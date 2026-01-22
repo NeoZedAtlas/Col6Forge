@@ -1,0 +1,173 @@
+const std = @import("std");
+
+pub const SourceSpan = struct {
+    start_line: usize,
+    end_line: usize,
+};
+
+pub const Segment = struct {
+    line: usize,
+    column: usize,
+    length: usize,
+};
+
+pub const LogicalLine = struct {
+    label: ?[]const u8,
+    text: []const u8,
+    span: SourceSpan,
+    segments: []Segment,
+};
+
+pub const SourcePos = struct {
+    line: usize,
+    column: usize,
+};
+
+pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![]LogicalLine {
+    var list = std.array_list.Managed(LogicalLine).init(allocator);
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    var segments = std.array_list.Managed(Segment).init(allocator);
+    var current_label: ?[]const u8 = null;
+    var current_start: usize = 0;
+    var current_end: usize = 0;
+    var in_stmt = false;
+
+    var it = std.mem.splitScalar(u8, contents, '\n');
+    var line_no: usize = 1;
+    while (it.next()) |raw_line| : (line_no += 1) {
+        var line = raw_line;
+        if (line.len > 0 and line[line.len - 1] == '\r') {
+            line = line[0 .. line.len - 1];
+        }
+
+        if (isCommentLine(line)) {
+            if (in_stmt) {
+                const text_owned = try buffer.toOwnedSlice();
+                const segments_owned = try segments.toOwnedSlice();
+                try list.append(.{
+                    .label = current_label,
+                    .text = text_owned,
+                    .span = .{ .start_line = current_start, .end_line = current_end },
+                    .segments = segments_owned,
+                });
+                buffer = std.array_list.Managed(u8).init(allocator);
+                segments = std.array_list.Managed(Segment).init(allocator);
+                in_stmt = false;
+                current_label = null;
+            }
+            continue;
+        }
+
+        const is_cont = isContinuation(line);
+        const label = parseLabel(line);
+        const code = codeSlice(line);
+        const trimmed_code = std.mem.trimRight(u8, code, " \t");
+
+        if (trimmed_code.len == 0 and !is_cont) {
+            if (in_stmt) {
+                const text_owned = try buffer.toOwnedSlice();
+                const segments_owned = try segments.toOwnedSlice();
+                try list.append(.{
+                    .label = current_label,
+                    .text = text_owned,
+                    .span = .{ .start_line = current_start, .end_line = current_end },
+                    .segments = segments_owned,
+                });
+                buffer = std.array_list.Managed(u8).init(allocator);
+                segments = std.array_list.Managed(Segment).init(allocator);
+                in_stmt = false;
+                current_label = null;
+            }
+            continue;
+        }
+
+        if (!is_cont or !in_stmt) {
+            if (in_stmt) {
+                const text_owned = try buffer.toOwnedSlice();
+                const segments_owned = try segments.toOwnedSlice();
+                try list.append(.{
+                    .label = current_label,
+                    .text = text_owned,
+                    .span = .{ .start_line = current_start, .end_line = current_end },
+                    .segments = segments_owned,
+                });
+                buffer = std.array_list.Managed(u8).init(allocator);
+                segments = std.array_list.Managed(Segment).init(allocator);
+            }
+            current_start = line_no;
+            current_end = line_no;
+            current_label = label;
+            in_stmt = true;
+        } else {
+            current_end = line_no;
+        }
+
+        if (trimmed_code.len > 0) {
+            try buffer.appendSlice(trimmed_code);
+            try segments.append(.{
+                .line = line_no,
+                .column = 7,
+                .length = trimmed_code.len,
+            });
+        }
+    }
+
+    if (in_stmt) {
+        const text_owned = try buffer.toOwnedSlice();
+        const segments_owned = try segments.toOwnedSlice();
+        try list.append(.{
+            .label = current_label,
+            .text = text_owned,
+            .span = .{ .start_line = current_start, .end_line = current_end },
+            .segments = segments_owned,
+        });
+    } else {
+        buffer.deinit();
+        segments.deinit();
+    }
+
+    return list.toOwnedSlice();
+}
+
+pub fn freeLogicalLines(allocator: std.mem.Allocator, lines: []LogicalLine) void {
+    for (lines) |line| {
+        allocator.free(line.text);
+        allocator.free(line.segments);
+    }
+    allocator.free(lines);
+}
+
+pub fn mapIndexToPos(line: LogicalLine, index: usize) SourcePos {
+    var offset: usize = 0;
+    for (line.segments) |segment| {
+        if (index < offset + segment.length) {
+            const col = segment.column + (index - offset);
+            return .{ .line = segment.line, .column = col };
+        }
+        offset += segment.length;
+    }
+    return .{ .line = line.span.start_line, .column = 1 };
+}
+
+fn isCommentLine(line: []const u8) bool {
+    if (line.len == 0) return false;
+    return line[0] == 'c' or line[0] == 'C' or line[0] == '*' or line[0] == '!';
+}
+
+fn isContinuation(line: []const u8) bool {
+    if (line.len < 6) return false;
+    return line[5] != ' ';
+}
+
+fn parseLabel(line: []const u8) ?[]const u8 {
+    const end = if (line.len < 5) line.len else 5;
+    const label_slice = std.mem.trim(u8, line[0..end], " \t");
+    if (label_slice.len == 0) return null;
+    return label_slice;
+}
+
+fn codeSlice(line: []const u8) []const u8 {
+    if (line.len <= 6) return "";
+    const end = if (line.len < 72) line.len else 72;
+    return line[6..end];
+}
