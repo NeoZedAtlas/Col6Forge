@@ -1,67 +1,18 @@
 const std = @import("std");
-const parser = @import("parser.zig");
+const ast = @import("../ast/nodes.zig");
+const symbols = @import("symbol.zig");
 
-pub const SymbolKind = enum {
-    variable,
-    parameter,
-    function,
-    subroutine,
-};
+const SymbolKind = symbols.SymbolKind;
+const StorageClass = symbols.StorageClass;
+const Symbol = symbols.Symbol;
+const ConstValue = symbols.ConstValue;
+const ImplicitRule = symbols.ImplicitRule;
+const ResolvedRefKind = symbols.ResolvedRefKind;
+const ResolvedRef = symbols.ResolvedRef;
+const SemanticUnit = symbols.SemanticUnit;
+const SemanticProgram = symbols.SemanticProgram;
 
-pub const StorageClass = enum {
-    local,
-    common,
-    dummy,
-};
-
-pub const Symbol = struct {
-    name: []const u8,
-    type_kind: parser.TypeKind,
-    dims: []*parser.Expr,
-    kind: SymbolKind,
-    storage: StorageClass,
-    is_external: bool,
-    is_intrinsic: bool,
-    const_value: ?ConstValue,
-    type_explicit: bool,
-};
-
-pub const ConstValue = union(enum) {
-    integer: i64,
-    real: f64,
-};
-
-pub const ImplicitRule = struct {
-    start: u8,
-    end: u8,
-    type_kind: parser.TypeKind,
-};
-
-pub const ResolvedRefKind = enum {
-    call,
-    subscript,
-    unknown,
-};
-
-pub const ResolvedRef = struct {
-    expr: *parser.Expr,
-    name: []const u8,
-    kind: ResolvedRefKind,
-};
-
-pub const SemanticUnit = struct {
-    name: []const u8,
-    kind: parser.ProgramUnitKind,
-    symbols: []Symbol,
-    implicit_rules: []ImplicitRule,
-    resolved_refs: []ResolvedRef,
-};
-
-pub const SemanticProgram = struct {
-    units: []SemanticUnit,
-};
-
-pub fn analyzeProgram(arena: std.mem.Allocator, program: parser.Program) !SemanticProgram {
+pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticProgram {
     var units = std.array_list.Managed(SemanticUnit).init(arena);
     for (program.units) |unit| {
         var analyzer = UnitAnalyzer.init(arena, unit);
@@ -93,13 +44,13 @@ pub fn printSemantic(writer: anytype, program: SemanticProgram) !void {
 
 const UnitAnalyzer = struct {
     arena: std.mem.Allocator,
-    unit: parser.ProgramUnit,
+    unit: ast.ProgramUnit,
     table: std.StringHashMap(usize),
     symbols: std.array_list.Managed(Symbol),
     implicit: std.array_list.Managed(ImplicitRule),
     refs: std.array_list.Managed(ResolvedRef),
 
-    fn init(arena: std.mem.Allocator, unit: parser.ProgramUnit) UnitAnalyzer {
+    fn init(arena: std.mem.Allocator, unit: ast.ProgramUnit) UnitAnalyzer {
         return .{
             .arena = arena,
             .unit = unit,
@@ -171,7 +122,7 @@ const UnitAnalyzer = struct {
         }
     }
 
-    fn applyDecl(self: *UnitAnalyzer, decl: parser.Decl) !void {
+    fn applyDecl(self: *UnitAnalyzer, decl: ast.Decl) !void {
         switch (decl) {
             .implicit => |imp| {
                 self.implicit.clearRetainingCapacity();
@@ -231,7 +182,7 @@ const UnitAnalyzer = struct {
         }
     }
 
-    fn applyDeclarator(self: *UnitAnalyzer, type_kind: parser.TypeKind, item: parser.Declarator, storage: StorageClass, explicit_type: bool) !void {
+    fn applyDeclarator(self: *UnitAnalyzer, type_kind: ast.TypeKind, item: ast.Declarator, storage: StorageClass, explicit_type: bool) !void {
         const idx = try self.ensureSymbol(item.name);
         if (explicit_type) {
             self.symbols.items[idx].type_kind = type_kind;
@@ -245,7 +196,7 @@ const UnitAnalyzer = struct {
         self.symbols.items[idx].storage = storage;
     }
 
-    fn resolveStmt(self: *UnitAnalyzer, stmt: parser.Stmt) !void {
+    fn resolveStmt(self: *UnitAnalyzer, stmt: ast.Stmt) !void {
         switch (stmt.node) {
             .assignment => |assign| {
                 try self.resolveExpr(assign.target);
@@ -278,7 +229,7 @@ const UnitAnalyzer = struct {
         }
     }
 
-    fn resolveStmtNode(self: *UnitAnalyzer, node: parser.StmtNode) !void {
+    fn resolveStmtNode(self: *UnitAnalyzer, node: ast.StmtNode) !void {
         switch (node) {
             .assignment => |assign| {
                 try self.resolveExpr(assign.target);
@@ -311,7 +262,7 @@ const UnitAnalyzer = struct {
         }
     }
 
-    fn resolveExpr(self: *UnitAnalyzer, expr: *parser.Expr) !void {
+    fn resolveExpr(self: *UnitAnalyzer, expr: *ast.Expr) !void {
         switch (expr.*) {
             .identifier => |name| {
                 _ = try self.ensureSymbol(name);
@@ -364,7 +315,7 @@ const UnitAnalyzer = struct {
         return idx;
     }
 
-    fn implicitType(self: *UnitAnalyzer, name: []const u8) parser.TypeKind {
+    fn implicitType(self: *UnitAnalyzer, name: []const u8) ast.TypeKind {
         if (name.len == 0) return .real;
         const first = std.ascii.toUpper(name[0]);
         for (self.implicit.items) |rule| {
@@ -373,7 +324,7 @@ const UnitAnalyzer = struct {
         return .real;
     }
 
-    fn evalConst(self: *UnitAnalyzer, expr: *parser.Expr) !?ConstValue {
+    fn evalConst(self: *UnitAnalyzer, expr: *ast.Expr) !?ConstValue {
         switch (expr.*) {
             .literal => |lit| {
                 return switch (lit.kind) {
@@ -428,7 +379,7 @@ fn negateConst(value: ConstValue) ConstValue {
     };
 }
 
-fn evalBinary(op: parser.BinaryOp, left: ConstValue, right: ConstValue) ?ConstValue {
+fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue) ?ConstValue {
     const left_is_real = switch (left) {
         .real => true,
         else => false,
@@ -477,3 +428,4 @@ fn toReal(value: ConstValue) f64 {
         .integer => |v| @as(f64, @floatFromInt(v)),
     };
 }
+

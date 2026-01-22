@@ -1,8 +1,8 @@
 const std = @import("std");
-const fixed_form = @import("fixed_form.zig");
-const parser = @import("parser.zig");
-const semantic = @import("semantic.zig");
-const codegen = @import("codegen.zig");
+const fixed_form = @import("../frontend/fixed_form.zig");
+const parser = @import("../frontend/parser.zig");
+const semantic = @import("../sema/mod.zig");
+const codegen = @import("../codegen/mod.zig");
 
 pub const EmitKind = enum {
     llvm,
@@ -35,3 +35,4 @@ fn emitLlvmModule(allocator: std.mem.Allocator, input_path: []const u8, logical_
     const sem = try semantic.analyzeProgram(arena.allocator(), program);
     return codegen.emitModule(allocator, program, sem, input_path);
 }
+

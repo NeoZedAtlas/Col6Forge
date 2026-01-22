@@ -1,17 +1,20 @@
 const std = @import("std");
-const parser = @import("parser.zig");
-const semantic = @import("semantic.zig");
+const ast = @import("../../ast/nodes.zig");
+const sema = @import("../../sema/mod.zig");
+const ir = @import("../ir.zig");
+const llvm_types = @import("types.zig");
 
-pub const IRType = enum {
-    void,
-    i1,
-    i32,
-    f32,
-    f64,
-    ptr,
-};
+const Program = ast.Program;
+const ProgramUnit = ast.ProgramUnit;
+const Stmt = ast.Stmt;
+const Expr = ast.Expr;
+const BinaryOp = ast.BinaryOp;
+const CallOrSubscript = ast.CallOrSubscript;
+const Literal = ast.Literal;
+const TypeKind = ast.TypeKind;
+const IRType = ir.IRType;
 
-pub fn emitModule(allocator: std.mem.Allocator, program: parser.Program, sem: semantic.SemanticProgram, source_name: []const u8) ![]const u8 {
+pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: sema.SemanticProgram, source_name: []const u8) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
     const w = buffer.writer();
     try w.print("; ModuleID = 'col6forge'\n", .{});
@@ -22,7 +25,7 @@ pub fn emitModule(allocator: std.mem.Allocator, program: parser.Program, sem: se
     var defined = std.StringHashMap(void).init(allocator);
     defer defined.deinit();
 
-    var sem_map = std.StringHashMap(*const semantic.SemanticUnit).init(allocator);
+    var sem_map = std.StringHashMap(*const sema.SemanticUnit).init(allocator);
     defer sem_map.deinit();
     for (sem.units) |*unit| {
         try sem_map.put(unit.name, unit);
@@ -42,7 +45,7 @@ pub fn emitModule(allocator: std.mem.Allocator, program: parser.Program, sem: se
     while (decl_it.next()) |entry| {
         const decl = entry.value_ptr.*;
         const name = entry.key_ptr.*;
-        const ret_text = irTypeText(decl.ret_type);
+        const ret_text = llvm_types.irTypeText(decl.ret_type);
         if (decl.varargs) {
             try w.print("declare {s} @{s}(...)\n", .{ ret_text, name });
         } else {
@@ -61,18 +64,18 @@ const IRDecl = struct {
 
 const FunctionEmitter = struct {
     allocator: std.mem.Allocator,
-    unit: parser.ProgramUnit,
-    sem: *const semantic.SemanticUnit,
+    unit: ProgramUnit,
+    sem: *const sema.SemanticUnit,
     decls: *std.StringHashMap(IRDecl),
     defined: *std.StringHashMap(void),
     temp_index: usize,
     locals: std.StringHashMap(ValueRef),
-    ref_kinds: std.AutoHashMap(usize, semantic.ResolvedRefKind),
+    ref_kinds: std.AutoHashMap(usize, sema.ResolvedRefKind),
     label_map: std.StringHashMap([]const u8),
     label_index: std.StringHashMap(usize),
     label_counter: usize,
 
-    fn init(allocator: std.mem.Allocator, unit: parser.ProgramUnit, sem: *const semantic.SemanticUnit, decls: *std.StringHashMap(IRDecl), defined: *std.StringHashMap(void)) FunctionEmitter {
+    fn init(allocator: std.mem.Allocator, unit: ProgramUnit, sem: *const sema.SemanticUnit, decls: *std.StringHashMap(IRDecl), defined: *std.StringHashMap(void)) FunctionEmitter {
         return .{
             .allocator = allocator,
             .unit = unit,
@@ -81,7 +84,7 @@ const FunctionEmitter = struct {
             .defined = defined,
             .temp_index = 0,
             .locals = std.StringHashMap(ValueRef).init(allocator),
-            .ref_kinds = std.AutoHashMap(usize, semantic.ResolvedRefKind).init(allocator),
+            .ref_kinds = std.AutoHashMap(usize, sema.ResolvedRefKind).init(allocator),
             .label_map = std.StringHashMap([]const u8).init(allocator),
             .label_index = std.StringHashMap(usize).init(allocator),
             .label_counter = 0,
@@ -128,9 +131,9 @@ const FunctionEmitter = struct {
             if (sym.kind == .parameter or sym.kind == .function or sym.kind == .subroutine) continue;
             if (self.locals.contains(sym.name)) continue;
             if (sym.dims.len > 0) return error.ArraysUnsupported;
-            const ty = typeFromKind(sym.type_kind);
+            const ty = llvm_types.typeFromKind(sym.type_kind);
             const alloca_name = try self.nextTemp();
-            try writer.print("  {s} = alloca {s}\n", .{ alloca_name, irTypeText(ty) });
+            try writer.print("  {s} = alloca {s}\n", .{ alloca_name, llvm_types.irTypeText(ty) });
             try self.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
         }
 
@@ -187,14 +190,14 @@ const FunctionEmitter = struct {
         }
     }
 
-    fn emitStmt(self: *FunctionEmitter, writer: anytype, stmt: parser.Stmt, next_block: []const u8) !bool {
+    fn emitStmt(self: *FunctionEmitter, writer: anytype, stmt: Stmt, next_block: []const u8) !bool {
         switch (stmt.node) {
             .assignment => |assign| {
                 const target_ptr = try self.emitLValue(writer, assign.target);
                 const value = try self.emitExpr(writer, assign.value);
                 const sym_ty = try self.exprType(assign.target);
                 const coerced = try self.coerce(writer, value, sym_ty);
-                try writer.print("  store {s} {s}, ptr {s}\n", .{ irTypeText(coerced.ty), coerced.name, target_ptr.name });
+                try writer.print("  store {s} {s}, ptr {s}\n", .{ llvm_types.irTypeText(coerced.ty), coerced.name, target_ptr.name });
                 try writer.print("  br label %{s}\n", .{next_block});
                 return true;
             },
@@ -258,7 +261,7 @@ const FunctionEmitter = struct {
         const loop = stmt.node.do_loop;
         const var_ptr = try self.getPointer(loop.var_name);
         const sym = self.findSymbol(loop.var_name) orelse return error.UnknownSymbol;
-        const var_ty = typeFromKind(sym.type_kind);
+        const var_ty = llvm_types.typeFromKind(sym.type_kind);
 
         const end_addr = try self.nextTemp();
         try writer.print("  {s} = alloca i32\n", .{end_addr});
@@ -267,7 +270,7 @@ const FunctionEmitter = struct {
 
         const start_val = try self.emitExpr(writer, loop.start);
         const start_coerced = try self.coerce(writer, start_val, var_ty);
-        try writer.print("  store {s} {s}, ptr {s}\n", .{ irTypeText(var_ty), start_coerced.name, var_ptr.name });
+        try writer.print("  store {s} {s}, ptr {s}\n", .{ llvm_types.irTypeText(var_ty), start_coerced.name, var_ptr.name });
 
         const end_val = try self.emitIndex(writer, loop.end);
         try writer.print("  store i32 {s}, ptr {s}\n", .{ end_val.name, end_addr });
@@ -306,7 +309,7 @@ const FunctionEmitter = struct {
         const step_loaded2 = try self.loadI32(writer, step_addr);
         const sum = try self.emitAdd(writer, var_loaded2, step_loaded2);
         const sum_coerced = try self.coerce(writer, sum, var_ty);
-        try writer.print("  store {s} {s}, ptr {s}\n", .{ irTypeText(var_ty), sum_coerced.name, var_ptr.name });
+        try writer.print("  store {s} {s}, ptr {s}\n", .{ llvm_types.irTypeText(var_ty), sum_coerced.name, var_ptr.name });
         try writer.print("  br label %{s}\n", .{test_label});
     }
 
@@ -334,7 +337,7 @@ const FunctionEmitter = struct {
         }
     }
 
-    fn emitLValue(self: *FunctionEmitter, writer: anytype, expr: *parser.Expr) !ValueRef {
+    fn emitLValue(self: *FunctionEmitter, writer: anytype, expr: *Expr) !ValueRef {
         switch (expr.*) {
             .identifier => |name| {
                 return self.getPointer(name);
@@ -350,7 +353,7 @@ const FunctionEmitter = struct {
         }
     }
 
-    fn emitExpr(self: *FunctionEmitter, writer: anytype, expr: *parser.Expr) !ValueRef {
+    fn emitExpr(self: *FunctionEmitter, writer: anytype, expr: *Expr) !ValueRef {
         switch (expr.*) {
             .identifier => |name| {
                 const sym = self.findSymbol(name) orelse return error.UnknownSymbol;
@@ -358,9 +361,9 @@ const FunctionEmitter = struct {
                     if (sym.const_value) |cv| return self.emitConstTyped(cv, sym.type_kind);
                 }
                 const ptr = try self.getPointer(name);
-                const ty = typeFromKind(sym.type_kind);
+                const ty = llvm_types.typeFromKind(sym.type_kind);
                 const tmp = try self.nextTemp();
-                try writer.print("  {s} = load {s}, ptr {s}\n", .{ tmp, irTypeText(ty), ptr.name });
+                try writer.print("  {s} = load {s}, ptr {s}\n", .{ tmp, llvm_types.irTypeText(ty), ptr.name });
                 return .{ .name = tmp, .ty = ty, .is_ptr = false };
             },
             .literal => |lit| {
@@ -393,23 +396,23 @@ const FunctionEmitter = struct {
                 if (kind == .subscript) {
                     const ptr = try self.emitSubscriptPtr(writer, call);
                     const sym = self.findSymbol(call.name) orelse return error.UnknownSymbol;
-                    const ty = typeFromKind(sym.type_kind);
+                    const ty = llvm_types.typeFromKind(sym.type_kind);
                     if (ty == .ptr) return error.UnsupportedArrayElementType;
                     const tmp = try self.nextTemp();
-                    try writer.print("  {s} = load {s}, ptr {s}\n", .{ tmp, irTypeText(ty), ptr.name });
+                    try writer.print("  {s} = load {s}, ptr {s}\n", .{ tmp, llvm_types.irTypeText(ty), ptr.name });
                     return .{ .name = tmp, .ty = ty, .is_ptr = false };
                 }
                 if (kind != .call) return error.AmbiguousCallOrSubscript;
                 const sym = self.findSymbol(call.name) orelse return error.UnknownSymbol;
-                const ret_ty = typeFromKind(sym.type_kind);
+                const ret_ty = llvm_types.typeFromKind(sym.type_kind);
                 const fn_name = try self.ensureDecl(call.name, ret_ty);
                 return self.emitCall(writer, fn_name, ret_ty, call.args, false);
             },
         }
     }
 
-    fn emitBinary(self: *FunctionEmitter, writer: anytype, op: parser.BinaryOp, lhs: ValueRef, rhs: ValueRef) !ValueRef {
-        const common_ty = commonType(lhs.ty, rhs.ty);
+    fn emitBinary(self: *FunctionEmitter, writer: anytype, op: BinaryOp, lhs: ValueRef, rhs: ValueRef) !ValueRef {
+        const common_ty = ir.commonType(lhs.ty, rhs.ty);
         var left = lhs;
         var right = rhs;
         left = try self.coerce(writer, left, common_ty);
@@ -424,7 +427,7 @@ const FunctionEmitter = struct {
                     .div => if (common_ty == .i32) "sdiv" else "fdiv",
                     else => unreachable,
                 };
-                try writer.print("  {s} = {s} {s} {s}, {s}\n", .{ tmp, op_text, irTypeText(common_ty), left.name, right.name });
+                try writer.print("  {s} = {s} {s} {s}, {s}\n", .{ tmp, op_text, llvm_types.irTypeText(common_ty), left.name, right.name });
                 return .{ .name = tmp, .ty = common_ty, .is_ptr = false };
             },
             .eq, .ne, .lt, .le, .gt, .ge => {
@@ -439,7 +442,7 @@ const FunctionEmitter = struct {
                     else => unreachable,
                 };
                 const instr = if (is_int) "icmp" else "fcmp";
-                try writer.print("  {s} = {s} {s} {s} {s}, {s}\n", .{ tmp, instr, pred, irTypeText(common_ty), left.name, right.name });
+                try writer.print("  {s} = {s} {s} {s} {s}, {s}\n", .{ tmp, instr, pred, llvm_types.irTypeText(common_ty), left.name, right.name });
                 return .{ .name = tmp, .ty = .i1, .is_ptr = false };
             },
             .and_, .or_ => {
@@ -452,7 +455,7 @@ const FunctionEmitter = struct {
         }
     }
 
-    fn emitCall(self: *FunctionEmitter, writer: anytype, fn_name: []const u8, ret_ty: IRType, args: []*parser.Expr, discard: bool) !ValueRef {
+    fn emitCall(self: *FunctionEmitter, writer: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
         var arg_text = std.array_list.Managed(u8).init(self.allocator);
         defer arg_text.deinit();
         var first = true;
@@ -465,15 +468,15 @@ const FunctionEmitter = struct {
         }
 
         if (discard or ret_ty == .void) {
-            try writer.print("  call {s} @{s}({s})\n", .{ irTypeText(ret_ty), fn_name, arg_text.items });
+            try writer.print("  call {s} @{s}({s})\n", .{ llvm_types.irTypeText(ret_ty), fn_name, arg_text.items });
             return .{ .name = "", .ty = ret_ty, .is_ptr = false };
         }
         const tmp = try self.nextTemp();
-        try writer.print("  {s} = call {s} @{s}({s})\n", .{ tmp, irTypeText(ret_ty), fn_name, arg_text.items });
+        try writer.print("  {s} = call {s} @{s}({s})\n", .{ tmp, llvm_types.irTypeText(ret_ty), fn_name, arg_text.items });
         return .{ .name = tmp, .ty = ret_ty, .is_ptr = false };
     }
 
-    fn emitArgPointer(self: *FunctionEmitter, expr: *parser.Expr) !ValueRef {
+    fn emitArgPointer(self: *FunctionEmitter, expr: *Expr) !ValueRef {
         switch (expr.*) {
             .identifier => |name| {
                 return self.getPointer(name);
@@ -482,12 +485,12 @@ const FunctionEmitter = struct {
         }
     }
 
-    fn emitSubscriptPtr(self: *FunctionEmitter, writer: anytype, call: parser.CallOrSubscript) !ValueRef {
+    fn emitSubscriptPtr(self: *FunctionEmitter, writer: anytype, call: CallOrSubscript) !ValueRef {
         const sym = self.findSymbol(call.name) orelse return error.UnknownSymbol;
         if (sym.dims.len == 0) return error.ArraysUnsupported;
         if (sym.dims.len > 2) return error.ArrayRankUnsupported;
         const base_ptr = try self.getPointer(call.name);
-        const elem_ty = typeFromKind(sym.type_kind);
+        const elem_ty = llvm_types.typeFromKind(sym.type_kind);
         if (elem_ty == .ptr) return error.UnsupportedArrayElementType;
 
         if (call.args.len == 0) return error.InvalidSubscript;
@@ -509,14 +512,14 @@ const FunctionEmitter = struct {
         const gep = try self.nextTemp();
         try writer.print("  {s} = getelementptr {s}, ptr {s}, i32 {s}\n", .{
             gep,
-            irTypeText(elem_ty),
+            llvm_types.irTypeText(elem_ty),
             base_ptr.name,
             offset.name,
         });
         return .{ .name = gep, .ty = .ptr, .is_ptr = true };
     }
 
-    fn emitDimValue(self: *FunctionEmitter, writer: anytype, expr: *parser.Expr) !ValueRef {
+    fn emitDimValue(self: *FunctionEmitter, writer: anytype, expr: *Expr) !ValueRef {
         switch (expr.*) {
             .literal => |lit| {
                 if (lit.kind == .assumed_size) return error.AssumedSizeDimUnsupported;
@@ -527,7 +530,7 @@ const FunctionEmitter = struct {
         return self.coerce(writer, value, .i32);
     }
 
-    fn emitIndex(self: *FunctionEmitter, writer: anytype, expr: *parser.Expr) !ValueRef {
+    fn emitIndex(self: *FunctionEmitter, writer: anytype, expr: *Expr) !ValueRef {
         const value = try self.emitExpr(writer, expr);
         return self.coerce(writer, value, .i32);
     }
@@ -550,7 +553,7 @@ const FunctionEmitter = struct {
         return .{ .name = tmp, .ty = .i32, .is_ptr = false };
     }
 
-    fn emitCond(self: *FunctionEmitter, writer: anytype, expr: *parser.Expr) !ValueRef {
+    fn emitCond(self: *FunctionEmitter, writer: anytype, expr: *Expr) !ValueRef {
         const value = try self.emitExpr(writer, expr);
         if (value.ty == .i1) return value;
         if (value.is_ptr) return error.UnsupportedLogicalOp;
@@ -574,7 +577,7 @@ const FunctionEmitter = struct {
 
     fn loadValue(self: *FunctionEmitter, writer: anytype, ptr: ValueRef, ty: IRType) !ValueRef {
         const tmp = try self.nextTemp();
-        try writer.print("  {s} = load {s}, ptr {s}\n", .{ tmp, irTypeText(ty), ptr.name });
+        try writer.print("  {s} = load {s}, ptr {s}\n", .{ tmp, llvm_types.irTypeText(ty), ptr.name });
         return .{ .name = tmp, .ty = ty, .is_ptr = false };
     }
 
@@ -590,7 +593,7 @@ const FunctionEmitter = struct {
         return name;
     }
 
-    fn emitLiteral(self: *FunctionEmitter, lit: parser.Literal) !ValueRef {
+    fn emitLiteral(self: *FunctionEmitter, lit: Literal) !ValueRef {
         switch (lit.kind) {
             .integer => return .{ .name = lit.text, .ty = .i32, .is_ptr = false },
             .real => {
@@ -602,8 +605,8 @@ const FunctionEmitter = struct {
         }
     }
 
-    fn emitConstTyped(self: *FunctionEmitter, value: semantic.ConstValue, type_kind: parser.TypeKind) ValueRef {
-        const ty = typeFromKind(type_kind);
+    fn emitConstTyped(self: *FunctionEmitter, value: sema.ConstValue, type_kind: TypeKind) ValueRef {
+        const ty = llvm_types.typeFromKind(type_kind);
         return switch (value) {
             .integer => |v| .{
                 .name = if (ty == .f32 or ty == .f64) formatReal(self.allocator, @as(f64, @floatFromInt(v))) else formatInt(self.allocator, v),
@@ -643,15 +646,15 @@ const FunctionEmitter = struct {
             },
             .ptr => return error.UnsupportedCast,
         };
-        try writer.print("  {s} = {s} {s} {s} to {s}\n", .{ tmp, instr, irTypeText(from), value.name, irTypeText(to) });
+        try writer.print("  {s} = {s} {s} {s} to {s}\n", .{ tmp, instr, llvm_types.irTypeText(from), value.name, llvm_types.irTypeText(to) });
         return .{ .name = tmp, .ty = to, .is_ptr = false };
     }
 
-    fn exprType(self: *FunctionEmitter, expr: *parser.Expr) !IRType {
+    fn exprType(self: *FunctionEmitter, expr: *Expr) !IRType {
         switch (expr.*) {
             .identifier => |name| {
                 const sym = self.findSymbol(name) orelse return error.UnknownSymbol;
-                return typeFromKind(sym.type_kind);
+                return llvm_types.typeFromKind(sym.type_kind);
             },
             .literal => |lit| return switch (lit.kind) {
                 .integer => .i32,
@@ -662,17 +665,17 @@ const FunctionEmitter = struct {
             .binary => |bin| {
                 const left = try self.exprType(bin.left);
                 const right = try self.exprType(bin.right);
-                return commonType(left, right);
+                return ir.commonType(left, right);
             },
             .call_or_subscript => |call| {
                 const kind = self.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
                 if (kind == .subscript) {
                     const sym = self.findSymbol(call.name) orelse return error.UnknownSymbol;
-                    return typeFromKind(sym.type_kind);
+                    return llvm_types.typeFromKind(sym.type_kind);
                 }
                 if (kind != .call) return error.AmbiguousCallOrSubscript;
                 const sym = self.findSymbol(call.name) orelse return error.UnknownSymbol;
-                return typeFromKind(sym.type_kind);
+                return llvm_types.typeFromKind(sym.type_kind);
             },
         }
     }
@@ -682,7 +685,7 @@ const FunctionEmitter = struct {
         return error.UnknownSymbol;
     }
 
-    fn findSymbol(self: *FunctionEmitter, name: []const u8) ?semantic.Symbol {
+    fn findSymbol(self: *FunctionEmitter, name: []const u8) ?sema.Symbol {
         for (self.sem.symbols) |sym| {
             if (std.mem.eql(u8, sym.name, name)) return sym;
         }
@@ -698,7 +701,7 @@ const FunctionEmitter = struct {
         return mangled;
     }
 
-    fn implicitType(self: *FunctionEmitter, name: []const u8) parser.TypeKind {
+    fn implicitType(self: *FunctionEmitter, name: []const u8) TypeKind {
         if (name.len == 0) return .real;
         const first = std.ascii.toUpper(name[0]);
         for (self.sem.implicit_rules) |rule| {
@@ -719,35 +722,6 @@ const ValueRef = struct {
     ty: IRType,
     is_ptr: bool,
 };
-
-fn typeFromKind(kind: parser.TypeKind) IRType {
-    return switch (kind) {
-        .double_precision => .f64,
-        .integer => .i32,
-        .real => .f32,
-        .complex => .ptr,
-        .logical => .i1,
-        .character => .ptr,
-    };
-}
-
-fn commonType(a: IRType, b: IRType) IRType {
-    if (a == .f64 or b == .f64) return .f64;
-    if (a == .f32 or b == .f32) return .f32;
-    if (a == .i1 and b == .i1) return .i1;
-    return .i32;
-}
-
-fn irTypeText(ty: IRType) []const u8 {
-    return switch (ty) {
-        .void => "void",
-        .i1 => "i1",
-        .i32 => "i32",
-        .f32 => "float",
-        .f64 => "double",
-        .ptr => "ptr",
-    };
-}
 
 fn formatTempName(allocator: std.mem.Allocator, prefix: []const u8, index: usize) ![]const u8 {
     return std.fmt.allocPrint(allocator, "%{s}{d}", .{ prefix, index });
@@ -796,3 +770,4 @@ fn formatInt(allocator: std.mem.Allocator, value: i64) []const u8 {
 fn formatReal(allocator: std.mem.Allocator, value: f64) []const u8 {
     return std.fmt.allocPrint(allocator, "{d}", .{value}) catch "0.0";
 }
+

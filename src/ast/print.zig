@@ -1,0 +1,96 @@
+const ast = @import("nodes.zig");
+
+pub fn printProgram(writer: anytype, program: ast.Program) !void {
+    try writer.print("; AST units: {d}\n", .{program.units.len});
+    for (program.units) |unit| {
+        const kind_text = switch (unit.kind) {
+            .subroutine => "subroutine",
+            .function => "function",
+        };
+        try writer.print("; unit {s} {s}\n", .{ kind_text, unit.name });
+        try writer.print(";  args({d})\n", .{unit.args.len});
+        for (unit.args) |arg| {
+            try writer.print(";   arg {s}\n", .{arg});
+        }
+        try writer.print(";  decls({d})\n", .{unit.decls.len});
+        for (unit.decls) |decl| {
+            try printDecl(writer, decl);
+        }
+        try writer.print(";  stmts({d})\n", .{unit.stmts.len});
+        for (unit.stmts) |stmt| {
+            try printStmt(writer, stmt);
+        }
+    }
+}
+
+fn printDecl(writer: anytype, decl: ast.Decl) !void {
+    switch (decl) {
+        .implicit => |imp| {
+            try writer.print(";   decl implicit rules({d})\n", .{imp.rules.len});
+        },
+        .type_decl => |td| {
+            try writer.print(";   decl type {s} items({d})\n", .{ typeKindName(td.type_kind), td.items.len });
+        },
+        .dimension => |dim| {
+            try writer.print(";   decl dimension items({d})\n", .{dim.items.len});
+        },
+        .parameter => |param| {
+            try writer.print(";   decl parameter assigns({d})\n", .{param.assigns.len});
+        },
+        .common => |common| {
+            try writer.print(";   decl common blocks({d})\n", .{common.blocks.len});
+        },
+        .equivalence => |eqv| {
+            try writer.print(";   decl equivalence groups({d})\n", .{eqv.groups.len});
+        },
+        .external => |ext| {
+            try writer.print(";   decl external names({d})\n", .{ext.names.len});
+        },
+        .intrinsic => |intr| {
+            try writer.print(";   decl intrinsic names({d})\n", .{intr.names.len});
+        },
+    }
+}
+
+fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
+    const label_text = if (stmt.label) |l| l else "-";
+    switch (stmt.node) {
+        .assignment => {
+            try writer.print(";   stmt label={s} assignment\n", .{label_text});
+        },
+        .call => |call| {
+            try writer.print(";   stmt label={s} call {s}({d})\n", .{ label_text, call.name, call.args.len });
+        },
+        .goto => |gt| {
+            try writer.print(";   stmt label={s} goto {s}\n", .{ label_text, gt.label });
+        },
+        .do_loop => |loop| {
+            const step_text = if (loop.step) |_| "yes" else "no";
+            try writer.print(";   stmt label={s} do end={s} var={s} step={s}\n", .{ label_text, loop.end_label, loop.var_name, step_text });
+        },
+        .ret => {
+            try writer.print(";   stmt label={s} return\n", .{label_text});
+        },
+        .cont => {
+            try writer.print(";   stmt label={s} continue\n", .{label_text});
+        },
+        .if_single => {
+            try writer.print(";   stmt label={s} if-single\n", .{label_text});
+        },
+        .if_block => |ifb| {
+            try writer.print(";   stmt label={s} if-block then({d}) else({d})\n", .{ label_text, ifb.then_stmts.len, ifb.else_stmts.len });
+        },
+    }
+}
+
+fn typeKindName(kind: ast.TypeKind) []const u8 {
+    return switch (kind) {
+        .integer => "INTEGER",
+        .real => "REAL",
+        .double_precision => "DOUBLE PRECISION",
+        .complex => "COMPLEX",
+        .logical => "LOGICAL",
+        .character => "CHARACTER",
+    };
+}
+

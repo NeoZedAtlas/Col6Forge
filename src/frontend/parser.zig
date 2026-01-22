@@ -1,206 +1,41 @@
 const std = @import("std");
+const ast = @import("../ast/nodes.zig");
 const fixed_form = @import("fixed_form.zig");
 const lexer = @import("lexer.zig");
 
-pub const Program = struct {
-    units: []ProgramUnit,
-};
-
-pub const ProgramUnitKind = enum {
-    subroutine,
-    function,
-};
-
-pub const ProgramUnit = struct {
-    kind: ProgramUnitKind,
-    name: []const u8,
-    args: []const []const u8,
-    decls: []Decl,
-    stmts: []Stmt,
-};
-
-pub const TypeKind = enum {
-    integer,
-    real,
-    double_precision,
-    complex,
-    logical,
-    character,
-};
-
-pub const Decl = union(enum) {
-    implicit: ImplicitDecl,
-    type_decl: TypeDecl,
-    dimension: DimensionDecl,
-    parameter: ParameterDecl,
-    common: CommonDecl,
-    equivalence: EquivalenceDecl,
-    external: NameListDecl,
-    intrinsic: NameListDecl,
-};
-
-pub const TypeDecl = struct {
-    type_kind: TypeKind,
-    items: []Declarator,
-};
-
-pub const DimensionDecl = struct {
-    items: []Declarator,
-};
-
-pub const ParameterDecl = struct {
-    assigns: []ParamAssign,
-};
-
-pub const ParamAssign = struct {
-    name: []const u8,
-    value: *Expr,
-};
-
-pub const CommonDecl = struct {
-    blocks: []CommonBlock,
-};
-
-pub const CommonBlock = struct {
-    name: ?[]const u8,
-    items: []Declarator,
-};
-
-pub const EquivalenceDecl = struct {
-    groups: []EquivalenceGroup,
-};
-
-pub const EquivalenceGroup = struct {
-    items: []*Expr,
-};
-
-pub const ImplicitDecl = struct {
-    rules: []ImplicitRule,
-};
-
-pub const ImplicitRule = struct {
-    start: u8,
-    end: u8,
-    type_kind: TypeKind,
-};
-
-pub const NameListDecl = struct {
-    names: []const []const u8,
-};
-
-pub const Declarator = struct {
-    name: []const u8,
-    dims: []*Expr,
-    char_len: ?*Expr,
-};
-
-pub const Stmt = struct {
-    label: ?[]const u8,
-    node: StmtNode,
-};
-
-pub const StmtNode = union(enum) {
-    assignment: Assignment,
-    call: CallStmt,
-    goto: GotoStmt,
-    do_loop: DoLoopStmt,
-    ret: void,
-    cont: void,
-    if_single: IfSingle,
-    if_block: IfBlock,
-};
-
-pub const Assignment = struct {
-    target: *Expr,
-    value: *Expr,
-};
-
-pub const CallStmt = struct {
-    name: []const u8,
-    args: []*Expr,
-};
-
-pub const IfSingle = struct {
-    condition: *Expr,
-    stmt: *StmtNode,
-};
-
-pub const IfBlock = struct {
-    condition: *Expr,
-    then_stmts: []Stmt,
-    else_stmts: []Stmt,
-};
-
-pub const GotoStmt = struct {
-    label: []const u8,
-};
-
-pub const DoLoopStmt = struct {
-    end_label: []const u8,
-    var_name: []const u8,
-    start: *Expr,
-    end: *Expr,
-    step: ?*Expr,
-};
-
-pub const Expr = union(enum) {
-    identifier: []const u8,
-    literal: Literal,
-    call_or_subscript: CallOrSubscript,
-    unary: UnaryExpr,
-    binary: BinaryExpr,
-};
-
-pub const Literal = struct {
-    kind: LiteralKind,
-    text: []const u8,
-};
-
-pub const LiteralKind = enum {
-    integer,
-    real,
-    string,
-    hollerith,
-    assumed_size,
-};
-
-pub const CallOrSubscript = struct {
-    name: []const u8,
-    args: []*Expr,
-};
-
-pub const UnaryExpr = struct {
-    op: UnaryOp,
-    expr: *Expr,
-};
-
-pub const UnaryOp = enum {
-    plus,
-    minus,
-    not,
-};
-
-pub const BinaryExpr = struct {
-    op: BinaryOp,
-    left: *Expr,
-    right: *Expr,
-};
-
-pub const BinaryOp = enum {
-    add,
-    sub,
-    mul,
-    div,
-    power,
-    eq,
-    ne,
-    lt,
-    le,
-    gt,
-    ge,
-    and_,
-    or_,
-};
+const Program = ast.Program;
+const ProgramUnitKind = ast.ProgramUnitKind;
+const ProgramUnit = ast.ProgramUnit;
+const TypeKind = ast.TypeKind;
+const Decl = ast.Decl;
+const TypeDecl = ast.TypeDecl;
+const DimensionDecl = ast.DimensionDecl;
+const ParameterDecl = ast.ParameterDecl;
+const ParamAssign = ast.ParamAssign;
+const CommonDecl = ast.CommonDecl;
+const CommonBlock = ast.CommonBlock;
+const EquivalenceDecl = ast.EquivalenceDecl;
+const EquivalenceGroup = ast.EquivalenceGroup;
+const ImplicitDecl = ast.ImplicitDecl;
+const ImplicitRule = ast.ImplicitRule;
+const NameListDecl = ast.NameListDecl;
+const Declarator = ast.Declarator;
+const Stmt = ast.Stmt;
+const StmtNode = ast.StmtNode;
+const Assignment = ast.Assignment;
+const CallStmt = ast.CallStmt;
+const IfSingle = ast.IfSingle;
+const IfBlock = ast.IfBlock;
+const GotoStmt = ast.GotoStmt;
+const DoLoopStmt = ast.DoLoopStmt;
+const Expr = ast.Expr;
+const Literal = ast.Literal;
+const LiteralKind = ast.LiteralKind;
+const CallOrSubscript = ast.CallOrSubscript;
+const UnaryExpr = ast.UnaryExpr;
+const UnaryOp = ast.UnaryOp;
+const BinaryExpr = ast.BinaryExpr;
+const BinaryOp = ast.BinaryOp;
 
 pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []fixed_form.LogicalLine) !Program {
     var parser = Parser{
@@ -211,99 +46,6 @@ pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []fixed_form.Logi
     return parser.parseProgram();
 }
 
-pub fn printProgram(writer: anytype, program: Program) !void {
-    try writer.print("; AST units: {d}\n", .{program.units.len});
-    for (program.units) |unit| {
-        const kind_text = switch (unit.kind) {
-            .subroutine => "subroutine",
-            .function => "function",
-        };
-        try writer.print("; unit {s} {s}\n", .{ kind_text, unit.name });
-        try writer.print(";  args({d})\n", .{unit.args.len});
-        for (unit.args) |arg| {
-            try writer.print(";   arg {s}\n", .{arg});
-        }
-        try writer.print(";  decls({d})\n", .{unit.decls.len});
-        for (unit.decls) |decl| {
-            try printDecl(writer, decl);
-        }
-        try writer.print(";  stmts({d})\n", .{unit.stmts.len});
-        for (unit.stmts) |stmt| {
-            try printStmt(writer, stmt);
-        }
-    }
-}
-
-    fn printDecl(writer: anytype, decl: Decl) !void {
-    switch (decl) {
-        .implicit => |imp| {
-            try writer.print(";   decl implicit rules({d})\n", .{imp.rules.len});
-        },
-        .type_decl => |td| {
-            try writer.print(";   decl type {s} items({d})\n", .{ typeKindName(td.type_kind), td.items.len });
-        },
-        .dimension => |dim| {
-            try writer.print(";   decl dimension items({d})\n", .{dim.items.len});
-        },
-        .parameter => |param| {
-            try writer.print(";   decl parameter assigns({d})\n", .{param.assigns.len});
-        },
-        .common => |common| {
-            try writer.print(";   decl common blocks({d})\n", .{common.blocks.len});
-        },
-        .equivalence => |eqv| {
-            try writer.print(";   decl equivalence groups({d})\n", .{eqv.groups.len});
-        },
-        .external => |ext| {
-            try writer.print(";   decl external names({d})\n", .{ext.names.len});
-        },
-        .intrinsic => |intr| {
-            try writer.print(";   decl intrinsic names({d})\n", .{intr.names.len});
-        },
-    }
-}
-
-fn printStmt(writer: anytype, stmt: Stmt) !void {
-    const label_text = if (stmt.label) |l| l else "-";
-    switch (stmt.node) {
-        .assignment => {
-            try writer.print(";   stmt label={s} assignment\n", .{label_text});
-        },
-        .call => |call| {
-            try writer.print(";   stmt label={s} call {s}({d})\n", .{ label_text, call.name, call.args.len });
-        },
-        .goto => |gt| {
-            try writer.print(";   stmt label={s} goto {s}\n", .{ label_text, gt.label });
-        },
-        .do_loop => |loop| {
-            const step_text = if (loop.step) |_| "yes" else "no";
-            try writer.print(";   stmt label={s} do end={s} var={s} step={s}\n", .{ label_text, loop.end_label, loop.var_name, step_text });
-        },
-        .ret => {
-            try writer.print(";   stmt label={s} return\n", .{label_text});
-        },
-        .cont => {
-            try writer.print(";   stmt label={s} continue\n", .{label_text});
-        },
-        .if_single => {
-            try writer.print(";   stmt label={s} if-single\n", .{label_text});
-        },
-        .if_block => |ifb| {
-            try writer.print(";   stmt label={s} if-block then({d}) else({d})\n", .{ label_text, ifb.then_stmts.len, ifb.else_stmts.len });
-        },
-    }
-}
-
-fn typeKindName(kind: TypeKind) []const u8 {
-    return switch (kind) {
-        .integer => "INTEGER",
-        .real => "REAL",
-        .double_precision => "DOUBLE PRECISION",
-        .complex => "COMPLEX",
-        .logical => "LOGICAL",
-        .character => "CHARACTER",
-    };
-}
 
 const Parser = struct {
     arena: std.mem.Allocator,
@@ -959,3 +701,4 @@ fn eqNoCase(a: []const u8, b: []const u8) bool {
     }
     return true;
 }
+
