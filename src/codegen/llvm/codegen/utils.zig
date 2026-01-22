@@ -42,6 +42,8 @@ pub fn zeroValue(ty: IRType) ValueRef {
         .i32 => .{ .name = "0", .ty = .i32, .is_ptr = false },
         .f32 => .{ .name = "0.0", .ty = .f32, .is_ptr = false },
         .f64 => .{ .name = "0.0", .ty = .f64, .is_ptr = false },
+        .complex_f32 => .{ .name = "zeroinitializer", .ty = .complex_f32, .is_ptr = false },
+        .complex_f64 => .{ .name = "zeroinitializer", .ty = .complex_f64, .is_ptr = false },
         .ptr => .{ .name = "null", .ty = .ptr, .is_ptr = false },
         .void => .{ .name = "", .ty = .void, .is_ptr = false },
     };

@@ -54,6 +54,9 @@ pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef
             switch (un.op) {
                 .plus => return inner,
                 .minus => {
+                    if (isComplexType(inner.ty)) {
+                        return emitComplexNegate(ctx, builder, inner);
+                    }
                     const zero = utils.zeroValue(inner.ty);
                     return emitBinary(ctx, builder, .sub, zero, inner);
                 },
@@ -84,6 +87,9 @@ pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef
             }
             if (kind != .call) return error.AmbiguousCallOrSubscript;
             const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
+            if (sym.is_intrinsic) {
+                return emitIntrinsicCall(ctx, builder, call.name, call.args);
+            }
             const ret_ty = llvm_types.typeFromKind(sym.type_kind);
             const fn_name = try ctx.ensureDecl(call.name, ret_ty);
             return emitCall(ctx, builder, fn_name, ret_ty, call.args, false);
@@ -92,6 +98,17 @@ pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef
 }
 
 pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, rhs: ValueRef) !ValueRef {
+    if (op == .add or op == .sub or op == .mul or op == .div) {
+        if (isComplexType(lhs.ty) or isComplexType(rhs.ty)) {
+            const complex_ty = complexCommonType(lhs.ty, rhs.ty) orelse return error.UnsupportedComplexType;
+            const left = try coerceToComplex(ctx, builder, lhs, complex_ty);
+            const right = try coerceToComplex(ctx, builder, rhs, complex_ty);
+            return emitComplexBinary(ctx, builder, op, left, right);
+        }
+    }
+    if (op == .eq or op == .ne or op == .lt or op == .le or op == .gt or op == .ge) {
+        if (isComplexType(lhs.ty) or isComplexType(rhs.ty)) return error.UnsupportedComplexComparison;
+    }
     const common_ty = ir.commonType(lhs.ty, rhs.ty);
     var left = lhs;
     var right = rhs;
@@ -232,6 +249,7 @@ pub fn emitMul(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !V
 pub fn emitCond(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     const value = try emitExpr(ctx, builder, expr);
     if (value.ty == .i1) return value;
+    if (isComplexType(value.ty)) return error.UnsupportedLogicalOp;
     if (value.is_ptr) return error.UnsupportedLogicalOp;
     const tmp = try ctx.nextTemp();
     const zero = utils.zeroValue(value.ty);
@@ -285,9 +303,11 @@ pub fn emitConstTyped(ctx: *Context, value: sema.ConstValue, type_kind: TypeKind
     };
 }
 
-pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) !ValueRef {
+pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) EmitError!ValueRef {
     if (value.ty == target) return value;
     if (value.is_ptr) return error.UnexpectedPointerValue;
+    if (isComplexType(target)) return coerceToComplex(ctx, builder, value, target);
+    if (isComplexType(value.ty)) return error.UnsupportedCast;
     const tmp = try ctx.nextTemp();
     const from = value.ty;
     const to = target;
@@ -313,6 +333,8 @@ pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) 
             .i32 => "zext",
             else => return error.UnsupportedCast,
         },
+        .complex_f32 => return error.UnsupportedCast,
+        .complex_f64 => return error.UnsupportedCast,
         .ptr => return error.UnsupportedCast,
         .void => return error.UnsupportedCast,
     };
@@ -348,4 +370,245 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
             return llvm_types.typeFromKind(sym.type_kind);
         },
     }
+}
+
+fn isComplexType(ty: IRType) bool {
+    return ty == .complex_f32 or ty == .complex_f64;
+}
+
+fn complexElemType(ty: IRType) ?IRType {
+    return switch (ty) {
+        .complex_f32 => .f32,
+        .complex_f64 => .f64,
+        else => null,
+    };
+}
+
+fn complexCommonType(lhs: IRType, rhs: IRType) ?IRType {
+    if (lhs == .complex_f64 or rhs == .complex_f64) return .complex_f64;
+    if (lhs == .complex_f32 or rhs == .complex_f32) return .complex_f32;
+    return null;
+}
+
+fn emitBinaryOp(ctx: *Context, builder: anytype, op_text: []const u8, ty: IRType, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
+    const tmp = try ctx.nextTemp();
+    try builder.binary(tmp, op_text, ty, lhs, rhs);
+    return .{ .name = tmp, .ty = ty, .is_ptr = false };
+}
+
+fn extractComplex(ctx: *Context, builder: anytype, value: ValueRef, index: usize) EmitError!ValueRef {
+    const elem_ty = complexElemType(value.ty) orelse return error.UnsupportedComplexType;
+    const tmp = try ctx.nextTemp();
+    try builder.extractValue(tmp, value.ty, value, index);
+    return .{ .name = tmp, .ty = elem_ty, .is_ptr = false };
+}
+
+fn buildComplex(ctx: *Context, builder: anytype, real: ValueRef, imag: ValueRef, ty: IRType) EmitError!ValueRef {
+    const undef = ValueRef{ .name = "undef", .ty = ty, .is_ptr = false };
+    const tmp1 = try ctx.nextTemp();
+    try builder.insertValue(tmp1, ty, undef, real.ty, real, 0);
+    const tmp2 = try ctx.nextTemp();
+    try builder.insertValue(tmp2, ty, .{ .name = tmp1, .ty = ty, .is_ptr = false }, imag.ty, imag, 1);
+    return .{ .name = tmp2, .ty = ty, .is_ptr = false };
+}
+
+fn coerceToComplex(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) EmitError!ValueRef {
+    if (!isComplexType(target)) return error.UnsupportedCast;
+    if (value.ty == target) return value;
+    if (isComplexType(value.ty)) {
+        const elem_from = complexElemType(value.ty) orelse return error.UnsupportedComplexType;
+        const elem_to = complexElemType(target) orelse return error.UnsupportedComplexType;
+        const real = try extractComplex(ctx, builder, value, 0);
+        const imag = try extractComplex(ctx, builder, value, 1);
+        var real_cast = real;
+        var imag_cast = imag;
+        if (elem_from != elem_to) {
+            real_cast = try coerce(ctx, builder, real, elem_to);
+            imag_cast = try coerce(ctx, builder, imag, elem_to);
+        }
+        return buildComplex(ctx, builder, real_cast, imag_cast, target);
+    }
+    const elem_ty = complexElemType(target) orelse return error.UnsupportedComplexType;
+    var scalar = value;
+    if (scalar.ty != elem_ty) scalar = try coerce(ctx, builder, scalar, elem_ty);
+    const zero = utils.zeroValue(elem_ty);
+    return buildComplex(ctx, builder, scalar, zero, target);
+}
+
+fn emitComplexNegate(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+    const elem_ty = complexElemType(value.ty) orelse return error.UnsupportedComplexType;
+    const real = try extractComplex(ctx, builder, value, 0);
+    const imag = try extractComplex(ctx, builder, value, 1);
+    const zero = utils.zeroValue(elem_ty);
+    const neg_real = try emitBinaryOp(ctx, builder, "fsub", elem_ty, zero, real);
+    const neg_imag = try emitBinaryOp(ctx, builder, "fsub", elem_ty, zero, imag);
+    return buildComplex(ctx, builder, neg_real, neg_imag, value.ty);
+}
+
+fn emitComplexConjg(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+    const elem_ty = complexElemType(value.ty) orelse return error.UnsupportedComplexType;
+    const real = try extractComplex(ctx, builder, value, 0);
+    const imag = try extractComplex(ctx, builder, value, 1);
+    const zero = utils.zeroValue(elem_ty);
+    const neg_imag = try emitBinaryOp(ctx, builder, "fsub", elem_ty, zero, imag);
+    return buildComplex(ctx, builder, real, neg_imag, value.ty);
+}
+
+fn emitComplexBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
+    const elem_ty = complexElemType(lhs.ty) orelse return error.UnsupportedComplexType;
+    const ar = try extractComplex(ctx, builder, lhs, 0);
+    const ai = try extractComplex(ctx, builder, lhs, 1);
+    const br = try extractComplex(ctx, builder, rhs, 0);
+    const bi = try extractComplex(ctx, builder, rhs, 1);
+    switch (op) {
+        .add => {
+            const real = try emitBinaryOp(ctx, builder, "fadd", elem_ty, ar, br);
+            const imag = try emitBinaryOp(ctx, builder, "fadd", elem_ty, ai, bi);
+            return buildComplex(ctx, builder, real, imag, lhs.ty);
+        },
+        .sub => {
+            const real = try emitBinaryOp(ctx, builder, "fsub", elem_ty, ar, br);
+            const imag = try emitBinaryOp(ctx, builder, "fsub", elem_ty, ai, bi);
+            return buildComplex(ctx, builder, real, imag, lhs.ty);
+        },
+        .mul => {
+            const ar_br = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ar, br);
+            const ai_bi = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ai, bi);
+            const ar_bi = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ar, bi);
+            const ai_br = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ai, br);
+            const real = try emitBinaryOp(ctx, builder, "fsub", elem_ty, ar_br, ai_bi);
+            const imag = try emitBinaryOp(ctx, builder, "fadd", elem_ty, ar_bi, ai_br);
+            return buildComplex(ctx, builder, real, imag, lhs.ty);
+        },
+        .div => {
+            const br_br = try emitBinaryOp(ctx, builder, "fmul", elem_ty, br, br);
+            const bi_bi = try emitBinaryOp(ctx, builder, "fmul", elem_ty, bi, bi);
+            const denom = try emitBinaryOp(ctx, builder, "fadd", elem_ty, br_br, bi_bi);
+            const ar_br = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ar, br);
+            const ai_bi = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ai, bi);
+            const ai_br = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ai, br);
+            const ar_bi = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ar, bi);
+            const real_num = try emitBinaryOp(ctx, builder, "fadd", elem_ty, ar_br, ai_bi);
+            const imag_num = try emitBinaryOp(ctx, builder, "fsub", elem_ty, ai_br, ar_bi);
+            const real = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, real_num, denom);
+            const imag = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, imag_num, denom);
+            return buildComplex(ctx, builder, real, imag, lhs.ty);
+        },
+        else => return error.UnsupportedComplexOp,
+    }
+}
+
+fn buildSig(allocator: std.mem.Allocator, types: []const IRType) EmitError![]const u8 {
+    var sig = std.array_list.Managed(u8).init(allocator);
+    var first = true;
+    for (types) |ty| {
+        if (!first) try sig.appendSlice(", ");
+        first = false;
+        try sig.appendSlice(llvm_types.irTypeText(ty));
+    }
+    return sig.toOwnedSlice();
+}
+
+fn buildArgText(allocator: std.mem.Allocator, values: []const ValueRef) EmitError![]const u8 {
+    var args = std.array_list.Managed(u8).init(allocator);
+    var first = true;
+    for (values) |val| {
+        if (!first) try args.appendSlice(", ");
+        first = false;
+        try args.appendSlice(llvm_types.irTypeText(val.ty));
+        try args.appendSlice(" ");
+        try args.appendSlice(val.name);
+    }
+    return args.toOwnedSlice();
+}
+
+fn llvmIntrinsicName(allocator: std.mem.Allocator, base: []const u8, ty: IRType) EmitError![]const u8 {
+    const suffix = switch (ty) {
+        .f32 => "f32",
+        .f64 => "f64",
+        else => return error.UnsupportedIntrinsicType,
+    };
+    return std.fmt.allocPrint(allocator, "llvm.{s}.{s}", .{ base, suffix });
+}
+
+fn emitIntrinsicUnaryFloatValue(ctx: *Context, builder: anytype, base: []const u8, value: ValueRef) EmitError!ValueRef {
+    if (value.ty != .f32 and value.ty != .f64) return error.UnsupportedIntrinsicType;
+    const name = try llvmIntrinsicName(ctx.allocator, base, value.ty);
+    const sig = try buildSig(ctx.allocator, &.{value.ty});
+    _ = try ctx.ensureDeclRaw(name, value.ty, sig, false);
+    const args = try buildArgText(ctx.allocator, &.{value});
+    const tmp = try ctx.nextTemp();
+    try builder.call(tmp, value.ty, name, args);
+    return .{ .name = tmp, .ty = value.ty, .is_ptr = false };
+}
+
+fn emitIntrinsicUnaryFloat(ctx: *Context, builder: anytype, base: []const u8, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try emitExpr(ctx, builder, args[0]);
+    return emitIntrinsicUnaryFloatValue(ctx, builder, base, value);
+}
+
+fn emitIntrinsicAbs(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try emitExpr(ctx, builder, args[0]);
+    if (isComplexType(value.ty)) {
+        const elem_ty = complexElemType(value.ty) orelse return error.UnsupportedIntrinsicType;
+        const real = try extractComplex(ctx, builder, value, 0);
+        const imag = try extractComplex(ctx, builder, value, 1);
+        const real_sq = try emitBinaryOp(ctx, builder, "fmul", elem_ty, real, real);
+        const imag_sq = try emitBinaryOp(ctx, builder, "fmul", elem_ty, imag, imag);
+        const sum = try emitBinaryOp(ctx, builder, "fadd", elem_ty, real_sq, imag_sq);
+        return emitIntrinsicUnaryFloatValue(ctx, builder, "sqrt", sum);
+    }
+    if (value.ty == .i32) {
+        const zero = utils.zeroValue(.i32);
+        const cond_name = try ctx.nextTemp();
+        try builder.compare(cond_name, "icmp", "slt", .i32, value, zero);
+        const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
+        const neg = try emitBinaryOp(ctx, builder, "sub", .i32, zero, value);
+        const tmp = try ctx.nextTemp();
+        try builder.select(tmp, .i32, cond, neg, value);
+        return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    }
+    if (value.ty == .f32 or value.ty == .f64) {
+        return emitIntrinsicUnaryFloatValue(ctx, builder, "fabs", value);
+    }
+    return error.UnsupportedIntrinsicType;
+}
+
+fn emitIntrinsicMinMax(ctx: *Context, builder: anytype, args: []*Expr, is_max: bool) EmitError!ValueRef {
+    if (args.len != 2) return error.InvalidIntrinsicCall;
+    var left = try emitExpr(ctx, builder, args[0]);
+    var right = try emitExpr(ctx, builder, args[1]);
+    if (isComplexType(left.ty) or isComplexType(right.ty)) return error.UnsupportedIntrinsicType;
+    const common_ty = ir.commonType(left.ty, right.ty);
+    if (common_ty != .i32 and common_ty != .f32 and common_ty != .f64) return error.UnsupportedIntrinsicType;
+    left = try coerce(ctx, builder, left, common_ty);
+    right = try coerce(ctx, builder, right, common_ty);
+    const pred = if (common_ty == .i32) (if (is_max) "sgt" else "slt") else (if (is_max) "ogt" else "olt");
+    const instr = if (common_ty == .i32) "icmp" else "fcmp";
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, instr, pred, common_ty, left, right);
+    const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
+    const tmp = try ctx.nextTemp();
+    try builder.select(tmp, common_ty, cond, left, right);
+    return .{ .name = tmp, .ty = common_ty, .is_ptr = false };
+}
+
+fn emitIntrinsicConjg(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try emitExpr(ctx, builder, args[0]);
+    if (!isComplexType(value.ty)) return error.UnsupportedIntrinsicType;
+    return emitComplexConjg(ctx, builder, value);
+}
+
+fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args: []*Expr) EmitError!ValueRef {
+    if (std.ascii.eqlIgnoreCase(name, "SIN")) return emitIntrinsicUnaryFloat(ctx, builder, "sin", args);
+    if (std.ascii.eqlIgnoreCase(name, "COS")) return emitIntrinsicUnaryFloat(ctx, builder, "cos", args);
+    if (std.ascii.eqlIgnoreCase(name, "SQRT")) return emitIntrinsicUnaryFloat(ctx, builder, "sqrt", args);
+    if (std.ascii.eqlIgnoreCase(name, "ABS")) return emitIntrinsicAbs(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "MIN")) return emitIntrinsicMinMax(ctx, builder, args, false);
+    if (std.ascii.eqlIgnoreCase(name, "MAX")) return emitIntrinsicMinMax(ctx, builder, args, true);
+    if (std.ascii.eqlIgnoreCase(name, "CONJG")) return emitIntrinsicConjg(ctx, builder, args);
+    return error.UnknownIntrinsic;
 }

@@ -111,6 +111,14 @@ pub const Context = struct {
         return mangled;
     }
 
+    pub fn ensureDeclRaw(self: *Context, name: []const u8, ret_ty: IRType, sig: []const u8, varargs: bool) ![]const u8 {
+        if (self.defined.contains(name)) return name;
+        if (self.decls.contains(name)) return name;
+        const decl = IRDecl{ .ret_type = ret_ty, .sig = sig, .varargs = varargs };
+        try self.decls.put(name, decl);
+        return name;
+    }
+
     pub fn implicitType(self: *Context, name: []const u8) TypeKind {
         if (name.len == 0) return .real;
         const first = std.ascii.toUpper(name[0]);

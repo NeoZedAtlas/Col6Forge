@@ -99,6 +99,8 @@ fn sizeAlign(ty: ir.IRType) !SizeAlign {
         .i32 => .{ .size = 4, .alignment = 4 },
         .f32 => .{ .size = 4, .alignment = 4 },
         .f64 => .{ .size = 8, .alignment = 8 },
+        .complex_f32 => .{ .size = 8, .alignment = 4 },
+        .complex_f64 => .{ .size = 16, .alignment = 8 },
         .ptr => error.UnsupportedCommonType,
         .void => error.UnsupportedCommonType,
     };

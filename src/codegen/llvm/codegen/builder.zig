@@ -102,6 +102,13 @@ pub fn Builder(comptime WriterType: type) type {
             try self.writer.print("  {s} = select i1 {s}, i1 {s}, i1 {s}\n", .{ tmp, cond.name, then_val.name, else_val.name });
         }
 
+        pub fn select(self: *@This(), tmp: []const u8, ty: IRType, cond: ValueRef, then_val: ValueRef, else_val: ValueRef) !void {
+            try self.writer.print(
+                "  {s} = select i1 {s}, {s} {s}, {s} {s}\n",
+                .{ tmp, cond.name, llvm_types.irTypeText(ty), then_val.name, llvm_types.irTypeText(ty), else_val.name },
+            );
+        }
+
         pub fn gep(self: *@This(), tmp: []const u8, elem_ty: IRType, base_ptr: ValueRef, offset: ValueRef) !void {
             try self.writer.print("  {s} = getelementptr {s}, ptr {s}, i32 {s}\n", .{ tmp, llvm_types.irTypeText(elem_ty), base_ptr.name, offset.name });
         }
@@ -112,6 +119,17 @@ pub fn Builder(comptime WriterType: type) type {
             } else {
                 try self.writer.print("  call {s} @{s}({s})\n", .{ llvm_types.irTypeText(ret_ty), fn_name, args });
             }
+        }
+
+        pub fn extractValue(self: *@This(), tmp: []const u8, agg_ty: IRType, agg_val: ValueRef, index: usize) !void {
+            try self.writer.print("  {s} = extractvalue {s} {s}, {d}\n", .{ tmp, llvm_types.irTypeText(agg_ty), agg_val.name, index });
+        }
+
+        pub fn insertValue(self: *@This(), tmp: []const u8, agg_ty: IRType, agg_val: ValueRef, elem_ty: IRType, elem_val: ValueRef, index: usize) !void {
+            try self.writer.print(
+                "  {s} = insertvalue {s} {s}, {s} {s}, {d}\n",
+                .{ tmp, llvm_types.irTypeText(agg_ty), agg_val.name, llvm_types.irTypeText(elem_ty), elem_val.name, index },
+            );
         }
 
         pub fn cast(self: *@This(), tmp: []const u8, instr: []const u8, from: IRType, value: ValueRef, to: IRType) !void {
