@@ -1,6 +1,7 @@
 pub const IRType = enum {
     void,
     i1,
+    i8,
     i32,
     f32,
     f64,

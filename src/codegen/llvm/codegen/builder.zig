@@ -18,6 +18,10 @@ pub fn Builder(comptime WriterType: type) type {
             try self.writer.print("source_filename = \"{s}\"\n", .{source_name});
         }
 
+        pub fn commonGlobal(self: *@This(), name: []const u8, size: usize, alignment: usize) !void {
+            try self.writer.print("@{s} = common global [{d} x i8] zeroinitializer, align {d}\n", .{ name, size, alignment });
+        }
+
         pub fn declare(self: *@This(), name: []const u8, ret_type: IRType, sig: []const u8, varargs: bool) !void {
             const ret_text = llvm_types.irTypeText(ret_type);
             if (varargs) {

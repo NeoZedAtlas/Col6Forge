@@ -3,6 +3,7 @@ const ast = @import("../../../ast/nodes.zig");
 const llvm_types = @import("../types.zig");
 const context = @import("context.zig");
 const expr = @import("expr.zig");
+const common = @import("common.zig");
 const utils = @import("utils.zig");
 
 const Stmt = ast.Stmt;
@@ -51,6 +52,8 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         try builder.alloca(alloca_name, ty);
         try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
     }
+
+    try installCommonLocals(ctx, builder);
 
     const block_names = try ctx.buildBlockNames();
     defer {
@@ -221,5 +224,20 @@ fn emitSequenceWithEnd(ctx: *Context, builder: anytype, block_names: [][]const u
         const next_block = if (i == end_idx) end_next else block_names[i + 1];
         _ = try emitStmt(ctx, builder, stmt, next_block);
         i += 1;
+    }
+}
+
+fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {
+    const layouts = try common.buildUnitCommonLayouts(ctx.allocator, ctx.unit, ctx.sem);
+    for (layouts) |layout| {
+        const base_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{layout.global_name});
+        const base_ref = ValueRef{ .name = base_name, .ty = .ptr, .is_ptr = true };
+        for (layout.items) |item| {
+            const offset_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{item.offset});
+            const offset_val = ValueRef{ .name = offset_text, .ty = .i32, .is_ptr = false };
+            const ptr_name = try ctx.nextTemp();
+            try builder.gep(ptr_name, .i8, base_ref, offset_val);
+            try ctx.locals.put(item.name, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
+        }
     }
 }

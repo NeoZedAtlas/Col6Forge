@@ -3,6 +3,7 @@ const ast = @import("../../../ast/nodes.zig");
 const sema = @import("../../../sema/mod.zig");
 const context = @import("context.zig");
 const builder_mod = @import("builder.zig");
+const common = @import("common.zig");
 const stmt = @import("stmt.zig");
 const utils = @import("utils.zig");
 
@@ -27,6 +28,29 @@ pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: sema.Sema
     for (program.units) |unit| {
         const mangled = try utils.mangleName(allocator, unit.name);
         try defined.put(mangled, {});
+    }
+
+    var common_blocks = std.StringHashMap(common.CommonBlockInfo).init(allocator);
+    defer common_blocks.deinit();
+    for (program.units) |unit| {
+        const sem_unit = sem_map.get(unit.name) orelse return error.MissingSemanticUnit;
+        const layouts = try common.buildUnitCommonLayouts(allocator, unit, sem_unit);
+        for (layouts) |layout| {
+            if (common_blocks.get(layout.key)) |info| {
+                if (info.size != layout.size or info.alignment != layout.alignment) return error.CommonBlockMismatch;
+            } else {
+                try common_blocks.put(layout.key, .{
+                    .global_name = layout.global_name,
+                    .size = layout.size,
+                    .alignment = layout.alignment,
+                });
+            }
+        }
+    }
+    var common_it = common_blocks.iterator();
+    while (common_it.next()) |entry| {
+        const info = entry.value_ptr.*;
+        try builder.commonGlobal(info.global_name, info.size, info.alignment);
     }
 
     for (program.units) |unit| {

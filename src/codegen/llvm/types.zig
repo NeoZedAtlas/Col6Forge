@@ -18,6 +18,7 @@ pub fn irTypeText(ty: IRType) []const u8 {
     return switch (ty) {
         .void => "void",
         .i1 => "i1",
+        .i8 => "i8",
         .i32 => "i32",
         .f32 => "float",
         .f64 => "double",

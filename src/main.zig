@@ -92,9 +92,11 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParsedArgs
 
 fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
     var stderr = std.fs.File.stderr();
+    var buffer: [4096]u8 = undefined;
+    var writer = stderr.writer(&buffer);
     switch (err) {
         error.FileNotFound => {
-            try Col6Forge.writeDiagnostic(stderr.writer(), .{
+            try Col6Forge.writeDiagnostic(&writer.interface, .{
                 .file_path = input_path,
                 .line = 1,
                 .column = 1,
@@ -103,7 +105,7 @@ fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
             });
         },
         else => {
-            try Col6Forge.writeDiagnostic(stderr.writer(), .{
+            try Col6Forge.writeDiagnostic(&writer.interface, .{
                 .file_path = input_path,
                 .line = 1,
                 .column = 1,
@@ -112,6 +114,7 @@ fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
             });
         },
     }
+    try writer.interface.flush();
 }
 
 fn printUsage(file: std.fs.File) !void {

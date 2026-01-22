@@ -240,6 +240,7 @@ pub fn emitCond(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
             try builder.compare(tmp, "icmp", "ne", .i32, value, zero);
             return .{ .name = tmp, .ty = .i1, .is_ptr = false };
         },
+        .i8 => return error.UnsupportedLogicalOp,
         .f32, .f64 => {
             try builder.compare(tmp, "fcmp", "one", value.ty, value, zero);
             return .{ .name = tmp, .ty = .i1, .is_ptr = false };
@@ -297,6 +298,7 @@ pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) 
             .i1 => "trunc",
             else => return error.UnsupportedCast,
         },
+        .i8 => return error.UnsupportedCast,
         .f32 => switch (to) {
             .f64 => "fpext",
             .i32 => "fptosi",

@@ -8,7 +8,7 @@ pub const Diagnostic = struct {
     line_text: []const u8,
 };
 
-pub fn writeDiagnostic(writer: anytype, diag: Diagnostic) !void {
+pub fn writeDiagnostic(writer: *std.Io.Writer, diag: Diagnostic) !void {
     try writer.print("{s}:{d}:{d}: error: {s}\n", .{
         diag.file_path,
         diag.line,

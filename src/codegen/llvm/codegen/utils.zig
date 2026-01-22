@@ -38,6 +38,7 @@ pub fn hasDExponent(text: []const u8) bool {
 pub fn zeroValue(ty: IRType) ValueRef {
     return switch (ty) {
         .i1 => .{ .name = "0", .ty = .i1, .is_ptr = false },
+        .i8 => .{ .name = "0", .ty = .i8, .is_ptr = false },
         .i32 => .{ .name = "0", .ty = .i32, .is_ptr = false },
         .f32 => .{ .name = "0.0", .ty = .f32, .is_ptr = false },
         .f64 => .{ .name = "0.0", .ty = .f64, .is_ptr = false },
