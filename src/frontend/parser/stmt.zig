@@ -13,15 +13,52 @@ const Expr = ast.Expr;
 
 const ParseStmtError = anyerror;
 
-pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize) ParseStmtError!Stmt {
+pub const DoContext = struct {
+    stack: std.array_list.Managed([]const u8),
+    counter: usize,
+
+    pub fn init(arena: std.mem.Allocator) DoContext {
+        return .{
+            .stack = std.array_list.Managed([]const u8).init(arena),
+            .counter = 0,
+        };
+    }
+
+    pub fn nextLabel(self: *DoContext, arena: std.mem.Allocator) ![]const u8 {
+        const label = try std.fmt.allocPrint(arena, "ENDDO{d}", .{self.counter});
+        self.counter += 1;
+        return label;
+    }
+
+    pub fn push(self: *DoContext, label: []const u8) !void {
+        try self.stack.append(label);
+    }
+
+    pub fn pop(self: *DoContext) ?[]const u8 {
+        if (self.stack.items.len == 0) return null;
+        const idx = self.stack.items.len - 1;
+        const label = self.stack.items[idx];
+        self.stack.items.len = idx;
+        return label;
+    }
+};
+
+pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize, do_ctx: *DoContext) ParseStmtError!Stmt {
     const line = lines[index.*];
     const tokens = try lexer.lexLogicalLine(arena, line);
     defer arena.free(tokens);
     var lp = LineParser.init(line, tokens);
     const label = line.label;
 
+    if (isEndDo(lp)) {
+        _ = lp.next();
+        _ = lp.next();
+        const end_label = do_ctx.pop() orelse return error.EndDoWithoutDo;
+        index.* += 1;
+        return .{ .label = end_label, .node = .{ .cont = {} } };
+    }
     if (lp.isKeyword("IF")) {
-        return parseIfStatement(arena, lines, index, label, &lp);
+        return parseIfStatement(arena, lines, index, label, &lp, do_ctx);
     }
     if (lp.isKeyword("CALL")) {
         _ = lp.next();
@@ -41,8 +78,20 @@ pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine,
     }
     if (lp.isKeyword("DO")) {
         _ = lp.next();
-        const end_label = try parseLabelToken(&lp);
-        const var_tok = lp.expectIdentifier() orelse return error.MissingName;
+        const next_tok = lp.peek() orelse return error.UnexpectedToken;
+        var end_label: []const u8 = undefined;
+        var var_tok: lexer.Token = undefined;
+        if (next_tok.kind == .integer) {
+            end_label = try parseLabelToken(&lp);
+            var_tok = lp.expectIdentifier() orelse return error.MissingName;
+        } else if (next_tok.kind == .identifier and nextTokenIsEquals(lp)) {
+            end_label = try do_ctx.nextLabel(arena);
+            try do_ctx.push(end_label);
+            var_tok = lp.expectIdentifier() orelse return error.MissingName;
+        } else {
+            end_label = try parseLabelToken(&lp);
+            var_tok = lp.expectIdentifier() orelse return error.MissingName;
+        }
         _ = lp.expect(.equals) orelse return error.UnexpectedToken;
         const start_expr = try expr.parseExpr(&lp, arena, 0);
         _ = lp.expect(.comma) orelse return error.UnexpectedToken;
@@ -84,7 +133,7 @@ pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine,
     return .{ .label = label, .node = .{ .assignment = .{ .target = target, .value = value } } };
 }
 
-fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize, label: ?[]const u8, lp: *LineParser) ParseStmtError!Stmt {
+fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize, label: ?[]const u8, lp: *LineParser, do_ctx: *DoContext) ParseStmtError!Stmt {
     _ = lp.next();
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
     const cond = try expr.parseExpr(lp, arena, 0);
@@ -93,7 +142,7 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
     if (lp.isKeyword("THEN")) {
         _ = lp.next();
         index.* += 1;
-        const then_stmts = try parseIfBlock(arena, lines, index);
+        const then_stmts = try parseIfBlock(arena, lines, index, do_ctx);
         var else_stmts: []Stmt = &.{};
         if (index.* < lines.len) {
             const next_line = lines[index.*];
@@ -102,7 +151,7 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
             var next_lp = LineParser.init(next_line, next_tokens);
             if (next_lp.isKeyword("ELSE")) {
                 index.* += 1;
-                else_stmts = try parseIfBlock(arena, lines, index);
+                else_stmts = try parseIfBlock(arena, lines, index, do_ctx);
             }
         }
         if (index.* >= lines.len) return error.UnexpectedEOF;
@@ -110,7 +159,7 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
         const end_tokens = try lexer.lexLogicalLine(arena, end_line);
         defer arena.free(end_tokens);
         var end_lp = LineParser.init(end_line, end_tokens);
-        if (!end_lp.isKeyword("ENDIF")) return error.ExpectedEndIf;
+        if (!end_lp.isKeyword("ENDIF") and !isEndIfLine(end_lp)) return error.ExpectedEndIf;
         index.* += 1;
         return .{
             .label = label,
@@ -123,18 +172,18 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
     return .{ .label = label, .node = .{ .if_single = .{ .condition = cond, .stmt = stmt_node } } };
 }
 
-pub fn parseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize) ParseStmtError![]Stmt {
+pub fn parseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize, do_ctx: *DoContext) ParseStmtError![]Stmt {
     var stmts = std.array_list.Managed(Stmt).init(arena);
     while (index.* < lines.len) {
         const line = lines[index.*];
         const tokens = try lexer.lexLogicalLine(arena, line);
         defer arena.free(tokens);
         var lp = LineParser.init(line, tokens);
-        if (lp.isKeyword("ELSE") or lp.isKeyword("ENDIF")) {
+        if (lp.isKeyword("ELSE") or lp.isKeyword("ENDIF") or isEndIfLine(lp)) {
             break;
         }
         if (decl.isDeclarationStart(lp)) return error.DeclarationInIfBlock;
-        const node = try parseStatement(arena, lines, index);
+        const node = try parseStatement(arena, lines, index, do_ctx);
         try stmts.append(node);
     }
     return stmts.toOwnedSlice();
@@ -211,4 +260,25 @@ fn parseLabelToken(lp: *LineParser) ParseStmtError![]const u8 {
     if (tok.kind != .integer and tok.kind != .identifier) return error.UnexpectedToken;
     _ = lp.next();
     return lp.tokenText(tok);
+}
+
+fn isEndDo(lp: LineParser) bool {
+    if (!lp.isKeyword("END")) return false;
+    if (lp.index + 1 >= lp.tokens.len) return false;
+    const next_tok = lp.tokens[lp.index + 1];
+    if (next_tok.kind != .identifier) return false;
+    return context.eqNoCase(lp.tokenText(next_tok), "DO");
+}
+
+fn isEndIfLine(lp: LineParser) bool {
+    if (!lp.isKeyword("END")) return false;
+    if (lp.index + 1 >= lp.tokens.len) return false;
+    const next_tok = lp.tokens[lp.index + 1];
+    if (next_tok.kind != .identifier) return false;
+    return context.eqNoCase(lp.tokenText(next_tok), "IF");
+}
+
+fn nextTokenIsEquals(lp: LineParser) bool {
+    if (lp.index + 1 >= lp.tokens.len) return false;
+    return lp.tokens[lp.index + 1].kind == .equals;
 }

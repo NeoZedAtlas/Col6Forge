@@ -12,6 +12,46 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 
+const LocalBlocks = struct {
+    names: [][]const u8,
+    label_map: std.StringHashMap([]const u8),
+    label_index: std.StringHashMap(usize),
+};
+
+fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !LocalBlocks {
+    var names = std.array_list.Managed([]const u8).init(ctx.allocator);
+    var label_map = std.StringHashMap([]const u8).init(ctx.allocator);
+    var label_index = std.StringHashMap(usize).init(ctx.allocator);
+    for (stmts, 0..) |stmt, idx| {
+        const name = if (stmt.label) |label| blk: {
+            const block_name = try std.fmt.allocPrint(ctx.allocator, "L{s}", .{label});
+            try label_map.put(label, block_name);
+            try label_index.put(label, idx);
+            break :blk block_name;
+        } else try ctx.nextLabel(prefix);
+        try names.append(name);
+    }
+    return .{
+        .names = try names.toOwnedSlice(),
+        .label_map = label_map,
+        .label_index = label_index,
+    };
+}
+
+fn freeBlockNames(ctx: *Context, names: [][]const u8) void {
+    for (names) |name| {
+        ctx.allocator.free(name);
+    }
+    ctx.allocator.free(names);
+}
+
+fn resolveLabel(ctx: *Context, local_map: ?*const std.StringHashMap([]const u8), label: []const u8) ?[]const u8 {
+    if (local_map) |map| {
+        if (map.get(label)) |name| return name;
+    }
+    return ctx.label_map.get(label);
+}
+
 pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try ctx.buildRefMap();
     try ctx.buildLocals();
@@ -76,7 +116,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try builder.functionEnd();
 }
 
-fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8) EmitError!bool {
+fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8, local_label_map: ?*const std.StringHashMap([]const u8)) EmitError!bool {
     switch (stmt.node) {
         .assignment => |assign| {
             const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
@@ -94,7 +134,7 @@ fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8)
             return true;
         },
         .goto => |gt| {
-            const target = ctx.label_map.get(gt.label) orelse return error.MissingLabel;
+            const target = resolveLabel(ctx, local_label_map, gt.label) orelse return error.MissingLabel;
             try builder.br(target);
             return true;
         },
@@ -106,13 +146,91 @@ fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8)
         .cont => {},
         .if_single => |ifs| {
             const inner = ifs.stmt.*;
-            if (inner != .goto) return error.ControlFlowUnsupported;
-            const target = ctx.label_map.get(inner.goto.label) orelse return error.MissingLabel;
             const cond = try expr.emitCond(ctx, builder, ifs.condition);
-            try builder.brCond(cond, target, next_block);
+            switch (inner) {
+                .goto => {
+                    const target = resolveLabel(ctx, local_label_map, inner.goto.label) orelse return error.MissingLabel;
+                    try builder.brCond(cond, target, next_block);
+                    return true;
+                },
+                .ret => {
+                    const then_label = try ctx.nextLabel("if_ret");
+                    try builder.brCond(cond, then_label, next_block);
+                    try builder.label(then_label);
+                    try builder.retVoid();
+                    return true;
+                },
+                .assignment => |assign| {
+                    const then_label = try ctx.nextLabel("if_assign");
+                    try builder.brCond(cond, then_label, next_block);
+                    try builder.label(then_label);
+                    const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
+                    const value = try expr.emitExpr(ctx, builder, assign.value);
+                    const sym_ty = try expr.exprType(ctx, assign.target);
+                    const coerced = try expr.coerce(ctx, builder, value, sym_ty);
+                    try builder.store(coerced, target_ptr);
+                    try builder.br(next_block);
+                    return true;
+                },
+                .call => |call| {
+                    const then_label = try ctx.nextLabel("if_call");
+                    try builder.brCond(cond, then_label, next_block);
+                    try builder.label(then_label);
+                    const fn_name = try ctx.ensureDecl(call.name, .void);
+                    _ = try expr.emitCall(ctx, builder, fn_name, .void, call.args, true);
+                    try builder.br(next_block);
+                    return true;
+                },
+                .cont => {
+                    try builder.br(next_block);
+                    return true;
+                },
+                else => return error.ControlFlowUnsupported,
+            }
+        },
+        .if_block => |ifb| {
+            const cond = try expr.emitCond(ctx, builder, ifb.condition);
+            if (ifb.then_stmts.len == 0 and ifb.else_stmts.len == 0) {
+                try builder.br(next_block);
+                return true;
+            }
+
+            var then_blocks: ?LocalBlocks = null;
+            var else_blocks: ?LocalBlocks = null;
+            if (ifb.then_stmts.len > 0) {
+                then_blocks = try buildLocalBlocks(ctx, ifb.then_stmts, "if_then");
+            }
+            if (ifb.else_stmts.len > 0) {
+                else_blocks = try buildLocalBlocks(ctx, ifb.else_stmts, "if_else");
+            }
+
+            if (then_blocks) |blocks| {
+                defer {
+                    freeBlockNames(ctx, blocks.names);
+                    blocks.label_map.deinit();
+                    blocks.label_index.deinit();
+                }
+            }
+            if (else_blocks) |blocks| {
+                defer {
+                    freeBlockNames(ctx, blocks.names);
+                    blocks.label_map.deinit();
+                    blocks.label_index.deinit();
+                }
+            }
+
+            const then_entry = if (then_blocks) |blocks| blocks.names[0] else next_block;
+            const else_entry = if (else_blocks) |blocks| blocks.names[0] else next_block;
+            try builder.brCond(cond, then_entry, else_entry);
+
+            if (then_blocks) |blocks| {
+                try emitStmtListRange(ctx, builder, ifb.then_stmts, blocks.names, &blocks.label_map, &blocks.label_index, 0, blocks.names.len - 1, next_block);
+            }
+            if (else_blocks) |blocks| {
+                try emitStmtListRange(ctx, builder, ifb.else_stmts, blocks.names, &blocks.label_map, &blocks.label_index, 0, blocks.names.len - 1, next_block);
+            }
             return true;
         },
-        .if_block => return error.ControlFlowUnsupported,
     }
     try builder.br(next_block);
     return true;
@@ -137,7 +255,7 @@ fn emitSequence(ctx: *Context, builder: anytype, block_names: [][]const u8, star
             else => {},
         }
         const next_block = if (i + 1 <= end_idx) block_names[i + 1] else "exit";
-        _ = try emitStmt(ctx, builder, stmt, next_block);
+        _ = try emitStmt(ctx, builder, stmt, next_block, null);
         i += 1;
     }
 }
@@ -222,9 +340,114 @@ fn emitSequenceWithEnd(ctx: *Context, builder: anytype, block_names: [][]const u
             else => {},
         }
         const next_block = if (i == end_idx) end_next else block_names[i + 1];
-        _ = try emitStmt(ctx, builder, stmt, next_block);
+        _ = try emitStmt(ctx, builder, stmt, next_block, null);
         i += 1;
     }
+}
+
+fn emitStmtListRange(
+    ctx: *Context,
+    builder: anytype,
+    stmts: []Stmt,
+    block_names: [][]const u8,
+    label_map: *const std.StringHashMap([]const u8),
+    label_index: *const std.StringHashMap(usize),
+    start_idx: usize,
+    end_idx: usize,
+    end_next: []const u8,
+) EmitError!void {
+    var i = start_idx;
+    while (i <= end_idx) {
+        const stmt = stmts[i];
+        const block_name = block_names[i];
+        try builder.label(block_name);
+        switch (stmt.node) {
+            .do_loop => |loop| {
+                const end_label_idx = label_index.get(loop.end_label) orelse return error.MissingLabel;
+                if (end_label_idx <= i) return error.InvalidDoLabel;
+                if (end_label_idx > end_idx) return error.InvalidDoLabel;
+                const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
+                try emitDoList(ctx, builder, stmts, block_names, label_map, label_index, i, end_label_idx, after_loop);
+                i = end_label_idx + 1;
+                continue;
+            },
+            else => {},
+        }
+        const next_block = if (i == end_idx) end_next else block_names[i + 1];
+        _ = try emitStmt(ctx, builder, stmt, next_block, label_map);
+        i += 1;
+    }
+}
+
+fn emitDoList(
+    ctx: *Context,
+    builder: anytype,
+    stmts: []Stmt,
+    block_names: [][]const u8,
+    label_map: *const std.StringHashMap([]const u8),
+    label_index: *const std.StringHashMap(usize),
+    do_idx: usize,
+    end_idx: usize,
+    after_loop: []const u8,
+) EmitError!void {
+    const stmt = stmts[do_idx];
+    const loop = stmt.node.do_loop;
+    const var_ptr = try ctx.getPointer(loop.var_name);
+    const sym = ctx.findSymbol(loop.var_name) orelse return error.UnknownSymbol;
+    const var_ty = llvm_types.typeFromKind(sym.type_kind);
+
+    const end_addr = try ctx.nextTemp();
+    try builder.alloca(end_addr, .i32);
+    const step_addr = try ctx.nextTemp();
+    try builder.alloca(step_addr, .i32);
+
+    const start_val = try expr.emitExpr(ctx, builder, loop.start);
+    const start_coerced = try expr.coerce(ctx, builder, start_val, var_ty);
+    try builder.store(start_coerced, var_ptr);
+
+    const end_val = try expr.emitIndex(ctx, builder, loop.end);
+    try builder.store(end_val, .{ .name = end_addr, .ty = .ptr, .is_ptr = true });
+
+    const step_expr = loop.step orelse null;
+    const step_val = if (step_expr) |expr_node| try expr.emitIndex(ctx, builder, expr_node) else utils.oneValue();
+    try builder.store(step_val, .{ .name = step_addr, .ty = .ptr, .is_ptr = true });
+
+    const test_label = try ctx.nextLabel("do_test");
+    const inc_label = try ctx.nextLabel("do_inc");
+
+    try builder.br(test_label);
+
+    try builder.label(test_label);
+    const var_loaded_val = try expr.loadValue(ctx, builder, var_ptr, var_ty);
+    const var_loaded = try expr.coerce(ctx, builder, var_loaded_val, .i32);
+    const end_loaded = try expr.loadI32(ctx, builder, end_addr);
+    const step_loaded = try expr.loadI32(ctx, builder, step_addr);
+    const step_nonneg_name = try ctx.nextTemp();
+    try builder.compare(step_nonneg_name, "icmp", "sge", .i32, step_loaded, utils.zeroValue(.i32));
+    const step_nonneg = ValueRef{ .name = step_nonneg_name, .ty = .i1, .is_ptr = false };
+    const cmp_le_name = try ctx.nextTemp();
+    try builder.compare(cmp_le_name, "icmp", "sle", .i32, var_loaded, end_loaded);
+    const cmp_le = ValueRef{ .name = cmp_le_name, .ty = .i1, .is_ptr = false };
+    const cmp_ge_name = try ctx.nextTemp();
+    try builder.compare(cmp_ge_name, "icmp", "sge", .i32, var_loaded, end_loaded);
+    const cmp_ge = ValueRef{ .name = cmp_ge_name, .ty = .i1, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.selectI1(cond_name, step_nonneg, cmp_le, cmp_ge);
+    const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
+
+    const body_start = block_names[do_idx + 1];
+    try builder.brCond(cond, body_start, after_loop);
+
+    try emitStmtListRange(ctx, builder, stmts, block_names, label_map, label_index, do_idx + 1, end_idx, inc_label);
+
+    try builder.label(inc_label);
+    const var_loaded2_val = try expr.loadValue(ctx, builder, var_ptr, var_ty);
+    const var_loaded2 = try expr.coerce(ctx, builder, var_loaded2_val, .i32);
+    const step_loaded2 = try expr.loadI32(ctx, builder, step_addr);
+    const sum = try expr.emitAdd(ctx, builder, var_loaded2, step_loaded2);
+    const sum_coerced = try expr.coerce(ctx, builder, sum, var_ty);
+    try builder.store(sum_coerced, var_ptr);
+    try builder.br(test_label);
 }
 
 fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {

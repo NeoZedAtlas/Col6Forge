@@ -59,12 +59,13 @@ const Parser = struct {
 
         var decls = std.array_list.Managed(Decl).init(self.arena);
         var stmts = std.array_list.Managed(Stmt).init(self.arena);
+        var do_ctx = stmt.DoContext.init(self.arena);
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
             const tokens = try lexer.lexLogicalLine(self.arena, line);
             defer self.arena.free(tokens);
             var stmt_lp = LineParser.init(line, tokens);
-            if (stmt_lp.isKeyword("END")) {
+            if (stmt_lp.isKeyword("END") and !isEndDoLine(stmt_lp) and !isEndIfLine(stmt_lp)) {
                 self.index += 1;
                 break;
             }
@@ -74,7 +75,7 @@ const Parser = struct {
                 self.index += 1;
                 continue;
             }
-            const stmt_node = try stmt.parseStatement(self.arena, self.lines, &self.index);
+            const stmt_node = try stmt.parseStatement(self.arena, self.lines, &self.index, &do_ctx);
             try stmts.append(stmt_node);
         }
 
@@ -98,4 +99,20 @@ fn parseProgramUnitKind(lp: *LineParser) !ProgramUnitKind {
         return .function;
     }
     return error.ExpectedProgramUnit;
+}
+
+fn isEndDoLine(lp: LineParser) bool {
+    if (!lp.isKeyword("END")) return false;
+    if (lp.index + 1 >= lp.tokens.len) return false;
+    const next_tok = lp.tokens[lp.index + 1];
+    if (next_tok.kind != .identifier) return false;
+    return context.eqNoCase(lp.tokenText(next_tok), "DO");
+}
+
+fn isEndIfLine(lp: LineParser) bool {
+    if (!lp.isKeyword("END")) return false;
+    if (lp.index + 1 >= lp.tokens.len) return false;
+    const next_tok = lp.tokens[lp.index + 1];
+    if (next_tok.kind != .identifier) return false;
+    return context.eqNoCase(lp.tokenText(next_tok), "IF");
 }
