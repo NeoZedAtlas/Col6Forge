@@ -1,6 +1,6 @@
 const std = @import("std");
 const fixed_form = @import("../frontend/fixed_form.zig");
-const parser = @import("../frontend/parser.zig");
+const parser = @import("../frontend/parser/mod.zig");
 const semantic = @import("../sema/mod.zig");
 const codegen = @import("../codegen/mod.zig");
 
