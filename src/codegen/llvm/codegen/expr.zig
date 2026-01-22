@@ -15,6 +15,8 @@ const IRType = ir.IRType;
 const Context = context.Context;
 const ValueRef = context.ValueRef;
 
+const EmitError = anyerror;
+
 pub fn emitLValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     switch (expr.*) {
         .identifier => |name| {
@@ -31,7 +33,7 @@ pub fn emitLValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     }
 }
 
-pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
+pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef {
     switch (expr.*) {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;

@@ -9,7 +9,9 @@ const Stmt = ast.Stmt;
 const Context = context.Context;
 const ValueRef = context.ValueRef;
 
-pub fn emitFunction(ctx: *Context, builder: anytype) !void {
+const EmitError = anyerror;
+
+pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try ctx.buildRefMap();
     try ctx.buildLocals();
 
@@ -71,7 +73,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) !void {
     try builder.functionEnd();
 }
 
-fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8) !bool {
+fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8) EmitError!bool {
     switch (stmt.node) {
         .assignment => |assign| {
             const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
@@ -113,7 +115,7 @@ fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8)
     return true;
 }
 
-fn emitSequence(ctx: *Context, builder: anytype, block_names: [][]const u8, start_idx: usize, end_idx: usize) !void {
+fn emitSequence(ctx: *Context, builder: anytype, block_names: [][]const u8, start_idx: usize, end_idx: usize) EmitError!void {
     var i = start_idx;
     while (i <= end_idx) {
         const stmt = ctx.unit.stmts[i];
@@ -137,7 +139,7 @@ fn emitSequence(ctx: *Context, builder: anytype, block_names: [][]const u8, star
     }
 }
 
-fn emitDo(ctx: *Context, builder: anytype, block_names: [][]const u8, do_idx: usize, end_idx: usize, after_loop: []const u8) !void {
+fn emitDo(ctx: *Context, builder: anytype, block_names: [][]const u8, do_idx: usize, end_idx: usize, after_loop: []const u8) EmitError!void {
     const stmt = ctx.unit.stmts[do_idx];
     const loop = stmt.node.do_loop;
     const var_ptr = try ctx.getPointer(loop.var_name);
@@ -198,7 +200,7 @@ fn emitDo(ctx: *Context, builder: anytype, block_names: [][]const u8, do_idx: us
     try builder.br(test_label);
 }
 
-fn emitSequenceWithEnd(ctx: *Context, builder: anytype, block_names: [][]const u8, start_idx: usize, end_idx: usize, end_next: []const u8) !void {
+fn emitSequenceWithEnd(ctx: *Context, builder: anytype, block_names: [][]const u8, start_idx: usize, end_idx: usize, end_next: []const u8) EmitError!void {
     var i = start_idx;
     while (i <= end_idx) {
         const stmt = ctx.unit.stmts[i];

@@ -6,10 +6,12 @@ const LineParser = context.LineParser;
 const Expr = ast.Expr;
 const BinaryOp = ast.BinaryOp;
 
-pub fn parseExpr(lp: *LineParser, arena: std.mem.Allocator, min_prec: u8) !*Expr {
+const ParseExprError = error{UnexpectedEOF, UnexpectedToken} || std.mem.Allocator.Error;
+
+pub fn parseExpr(lp: *LineParser, arena: std.mem.Allocator, min_prec: u8) ParseExprError!*Expr {
     var left = try parsePrimary(lp, arena);
     while (true) {
-        const op_info = peekBinaryOp(lp) orelse break;
+        const op_info = peekBinaryOp(lp.*) orelse break;
         if (op_info.prec < min_prec) break;
         _ = lp.next();
         const next_min = if (op_info.right_assoc) op_info.prec else op_info.prec + 1;
@@ -21,7 +23,7 @@ pub fn parseExpr(lp: *LineParser, arena: std.mem.Allocator, min_prec: u8) !*Expr
     return left;
 }
 
-pub fn parseDimExpr(lp: *LineParser, arena: std.mem.Allocator) !*Expr {
+pub fn parseDimExpr(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr {
     if (lp.peekIs(.star)) {
         const tok = lp.next();
         const node = try arena.create(Expr);
@@ -31,7 +33,7 @@ pub fn parseDimExpr(lp: *LineParser, arena: std.mem.Allocator) !*Expr {
     return parseExpr(lp, arena, 0);
 }
 
-fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) !*Expr {
+fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr {
     const tok = lp.peek() orelse return error.UnexpectedEOF;
     switch (tok.kind) {
         .identifier => {

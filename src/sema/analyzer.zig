@@ -196,7 +196,9 @@ const UnitAnalyzer = struct {
         self.symbols.items[idx].storage = storage;
     }
 
-    fn resolveStmt(self: *UnitAnalyzer, stmt: ast.Stmt) !void {
+    const ResolveError = anyerror;
+
+    fn resolveStmt(self: *UnitAnalyzer, stmt: ast.Stmt) ResolveError!void {
         switch (stmt.node) {
             .assignment => |assign| {
                 try self.resolveExpr(assign.target);
@@ -229,7 +231,7 @@ const UnitAnalyzer = struct {
         }
     }
 
-    fn resolveStmtNode(self: *UnitAnalyzer, node: ast.StmtNode) !void {
+    fn resolveStmtNode(self: *UnitAnalyzer, node: ast.StmtNode) ResolveError!void {
         switch (node) {
             .assignment => |assign| {
                 try self.resolveExpr(assign.target);
@@ -262,7 +264,7 @@ const UnitAnalyzer = struct {
         }
     }
 
-    fn resolveExpr(self: *UnitAnalyzer, expr: *ast.Expr) !void {
+    fn resolveExpr(self: *UnitAnalyzer, expr: *ast.Expr) ResolveError!void {
         switch (expr.*) {
             .identifier => |name| {
                 _ = try self.ensureSymbol(name);
@@ -352,7 +354,7 @@ const UnitAnalyzer = struct {
                 const right = (try self.evalConst(bin.right)) orelse return null;
                 return evalBinary(bin.op, left, right);
             },
-            .call_or_subscript => null,
+            .call_or_subscript => return null,
         }
     }
 };
