@@ -32,6 +32,17 @@ pub fn main() !void {
     const root_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(root_path);
 
+    var gfortran_cmd = options.gfortran_path;
+    if (std.mem.eql(u8, gfortran_cmd, defaultGfortran())) {
+        if (std.process.getEnvVarOwned(allocator, "GFORTRAN") catch null) |value| {
+            defer allocator.free(value);
+            gfortran_cmd = try arena_allocator.dupe(u8, value);
+        } else if (std.process.getEnvVarOwned(allocator, "FC") catch null) |value| {
+            defer allocator.free(value);
+            gfortran_cmd = try arena_allocator.dupe(u8, value);
+        }
+    }
+
     const cases = try collectTestCases(arena_allocator, options.tests_dir, options.filter);
     if (cases.len == 0) {
         try std.fs.File.stdout().writeAll("no .f tests found\n");
@@ -47,12 +58,12 @@ pub fn main() !void {
         const abs_case_dir = try std.fs.path.join(allocator, &.{ root_path, case.case_dir });
         defer allocator.free(abs_case_dir);
 
-        const work_dir = try std.fs.path.join(allocator, &.{ root_path, "zig-cache", "verify", case.work_name });
+        const work_dir_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "verify", case.work_name });
+        defer allocator.free(work_dir_rel);
+        try std.fs.cwd().makePath(work_dir_rel);
+
+        const work_dir = try std.fs.path.join(allocator, &.{ root_path, work_dir_rel });
         defer allocator.free(work_dir);
-        std.fs.makeDirAbsolute(work_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
 
         const ll_path = try std.fs.path.join(allocator, &.{ work_dir, "translated.ll" });
         defer allocator.free(ll_path);
@@ -69,40 +80,50 @@ pub fn main() !void {
         defer allocator.free(ir.output);
         try writeFile(ll_path, ir.output);
 
-        const ref_compile = runProcessCapture(allocator, &.{ "gfortran", "-o", ref_exe, abs_input_path }, work_dir) catch |err| {
+        const ref_compile = runProcessCapture(allocator, &.{ gfortran_cmd, "-std=legacy", "-o", ref_exe, abs_input_path }, work_dir) catch |err| {
             failures += 1;
-            try std.fs.File.stderr().writer().print("gfortran failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+            if (err == error.FileNotFound) {
+                try logStderr("gfortran not found (use --gfortran or set GFORTRAN/FC)\n", .{});
+            }
+            try logStderr("gfortran failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
             continue;
         };
         defer ref_compile.deinit(allocator);
         if (!isZeroExit(ref_compile.term)) {
             failures += 1;
-            try std.fs.File.stderr().writer().print("gfortran compile failed: {s}\n{s}\n", .{ abs_input_path, ref_compile.stderr });
+            const code = exitCode(ref_compile.term);
+            try logStderr("\n=== GFORTRAN COMPILE ERROR ===\n", .{});
+            try logStderr("Exit Code: {d}\n", .{code});
+            try logStderr("Work Dir : {s}\n", .{work_dir});
+            try logStderr("Command  : {s} -std=legacy -o {s} {s}\n", .{ gfortran_cmd, ref_exe, abs_input_path });
+            try logStderr("STDOUT   : \n{s}\n", .{ref_compile.stdout});
+            try logStderr("STDERR   : \n{s}\n", .{ref_compile.stderr});
+            try logStderr("==============================\n", .{});
             continue;
         }
 
         const our_compile = runProcessCapture(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path }, work_dir) catch |err| {
             failures += 1;
-            try std.fs.File.stderr().writer().print("zig cc failed: {s} ({s})\n", .{ ll_path, @errorName(err) });
+            try logStderr("zig cc failed: {s} ({s})\n", .{ ll_path, @errorName(err) });
             continue;
         };
         defer our_compile.deinit(allocator);
         if (!isZeroExit(our_compile.term)) {
             failures += 1;
-            try std.fs.File.stderr().writer().print("zig cc compile failed: {s}\n{s}\n", .{ ll_path, our_compile.stderr });
+            try logStderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, our_compile.stderr });
             continue;
         }
 
         const ref_run = runProcessCapture(allocator, &.{ ref_exe }, abs_case_dir) catch |err| {
             failures += 1;
-            try std.fs.File.stderr().writer().print("reference run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+            try logStderr("reference run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
             continue;
         };
         defer ref_run.deinit(allocator);
 
         const test_run = runProcessCapture(allocator, &.{ test_exe }, abs_case_dir) catch |err| {
             failures += 1;
-            try std.fs.File.stderr().writer().print("translated run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+            try logStderr("translated run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
             continue;
         };
         defer test_run.deinit(allocator);
@@ -110,7 +131,7 @@ pub fn main() !void {
         const comparison = try Comparator.compare(allocator, ref_run.term, test_run.term, ref_run.stdout, test_run.stdout);
         if (!comparison.ok) {
             failures += 1;
-            try std.fs.File.stderr().writer().print("mismatch: {s}\n{s}\n", .{ abs_input_path, comparison.diff.? });
+            try logStderr("mismatch: {s}\n{s}\n", .{ abs_input_path, comparison.diff.? });
             allocator.free(comparison.diff.?);
             continue;
         }
@@ -120,15 +141,16 @@ pub fn main() !void {
     }
 
     if (failures > 0) {
-        try std.fs.File.stderr().writer().print("verification failed: {d}\n", .{failures});
+        try logStderr("verification failed: {d}\n", .{failures});
         return error.VerificationFailed;
     }
-    try std.fs.File.stdout().writeAll("verification passed\n");
+    try logStdout("verification passed\n", .{});
 }
 
 const Options = struct {
     tests_dir: []const u8,
     filter: ?[]const u8,
+    gfortran_path: []const u8,
     emit: Col6Forge.EmitKind,
     show_help: bool,
 };
@@ -136,6 +158,7 @@ const Options = struct {
 fn parseArgs(args: []const []const u8) !Options {
     var tests_dir: []const u8 = "tests/NIST_F78_test_suite";
     var filter: ?[]const u8 = null;
+    var gfortran_path: []const u8 = defaultGfortran();
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
 
@@ -158,6 +181,12 @@ fn parseArgs(args: []const []const u8) !Options {
             filter = args[i];
             continue;
         }
+        if (std.mem.eql(u8, arg, "--gfortran")) {
+            if (i + 1 >= args.len) return error.MissingGfortranPath;
+            i += 1;
+            gfortran_path = args[i];
+            continue;
+        }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
             continue;
@@ -168,6 +197,7 @@ fn parseArgs(args: []const []const u8) !Options {
     return .{
         .tests_dir = tests_dir,
         .filter = filter,
+        .gfortran_path = gfortran_path,
         .emit = emit,
         .show_help = show_help,
     };
@@ -179,6 +209,7 @@ fn printUsage(file: std.fs.File) !void {
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
         \\  --filter <text>    Only run tests whose relative path contains this text
+        \\  --gfortran <path>  Path to gfortran executable (default: gfortran or gfortran.exe)
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
         \\
@@ -192,7 +223,7 @@ const TestCase = struct {
 };
 
 fn collectTestCases(allocator: std.mem.Allocator, tests_dir: []const u8, filter: ?[]const u8) ![]TestCase {
-    var list = std.ArrayList(TestCase).init(allocator);
+    var list: std.ArrayList(TestCase) = .empty;
     var dir = try std.fs.cwd().openDir(tests_dir, .{ .iterate = true });
     defer dir.close();
 
@@ -210,11 +241,11 @@ fn collectTestCases(allocator: std.mem.Allocator, tests_dir: []const u8, filter:
         const case_dir = std.fs.path.dirname(input_path) orelse tests_dir;
         const work_name = try sanitizeWorkName(allocator, entry.path);
 
-        try list.append(.{ .input_path = input_path, .case_dir = case_dir, .work_name = work_name });
+        try list.append(allocator, .{ .input_path = input_path, .case_dir = case_dir, .work_name = work_name });
     }
 
-    std.sort.sort(TestCase, list.items, {}, testCaseLessThan);
-    return list.toOwnedSlice();
+    std.sort.heap(TestCase, list.items, {}, testCaseLessThan);
+    return list.toOwnedSlice(allocator);
 }
 
 fn testCaseLessThan(_: void, a: TestCase, b: TestCase) bool {
@@ -241,6 +272,10 @@ fn sanitizeWorkName(allocator: std.mem.Allocator, rel_path: []const u8) ![]const
 
 fn exeName(comptime base: []const u8) []const u8 {
     return if (builtin.os.tag == .windows) base ++ ".exe" else base;
+}
+
+fn defaultGfortran() []const u8 {
+    return if (builtin.os.tag == .windows) "gfortran.exe" else "gfortran";
 }
 
 fn writeFile(path: []const u8, contents: []const u8) !void {
@@ -282,7 +317,7 @@ fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
 const ProcessResult = struct {
     stdout: []const u8,
     stderr: []const u8,
-    term: std.ChildProcess.Term,
+    term: std.process.Child.Term,
 
     fn deinit(self: ProcessResult, allocator: std.mem.Allocator) void {
         allocator.free(self.stdout);
@@ -295,7 +330,7 @@ fn runProcessCapture(
     argv: []const []const u8,
     cwd: ?[]const u8,
 ) !ProcessResult {
-    const result = try std.ChildProcess.exec(.{
+    const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = argv,
         .cwd = cwd,
@@ -304,7 +339,7 @@ fn runProcessCapture(
     return .{ .stdout = result.stdout, .stderr = result.stderr, .term = result.term };
 }
 
-fn isZeroExit(term: std.ChildProcess.Term) bool {
+fn isZeroExit(term: std.process.Child.Term) bool {
     return switch (term) {
         .Exited => |code| code == 0,
         else => false,
@@ -319,8 +354,8 @@ const Comparator = struct {
 
     pub fn compare(
         allocator: std.mem.Allocator,
-        ref_term: std.ChildProcess.Term,
-        test_term: std.ChildProcess.Term,
+        ref_term: std.process.Child.Term,
+        test_term: std.process.Child.Term,
         ref_stdout: []const u8,
         test_stdout: []const u8,
     ) !CompareResult {
@@ -386,7 +421,7 @@ const Comparator = struct {
     }
 };
 
-fn exitCode(term: std.ChildProcess.Term) u32 {
+fn exitCode(term: std.process.Child.Term) u32 {
     return switch (term) {
         .Exited => |code| code,
         .Signal => |signal| 128 + signal,
@@ -396,4 +431,20 @@ fn exitCode(term: std.ChildProcess.Term) u32 {
 
 fn trimCr(line: []const u8) []const u8 {
     return std.mem.trimRight(u8, line, "\r");
+}
+
+fn logStderr(comptime fmt: []const u8, args: anytype) !void {
+    var stderr_file = std.fs.File.stderr();
+    var buffer: [4096]u8 = undefined;
+    var writer = stderr_file.writer(&buffer);
+    try writer.interface.print(fmt, args);
+    try writer.interface.flush();
+}
+
+fn logStdout(comptime fmt: []const u8, args: anytype) !void {
+    var stdout_file = std.fs.File.stdout();
+    var buffer: [4096]u8 = undefined;
+    var writer = stdout_file.writer(&buffer);
+    try writer.interface.print(fmt, args);
+    try writer.interface.flush();
 }

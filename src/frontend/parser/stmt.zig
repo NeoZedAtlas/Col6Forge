@@ -10,6 +10,9 @@ const LineParser = context.LineParser;
 const Stmt = ast.Stmt;
 const StmtNode = ast.StmtNode;
 const Expr = ast.Expr;
+const FormatItem = ast.FormatItem;
+const IntFormat = ast.IntFormat;
+const RealFormat = ast.RealFormat;
 
 const ParseStmtError = anyerror;
 
@@ -59,6 +62,20 @@ pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine,
     }
     if (lp.isKeyword("IF")) {
         return parseIfStatement(arena, lines, index, label, &lp, do_ctx);
+    }
+    if (lp.isKeyword("FORMAT")) {
+        const items = try parseFormatItems(arena, line.text);
+        index.* += 1;
+        return .{ .label = label, .node = .{ .format = .{ .items = items } } };
+    }
+    if (lp.isKeyword("STOP")) {
+        index.* += 1;
+        return .{ .label = label, .node = .{ .stop = {} } };
+    }
+    if (lp.isKeyword("WRITE")) {
+        const stmt_node = try parseWriteStatement(arena, &lp);
+        index.* += 1;
+        return .{ .label = label, .node = stmt_node };
     }
     if (lp.isKeyword("CALL")) {
         _ = lp.next();
@@ -139,6 +156,26 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
     const cond = try expr.parseExpr(lp, arena, 0);
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
 
+    if (lp.peek()) |next_tok| {
+        if (next_tok.kind == .integer or next_tok.kind == .identifier) {
+            const neg_label = try parseLabelToken(lp);
+            _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+            const zero_label = try parseLabelToken(lp);
+            _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+            const pos_label = try parseLabelToken(lp);
+            index.* += 1;
+            return .{
+                .label = label,
+                .node = .{ .arith_if = .{
+                    .condition = cond,
+                    .neg_label = neg_label,
+                    .zero_label = zero_label,
+                    .pos_label = pos_label,
+                } },
+            };
+        }
+    }
+
     if (lp.isKeyword("THEN")) {
         _ = lp.next();
         index.* += 1;
@@ -190,6 +227,17 @@ pub fn parseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
 }
 
 fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator) ParseStmtError!*StmtNode {
+    if (lp.isKeyword("WRITE")) {
+        const node = try arena.create(StmtNode);
+        node.* = try parseWriteStatement(arena, lp);
+        return node;
+    }
+    if (lp.isKeyword("STOP")) {
+        _ = lp.next();
+        const node = try arena.create(StmtNode);
+        node.* = .{ .stop = {} };
+        return node;
+    }
     if (lp.isKeyword("CALL")) {
         _ = lp.next();
         const name_tok = lp.expectIdentifier() orelse return error.MissingName;
@@ -232,6 +280,127 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator) ParseStmtError
     const node = try arena.create(StmtNode);
     node.* = .{ .assignment = .{ .target = target, .value = value } };
     return node;
+}
+
+fn parseWriteStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    _ = lp.next();
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    const unit_expr = try expr.parseExpr(lp, arena, 0);
+    _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+    const fmt_tok = lp.peek() orelse return error.UnexpectedToken;
+    if (fmt_tok.kind != .integer and fmt_tok.kind != .identifier) return error.UnexpectedToken;
+    _ = lp.next();
+    const format_label = lp.tokenText(fmt_tok);
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+
+    var args = std.array_list.Managed(*Expr).init(arena);
+    if (lp.peek() != null) {
+        while (true) {
+            if (lp.peek() == null) break;
+            const arg = try expr.parseExpr(lp, arena, 0);
+            try args.append(arg);
+            if (!lp.consume(.comma)) break;
+        }
+    }
+
+    return .{ .write = .{ .unit = unit_expr, .format_label = format_label, .args = try args.toOwnedSlice() } };
+}
+
+fn parseFormatItems(arena: std.mem.Allocator, text: []const u8) ![]FormatItem {
+    const open_idx = std.mem.indexOfScalar(u8, text, '(') orelse return error.UnexpectedToken;
+    const close_idx = std.mem.lastIndexOfScalar(u8, text, ')') orelse return error.UnexpectedToken;
+    if (close_idx <= open_idx) return error.UnexpectedToken;
+    const inner = text[open_idx + 1 .. close_idx];
+
+    var items = std.array_list.Managed(FormatItem).init(arena);
+    var i: usize = 0;
+    while (i < inner.len) {
+        while (i < inner.len and (inner[i] == ' ' or inner[i] == '\t' or inner[i] == ',')) : (i += 1) {}
+        if (i >= inner.len) break;
+
+        const ch = inner[i];
+        if (ch == '\'' or ch == '"') {
+            const quote = ch;
+            i += 1;
+            var buf = std.array_list.Managed(u8).init(arena);
+            while (i < inner.len) {
+                if (inner[i] == quote) {
+                    if (i + 1 < inner.len and inner[i + 1] == quote) {
+                        try buf.append(quote);
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                try buf.append(inner[i]);
+                i += 1;
+            }
+            const lit = try buf.toOwnedSlice();
+            try items.append(.{ .literal = lit });
+            continue;
+        }
+
+        if (std.ascii.isDigit(ch)) {
+            const start = i;
+            i += 1;
+            while (i < inner.len and std.ascii.isDigit(inner[i])) : (i += 1) {}
+            const value = parseDecimal(inner[start..i]);
+            while (i < inner.len and (inner[i] == ' ' or inner[i] == '\t')) : (i += 1) {}
+            if (i < inner.len and (inner[i] == 'X' or inner[i] == 'x')) {
+                i += 1;
+                try items.append(.{ .spaces = value });
+                continue;
+            }
+            return error.UnexpectedToken;
+        }
+
+        if (ch == 'X' or ch == 'x') {
+            i += 1;
+            try items.append(.{ .spaces = 1 });
+            continue;
+        }
+
+        if (ch == 'I' or ch == 'i') {
+            i += 1;
+            const width = parseUnsigned(inner, &i) orelse return error.UnexpectedToken;
+            try items.append(.{ .int = .{ .width = width } });
+            continue;
+        }
+
+        if (ch == 'E' or ch == 'e') {
+            i += 1;
+            const width = parseUnsigned(inner, &i) orelse return error.UnexpectedToken;
+            var precision: usize = 0;
+            if (i < inner.len and inner[i] == '.') {
+                i += 1;
+                precision = parseUnsigned(inner, &i) orelse return error.UnexpectedToken;
+            }
+            try items.append(.{ .real = .{ .width = width, .precision = precision } });
+            continue;
+        }
+
+        return error.UnexpectedToken;
+    }
+
+    return items.toOwnedSlice();
+}
+
+fn parseUnsigned(text: []const u8, index: *usize) ?usize {
+    const start = index.*;
+    var i = start;
+    while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
+    if (i == start) return null;
+    index.* = i;
+    return parseDecimal(text[start..i]);
+}
+
+fn parseDecimal(text: []const u8) usize {
+    var value: usize = 0;
+    for (text) |ch| {
+        value = value * 10 + @as(usize, ch - '0');
+    }
+    return value;
 }
 
 fn isGotoStart(lp: LineParser) bool {

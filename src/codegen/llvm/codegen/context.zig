@@ -7,11 +7,18 @@ const utils = @import("utils.zig");
 const ProgramUnit = ast.ProgramUnit;
 const TypeKind = ast.TypeKind;
 const IRType = ir.IRType;
+const FormatItem = ast.FormatItem;
 
 pub const IRDecl = struct {
     ret_type: IRType,
     sig: []const u8,
     varargs: bool,
+};
+
+pub const FormatInfo = struct {
+    items: []const FormatItem,
+    global_name: []const u8,
+    string_len: usize,
 };
 
 pub const ValueRef = utils.ValueRef;
@@ -22,6 +29,7 @@ pub const Context = struct {
     sem: *const sema.SemanticUnit,
     decls: *std.StringHashMap(IRDecl),
     defined: *std.StringHashMap(void),
+    formats: *const std.StringHashMap(FormatInfo),
     temp_index: usize,
     locals: std.StringHashMap(ValueRef),
     ref_kinds: std.AutoHashMap(usize, sema.ResolvedRefKind),
@@ -29,13 +37,21 @@ pub const Context = struct {
     label_index: std.StringHashMap(usize),
     label_counter: usize,
 
-    pub fn init(allocator: std.mem.Allocator, unit: ProgramUnit, sem: *const sema.SemanticUnit, decls: *std.StringHashMap(IRDecl), defined: *std.StringHashMap(void)) Context {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        unit: ProgramUnit,
+        sem: *const sema.SemanticUnit,
+        decls: *std.StringHashMap(IRDecl),
+        defined: *std.StringHashMap(void),
+        formats: *const std.StringHashMap(FormatInfo),
+    ) Context {
         return .{
             .allocator = allocator,
             .unit = unit,
             .sem = sem,
             .decls = decls,
             .defined = defined,
+            .formats = formats,
             .temp_index = 0,
             .locals = std.StringHashMap(ValueRef).init(allocator),
             .ref_kinds = std.AutoHashMap(usize, sema.ResolvedRefKind).init(allocator),

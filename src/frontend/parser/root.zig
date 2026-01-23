@@ -90,6 +90,10 @@ const Parser = struct {
 };
 
 fn parseProgramUnitKind(lp: *LineParser) !ProgramUnitKind {
+    if (lp.isKeyword("PROGRAM")) {
+        _ = lp.next();
+        return .program;
+    }
     if (lp.isKeyword("SUBROUTINE")) {
         _ = lp.next();
         return .subroutine;

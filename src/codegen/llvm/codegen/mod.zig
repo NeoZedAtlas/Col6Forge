@@ -8,6 +8,7 @@ const stmt = @import("stmt.zig");
 const utils = @import("utils.zig");
 
 const Program = ast.Program;
+const FormatInfo = context.FormatInfo;
 
 pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: sema.SemanticProgram, source_name: []const u8) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
@@ -34,9 +35,14 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
     for (sem.units) |*unit| {
         try sem_map.put(unit.name, unit);
     }
+    var program_mangled: ?[]const u8 = null;
     for (program.units) |unit| {
         const mangled = try utils.mangleName(scratch, unit.name);
         try defined.put(mangled, {});
+        if (unit.kind == .program) {
+            if (program_mangled != null) return error.MultipleProgramUnits;
+            program_mangled = mangled;
+        }
     }
 
     var common_blocks = std.StringHashMap(common.CommonBlockInfo).init(scratch);
@@ -64,9 +70,19 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
 
     for (program.units) |unit| {
         const sem_unit = sem_map.get(unit.name) orelse return error.MissingSemanticUnit;
-        var ctx = context.Context.init(scratch, unit, sem_unit, &decls, &defined);
+        var format_map = try buildFormatMap(scratch, &builder, unit);
+        var ctx = context.Context.init(scratch, unit, sem_unit, &decls, &defined, &format_map);
         defer ctx.deinit();
         try stmt.emitFunction(&ctx, &builder);
+    }
+
+    if (program_mangled) |entry_name| {
+        try builder.defineStartWithRet(.i32, "main");
+        try builder.defineEnd();
+        try builder.entryLabel();
+        try builder.call(null, .void, entry_name, "");
+        try builder.retValue(.i32, "0");
+        try builder.functionEnd();
     }
 
     var decl_it = decls.iterator();
@@ -77,6 +93,50 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
     }
 
     return;
+}
+
+fn buildFormatMap(allocator: std.mem.Allocator, builder: anytype, unit: ast.ProgramUnit) !std.StringHashMap(FormatInfo) {
+    var map = std.StringHashMap(FormatInfo).init(allocator);
+    const unit_mangled = try utils.mangleName(allocator, unit.name);
+    for (unit.stmts) |stmt_item| {
+        if (stmt_item.node != .format) continue;
+        const label = stmt_item.label orelse return error.FormatMissingLabel;
+        if (map.contains(label)) return error.DuplicateFormatLabel;
+        const format_bytes = try buildPrintfFormat(allocator, stmt_item.node.format.items);
+        const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}{s}", .{ unit_mangled, label });
+        try builder.globalString(global_name, format_bytes);
+        try map.put(label, .{
+            .items = stmt_item.node.format.items,
+            .global_name = global_name,
+            .string_len = format_bytes.len + 1,
+        });
+    }
+    return map;
+}
+
+fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem) ![]const u8 {
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    for (items) |item| {
+        switch (item) {
+            .literal => |text| {
+                try buffer.appendSlice(text);
+            },
+            .spaces => |count| {
+                var i: usize = 0;
+                while (i < count) : (i += 1) {
+                    try buffer.append(' ');
+                }
+            },
+            .int => |spec| {
+                try buffer.writer().print("%{d}d", .{spec.width});
+            },
+            .real => |spec| {
+                try buffer.writer().print("%{d}.{d}E", .{ spec.width, spec.precision });
+            },
+        }
+    }
+    try buffer.append('\n');
+    return buffer.toOwnedSlice();
 }
 
 test "emitModuleToWriter emits module header and empty function" {

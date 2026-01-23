@@ -57,12 +57,13 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
             i += 1;
             continue;
         }
-        if (ch == '\'') {
+        if (ch == '\'' or ch == '"') {
+            const quote = ch;
             const start = i;
             i += 1;
             while (i < text.len) {
-                if (text[i] == '\'') {
-                    if (i + 1 < text.len and text[i + 1] == '\'') {
+                if (text[i] == quote) {
+                    if (i + 1 < text.len and text[i + 1] == quote) {
                         i += 2;
                         continue;
                     }

@@ -3,6 +3,7 @@ pub const Program = struct {
 };
 
 pub const ProgramUnitKind = enum {
+    program,
     subroutine,
     function,
 };
@@ -99,6 +100,10 @@ pub const StmtNode = union(enum) {
     assignment: Assignment,
     call: CallStmt,
     goto: GotoStmt,
+    write: WriteStmt,
+    format: FormatStmt,
+    arith_if: ArithIfStmt,
+    stop: void,
     do_loop: DoLoopStmt,
     ret: void,
     cont: void,
@@ -116,6 +121,32 @@ pub const CallStmt = struct {
     args: []*Expr,
 };
 
+pub const WriteStmt = struct {
+    unit: *Expr,
+    format_label: []const u8,
+    args: []*Expr,
+};
+
+pub const FormatStmt = struct {
+    items: []FormatItem,
+};
+
+pub const FormatItem = union(enum) {
+    literal: []const u8,
+    spaces: usize,
+    int: IntFormat,
+    real: RealFormat,
+};
+
+pub const IntFormat = struct {
+    width: usize,
+};
+
+pub const RealFormat = struct {
+    width: usize,
+    precision: usize,
+};
+
 pub const IfSingle = struct {
     condition: *Expr,
     stmt: *StmtNode,
@@ -125,6 +156,13 @@ pub const IfBlock = struct {
     condition: *Expr,
     then_stmts: []Stmt,
     else_stmts: []Stmt,
+};
+
+pub const ArithIfStmt = struct {
+    condition: *Expr,
+    neg_label: []const u8,
+    zero_label: []const u8,
+    pos_label: []const u8,
 };
 
 pub const GotoStmt = struct {

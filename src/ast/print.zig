@@ -4,6 +4,7 @@ pub fn printProgram(writer: anytype, program: ast.Program) !void {
     try writer.print("; AST units: {d}\n", .{program.units.len});
     for (program.units) |unit| {
         const kind_text = switch (unit.kind) {
+            .program => "program",
             .subroutine => "subroutine",
             .function => "function",
         };
@@ -60,6 +61,21 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         },
         .call => |call| {
             try writer.print(";   stmt label={s} call {s}({d})\n", .{ label_text, call.name, call.args.len });
+        },
+        .write => |write| {
+            try writer.print(";   stmt label={s} write fmt={s} args={d}\n", .{ label_text, write.format_label, write.args.len });
+        },
+        .format => |format| {
+            try writer.print(";   stmt label={s} format items={d}\n", .{ label_text, format.items.len });
+        },
+        .arith_if => |node| {
+            try writer.print(
+                ";   stmt label={s} arith-if {s},{s},{s}\n",
+                .{ label_text, node.neg_label, node.zero_label, node.pos_label },
+            );
+        },
+        .stop => {
+            try writer.print(";   stmt label={s} stop\n", .{label_text});
         },
         .goto => |gt| {
             try writer.print(";   stmt label={s} goto {s}\n", .{ label_text, gt.label });

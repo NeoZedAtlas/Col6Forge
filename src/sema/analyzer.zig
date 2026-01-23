@@ -26,6 +26,7 @@ pub fn printSemantic(writer: anytype, program: SemanticProgram) !void {
     try writer.print("; semantic units: {d}\n", .{program.units.len});
     for (program.units) |unit| {
         const kind_text = switch (unit.kind) {
+            .program => "program",
             .subroutine => "subroutine",
             .function => "function",
         };
@@ -88,6 +89,7 @@ const UnitAnalyzer = struct {
 
     fn installUnitSymbol(self: *UnitAnalyzer) !void {
         const kind: SymbolKind = switch (self.unit.kind) {
+            .program => .subroutine,
             .subroutine => .subroutine,
             .function => .function,
         };
@@ -211,6 +213,17 @@ const UnitAnalyzer = struct {
                     try self.resolveExpr(arg);
                 }
             },
+            .write => |write| {
+                try self.resolveExpr(write.unit);
+                for (write.args) |arg| {
+                    try self.resolveExpr(arg);
+                }
+            },
+            .format => {},
+            .arith_if => |arith| {
+                try self.resolveExpr(arith.condition);
+            },
+            .stop => {},
             .do_loop => |loop| {
                 _ = try self.ensureSymbol(loop.var_name);
                 try self.resolveExpr(loop.start);
@@ -244,6 +257,17 @@ const UnitAnalyzer = struct {
                     try self.resolveExpr(arg);
                 }
             },
+            .write => |write| {
+                try self.resolveExpr(write.unit);
+                for (write.args) |arg| {
+                    try self.resolveExpr(arg);
+                }
+            },
+            .format => {},
+            .arith_if => |arith| {
+                try self.resolveExpr(arith.condition);
+            },
+            .stop => {},
             .do_loop => |loop| {
                 _ = try self.ensureSymbol(loop.var_name);
                 try self.resolveExpr(loop.start);

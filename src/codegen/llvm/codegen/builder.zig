@@ -31,6 +31,14 @@ pub fn Builder(comptime WriterType: type) type {
             try self.writer.print("@{s} = common global [{d} x i8] zeroinitializer, align {d}\n", .{ name, size, alignment });
         }
 
+        pub fn globalString(self: *@This(), name: []const u8, bytes: []const u8) !void {
+            try self.bump();
+            const total_len = bytes.len + 1;
+            try self.writer.print("@{s} = private unnamed_addr constant [{d} x i8] c\"", .{ name, total_len });
+            try emitCString(self.writer, bytes);
+            try self.writer.writeAll("\\00\", align 1\n");
+        }
+
         pub fn declare(self: *@This(), name: []const u8, ret_type: IRType, sig: []const u8, varargs: bool) !void {
             try self.bump();
             const ret_text = llvm_types.irTypeText(ret_type);
@@ -44,6 +52,11 @@ pub fn Builder(comptime WriterType: type) type {
         pub fn defineStart(self: *@This(), name: []const u8) !void {
             try self.bump();
             try self.writer.print("define void @{s}(", .{name});
+        }
+
+        pub fn defineStartWithRet(self: *@This(), ret_type: IRType, name: []const u8) !void {
+            try self.bump();
+            try self.writer.print("define {s} @{s}(", .{ llvm_types.irTypeText(ret_type), name });
         }
 
         pub fn defineArgPtr(self: *@This(), name: []const u8, is_first: bool) !void {
@@ -77,6 +90,11 @@ pub fn Builder(comptime WriterType: type) type {
         pub fn retVoid(self: *@This()) !void {
             try self.bump();
             try self.writer.writeAll("  ret void\n");
+        }
+
+        pub fn retValue(self: *@This(), ty: IRType, value: []const u8) !void {
+            try self.bump();
+            try self.writer.print("  ret {s} {s}\n", .{ llvm_types.irTypeText(ty), value });
         }
 
         pub fn br(self: *@This(), target: []const u8) !void {
@@ -142,6 +160,14 @@ pub fn Builder(comptime WriterType: type) type {
             try self.writer.print("  {s} = getelementptr {s}, ptr {s}, i32 {s}\n", .{ tmp, llvm_types.irTypeText(elem_ty), base_ptr.name, offset.name });
         }
 
+        pub fn gepConstString(self: *@This(), tmp: []const u8, name: []const u8, len: usize) !void {
+            try self.bump();
+            try self.writer.print(
+                "  {s} = getelementptr [{d} x i8], ptr @{s}, i32 0, i32 0\n",
+                .{ tmp, len, name },
+            );
+        }
+
         pub fn call(self: *@This(), tmp: ?[]const u8, ret_ty: IRType, fn_name: []const u8, args: []const u8) !void {
             try self.bump();
             if (tmp) |name| {
@@ -169,4 +195,14 @@ pub fn Builder(comptime WriterType: type) type {
             try self.writer.print("  {s} = {s} {s} {s} to {s}\n", .{ tmp, instr, llvm_types.irTypeText(from), value.name, llvm_types.irTypeText(to) });
         }
     };
+}
+
+fn emitCString(writer: anytype, bytes: []const u8) !void {
+    for (bytes) |ch| {
+        if (ch >= 32 and ch <= 126 and ch != '"' and ch != '\\') {
+            try writer.writeAll(&[_]u8{ch});
+        } else {
+            try writer.print("\\{X:0>2}", .{ch});
+        }
+    }
 }

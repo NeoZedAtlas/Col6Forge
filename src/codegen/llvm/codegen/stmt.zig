@@ -54,7 +54,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try ctx.buildRefMap();
     try ctx.buildLocals();
 
-    if (ctx.unit.kind != .subroutine) return error.UnsupportedProgramUnit;
+    if (ctx.unit.kind != .subroutine and ctx.unit.kind != .program) return error.UnsupportedProgramUnit;
 
     const func_name = utils.mangleName(ctx.allocator, ctx.unit.name) catch return error.OutOfMemory;
 
@@ -131,6 +131,23 @@ fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8,
             try builder.br(next_block);
             return true;
         },
+        .write => |write| {
+            try emitWrite(ctx, builder, write);
+            try builder.br(next_block);
+            return true;
+        },
+        .format => {
+            try builder.br(next_block);
+            return true;
+        },
+        .arith_if => |arith| {
+            try emitArithIf(ctx, builder, arith, local_label_map);
+            return true;
+        },
+        .stop => {
+            try builder.retVoid();
+            return true;
+        },
         .goto => |gt| {
             const target = resolveLabel(ctx, local_label_map, gt.label) orelse return error.MissingLabel;
             try builder.br(target);
@@ -177,6 +194,28 @@ fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8,
                     const fn_name = try ctx.ensureDecl(call.name, .void);
                     _ = try expr.emitCall(ctx, builder, fn_name, .void, call.args, true);
                     try builder.br(next_block);
+                    return true;
+                },
+                .write => |write| {
+                    const then_label = try ctx.nextLabel("if_write");
+                    try builder.brCond(cond, then_label, next_block);
+                    try builder.label(then_label);
+                    try emitWrite(ctx, builder, write);
+                    try builder.br(next_block);
+                    return true;
+                },
+                .arith_if => |arith| {
+                    const then_label = try ctx.nextLabel("if_arith");
+                    try builder.brCond(cond, then_label, next_block);
+                    try builder.label(then_label);
+                    try emitArithIf(ctx, builder, arith, local_label_map);
+                    return true;
+                },
+                .stop => {
+                    const then_label = try ctx.nextLabel("if_stop");
+                    try builder.brCond(cond, then_label, next_block);
+                    try builder.label(then_label);
+                    try builder.retVoid();
                     return true;
                 },
                 .cont => {
@@ -378,6 +417,86 @@ fn emitStmtListRange(
     }
 }
 
+fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
+    _ = write.unit;
+    const fmt_info = ctx.formats.get(write.format_label) orelse return error.MissingFormatLabel;
+    const fmt_ptr = try ctx.nextTemp();
+    try builder.gepConstString(fmt_ptr, fmt_info.global_name, fmt_info.string_len);
+
+    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_buf.deinit();
+    try arg_buf.writer().print("ptr {s}", .{fmt_ptr});
+
+    var arg_index: usize = 0;
+    for (fmt_info.items) |item| {
+        switch (item) {
+            .int => {
+                if (arg_index >= write.args.len) return error.MissingWriteArg;
+                const value = try expr.emitExpr(ctx, builder, write.args[arg_index]);
+                const coerced = try expr.coerce(ctx, builder, value, .i32);
+                try arg_buf.writer().print(", {s} {s}", .{ llvm_types.irTypeText(.i32), coerced.name });
+                arg_index += 1;
+            },
+            .real => {
+                if (arg_index >= write.args.len) return error.MissingWriteArg;
+                const value = try expr.emitExpr(ctx, builder, write.args[arg_index]);
+                const coerced = try expr.coerce(ctx, builder, value, .f64);
+                try arg_buf.writer().print(", {s} {s}", .{ llvm_types.irTypeText(.f64), coerced.name });
+                arg_index += 1;
+            },
+            .literal, .spaces => {},
+        }
+    }
+    if (arg_index < write.args.len) return error.TooManyWriteArgs;
+
+    const printf_name = try ctx.ensureDeclRaw("printf", .i32, "ptr", true);
+    try builder.call(null, .i32, printf_name, arg_buf.items);
+}
+
+fn emitArithIf(
+    ctx: *Context,
+    builder: anytype,
+    arith: ast.ArithIfStmt,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!void {
+    const neg_label = resolveLabel(ctx, local_label_map, arith.neg_label) orelse return error.MissingLabel;
+    const zero_label = resolveLabel(ctx, local_label_map, arith.zero_label) orelse return error.MissingLabel;
+    const pos_label = resolveLabel(ctx, local_label_map, arith.pos_label) orelse return error.MissingLabel;
+
+    const value = try expr.emitExpr(ctx, builder, arith.condition);
+    if (value.is_ptr) return error.UnsupportedArithmeticIf;
+
+    if (value.ty == .f32 or value.ty == .f64) {
+        const zero = utils.zeroValue(value.ty);
+        const lt_name = try ctx.nextTemp();
+        try builder.compare(lt_name, "fcmp", "olt", value.ty, value, zero);
+        const lt_val = ValueRef{ .name = lt_name, .ty = .i1, .is_ptr = false };
+        const mid_label = try ctx.nextLabel("arith_if_zero");
+        try builder.brCond(lt_val, neg_label, mid_label);
+        try builder.label(mid_label);
+
+        const eq_name = try ctx.nextTemp();
+        try builder.compare(eq_name, "fcmp", "oeq", value.ty, value, zero);
+        const eq_val = ValueRef{ .name = eq_name, .ty = .i1, .is_ptr = false };
+        try builder.brCond(eq_val, zero_label, pos_label);
+        return;
+    }
+
+    const int_val = try expr.coerce(ctx, builder, value, .i32);
+    const zero_i32 = utils.zeroValue(.i32);
+    const lt_name = try ctx.nextTemp();
+    try builder.compare(lt_name, "icmp", "slt", .i32, int_val, zero_i32);
+    const lt_val = ValueRef{ .name = lt_name, .ty = .i1, .is_ptr = false };
+    const mid_label = try ctx.nextLabel("arith_if_zero");
+    try builder.brCond(lt_val, neg_label, mid_label);
+    try builder.label(mid_label);
+
+    const eq_name = try ctx.nextTemp();
+    try builder.compare(eq_name, "icmp", "eq", .i32, int_val, zero_i32);
+    const eq_val = ValueRef{ .name = eq_name, .ty = .i1, .is_ptr = false };
+    try builder.brCond(eq_val, zero_label, pos_label);
+}
+
 fn emitDoList(
     ctx: *Context,
     builder: anytype,
@@ -523,7 +642,8 @@ test "emitFunction emits a simple assignment" {
     defer decls.deinit();
     var defined = std.StringHashMap(void).init(a);
     defer defined.deinit();
-    var ctx = Context.init(a, unit, &sem_unit, &decls, &defined);
+    var formats = std.StringHashMap(context.FormatInfo).init(a);
+    var ctx = Context.init(a, unit, &sem_unit, &decls, &defined, &formats);
     defer ctx.deinit();
 
     var buffer = std.array_list.Managed(u8).init(allocator);

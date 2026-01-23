@@ -30,7 +30,7 @@ pub fn main() !void {
 
     const cases = try collectTestCases(arena_allocator, options.tests_dir);
     if (cases.len == 0) {
-        try std.fs.File.stdout().writeAll("no .f tests found\n");
+        try logStdout("no .f tests found\n", .{});
         return;
     }
 
@@ -54,9 +54,9 @@ pub fn main() !void {
         const expected = std.fs.cwd().readFileAlloc(allocator, case.golden_path, 64 * 1024 * 1024) catch |err| {
             failures += 1;
             if (err == error.FileNotFound) {
-                try std.fs.File.stderr().writer().print("missing golden file: {s}\n", .{case.golden_path});
+                try logStderr("missing golden file: {s}\n", .{case.golden_path});
             } else {
-                try std.fs.File.stderr().writer().print("failed to read golden file {s}: {s}\n", .{ case.golden_path, @errorName(err) });
+                try logStderr("failed to read golden file {s}: {s}\n", .{ case.golden_path, @errorName(err) });
             }
             continue;
         };
@@ -65,7 +65,7 @@ pub fn main() !void {
         const comparison = try Comparator.compareText(allocator, expected, result.output);
         if (!comparison.ok) {
             failures += 1;
-            try std.fs.File.stderr().writer().print("mismatch: {s}\n{s}\n", .{ case.input_path, comparison.diff.? });
+            try logStderr("mismatch: {s}\n{s}\n", .{ case.input_path, comparison.diff.? });
             allocator.free(comparison.diff.?);
             continue;
         }
@@ -75,15 +75,15 @@ pub fn main() !void {
     }
 
     if (options.update) {
-        try std.fs.File.stdout().writer().print("updated {d} golden files\n", .{updated});
+        try logStdout("updated {d} golden files\n", .{updated});
         return;
     }
 
     if (failures > 0) {
-        try std.fs.File.stderr().writer().print("golden tests failed: {d}\n", .{failures});
+        try logStderr("golden tests failed: {d}\n", .{failures});
         return error.GoldenTestsFailed;
     }
-    try std.fs.File.stdout().writeAll("golden tests passed\n");
+    try logStdout("golden tests passed\n", .{});
 }
 
 const Options = struct {
@@ -149,7 +149,7 @@ const TestCase = struct {
 };
 
 fn collectTestCases(allocator: std.mem.Allocator, tests_dir: []const u8) ![]TestCase {
-    var list = std.ArrayList(TestCase).init(allocator);
+    var list: std.ArrayList(TestCase) = .empty;
     var dir = try std.fs.cwd().openDir(tests_dir, .{ .iterate = true });
     defer dir.close();
 
@@ -162,11 +162,11 @@ fn collectTestCases(allocator: std.mem.Allocator, tests_dir: []const u8) ![]Test
 
         const input_path = try std.fs.path.join(allocator, &.{ tests_dir, entry.path });
         const golden_path = try replaceExtension(allocator, input_path, "ll");
-        try list.append(.{ .input_path = input_path, .golden_path = golden_path });
+        try list.append(allocator, .{ .input_path = input_path, .golden_path = golden_path });
     }
 
-    std.sort.sort(TestCase, list.items, {}, testCaseLessThan);
-    return list.toOwnedSlice();
+    std.sort.heap(TestCase, list.items, {}, testCaseLessThan);
+    return list.toOwnedSlice(allocator);
 }
 
 fn testCaseLessThan(_: void, a: TestCase, b: TestCase) bool {
@@ -278,4 +278,20 @@ const Comparator = struct {
 
 fn trimCr(line: []const u8) []const u8 {
     return std.mem.trimRight(u8, line, "\r");
+}
+
+fn logStderr(comptime fmt: []const u8, args: anytype) !void {
+    var stderr_file = std.fs.File.stderr();
+    var buffer: [4096]u8 = undefined;
+    var writer = stderr_file.writer(&buffer);
+    try writer.interface.print(fmt, args);
+    try writer.interface.flush();
+}
+
+fn logStdout(comptime fmt: []const u8, args: anytype) !void {
+    var stdout_file = std.fs.File.stdout();
+    var buffer: [4096]u8 = undefined;
+    var writer = stdout_file.writer(&buffer);
+    try writer.interface.print(fmt, args);
+    try writer.interface.flush();
 }
