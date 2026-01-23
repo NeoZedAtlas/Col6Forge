@@ -207,3 +207,22 @@ fn parseDecimal(text: []const u8) usize {
     return value;
 }
 
+test "lexLogicalLine tokenizes basic expression" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A=1.0E2+2\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+
+    const expected = [_]TokenKind{ .identifier, .equals, .real, .plus, .integer };
+    try testing.expectEqual(expected.len, tokens.len);
+    for (tokens, 0..) |tok, idx| {
+        try testing.expectEqual(expected[idx], tok.kind);
+    }
+    try testing.expectEqual(@as(usize, 1), tokens[0].line);
+    try testing.expectEqual(@as(usize, 7), tokens[0].column);
+}
+

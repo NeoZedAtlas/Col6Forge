@@ -126,3 +126,82 @@ fn findSymbol(sem: *const sema.SemanticUnit, name: []const u8) ?sema.Symbol {
     }
     return null;
 }
+
+test "buildUnitCommonLayouts computes offsets and alignment" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const empty_exprs = try a.alloc(*ast.Expr, 0);
+    const decl_items = try a.alloc(ast.Declarator, 2);
+    decl_items[0] = .{ .name = "A", .dims = empty_exprs, .char_len = null };
+    decl_items[1] = .{ .name = "B", .dims = empty_exprs, .char_len = null };
+    const blocks = try a.alloc(ast.CommonBlock, 1);
+    blocks[0] = .{ .name = "BLK", .items = decl_items };
+    const decls = try a.alloc(ast.Decl, 1);
+    decls[0] = .{ .common = .{ .blocks = blocks } };
+
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = decls,
+        .stmts = try a.alloc(ast.Stmt, 0),
+    };
+
+    const symbols = try a.alloc(sema.Symbol, 2);
+    symbols[0] = .{
+        .name = "A",
+        .type_kind = .integer,
+        .dims = empty_exprs,
+        .kind = .variable,
+        .storage = .common,
+        .is_external = false,
+        .is_intrinsic = false,
+        .const_value = null,
+        .type_explicit = true,
+    };
+    symbols[1] = .{
+        .name = "B",
+        .type_kind = .real,
+        .dims = empty_exprs,
+        .kind = .variable,
+        .storage = .common,
+        .is_external = false,
+        .is_intrinsic = false,
+        .const_value = null,
+        .type_explicit = true,
+    };
+    const sem_unit = sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(sema.ResolvedRef, 0),
+    };
+
+    const layouts = try buildUnitCommonLayouts(a, unit, &sem_unit);
+    try testing.expectEqual(@as(usize, 1), layouts.len);
+    const layout = layouts[0];
+    try testing.expectEqualStrings("blk", layout.key);
+    try testing.expectEqualStrings("common_blk_", layout.global_name);
+    try testing.expectEqual(@as(usize, 8), layout.size);
+    try testing.expectEqual(@as(usize, 4), layout.alignment);
+    try testing.expectEqual(@as(usize, 2), layout.items.len);
+    try testing.expectEqualStrings("A", layout.items[0].name);
+    try testing.expectEqual(@as(usize, 0), layout.items[0].offset);
+    try testing.expectEqualStrings("B", layout.items[1].name);
+    try testing.expectEqual(@as(usize, 4), layout.items[1].offset);
+}
+
+test "commonGlobalName formats blank blocks" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const blank = try commonGlobalName(allocator, "");
+    defer allocator.free(blank);
+    try testing.expectEqualStrings("common_blank_", blank);
+}

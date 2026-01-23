@@ -2,6 +2,8 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const context = @import("context.zig");
 const expr = @import("expr.zig");
+const fixed_form = @import("../fixed_form.zig");
+const lexer = @import("../lexer.zig");
 
 const LineParser = context.LineParser;
 const TypeKind = ast.TypeKind;
@@ -183,4 +185,30 @@ fn parseNameList(lp: *LineParser, arena: std.mem.Allocator) ![]const []const u8 
         if (!lp.consume(.comma)) break;
     }
     return names.toOwnedSlice();
+}
+
+test "parseDecl handles simple type declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      INTEGER A, B\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.integer, td.type_kind);
+            try testing.expectEqual(@as(usize, 2), td.items.len);
+            try testing.expectEqualStrings("A", td.items[0].name);
+            try testing.expectEqualStrings("B", td.items[1].name);
+        },
+        else => return error.UnexpectedToken,
+    }
 }

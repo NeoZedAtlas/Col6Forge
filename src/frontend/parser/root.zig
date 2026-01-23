@@ -116,3 +116,28 @@ fn isEndIfLine(lp: LineParser) bool {
     if (next_tok.kind != .identifier) return false;
     return context.eqNoCase(lp.tokenText(next_tok), "IF");
 }
+
+test "parseProgram parses a basic subroutine" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE FOO(A)\n" ++
+        "      INTEGER A\n" ++
+        "      A=1\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqualStrings("FOO", unit.name);
+    try testing.expectEqual(@as(usize, 1), unit.args.len);
+    try testing.expectEqualStrings("A", unit.args[0]);
+    try testing.expectEqual(@as(usize, 1), unit.decls.len);
+    try testing.expectEqual(@as(usize, 1), unit.stmts.len);
+}

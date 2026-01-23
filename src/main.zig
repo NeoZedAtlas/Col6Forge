@@ -189,3 +189,25 @@ fn printUsage(file: std.fs.File) !void {
         \\
     );
 }
+
+test "args parsing" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    try testing.expectError(error.MissingInputFile, parseArgs(allocator, &[_][]const u8{"col6forge"}));
+    try testing.expectError(error.MissingOutputPath, parseArgs(allocator, &[_][]const u8{"col6forge", "-o"}));
+    try testing.expectError(error.UnknownFlag, parseArgs(allocator, &[_][]const u8{"col6forge", "-bogus", "file.f"}));
+    try testing.expectError(error.TooManyInputs, parseArgs(allocator, &[_][]const u8{"col6forge", "a.f", "b.f"}));
+
+    const help = try parseArgs(allocator, &[_][]const u8{"col6forge", "-h", "-o", "out.ll"});
+    try testing.expect(help.show_help);
+    try testing.expectEqualStrings("", help.input_path);
+    try testing.expectEqualStrings("out.ll", help.output_path.?);
+    try testing.expectEqual(Col6Forge.EmitKind.llvm, help.emit);
+
+    const parsed = try parseArgs(allocator, &[_][]const u8{"col6forge", "-emit-llvm", "input.f"});
+    try testing.expect(!parsed.show_help);
+    try testing.expectEqualStrings("input.f", parsed.input_path);
+    try testing.expect(parsed.output_path == null);
+    try testing.expectEqual(Col6Forge.EmitKind.llvm, parsed.emit);
+}

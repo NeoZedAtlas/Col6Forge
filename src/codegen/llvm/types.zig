@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const ir = @import("../ir.zig");
 
@@ -26,5 +27,14 @@ pub fn irTypeText(ty: IRType) []const u8 {
         .complex_f64 => "{double, double}",
         .ptr => "ptr",
     };
+}
+
+test "typeFromKind and irTypeText map types" {
+    const testing = std.testing;
+
+    try testing.expectEqual(IRType.i32, typeFromKind(.integer));
+    try testing.expectEqual(IRType.f64, typeFromKind(.double_precision));
+    try testing.expectEqualStrings("double", irTypeText(.f64));
+    try testing.expectEqualStrings("ptr", irTypeText(.ptr));
 }
 

@@ -1,6 +1,8 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const context = @import("context.zig");
+const fixed_form = @import("../fixed_form.zig");
+const lexer = @import("../lexer.zig");
 
 const LineParser = context.LineParser;
 const Expr = ast.Expr;
@@ -147,5 +149,56 @@ fn peekBinaryOp(lp: LineParser) ?BinOpInfo {
             return null;
         },
         else => return null,
+    }
+}
+
+test "parseExpr respects precedence" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      1+2*3\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .binary => |bin| {
+            try testing.expectEqual(BinaryOp.add, bin.op);
+            try testing.expect(bin.left.* == .literal);
+            try testing.expect(bin.right.* == .binary);
+            const right = bin.right.binary;
+            try testing.expectEqual(BinaryOp.mul, right.op);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDimExpr handles assumed size" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      *\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseDimExpr(&lp, arena.allocator());
+
+    switch (node.*) {
+        .literal => |lit| {
+            try testing.expectEqual(ast.LiteralKind.assumed_size, lit.kind);
+            try testing.expectEqualStrings("*", lit.text);
+        },
+        else => return error.UnexpectedToken,
     }
 }

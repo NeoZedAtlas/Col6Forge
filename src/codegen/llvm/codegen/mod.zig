@@ -78,3 +78,43 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
 
     return;
 }
+
+test "emitModuleToWriter emits module header and empty function" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(ast.Decl, 0),
+        .stmts = try a.alloc(ast.Stmt, 0),
+    };
+    const units = try a.alloc(ast.ProgramUnit, 1);
+    units[0] = unit;
+    const program = ast.Program{ .units = units };
+
+    const sem_unit = sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = try a.alloc(sema.Symbol, 0),
+        .implicit_rules = try a.alloc(sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "test.f");
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "source_filename = \"test.f\"") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "define void @unit_") != null);
+}

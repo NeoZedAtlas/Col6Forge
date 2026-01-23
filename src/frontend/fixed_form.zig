@@ -171,3 +171,35 @@ fn codeSlice(line: []const u8) []const u8 {
     const end = if (line.len < 72) line.len else 72;
     return line[6..end];
 }
+
+test "normalizeFixedForm joins continuations and preserves labels" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      A=1\n" ++
+        "     +B=2\n" ++
+        "C comment\n" ++
+        "      \n" ++
+        "  10  CONTINUE\n";
+    const lines = try normalizeFixedForm(allocator, source);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expect(lines[0].label == null);
+    try testing.expectEqualStrings("A=1B=2", lines[0].text);
+    try testing.expectEqual(@as(usize, 1), lines[0].span.start_line);
+    try testing.expectEqual(@as(usize, 2), lines[0].span.end_line);
+    try testing.expectEqual(@as(usize, 2), lines[0].segments.len);
+    try testing.expectEqual(@as(usize, 1), lines[0].segments[0].line);
+    try testing.expectEqual(@as(usize, 7), lines[0].segments[0].column);
+    try testing.expectEqual(@as(usize, 3), lines[0].segments[0].length);
+    try testing.expectEqual(@as(usize, 2), lines[0].segments[1].line);
+    try testing.expectEqual(@as(usize, 7), lines[0].segments[1].column);
+    try testing.expectEqual(@as(usize, 3), lines[0].segments[1].length);
+
+    try testing.expectEqualStrings("10", lines[1].label.?);
+    try testing.expectEqualStrings("CONTINUE", lines[1].text);
+    try testing.expectEqual(@as(usize, 5), lines[1].span.start_line);
+    try testing.expectEqual(@as(usize, 5), lines[1].span.end_line);
+}

@@ -5,6 +5,8 @@ const context = @import("context.zig");
 const expr = @import("expr.zig");
 const common = @import("common.zig");
 const utils = @import("utils.zig");
+const sema = @import("../../../sema/mod.zig");
+const builder_mod = @import("builder.zig");
 
 const Stmt = ast.Stmt;
 const Context = context.Context;
@@ -468,4 +470,70 @@ fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {
             try ctx.locals.put(item.name, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
         }
     }
+}
+
+test "emitFunction emits a simple assignment" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const target = try a.create(ast.Expr);
+    target.* = .{ .identifier = "A" };
+    const value = try a.create(ast.Expr);
+    value.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+    const stmt_node = ast.Stmt{
+        .label = null,
+        .node = .{ .assignment = .{ .target = target, .value = value } },
+    };
+    const stmts = try a.alloc(ast.Stmt, 1);
+    stmts[0] = stmt_node;
+
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(ast.Decl, 0),
+        .stmts = stmts,
+    };
+
+    const symbols = try a.alloc(sema.Symbol, 1);
+    symbols[0] = .{
+        .name = "A",
+        .type_kind = .integer,
+        .dims = try a.alloc(*ast.Expr, 0),
+        .kind = .variable,
+        .storage = .local,
+        .is_external = false,
+        .is_intrinsic = false,
+        .const_value = null,
+        .type_explicit = true,
+    };
+    const sem_unit = sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(sema.ResolvedRef, 0),
+    };
+
+    var decls = std.StringHashMap(context.IRDecl).init(a);
+    defer decls.deinit();
+    var defined = std.StringHashMap(void).init(a);
+    defer defined.deinit();
+    var ctx = Context.init(a, unit, &sem_unit, &decls, &defined);
+    defer ctx.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    try emitFunction(&ctx, &builder);
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "alloca") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "store i32 1") != null);
 }
