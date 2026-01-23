@@ -94,7 +94,7 @@ const Options = struct {
 };
 
 fn parseArgs(args: []const []const u8) !Options {
-    var tests_dir: []const u8 = "tests";
+    var tests_dir: []const u8 = "tests/NIST_F78_test_suite";
     var update = false;
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
@@ -135,7 +135,7 @@ fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
         \\Usage: golden_runner [--tests-dir <dir>] [--update] [-emit-llvm]
         \\Options:
-        \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests)
+        \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
         \\  --update           Overwrite golden .ll files with current output
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
