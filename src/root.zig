@@ -17,6 +17,7 @@ pub const SemanticProgram = sema.SemanticProgram;
 
 pub const writeDiagnostic = diag.writeDiagnostic;
 pub const runPipeline = pipeline.runPipeline;
+pub const runPipelineToWriter = pipeline.runPipelineToWriter;
 pub const normalizeFixedForm = frontend.normalizeFixedForm;
 pub const freeLogicalLines = frontend.freeLogicalLines;
 pub const lexLogicalLine = frontend.lexLogicalLine;

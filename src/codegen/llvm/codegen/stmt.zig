@@ -15,18 +15,15 @@ const EmitError = anyerror;
 const LocalBlocks = struct {
     names: [][]const u8,
     label_map: std.StringHashMap([]const u8),
-    label_index: std.StringHashMap(usize),
 };
 
 fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !LocalBlocks {
     var names = std.array_list.Managed([]const u8).init(ctx.allocator);
     var label_map = std.StringHashMap([]const u8).init(ctx.allocator);
-    var label_index = std.StringHashMap(usize).init(ctx.allocator);
-    for (stmts, 0..) |stmt, idx| {
+    for (stmts) |stmt| {
         const name = if (stmt.label) |label| blk: {
             const block_name = try std.fmt.allocPrint(ctx.allocator, "L{s}", .{label});
             try label_map.put(label, block_name);
-            try label_index.put(label, idx);
             break :blk block_name;
         } else try ctx.nextLabel(prefix);
         try names.append(name);
@@ -34,7 +31,6 @@ fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !LocalBloc
     return .{
         .names = try names.toOwnedSlice(),
         .label_map = label_map,
-        .label_index = label_index,
     };
 }
 
@@ -204,30 +200,28 @@ fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8,
                 else_blocks = try buildLocalBlocks(ctx, ifb.else_stmts, "if_else");
             }
 
-            if (then_blocks) |blocks| {
+            if (then_blocks) |*blocks| {
                 defer {
                     freeBlockNames(ctx, blocks.names);
                     blocks.label_map.deinit();
-                    blocks.label_index.deinit();
                 }
             }
-            if (else_blocks) |blocks| {
+            if (else_blocks) |*blocks| {
                 defer {
                     freeBlockNames(ctx, blocks.names);
                     blocks.label_map.deinit();
-                    blocks.label_index.deinit();
                 }
             }
 
-            const then_entry = if (then_blocks) |blocks| blocks.names[0] else next_block;
-            const else_entry = if (else_blocks) |blocks| blocks.names[0] else next_block;
+            const then_entry = if (then_blocks) |*blocks| blocks.names[0] else next_block;
+            const else_entry = if (else_blocks) |*blocks| blocks.names[0] else next_block;
             try builder.brCond(cond, then_entry, else_entry);
 
-            if (then_blocks) |blocks| {
-                try emitStmtListRange(ctx, builder, ifb.then_stmts, blocks.names, &blocks.label_map, &blocks.label_index, 0, blocks.names.len - 1, next_block);
+            if (then_blocks) |*blocks| {
+                try emitStmtListRange(ctx, builder, ifb.then_stmts, blocks.names, &blocks.label_map, 0, blocks.names.len - 1, next_block);
             }
-            if (else_blocks) |blocks| {
-                try emitStmtListRange(ctx, builder, ifb.else_stmts, blocks.names, &blocks.label_map, &blocks.label_index, 0, blocks.names.len - 1, next_block);
+            if (else_blocks) |*blocks| {
+                try emitStmtListRange(ctx, builder, ifb.else_stmts, blocks.names, &blocks.label_map, 0, blocks.names.len - 1, next_block);
             }
             return true;
         },
@@ -351,7 +345,6 @@ fn emitStmtListRange(
     stmts: []Stmt,
     block_names: [][]const u8,
     label_map: *const std.StringHashMap([]const u8),
-    label_index: *const std.StringHashMap(usize),
     start_idx: usize,
     end_idx: usize,
     end_next: []const u8,
@@ -363,11 +356,11 @@ fn emitStmtListRange(
         try builder.label(block_name);
         switch (stmt.node) {
             .do_loop => |loop| {
-                const end_label_idx = label_index.get(loop.end_label) orelse return error.MissingLabel;
+                const end_label_idx = findLabelIndex(stmts, loop.end_label) orelse return error.MissingLabel;
                 if (end_label_idx <= i) return error.InvalidDoLabel;
                 if (end_label_idx > end_idx) return error.InvalidDoLabel;
                 const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
-                try emitDoList(ctx, builder, stmts, block_names, label_map, label_index, i, end_label_idx, after_loop);
+                try emitDoList(ctx, builder, stmts, block_names, label_map, i, end_label_idx, after_loop);
                 i = end_label_idx + 1;
                 continue;
             },
@@ -385,7 +378,6 @@ fn emitDoList(
     stmts: []Stmt,
     block_names: [][]const u8,
     label_map: *const std.StringHashMap([]const u8),
-    label_index: *const std.StringHashMap(usize),
     do_idx: usize,
     end_idx: usize,
     after_loop: []const u8,
@@ -438,7 +430,7 @@ fn emitDoList(
     const body_start = block_names[do_idx + 1];
     try builder.brCond(cond, body_start, after_loop);
 
-    try emitStmtListRange(ctx, builder, stmts, block_names, label_map, label_index, do_idx + 1, end_idx, inc_label);
+    try emitStmtListRange(ctx, builder, stmts, block_names, label_map, do_idx + 1, end_idx, inc_label);
 
     try builder.label(inc_label);
     const var_loaded2_val = try expr.loadValue(ctx, builder, var_ptr, var_ty);
@@ -448,6 +440,15 @@ fn emitDoList(
     const sum_coerced = try expr.coerce(ctx, builder, sum, var_ty);
     try builder.store(sum_coerced, var_ptr);
     try builder.br(test_label);
+}
+
+fn findLabelIndex(stmts: []Stmt, label: []const u8) ?usize {
+    for (stmts, 0..) |stmt, idx| {
+        if (stmt.label) |stmt_label| {
+            if (std.mem.eql(u8, stmt_label, label)) return idx;
+        }
+    }
+    return null;
 }
 
 fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {

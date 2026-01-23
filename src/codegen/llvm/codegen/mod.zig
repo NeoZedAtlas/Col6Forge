@@ -11,7 +11,12 @@ const Program = ast.Program;
 
 pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: sema.SemanticProgram, source_name: []const u8) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
-    const writer = buffer.writer();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem, source_name);
+    return buffer.toOwnedSlice();
+}
+
+pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program: Program, sem: sema.SemanticProgram, source_name: []const u8) !void {
     var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
     try builder.moduleHeader(source_name);
 
@@ -67,5 +72,5 @@ pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: sema.Sema
         try builder.declare(name, decl.ret_type, decl.sig, decl.varargs);
     }
 
-    return buffer.toOwnedSlice();
+    return;
 }
