@@ -95,12 +95,25 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const verify_runner = b.addExecutable(.{
+        .name = "verify_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/verify_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "Col6Forge", .module = mod },
+            },
+        }),
+    });
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
     b.installArtifact(golden_runner);
+    b.installArtifact(verify_runner);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -161,6 +174,14 @@ pub fn build(b: *std.Build) void {
     run_golden.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_golden.addArgs(args);
+    }
+
+    const verify_step = b.step("verify", "Run NIST F78 verification tests");
+    const run_verify = b.addRunArtifact(verify_runner);
+    verify_step.dependOn(&run_verify.step);
+    run_verify.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_verify.addArgs(args);
     }
 
     // Just like flags, top level steps are also listed in the `--help` menu.
