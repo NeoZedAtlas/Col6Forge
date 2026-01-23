@@ -77,10 +77,17 @@ const FileOutputWriter = struct {
     }
 
     pub fn print(self: *FileOutputWriter, comptime fmt: []const u8, args: anytype) !void {
-        var buffer: [4096]u8 = undefined;
-        var writer = self.file.writer(&buffer);
-        try writer.interface.print(fmt, args);
-        try writer.interface.flush();
+        var stack_buf: [512]u8 = undefined;
+        const text = std.fmt.bufPrint(&stack_buf, fmt, args) catch |err| switch (err) {
+            error.NoSpaceLeft => {
+                const heap_text = try std.fmt.allocPrint(self.allocator, fmt, args);
+                defer self.allocator.free(heap_text);
+                try self.file.writeAll(heap_text);
+                return;
+            },
+            else => return err,
+        };
+        try self.file.writeAll(text);
     }
 };
 
