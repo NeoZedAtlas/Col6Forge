@@ -83,11 +83,24 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const golden_runner = b.addExecutable(.{
+        .name = "golden_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/golden_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "Col6Forge", .module = mod },
+            },
+        }),
+    });
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
+    b.installArtifact(golden_runner);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -141,6 +154,14 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    const golden_step = b.step("golden", "Run golden file tests");
+    const run_golden = b.addRunArtifact(golden_runner);
+    golden_step.dependOn(&run_golden.step);
+    run_golden.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_golden.addArgs(args);
+    }
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

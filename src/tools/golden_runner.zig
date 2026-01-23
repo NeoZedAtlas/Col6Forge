@@ -1,0 +1,281 @@
+//! Golden file test runner for Col6Forge.
+//!
+//! Runner (IO): discovers test inputs, executes the compiler pipeline, and
+//! reads/writes golden files.
+//! Comparator (pure logic): compares expected vs. actual outputs and reports
+//! a compact diff.
+const std = @import("std");
+const Col6Forge = @import("Col6Forge");
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    const options = parseArgs(args) catch |err| {
+        try printUsage(std.fs.File.stderr());
+        return err;
+    };
+    if (options.show_help) {
+        try printUsage(std.fs.File.stdout());
+        return;
+    }
+
+    const cases = try collectTestCases(arena_allocator, options.tests_dir);
+    if (cases.len == 0) {
+        try std.fs.File.stdout().writeAll("no .f tests found\n");
+        return;
+    }
+
+    var failures: usize = 0;
+    var updated: usize = 0;
+
+    for (cases) |case| {
+        const result = Col6Forge.runPipeline(allocator, case.input_path, options.emit) catch |err| {
+            failures += 1;
+            try reportPipelineError(case.input_path, err);
+            continue;
+        };
+        defer allocator.free(result.output);
+
+        if (options.update) {
+            try writeFile(case.golden_path, result.output);
+            updated += 1;
+            continue;
+        }
+
+        const expected = std.fs.cwd().readFileAlloc(allocator, case.golden_path, 64 * 1024 * 1024) catch |err| {
+            failures += 1;
+            if (err == error.FileNotFound) {
+                try std.fs.File.stderr().writer().print("missing golden file: {s}\n", .{case.golden_path});
+            } else {
+                try std.fs.File.stderr().writer().print("failed to read golden file {s}: {s}\n", .{ case.golden_path, @errorName(err) });
+            }
+            continue;
+        };
+        defer allocator.free(expected);
+
+        const comparison = try Comparator.compareText(allocator, expected, result.output);
+        if (!comparison.ok) {
+            failures += 1;
+            try std.fs.File.stderr().writer().print("mismatch: {s}\n{s}\n", .{ case.input_path, comparison.diff.? });
+            allocator.free(comparison.diff.?);
+            continue;
+        }
+        if (comparison.diff) |diff| {
+            allocator.free(diff);
+        }
+    }
+
+    if (options.update) {
+        try std.fs.File.stdout().writer().print("updated {d} golden files\n", .{updated});
+        return;
+    }
+
+    if (failures > 0) {
+        try std.fs.File.stderr().writer().print("golden tests failed: {d}\n", .{failures});
+        return error.GoldenTestsFailed;
+    }
+    try std.fs.File.stdout().writeAll("golden tests passed\n");
+}
+
+const Options = struct {
+    tests_dir: []const u8,
+    update: bool,
+    emit: Col6Forge.EmitKind,
+    show_help: bool,
+};
+
+fn parseArgs(args: []const []const u8) !Options {
+    var tests_dir: []const u8 = "tests";
+    var update = false;
+    var emit: Col6Forge.EmitKind = .llvm;
+    var show_help = false;
+
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            show_help = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--update")) {
+            update = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-emit-llvm")) {
+            emit = .llvm;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--tests-dir")) {
+            if (i + 1 >= args.len) return error.MissingTestsDir;
+            i += 1;
+            tests_dir = args[i];
+            continue;
+        }
+        return error.UnknownFlag;
+    }
+
+    return .{
+        .tests_dir = tests_dir,
+        .update = update,
+        .emit = emit,
+        .show_help = show_help,
+    };
+}
+
+fn printUsage(file: std.fs.File) !void {
+    try file.writeAll(
+        \\Usage: golden_runner [--tests-dir <dir>] [--update] [-emit-llvm]
+        \\Options:
+        \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests)
+        \\  --update           Overwrite golden .ll files with current output
+        \\  -emit-llvm         Emit LLVM IR (default)
+        \\  -h, --help         Show this help
+        \\
+    );
+}
+
+const TestCase = struct {
+    input_path: []const u8,
+    golden_path: []const u8,
+};
+
+fn collectTestCases(allocator: std.mem.Allocator, tests_dir: []const u8) ![]TestCase {
+    var list = std.ArrayList(TestCase).init(allocator);
+    var dir = try std.fs.cwd().openDir(tests_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    while (try walker.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.path, ".f")) continue;
+
+        const input_path = try std.fs.path.join(allocator, &.{ tests_dir, entry.path });
+        const golden_path = try replaceExtension(allocator, input_path, "ll");
+        try list.append(.{ .input_path = input_path, .golden_path = golden_path });
+    }
+
+    std.sort.sort(TestCase, list.items, {}, testCaseLessThan);
+    return list.toOwnedSlice();
+}
+
+fn testCaseLessThan(_: void, a: TestCase, b: TestCase) bool {
+    return std.mem.order(u8, a.input_path, b.input_path) == .lt;
+}
+
+fn replaceExtension(allocator: std.mem.Allocator, path: []const u8, new_ext: []const u8) ![]const u8 {
+    const dir = std.fs.path.dirname(path) orelse "";
+    const base = std.fs.path.basename(path);
+    const dot_index = std.mem.lastIndexOfScalar(u8, base, '.') orelse base.len;
+    const stem = base[0..dot_index];
+
+    if (dir.len == 0 or std.mem.eql(u8, dir, ".")) {
+        return std.fmt.allocPrint(allocator, "{s}.{s}", .{ stem, new_ext });
+    }
+    return std.fmt.allocPrint(allocator, "{s}{c}{s}.{s}", .{ dir, std.fs.path.sep, stem, new_ext });
+}
+
+fn writeFile(path: []const u8, contents: []const u8) !void {
+    var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(contents);
+}
+
+fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
+    var stderr = std.fs.File.stderr();
+    var buffer: [4096]u8 = undefined;
+    var writer = stderr.writer(&buffer);
+    switch (err) {
+        error.FileNotFound => {
+            try Col6Forge.writeDiagnostic(&writer.interface, .{
+                .file_path = input_path,
+                .line = 1,
+                .column = 1,
+                .message = "input file not found",
+                .line_text = "",
+            });
+        },
+        else => {
+            const err_name = @errorName(err);
+            const message = try std.fmt.allocPrint(std.heap.page_allocator, "pipeline error: {s}", .{err_name});
+            defer std.heap.page_allocator.free(message);
+            try Col6Forge.writeDiagnostic(&writer.interface, .{
+                .file_path = input_path,
+                .line = 1,
+                .column = 1,
+                .message = message,
+                .line_text = "",
+            });
+        },
+    }
+    try writer.interface.flush();
+}
+
+const Comparator = struct {
+    pub const CompareResult = struct {
+        ok: bool,
+        diff: ?[]const u8,
+    };
+
+    pub fn compareText(allocator: std.mem.Allocator, expected: []const u8, actual: []const u8) !CompareResult {
+        if (std.mem.eql(u8, expected, actual)) {
+            return .{ .ok = true, .diff = null };
+        }
+
+        var exp_it = std.mem.splitScalar(u8, expected, '\n');
+        var act_it = std.mem.splitScalar(u8, actual, '\n');
+        var line_no: usize = 1;
+
+        while (true) : (line_no += 1) {
+            const exp_opt = exp_it.next();
+            const act_opt = act_it.next();
+
+            if (exp_opt == null and act_opt == null) {
+                break;
+            }
+            if (exp_opt == null and act_opt != null) {
+                const diff = try std.fmt.allocPrint(
+                    allocator,
+                    "actual has extra content at line {d}\nactual: {s}\n",
+                    .{ line_no, trimCr(act_opt.?) },
+                );
+                return .{ .ok = false, .diff = diff };
+            }
+            if (act_opt == null and exp_opt != null) {
+                const diff = try std.fmt.allocPrint(
+                    allocator,
+                    "expected has extra content at line {d}\nexpected: {s}\n",
+                    .{ line_no, trimCr(exp_opt.?) },
+                );
+                return .{ .ok = false, .diff = diff };
+            }
+
+            const exp_line = trimCr(exp_opt.?);
+            const act_line = trimCr(act_opt.?);
+            if (!std.mem.eql(u8, exp_line, act_line)) {
+                const diff = try std.fmt.allocPrint(
+                    allocator,
+                    "line {d} mismatch\nexpected: {s}\nactual:   {s}\n",
+                    .{ line_no, exp_line, act_line },
+                );
+                return .{ .ok = false, .diff = diff };
+            }
+        }
+
+        return .{ .ok = true, .diff = null };
+    }
+};
+
+fn trimCr(line: []const u8) []const u8 {
+    return std.mem.trimRight(u8, line, "\r");
+}
