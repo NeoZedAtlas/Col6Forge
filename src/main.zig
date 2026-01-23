@@ -77,9 +77,10 @@ const FileOutputWriter = struct {
     }
 
     pub fn print(self: *FileOutputWriter, comptime fmt: []const u8, args: anytype) !void {
-        const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
-        defer self.allocator.free(msg);
-        try self.file.writeAll(msg);
+        var buffer: [4096]u8 = undefined;
+        var writer = self.file.writer(&buffer);
+        try writer.interface.print(fmt, args);
+        try writer.interface.flush();
     }
 };
 

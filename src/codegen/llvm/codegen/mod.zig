@@ -17,29 +17,33 @@ pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: sema.Sema
 }
 
 pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program: Program, sem: sema.SemanticProgram, source_name: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+
     var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
     try builder.moduleHeader(source_name);
 
-    var decls = std.StringHashMap(context.IRDecl).init(allocator);
+    var decls = std.StringHashMap(context.IRDecl).init(scratch);
     defer decls.deinit();
-    var defined = std.StringHashMap(void).init(allocator);
+    var defined = std.StringHashMap(void).init(scratch);
     defer defined.deinit();
 
-    var sem_map = std.StringHashMap(*const sema.SemanticUnit).init(allocator);
+    var sem_map = std.StringHashMap(*const sema.SemanticUnit).init(scratch);
     defer sem_map.deinit();
     for (sem.units) |*unit| {
         try sem_map.put(unit.name, unit);
     }
     for (program.units) |unit| {
-        const mangled = try utils.mangleName(allocator, unit.name);
+        const mangled = try utils.mangleName(scratch, unit.name);
         try defined.put(mangled, {});
     }
 
-    var common_blocks = std.StringHashMap(common.CommonBlockInfo).init(allocator);
+    var common_blocks = std.StringHashMap(common.CommonBlockInfo).init(scratch);
     defer common_blocks.deinit();
     for (program.units) |unit| {
         const sem_unit = sem_map.get(unit.name) orelse return error.MissingSemanticUnit;
-        const layouts = try common.buildUnitCommonLayouts(allocator, unit, sem_unit);
+        const layouts = try common.buildUnitCommonLayouts(scratch, unit, sem_unit);
         for (layouts) |layout| {
             if (common_blocks.get(layout.key)) |info| {
                 if (info.size != layout.size or info.alignment != layout.alignment) return error.CommonBlockMismatch;
@@ -60,7 +64,7 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
 
     for (program.units) |unit| {
         const sem_unit = sem_map.get(unit.name) orelse return error.MissingSemanticUnit;
-        var ctx = context.Context.init(allocator, unit, sem_unit, &decls, &defined);
+        var ctx = context.Context.init(scratch, unit, sem_unit, &decls, &defined);
         defer ctx.deinit();
         try stmt.emitFunction(&ctx, &builder);
     }

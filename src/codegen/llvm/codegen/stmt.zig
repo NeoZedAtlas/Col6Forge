@@ -181,6 +181,13 @@ fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8,
                     try builder.br(next_block);
                     return true;
                 },
+                .if_single, .if_block => {
+                    const then_label = try ctx.nextLabel("if_nested");
+                    try builder.brCond(cond, then_label, next_block);
+                    try builder.label(then_label);
+                    _ = try emitStmt(ctx, builder, .{ .label = null, .node = inner }, next_block, local_label_map);
+                    return true;
+                },
                 else => return error.ControlFlowUnsupported,
             }
         },
@@ -193,24 +200,21 @@ fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8,
 
             var then_blocks: ?LocalBlocks = null;
             var else_blocks: ?LocalBlocks = null;
+            defer {
+                if (then_blocks) |*blocks| {
+                    freeBlockNames(ctx, blocks.names);
+                    blocks.label_map.deinit();
+                }
+                if (else_blocks) |*blocks| {
+                    freeBlockNames(ctx, blocks.names);
+                    blocks.label_map.deinit();
+                }
+            }
             if (ifb.then_stmts.len > 0) {
                 then_blocks = try buildLocalBlocks(ctx, ifb.then_stmts, "if_then");
             }
             if (ifb.else_stmts.len > 0) {
                 else_blocks = try buildLocalBlocks(ctx, ifb.else_stmts, "if_else");
-            }
-
-            if (then_blocks) |*blocks| {
-                defer {
-                    freeBlockNames(ctx, blocks.names);
-                    blocks.label_map.deinit();
-                }
-            }
-            if (else_blocks) |*blocks| {
-                defer {
-                    freeBlockNames(ctx, blocks.names);
-                    blocks.label_map.deinit();
-                }
             }
 
             const then_entry = if (then_blocks) |*blocks| blocks.names[0] else next_block;
