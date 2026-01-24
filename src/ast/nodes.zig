@@ -148,6 +148,8 @@ pub const FormatItem = union(enum) {
     spaces: usize,
     int: IntFormat,
     real: RealFormat,
+    real_fixed: RealFormat,
+    char: CharFormat,
 };
 
 pub const IntFormat = struct {
@@ -157,6 +159,10 @@ pub const IntFormat = struct {
 pub const RealFormat = struct {
     width: usize,
     precision: usize,
+};
+
+pub const CharFormat = struct {
+    width: usize,
 };
 
 pub const IfSingle = struct {

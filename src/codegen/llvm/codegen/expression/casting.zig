@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
 const sema = @import("../../../../sema/mod.zig");
 const ir = @import("../../../ir.zig");
@@ -16,7 +17,7 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 
-pub fn emitLiteral(ctx: *Context, lit: Literal) !ValueRef {
+pub fn emitLiteral(ctx: *Context, builder: anytype, lit: Literal) !ValueRef {
     switch (lit.kind) {
         .integer => return .{ .name = lit.text, .ty = .i32, .is_ptr = false },
         .real => {
@@ -25,8 +26,23 @@ pub fn emitLiteral(ctx: *Context, lit: Literal) !ValueRef {
             return .{ .name = normalized, .ty = ty, .is_ptr = false };
         },
         .logical => return .{ .name = lit.text, .ty = .i1, .is_ptr = false },
-        .string, .hollerith, .assumed_size => return error.UnsupportedLiteral,
+        .string => return emitStringLiteral(ctx, builder, lit.text),
+        .hollerith => {
+            const idx = std.mem.indexOfScalar(u8, lit.text, 'H') orelse std.mem.indexOfScalar(u8, lit.text, 'h') orelse return error.UnsupportedLiteral;
+            if (idx + 1 > lit.text.len) return error.UnsupportedLiteral;
+            const bytes = lit.text[idx + 1 ..];
+            return emitStringLiteral(ctx, builder, bytes);
+        },
+        .assumed_size => return error.UnsupportedLiteral,
     }
+}
+
+fn emitStringLiteral(ctx: *Context, builder: anytype, bytes: []const u8) !ValueRef {
+    const name = try ctx.nextStringName();
+    try builder.globalString(name, bytes);
+    const ptr_name = try ctx.nextTemp();
+    try builder.gepConstString(ptr_name, name, bytes.len + 1);
+    return .{ .name = ptr_name, .ty = .ptr, .is_ptr = false };
 }
 
 pub fn emitConstTyped(ctx: *Context, value: sema.ConstValue, type_kind: TypeKind) ValueRef {
@@ -90,6 +106,7 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
             .integer => .i32,
             .real => if (utils.hasDExponent(lit.text)) .f64 else .f32,
             .logical => .i1,
+            .string, .hollerith => .ptr,
             else => return error.UnsupportedLiteral,
         },
         .unary => |un| return exprType(ctx, un.expr),

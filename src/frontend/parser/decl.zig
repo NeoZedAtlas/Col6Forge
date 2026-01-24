@@ -35,7 +35,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         if (lp.isKeywordSplit("NONE")) return error.ImplicitNoneUnsupported;
         var rules = std.array_list.Managed(ImplicitRule).init(arena);
         while (lp.peek()) |_| {
-            const type_kind = try parseTypeKind(lp);
+            const type_kind = try parseImplicitTypeKind(lp, arena);
             _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
             while (!lp.peekIs(.r_paren)) {
                 const start_tok = lp.expectIdentifier() orelse return error.UnexpectedToken;
@@ -118,6 +118,17 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     const type_kind = try parseTypeKind(lp);
     const items = try parseDeclarators(lp, arena);
     return .{ .type_decl = .{ .type_kind = type_kind, .items = items } };
+}
+
+fn parseImplicitTypeKind(lp: *LineParser, arena: std.mem.Allocator) !TypeKind {
+    if (lp.isKeywordSplit("CHARACTER")) {
+        _ = lp.consumeKeyword("CHARACTER");
+        if (lp.consume(.star)) {
+            _ = try expr.parseExpr(lp, arena, 6);
+        }
+        return .character;
+    }
+    return parseTypeKind(lp);
 }
 
 fn parseTypeKind(lp: *LineParser) !TypeKind {

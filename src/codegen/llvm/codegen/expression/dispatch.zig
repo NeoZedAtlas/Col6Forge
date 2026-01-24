@@ -46,7 +46,7 @@ pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef
             return .{ .name = tmp, .ty = ty, .is_ptr = false };
         },
         .literal => |lit| {
-            return casting.emitLiteral(ctx, lit);
+            return casting.emitLiteral(ctx, builder, lit);
         },
         .unary => |un| {
             const inner = try emitExpr(ctx, builder, un.expr);

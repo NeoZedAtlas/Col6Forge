@@ -141,11 +141,16 @@ test "emitLiteral and emitConstTyped produce expected IR types" {
     var harness = try TestHarness.init(allocator);
     defer harness.deinit();
 
-    const lit_int = try emitLiteral(&harness.ctx, .{ .kind = .integer, .text = "42" });
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lit_int = try emitLiteral(&harness.ctx, &builder, .{ .kind = .integer, .text = "42" });
     try testing.expectEqual(IRType.i32, lit_int.ty);
     try testing.expectEqualStrings("42", lit_int.name);
 
-    const lit_real = try emitLiteral(&harness.ctx, .{ .kind = .real, .text = "1.0D0" });
+    const lit_real = try emitLiteral(&harness.ctx, &builder, .{ .kind = .real, .text = "1.0D0" });
     try testing.expectEqual(IRType.f64, lit_real.ty);
     try testing.expectEqualStrings("1.0e0", lit_real.name);
 

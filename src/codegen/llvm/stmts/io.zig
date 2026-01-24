@@ -28,11 +28,18 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                 try arg_buf.writer().print(", {s} {s}", .{ llvm_types.irTypeText(.i32), coerced.name });
                 arg_index += 1;
             },
-            .real => {
+            .real, .real_fixed => {
                 if (arg_index >= write.args.len) return error.MissingWriteArg;
                 const value = try expr.emitExpr(ctx, builder, write.args[arg_index]);
                 const coerced = try expr.coerce(ctx, builder, value, .f64);
                 try arg_buf.writer().print(", {s} {s}", .{ llvm_types.irTypeText(.f64), coerced.name });
+                arg_index += 1;
+            },
+            .char => {
+                if (arg_index >= write.args.len) return error.MissingWriteArg;
+                const value = try expr.emitExpr(ctx, builder, write.args[arg_index]);
+                if (value.ty != .ptr) return error.UnsupportedCharArg;
+                try arg_buf.writer().print(", {s} {s}", .{ llvm_types.irTypeText(.ptr), value.name });
                 arg_index += 1;
             },
             .literal, .spaces => {},

@@ -14,6 +14,7 @@ const Expr = ast.Expr;
 const FormatItem = ast.FormatItem;
 const IntFormat = ast.IntFormat;
 const RealFormat = ast.RealFormat;
+const CharFormat = ast.CharFormat;
 
 const ParseStmtError = anyerror;
 
@@ -703,12 +704,27 @@ fn parseFormatItems(arena: std.mem.Allocator, text: []const u8) ![]FormatItem {
                 try items.append(.{ .spaces = value });
                 continue;
             }
+            if (i < inner.len and inner[i] == '/') {
+                i += 1;
+                const lit = try arena.alloc(u8, value);
+                @memset(lit, '\n');
+                try items.append(.{ .literal = lit });
+                continue;
+            }
             return error.UnexpectedToken;
         }
 
         if (ch == 'X' or ch == 'x') {
             i += 1;
             try items.append(.{ .spaces = 1 });
+            continue;
+        }
+
+        if (ch == '/') {
+            i += 1;
+            const lit = try arena.alloc(u8, 1);
+            lit[0] = '\n';
+            try items.append(.{ .literal = lit });
             continue;
         }
 
@@ -728,6 +744,25 @@ fn parseFormatItems(arena: std.mem.Allocator, text: []const u8) ![]FormatItem {
                 precision = parseUnsigned(inner, &i) orelse return error.UnexpectedToken;
             }
             try items.append(.{ .real = .{ .width = width, .precision = precision } });
+            continue;
+        }
+
+        if (ch == 'F' or ch == 'f') {
+            i += 1;
+            const width = parseUnsigned(inner, &i) orelse return error.UnexpectedToken;
+            var precision: usize = 0;
+            if (i < inner.len and inner[i] == '.') {
+                i += 1;
+                precision = parseUnsigned(inner, &i) orelse return error.UnexpectedToken;
+            }
+            try items.append(.{ .real_fixed = .{ .width = width, .precision = precision } });
+            continue;
+        }
+
+        if (ch == 'A' or ch == 'a') {
+            i += 1;
+            const width = parseUnsigned(inner, &i) orelse 0;
+            try items.append(.{ .char = .{ .width = width } });
             continue;
         }
 

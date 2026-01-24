@@ -31,6 +31,7 @@ pub const Context = struct {
     defined: *std.StringHashMap(void),
     formats: *const std.StringHashMap(FormatInfo),
     temp_index: usize,
+    string_index: usize,
     locals: std.StringHashMap(ValueRef),
     ref_kinds: std.AutoHashMap(usize, sema.ResolvedRefKind),
     label_map: std.StringHashMap([]const u8),
@@ -53,6 +54,7 @@ pub const Context = struct {
             .defined = defined,
             .formats = formats,
             .temp_index = 0,
+            .string_index = 0,
             .locals = std.StringHashMap(ValueRef).init(allocator),
             .ref_kinds = std.AutoHashMap(usize, sema.ResolvedRefKind).init(allocator),
             .label_map = std.StringHashMap([]const u8).init(allocator),
@@ -147,6 +149,12 @@ pub const Context = struct {
     pub fn nextTemp(self: *Context) ![]const u8 {
         const name = try utils.formatTempName(self.allocator, "t", self.temp_index);
         self.temp_index += 1;
+        return name;
+    }
+
+    pub fn nextStringName(self: *Context) ![]const u8 {
+        const name = try utils.formatTempName(self.allocator, "str", self.string_index);
+        self.string_index += 1;
         return name;
     }
 };

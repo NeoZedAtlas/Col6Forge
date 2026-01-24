@@ -41,20 +41,6 @@ pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![
         }
 
         if (isCommentLine(line)) {
-            if (in_stmt) {
-                const text_owned = try buffer.toOwnedSlice();
-                const segments_owned = try segments.toOwnedSlice();
-                try list.append(.{
-                    .label = current_label,
-                    .text = text_owned,
-                    .span = .{ .start_line = current_start, .end_line = current_end },
-                    .segments = segments_owned,
-                });
-                buffer = std.array_list.Managed(u8).init(allocator);
-                segments = std.array_list.Managed(Segment).init(allocator);
-                in_stmt = false;
-                current_label = null;
-            }
             continue;
         }
 
@@ -157,7 +143,8 @@ fn isCommentLine(line: []const u8) bool {
 
 fn isContinuation(line: []const u8) bool {
     if (line.len < 6) return false;
-    return line[5] != ' ';
+    const mark = line[5];
+    return mark != ' ' and mark != '0';
 }
 
 fn parseLabel(allocator: std.mem.Allocator, line: []const u8) !?[]const u8 {

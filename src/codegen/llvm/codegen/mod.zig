@@ -140,6 +140,20 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem
             .real => |spec| {
                 try buffer.writer().print("%{d}.{d}E", .{ spec.width, spec.precision });
             },
+            .real_fixed => |spec| {
+                if (spec.precision == 0) {
+                    try buffer.writer().print("%#{d}.0f", .{spec.width});
+                } else {
+                    try buffer.writer().print("%{d}.{d}f", .{ spec.width, spec.precision });
+                }
+            },
+            .char => |spec| {
+                if (spec.width == 0) {
+                    try buffer.writer().print("%s", .{});
+                } else {
+                    try buffer.writer().print("%{d}s", .{spec.width});
+                }
+            },
         }
     }
     try buffer.append('\n');
