@@ -295,6 +295,7 @@ pub const UnitAnalyzer = struct {
                 } else if (sym.dims.len > 0) {
                     kind = .subscript;
                 }
+                if (kind == .unknown) return error.AmbiguousCallOrSubscript;
                 try self.refs.append(.{ .expr = expr, .name = call.name, .kind = kind });
                 for (call.args) |arg| {
                     try self.resolveExpr(arg);
@@ -304,9 +305,69 @@ pub const UnitAnalyzer = struct {
             .binary => |bin| {
                 try self.resolveExpr(bin.left);
                 try self.resolveExpr(bin.right);
+                if (bin.op == .power) {
+                    const left_kind = try self.exprType(bin.left);
+                    const right_kind = try self.exprType(bin.right);
+                    if (!isPowerOperandSupported(left_kind) or !isPowerOperandSupported(right_kind)) {
+                        return error.PowerUnsupported;
+                    }
+                }
             },
             .literal => {},
         }
+    }
+
+    fn exprType(self: *UnitAnalyzer, expr: *ast.Expr) ResolveError!ast.TypeKind {
+        switch (expr.*) {
+            .identifier => |name| {
+                const idx = try self.ensureSymbol(name);
+                return self.symbols.items[idx].type_kind;
+            },
+            .call_or_subscript => |call| {
+                const idx = try self.ensureSymbol(call.name);
+                return self.symbols.items[idx].type_kind;
+            },
+            .literal => |lit| {
+                return switch (lit.kind) {
+                    .integer => .integer,
+                    .real => .real,
+                    .logical => .logical,
+                    .string, .hollerith => .character,
+                    .assumed_size => .integer,
+                };
+            },
+            .unary => |un| {
+                return switch (un.op) {
+                    .not => .logical,
+                    .plus, .minus => self.exprType(un.expr),
+                };
+            },
+            .binary => |bin| {
+                switch (bin.op) {
+                    .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_ => return .logical,
+                    else => {},
+                }
+                const left = try self.exprType(bin.left);
+                const right = try self.exprType(bin.right);
+                return promoteNumericType(left, right);
+            },
+        }
+    }
+
+    fn promoteNumericType(left: ast.TypeKind, right: ast.TypeKind) ast.TypeKind {
+        if (left == .complex or right == .complex) return .complex;
+        if (left == .double_precision or right == .double_precision) return .double_precision;
+        if (left == .real or right == .real) return .real;
+        if (left == .character or right == .character) return .character;
+        if (left == .logical and right == .logical) return .logical;
+        return .integer;
+    }
+
+    fn isPowerOperandSupported(kind: ast.TypeKind) bool {
+        return switch (kind) {
+            .integer, .real, .double_precision => true,
+            else => false,
+        };
     }
 
     fn ensureSymbol(self: *UnitAnalyzer, name: []const u8) !usize {

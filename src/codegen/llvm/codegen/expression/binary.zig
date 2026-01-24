@@ -89,7 +89,7 @@ fn emitPower(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) Emit
         try builder.cast(tmp, "fptosi", pow.ty, pow, .i32);
         return .{ .name = tmp, .ty = .i32, .is_ptr = false };
     }
-    return error.UnsupportedPowerType;
+    return error.PowerUnsupported;
 }
 
 pub fn emitAdd(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
