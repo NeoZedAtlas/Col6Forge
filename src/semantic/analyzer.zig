@@ -289,14 +289,20 @@ pub const UnitAnalyzer = struct {
             },
             .call_or_subscript => |call| {
                 const idx = try self.ensureSymbol(call.name);
-                const sym = self.symbols.items[idx];
+                var sym = self.symbols.items[idx];
                 var kind: ResolvedRefKind = .unknown;
-                if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
-                    kind = .call;
-                } else if (sym.dims.len > 0) {
+                if (sym.dims.len > 0) {
                     kind = .subscript;
+                } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                    kind = .call;
+                } else {
+                    // Default to function call when nothing declares it as an array.
+                    kind = .call;
+                    if (sym.kind == .variable) {
+                        sym.kind = .function;
+                    }
+                    self.symbols.items[idx] = sym;
                 }
-                if (kind == .unknown) return error.AmbiguousCallOrSubscript;
                 try self.refs.append(.{ .expr = expr, .name = call.name, .kind = kind });
                 for (call.args) |arg| {
                     try self.resolveExpr(arg);
