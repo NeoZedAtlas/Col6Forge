@@ -41,8 +41,8 @@ pub fn resolveGotoTargets(
     global_label_map: *const std.StringHashMap([]const u8),
     mode: GotoTargetMode,
 ) ![]BranchTarget {
-    var targets = std.ArrayList(BranchTarget).init(allocator);
-    errdefer targets.deinit();
+    var targets: std.ArrayList(BranchTarget) = .empty;
+    errdefer targets.deinit(allocator);
 
     for (labels, 0..) |label, idx| {
         const target = resolveLabel(local_label_map, global_label_map, label) orelse return error.MissingLabel;
@@ -50,13 +50,13 @@ pub fn resolveGotoTargets(
             .computed => @as(i64, @intCast(idx + 1)),
             .assigned => std.fmt.parseInt(i64, label, 10) catch return error.InvalidLabelValue,
         };
-        try targets.append(.{
+        try targets.append(allocator, .{
             .index = branch_value,
             .target_block = target,
         });
     }
 
-    return targets.toOwnedSlice();
+    return targets.toOwnedSlice(allocator);
 }
 
 pub fn analyzeLoopConfig(loop: ast.DoLoopStmt, var_kind: ast.TypeKind) LoopConfig {

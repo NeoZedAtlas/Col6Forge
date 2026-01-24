@@ -12,6 +12,7 @@ const FormatInfo = context.FormatInfo;
 
 pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: sema.SemanticProgram, source_name: []const u8) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
+    errdefer buffer.deinit();
     var writer = buffer.writer();
     try emitModuleToWriter(&writer, allocator, program, sem, source_name);
     return buffer.toOwnedSlice();
@@ -116,6 +117,7 @@ fn buildFormatMap(allocator: std.mem.Allocator, builder: anytype, unit: ast.Prog
 
 fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
+    errdefer buffer.deinit();
     var last_non_space: ?usize = null;
     for (items, 0..) |item, idx| {
         if (item != .spaces) last_non_space = idx;

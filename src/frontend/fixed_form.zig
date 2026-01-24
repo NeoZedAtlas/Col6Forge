@@ -45,7 +45,6 @@ pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![
         }
 
         const is_cont = isContinuation(line);
-        const label = try parseLabel(allocator, line);
         const code = codeSlice(line);
         const trimmed_code = std.mem.trimRight(u8, code, " \t");
 
@@ -80,6 +79,7 @@ pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![
                 buffer = std.array_list.Managed(u8).init(allocator);
                 segments = std.array_list.Managed(Segment).init(allocator);
             }
+            const label = try parseLabel(allocator, line);
             current_start = line_no;
             current_end = line_no;
             current_label = label;
@@ -156,7 +156,10 @@ fn parseLabel(allocator: std.mem.Allocator, line: []const u8) !?[]const u8 {
         if (ch == ' ' or ch == '\t') continue;
         try buffer.append(ch);
     }
-    if (buffer.items.len == 0) return null;
+    if (buffer.items.len == 0) {
+        buffer.deinit();
+        return null;
+    }
     const owned = try buffer.toOwnedSlice();
     return owned;
 }
