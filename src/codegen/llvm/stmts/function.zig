@@ -63,6 +63,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     }
 
     try installCommonLocals(ctx, builder);
+    try applyEquivalences(ctx);
 
     const block_names = try ctx.buildBlockNames();
     defer {
@@ -97,6 +98,65 @@ fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {
             try builder.gep(ptr_name, .i8, base_ref, offset_val);
             try ctx.locals.put(item.name, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
         }
+    }
+}
+
+fn applyEquivalences(ctx: *Context) EmitError!void {
+    for (ctx.unit.decls) |decl| {
+        if (decl != .equivalence) continue;
+        for (decl.equivalence.groups) |group| {
+            if (group.items.len < 2) continue;
+            const anchor = group.items[0];
+            var idx: usize = 1;
+            while (idx < group.items.len) : (idx += 1) {
+                const other = group.items[idx];
+                try applyEquivalencePair(ctx, anchor, other);
+            }
+        }
+    }
+}
+
+fn applyEquivalencePair(ctx: *Context, anchor: *ast.Expr, other: *ast.Expr) EmitError!void {
+    if (anchor.* == .call_or_subscript and other.* == .call_or_subscript) {
+        const a_call = anchor.call_or_subscript;
+        const b_call = other.call_or_subscript;
+        if (!argsEqual(a_call.args, b_call.args)) return;
+        const a_sym = ctx.findSymbol(a_call.name) orelse return;
+        const b_sym = ctx.findSymbol(b_call.name) orelse return;
+        if (a_sym.type_kind != b_sym.type_kind) return;
+        if (a_sym.dims.len != b_sym.dims.len) return;
+        const base = ctx.locals.get(a_call.name) orelse return;
+        try ctx.locals.put(b_call.name, base);
+        return;
+    }
+    if (anchor.* == .identifier and other.* == .identifier) {
+        const a_name = anchor.identifier;
+        const b_name = other.identifier;
+        const a_sym = ctx.findSymbol(a_name) orelse return;
+        const b_sym = ctx.findSymbol(b_name) orelse return;
+        if (a_sym.type_kind != b_sym.type_kind) return;
+        const base = ctx.locals.get(a_name) orelse return;
+        try ctx.locals.put(b_name, base);
+    }
+}
+
+fn argsEqual(a: []*ast.Expr, b: []*ast.Expr) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |arg, idx| {
+        const av = constIndexValue(arg) orelse return false;
+        const bv = constIndexValue(b[idx]) orelse return false;
+        if (av != bv) return false;
+    }
+    return true;
+}
+
+fn constIndexValue(expr: *ast.Expr) ?i64 {
+    switch (expr.*) {
+        .literal => |lit| {
+            if (lit.kind != .integer) return null;
+            return std.fmt.parseInt(i64, lit.text, 10) catch return null;
+        },
+        else => return null,
     }
 }
 

@@ -19,6 +19,7 @@ pub const coerce = casting.coerce;
 pub const exprType = casting.exprType;
 
 pub const emitSubscriptPtr = memory.emitSubscriptPtr;
+pub const emitLinearSubscriptPtr = memory.emitLinearSubscriptPtr;
 pub const emitDimValue = memory.emitDimValue;
 pub const emitIndex = memory.emitIndex;
 pub const loadValue = memory.loadValue;

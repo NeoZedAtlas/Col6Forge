@@ -30,7 +30,18 @@ pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!v
 
 pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!void {
     for (data.inits) |init| {
-        const target_ptr = try expr.emitLValue(ctx, builder, init.target);
+        var target_ptr: context.ValueRef = undefined;
+        if (init.target.* == .call_or_subscript) {
+            const call = init.target.call_or_subscript;
+            const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
+            if (sym.dims.len > 1 and call.args.len == 1) {
+                target_ptr = try expr.emitLinearSubscriptPtr(ctx, builder, call);
+            } else {
+                target_ptr = try expr.emitLValue(ctx, builder, init.target);
+            }
+        } else {
+            target_ptr = try expr.emitLValue(ctx, builder, init.target);
+        }
         const value = try expr.emitExpr(ctx, builder, init.value);
         const sym_ty = try expr.exprType(ctx, init.target);
         const coerced = try expr.coerce(ctx, builder, value, sym_ty);

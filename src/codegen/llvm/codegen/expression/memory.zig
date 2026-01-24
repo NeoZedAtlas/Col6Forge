@@ -42,6 +42,21 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     return .{ .name = gep, .ty = .ptr, .is_ptr = true };
 }
 
+pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) !ValueRef {
+    const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
+    if (sym.dims.len == 0) return error.ArraysUnsupported;
+    const base_ptr = try ctx.getPointer(call.name);
+    const elem_ty = llvm_types.typeFromKind(sym.type_kind);
+    if (elem_ty == .ptr) return error.UnsupportedArrayElementType;
+
+    if (call.args.len != 1) return error.InvalidSubscript;
+    const idx1 = try emitIndex(ctx, builder, call.args[0]);
+    const idx1_adj = try binary.emitSub(ctx, builder, idx1, utils.oneValue());
+    const gep = try ctx.nextTemp();
+    try builder.gep(gep, elem_ty, base_ptr, idx1_adj);
+    return .{ .name = gep, .ty = .ptr, .is_ptr = true };
+}
+
 pub fn emitDimValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     switch (expr.*) {
         .literal => |lit| {
