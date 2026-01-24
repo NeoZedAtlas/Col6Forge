@@ -116,7 +116,14 @@ fn buildFormatMap(allocator: std.mem.Allocator, builder: anytype, unit: ast.Prog
 
 fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
-    for (items) |item| {
+    var last_non_space: ?usize = null;
+    for (items, 0..) |item, idx| {
+        if (item != .spaces) last_non_space = idx;
+    }
+    const cutoff = last_non_space orelse 0;
+    const limit = if (last_non_space == null) 0 else cutoff + 1;
+
+    for (items[0..limit]) |item| {
         switch (item) {
             .literal => |text| {
                 try buffer.appendSlice(text);
