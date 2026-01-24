@@ -55,7 +55,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
     if (lp.isKeywordSplit("DIMENSION")) {
         _ = lp.consumeKeyword("DIMENSION");
-        const items = try parseDeclarators(lp, arena);
+        const items = try parseDeclarators(lp, arena, null);
         return .{ .dimension = .{ .items = items } };
     }
     if (lp.isKeywordSplit("PARAMETER")) {
@@ -83,7 +83,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
                 }
                 _ = lp.expect(.slash) orelse return error.UnexpectedToken;
             }
-            const items = try parseDeclarators(lp, arena);
+            const items = try parseDeclarators(lp, arena, null);
             try blocks.append(.{ .name = block_name, .items = items });
             if (!lp.consume(.comma)) break;
         }
@@ -117,7 +117,11 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
 
     const type_kind = try parseTypeKind(lp);
-    const items = try parseDeclarators(lp, arena);
+    var default_char_len: ?*ast.Expr = null;
+    if (type_kind == .character and lp.consume(.star)) {
+        default_char_len = try expr.parseExpr(lp, arena, 6);
+    }
+    const items = try parseDeclarators(lp, arena, default_char_len);
     return .{ .type_decl = .{ .type_kind = type_kind, .items = items } };
 }
 
@@ -162,12 +166,12 @@ fn parseTypeKind(lp: *LineParser) !TypeKind {
     return error.UnknownType;
 }
 
-fn parseDeclarators(lp: *LineParser, arena: std.mem.Allocator) ![]Declarator {
+fn parseDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_char_len: ?*ast.Expr) ![]Declarator {
     var items = std.array_list.Managed(Declarator).init(arena);
     while (lp.peek()) |_| {
         const name = lp.readName(arena) orelse return error.MissingName;
         var dims = std.array_list.Managed(*ast.Expr).init(arena);
-        var char_len: ?*ast.Expr = null;
+        var char_len: ?*ast.Expr = default_char_len;
         if (lp.consume(.star)) {
             char_len = try expr.parseExpr(lp, arena, 6);
         }
@@ -220,6 +224,38 @@ test "parseDecl handles simple type declaration" {
             try testing.expectEqual(@as(usize, 2), td.items.len);
             try testing.expectEqualStrings("A", td.items[0].name);
             try testing.expectEqualStrings("B", td.items[1].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles character length prefix" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CHARACTER*1 NINE, IDUMP\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.character, td.type_kind);
+            try testing.expectEqual(@as(usize, 2), td.items.len);
+            try testing.expectEqualStrings("NINE", td.items[0].name);
+            try testing.expect(td.items[0].char_len != null);
+            try testing.expectEqualStrings("IDUMP", td.items[1].name);
+            try testing.expect(td.items[1].char_len != null);
+            switch (td.items[0].char_len.?.*) {
+                .literal => |lit| try testing.expectEqualStrings("1", lit.text),
+                else => return error.UnexpectedToken,
+            }
         },
         else => return error.UnexpectedToken,
     }
