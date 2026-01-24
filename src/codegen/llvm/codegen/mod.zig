@@ -131,7 +131,7 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem
     errdefer buffer.deinit();
     var last_non_space: ?usize = null;
     for (items, 0..) |item, idx| {
-        if (item != .spaces) last_non_space = idx;
+        if (item != .spaces and item != .scale) last_non_space = idx;
     }
     const cutoff = last_non_space orelse 0;
     const limit = if (last_non_space == null) 0 else cutoff + 1;
@@ -167,6 +167,7 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem
                     try buffer.writer().print("%{d}s", .{spec.width});
                 }
             },
+            .scale => {},
         }
     }
     try buffer.append('\n');

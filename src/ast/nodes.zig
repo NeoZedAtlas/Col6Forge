@@ -163,6 +163,7 @@ pub const FormatItem = union(enum) {
     real: RealFormat,
     real_fixed: RealFormat,
     char: CharFormat,
+    scale: i32,
 };
 
 pub const IntFormat = struct {

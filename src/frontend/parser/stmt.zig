@@ -726,105 +726,161 @@ fn parseFormatItems(arena: std.mem.Allocator, text: []const u8) ![]FormatItem {
     if (close_idx <= open_idx) return error.UnexpectedToken;
     const inner = text[open_idx + 1 .. close_idx];
 
-    var items = std.array_list.Managed(FormatItem).init(arena);
     var i: usize = 0;
-    while (i < inner.len) {
-        while (i < inner.len and (inner[i] == ' ' or inner[i] == '\t' or inner[i] == ',')) : (i += 1) {}
-        if (i >= inner.len) break;
+    return parseFormatSequence(arena, inner, &i, false);
+}
 
-        const ch = inner[i];
+fn parseFormatSequence(arena: std.mem.Allocator, text: []const u8, index: *usize, stop_on_paren: bool) ![]FormatItem {
+    var items = std.array_list.Managed(FormatItem).init(arena);
+    while (index.* < text.len) {
+        while (index.* < text.len and (text[index.*] == ' ' or text[index.*] == '\t' or text[index.*] == ',')) : (index.* += 1) {}
+        if (index.* >= text.len) break;
+        if (stop_on_paren and text[index.*] == ')') {
+            index.* += 1;
+            break;
+        }
+
+        const ch = text[index.*];
         if (ch == '\'' or ch == '"') {
             const quote = ch;
-            i += 1;
+            index.* += 1;
             var buf = std.array_list.Managed(u8).init(arena);
-            while (i < inner.len) {
-                if (inner[i] == quote) {
-                    if (i + 1 < inner.len and inner[i + 1] == quote) {
+            while (index.* < text.len) {
+                if (text[index.*] == quote) {
+                    if (index.* + 1 < text.len and text[index.* + 1] == quote) {
                         try buf.append(quote);
-                        i += 2;
+                        index.* += 2;
                         continue;
                     }
-                    i += 1;
+                    index.* += 1;
                     break;
                 }
-                try buf.append(inner[i]);
-                i += 1;
+                try buf.append(text[index.*]);
+                index.* += 1;
             }
             const lit = try buf.toOwnedSlice();
             try items.append(.{ .literal = lit });
             continue;
         }
 
-        if (std.ascii.isDigit(ch)) {
-            const start = i;
-            i += 1;
-            while (i < inner.len and std.ascii.isDigit(inner[i])) : (i += 1) {}
-            const value = parseDecimal(inner[start..i]);
-            while (i < inner.len and (inner[i] == ' ' or inner[i] == '\t')) : (i += 1) {}
-            if (i < inner.len and (inner[i] == 'X' or inner[i] == 'x')) {
-                i += 1;
-                try items.append(.{ .spaces = value });
-                continue;
-            }
-            if (i < inner.len and inner[i] == '/') {
-                i += 1;
-                const lit = try arena.alloc(u8, value);
-                @memset(lit, '\n');
-                try items.append(.{ .literal = lit });
-                continue;
-            }
-            return error.UnexpectedToken;
-        }
-
-        if (ch == 'X' or ch == 'x') {
-            i += 1;
-            try items.append(.{ .spaces = 1 });
+        if (ch == '(') {
+            index.* += 1;
+            const group = try parseFormatSequence(arena, text, index, true);
+            try appendRepeatedItems(&items, group, 1);
             continue;
         }
 
         if (ch == '/') {
-            i += 1;
+            index.* += 1;
             const lit = try arena.alloc(u8, 1);
             lit[0] = '\n';
             try items.append(.{ .literal = lit });
             continue;
         }
 
+        if (ch == 'X' or ch == 'x') {
+            index.* += 1;
+            try items.append(.{ .spaces = 1 });
+            continue;
+        }
+
+        if (ch == '+' or ch == '-' or std.ascii.isDigit(ch)) {
+            var sign: i32 = 1;
+            if (ch == '+' or ch == '-') {
+                sign = if (ch == '-') -1 else 1;
+                index.* += 1;
+            }
+            const digits_start = index.*;
+            while (index.* < text.len and std.ascii.isDigit(text[index.*])) : (index.* += 1) {}
+            if (digits_start == index.*) return error.UnexpectedToken;
+            const count = parseDecimal(text[digits_start..index.*]);
+
+            while (index.* < text.len and (text[index.*] == ' ' or text[index.*] == '\t')) : (index.* += 1) {}
+            if (index.* < text.len and (text[index.*] == 'P' or text[index.*] == 'p')) {
+                index.* += 1;
+                const value = sign * @as(i32, @intCast(count));
+                try items.append(.{ .scale = value });
+                continue;
+            }
+            if (sign != 1) return error.UnexpectedToken;
+
+            if (index.* < text.len and text[index.*] == '(') {
+                index.* += 1;
+                const group = try parseFormatSequence(arena, text, index, true);
+                try appendRepeatedItems(&items, group, count);
+                continue;
+            }
+            if (index.* < text.len and (text[index.*] == 'H' or text[index.*] == 'h')) {
+                index.* += 1;
+                if (index.* + count > text.len) return error.UnexpectedToken;
+                const lit = text[index.* .. index.* + count];
+                index.* += count;
+                try items.append(.{ .literal = lit });
+                continue;
+            }
+            if (index.* < text.len and (text[index.*] == 'X' or text[index.*] == 'x')) {
+                index.* += 1;
+                try items.append(.{ .spaces = count });
+                continue;
+            }
+            if (index.* < text.len and text[index.*] == '/') {
+                index.* += 1;
+                const lit = try arena.alloc(u8, count);
+                @memset(lit, '\n');
+                try items.append(.{ .literal = lit });
+                continue;
+            }
+
+            if (index.* < text.len and (text[index.*] == 'I' or text[index.*] == 'i')) {
+                index.* += 1;
+                const spec = try parseIntFormat(text, index);
+                try appendRepeatedItem(&items, .{ .int = spec }, count);
+                continue;
+            }
+            if (index.* < text.len and (text[index.*] == 'E' or text[index.*] == 'e')) {
+                index.* += 1;
+                const spec = try parseRealFormat(text, index);
+                try appendRepeatedItem(&items, .{ .real = spec }, count);
+                continue;
+            }
+            if (index.* < text.len and (text[index.*] == 'F' or text[index.*] == 'f')) {
+                index.* += 1;
+                const spec = try parseRealFormat(text, index);
+                try appendRepeatedItem(&items, .{ .real_fixed = spec }, count);
+                continue;
+            }
+            if (index.* < text.len and (text[index.*] == 'A' or text[index.*] == 'a')) {
+                index.* += 1;
+                const spec = parseCharFormat(text, index);
+                try appendRepeatedItem(&items, .{ .char = spec }, count);
+                continue;
+            }
+
+            return error.UnexpectedToken;
+        }
+
         if (ch == 'I' or ch == 'i') {
-            i += 1;
-            const width = parseUnsigned(inner, &i) orelse return error.UnexpectedToken;
-            try items.append(.{ .int = .{ .width = width } });
+            index.* += 1;
+            const spec = try parseIntFormat(text, index);
+            try items.append(.{ .int = spec });
             continue;
         }
-
         if (ch == 'E' or ch == 'e') {
-            i += 1;
-            const width = parseUnsigned(inner, &i) orelse return error.UnexpectedToken;
-            var precision: usize = 0;
-            if (i < inner.len and inner[i] == '.') {
-                i += 1;
-                precision = parseUnsigned(inner, &i) orelse return error.UnexpectedToken;
-            }
-            try items.append(.{ .real = .{ .width = width, .precision = precision } });
+            index.* += 1;
+            const spec = try parseRealFormat(text, index);
+            try items.append(.{ .real = spec });
             continue;
         }
-
         if (ch == 'F' or ch == 'f') {
-            i += 1;
-            const width = parseUnsigned(inner, &i) orelse return error.UnexpectedToken;
-            var precision: usize = 0;
-            if (i < inner.len and inner[i] == '.') {
-                i += 1;
-                precision = parseUnsigned(inner, &i) orelse return error.UnexpectedToken;
-            }
-            try items.append(.{ .real_fixed = .{ .width = width, .precision = precision } });
+            index.* += 1;
+            const spec = try parseRealFormat(text, index);
+            try items.append(.{ .real_fixed = spec });
             continue;
         }
-
         if (ch == 'A' or ch == 'a') {
-            i += 1;
-            const width = parseUnsigned(inner, &i) orelse 0;
-            try items.append(.{ .char = .{ .width = width } });
+            index.* += 1;
+            const spec = parseCharFormat(text, index);
+            try items.append(.{ .char = spec });
             continue;
         }
 
@@ -832,6 +888,42 @@ fn parseFormatItems(arena: std.mem.Allocator, text: []const u8) ![]FormatItem {
     }
 
     return items.toOwnedSlice();
+}
+
+fn appendRepeatedItems(items: *std.array_list.Managed(FormatItem), group: []const FormatItem, count: usize) !void {
+    var repeat: usize = 0;
+    while (repeat < count) : (repeat += 1) {
+        for (group) |item| {
+            try items.append(item);
+        }
+    }
+}
+
+fn appendRepeatedItem(items: *std.array_list.Managed(FormatItem), item: FormatItem, count: usize) !void {
+    var repeat: usize = 0;
+    while (repeat < count) : (repeat += 1) {
+        try items.append(item);
+    }
+}
+
+fn parseIntFormat(text: []const u8, index: *usize) !IntFormat {
+    const width = parseUnsigned(text, index) orelse return error.UnexpectedToken;
+    return .{ .width = width };
+}
+
+fn parseRealFormat(text: []const u8, index: *usize) !RealFormat {
+    const width = parseUnsigned(text, index) orelse return error.UnexpectedToken;
+    var precision: usize = 0;
+    if (index.* < text.len and text[index.*] == '.') {
+        index.* += 1;
+        precision = parseUnsigned(text, index) orelse return error.UnexpectedToken;
+    }
+    return .{ .width = width, .precision = precision };
+}
+
+fn parseCharFormat(text: []const u8, index: *usize) CharFormat {
+    const width = parseUnsigned(text, index) orelse 0;
+    return .{ .width = width };
 }
 
 fn parseUnsigned(text: []const u8, index: *usize) ?usize {
