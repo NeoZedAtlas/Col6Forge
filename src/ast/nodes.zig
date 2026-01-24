@@ -104,6 +104,8 @@ pub const StmtNode = union(enum) {
     computed_goto: ComputedGotoStmt,
     assigned_goto: AssignedGotoStmt,
     write: WriteStmt,
+    read: ReadStmt,
+    rewind: RewindStmt,
     data: DataStmt,
     format: FormatStmt,
     arith_if: ArithIfStmt,
@@ -129,6 +131,16 @@ pub const WriteStmt = struct {
     unit: *Expr,
     format_label: []const u8,
     args: []*Expr,
+};
+
+pub const ReadStmt = struct {
+    unit: *Expr,
+    format_label: []const u8,
+    args: []*Expr,
+};
+
+pub const RewindStmt = struct {
+    unit: *Expr,
 };
 
 pub const DataInit = struct {

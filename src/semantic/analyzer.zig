@@ -189,6 +189,15 @@ pub const UnitAnalyzer = struct {
                     try self.resolveExpr(arg);
                 }
             },
+            .read => |read| {
+                try self.resolveExpr(read.unit);
+                for (read.args) |arg| {
+                    try self.resolveExpr(arg);
+                }
+            },
+            .rewind => |rewind| {
+                try self.resolveExpr(rewind.unit);
+            },
             .data => |data| {
                 for (data.inits) |data_init| {
                     try self.resolveExpr(data_init.target);
@@ -244,6 +253,15 @@ pub const UnitAnalyzer = struct {
                 for (write.args) |arg| {
                     try self.resolveExpr(arg);
                 }
+            },
+            .read => |read| {
+                try self.resolveExpr(read.unit);
+                for (read.args) |arg| {
+                    try self.resolveExpr(arg);
+                }
+            },
+            .rewind => |rewind| {
+                try self.resolveExpr(rewind.unit);
             },
             .data => |data| {
                 for (data.inits) |data_init| {

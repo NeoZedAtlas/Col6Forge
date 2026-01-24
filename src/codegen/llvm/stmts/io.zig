@@ -50,3 +50,17 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
     const printf_name = try ctx.ensureDeclRaw("printf", .i32, "ptr", true);
     try builder.call(null, .i32, printf_name, arg_buf.items);
 }
+
+pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
+    _ = ctx;
+    _ = builder;
+    _ = read;
+    return error.UnsupportedRead;
+}
+
+pub fn emitRewind(ctx: *Context, builder: anytype, rewind: ast.RewindStmt) EmitError!void {
+    _ = ctx;
+    _ = builder;
+    _ = rewind;
+    return error.UnsupportedRewind;
+}

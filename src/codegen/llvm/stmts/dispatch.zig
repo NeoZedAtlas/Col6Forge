@@ -34,6 +34,16 @@ pub fn emitStmt(
             try builder.br(next_block);
             return true;
         },
+        .read => |read| {
+            try io.emitRead(ctx, builder, read);
+            try builder.br(next_block);
+            return true;
+        },
+        .rewind => |rewind| {
+            try io.emitRewind(ctx, builder, rewind);
+            try builder.br(next_block);
+            return true;
+        },
         .data => |data| {
             try execution.emitData(ctx, builder, data);
             try builder.br(next_block);

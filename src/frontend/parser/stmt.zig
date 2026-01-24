@@ -90,6 +90,16 @@ pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine,
         index.* += 1;
         return .{ .label = label, .node = stmt_node };
     }
+    if (lp.isKeywordSplit("READ")) {
+        const stmt_node = try parseReadStatement(arena, &lp);
+        index.* += 1;
+        return .{ .label = label, .node = stmt_node };
+    }
+    if (lp.isKeywordSplit("REWIND")) {
+        const stmt_node = try parseRewindStatement(arena, &lp);
+        index.* += 1;
+        return .{ .label = label, .node = stmt_node };
+    }
     if (lp.isKeywordSplit("CALL")) {
         if (lineHasEquals(lp)) {
             if (tryParseBlankInsensitiveAssignment(arena, line, lp)) |stmt_node| {
@@ -257,6 +267,16 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator) ParseStmtError
         node.* = try parseWriteStatement(arena, lp);
         return node;
     }
+    if (lp.isKeywordSplit("READ")) {
+        const node = try arena.create(StmtNode);
+        node.* = try parseReadStatement(arena, lp);
+        return node;
+    }
+    if (lp.isKeywordSplit("REWIND")) {
+        const node = try arena.create(StmtNode);
+        node.* = try parseRewindStatement(arena, lp);
+        return node;
+    }
     if (lp.isKeywordSplit("STOP")) {
         _ = lp.consumeKeyword("STOP");
         const node = try arena.create(StmtNode);
@@ -332,6 +352,36 @@ fn parseWriteStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError
     }
 
     return .{ .write = .{ .unit = unit_expr, .format_label = format_label, .args = try args.toOwnedSlice() } };
+}
+
+fn parseReadStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    _ = lp.consumeKeyword("READ");
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    const unit_expr = try expr.parseExpr(lp, arena, 0);
+    _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+    const fmt_tok = lp.peek() orelse return error.UnexpectedToken;
+    if (fmt_tok.kind != .integer and fmt_tok.kind != .identifier) return error.UnexpectedToken;
+    _ = lp.next();
+    const format_label = lp.tokenText(fmt_tok);
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+
+    var args = std.array_list.Managed(*Expr).init(arena);
+    if (lp.peek() != null) {
+        while (true) {
+            if (lp.peek() == null) break;
+            const arg = try expr.parseExpr(lp, arena, 0);
+            try args.append(arg);
+            if (!lp.consume(.comma)) break;
+        }
+    }
+
+    return .{ .read = .{ .unit = unit_expr, .format_label = format_label, .args = try args.toOwnedSlice() } };
+}
+
+fn parseRewindStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    _ = lp.consumeKeyword("REWIND");
+    const unit_expr = try expr.parseExpr(lp, arena, 0);
+    return .{ .rewind = .{ .unit = unit_expr } };
 }
 
 fn parseAssignStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
