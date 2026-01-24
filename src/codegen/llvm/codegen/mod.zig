@@ -4,7 +4,7 @@ const sema = @import("../../../sema/mod.zig");
 const context = @import("context.zig");
 const builder_mod = @import("builder.zig");
 const common = @import("common.zig");
-const stmt = @import("stmt.zig");
+const stmts = @import("../stmts/mod.zig");
 const utils = @import("utils.zig");
 
 const Program = ast.Program;
@@ -73,7 +73,7 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
         var format_map = try buildFormatMap(scratch, &builder, unit);
         var ctx = context.Context.init(scratch, unit, sem_unit, &decls, &defined, &format_map);
         defer ctx.deinit();
-        try stmt.emitFunction(&ctx, &builder);
+        try stmts.emitFunction(&ctx, &builder);
     }
 
     if (program_mangled) |entry_name| {
