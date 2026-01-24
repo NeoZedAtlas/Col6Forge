@@ -78,7 +78,9 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         while (lp.peek()) |_| {
             var block_name: ?[]const u8 = null;
             if (lp.consume(.slash)) {
-                block_name = lp.readName(arena) orelse return error.MissingName;
+                if (!lp.peekIs(.slash)) {
+                    block_name = lp.readName(arena) orelse return error.MissingName;
+                }
                 _ = lp.expect(.slash) orelse return error.UnexpectedToken;
             }
             const items = try parseDeclarators(lp, arena);

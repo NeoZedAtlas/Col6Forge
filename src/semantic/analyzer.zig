@@ -61,6 +61,7 @@ pub const UnitAnalyzer = struct {
             .program => .subroutine,
             .subroutine => .subroutine,
             .function => .function,
+            .block_data => .subroutine,
         };
         const symbol = Symbol{
             .name = self.unit.name,

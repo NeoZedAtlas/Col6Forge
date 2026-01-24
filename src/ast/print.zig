@@ -7,6 +7,7 @@ pub fn printProgram(writer: anytype, program: ast.Program) !void {
             .program => "program",
             .subroutine => "subroutine",
             .function => "function",
+            .block_data => "block_data",
         };
         try writer.print("; unit {s} {s}\n", .{ kind_text, unit.name });
         try writer.print(";  args({d})\n", .{unit.args.len});

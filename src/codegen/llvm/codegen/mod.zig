@@ -37,12 +37,20 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
         try sem_map.put(unit.name, unit);
     }
     var program_mangled: ?[]const u8 = null;
+    var block_data_mangled = std.array_list.Managed([]const u8).init(scratch);
+    defer block_data_mangled.deinit();
     for (program.units) |unit| {
         const mangled = try utils.mangleName(scratch, unit.name);
         try defined.put(mangled, {});
-        if (unit.kind == .program) {
-            if (program_mangled != null) return error.MultipleProgramUnits;
-            program_mangled = mangled;
+        switch (unit.kind) {
+            .program => {
+                if (program_mangled != null) return error.MultipleProgramUnits;
+                program_mangled = mangled;
+            },
+            .block_data => {
+                try block_data_mangled.append(mangled);
+            },
+            else => {},
         }
     }
 
@@ -81,6 +89,9 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
         try builder.defineStartWithRet(.i32, "main");
         try builder.defineEnd();
         try builder.entryLabel();
+        for (block_data_mangled.items) |block_name| {
+            try builder.call(null, .void, block_name, "");
+        }
         try builder.call(null, .void, entry_name, "");
         try builder.retValue(.i32, "0");
         try builder.functionEnd();

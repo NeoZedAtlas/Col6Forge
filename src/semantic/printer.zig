@@ -10,6 +10,7 @@ pub fn printSemantic(writer: anytype, program: SemanticProgram) !void {
             .program => "program",
             .subroutine => "subroutine",
             .function => "function",
+            .block_data => "block_data",
         };
         try writer.print("; sem unit {s} {s}\n", .{ kind_text, unit.name });
         try writer.print(";  symbols({d}) implicit({d}) refs({d})\n", .{ unit.symbols.len, unit.implicit_rules.len, unit.resolved_refs.len });

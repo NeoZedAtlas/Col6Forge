@@ -6,6 +6,7 @@ pub const ProgramUnitKind = enum {
     program,
     subroutine,
     function,
+    block_data,
 };
 
 pub const ProgramUnit = struct {

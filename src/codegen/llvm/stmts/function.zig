@@ -17,7 +17,9 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try ctx.buildRefMap();
     try ctx.buildLocals();
 
-    if (ctx.unit.kind != .subroutine and ctx.unit.kind != .program) return error.UnsupportedProgramUnit;
+    if (ctx.unit.kind != .subroutine and ctx.unit.kind != .program and ctx.unit.kind != .block_data) {
+        return error.UnsupportedProgramUnit;
+    }
 
     const func_name = utils.mangleName(ctx.allocator, ctx.unit.name) catch return error.OutOfMemory;
 

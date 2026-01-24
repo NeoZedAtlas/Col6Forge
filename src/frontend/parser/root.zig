@@ -20,6 +20,7 @@ pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []fixed_form.Logi
         .arena = arena_allocator,
         .lines = lines,
         .index = 0,
+        .block_data_counter = 0,
     };
     return parser.parseProgram();
 }
@@ -28,6 +29,7 @@ const Parser = struct {
     arena: std.mem.Allocator,
     lines: []fixed_form.LogicalLine,
     index: usize,
+    block_data_counter: usize,
 
     fn parseProgram(self: *Parser) !Program {
         var units = std.array_list.Managed(ProgramUnit).init(self.arena);
@@ -44,7 +46,7 @@ const Parser = struct {
         const header_tokens = try lexer.lexLogicalLine(self.arena, header_line);
         defer self.arena.free(header_tokens);
         var lp = LineParser.init(header_line, header_tokens);
-        const header = try parseProgramUnitHeader(self.arena, &lp);
+        const header = try parseProgramUnitHeader(self.arena, &lp, &self.block_data_counter);
         self.index += 1;
 
         var decls = std.array_list.Managed(Decl).init(self.arena);
@@ -94,9 +96,10 @@ const ProgramUnitHeader = struct {
     type_decl: ?Decl,
 };
 
-fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser) !ProgramUnitHeader {
+fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_counter: *usize) !ProgramUnitHeader {
     var kind: ProgramUnitKind = undefined;
     var type_info: ?TypeInfo = null;
+    var allow_missing_name = false;
 
     if (lp.isKeywordSplit("PROGRAM")) {
         _ = lp.consumeKeyword("PROGRAM");
@@ -107,6 +110,10 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser) !ProgramUni
     } else if (lp.isKeywordSplit("FUNCTION")) {
         _ = lp.consumeKeyword("FUNCTION");
         kind = .function;
+    } else if (lp.isKeywordSplit("BLOCKDATA")) {
+        _ = lp.consumeKeyword("BLOCKDATA");
+        kind = .block_data;
+        allow_missing_name = true;
     } else {
         type_info = try parseTypePrefix(arena, lp) orelse return error.ExpectedProgramUnit;
         if (!lp.isKeywordSplit("FUNCTION")) return error.ExpectedProgramUnit;
@@ -114,7 +121,12 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser) !ProgramUni
         kind = .function;
     }
 
-    const name = lp.readName(arena) orelse return error.MissingName;
+    const name = lp.readName(arena) orelse blk: {
+        if (!allow_missing_name) return error.MissingName;
+        const synthetic = try std.fmt.allocPrint(arena, "BLOCKDATA{d}", .{block_data_counter.*});
+        block_data_counter.* += 1;
+        break :blk synthetic;
+    };
     var args_list = std.array_list.Managed([]const u8).init(arena);
     if (lp.consume(.l_paren)) {
         while (!lp.peekIs(.r_paren)) {
