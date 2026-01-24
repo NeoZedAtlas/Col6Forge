@@ -54,6 +54,36 @@ pub const LineParser = struct {
         if (tok.kind != .identifier) return false;
         return eqNoCase(self.tokenText(tok), text);
     }
+
+    pub fn keywordSpan(self: LineParser, text: []const u8) ?usize {
+        var pos: usize = 0;
+        var count: usize = 0;
+        var idx = self.index;
+        while (idx < self.tokens.len and pos < text.len) : (idx += 1) {
+            const tok = self.tokens[idx];
+            if (tok.kind != .identifier) return null;
+            const tok_text = self.tokenText(tok);
+            if (pos + tok_text.len > text.len) return null;
+            var i: usize = 0;
+            while (i < tok_text.len) : (i += 1) {
+                if (std.ascii.toLower(tok_text[i]) != std.ascii.toLower(text[pos + i])) return null;
+            }
+            pos += tok_text.len;
+            count += 1;
+        }
+        if (pos != text.len) return null;
+        return count;
+    }
+
+    pub fn isKeywordSplit(self: LineParser, text: []const u8) bool {
+        return self.keywordSpan(text) != null;
+    }
+
+    pub fn consumeKeyword(self: *LineParser, text: []const u8) bool {
+        const count = self.keywordSpan(text) orelse return false;
+        self.index += count;
+        return true;
+    }
 };
 
 pub fn eqNoCase(a: []const u8, b: []const u8) bool {

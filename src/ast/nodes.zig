@@ -100,7 +100,10 @@ pub const StmtNode = union(enum) {
     assignment: Assignment,
     call: CallStmt,
     goto: GotoStmt,
+    computed_goto: ComputedGotoStmt,
+    assigned_goto: AssignedGotoStmt,
     write: WriteStmt,
+    data: DataStmt,
     format: FormatStmt,
     arith_if: ArithIfStmt,
     stop: void,
@@ -125,6 +128,15 @@ pub const WriteStmt = struct {
     unit: *Expr,
     format_label: []const u8,
     args: []*Expr,
+};
+
+pub const DataInit = struct {
+    target: *Expr,
+    value: *Expr,
+};
+
+pub const DataStmt = struct {
+    inits: []DataInit,
 };
 
 pub const FormatStmt = struct {
@@ -169,6 +181,16 @@ pub const GotoStmt = struct {
     label: []const u8,
 };
 
+pub const ComputedGotoStmt = struct {
+    labels: []const []const u8,
+    selector: *Expr,
+};
+
+pub const AssignedGotoStmt = struct {
+    var_name: []const u8,
+    labels: []const []const u8,
+};
+
 pub const DoLoopStmt = struct {
     end_label: []const u8,
     var_name: []const u8,
@@ -195,6 +217,7 @@ pub const LiteralKind = enum {
     real,
     string,
     hollerith,
+    logical,
     assumed_size,
 };
 

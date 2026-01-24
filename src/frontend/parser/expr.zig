@@ -102,6 +102,18 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
             return node;
         },
         .dot_op => {
+            if (dotOpIs(lp.*, "TRUE")) {
+                _ = lp.next();
+                const node = try arena.create(Expr);
+                node.* = .{ .literal = .{ .kind = .logical, .text = "1" } };
+                return node;
+            }
+            if (dotOpIs(lp.*, "FALSE")) {
+                _ = lp.next();
+                const node = try arena.create(Expr);
+                node.* = .{ .literal = .{ .kind = .logical, .text = "0" } };
+                return node;
+            }
             if (dotOpIs(lp.*, "NOT")) {
                 _ = lp.next();
                 const expr = try parseExpr(lp, arena, 6);

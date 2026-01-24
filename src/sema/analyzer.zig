@@ -219,6 +219,12 @@ const UnitAnalyzer = struct {
                     try self.resolveExpr(arg);
                 }
             },
+            .data => |data| {
+                for (data.inits) |data_init| {
+                    try self.resolveExpr(data_init.target);
+                    try self.resolveExpr(data_init.value);
+                }
+            },
             .format => {},
             .arith_if => |arith| {
                 try self.resolveExpr(arith.condition);
@@ -231,6 +237,12 @@ const UnitAnalyzer = struct {
                 if (loop.step) |step| try self.resolveExpr(step);
             },
             .goto => {},
+            .computed_goto => |gt| {
+                try self.resolveExpr(gt.selector);
+            },
+            .assigned_goto => |gt| {
+                _ = try self.ensureSymbol(gt.var_name);
+            },
             .if_single => |ifs| {
                 try self.resolveExpr(ifs.condition);
                 try self.resolveStmtNode(ifs.stmt.*);
@@ -263,6 +275,12 @@ const UnitAnalyzer = struct {
                     try self.resolveExpr(arg);
                 }
             },
+            .data => |data| {
+                for (data.inits) |data_init| {
+                    try self.resolveExpr(data_init.target);
+                    try self.resolveExpr(data_init.value);
+                }
+            },
             .format => {},
             .arith_if => |arith| {
                 try self.resolveExpr(arith.condition);
@@ -275,6 +293,12 @@ const UnitAnalyzer = struct {
                 if (loop.step) |step| try self.resolveExpr(step);
             },
             .goto => {},
+            .computed_goto => |gt| {
+                try self.resolveExpr(gt.selector);
+            },
+            .assigned_goto => |gt| {
+                _ = try self.ensureSymbol(gt.var_name);
+            },
             .if_single => |ifs| {
                 try self.resolveExpr(ifs.condition);
                 try self.resolveStmtNode(ifs.stmt.*);
@@ -356,6 +380,7 @@ const UnitAnalyzer = struct {
                 return switch (lit.kind) {
                     .integer => .{ .integer = try parseInt(lit.text) },
                     .real => .{ .real = try parseReal(lit.text) },
+                    .logical => .{ .integer = try parseInt(lit.text) },
                     .string, .hollerith, .assumed_size => null,
                 };
             },

@@ -136,6 +136,17 @@ fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8,
             try builder.br(next_block);
             return true;
         },
+        .data => |data| {
+            for (data.inits) |init| {
+                const target_ptr = try expr.emitLValue(ctx, builder, init.target);
+                const value = try expr.emitExpr(ctx, builder, init.value);
+                const sym_ty = try expr.exprType(ctx, init.target);
+                const coerced = try expr.coerce(ctx, builder, value, sym_ty);
+                try builder.store(coerced, target_ptr);
+            }
+            try builder.br(next_block);
+            return true;
+        },
         .format => {
             try builder.br(next_block);
             return true;
@@ -153,6 +164,14 @@ fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8,
             try builder.br(target);
             return true;
         },
+        .computed_goto => |gt| {
+            try emitComputedGoto(ctx, builder, gt, next_block, local_label_map);
+            return true;
+        },
+        .assigned_goto => |gt| {
+            try emitAssignedGoto(ctx, builder, gt, next_block, local_label_map);
+            return true;
+        },
         .do_loop => return error.UnexpectedToken,
         .ret => {
             try builder.retVoid();
@@ -166,6 +185,20 @@ fn emitStmt(ctx: *Context, builder: anytype, stmt: Stmt, next_block: []const u8,
                 .goto => {
                     const target = resolveLabel(ctx, local_label_map, inner.goto.label) orelse return error.MissingLabel;
                     try builder.brCond(cond, target, next_block);
+                    return true;
+                },
+                .computed_goto => |gt| {
+                    const then_label = try ctx.nextLabel("if_cgoto");
+                    try builder.brCond(cond, then_label, next_block);
+                    try builder.label(then_label);
+                    try emitComputedGoto(ctx, builder, gt, next_block, local_label_map);
+                    return true;
+                },
+                .assigned_goto => |gt| {
+                    const then_label = try ctx.nextLabel("if_agoto");
+                    try builder.brCond(cond, then_label, next_block);
+                    try builder.label(then_label);
+                    try emitAssignedGoto(ctx, builder, gt, next_block, local_label_map);
                     return true;
                 },
                 .ret => {
@@ -451,6 +484,71 @@ fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!vo
 
     const printf_name = try ctx.ensureDeclRaw("printf", .i32, "ptr", true);
     try builder.call(null, .i32, printf_name, arg_buf.items);
+}
+
+fn emitComputedGoto(
+    ctx: *Context,
+    builder: anytype,
+    gt: ast.ComputedGotoStmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!void {
+    if (gt.labels.len == 0) {
+        try builder.br(next_block);
+        return;
+    }
+    const selector = try expr.emitExpr(ctx, builder, gt.selector);
+    const sel_i32 = try expr.coerce(ctx, builder, selector, .i32);
+
+    var idx: usize = 0;
+    while (idx < gt.labels.len) : (idx += 1) {
+        const label = gt.labels[idx];
+        const target = resolveLabel(ctx, local_label_map, label) orelse return error.MissingLabel;
+        const cmp_tmp = try ctx.nextTemp();
+        const idx_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @as(i64, @intCast(idx + 1))), .ty = .i32, .is_ptr = false };
+        try builder.compare(cmp_tmp, "icmp", "eq", .i32, sel_i32, idx_val);
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        const else_label = if (idx + 1 < gt.labels.len) try ctx.nextLabel("cg_next") else next_block;
+        try builder.brCond(cond, target, else_label);
+        if (idx + 1 < gt.labels.len) {
+            try builder.label(else_label);
+        }
+    }
+}
+
+fn emitAssignedGoto(
+    ctx: *Context,
+    builder: anytype,
+    gt: ast.AssignedGotoStmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!void {
+    if (gt.labels.len == 0) {
+        try builder.br(next_block);
+        return;
+    }
+    const sym = ctx.findSymbol(gt.var_name) orelse return error.UnknownSymbol;
+    const ptr = try ctx.getPointer(gt.var_name);
+    const tmp = try ctx.nextTemp();
+    const ty = llvm_types.typeFromKind(sym.type_kind);
+    try builder.load(tmp, ty, ptr);
+    var sel = ValueRef{ .name = tmp, .ty = ty, .is_ptr = false };
+    sel = try expr.coerce(ctx, builder, sel, .i32);
+
+    var idx: usize = 0;
+    while (idx < gt.labels.len) : (idx += 1) {
+        const label = gt.labels[idx];
+        const target = resolveLabel(ctx, local_label_map, label) orelse return error.MissingLabel;
+        const cmp_tmp = try ctx.nextTemp();
+        const label_val = ValueRef{ .name = label, .ty = .i32, .is_ptr = false };
+        try builder.compare(cmp_tmp, "icmp", "eq", .i32, sel, label_val);
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        const else_label = if (idx + 1 < gt.labels.len) try ctx.nextLabel("ag_next") else next_block;
+        try builder.brCond(cond, target, else_label);
+        if (idx + 1 < gt.labels.len) {
+            try builder.label(else_label);
+        }
+    }
 }
 
 fn emitArithIf(

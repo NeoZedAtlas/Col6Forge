@@ -24,7 +24,15 @@ pub fn mangleName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
 
 pub fn normalizeFloatLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
-    for (text) |ch| {
+    var start: usize = 0;
+    if (text.len >= 1 and text[0] == '.') {
+        try buffer.append('0');
+    } else if (text.len >= 2 and (text[0] == '+' or text[0] == '-') and text[1] == '.') {
+        try buffer.append(text[0]);
+        try buffer.append('0');
+        start = 1;
+    }
+    for (text[start..]) |ch| {
         const out = if (ch == 'D' or ch == 'd') 'E' else ch;
         try buffer.append(out);
     }
@@ -59,4 +67,27 @@ pub fn formatInt(allocator: std.mem.Allocator, value: i64) []const u8 {
 
 pub fn formatReal(allocator: std.mem.Allocator, value: f64) []const u8 {
     return std.fmt.allocPrint(allocator, "{d}", .{value}) catch "0.0";
+}
+
+pub fn formatFloatValue(allocator: std.mem.Allocator, value: f64, ty: IRType) []const u8 {
+    const fmt_value: f64 = switch (ty) {
+        .f32 => @as(f64, @floatCast(@as(f32, @floatCast(value)))),
+        .f64 => value,
+        else => return "0.0",
+    };
+    if (fmt_value == 0.0) return "0.0";
+    const raw = std.fmt.allocPrint(allocator, "{e}", .{fmt_value}) catch return "0.0";
+    if (std.mem.indexOfScalar(u8, raw, '.') != null) return raw;
+    const e_pos = std.mem.indexOfAny(u8, raw, "eE") orelse return raw;
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    buffer.appendSlice(raw[0..e_pos]) catch return raw;
+    buffer.appendSlice(".0") catch return raw;
+    buffer.appendSlice(raw[e_pos..]) catch return raw;
+    return buffer.toOwnedSlice() catch raw;
+}
+
+pub fn formatFloatLiteral(allocator: std.mem.Allocator, text: []const u8, ty: IRType) ![]const u8 {
+    const normalized = try normalizeFloatLiteral(allocator, text);
+    const value = std.fmt.parseFloat(f64, normalized) catch return error.InvalidFloatLiteral;
+    return formatFloatValue(allocator, value, ty);
 }

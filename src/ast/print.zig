@@ -65,6 +65,9 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         .write => |write| {
             try writer.print(";   stmt label={s} write fmt={s} args={d}\n", .{ label_text, write.format_label, write.args.len });
         },
+        .data => |data| {
+            try writer.print(";   stmt label={s} data inits({d})\n", .{ label_text, data.inits.len });
+        },
         .format => |format| {
             try writer.print(";   stmt label={s} format items={d}\n", .{ label_text, format.items.len });
         },
@@ -79,6 +82,12 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         },
         .goto => |gt| {
             try writer.print(";   stmt label={s} goto {s}\n", .{ label_text, gt.label });
+        },
+        .computed_goto => |gt| {
+            try writer.print(";   stmt label={s} computed-goto labels({d})\n", .{ label_text, gt.labels.len });
+        },
+        .assigned_goto => |gt| {
+            try writer.print(";   stmt label={s} assigned-goto var={s} labels({d})\n", .{ label_text, gt.var_name, gt.labels.len });
         },
         .do_loop => |loop| {
             const step_text = if (loop.step) |_| "yes" else "no";

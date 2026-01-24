@@ -59,7 +59,7 @@ pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![
         }
 
         const is_cont = isContinuation(line);
-        const label = parseLabel(line);
+        const label = try parseLabel(allocator, line);
         const code = codeSlice(line);
         const trimmed_code = std.mem.trimRight(u8, code, " \t");
 
@@ -133,6 +133,7 @@ pub fn freeLogicalLines(allocator: std.mem.Allocator, lines: []LogicalLine) void
     for (lines) |line| {
         allocator.free(line.text);
         allocator.free(line.segments);
+        if (line.label) |label| allocator.free(label);
     }
     allocator.free(lines);
 }
@@ -159,11 +160,18 @@ fn isContinuation(line: []const u8) bool {
     return line[5] != ' ';
 }
 
-fn parseLabel(line: []const u8) ?[]const u8 {
+fn parseLabel(allocator: std.mem.Allocator, line: []const u8) !?[]const u8 {
     const end = if (line.len < 5) line.len else 5;
     const label_slice = std.mem.trim(u8, line[0..end], " \t");
     if (label_slice.len == 0) return null;
-    return label_slice;
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    for (label_slice) |ch| {
+        if (ch == ' ' or ch == '\t') continue;
+        try buffer.append(ch);
+    }
+    if (buffer.items.len == 0) return null;
+    const owned = try buffer.toOwnedSlice();
+    return owned;
 }
 
 fn codeSlice(line: []const u8) []const u8 {

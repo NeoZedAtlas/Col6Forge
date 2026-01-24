@@ -72,7 +72,6 @@ pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef
         .binary => |bin| {
             const lhs = try emitExpr(ctx, builder, bin.left);
             const rhs = try emitExpr(ctx, builder, bin.right);
-            if (bin.op == .power) return error.PowerUnsupported;
             return emitBinary(ctx, builder, bin.op, lhs, rhs);
         },
         .call_or_subscript => |call| {
@@ -99,6 +98,9 @@ pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef
 }
 
 pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, rhs: ValueRef) !ValueRef {
+    if (op == .power) {
+        return emitPower(ctx, builder, lhs, rhs);
+    }
     if (op == .add or op == .sub or op == .mul or op == .div) {
         if (isComplexType(lhs.ty) or isComplexType(rhs.ty)) {
             const complex_ty = complexCommonType(lhs.ty, rhs.ty) orelse return error.UnsupportedComplexType;
@@ -151,6 +153,25 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
         },
         .power => unreachable,
     }
+}
+
+fn emitPower(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
+    if (isComplexType(lhs.ty) or isComplexType(rhs.ty)) return error.UnsupportedComplexOp;
+    const common_ty = ir.commonType(lhs.ty, rhs.ty);
+    if (common_ty == .f32 or common_ty == .f64) {
+        const left = try coerce(ctx, builder, lhs, common_ty);
+        const right = try coerce(ctx, builder, rhs, common_ty);
+        return emitIntrinsicBinaryFloatValue(ctx, builder, "pow", left, right);
+    }
+    if (common_ty == .i32) {
+        const left = try coerce(ctx, builder, lhs, .f64);
+        const right = try coerce(ctx, builder, rhs, .f64);
+        const pow = try emitIntrinsicBinaryFloatValue(ctx, builder, "pow", left, right);
+        const tmp = try ctx.nextTemp();
+        try builder.cast(tmp, "fptosi", pow.ty, pow, .i32);
+        return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    }
+    return error.UnsupportedPowerType;
 }
 
 pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
@@ -285,9 +306,10 @@ pub fn emitLiteral(ctx: *Context, lit: Literal) !ValueRef {
         .integer => return .{ .name = lit.text, .ty = .i32, .is_ptr = false },
         .real => {
             const ty: IRType = if (utils.hasDExponent(lit.text)) .f64 else .f32;
-            const normalized = try utils.normalizeFloatLiteral(ctx.allocator, lit.text);
+            const normalized = try utils.formatFloatLiteral(ctx.allocator, lit.text, ty);
             return .{ .name = normalized, .ty = ty, .is_ptr = false };
         },
+        .logical => return .{ .name = lit.text, .ty = .i1, .is_ptr = false },
         .string, .hollerith, .assumed_size => return error.UnsupportedLiteral,
     }
 }
@@ -296,11 +318,11 @@ pub fn emitConstTyped(ctx: *Context, value: sema.ConstValue, type_kind: TypeKind
     const ty = llvm_types.typeFromKind(type_kind);
     return switch (value) {
         .integer => |v| .{
-            .name = if (ty == .f32 or ty == .f64) utils.formatReal(ctx.allocator, @as(f64, @floatFromInt(v))) else utils.formatInt(ctx.allocator, v),
+            .name = if (ty == .f32 or ty == .f64) utils.formatFloatValue(ctx.allocator, @as(f64, @floatFromInt(v)), ty) else utils.formatInt(ctx.allocator, v),
             .ty = ty,
             .is_ptr = false,
         },
-        .real => |v| .{ .name = utils.formatReal(ctx.allocator, v), .ty = ty, .is_ptr = false },
+        .real => |v| .{ .name = utils.formatFloatValue(ctx.allocator, v, ty), .ty = ty, .is_ptr = false },
     };
 }
 
@@ -352,6 +374,7 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
         .literal => |lit| return switch (lit.kind) {
             .integer => .i32,
             .real => if (utils.hasDExponent(lit.text)) .f64 else .f32,
+            .logical => .i1,
             else => return error.UnsupportedLiteral,
         },
         .unary => |un| return exprType(ctx, un.expr),
@@ -543,6 +566,19 @@ fn emitIntrinsicUnaryFloatValue(ctx: *Context, builder: anytype, base: []const u
     return .{ .name = tmp, .ty = value.ty, .is_ptr = false };
 }
 
+fn emitIntrinsicBinaryFloatValue(ctx: *Context, builder: anytype, base: []const u8, left: ValueRef, right: ValueRef) EmitError!ValueRef {
+    if (left.ty != .f32 and left.ty != .f64) return error.UnsupportedIntrinsicType;
+    if (right.ty != .f32 and right.ty != .f64) return error.UnsupportedIntrinsicType;
+    if (left.ty != right.ty) return error.UnsupportedIntrinsicType;
+    const name = try llvmIntrinsicName(ctx.allocator, base, left.ty);
+    const sig = try buildSig(ctx.allocator, &.{left.ty, right.ty});
+    _ = try ctx.ensureDeclRaw(name, left.ty, sig, false);
+    const args = try buildArgText(ctx.allocator, &.{left, right});
+    const tmp = try ctx.nextTemp();
+    try builder.call(tmp, left.ty, name, args);
+    return .{ .name = tmp, .ty = left.ty, .is_ptr = false };
+}
+
 fn emitIntrinsicUnaryFloat(ctx: *Context, builder: anytype, base: []const u8, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     const value = try emitExpr(ctx, builder, args[0]);
@@ -721,7 +757,7 @@ test "emitLiteral and emitConstTyped produce expected IR types" {
 
     const lit_real = try emitLiteral(&harness.ctx, .{ .kind = .real, .text = "1.0D0" });
     try testing.expectEqual(IRType.f64, lit_real.ty);
-    try testing.expectEqualStrings("1.0E0", lit_real.name);
+    try testing.expectEqualStrings("1.0e0", lit_real.name);
 
     const const_val = emitConstTyped(&harness.ctx, .{ .integer = 7 }, .real);
     try testing.expectEqual(IRType.f32, const_val.ty);

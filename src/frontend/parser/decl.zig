@@ -15,10 +15,10 @@ const ImplicitRule = ast.ImplicitRule;
 const Declarator = ast.Declarator;
 
 pub fn isDeclarationStart(lp: LineParser) bool {
-    if (lp.isKeyword("INTEGER") or lp.isKeyword("REAL") or lp.isKeyword("COMPLEX") or lp.isKeyword("LOGICAL") or lp.isKeyword("CHARACTER")) {
+    if (lp.isKeywordSplit("INTEGER") or lp.isKeywordSplit("REAL") or lp.isKeywordSplit("COMPLEX") or lp.isKeywordSplit("LOGICAL") or lp.isKeywordSplit("CHARACTER")) {
         return true;
     }
-    if (lp.isKeyword("DOUBLE")) {
+    if (lp.isKeywordSplit("DOUBLE")) {
         if (lp.index + 1 < lp.tokens.len) {
             const next_tok = lp.tokens[lp.index + 1];
             if (next_tok.kind == .identifier and context.eqNoCase(lp.tokenText(next_tok), "PRECISION")) {
@@ -26,13 +26,13 @@ pub fn isDeclarationStart(lp: LineParser) bool {
             }
         }
     }
-    return lp.isKeyword("DIMENSION") or lp.isKeyword("PARAMETER") or lp.isKeyword("COMMON") or lp.isKeyword("EQUIVALENCE") or lp.isKeyword("IMPLICIT") or lp.isKeyword("EXTERNAL") or lp.isKeyword("INTRINSIC");
+    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC");
 }
 
 pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
-    if (lp.isKeyword("IMPLICIT")) {
-        _ = lp.next();
-        if (lp.isKeyword("NONE")) return error.ImplicitNoneUnsupported;
+    if (lp.isKeywordSplit("IMPLICIT")) {
+        _ = lp.consumeKeyword("IMPLICIT");
+        if (lp.isKeywordSplit("NONE")) return error.ImplicitNoneUnsupported;
         var rules = std.array_list.Managed(ImplicitRule).init(arena);
         while (lp.peek()) |_| {
             const type_kind = try parseTypeKind(lp);
@@ -53,13 +53,13 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         }
         return .{ .implicit = .{ .rules = try rules.toOwnedSlice() } };
     }
-    if (lp.isKeyword("DIMENSION")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("DIMENSION")) {
+        _ = lp.consumeKeyword("DIMENSION");
         const items = try parseDeclarators(lp, arena);
         return .{ .dimension = .{ .items = items } };
     }
-    if (lp.isKeyword("PARAMETER")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("PARAMETER")) {
+        _ = lp.consumeKeyword("PARAMETER");
         _ = lp.consume(.l_paren);
         var assigns = std.array_list.Managed(ParamAssign).init(arena);
         while (lp.peek()) |_| {
@@ -72,8 +72,8 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         _ = lp.consume(.r_paren);
         return .{ .parameter = .{ .assigns = try assigns.toOwnedSlice() } };
     }
-    if (lp.isKeyword("COMMON")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("COMMON")) {
+        _ = lp.consumeKeyword("COMMON");
         var blocks = std.array_list.Managed(CommonBlock).init(arena);
         while (lp.peek()) |_| {
             var block_name: ?[]const u8 = null;
@@ -88,8 +88,8 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         }
         return .{ .common = .{ .blocks = try blocks.toOwnedSlice() } };
     }
-    if (lp.isKeyword("EQUIVALENCE")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("EQUIVALENCE")) {
+        _ = lp.consumeKeyword("EQUIVALENCE");
         var groups = std.array_list.Managed(EquivalenceGroup).init(arena);
         while (lp.consume(.l_paren)) {
             var items = std.array_list.Managed(*ast.Expr).init(arena);
@@ -104,13 +104,13 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         }
         return .{ .equivalence = .{ .groups = try groups.toOwnedSlice() } };
     }
-    if (lp.isKeyword("EXTERNAL")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("EXTERNAL")) {
+        _ = lp.consumeKeyword("EXTERNAL");
         const names = try parseNameList(lp, arena);
         return .{ .external = .{ .names = names } };
     }
-    if (lp.isKeyword("INTRINSIC")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("INTRINSIC")) {
+        _ = lp.consumeKeyword("INTRINSIC");
         const names = try parseNameList(lp, arena);
         return .{ .intrinsic = .{ .names = names } };
     }
@@ -121,30 +121,30 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
 }
 
 fn parseTypeKind(lp: *LineParser) !TypeKind {
-    if (lp.isKeyword("INTEGER")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("INTEGER")) {
+        _ = lp.consumeKeyword("INTEGER");
         return .integer;
     }
-    if (lp.isKeyword("REAL")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("REAL")) {
+        _ = lp.consumeKeyword("REAL");
         return .real;
     }
-    if (lp.isKeyword("COMPLEX")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("COMPLEX")) {
+        _ = lp.consumeKeyword("COMPLEX");
         return .complex;
     }
-    if (lp.isKeyword("LOGICAL")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("LOGICAL")) {
+        _ = lp.consumeKeyword("LOGICAL");
         return .logical;
     }
-    if (lp.isKeyword("CHARACTER")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("CHARACTER")) {
+        _ = lp.consumeKeyword("CHARACTER");
         return .character;
     }
-    if (lp.isKeyword("DOUBLE")) {
-        _ = lp.next();
-        if (!lp.isKeyword("PRECISION")) return error.ExpectedPrecision;
-        _ = lp.next();
+    if (lp.isKeywordSplit("DOUBLE")) {
+        _ = lp.consumeKeyword("DOUBLE");
+        if (!lp.isKeywordSplit("PRECISION")) return error.ExpectedPrecision;
+        _ = lp.consumeKeyword("PRECISION");
         return .double_precision;
     }
     return error.UnknownType;
