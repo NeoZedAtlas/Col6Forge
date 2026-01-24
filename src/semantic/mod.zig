@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("../ast/nodes.zig");
 const symbols = @import("../sema/symbol.zig");
 
-pub const analyzer = @import("analyzer.zig");
+pub const analyzer = @import("analysis/mod.zig");
 pub const evaluator = @import("evaluator.zig");
 pub const printer = @import("printer.zig");
 

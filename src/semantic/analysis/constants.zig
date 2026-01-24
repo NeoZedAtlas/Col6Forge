@@ -1,0 +1,22 @@
+const ast = @import("../../ast/nodes.zig");
+const symbols = @import("../../sema/symbol.zig");
+const evaluator = @import("../evaluator.zig");
+const context = @import("context.zig");
+
+const ConstValue = symbols.ConstValue;
+
+pub fn evalConst(self: *context.Context, expr: *ast.Expr) !?ConstValue {
+    const resolver = evaluator.ConstResolver{
+        .ctx = @ptrCast(self),
+        .resolveFn = resolveConstValue,
+    };
+    return evaluator.evalConst(expr, resolver);
+}
+
+fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?ConstValue {
+    const self: *context.Context = @ptrCast(@alignCast(ctx));
+    if (self.table.get(name)) |idx| {
+        return self.symbols.items[idx].const_value;
+    }
+    return null;
+}
