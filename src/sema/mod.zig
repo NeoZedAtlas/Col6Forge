@@ -1,5 +1,5 @@
 pub const symbol = @import("symbol.zig");
-pub const analyzer = @import("analyzer.zig");
+pub const semantic = @import("../semantic/mod.zig");
 
 pub const SymbolKind = symbol.SymbolKind;
 pub const StorageClass = symbol.StorageClass;
@@ -11,6 +11,6 @@ pub const ResolvedRef = symbol.ResolvedRef;
 pub const SemanticUnit = symbol.SemanticUnit;
 pub const SemanticProgram = symbol.SemanticProgram;
 
-pub const analyzeProgram = analyzer.analyzeProgram;
-pub const printSemantic = analyzer.printSemantic;
+pub const analyzeProgram = semantic.analyzeProgram;
+pub const printSemantic = semantic.printSemantic;
 
