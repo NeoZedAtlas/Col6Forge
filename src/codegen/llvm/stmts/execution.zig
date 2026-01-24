@@ -1,6 +1,6 @@
 const ast = @import("../../../ast/nodes.zig");
 const context = @import("../codegen/context.zig");
-const expr = @import("../codegen/expr.zig");
+const expr = @import("../codegen/expression/mod.zig");
 
 const Context = context.Context;
 
