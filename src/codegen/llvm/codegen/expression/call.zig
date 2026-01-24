@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
 const ir = @import("../../../ir.zig");
 const context = @import("../context.zig");
+const memory = @import("memory.zig");
 
 const Expr = ast.Expr;
 const IRType = ir.IRType;
@@ -30,10 +31,16 @@ pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IR
 }
 
 pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
-    _ = builder;
     switch (expr.*) {
         .identifier => |name| {
             return ctx.getPointer(name);
+        },
+        .call_or_subscript => |call| {
+            const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            if (kind == .subscript) {
+                return memory.emitSubscriptPtr(ctx, builder, call);
+            }
+            return error.NonAddressableArgument;
         },
         .substring => return error.NonAddressableArgument,
         else => return error.NonAddressableArgument,
