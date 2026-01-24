@@ -40,6 +40,7 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
             const right = (try evalConst(bin.right, resolver)) orelse return null;
             return evalBinary(bin.op, left, right);
         },
+        .substring => return null,
         .call_or_subscript => return null,
     }
 }

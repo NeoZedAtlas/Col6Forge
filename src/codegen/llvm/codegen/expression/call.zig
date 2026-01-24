@@ -35,6 +35,7 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
         .identifier => |name| {
             return ctx.getPointer(name);
         },
+        .substring => return error.NonAddressableArgument,
         else => return error.NonAddressableArgument,
     }
 }

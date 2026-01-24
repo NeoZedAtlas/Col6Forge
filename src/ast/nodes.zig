@@ -209,6 +209,7 @@ pub const Expr = union(enum) {
     identifier: []const u8,
     literal: Literal,
     call_or_subscript: CallOrSubscript,
+    substring: SubstringExpr,
     unary: UnaryExpr,
     binary: BinaryExpr,
 };
@@ -230,6 +231,12 @@ pub const LiteralKind = enum {
 pub const CallOrSubscript = struct {
     name: []const u8,
     args: []*Expr,
+};
+
+pub const SubstringExpr = struct {
+    name: []const u8,
+    start: ?*Expr,
+    end: ?*Expr,
 };
 
 pub const UnaryExpr = struct {

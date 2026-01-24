@@ -12,6 +12,7 @@ pub const TokenKind = enum {
     l_paren,
     r_paren,
     comma,
+    colon,
     equals,
     plus,
     minus,
@@ -39,6 +40,7 @@ pub fn tokenKindName(kind: TokenKind) []const u8 {
         .l_paren => "l_paren",
         .r_paren => "r_paren",
         .comma => "comma",
+        .colon => "colon",
         .equals => "equals",
         .plus => "plus",
         .minus => "minus",
@@ -155,6 +157,10 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
             },
             ',' => {
                 try tokens.append(.{ .kind = .comma, .start = i, .end = i + 1, .line = pos.line, .column = pos.column });
+                i += 1;
+            },
+            ':' => {
+                try tokens.append(.{ .kind = .colon, .start = i, .end = i + 1, .line = pos.line, .column = pos.column });
                 i += 1;
             },
             '=' => {

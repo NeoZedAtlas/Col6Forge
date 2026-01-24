@@ -4,6 +4,7 @@ const fixed_form = @import("../fixed_form.zig");
 const lexer = @import("../lexer.zig");
 const context = @import("context.zig");
 const decl = @import("decl.zig");
+const expr = @import("expr.zig");
 const stmt = @import("stmt.zig");
 
 const Program = ast.Program;
@@ -43,29 +44,21 @@ const Parser = struct {
         const header_tokens = try lexer.lexLogicalLine(self.arena, header_line);
         defer self.arena.free(header_tokens);
         var lp = LineParser.init(header_line, header_tokens);
-        const kind = try parseProgramUnitKind(&lp);
-        const name_tok = lp.expectIdentifier() orelse return error.MissingName;
-        const name = lp.tokenText(name_tok);
-        var args_list = std.array_list.Managed([]const u8).init(self.arena);
-        if (lp.consume(.l_paren)) {
-            while (!lp.peekIs(.r_paren)) {
-                const arg_tok = lp.expectIdentifier() orelse return error.MissingName;
-                try args_list.append(lp.tokenText(arg_tok));
-                _ = lp.consume(.comma);
-            }
-            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-        }
+        const header = try parseProgramUnitHeader(self.arena, &lp);
         self.index += 1;
 
         var decls = std.array_list.Managed(Decl).init(self.arena);
         var stmts = std.array_list.Managed(Stmt).init(self.arena);
         var do_ctx = stmt.DoContext.init(self.arena);
+        if (header.type_decl) |type_decl| {
+            try decls.append(type_decl);
+        }
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
             const tokens = try lexer.lexLogicalLine(self.arena, line);
             defer self.arena.free(tokens);
             var stmt_lp = LineParser.init(line, tokens);
-            if (stmt_lp.isKeyword("END") and !isEndDoLine(stmt_lp) and !isEndIfLine(stmt_lp)) {
+            if (stmt_lp.isKeywordSplit("END") and !isEndDoLine(stmt_lp) and !isEndIfLine(stmt_lp)) {
                 self.index += 1;
                 break;
             }
@@ -80,43 +73,125 @@ const Parser = struct {
         }
 
         return .{
-            .kind = kind,
-            .name = name,
-            .args = try args_list.toOwnedSlice(),
+            .kind = header.kind,
+            .name = header.name,
+            .args = header.args,
             .decls = try decls.toOwnedSlice(),
             .stmts = try stmts.toOwnedSlice(),
         };
     }
 };
 
-fn parseProgramUnitKind(lp: *LineParser) !ProgramUnitKind {
-    if (lp.isKeyword("PROGRAM")) {
-        _ = lp.next();
-        return .program;
+const TypeInfo = struct {
+    type_kind: ast.TypeKind,
+    char_len: ?*ast.Expr,
+};
+
+const ProgramUnitHeader = struct {
+    kind: ProgramUnitKind,
+    name: []const u8,
+    args: []const []const u8,
+    type_decl: ?Decl,
+};
+
+fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser) !ProgramUnitHeader {
+    var kind: ProgramUnitKind = undefined;
+    var type_info: ?TypeInfo = null;
+
+    if (lp.isKeywordSplit("PROGRAM")) {
+        _ = lp.consumeKeyword("PROGRAM");
+        kind = .program;
+    } else if (lp.isKeywordSplit("SUBROUTINE")) {
+        _ = lp.consumeKeyword("SUBROUTINE");
+        kind = .subroutine;
+    } else if (lp.isKeywordSplit("FUNCTION")) {
+        _ = lp.consumeKeyword("FUNCTION");
+        kind = .function;
+    } else {
+        type_info = try parseTypePrefix(arena, lp) orelse return error.ExpectedProgramUnit;
+        if (!lp.isKeywordSplit("FUNCTION")) return error.ExpectedProgramUnit;
+        _ = lp.consumeKeyword("FUNCTION");
+        kind = .function;
     }
-    if (lp.isKeyword("SUBROUTINE")) {
-        _ = lp.next();
-        return .subroutine;
+
+    const name = lp.readName(arena) orelse return error.MissingName;
+    var args_list = std.array_list.Managed([]const u8).init(arena);
+    if (lp.consume(.l_paren)) {
+        while (!lp.peekIs(.r_paren)) {
+            const arg_name = lp.readName(arena) orelse return error.MissingName;
+            try args_list.append(arg_name);
+            _ = lp.consume(.comma);
+        }
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     }
-    if (lp.isKeyword("FUNCTION")) {
-        _ = lp.next();
-        return .function;
+
+    var type_decl: ?Decl = null;
+    if (type_info) |info| {
+        const decl_items = try arena.alloc(ast.Declarator, 1);
+        decl_items[0] = .{
+            .name = name,
+            .dims = &.{},
+            .char_len = info.char_len,
+        };
+        type_decl = .{ .type_decl = .{ .type_kind = info.type_kind, .items = decl_items } };
     }
-    return error.ExpectedProgramUnit;
+
+    return .{
+        .kind = kind,
+        .name = name,
+        .args = try args_list.toOwnedSlice(),
+        .type_decl = type_decl,
+    };
+}
+
+fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
+    if (lp.isKeywordSplit("INTEGER")) {
+        _ = lp.consumeKeyword("INTEGER");
+        return .{ .type_kind = .integer, .char_len = null };
+    }
+    if (lp.isKeywordSplit("REAL")) {
+        _ = lp.consumeKeyword("REAL");
+        return .{ .type_kind = .real, .char_len = null };
+    }
+    if (lp.isKeywordSplit("COMPLEX")) {
+        _ = lp.consumeKeyword("COMPLEX");
+        return .{ .type_kind = .complex, .char_len = null };
+    }
+    if (lp.isKeywordSplit("LOGICAL")) {
+        _ = lp.consumeKeyword("LOGICAL");
+        return .{ .type_kind = .logical, .char_len = null };
+    }
+    if (lp.isKeywordSplit("CHARACTER")) {
+        _ = lp.consumeKeyword("CHARACTER");
+        var char_len: ?*ast.Expr = null;
+        if (lp.consume(.star)) {
+            char_len = try expr.parseExpr(lp, arena, 6);
+        }
+        return .{ .type_kind = .character, .char_len = char_len };
+    }
+    if (lp.isKeywordSplit("DOUBLE")) {
+        _ = lp.consumeKeyword("DOUBLE");
+        if (!lp.isKeywordSplit("PRECISION")) return error.ExpectedPrecision;
+        _ = lp.consumeKeyword("PRECISION");
+        return .{ .type_kind = .double_precision, .char_len = null };
+    }
+    return null;
 }
 
 fn isEndDoLine(lp: LineParser) bool {
-    if (!lp.isKeyword("END")) return false;
-    if (lp.index + 1 >= lp.tokens.len) return false;
-    const next_tok = lp.tokens[lp.index + 1];
+    const end_span = lp.keywordSpan("END") orelse return false;
+    const next_idx = lp.index + end_span;
+    if (next_idx >= lp.tokens.len) return false;
+    const next_tok = lp.tokens[next_idx];
     if (next_tok.kind != .identifier) return false;
     return context.eqNoCase(lp.tokenText(next_tok), "DO");
 }
 
 fn isEndIfLine(lp: LineParser) bool {
-    if (!lp.isKeyword("END")) return false;
-    if (lp.index + 1 >= lp.tokens.len) return false;
-    const next_tok = lp.tokens[lp.index + 1];
+    const end_span = lp.keywordSpan("END") orelse return false;
+    const next_idx = lp.index + end_span;
+    if (next_idx >= lp.tokens.len) return false;
+    const next_tok = lp.tokens[next_idx];
     if (next_tok.kind != .identifier) return false;
     return context.eqNoCase(lp.tokenText(next_tok), "IF");
 }

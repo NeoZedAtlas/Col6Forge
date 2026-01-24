@@ -115,6 +115,7 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
             const right = try exprType(ctx, bin.right);
             return ir.commonType(left, right);
         },
+        .substring => return .ptr,
         .call_or_subscript => |call| {
             const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
             if (kind == .subscript) {

@@ -39,19 +39,34 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
     const tok = lp.peek() orelse return error.UnexpectedEOF;
     switch (tok.kind) {
         .identifier => {
-            _ = lp.next();
-            const name = lp.tokenText(tok);
+            const name = lp.readName(arena) orelse return error.UnexpectedToken;
             if (lp.consume(.l_paren)) {
-                var args = std.array_list.Managed(*Expr).init(arena);
-                while (!lp.peekIs(.r_paren)) {
-                    const expr = try parseExpr(lp, arena, 0);
-                    try args.append(expr);
-                    _ = lp.consume(.comma);
+                if (hasSubstringRange(lp.*)) {
+                    var start_expr: ?*Expr = null;
+                    if (!lp.peekIs(.colon)) {
+                        start_expr = try parseExpr(lp, arena, 0);
+                    }
+                    _ = lp.expect(.colon) orelse return error.UnexpectedToken;
+                    var end_expr: ?*Expr = null;
+                    if (!lp.peekIs(.r_paren)) {
+                        end_expr = try parseExpr(lp, arena, 0);
+                    }
+                    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+                    const node = try arena.create(Expr);
+                    node.* = .{ .substring = .{ .name = name, .start = start_expr, .end = end_expr } };
+                    return node;
+                } else {
+                    var args = std.array_list.Managed(*Expr).init(arena);
+                    while (!lp.peekIs(.r_paren)) {
+                        const expr = try parseExpr(lp, arena, 0);
+                        try args.append(expr);
+                        _ = lp.consume(.comma);
+                    }
+                    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+                    const node = try arena.create(Expr);
+                    node.* = .{ .call_or_subscript = .{ .name = name, .args = try args.toOwnedSlice() } };
+                    return node;
                 }
-                _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-                const node = try arena.create(Expr);
-                node.* = .{ .call_or_subscript = .{ .name = name, .args = try args.toOwnedSlice() } };
-                return node;
             }
             const node = try arena.create(Expr);
             node.* = .{ .identifier = name };
@@ -125,6 +140,29 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
         },
         else => return error.UnexpectedToken,
     }
+}
+
+fn hasSubstringRange(lp: LineParser) bool {
+    var depth: usize = 0;
+    var idx = lp.index;
+    while (idx < lp.tokens.len) : (idx += 1) {
+        const tok = lp.tokens[idx];
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => {
+                if (depth == 0) return false;
+                depth -= 1;
+            },
+            .comma => {
+                if (depth == 0) return false;
+            },
+            .colon => {
+                if (depth == 0) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn dotOpIs(lp: LineParser, name: []const u8) bool {

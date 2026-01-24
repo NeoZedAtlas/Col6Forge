@@ -98,8 +98,7 @@ pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine,
             }
         }
         _ = lp.next();
-        const name_tok = lp.expectIdentifier() orelse return error.MissingName;
-        const name = lp.tokenText(name_tok);
+        const name = lp.readName(arena) orelse return error.MissingName;
         var args = std.array_list.Managed(*Expr).init(arena);
         if (lp.consume(.l_paren)) {
             while (!lp.peekIs(.r_paren)) {
@@ -202,8 +201,8 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
         };
     }
 
-    if (lp.isKeyword("THEN")) {
-        _ = lp.next();
+    if (lp.isKeywordSplit("THEN")) {
+        _ = lp.consumeKeyword("THEN");
         index.* += 1;
         const then_stmts = try parseIfBlock(arena, lines, index, do_ctx);
         var else_stmts: []Stmt = &.{};
@@ -212,7 +211,7 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
             const next_tokens = try lexer.lexLogicalLine(arena, next_line);
             defer arena.free(next_tokens);
             var next_lp = LineParser.init(next_line, next_tokens);
-            if (next_lp.isKeyword("ELSE")) {
+            if (next_lp.isKeywordSplit("ELSE")) {
                 index.* += 1;
                 else_stmts = try parseIfBlock(arena, lines, index, do_ctx);
             }
@@ -222,7 +221,7 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
         const end_tokens = try lexer.lexLogicalLine(arena, end_line);
         defer arena.free(end_tokens);
         var end_lp = LineParser.init(end_line, end_tokens);
-        if (!end_lp.isKeyword("ENDIF") and !isEndIfLine(end_lp)) return error.ExpectedEndIf;
+        if (!end_lp.isKeywordSplit("ENDIF") and !isEndIfLine(end_lp)) return error.ExpectedEndIf;
         index.* += 1;
         return .{
             .label = label,
@@ -242,7 +241,7 @@ pub fn parseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
         const tokens = try lexer.lexLogicalLine(arena, line);
         defer arena.free(tokens);
         var lp = LineParser.init(line, tokens);
-        if (lp.isKeyword("ELSE") or lp.isKeyword("ENDIF") or isEndIfLine(lp)) {
+        if (lp.isKeywordSplit("ELSE") or lp.isKeywordSplit("ENDIF") or isEndIfLine(lp)) {
             break;
         }
         if (decl.isDeclarationStart(lp)) return error.DeclarationInIfBlock;
@@ -266,8 +265,7 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator) ParseStmtError
     }
     if (lp.isKeywordSplit("CALL")) {
         _ = lp.consumeKeyword("CALL");
-        const name_tok = lp.expectIdentifier() orelse return error.MissingName;
-        const name = lp.tokenText(name_tok);
+        const name = lp.readName(arena) orelse return error.MissingName;
         var args = std.array_list.Managed(*Expr).init(arena);
         if (lp.consume(.l_paren)) {
             while (!lp.peekIs(.r_paren)) {
@@ -341,24 +339,24 @@ fn parseAssignStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtErro
     const label_tok = lp.peek() orelse return error.UnexpectedToken;
     if (label_tok.kind != .integer and label_tok.kind != .identifier) return error.UnexpectedToken;
     _ = lp.next();
-    if (!lp.isKeyword("TO")) return error.UnexpectedToken;
-    _ = lp.next();
-    const name_tok = lp.expectIdentifier() orelse return error.MissingName;
+    if (!lp.isKeywordSplit("TO")) return error.UnexpectedToken;
+    _ = lp.consumeKeyword("TO");
+    const name = lp.readName(arena) orelse return error.MissingName;
 
     const value_expr = try arena.create(Expr);
     value_expr.* = .{ .literal = .{ .kind = .integer, .text = lp.tokenText(label_tok) } };
     const target_expr = try arena.create(Expr);
-    target_expr.* = .{ .identifier = lp.tokenText(name_tok) };
+    target_expr.* = .{ .identifier = name };
     return .{ .assignment = .{ .target = target_expr, .value = value_expr } };
 }
 
 fn parseGotoStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
-    if (lp.isKeyword("GOTO")) {
-        _ = lp.next();
-    } else if (lp.isKeyword("GO")) {
-        _ = lp.next();
-        if (!lp.isKeyword("TO")) return error.UnexpectedToken;
-        _ = lp.next();
+    if (lp.isKeywordSplit("GOTO")) {
+        _ = lp.consumeKeyword("GOTO");
+    } else if (lp.isKeywordSplit("GO")) {
+        _ = lp.consumeKeyword("GO");
+        if (!lp.isKeywordSplit("TO")) return error.UnexpectedToken;
+        _ = lp.consumeKeyword("TO");
     } else {
         return error.UnexpectedToken;
     }
@@ -373,14 +371,14 @@ fn parseGotoStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!
     }
 
     if (lp.peekIs(.identifier)) {
-        const name_tok = lp.next();
+        const name = lp.readName(arena) orelse return error.UnexpectedToken;
         if (lp.consume(.comma)) {
             _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
             const labels = try parseLabelList(arena, lp);
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-            return .{ .assigned_goto = .{ .var_name = lp.tokenText(name_tok), .labels = labels } };
+            return .{ .assigned_goto = .{ .var_name = name, .labels = labels } };
         }
-        return .{ .goto = .{ .label = lp.tokenText(name_tok) } };
+        return .{ .goto = .{ .label = name } };
     }
 
     const target = try parseLabelToken(lp);
@@ -790,20 +788,20 @@ fn parseDecimal(text: []const u8) usize {
 }
 
 fn isGotoStart(lp: LineParser) bool {
-    if (lp.isKeyword("GOTO")) return true;
-    if (!lp.isKeyword("GO")) return false;
-    if (lp.index + 1 >= lp.tokens.len) return false;
-    const next_tok = lp.tokens[lp.index + 1];
-    return next_tok.kind == .identifier and context.eqNoCase(lp.tokenText(next_tok), "TO");
+    if (lp.isKeywordSplit("GOTO")) return true;
+    if (!lp.isKeywordSplit("GO")) return false;
+    var tmp = lp;
+    _ = tmp.consumeKeyword("GO");
+    return tmp.isKeywordSplit("TO");
 }
 
 fn parseGotoLabel(lp: *LineParser) ParseStmtError![]const u8 {
-    if (lp.isKeyword("GOTO")) {
-        _ = lp.next();
-    } else if (lp.isKeyword("GO")) {
-        _ = lp.next();
-        if (!lp.isKeyword("TO")) return error.UnexpectedToken;
-        _ = lp.next();
+    if (lp.isKeywordSplit("GOTO")) {
+        _ = lp.consumeKeyword("GOTO");
+    } else if (lp.isKeywordSplit("GO")) {
+        _ = lp.consumeKeyword("GO");
+        if (!lp.isKeywordSplit("TO")) return error.UnexpectedToken;
+        _ = lp.consumeKeyword("TO");
     } else {
         return error.UnexpectedToken;
     }
@@ -818,17 +816,19 @@ fn parseLabelToken(lp: *LineParser) ParseStmtError![]const u8 {
 }
 
 fn isEndDo(lp: LineParser) bool {
-    if (!lp.isKeyword("END")) return false;
-    if (lp.index + 1 >= lp.tokens.len) return false;
-    const next_tok = lp.tokens[lp.index + 1];
+    const end_span = lp.keywordSpan("END") orelse return false;
+    const next_idx = lp.index + end_span;
+    if (next_idx >= lp.tokens.len) return false;
+    const next_tok = lp.tokens[next_idx];
     if (next_tok.kind != .identifier) return false;
     return context.eqNoCase(lp.tokenText(next_tok), "DO");
 }
 
 fn isEndIfLine(lp: LineParser) bool {
-    if (!lp.isKeyword("END")) return false;
-    if (lp.index + 1 >= lp.tokens.len) return false;
-    const next_tok = lp.tokens[lp.index + 1];
+    const end_span = lp.keywordSpan("END") orelse return false;
+    const next_idx = lp.index + end_span;
+    if (next_idx >= lp.tokens.len) return false;
+    const next_tok = lp.tokens[next_idx];
     if (next_tok.kind != .identifier) return false;
     return context.eqNoCase(lp.tokenText(next_tok), "IF");
 }
@@ -950,17 +950,17 @@ fn isSplitKeyword(lp: LineParser, keyword: []const u8) bool {
 fn parseDoStatement(arena: std.mem.Allocator, lp: *LineParser, do_ctx: *DoContext) ParseStmtError!StmtNode {
     const next_tok = lp.peek() orelse return error.UnexpectedToken;
     var end_label: []const u8 = undefined;
-    var var_tok: lexer.Token = undefined;
+    var var_name: []const u8 = undefined;
     if (next_tok.kind == .integer) {
         end_label = try parseLabelToken(lp);
-        var_tok = lp.expectIdentifier() orelse return error.MissingName;
+        var_name = lp.readName(arena) orelse return error.MissingName;
     } else if (next_tok.kind == .identifier and nextTokenIsEquals(lp.*)) {
         end_label = try do_ctx.nextLabel(arena);
         try do_ctx.push(end_label);
-        var_tok = lp.expectIdentifier() orelse return error.MissingName;
+        var_name = lp.readName(arena) orelse return error.MissingName;
     } else {
         end_label = try parseLabelToken(lp);
-        var_tok = lp.expectIdentifier() orelse return error.MissingName;
+        var_name = lp.readName(arena) orelse return error.MissingName;
     }
     _ = lp.expect(.equals) orelse return error.UnexpectedToken;
     const start_expr = try expr.parseExpr(lp, arena, 0);
@@ -972,7 +972,7 @@ fn parseDoStatement(arena: std.mem.Allocator, lp: *LineParser, do_ctx: *DoContex
     }
     return .{ .do_loop = .{
         .end_label = end_label,
-        .var_name = lp.tokenText(var_tok),
+        .var_name = var_name,
         .start = start_expr,
         .end = end_expr,
         .step = step_expr,

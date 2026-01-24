@@ -28,6 +28,7 @@ pub fn emitLValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
             }
             return error.InvalidAssignmentTarget;
         },
+        .substring => return error.UnsupportedSubstring,
         else => return error.InvalidAssignmentTarget,
     }
 }
@@ -92,5 +93,6 @@ pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef
             const fn_name = try ctx.ensureDecl(call_or_sub.name, ret_ty);
             return call.emitCall(ctx, builder, fn_name, ret_ty, call_or_sub.args, false);
         },
+        .substring => return error.UnsupportedSubstring,
     }
 }

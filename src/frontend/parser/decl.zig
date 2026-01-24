@@ -63,10 +63,10 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         _ = lp.consume(.l_paren);
         var assigns = std.array_list.Managed(ParamAssign).init(arena);
         while (lp.peek()) |_| {
-            const name_tok = lp.expectIdentifier() orelse return error.MissingName;
+            const name = lp.readName(arena) orelse return error.MissingName;
             _ = lp.expect(.equals) orelse return error.UnexpectedToken;
             const value = try expr.parseExpr(lp, arena, 0);
-            try assigns.append(.{ .name = lp.tokenText(name_tok), .value = value });
+            try assigns.append(.{ .name = name, .value = value });
             if (!lp.consume(.comma)) break;
         }
         _ = lp.consume(.r_paren);
@@ -78,8 +78,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         while (lp.peek()) |_| {
             var block_name: ?[]const u8 = null;
             if (lp.consume(.slash)) {
-                const name_tok = lp.expectIdentifier() orelse return error.MissingName;
-                block_name = lp.tokenText(name_tok);
+                block_name = lp.readName(arena) orelse return error.MissingName;
                 _ = lp.expect(.slash) orelse return error.UnexpectedToken;
             }
             const items = try parseDeclarators(lp, arena);
@@ -164,7 +163,7 @@ fn parseTypeKind(lp: *LineParser) !TypeKind {
 fn parseDeclarators(lp: *LineParser, arena: std.mem.Allocator) ![]Declarator {
     var items = std.array_list.Managed(Declarator).init(arena);
     while (lp.peek()) |_| {
-        const name_tok = lp.expectIdentifier() orelse return error.MissingName;
+        const name = lp.readName(arena) orelse return error.MissingName;
         var dims = std.array_list.Managed(*ast.Expr).init(arena);
         var char_len: ?*ast.Expr = null;
         if (lp.consume(.star)) {
@@ -179,7 +178,7 @@ fn parseDeclarators(lp: *LineParser, arena: std.mem.Allocator) ![]Declarator {
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         }
         try items.append(.{
-            .name = lp.tokenText(name_tok),
+            .name = name,
             .dims = try dims.toOwnedSlice(),
             .char_len = char_len,
         });
@@ -191,8 +190,8 @@ fn parseDeclarators(lp: *LineParser, arena: std.mem.Allocator) ![]Declarator {
 fn parseNameList(lp: *LineParser, arena: std.mem.Allocator) ![]const []const u8 {
     var names = std.array_list.Managed([]const u8).init(arena);
     while (lp.peek()) |_| {
-        const name_tok = lp.expectIdentifier() orelse return error.MissingName;
-        try names.append(lp.tokenText(name_tok));
+        const name = lp.readName(arena) orelse return error.MissingName;
+        try names.append(name);
         if (!lp.consume(.comma)) break;
     }
     return names.toOwnedSlice();

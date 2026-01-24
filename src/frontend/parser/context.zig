@@ -49,6 +49,19 @@ pub const LineParser = struct {
         return tok;
     }
 
+    pub fn readName(self: *LineParser, arena: std.mem.Allocator) ?[]const u8 {
+        const first = self.peek() orelse return null;
+        if (first.kind != .identifier) return null;
+        var buf = std.array_list.Managed(u8).init(arena);
+        while (self.index < self.tokens.len) {
+            const tok = self.tokens[self.index];
+            if (tok.kind != .identifier and tok.kind != .integer) break;
+            buf.appendSlice(self.tokenText(tok)) catch return null;
+            self.index += 1;
+        }
+        return buf.toOwnedSlice() catch null;
+    }
+
     pub fn isKeyword(self: LineParser, text: []const u8) bool {
         const tok = self.peek() orelse return false;
         if (tok.kind != .identifier) return false;

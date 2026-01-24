@@ -301,6 +301,11 @@ pub const UnitAnalyzer = struct {
                     try self.resolveExpr(arg);
                 }
             },
+            .substring => |sub| {
+                _ = try self.ensureSymbol(sub.name);
+                if (sub.start) |start| try self.resolveExpr(start);
+                if (sub.end) |end| try self.resolveExpr(end);
+            },
             .unary => |un| try self.resolveExpr(un.expr),
             .binary => |bin| {
                 try self.resolveExpr(bin.left);
@@ -326,6 +331,10 @@ pub const UnitAnalyzer = struct {
             .call_or_subscript => |call| {
                 const idx = try self.ensureSymbol(call.name);
                 return self.symbols.items[idx].type_kind;
+            },
+            .substring => |sub| {
+                _ = try self.ensureSymbol(sub.name);
+                return .character;
             },
             .literal => |lit| {
                 return switch (lit.kind) {
