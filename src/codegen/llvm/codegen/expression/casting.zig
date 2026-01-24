@@ -38,8 +38,7 @@ pub fn emitLiteral(ctx: *Context, builder: anytype, lit: Literal) !ValueRef {
 }
 
 fn emitStringLiteral(ctx: *Context, builder: anytype, bytes: []const u8) !ValueRef {
-    const name = try ctx.nextStringName();
-    try builder.globalString(name, bytes);
+    const name = try ctx.string_pool.intern(bytes);
     const ptr_name = try ctx.nextTemp();
     try builder.gepConstString(ptr_name, name, bytes.len + 1);
     return .{ .name = ptr_name, .ty = .ptr, .is_ptr = false };

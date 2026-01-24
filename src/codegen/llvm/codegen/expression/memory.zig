@@ -16,25 +16,29 @@ const ValueRef = context.ValueRef;
 pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) !ValueRef {
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
     if (sym.dims.len == 0) return error.ArraysUnsupported;
-    if (sym.dims.len > 2) return error.ArrayRankUnsupported;
+    if (sym.dims.len == 0) return error.ArraysUnsupported;
     const base_ptr = try ctx.getPointer(call.name);
     const elem_ty = llvm_types.typeFromKind(sym.type_kind);
     if (elem_ty == .ptr) return error.UnsupportedArrayElementType;
 
     if (call.args.len == 0) return error.InvalidSubscript;
-    if (sym.dims.len == 1 and call.args.len != 1) return error.InvalidSubscript;
-    if (sym.dims.len == 2 and call.args.len < 2) return error.InvalidSubscript;
-    if (call.args.len > sym.dims.len) return error.InvalidSubscript;
+    if (call.args.len != sym.dims.len) return error.InvalidSubscript;
     const idx1 = try emitIndex(ctx, builder, call.args[0]);
     const idx1_adj = try binary.emitSub(ctx, builder, idx1, utils.oneValue());
     var offset = idx1_adj;
-
-    if (sym.dims.len >= 2 and call.args.len >= 2) {
-        const dim1 = try emitDimValue(ctx, builder, sym.dims[0]);
-        const j1 = try emitIndex(ctx, builder, call.args[1]);
-        const j1_adj = try binary.emitSub(ctx, builder, j1, utils.oneValue());
-        const stride_mul = try binary.emitMul(ctx, builder, j1_adj, dim1);
-        offset = try binary.emitAdd(ctx, builder, offset, stride_mul);
+    if (sym.dims.len >= 2) {
+        var stride = try emitDimValue(ctx, builder, sym.dims[0]);
+        var dim_idx: usize = 1;
+        while (dim_idx < sym.dims.len) : (dim_idx += 1) {
+            const idx_val = try emitIndex(ctx, builder, call.args[dim_idx]);
+            const idx_adj = try binary.emitSub(ctx, builder, idx_val, utils.oneValue());
+            const term = try binary.emitMul(ctx, builder, idx_adj, stride);
+            offset = try binary.emitAdd(ctx, builder, offset, term);
+            if (dim_idx + 1 < sym.dims.len) {
+                const dim_val = try emitDimValue(ctx, builder, sym.dims[dim_idx]);
+                stride = try binary.emitMul(ctx, builder, stride, dim_val);
+            }
+        }
     }
 
     const gep = try ctx.nextTemp();
