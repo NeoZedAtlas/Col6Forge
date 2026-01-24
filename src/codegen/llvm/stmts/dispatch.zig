@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const context = @import("../codegen/context.zig");
 const cfg = @import("cfg.zig");
-const control = @import("control.zig");
+const control = @import("../codegen/control_flow/mod.zig");
 const execution = @import("execution.zig");
 const io = @import("io.zig");
 
