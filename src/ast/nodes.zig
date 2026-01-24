@@ -129,13 +129,13 @@ pub const CallStmt = struct {
 
 pub const WriteStmt = struct {
     unit: *Expr,
-    format_label: []const u8,
+    format: FormatSpec,
     args: []*Expr,
 };
 
 pub const ReadStmt = struct {
     unit: *Expr,
-    format_label: []const u8,
+    format: FormatSpec,
     args: []*Expr,
 };
 
@@ -156,6 +156,16 @@ pub const FormatStmt = struct {
     items: []FormatItem,
 };
 
+pub const FormatSpec = union(enum) {
+    label: []const u8,
+    inline_items: []FormatItem,
+};
+
+pub const BlankControl = enum {
+    nulls,
+    zeros,
+};
+
 pub const FormatItem = union(enum) {
     literal: []const u8,
     spaces: usize,
@@ -164,6 +174,7 @@ pub const FormatItem = union(enum) {
     real_fixed: RealFormat,
     char: CharFormat,
     scale: i32,
+    blank_control: BlankControl,
 };
 
 pub const IntFormat = struct {

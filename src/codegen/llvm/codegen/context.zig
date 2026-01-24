@@ -33,6 +33,47 @@ pub const StatementFunctionSubst = struct {
     actuals: []*ast.Expr,
 };
 
+pub const StringPool = struct {
+    allocator: std.mem.Allocator,
+    names: std.StringHashMap([]const u8),
+    items: std.array_list.Managed(StringEntry),
+    counter: usize,
+
+    const StringEntry = struct {
+        name: []const u8,
+        bytes: []const u8,
+    };
+
+    pub fn init(allocator: std.mem.Allocator) StringPool {
+        return .{
+            .allocator = allocator,
+            .names = std.StringHashMap([]const u8).init(allocator),
+            .items = std.array_list.Managed(StringEntry).init(allocator),
+            .counter = 0,
+        };
+    }
+
+    pub fn deinit(self: *StringPool) void {
+        var it = self.names.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.names.deinit();
+        self.items.deinit();
+    }
+
+    pub fn intern(self: *StringPool, bytes: []const u8) ![]const u8 {
+        if (self.names.get(bytes)) |name| return name;
+        const key = try self.allocator.dupe(u8, bytes);
+        const name = try std.fmt.allocPrint(self.allocator, "str{d}", .{self.counter});
+        self.counter += 1;
+        try self.names.put(key, name);
+        try self.items.append(.{ .name = name, .bytes = key });
+        return name;
+    }
+};
+
 pub const Context = struct {
     allocator: std.mem.Allocator,
     unit: ProgramUnit,
@@ -40,13 +81,14 @@ pub const Context = struct {
     decls: *std.StringHashMap(IRDecl),
     defined: *std.StringHashMap(void),
     formats: *const std.StringHashMap(FormatInfo),
+    inline_formats: *const std.AutoHashMap(usize, FormatInfo),
     temp_index: usize,
-    string_index: usize,
     locals: std.StringHashMap(ValueRef),
     ref_kinds: std.AutoHashMap(usize, sema.ResolvedRefKind),
     label_map: std.StringHashMap([]const u8),
     label_index: std.StringHashMap(usize),
     label_counter: usize,
+    string_pool: *StringPool,
     statement_functions: std.StringHashMap(StatementFunction),
     stmt_func_stack: std.array_list.Managed(StatementFunctionSubst),
 
@@ -57,6 +99,8 @@ pub const Context = struct {
         decls: *std.StringHashMap(IRDecl),
         defined: *std.StringHashMap(void),
         formats: *const std.StringHashMap(FormatInfo),
+        inline_formats: *const std.AutoHashMap(usize, FormatInfo),
+        string_pool: *StringPool,
     ) Context {
         return .{
             .allocator = allocator,
@@ -65,13 +109,14 @@ pub const Context = struct {
             .decls = decls,
             .defined = defined,
             .formats = formats,
+            .inline_formats = inline_formats,
             .temp_index = 0,
-            .string_index = 0,
             .locals = std.StringHashMap(ValueRef).init(allocator),
             .ref_kinds = std.AutoHashMap(usize, sema.ResolvedRefKind).init(allocator),
             .label_map = std.StringHashMap([]const u8).init(allocator),
             .label_index = std.StringHashMap(usize).init(allocator),
             .label_counter = 0,
+            .string_pool = string_pool,
             .statement_functions = std.StringHashMap(StatementFunction).init(allocator),
             .stmt_func_stack = std.array_list.Managed(StatementFunctionSubst).init(allocator),
         };
@@ -174,8 +219,7 @@ pub const Context = struct {
     }
 
     pub fn nextStringName(self: *Context) ![]const u8 {
-        const name = try utils.formatTempName(self.allocator, "str", self.string_index);
-        self.string_index += 1;
+        const name = try std.fmt.allocPrint(self.allocator, "str{d}", .{self.string_pool.counter});
         return name;
     }
 };

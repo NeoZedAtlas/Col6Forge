@@ -10,6 +10,11 @@ const utils = @import("utils.zig");
 const Program = ast.Program;
 const FormatInfo = context.FormatInfo;
 
+const FormatMaps = struct {
+    labels: std.StringHashMap(FormatInfo),
+    inline_items: std.AutoHashMap(usize, FormatInfo),
+};
+
 pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: sema.SemanticProgram, source_name: []const u8) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
     errdefer buffer.deinit();
@@ -77,12 +82,19 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
         try builder.commonGlobal(info.global_name, info.size, info.alignment);
     }
 
+    var string_pool = context.StringPool.init(scratch);
+    defer string_pool.deinit();
+
     for (program.units) |unit| {
         const sem_unit = sem_map.get(unit.name) orelse return error.MissingSemanticUnit;
-        var format_map = try buildFormatMap(scratch, &builder, unit);
-        var ctx = context.Context.init(scratch, unit, sem_unit, &decls, &defined, &format_map);
+        var format_maps = try buildFormatMaps(scratch, &builder, unit);
+        var ctx = context.Context.init(scratch, unit, sem_unit, &decls, &defined, &format_maps.labels, &format_maps.inline_items, &string_pool);
         defer ctx.deinit();
         try stmts.emitFunction(&ctx, &builder);
+    }
+
+    for (string_pool.items.items) |entry| {
+        try builder.globalString(entry.name, entry.bytes);
     }
 
     if (program_mangled) |entry_name| {
@@ -107,23 +119,77 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
     return;
 }
 
-fn buildFormatMap(allocator: std.mem.Allocator, builder: anytype, unit: ast.ProgramUnit) !std.StringHashMap(FormatInfo) {
-    var map = std.StringHashMap(FormatInfo).init(allocator);
+fn buildFormatMaps(allocator: std.mem.Allocator, builder: anytype, unit: ast.ProgramUnit) !FormatMaps {
+    var label_map = std.StringHashMap(FormatInfo).init(allocator);
+    var inline_map = std.AutoHashMap(usize, FormatInfo).init(allocator);
     const unit_mangled = try utils.mangleName(allocator, unit.name);
     for (unit.stmts) |stmt_item| {
         if (stmt_item.node != .format) continue;
         const label = stmt_item.label orelse return error.FormatMissingLabel;
-        if (map.contains(label)) return error.DuplicateFormatLabel;
+        if (label_map.contains(label)) return error.DuplicateFormatLabel;
         const format_bytes = try buildPrintfFormat(allocator, stmt_item.node.format.items);
         const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}{s}", .{ unit_mangled, label });
         try builder.globalString(global_name, format_bytes);
-        try map.put(label, .{
+        try label_map.put(label, .{
             .items = stmt_item.node.format.items,
             .global_name = global_name,
             .string_len = format_bytes.len + 1,
         });
     }
-    return map;
+    for (unit.stmts) |stmt_item| {
+        if (stmt_item.node != .assignment) continue;
+        const assign = stmt_item.node.assignment;
+        if (assign.target.* != .identifier) continue;
+        if (assign.value.* != .literal) continue;
+        const lit = assign.value.literal;
+        if (lit.kind != .integer) continue;
+        const fmt_info = label_map.get(lit.text) orelse continue;
+        if (label_map.contains(assign.target.identifier)) continue;
+        try label_map.put(assign.target.identifier, fmt_info);
+    }
+    var inline_index: usize = 0;
+    for (unit.stmts) |stmt_item| {
+        switch (stmt_item.node) {
+            .write => |write| {
+                switch (write.format) {
+                    .inline_items => |items| {
+                        const key = @as(usize, @intFromPtr(items.ptr));
+                        if (inline_map.contains(key)) break;
+                        const format_bytes = try buildPrintfFormat(allocator, items);
+                        const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}inline{d}", .{ unit_mangled, inline_index });
+                        inline_index += 1;
+                        try builder.globalString(global_name, format_bytes);
+                        try inline_map.put(key, .{
+                            .items = items,
+                            .global_name = global_name,
+                            .string_len = format_bytes.len + 1,
+                        });
+                    },
+                    else => {},
+                }
+            },
+            .read => |read| {
+                switch (read.format) {
+                    .inline_items => |items| {
+                        const key = @as(usize, @intFromPtr(items.ptr));
+                        if (inline_map.contains(key)) break;
+                        const format_bytes = try buildPrintfFormat(allocator, items);
+                        const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}inline{d}", .{ unit_mangled, inline_index });
+                        inline_index += 1;
+                        try builder.globalString(global_name, format_bytes);
+                        try inline_map.put(key, .{
+                            .items = items,
+                            .global_name = global_name,
+                            .string_len = format_bytes.len + 1,
+                        });
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+    return .{ .labels = label_map, .inline_items = inline_map };
 }
 
 fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem) ![]const u8 {
@@ -131,7 +197,7 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem
     errdefer buffer.deinit();
     var last_non_space: ?usize = null;
     for (items, 0..) |item, idx| {
-        if (item != .spaces and item != .scale) last_non_space = idx;
+        if (item != .spaces and item != .scale and item != .blank_control) last_non_space = idx;
     }
     const cutoff = last_non_space orelse 0;
     const limit = if (last_non_space == null) 0 else cutoff + 1;
@@ -168,6 +234,7 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem
                 }
             },
             .scale => {},
+            .blank_control => {},
         }
     }
     try buffer.append('\n');

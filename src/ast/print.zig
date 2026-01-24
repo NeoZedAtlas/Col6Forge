@@ -64,10 +64,18 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
             try writer.print(";   stmt label={s} call {s}({d})\n", .{ label_text, call.name, call.args.len });
         },
         .write => |write| {
-            try writer.print(";   stmt label={s} write fmt={s} args={d}\n", .{ label_text, write.format_label, write.args.len });
+            const fmt_text = switch (write.format) {
+                .label => |label| label,
+                .inline_items => "inline",
+            };
+            try writer.print(";   stmt label={s} write fmt={s} args={d}\n", .{ label_text, fmt_text, write.args.len });
         },
         .read => |read| {
-            try writer.print(";   stmt label={s} read fmt={s} args={d}\n", .{ label_text, read.format_label, read.args.len });
+            const fmt_text = switch (read.format) {
+                .label => |label| label,
+                .inline_items => "inline",
+            };
+            try writer.print(";   stmt label={s} read fmt={s} args={d}\n", .{ label_text, fmt_text, read.args.len });
         },
         .rewind => {
             try writer.print(";   stmt label={s} rewind\n", .{label_text});

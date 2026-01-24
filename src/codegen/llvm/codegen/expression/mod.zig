@@ -101,7 +101,9 @@ const TestHarness = struct {
         var decls = std.StringHashMap(context.IRDecl).init(a);
         var defined = std.StringHashMap(void).init(a);
         var formats = std.StringHashMap(context.FormatInfo).init(a);
-        var ctx = Context.init(a, unit, &sem_unit, &decls, &defined, &formats);
+        var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
+        var string_pool = context.StringPool.init(a);
+        var ctx = Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool);
         try ctx.locals.put("A", .{ .name = "%a", .ty = .ptr, .is_ptr = true });
         try ctx.locals.put("ARR", .{ .name = "%arr", .ty = .ptr, .is_ptr = true });
 

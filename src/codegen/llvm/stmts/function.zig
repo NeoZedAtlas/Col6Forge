@@ -212,7 +212,9 @@ test "emitFunction emits a simple assignment" {
     var defined = std.StringHashMap(void).init(a);
     defer defined.deinit();
     var formats = std.StringHashMap(context.FormatInfo).init(a);
-    var ctx = Context.init(a, unit, &sem_unit, &decls, &defined, &formats);
+    var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
+    var string_pool = context.StringPool.init(a);
+    var ctx = Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool);
     defer ctx.deinit();
 
     var buffer = std.array_list.Managed(u8).init(allocator);
