@@ -165,7 +165,9 @@ pub const UnitAnalyzer = struct {
         if (item.dims.len > 0) {
             self.symbols.items[idx].dims = item.dims;
         }
-        self.symbols.items[idx].storage = storage;
+        if (self.symbols.items[idx].storage != .common or storage == .common) {
+            self.symbols.items[idx].storage = storage;
+        }
     }
 
     const ResolveError = anyerror;

@@ -3,6 +3,7 @@ const ast = @import("../../../ast/nodes.zig");
 const llvm_types = @import("../types.zig");
 const context = @import("../codegen/context.zig");
 const common = @import("../codegen/common.zig");
+const expression = @import("../codegen/expression/mod.zig");
 const dispatch = @import("dispatch.zig");
 const sema = @import("../../../sema/mod.zig");
 const utils = @import("../codegen/utils.zig");
@@ -63,7 +64,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     }
 
     try installCommonLocals(ctx, builder);
-    try applyEquivalences(ctx);
+    try applyEquivalences(ctx, builder);
 
     const block_names = try ctx.buildBlockNames();
     defer {
@@ -101,7 +102,7 @@ fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {
     }
 }
 
-fn applyEquivalences(ctx: *Context) EmitError!void {
+fn applyEquivalences(ctx: *Context, builder: anytype) EmitError!void {
     for (ctx.unit.decls) |decl| {
         if (decl != .equivalence) continue;
         for (decl.equivalence.groups) |group| {
@@ -110,23 +111,45 @@ fn applyEquivalences(ctx: *Context) EmitError!void {
             var idx: usize = 1;
             while (idx < group.items.len) : (idx += 1) {
                 const other = group.items[idx];
-                try applyEquivalencePair(ctx, anchor, other);
+                try applyEquivalencePair(ctx, builder, anchor, other);
             }
         }
     }
 }
 
-fn applyEquivalencePair(ctx: *Context, anchor: *ast.Expr, other: *ast.Expr) EmitError!void {
+fn applyEquivalencePair(ctx: *Context, builder: anytype, anchor: *ast.Expr, other: *ast.Expr) EmitError!void {
     if (anchor.* == .call_or_subscript and other.* == .call_or_subscript) {
         const a_call = anchor.call_or_subscript;
         const b_call = other.call_or_subscript;
-        if (!argsEqual(a_call.args, b_call.args)) return;
         const a_sym = ctx.findSymbol(a_call.name) orelse return;
         const b_sym = ctx.findSymbol(b_call.name) orelse return;
         if (a_sym.type_kind != b_sym.type_kind) return;
         if (a_sym.dims.len != b_sym.dims.len) return;
-        const base = ctx.locals.get(a_call.name) orelse return;
-        try ctx.locals.put(b_call.name, base);
+        if (argsEqual(a_call.args, b_call.args)) {
+            const base = ctx.locals.get(a_call.name) orelse return;
+            try ctx.locals.put(b_call.name, base);
+            return;
+        }
+        const b_offset = constLinearOffset(b_sym, b_call) orelse return;
+        const anchor_ptr = try expression.emitSubscriptPtr(ctx, builder, a_call);
+        var base_ptr = anchor_ptr;
+        if (b_offset != 0) {
+            const neg_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{-b_offset});
+            const neg_val = ValueRef{ .name = neg_text, .ty = .i32, .is_ptr = false };
+            const ptr_name = try ctx.nextTemp();
+            const elem_ty = llvm_types.typeFromKind(a_sym.type_kind);
+            try builder.gep(ptr_name, elem_ty, anchor_ptr, neg_val);
+            base_ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+        }
+        try ctx.locals.put(b_call.name, base_ptr);
+        return;
+    }
+    if (anchor.* == .call_or_subscript and other.* == .identifier) {
+        try applyEquivalenceSubscriptScalar(ctx, builder, anchor, other.identifier);
+        return;
+    }
+    if (anchor.* == .identifier and other.* == .call_or_subscript) {
+        try applyEquivalenceSubscriptScalar(ctx, builder, other, anchor.identifier);
         return;
     }
     if (anchor.* == .identifier and other.* == .identifier) {
@@ -140,6 +163,18 @@ fn applyEquivalencePair(ctx: *Context, anchor: *ast.Expr, other: *ast.Expr) Emit
     }
 }
 
+fn applyEquivalenceSubscriptScalar(ctx: *Context, builder: anytype, sub_expr: *ast.Expr, scalar_name: []const u8) EmitError!void {
+    const call = sub_expr.call_or_subscript;
+    const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(sub_expr))) orelse .unknown;
+    if (kind != .subscript) return;
+    const sub_sym = ctx.findSymbol(call.name) orelse return;
+    const scalar_sym = ctx.findSymbol(scalar_name) orelse return;
+    if (scalar_sym.dims.len != 0) return;
+    if (sub_sym.type_kind != scalar_sym.type_kind) return;
+    const ptr = try expression.emitSubscriptPtr(ctx, builder, call);
+    try ctx.locals.put(scalar_name, ptr);
+}
+
 fn argsEqual(a: []*ast.Expr, b: []*ast.Expr) bool {
     if (a.len != b.len) return false;
     for (a, 0..) |arg, idx| {
@@ -148,6 +183,26 @@ fn argsEqual(a: []*ast.Expr, b: []*ast.Expr) bool {
         if (av != bv) return false;
     }
     return true;
+}
+
+fn constLinearOffset(sym: sema.Symbol, call: ast.CallOrSubscript) ?i64 {
+    if (call.args.len == 0) return null;
+    if (call.args.len != sym.dims.len) return null;
+    var offset: i64 = 0;
+    var stride: i64 = 1;
+    var idx: usize = 0;
+    while (idx < call.args.len) : (idx += 1) {
+        const idx_val = constIndexValue(call.args[idx]) orelse return null;
+        const dim_val = constIndexValue(sym.dims[idx]) orelse return null;
+        if (idx_val <= 0 or dim_val <= 0) return null;
+        offset += (idx_val - 1) * stride;
+        if (idx + 1 < call.args.len) {
+            const mul = @mulWithOverflow(stride, dim_val);
+            if (mul[1] != 0) return null;
+            stride = mul[0];
+        }
+    }
+    return offset;
 }
 
 fn constIndexValue(expr: *ast.Expr) ?i64 {
