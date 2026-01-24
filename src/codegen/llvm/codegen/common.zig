@@ -62,8 +62,8 @@ pub fn buildUnitCommonLayouts(allocator: std.mem.Allocator, unit: ast.ProgramUni
             const sa = try sizeAlign(ty);
             const elem_count = if (sym.dims.len > 0) try arrayElementCount(sem, sym.dims) else 1;
             const size_mul = @mulWithOverflow(sa.size, elem_count);
-            if (size_mul.overflow) return error.ArraySizeOverflow;
-            const item_size = size_mul.result;
+            if (size_mul[1] != 0) return error.ArraySizeOverflow;
+            const item_size = size_mul[0];
             offset = alignForward(offset, sa.alignment);
             try items.append(.{ .name = name, .offset = offset, .ty = ty });
             offset += item_size;
@@ -145,8 +145,8 @@ pub fn arrayElementCount(sem: *const sema.SemanticUnit, dims: []*ast.Expr) !usiz
         if (value <= 0) return error.InvalidArrayDim;
         const dim_u: usize = @intCast(value);
         const mul = @mulWithOverflow(total, dim_u);
-        if (mul.overflow) return error.ArraySizeOverflow;
-        total = mul.result;
+        if (mul[1] != 0) return error.ArraySizeOverflow;
+        total = mul[0];
     }
     return total;
 }
