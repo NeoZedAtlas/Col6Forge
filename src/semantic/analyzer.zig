@@ -290,6 +290,10 @@ pub const UnitAnalyzer = struct {
             .call_or_subscript => |call| {
                 const idx = try self.ensureSymbol(call.name);
                 var sym = self.symbols.items[idx];
+                if (!sym.is_intrinsic and isIntrinsicName(call.name)) {
+                    sym.is_intrinsic = true;
+                    self.symbols.items[idx] = sym;
+                }
                 var kind: ResolvedRefKind = .unknown;
                 if (sym.dims.len > 0) {
                     kind = .subscript;
@@ -418,6 +422,18 @@ pub const UnitAnalyzer = struct {
             if (first >= rule.start and first <= rule.end) return rule.type_kind;
         }
         return .real;
+    }
+
+    fn isIntrinsicName(name: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(name, "SIN") or
+            std.ascii.eqlIgnoreCase(name, "COS") or
+            std.ascii.eqlIgnoreCase(name, "SQRT") or
+            std.ascii.eqlIgnoreCase(name, "ABS") or
+            std.ascii.eqlIgnoreCase(name, "MIN") or
+            std.ascii.eqlIgnoreCase(name, "MAX") or
+            std.ascii.eqlIgnoreCase(name, "CONJG") or
+            std.ascii.eqlIgnoreCase(name, "FLOAT") or
+            std.ascii.eqlIgnoreCase(name, "REAL");
     }
 
     fn evalConst(self: *UnitAnalyzer, expr: *ast.Expr) !?ConstValue {
