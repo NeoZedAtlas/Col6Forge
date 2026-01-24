@@ -23,6 +23,16 @@ pub const FormatInfo = struct {
 
 pub const ValueRef = utils.ValueRef;
 
+pub const StatementFunction = struct {
+    params: []const []const u8,
+    expr: *ast.Expr,
+};
+
+pub const StatementFunctionSubst = struct {
+    params: []const []const u8,
+    actuals: []*ast.Expr,
+};
+
 pub const Context = struct {
     allocator: std.mem.Allocator,
     unit: ProgramUnit,
@@ -37,6 +47,8 @@ pub const Context = struct {
     label_map: std.StringHashMap([]const u8),
     label_index: std.StringHashMap(usize),
     label_counter: usize,
+    statement_functions: std.StringHashMap(StatementFunction),
+    stmt_func_subst: ?StatementFunctionSubst,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -60,6 +72,8 @@ pub const Context = struct {
             .label_map = std.StringHashMap([]const u8).init(allocator),
             .label_index = std.StringHashMap(usize).init(allocator),
             .label_counter = 0,
+            .statement_functions = std.StringHashMap(StatementFunction).init(allocator),
+            .stmt_func_subst = null,
         };
     }
 
@@ -68,6 +82,7 @@ pub const Context = struct {
         self.ref_kinds.deinit();
         self.label_map.deinit();
         self.label_index.deinit();
+        self.statement_functions.deinit();
     }
 
     pub fn buildBlockNames(self: *Context) ![][]const u8 {
@@ -115,6 +130,14 @@ pub const Context = struct {
             if (std.mem.eql(u8, sym.name, name)) return sym;
         }
         return null;
+    }
+
+    pub fn addStatementFunction(self: *Context, name: []const u8, params: []const []const u8, expr: *ast.Expr) !void {
+        try self.statement_functions.put(name, .{ .params = params, .expr = expr });
+    }
+
+    pub fn getStatementFunction(self: *Context, name: []const u8) ?StatementFunction {
+        return self.statement_functions.get(name);
     }
 
     pub fn ensureDecl(self: *Context, name: []const u8, ret_ty: IRType) ![]const u8 {
