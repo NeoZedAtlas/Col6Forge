@@ -48,7 +48,7 @@ pub const Context = struct {
     label_index: std.StringHashMap(usize),
     label_counter: usize,
     statement_functions: std.StringHashMap(StatementFunction),
-    stmt_func_subst: ?StatementFunctionSubst,
+    stmt_func_stack: std.array_list.Managed(StatementFunctionSubst),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -73,7 +73,7 @@ pub const Context = struct {
             .label_index = std.StringHashMap(usize).init(allocator),
             .label_counter = 0,
             .statement_functions = std.StringHashMap(StatementFunction).init(allocator),
-            .stmt_func_subst = null,
+            .stmt_func_stack = std.array_list.Managed(StatementFunctionSubst).init(allocator),
         };
     }
 
@@ -83,6 +83,7 @@ pub const Context = struct {
         self.label_map.deinit();
         self.label_index.deinit();
         self.statement_functions.deinit();
+        self.stmt_func_stack.deinit();
     }
 
     pub fn buildBlockNames(self: *Context) ![][]const u8 {

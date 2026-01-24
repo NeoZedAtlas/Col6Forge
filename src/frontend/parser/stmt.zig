@@ -420,11 +420,25 @@ fn parseDataStatement(arena: std.mem.Allocator, line: fixed_form.LogicalLine) Pa
         const vars = try parseDataVarList(arena, line, var_text);
         const values = try parseDataValueList(arena, val_text);
         if (values.len < vars.len) return error.DataValueCountMismatch;
-        var v_idx: usize = 0;
-        for (vars) |var_expr| {
-            if (v_idx >= values.len) return error.DataValueCountMismatch;
-            try inits.append(.{ .target = var_expr, .value = values[v_idx] });
-            v_idx += 1;
+        if (vars.len == 1 and values.len > 1 and vars[0].* == .identifier) {
+            const name = vars[0].identifier;
+            var v_idx: usize = 0;
+            while (v_idx < values.len) : (v_idx += 1) {
+                const idx_expr = try arena.create(Expr);
+                idx_expr.* = .{ .literal = .{ .kind = .integer, .text = try std.fmt.allocPrint(arena, "{d}", .{v_idx + 1}) } };
+                const args = try arena.alloc(*Expr, 1);
+                args[0] = idx_expr;
+                const target = try arena.create(Expr);
+                target.* = .{ .call_or_subscript = .{ .name = name, .args = args } };
+                try inits.append(.{ .target = target, .value = values[v_idx] });
+            }
+        } else {
+            var v_idx: usize = 0;
+            for (vars) |var_expr| {
+                if (v_idx >= values.len) return error.DataValueCountMismatch;
+                try inits.append(.{ .target = var_expr, .value = values[v_idx] });
+                v_idx += 1;
+            }
         }
     }
 

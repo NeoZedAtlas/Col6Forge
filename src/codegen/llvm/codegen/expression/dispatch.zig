@@ -35,17 +35,19 @@ pub fn emitLValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
 }
 
 pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef {
-    return emitExprImpl(ctx, builder, expr, true);
+    return emitExprImpl(ctx, builder, expr, ctx.stmt_func_stack.items.len);
 }
 
-fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, use_subst: bool) EmitError!ValueRef {
+fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize) EmitError!ValueRef {
     switch (expr.*) {
         .identifier => |name| {
-            if (use_subst) {
-                if (ctx.stmt_func_subst) |subst| {
-                    const match = findParamIndex(subst.params, name);
-                    if (match) |idx| {
-                        return emitExprImpl(ctx, builder, subst.actuals[idx], false);
+            if (subst_depth > 0) {
+                var depth = subst_depth;
+                while (depth > 0) {
+                    depth -= 1;
+                    const subst = ctx.stmt_func_stack.items[depth];
+                    if (findParamIndex(subst.params, name)) |idx| {
+                        return emitExprImpl(ctx, builder, subst.actuals[idx], depth);
                     }
                 }
             }
@@ -63,7 +65,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, use_subst: bool) E
             return casting.emitLiteral(ctx, builder, lit);
         },
         .unary => |un| {
-            const inner = try emitExprImpl(ctx, builder, un.expr, use_subst);
+            const inner = try emitExprImpl(ctx, builder, un.expr, subst_depth);
             switch (un.op) {
                 .plus => return inner,
                 .minus => {
@@ -82,8 +84,8 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, use_subst: bool) E
             }
         },
         .binary => |bin| {
-            const lhs = try emitExprImpl(ctx, builder, bin.left, use_subst);
-            const rhs = try emitExprImpl(ctx, builder, bin.right, use_subst);
+            const lhs = try emitExprImpl(ctx, builder, bin.left, subst_depth);
+            const rhs = try emitExprImpl(ctx, builder, bin.right, subst_depth);
             return binary.emitBinary(ctx, builder, bin.op, lhs, rhs);
         },
         .call_or_subscript => |call_or_sub| {
@@ -99,7 +101,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, use_subst: bool) E
             }
             if (kind != .call) return error.AmbiguousCallOrSubscript;
             if (ctx.getStatementFunction(call_or_sub.name)) |def| {
-                return emitStatementFunctionCall(ctx, builder, def, call_or_sub.args, use_subst);
+                return emitStatementFunctionCall(ctx, builder, call_or_sub.name, def, call_or_sub.args);
             }
             const sym = ctx.findSymbol(call_or_sub.name) orelse return error.UnknownSymbol;
             if (sym.is_intrinsic) {
@@ -116,16 +118,19 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, use_subst: bool) E
 fn emitStatementFunctionCall(
     ctx: *Context,
     builder: anytype,
+    name: []const u8,
     def: context.StatementFunction,
     args: []*Expr,
-    use_subst: bool,
 ) EmitError!ValueRef {
-    _ = use_subst;
     if (def.params.len != args.len) return error.InvalidStatementFunctionCall;
-    const prev = ctx.stmt_func_subst;
-    ctx.stmt_func_subst = .{ .params = def.params, .actuals = args };
-    defer ctx.stmt_func_subst = prev;
-    return emitExprImpl(ctx, builder, def.expr, true);
+    try ctx.stmt_func_stack.append(.{ .params = def.params, .actuals = args });
+    defer _ = ctx.stmt_func_stack.pop();
+    var value = try emitExprImpl(ctx, builder, def.expr, ctx.stmt_func_stack.items.len);
+    if (ctx.findSymbol(name)) |sym| {
+        const target_ty = llvm_types.typeFromKind(sym.type_kind);
+        value = try casting.coerce(ctx, builder, value, target_ty);
+    }
+    return value;
 }
 
 fn findParamIndex(params: []const []const u8, name: []const u8) ?usize {
