@@ -112,6 +112,11 @@ pub fn Builder(comptime WriterType: type) type {
             try self.writer.print("  {s} = alloca {s}\n", .{ name, llvm_types.irTypeText(ty) });
         }
 
+        pub fn allocaArray(self: *@This(), name: []const u8, elem_ty: IRType, count: usize) !void {
+            try self.bump();
+            try self.writer.print("  {s} = alloca {s}, i32 {d}\n", .{ name, llvm_types.irTypeText(elem_ty), count });
+        }
+
         pub fn store(self: *@This(), value: ValueRef, ptr: ValueRef) !void {
             try self.bump();
             try self.writer.print("  store {s} {s}, ptr {s}\n", .{ llvm_types.irTypeText(value.ty), value.name, ptr.name });

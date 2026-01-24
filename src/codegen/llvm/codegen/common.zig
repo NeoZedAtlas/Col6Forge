@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const sema = @import("../../../sema/mod.zig");
+const evaluator = @import("../../../semantic/evaluator.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
 
@@ -57,12 +58,15 @@ pub fn buildUnitCommonLayouts(allocator: std.mem.Allocator, unit: ast.ProgramUni
         for (list.items) |name| {
             const sym = findSymbol(sem, name) orelse return error.UnknownSymbol;
             if (sym.storage != .common) return error.InvalidCommonSymbol;
-            if (sym.dims.len > 0) return error.ArraysUnsupported;
             const ty = llvm_types.typeFromKind(sym.type_kind);
             const sa = try sizeAlign(ty);
+            const elem_count = if (sym.dims.len > 0) try arrayElementCount(sem, sym.dims) else 1;
+            const size_mul = @mulWithOverflow(usize, sa.size, elem_count);
+            if (size_mul.overflow) return error.ArraySizeOverflow;
+            const item_size = size_mul.result;
             offset = alignForward(offset, sa.alignment);
             try items.append(.{ .name = name, .offset = offset, .ty = ty });
-            offset += sa.size;
+            offset += item_size;
             if (sa.alignment > max_align) max_align = sa.alignment;
         }
 
@@ -123,6 +127,46 @@ fn blockKey(allocator: std.mem.Allocator, name: ?[]const u8) ![]const u8 {
 fn findSymbol(sem: *const sema.SemanticUnit, name: []const u8) ?sema.Symbol {
     for (sem.symbols) |sym| {
         if (std.mem.eql(u8, sym.name, name)) return sym;
+    }
+    return null;
+}
+
+pub fn arrayElementCount(sem: *const sema.SemanticUnit, dims: []*ast.Expr) !usize {
+    if (dims.len == 0) return 1;
+    var total: usize = 1;
+    for (dims) |dim| {
+        switch (dim.*) {
+            .literal => |lit| {
+                if (lit.kind == .assumed_size) return error.AssumedSizeDimUnsupported;
+            },
+            else => {},
+        }
+        const value = (try evalConstInt(sem, dim)) orelse return error.ArrayDimNotConstant;
+        if (value <= 0) return error.InvalidArrayDim;
+        const dim_u: usize = @intCast(value);
+        const mul = @mulWithOverflow(usize, total, dim_u);
+        if (mul.overflow) return error.ArraySizeOverflow;
+        total = mul.result;
+    }
+    return total;
+}
+
+fn evalConstInt(sem: *const sema.SemanticUnit, expr: *ast.Expr) !?i64 {
+    const resolver = evaluator.ConstResolver{
+        .ctx = @ptrCast(@constCast(sem)),
+        .resolveFn = resolveConstValue,
+    };
+    const value = try evaluator.evalConst(expr, resolver);
+    return switch (value orelse return null) {
+        .integer => |v| v,
+        .real => null,
+    };
+}
+
+fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?sema.ConstValue {
+    const sem: *const sema.SemanticUnit = @ptrCast(@alignCast(ctx));
+    for (sem.symbols) |sym| {
+        if (std.mem.eql(u8, sym.name, name)) return sym.const_value;
     }
     return null;
 }

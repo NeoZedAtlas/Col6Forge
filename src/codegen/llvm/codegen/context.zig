@@ -96,9 +96,6 @@ pub const Context = struct {
             if (sym.storage == .dummy) {
                 continue;
             }
-            if (sym.storage == .common and sym.dims.len > 0) {
-                return error.ArraysUnsupported;
-            }
         }
     }
 

@@ -49,8 +49,14 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         if (sym.storage != .local) continue;
         if (sym.kind == .parameter or sym.kind == .function or sym.kind == .subroutine) continue;
         if (ctx.locals.contains(sym.name)) continue;
-        if (sym.dims.len > 0) return error.ArraysUnsupported;
         const ty = llvm_types.typeFromKind(sym.type_kind);
+        if (sym.dims.len > 0) {
+            const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
+            const alloca_name = try ctx.nextTemp();
+            try builder.allocaArray(alloca_name, ty, elem_count);
+            try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
+            continue;
+        }
         const alloca_name = try ctx.nextTemp();
         try builder.alloca(alloca_name, ty);
         try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
