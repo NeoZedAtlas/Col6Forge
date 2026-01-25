@@ -86,12 +86,33 @@ int f77_read(int unit, const char *fmt, ...) {
         record[record_len - 1] = '\0';
         record_len -= 1;
     }
+    if (record_len > 0 && record[record_len - 1] == '\r') {
+        record[record_len - 1] = '\0';
+        record_len -= 1;
+    }
 
     va_start(ap, fmt);
     const char *p = fmt;
     size_t idx = 0;
     while (*p != '\0') {
         if (*p != '%') {
+            if (*p == '\n') {
+                if (!fgets(record, (int)sizeof(record), file)) {
+                    break;
+                }
+                record_len = strlen(record);
+                if (record_len > 0 && record[record_len - 1] == '\n') {
+                    record[record_len - 1] = '\0';
+                    record_len -= 1;
+                }
+                if (record_len > 0 && record[record_len - 1] == '\r') {
+                    record[record_len - 1] = '\0';
+                    record_len -= 1;
+                }
+                idx = 0;
+                p++;
+                continue;
+            }
             if (idx < record_len) {
                 idx += 1;
             }
