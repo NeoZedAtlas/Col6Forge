@@ -213,6 +213,11 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
             const next_tokens = try lexer.lexLogicalLine(arena, next_line);
             defer arena.free(next_tokens);
             var next_lp = LineParser.init(next_line, next_tokens);
+            if (next_lp.isKeywordSplit("ELSEIF")) {
+                const else_if_block = try parseElseIfBlock(arena, lines, index, do_ctx);
+                try else_if_blocks.append(else_if_block);
+                continue;
+            }
             if (!next_lp.isKeywordSplit("ELSE")) break;
             _ = next_lp.consumeKeyword("ELSE");
             if (next_lp.isKeywordSplit("IF")) {
@@ -275,8 +280,12 @@ fn parseElseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
     const tokens = try lexer.lexLogicalLine(arena, line);
     defer arena.free(tokens);
     var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("ELSE")) return error.UnexpectedToken;
-    if (!lp.consumeKeyword("IF")) return error.UnexpectedToken;
+    if (lp.isKeywordSplit("ELSEIF")) {
+        _ = lp.consumeKeyword("ELSEIF");
+    } else {
+        if (!lp.consumeKeyword("ELSE")) return error.UnexpectedToken;
+        if (!lp.consumeKeyword("IF")) return error.UnexpectedToken;
+    }
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
     const cond = try expr.parseExpr(&lp, arena, 0);
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
@@ -294,7 +303,7 @@ pub fn parseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
         const tokens = try lexer.lexLogicalLine(arena, line);
         defer arena.free(tokens);
         var lp = LineParser.init(line, tokens);
-        if (lp.isKeywordSplit("ELSE") or lp.isKeywordSplit("ENDIF") or helpers.isEndIfLine(lp)) {
+        if (lp.isKeywordSplit("ELSE") or lp.isKeywordSplit("ELSEIF") or lp.isKeywordSplit("ENDIF") or helpers.isEndIfLine(lp)) {
             break;
         }
         if (decl.isDeclarationStart(lp)) return error.DeclarationInIfBlock;

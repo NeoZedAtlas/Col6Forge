@@ -34,29 +34,7 @@ static void f77_write_trimmed(FILE *file, const char *fmt, va_list ap) {
     va_copy(ap_fmt, ap);
     vsnprintf(buf, (size_t)needed + 1, fmt, ap_fmt);
     va_end(ap_fmt);
-
-    size_t start = 0;
-    for (size_t i = 0; i <= (size_t)needed; i++) {
-        if (i == (size_t)needed || buf[i] == '\n') {
-            size_t end = i;
-            size_t scan = end;
-            while (scan > start) {
-                char ch = buf[scan - 1];
-                if (ch != ' ' && ch != '\t' && ch != '\r') {
-                    end = scan;
-                    break;
-                }
-                scan--;
-            }
-            if (end > start) {
-                (void)fwrite(buf + start, 1, end - start, file);
-            }
-            if (i < (size_t)needed && buf[i] == '\n') {
-                (void)fputc('\n', file);
-            }
-            start = i + 1;
-        }
-    }
+    (void)fwrite(buf, 1, (size_t)needed, file);
     free(buf);
 }
 
