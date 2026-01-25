@@ -111,6 +111,7 @@ pub const StmtNode = union(enum) {
     data: DataStmt,
     format: FormatStmt,
     arith_if: ArithIfStmt,
+    pause: void,
     stop: void,
     do_loop: DoLoopStmt,
     ret: void,

@@ -49,6 +49,7 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
         .arith_if => |arith| {
             try expressions.resolveExpr(self, arith.condition);
         },
+        .pause => {},
         .stop => {},
         .do_loop => |loop| {
             _ = try symbols_mod.ensureSymbol(self, loop.var_name);
@@ -120,6 +121,7 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         .arith_if => |arith| {
             try expressions.resolveExpr(self, arith.condition);
         },
+        .pause => {},
         .stop => {},
         .do_loop => |loop| {
             _ = try symbols_mod.ensureSymbol(self, loop.var_name);

@@ -98,6 +98,9 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
                 .{ label_text, node.neg_label, node.zero_label, node.pos_label },
             );
         },
+        .pause => {
+            try writer.print(";   stmt label={s} pause\n", .{label_text});
+        },
         .stop => {
             try writer.print(";   stmt label={s} stop\n", .{label_text});
         },

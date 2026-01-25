@@ -130,6 +130,13 @@ pub fn emitIfSingle(
             try emitArithIf(ctx, builder, arith, local_label_map);
             return true;
         },
+        .pause => {
+            const then_label = try ctx.nextLabel("if_pause");
+            try builder.brCond(cond, then_label, next_block);
+            try builder.label(then_label);
+            try emitReturn(ctx, builder);
+            return true;
+        },
         .stop => {
             const then_label = try ctx.nextLabel("if_stop");
             try builder.brCond(cond, then_label, next_block);

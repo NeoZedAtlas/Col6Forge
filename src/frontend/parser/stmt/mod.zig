@@ -56,6 +56,10 @@ pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine,
         index.* += 1;
         return .{ .label = label, .node = stmt_node };
     }
+    if (lp.isKeywordSplit("PAUSE")) {
+        index.* += 1;
+        return .{ .label = label, .node = .{ .pause = {} } };
+    }
     if (lp.isKeywordSplit("STOP")) {
         index.* += 1;
         return .{ .label = label, .node = .{ .stop = {} } };
@@ -324,6 +328,12 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator) ParseStmtError
     if (lp.isKeywordSplit("ENDFILE")) {
         const node = try arena.create(StmtNode);
         node.* = try io.parseEndfileStatement(arena, lp);
+        return node;
+    }
+    if (lp.isKeywordSplit("PAUSE")) {
+        _ = lp.consumeKeyword("PAUSE");
+        const node = try arena.create(StmtNode);
+        node.* = .{ .pause = {} };
         return node;
     }
     if (lp.isKeywordSplit("STOP")) {

@@ -69,6 +69,10 @@ pub fn emitStmt(
             try control.emitArithIf(ctx, builder, arith, local_label_map);
             return true;
         },
+        .pause => {
+            try emitReturn(ctx, builder);
+            return true;
+        },
         .stop => {
             try emitReturn(ctx, builder);
             return true;
