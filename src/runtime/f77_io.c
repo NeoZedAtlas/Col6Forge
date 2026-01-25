@@ -69,7 +69,7 @@ int f77_read(int unit, const char *fmt, ...) {
         unit_filename(unit, name, sizeof(name));
         file = fopen(name, "r");
         if (!file) {
-            return -1;
+            exit(2);
         }
         if (unit_pos[unit] != 0) {
             (void)fseek(file, unit_pos[unit], SEEK_SET);
@@ -79,7 +79,7 @@ int f77_read(int unit, const char *fmt, ...) {
     char record[4096];
     if (!fgets(record, (int)sizeof(record), file)) {
         if (file != stdin) fclose(file);
-        return -1;
+        exit(2);
     }
     size_t record_len = strlen(record);
     if (record_len > 0 && record[record_len - 1] == '\n') {

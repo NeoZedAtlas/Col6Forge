@@ -67,9 +67,9 @@ pub fn main() !void {
 
         const ll_path = try std.fs.path.join(allocator, &.{ work_dir, "translated.ll" });
         defer allocator.free(ll_path);
-        const ref_exe = try std.fs.path.join(allocator, &.{ work_dir, exeName("ref") });
+        const ref_exe = try prepareExePath(allocator, work_dir, "ref");
         defer allocator.free(ref_exe);
-        const test_exe = try std.fs.path.join(allocator, &.{ work_dir, exeName("test") });
+        const test_exe = try prepareExePath(allocator, work_dir, "test");
         defer allocator.free(test_exe);
         const runtime_path = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "f77_io.c" });
         defer allocator.free(runtime_path);
@@ -286,6 +286,55 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
     try file.writeAll(contents);
 }
 
+fn prepareExePath(allocator: std.mem.Allocator, work_dir: []const u8, base: []const u8) ![]const u8 {
+    var attempt: usize = 0;
+    while (attempt < 1000) : (attempt += 1) {
+        const candidate = try buildExePath(allocator, work_dir, base, attempt);
+        if (attempt == 0) {
+            std.fs.deleteFileAbsolute(candidate) catch |err| switch (err) {
+                error.FileNotFound => return candidate,
+                error.AccessDenied, error.PermissionDenied => {
+                    allocator.free(candidate);
+                    continue;
+                },
+                else => {
+                    allocator.free(candidate);
+                    return err;
+                },
+            };
+            return candidate;
+        }
+        std.fs.accessAbsolute(candidate, .{ .mode = .read_only }) catch |err| switch (err) {
+            error.FileNotFound => return candidate,
+            error.AccessDenied, error.PermissionDenied => {
+                allocator.free(candidate);
+                continue;
+            },
+            else => {
+                allocator.free(candidate);
+                return err;
+            },
+        };
+        allocator.free(candidate);
+    }
+    return error.OutOfMemory;
+}
+
+fn buildExePath(
+    allocator: std.mem.Allocator,
+    work_dir: []const u8,
+    base: []const u8,
+    attempt: usize,
+) ![]const u8 {
+    const ext = if (builtin.os.tag == .windows) ".exe" else "";
+    const file_name = if (attempt == 0)
+        try std.fmt.allocPrint(allocator, "{s}{s}", .{ base, ext })
+    else
+        try std.fmt.allocPrint(allocator, "{s}_{d}{s}", .{ base, attempt, ext });
+    defer allocator.free(file_name);
+    return std.fs.path.join(allocator, &.{ work_dir, file_name });
+}
+
 fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
@@ -361,9 +410,9 @@ const Comparator = struct {
         ref_stdout: []const u8,
         test_stdout: []const u8,
     ) !CompareResult {
-        if (!isZeroExit(ref_term) or !isZeroExit(test_term)) {
-            const ref_code = exitCode(ref_term);
-            const test_code = exitCode(test_term);
+        const ref_code = exitCode(ref_term);
+        const test_code = exitCode(test_term);
+        if (ref_code != test_code) {
             const diff = try std.fmt.allocPrint(
                 allocator,
                 "exit code mismatch\nreference: {d}\ntranslated: {d}\n",
