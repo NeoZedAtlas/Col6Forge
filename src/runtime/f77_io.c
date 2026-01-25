@@ -7,6 +7,8 @@
 #define F77_MAX_UNITS 256
 
 static long unit_pos[F77_MAX_UNITS];
+static unsigned int fmt_index;
+static char fmt_buffers[8][64];
 
 static void unit_filename(int unit, char *buf, size_t len) {
     if (len == 0) {
@@ -222,4 +224,46 @@ void f77_backspace(int unit) {
 
 void f77_endfile(int unit) {
     (void)unit;
+}
+
+const char *f77_fmt_f(int width, int precision, double value) {
+    char tmp[128];
+    char *buf = fmt_buffers[fmt_index++ % 8];
+    if (precision < 0) precision = 0;
+
+    if (width <= 0) {
+        (void)snprintf(buf, 64, "%.*f", precision, value);
+        return buf;
+    }
+
+    (void)snprintf(tmp, sizeof(tmp), "%.*f", precision, value);
+
+    if (value > -1.0 && value < 1.0) {
+        if (tmp[0] == '0' && tmp[1] == '.') {
+            memmove(tmp, tmp + 1, strlen(tmp));
+        } else if (tmp[0] == '-' && tmp[1] == '0' && tmp[2] == '.') {
+            memmove(tmp + 1, tmp + 2, strlen(tmp + 2) + 1);
+        }
+    }
+
+    size_t len = strlen(tmp);
+    if ((int)len > width) {
+        for (int i = 0; i < width && i < 63; i++) {
+            buf[i] = '*';
+        }
+        buf[width < 63 ? width : 63] = '\0';
+        return buf;
+    }
+
+    int pad = width - (int)len;
+    if (pad < 0) pad = 0;
+    if (pad > 63) pad = 63;
+    for (int i = 0; i < pad; i++) {
+        buf[i] = ' ';
+    }
+    size_t copy_len = len;
+    if (copy_len > 63 - (size_t)pad) copy_len = 63 - (size_t)pad;
+    memcpy(buf + pad, tmp, copy_len);
+    buf[pad + copy_len] = '\0';
+    return buf;
 }

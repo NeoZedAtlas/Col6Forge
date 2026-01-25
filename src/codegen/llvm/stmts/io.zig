@@ -85,7 +85,20 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                             try builder.binary(scaled_tmp, "fmul", .f64, coerced, scale_val);
                             coerced = .{ .name = scaled_tmp, .ty = .f64, .is_ptr = false };
                         }
-                        if (item == .real_fixed and spec.precision == 0) {
+                        if (item == .real_fixed and spec.width > 0) {
+                            const fmt_tmp = try ctx.nextTemp();
+                            const width_text = utils.formatInt(ctx.allocator, @intCast(spec.width));
+                            const prec_text = utils.formatInt(ctx.allocator, @intCast(spec.precision));
+                            const call_args = try std.fmt.allocPrint(
+                                ctx.allocator,
+                                "i32 {s}, i32 {s}, double {s}",
+                                .{ width_text, prec_text, coerced.name },
+                            );
+                            const fmt_name = try ctx.ensureDeclRaw("f77_fmt_f", .ptr, "i32, i32, double", false);
+                            try builder.call(fmt_tmp, .ptr, fmt_name, call_args);
+                            try fmt_buf.appendSlice("%s");
+                            try args.append(.{ .ty = .ptr, .name = fmt_tmp });
+                        } else if (item == .real_fixed and spec.precision == 0) {
                             try fmt_buf.writer().print("%#{d}.0f", .{spec.width});
                             try args.append(.{ .ty = .f64, .name = coerced.name });
                         } else if (item == .real_fixed) {
@@ -254,7 +267,7 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
                     try appendScanfLiteral(&fmt_buf, text);
                 },
                 .spaces => |count| {
-                    if (count > 0) try fmt_buf.append(' ');
+                    if (count > 0) try appendSpaces(&fmt_buf, count);
                 },
                 else => {},
             }
@@ -270,7 +283,7 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
                         try appendScanfLiteral(&fmt_buf, text);
                     },
                     .spaces => |count| {
-                        if (count > 0) try fmt_buf.append(' ');
+                        if (count > 0) try appendSpaces(&fmt_buf, count);
                     },
                     .int => |spec| {
                         if (arg_index >= expanded.ptrs.items.len) break;
