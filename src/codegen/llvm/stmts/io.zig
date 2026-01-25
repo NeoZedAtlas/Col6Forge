@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const builtin = @import("builtin");
 const llvm_types = @import("../types.zig");
 const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
@@ -82,12 +83,82 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                         }
                         if (item == .real_fixed and spec.precision == 0) {
                             try fmt_buf.writer().print("%#{d}.0f", .{spec.width});
+                            try args.append(.{ .ty = .f64, .name = coerced.name });
                         } else if (item == .real_fixed) {
                             try fmt_buf.writer().print("%{d}.{d}f", .{ spec.width, spec.precision });
+                            try args.append(.{ .ty = .f64, .name = coerced.name });
                         } else {
-                            try fmt_buf.writer().print("%{d}.{d}E", .{ spec.width, spec.precision });
+                            const fabs_name = try ctx.ensureDeclRaw("fabs", .f64, "double", false);
+                            const log10_name = try ctx.ensureDeclRaw("log10", .f64, "double", false);
+                            const floor_name = try ctx.ensureDeclRaw("floor", .f64, "double", false);
+                            const pow_name = try ctx.ensureDeclRaw("pow", .f64, "double, double", false);
+
+                            const abs_tmp = try ctx.nextTemp();
+                            const abs_arg = try std.fmt.allocPrint(ctx.allocator, "double {s}", .{coerced.name});
+                            try builder.call(abs_tmp, .f64, fabs_name, abs_arg);
+
+                            const log_tmp = try ctx.nextTemp();
+                            const log_arg = try std.fmt.allocPrint(ctx.allocator, "double {s}", .{abs_tmp});
+                            try builder.call(log_tmp, .f64, log10_name, log_arg);
+
+                            const floor_tmp = try ctx.nextTemp();
+                            const floor_arg = try std.fmt.allocPrint(ctx.allocator, "double {s}", .{log_tmp});
+                            try builder.call(floor_tmp, .f64, floor_name, floor_arg);
+
+                            const exp_add_tmp = try ctx.nextTemp();
+                            const one_val = ValueRef{ .name = "1.0", .ty = .f64, .is_ptr = false };
+                            try builder.binary(exp_add_tmp, "fadd", .f64, .{ .name = floor_tmp, .ty = .f64, .is_ptr = false }, one_val);
+
+                            const pow_tmp = try ctx.nextTemp();
+                            const pow_arg = try std.fmt.allocPrint(ctx.allocator, "double 1.0e+01, double {s}", .{exp_add_tmp});
+                            try builder.call(pow_tmp, .f64, pow_name, pow_arg);
+
+                            const mantissa_tmp = try ctx.nextTemp();
+                            try builder.binary(
+                                mantissa_tmp,
+                                "fdiv",
+                                .f64,
+                                .{ .name = coerced.name, .ty = .f64, .is_ptr = false },
+                                .{ .name = pow_tmp, .ty = .f64, .is_ptr = false },
+                            );
+
+                            const zero_val = ValueRef{ .name = "0.0", .ty = .f64, .is_ptr = false };
+                            const abs_val = ValueRef{ .name = abs_tmp, .ty = .f64, .is_ptr = false };
+                            const is_zero_tmp = try ctx.nextTemp();
+                            try builder.compare(is_zero_tmp, "fcmp", "oeq", .f64, abs_val, zero_val);
+
+                            const exp_i32_tmp = try ctx.nextTemp();
+                            try builder.cast(exp_i32_tmp, "fptosi", .f64, .{ .name = exp_add_tmp, .ty = .f64, .is_ptr = false }, .i32);
+
+                            const mantissa_sel_tmp = try ctx.nextTemp();
+                            try builder.select(
+                                mantissa_sel_tmp,
+                                .f64,
+                                .{ .name = is_zero_tmp, .ty = .i1, .is_ptr = false },
+                                zero_val,
+                                .{ .name = mantissa_tmp, .ty = .f64, .is_ptr = false },
+                            );
+
+                            const zero_i32 = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+                            const exp_sel_tmp = try ctx.nextTemp();
+                            try builder.select(
+                                exp_sel_tmp,
+                                .i32,
+                                .{ .name = is_zero_tmp, .ty = .i1, .is_ptr = false },
+                                zero_i32,
+                                .{ .name = exp_i32_tmp, .ty = .i32, .is_ptr = false },
+                            );
+
+                            const exp_width: usize = 4;
+                            const mant_width: usize = if (spec.width > exp_width) spec.width - exp_width else 0;
+                            if (mant_width > 0) {
+                                try fmt_buf.writer().print("%#{d}.{d}fE%+03d", .{ mant_width, spec.precision });
+                            } else {
+                                try fmt_buf.writer().print("%#.{d}fE%+03d", .{spec.precision});
+                            }
+                            try args.append(.{ .ty = .f64, .name = mantissa_sel_tmp });
+                            try args.append(.{ .ty = .i32, .name = exp_sel_tmp });
                         }
-                        try args.append(.{ .ty = .f64, .name = coerced.name });
                         arg_index += 1;
                     },
                     .char => |spec| {
@@ -121,10 +192,27 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
     const fmt_ptr = try ctx.nextTemp();
     try builder.gepConstString(fmt_ptr, fmt_global, fmt_buf.items.len + 1);
 
+    var adjusted_args = std.array_list.Managed(Arg).init(ctx.allocator);
+    defer adjusted_args.deinit();
+    if (builtin.os.tag == .windows) {
+        for (args.items) |arg| {
+            if (arg.ty == .f64) {
+                const tmp = try ctx.nextTemp();
+                const val = ValueRef{ .name = arg.name, .ty = .f64, .is_ptr = false };
+                try builder.cast(tmp, "bitcast", .f64, val, .i64);
+                try adjusted_args.append(.{ .ty = .i64, .name = tmp });
+                continue;
+            }
+            try adjusted_args.append(arg);
+        }
+    } else {
+        try adjusted_args.appendSlice(args.items);
+    }
+
     var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_buf.deinit();
     try arg_buf.writer().print("ptr {s}", .{fmt_ptr});
-    for (args.items) |arg| {
+    for (adjusted_args.items) |arg| {
         try arg_buf.writer().print(", {s} {s}", .{ llvm_types.irTypeText(arg.ty), arg.name });
     }
 

@@ -5,6 +5,7 @@ pub const IRType = enum {
     i1,
     i8,
     i32,
+    i64,
     f32,
     f64,
     complex_f32,
@@ -17,6 +18,7 @@ pub fn commonType(a: IRType, b: IRType) IRType {
     if (a == .complex_f32 or b == .complex_f32) return .complex_f32;
     if (a == .f64 or b == .f64) return .f64;
     if (a == .f32 or b == .f32) return .f32;
+    if (a == .i64 or b == .i64) return .i64;
     if (a == .i1 and b == .i1) return .i1;
     return .i32;
 }

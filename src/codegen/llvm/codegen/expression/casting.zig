@@ -68,22 +68,32 @@ pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) 
         .i32 => switch (to) {
             .f32 => "sitofp",
             .f64 => "sitofp",
+            .i64 => "sext",
             .i1 => "trunc",
             else => return error.UnsupportedCast,
         },
         .i8 => return error.UnsupportedCast,
+        .i64 => switch (to) {
+            .i32 => "trunc",
+            .f32 => "sitofp",
+            .f64 => "sitofp",
+            else => return error.UnsupportedCast,
+        },
         .f32 => switch (to) {
             .f64 => "fpext",
             .i32 => "fptosi",
+            .i64 => "fptosi",
             else => return error.UnsupportedCast,
         },
         .f64 => switch (to) {
             .f32 => "fptrunc",
             .i32 => "fptosi",
+            .i64 => "fptosi",
             else => return error.UnsupportedCast,
         },
         .i1 => switch (to) {
             .i32 => "zext",
+            .i64 => "zext",
             else => return error.UnsupportedCast,
         },
         .complex_f32 => return error.UnsupportedCast,

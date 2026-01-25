@@ -101,6 +101,7 @@ fn sizeAlign(ty: ir.IRType) !SizeAlign {
         .i1 => .{ .size = 1, .alignment = 1 },
         .i8 => .{ .size = 1, .alignment = 1 },
         .i32 => .{ .size = 4, .alignment = 4 },
+        .i64 => .{ .size = 8, .alignment = 8 },
         .f32 => .{ .size = 4, .alignment = 4 },
         .f64 => .{ .size = 8, .alignment = 8 },
         .complex_f32 => .{ .size = 8, .alignment = 4 },

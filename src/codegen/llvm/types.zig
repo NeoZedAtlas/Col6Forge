@@ -21,6 +21,7 @@ pub fn irTypeText(ty: IRType) []const u8 {
         .i1 => "i1",
         .i8 => "i8",
         .i32 => "i32",
+        .i64 => "i64",
         .f32 => "float",
         .f64 => "double",
         .complex_f32 => "{float, float}",

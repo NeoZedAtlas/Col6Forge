@@ -36,6 +36,9 @@ pub fn normalizeFloatLiteral(allocator: std.mem.Allocator, text: []const u8) ![]
         const out = if (ch == 'D' or ch == 'd') 'E' else ch;
         try buffer.append(out);
     }
+    if (buffer.items.len > 0 and buffer.items[buffer.items.len - 1] == '.') {
+        try buffer.append('0');
+    }
     return buffer.toOwnedSlice();
 }
 
@@ -48,6 +51,7 @@ pub fn zeroValue(ty: IRType) ValueRef {
         .i1 => .{ .name = "0", .ty = .i1, .is_ptr = false },
         .i8 => .{ .name = "0", .ty = .i8, .is_ptr = false },
         .i32 => .{ .name = "0", .ty = .i32, .is_ptr = false },
+        .i64 => .{ .name = "0", .ty = .i64, .is_ptr = false },
         .f32 => .{ .name = "0.0", .ty = .f32, .is_ptr = false },
         .f64 => .{ .name = "0.0", .ty = .f64, .is_ptr = false },
         .complex_f32 => .{ .name = "zeroinitializer", .ty = .complex_f32, .is_ptr = false },

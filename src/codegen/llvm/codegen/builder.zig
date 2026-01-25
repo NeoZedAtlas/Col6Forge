@@ -1,3 +1,5 @@
+const std = @import("std");
+const builtin = @import("builtin");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
 const utils = @import("utils.zig");
@@ -24,6 +26,10 @@ pub fn Builder(comptime WriterType: type) type {
             try self.bump();
             try self.writer.print("; ModuleID = 'col6forge'\n", .{});
             try self.writer.print("source_filename = \"{s}\"\n", .{source_name});
+            if (builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) {
+                try self.writer.writeAll("target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"\n");
+                try self.writer.writeAll("target triple = \"x86_64-pc-windows-gnu\"\n");
+            }
         }
 
         pub fn commonGlobal(self: *@This(), name: []const u8, size: usize, alignment: usize) !void {
@@ -43,7 +49,11 @@ pub fn Builder(comptime WriterType: type) type {
             try self.bump();
             const ret_text = llvm_types.irTypeText(ret_type);
             if (varargs) {
-                try self.writer.print("declare {s} @{s}(...)\n", .{ ret_text, name });
+                if (sig.len > 0) {
+                    try self.writer.print("declare {s} @{s}({s}, ...)\n", .{ ret_text, name, sig });
+                } else {
+                    try self.writer.print("declare {s} @{s}(...)\n", .{ ret_text, name });
+                }
             } else {
                 try self.writer.print("declare {s} @{s}({s})\n", .{ ret_text, name, sig });
             }
