@@ -9,6 +9,11 @@ const ValueRef = utils.ValueRef;
 
 pub fn Builder(comptime WriterType: type) type {
     return struct {
+        pub const PhiIncoming = struct {
+            value: ValueRef,
+            label: []const u8,
+        };
+
         writer: WriterType,
         emit_count: usize,
         emit_limit: usize,
@@ -217,6 +222,18 @@ pub fn Builder(comptime WriterType: type) type {
         pub fn cast(self: *@This(), tmp: []const u8, instr: []const u8, from: IRType, value: ValueRef, to: IRType) !void {
             try self.bump();
             try self.writer.print("  {s} = {s} {s} {s} to {s}\n", .{ tmp, instr, llvm_types.irTypeText(from), value.name, llvm_types.irTypeText(to) });
+        }
+
+        pub fn phi(self: *@This(), tmp: []const u8, ty: IRType, incoming: []const PhiIncoming) !void {
+            try self.bump();
+            try self.writer.print("  {s} = phi {s} ", .{ tmp, llvm_types.irTypeText(ty) });
+            for (incoming, 0..) |entry, idx| {
+                if (idx != 0) {
+                    try self.writer.writeAll(", ");
+                }
+                try self.writer.print("[ {s} {s}, %{s} ]", .{ llvm_types.irTypeText(ty), entry.value.name, entry.label });
+            }
+            try self.writer.writeAll("\n");
         }
     };
 }

@@ -144,6 +144,12 @@ pub fn emitComplexBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: Val
             try builder.compare(cond_name, "fcmp", "oge", elem_ty, abs_br, abs_bi);
             const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
 
+            const then_label = try ctx.nextLabel("cdiv_then");
+            const else_label = try ctx.nextLabel("cdiv_else");
+            const merge_label = try ctx.nextLabel("cdiv_merge");
+            try builder.brCond(cond, then_label, else_label);
+
+            try builder.label(then_label);
             const r1 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, bi, br);
             const bi_r1 = try emitBinaryOp(ctx, builder, "fmul", elem_ty, bi, r1);
             const denom1 = try emitBinaryOp(ctx, builder, "fadd", elem_ty, br, bi_r1);
@@ -153,7 +159,9 @@ pub fn emitComplexBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: Val
             const imag_num1 = try emitBinaryOp(ctx, builder, "fsub", elem_ty, ai, ar_r1);
             const real1 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, real_num1, denom1);
             const imag1 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, imag_num1, denom1);
+            try builder.br(merge_label);
 
+            try builder.label(else_label);
             const r2 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, br, bi);
             const br_r2 = try emitBinaryOp(ctx, builder, "fmul", elem_ty, br, r2);
             const denom2 = try emitBinaryOp(ctx, builder, "fadd", elem_ty, bi, br_r2);
@@ -163,11 +171,19 @@ pub fn emitComplexBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: Val
             const imag_num2 = try emitBinaryOp(ctx, builder, "fsub", elem_ty, ai_r2, ar);
             const real2 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, real_num2, denom2);
             const imag2 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, imag_num2, denom2);
+            try builder.br(merge_label);
 
+            try builder.label(merge_label);
             const real_name = try ctx.nextTemp();
-            try builder.select(real_name, elem_ty, cond, real1, real2);
+            try builder.phi(real_name, elem_ty, &.{
+                .{ .value = real1, .label = then_label },
+                .{ .value = real2, .label = else_label },
+            });
             const imag_name = try ctx.nextTemp();
-            try builder.select(imag_name, elem_ty, cond, imag1, imag2);
+            try builder.phi(imag_name, elem_ty, &.{
+                .{ .value = imag1, .label = then_label },
+                .{ .value = imag2, .label = else_label },
+            });
             const real = ValueRef{ .name = real_name, .ty = elem_ty, .is_ptr = false };
             const imag = ValueRef{ .name = imag_name, .ty = elem_ty, .is_ptr = false };
             return buildComplex(ctx, builder, real, imag, lhs.ty);
