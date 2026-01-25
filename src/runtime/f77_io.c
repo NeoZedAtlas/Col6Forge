@@ -266,6 +266,13 @@ const char *f77_fmt_f(int width, int precision, double value) {
             memmove(tmp + 1, tmp + 2, strlen(tmp + 2) + 1);
         }
     }
+    if (precision == 0 && strchr(tmp, '.') == NULL) {
+        size_t tmp_len = strlen(tmp);
+        if (tmp_len + 1 < sizeof(tmp)) {
+            tmp[tmp_len] = '.';
+            tmp[tmp_len + 1] = '\0';
+        }
+    }
 
     size_t len = strlen(tmp);
     if ((int)len > width) {

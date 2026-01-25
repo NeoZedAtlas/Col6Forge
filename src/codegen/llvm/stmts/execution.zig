@@ -132,6 +132,7 @@ fn literalBytes(lit: ast.Literal) ?[]const u8 {
 fn stripQuotes(text: []const u8) ?[]const u8 {
     if (text.len < 2) return text;
     const quote = text[0];
+    if (quote != '\'' and quote != '"') return text;
     if (text[text.len - 1] != quote) return text;
     return text[1 .. text.len - 1];
 }

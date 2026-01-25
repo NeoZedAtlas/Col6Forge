@@ -9,6 +9,12 @@ const CharFormat = ast.CharFormat;
 
 const ParseStmtError = anyerror;
 
+const FormatSequence = struct {
+    items: []FormatItem,
+    has_descriptor: bool,
+    reversion_offset: ?usize,
+};
+
 pub fn parseInlineFormatSpec(
     arena: std.mem.Allocator,
     token_text: []const u8,
@@ -39,11 +45,31 @@ pub fn parseFormatItems(arena: std.mem.Allocator, text: []const u8) ![]FormatIte
     const inner = text[open_idx + 1 .. close_idx];
 
     var i: usize = 0;
-    return parseFormatSequence(arena, inner, &i, false);
+    const sequence = try parseFormatSequence(arena, inner, &i, false);
+    var reversion_start: ?usize = sequence.reversion_offset;
+    if (sequence.has_descriptor and reversion_start == null) {
+        reversion_start = 0;
+    }
+    if (reversion_start) |idx| {
+        var items = std.array_list.Managed(FormatItem).init(arena);
+        try items.ensureTotalCapacity(sequence.items.len + 1);
+        try items.appendSlice(sequence.items[0..idx]);
+        try items.append(.{ .reversion_anchor = {} });
+        try items.appendSlice(sequence.items[idx..]);
+        return items.toOwnedSlice();
+    }
+    return sequence.items;
 }
 
-fn parseFormatSequence(arena: std.mem.Allocator, text: []const u8, index: *usize, stop_on_paren: bool) ![]FormatItem {
+fn parseFormatSequence(
+    arena: std.mem.Allocator,
+    text: []const u8,
+    index: *usize,
+    stop_on_paren: bool,
+) !FormatSequence {
     var items = std.array_list.Managed(FormatItem).init(arena);
+    var has_descriptor = false;
+    var reversion_offset: ?usize = null;
     while (index.* < text.len) {
         while (index.* < text.len and (text[index.*] == ' ' or text[index.*] == '\t' or text[index.*] == ',')) : (index.* += 1) {}
         if (index.* >= text.len) break;
@@ -86,8 +112,14 @@ fn parseFormatSequence(arena: std.mem.Allocator, text: []const u8, index: *usize
 
         if (ch == '(') {
             index.* += 1;
+            const group_start = items.items.len;
             const group = try parseFormatSequence(arena, text, index, true);
-            try appendRepeatedItems(&items, group, 1);
+            if (group.has_descriptor) {
+                has_descriptor = true;
+                const inner_offset = group.reversion_offset orelse 0;
+                reversion_offset = group_start + inner_offset;
+            }
+            try appendRepeatedItems(&items, group.items, 1);
             continue;
         }
 
@@ -127,8 +159,14 @@ fn parseFormatSequence(arena: std.mem.Allocator, text: []const u8, index: *usize
 
             if (index.* < text.len and text[index.*] == '(') {
                 index.* += 1;
+                const group_start = items.items.len;
                 const group = try parseFormatSequence(arena, text, index, true);
-                try appendRepeatedItems(&items, group, count);
+                if (group.has_descriptor) {
+                    has_descriptor = true;
+                    const inner_offset = group.reversion_offset orelse 0;
+                    reversion_offset = group_start + inner_offset;
+                }
+                try appendRepeatedItems(&items, group.items, count);
                 continue;
             }
             if (index.* < text.len and (text[index.*] == 'H' or text[index.*] == 'h')) {
@@ -165,30 +203,35 @@ fn parseFormatSequence(arena: std.mem.Allocator, text: []const u8, index: *usize
                 index.* += 1;
                 const spec = try parseIntFormat(text, index);
                 try appendRepeatedItem(&items, .{ .int = spec }, count);
+                has_descriptor = true;
                 continue;
             }
             if (index.* < text.len and (text[index.*] == 'E' or text[index.*] == 'e')) {
                 index.* += 1;
                 const spec = try parseRealFormat(text, index);
                 try appendRepeatedItem(&items, .{ .real = spec }, count);
+                has_descriptor = true;
                 continue;
             }
             if (index.* < text.len and (text[index.*] == 'D' or text[index.*] == 'd')) {
                 index.* += 1;
                 const spec = try parseRealFormat(text, index);
                 try appendRepeatedItem(&items, .{ .real = spec }, count);
+                has_descriptor = true;
                 continue;
             }
             if (index.* < text.len and (text[index.*] == 'F' or text[index.*] == 'f')) {
                 index.* += 1;
                 const spec = try parseRealFormat(text, index);
                 try appendRepeatedItem(&items, .{ .real_fixed = spec }, count);
+                has_descriptor = true;
                 continue;
             }
             if (index.* < text.len and (text[index.*] == 'A' or text[index.*] == 'a')) {
                 index.* += 1;
                 const spec = parseCharFormat(text, index);
                 try appendRepeatedItem(&items, .{ .char = spec }, count);
+                has_descriptor = true;
                 continue;
             }
 
@@ -199,37 +242,46 @@ fn parseFormatSequence(arena: std.mem.Allocator, text: []const u8, index: *usize
             index.* += 1;
             const spec = try parseIntFormat(text, index);
             try items.append(.{ .int = spec });
+            has_descriptor = true;
             continue;
         }
         if (ch == 'E' or ch == 'e') {
             index.* += 1;
             const spec = try parseRealFormat(text, index);
             try items.append(.{ .real = spec });
+            has_descriptor = true;
             continue;
         }
         if (ch == 'D' or ch == 'd') {
             index.* += 1;
             const spec = try parseRealFormat(text, index);
             try items.append(.{ .real = spec });
+            has_descriptor = true;
             continue;
         }
         if (ch == 'F' or ch == 'f') {
             index.* += 1;
             const spec = try parseRealFormat(text, index);
             try items.append(.{ .real_fixed = spec });
+            has_descriptor = true;
             continue;
         }
         if (ch == 'A' or ch == 'a') {
             index.* += 1;
             const spec = parseCharFormat(text, index);
             try items.append(.{ .char = spec });
+            has_descriptor = true;
             continue;
         }
 
         return error.UnexpectedToken;
     }
 
-    return items.toOwnedSlice();
+    return .{
+        .items = try items.toOwnedSlice(),
+        .has_descriptor = has_descriptor,
+        .reversion_offset = reversion_offset,
+    };
 }
 
 fn appendRepeatedItems(items: *std.array_list.Managed(FormatItem), group: []const FormatItem, count: usize) !void {

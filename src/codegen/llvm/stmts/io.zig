@@ -50,9 +50,17 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
     } else {
         var arg_index: usize = 0;
         var pending_spaces: usize = 0;
+        const reversion_start = findReversionStart(fmt_info.items);
+        var format_start: usize = 0;
+        var first_pass = true;
         while (arg_index < expanded_values.values.items.len) {
+            if (!first_pass) {
+                pending_spaces = 0;
+                try fmt_buf.append('\n');
+            }
+            first_pass = false;
             var scale_factor: i32 = 0;
-            var idx: usize = 0;
+            var idx: usize = format_start;
             while (idx < fmt_info.items.len) : (idx += 1) {
                 const item = fmt_info.items[idx];
                 switch (item) {
@@ -197,12 +205,14 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                         scale_factor = value;
                     },
                     .blank_control => {},
+                    .reversion_anchor => {},
                 }
             }
             if (arg_index >= expanded_values.values.items.len) {
                 pending_spaces = 0;
                 break;
             }
+            format_start = reversion_start;
         }
     }
 
@@ -258,6 +268,14 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
 
     var arg_ptrs = std.array_list.Managed([]const u8).init(ctx.allocator);
     defer arg_ptrs.deinit();
+    const CharFixup = struct {
+        target_ptr: ValueRef,
+        target_len: usize,
+        field_width: usize,
+        temp_ptr: ?ValueRef,
+    };
+    var char_fixups = std.array_list.Managed(CharFixup).init(ctx.allocator);
+    defer char_fixups.deinit();
 
     const descriptor_count = countFormatDescriptors(fmt_info.items);
     if (descriptor_count == 0) {
@@ -274,8 +292,15 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
         }
     } else {
         var arg_index: usize = 0;
+        const reversion_start = findReversionStart(fmt_info.items);
+        var format_start: usize = 0;
+        var first_pass = true;
         while (arg_index < expanded.ptrs.items.len) {
-            var fmt_index: usize = 0;
+            if (!first_pass) {
+                try fmt_buf.append('\n');
+            }
+            first_pass = false;
+            var fmt_index: usize = format_start;
             while (fmt_index < fmt_info.items.len) : (fmt_index += 1) {
                 const item = fmt_info.items[fmt_index];
                 switch (item) {
@@ -311,15 +336,40 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
                     },
                     .char => |spec| {
                         if (arg_index >= expanded.ptrs.items.len) break;
-                        const width = if (spec.width > 0) spec.width else 1;
+                        const target_ptr = expanded.ptrs.items[arg_index];
+                        const target_len = expanded.char_lens.items[arg_index];
+                        const width = if (spec.width > 0) spec.width else if (target_len > 0) target_len else 1;
                         try fmt_buf.writer().print("%{d}c", .{width});
-                        try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                        if (target_len > 0 and width > target_len) {
+                            const tmp_name = try ctx.nextTemp();
+                            try builder.allocaArray(tmp_name, .i8, width);
+                            const tmp_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
+                            try arg_ptrs.append(tmp_name);
+                            try char_fixups.append(.{
+                                .target_ptr = target_ptr,
+                                .target_len = target_len,
+                                .field_width = width,
+                                .temp_ptr = tmp_ptr,
+                            });
+                        } else {
+                            try arg_ptrs.append(target_ptr.name);
+                            if (target_len > 0 and width < target_len) {
+                                try char_fixups.append(.{
+                                    .target_ptr = target_ptr,
+                                    .target_len = target_len,
+                                    .field_width = width,
+                                    .temp_ptr = null,
+                                });
+                            }
+                        }
                         arg_index += 1;
                     },
                     .scale => {},
                     .blank_control => {},
+                    .reversion_anchor => {},
                 }
             }
+            format_start = reversion_start;
         }
     }
 
@@ -336,22 +386,50 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
 
     const read_name = try ctx.ensureDeclRaw("f77_read", .i32, "i32, ptr", true);
     try builder.call(null, .i32, read_name, arg_buf.items);
+
+    for (char_fixups.items) |fixup| {
+        if (fixup.temp_ptr) |temp_ptr| {
+            var idx: usize = 0;
+            while (idx < fixup.target_len) : (idx += 1) {
+                const offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                const src_gep = try ctx.nextTemp();
+                try builder.gep(src_gep, .i8, temp_ptr, offset);
+                const tmp_val = try ctx.nextTemp();
+                try builder.load(tmp_val, .i8, .{ .name = src_gep, .ty = .ptr, .is_ptr = true });
+                const dst_gep = try ctx.nextTemp();
+                try builder.gep(dst_gep, .i8, fixup.target_ptr, offset);
+                try builder.store(.{ .name = tmp_val, .ty = .i8, .is_ptr = false }, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
+            }
+        } else if (fixup.field_width < fixup.target_len) {
+            var idx: usize = fixup.field_width;
+            while (idx < fixup.target_len) : (idx += 1) {
+                const offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                const dst_gep = try ctx.nextTemp();
+                try builder.gep(dst_gep, .i8, fixup.target_ptr, offset);
+                const space_val = ValueRef{ .name = "32", .ty = .i8, .is_ptr = false };
+                try builder.store(space_val, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
+            }
+        }
+    }
 }
 
 const ExpandedReadTargets = struct {
     ptrs: std.array_list.Managed(ValueRef),
     types: std.array_list.Managed(llvm_types.IRType),
+    char_lens: std.array_list.Managed(usize),
 
     fn init(allocator: std.mem.Allocator) ExpandedReadTargets {
         return .{
             .ptrs = std.array_list.Managed(ValueRef).init(allocator),
             .types = std.array_list.Managed(llvm_types.IRType).init(allocator),
+            .char_lens = std.array_list.Managed(usize).init(allocator),
         };
     }
 
     fn deinit(self: *ExpandedReadTargets) void {
         self.ptrs.deinit();
         self.types.deinit();
+        self.char_lens.deinit();
     }
 };
 
@@ -393,6 +471,7 @@ fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitErr
                     try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
                     try expanded.ptrs.append(.{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
                     try expanded.types.append(if (sym.type_kind == .character) llvm_types.IRType.ptr else elem_ty);
+                    try expanded.char_lens.append(if (sym.type_kind == .character) char_len else 0);
                 }
                 continue;
             }
@@ -401,6 +480,7 @@ fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitErr
         const ty = try expr.exprType(ctx, arg);
         try expanded.ptrs.append(ptr);
         try expanded.types.append(ty);
+        try expanded.char_lens.append(if (ty == .ptr) (charLenForExpr(ctx, arg) orelse 1) else 0);
     }
     return expanded;
 }
@@ -480,6 +560,16 @@ fn countFormatDescriptors(items: []const ast.FormatItem) usize {
         }
     }
     return count;
+}
+
+fn findReversionStart(items: []const ast.FormatItem) usize {
+    var idx: ?usize = null;
+    for (items, 0..) |item, i| {
+        if (item == .reversion_anchor) {
+            idx = i;
+        }
+    }
+    return idx orelse 0;
 }
 
 fn appendSpaces(buffer: *std.array_list.Managed(u8), count: usize) !void {

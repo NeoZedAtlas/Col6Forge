@@ -185,6 +185,7 @@ pub const FormatItem = union(enum) {
     char: CharFormat,
     scale: i32,
     blank_control: BlankControl,
+    reversion_anchor: void,
 };
 
 pub const IntFormat = struct {
