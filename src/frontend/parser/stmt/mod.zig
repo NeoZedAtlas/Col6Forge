@@ -198,15 +198,44 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
         index.* += 1;
         const then_stmts = try parseIfBlock(arena, lines, index, do_ctx);
         var else_stmts: []Stmt = &.{};
-        if (index.* < lines.len) {
+        var else_if_blocks = std.array_list.Managed(ElseIfBlock).init(arena);
+        var else_block: ?[]Stmt = null;
+
+        while (index.* < lines.len) {
             const next_line = lines[index.*];
             const next_tokens = try lexer.lexLogicalLine(arena, next_line);
             defer arena.free(next_tokens);
             var next_lp = LineParser.init(next_line, next_tokens);
-            if (next_lp.isKeywordSplit("ELSE")) {
-                index.* += 1;
-                else_stmts = try parseIfBlock(arena, lines, index, do_ctx);
+            if (!next_lp.isKeywordSplit("ELSE")) break;
+            _ = next_lp.consumeKeyword("ELSE");
+            if (next_lp.isKeywordSplit("IF")) {
+                const else_if_block = try parseElseIfBlock(arena, lines, index, do_ctx);
+                try else_if_blocks.append(else_if_block);
+                continue;
             }
+            index.* += 1;
+            else_block = try parseIfBlock(arena, lines, index, do_ctx);
+            break;
+        }
+
+        if (else_block) |block| {
+            else_stmts = block;
+        }
+        if (else_if_blocks.items.len != 0) {
+            var tail = else_stmts;
+            var i: usize = else_if_blocks.items.len;
+            while (i > 0) {
+                i -= 1;
+                const block = else_if_blocks.items[i];
+                const stmt = Stmt{
+                    .label = null,
+                    .node = .{ .if_block = .{ .condition = block.cond, .then_stmts = block.stmts, .else_stmts = tail } },
+                };
+                const slice = try arena.alloc(Stmt, 1);
+                slice[0] = stmt;
+                tail = slice;
+            }
+            else_stmts = tail;
         }
         if (index.* >= lines.len) return error.UnexpectedEOF;
         const end_line = lines[index.*];
@@ -224,6 +253,28 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
     const stmt_node = try parseInlineStmtNode(lp, arena);
     index.* += 1;
     return .{ .label = label, .node = .{ .if_single = .{ .condition = cond, .stmt = stmt_node } } };
+}
+
+const ElseIfBlock = struct {
+    cond: *Expr,
+    stmts: []Stmt,
+};
+
+fn parseElseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize, do_ctx: *DoContext) ParseStmtError!ElseIfBlock {
+    const line = lines[index.*];
+    const tokens = try lexer.lexLogicalLine(arena, line);
+    defer arena.free(tokens);
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("ELSE")) return error.UnexpectedToken;
+    if (!lp.consumeKeyword("IF")) return error.UnexpectedToken;
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    const cond = try expr.parseExpr(&lp, arena, 0);
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    if (!lp.isKeywordSplit("THEN")) return error.UnexpectedToken;
+    _ = lp.consumeKeyword("THEN");
+    index.* += 1;
+    const stmts = try parseIfBlock(arena, lines, index, do_ctx);
+    return .{ .cond = cond, .stmts = stmts };
 }
 
 pub fn parseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize, do_ctx: *DoContext) ParseStmtError![]Stmt {
