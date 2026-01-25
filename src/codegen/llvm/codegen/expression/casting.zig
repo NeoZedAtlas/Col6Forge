@@ -1,4 +1,3 @@
-const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
 const sema = @import("../../../../sema/mod.zig");
 const ir = @import("../../../ir.zig");
@@ -26,11 +25,12 @@ pub fn emitLiteral(ctx: *Context, builder: anytype, lit: Literal) !ValueRef {
             return .{ .name = normalized, .ty = ty, .is_ptr = false };
         },
         .logical => return .{ .name = lit.text, .ty = .i1, .is_ptr = false },
-        .string => return emitStringLiteral(ctx, builder, lit.text),
+        .string => {
+            const bytes = try utils.decodeStringLiteral(ctx.allocator, lit.text);
+            return emitStringLiteral(ctx, builder, bytes);
+        },
         .hollerith => {
-            const idx = std.mem.indexOfScalar(u8, lit.text, 'H') orelse std.mem.indexOfScalar(u8, lit.text, 'h') orelse return error.UnsupportedLiteral;
-            if (idx + 1 > lit.text.len) return error.UnsupportedLiteral;
-            const bytes = lit.text[idx + 1 ..];
+            const bytes = utils.hollerithBytes(lit.text) orelse return error.UnsupportedLiteral;
             return emitStringLiteral(ctx, builder, bytes);
         },
         .assumed_size => return error.UnsupportedLiteral,

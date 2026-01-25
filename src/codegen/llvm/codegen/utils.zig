@@ -95,3 +95,50 @@ pub fn formatFloatLiteral(allocator: std.mem.Allocator, text: []const u8, ty: IR
     const value = std.fmt.parseFloat(f64, normalized) catch return error.InvalidFloatLiteral;
     return formatFloatValue(allocator, value, ty);
 }
+
+pub fn decodeStringLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    if (text.len < 2) return allocator.dupe(u8, text);
+    const quote = text[0];
+    if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) {
+        return allocator.dupe(u8, text);
+    }
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    var i: usize = 1;
+    const end = text.len - 1;
+    while (i < end) {
+        const ch = text[i];
+        if (ch == quote and i + 1 < end and text[i + 1] == quote) {
+            try buffer.append(quote);
+            i += 2;
+            continue;
+        }
+        try buffer.append(ch);
+        i += 1;
+    }
+    return buffer.toOwnedSlice();
+}
+
+pub fn decodedStringLen(text: []const u8) usize {
+    if (text.len < 2) return text.len;
+    const quote = text[0];
+    if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) return text.len;
+    var len: usize = 0;
+    var i: usize = 1;
+    const end = text.len - 1;
+    while (i < end) {
+        if (text[i] == quote and i + 1 < end and text[i + 1] == quote) {
+            len += 1;
+            i += 2;
+            continue;
+        }
+        len += 1;
+        i += 1;
+    }
+    return len;
+}
+
+pub fn hollerithBytes(text: []const u8) ?[]const u8 {
+    const idx = std.mem.indexOfScalar(u8, text, 'H') orelse std.mem.indexOfScalar(u8, text, 'h') orelse return null;
+    if (idx + 1 > text.len) return null;
+    return text[idx + 1 ..];
+}

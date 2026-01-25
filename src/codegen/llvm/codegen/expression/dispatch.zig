@@ -88,7 +88,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             }
         },
         .binary => |bin| {
-            if (bin.op == .eq or bin.op == .ne) {
+            if (bin.op == .eq or bin.op == .ne or bin.op == .lt or bin.op == .le or bin.op == .gt or bin.op == .ge) {
                 if (charLenForExpr(ctx, bin.left)) |lhs_len| {
                     if (charLenForExpr(ctx, bin.right)) |rhs_len| {
                         const lhs_ptr = try emitExprImpl(ctx, builder, bin.left, subst_depth);
@@ -169,6 +169,14 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
             if (sym.type_kind != .character) return null;
             return sym.char_len orelse 1;
         },
+        .literal => |lit| switch (lit.kind) {
+            .string => return utils.decodedStringLen(lit.text),
+            .hollerith => {
+                const bytes = utils.hollerithBytes(lit.text) orelse return null;
+                return bytes.len;
+            },
+            else => return null,
+        },
         else => return null,
     }
 }
@@ -184,7 +192,9 @@ fn emitCharCompare(
 ) EmitError!ValueRef {
     const max_len = if (lhs_len > rhs_len) lhs_len else rhs_len;
     const blank = ValueRef{ .name = utils.formatInt(ctx.allocator, 32), .ty = .i8, .is_ptr = false };
-    var result: ?ValueRef = null;
+    var eq_so_far: ?ValueRef = null;
+    var lt_found: ?ValueRef = null;
+    var gt_found: ?ValueRef = null;
     var idx: usize = 0;
     while (idx < max_len) : (idx += 1) {
         var lhs_val = blank;
@@ -205,22 +215,65 @@ fn emitCharCompare(
             try builder.load(rhs_tmp, .i8, .{ .name = rhs_gep, .ty = .ptr, .is_ptr = true });
             rhs_val = .{ .name = rhs_tmp, .ty = .i8, .is_ptr = false };
         }
+
         const eq_tmp = try ctx.nextTemp();
         try builder.compare(eq_tmp, "icmp", "eq", .i8, lhs_val, rhs_val);
         const eq_val = ValueRef{ .name = eq_tmp, .ty = .i1, .is_ptr = false };
-        if (result) |prev| {
-            const and_tmp = try ctx.nextTemp();
-            try builder.binary(and_tmp, "and", .i1, prev, eq_val);
-            result = .{ .name = and_tmp, .ty = .i1, .is_ptr = false };
+
+        const lt_tmp = try ctx.nextTemp();
+        try builder.compare(lt_tmp, "icmp", "ult", .i8, lhs_val, rhs_val);
+        const lt_val = ValueRef{ .name = lt_tmp, .ty = .i1, .is_ptr = false };
+
+        const gt_tmp = try ctx.nextTemp();
+        try builder.compare(gt_tmp, "icmp", "ugt", .i8, lhs_val, rhs_val);
+        const gt_val = ValueRef{ .name = gt_tmp, .ty = .i1, .is_ptr = false };
+
+        if (eq_so_far) |eq_prev| {
+            const eq_and_lt = try ctx.nextTemp();
+            try builder.binary(eq_and_lt, "and", .i1, eq_prev, lt_val);
+            const lt_or = try ctx.nextTemp();
+            try builder.binary(lt_or, "or", .i1, lt_found.?, .{ .name = eq_and_lt, .ty = .i1, .is_ptr = false });
+            lt_found = .{ .name = lt_or, .ty = .i1, .is_ptr = false };
+
+            const eq_and_gt = try ctx.nextTemp();
+            try builder.binary(eq_and_gt, "and", .i1, eq_prev, gt_val);
+            const gt_or = try ctx.nextTemp();
+            try builder.binary(gt_or, "or", .i1, gt_found.?, .{ .name = eq_and_gt, .ty = .i1, .is_ptr = false });
+            gt_found = .{ .name = gt_or, .ty = .i1, .is_ptr = false };
+
+            const eq_and = try ctx.nextTemp();
+            try builder.binary(eq_and, "and", .i1, eq_prev, eq_val);
+            eq_so_far = .{ .name = eq_and, .ty = .i1, .is_ptr = false };
         } else {
-            result = eq_val;
+            eq_so_far = eq_val;
+            lt_found = lt_val;
+            gt_found = gt_val;
         }
     }
-    var out = result orelse ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
-    if (op == .ne) {
-        const tmp = try ctx.nextTemp();
-        try builder.xorI1(tmp, out);
-        out = .{ .name = tmp, .ty = .i1, .is_ptr = false };
-    }
-    return out;
+
+    const eq_val = eq_so_far orelse ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
+    const lt_val = lt_found orelse ValueRef{ .name = "0", .ty = .i1, .is_ptr = false };
+    const gt_val = gt_found orelse ValueRef{ .name = "0", .ty = .i1, .is_ptr = false };
+
+    return switch (op) {
+        .eq => eq_val,
+        .ne => blk: {
+            const tmp = try ctx.nextTemp();
+            try builder.xorI1(tmp, eq_val);
+            break :blk .{ .name = tmp, .ty = .i1, .is_ptr = false };
+        },
+        .lt => lt_val,
+        .le => blk: {
+            const tmp = try ctx.nextTemp();
+            try builder.binary(tmp, "or", .i1, lt_val, eq_val);
+            break :blk .{ .name = tmp, .ty = .i1, .is_ptr = false };
+        },
+        .gt => gt_val,
+        .ge => blk: {
+            const tmp = try ctx.nextTemp();
+            try builder.binary(tmp, "or", .i1, gt_val, eq_val);
+            break :blk .{ .name = tmp, .ty = .i1, .is_ptr = false };
+        },
+        else => return error.UnsupportedLogicalOp,
+    };
 }

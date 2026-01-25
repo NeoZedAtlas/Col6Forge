@@ -72,7 +72,7 @@ fn storeCharacterValue(ctx: *Context, builder: anytype, target_ptr: ValueRef, ch
     if (value_expr.* == .literal) {
         const lit = value_expr.literal;
         if (lit.kind == .string or lit.kind == .hollerith) {
-            const bytes = literalBytes(lit) orelse return error.UnsupportedLiteral;
+            const bytes = try literalBytes(ctx.allocator, lit);
             var i: usize = 0;
             while (i < char_len) : (i += 1) {
                 const byte: u8 = if (i < bytes.len) bytes[i] else ' ';
@@ -121,26 +121,12 @@ fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
     }
 }
 
-fn literalBytes(lit: ast.Literal) ?[]const u8 {
+fn literalBytes(allocator: std.mem.Allocator, lit: ast.Literal) ![]const u8 {
     return switch (lit.kind) {
-        .string => stripQuotes(lit.text),
-        .hollerith => hollerithBytes(lit.text),
-        else => null,
+        .string => utils.decodeStringLiteral(allocator, lit.text),
+        .hollerith => utils.hollerithBytes(lit.text) orelse return error.UnsupportedLiteral,
+        else => return error.UnsupportedLiteral,
     };
-}
-
-fn stripQuotes(text: []const u8) ?[]const u8 {
-    if (text.len < 2) return text;
-    const quote = text[0];
-    if (quote != '\'' and quote != '"') return text;
-    if (text[text.len - 1] != quote) return text;
-    return text[1 .. text.len - 1];
-}
-
-fn hollerithBytes(text: []const u8) ?[]const u8 {
-    const idx = std.mem.indexOfScalar(u8, text, 'H') orelse std.mem.indexOfScalar(u8, text, 'h') orelse return null;
-    if (idx + 1 > text.len) return null;
-    return text[idx + 1 ..];
 }
 
 fn extractStatementFunctionParams(ctx: *Context, args: []*ast.Expr) ![]const []const u8 {
