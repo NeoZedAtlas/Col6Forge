@@ -132,6 +132,17 @@ pub fn emitIntrinsicFloat(ctx: *Context, builder: anytype, args: []*Expr) EmitEr
     return casting.coerce(ctx, builder, value, .f32);
 }
 
+fn emitIntrinsicIchar(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    if (value.ty != .ptr) return error.UnsupportedIntrinsicType;
+    const tmp_byte = try ctx.nextTemp();
+    try builder.load(tmp_byte, .i8, .{ .name = value.name, .ty = .ptr, .is_ptr = true });
+    const tmp_int = try ctx.nextTemp();
+    try builder.cast(tmp_int, "zext", .i8, .{ .name = tmp_byte, .ty = .i8, .is_ptr = false }, .i32);
+    return .{ .name = tmp_int, .ty = .i32, .is_ptr = false };
+}
+
 fn emitMinMaxValue(ctx: *Context, builder: anytype, left_in: ValueRef, right_in: ValueRef, is_max: bool) EmitError!ValueRef {
     if (complex.isComplexType(left_in.ty) or complex.isComplexType(right_in.ty)) return error.UnsupportedIntrinsicType;
     const common_ty = ir.commonType(left_in.ty, right_in.ty);
@@ -382,6 +393,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
     if (std.ascii.eqlIgnoreCase(name, "CONJG")) return emitIntrinsicConjg(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "FLOAT")) return emitIntrinsicFloat(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "REAL")) return emitIntrinsicFloat(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "ICHAR")) return emitIntrinsicIchar(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "EXP")) {
         if (args.len != 1) return error.InvalidIntrinsicCall;
         const value = try dispatch.emitExpr(ctx, builder, args[0]);

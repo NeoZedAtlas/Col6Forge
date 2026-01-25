@@ -37,7 +37,11 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
         for (fmt_info.items) |item| {
             switch (item) {
                 .literal => |text| {
-                    try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                    if (isAllNewlines(text)) {
+                        pending_spaces = 0;
+                    } else {
+                        try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                    }
                     try fmt_buf.appendSlice(text);
                 },
                 .spaces => |count| {
@@ -65,7 +69,11 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                 const item = fmt_info.items[idx];
                 switch (item) {
                     .literal => |text| {
-                        try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                        if (isAllNewlines(text)) {
+                            pending_spaces = 0;
+                        } else {
+                            try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                        }
                         try fmt_buf.appendSlice(text);
                     },
                     .spaces => |count| {
@@ -583,6 +591,14 @@ fn flushPendingSpaces(buffer: *std.array_list.Managed(u8), pending: *usize) !voi
     if (pending.* == 0) return;
     try appendSpaces(buffer, pending.*);
     pending.* = 0;
+}
+
+fn isAllNewlines(text: []const u8) bool {
+    if (text.len == 0) return false;
+    for (text) |ch| {
+        if (ch != '\n') return false;
+    }
+    return true;
 }
 
 fn appendIntFormat(buffer: *std.array_list.Managed(u8), width: usize) !void {

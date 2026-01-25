@@ -18,11 +18,53 @@ static void unit_filename(int unit, char *buf, size_t len) {
     buf[len - 1] = '\0';
 }
 
+static void f77_write_trimmed(FILE *file, const char *fmt, va_list ap) {
+    va_list ap_len;
+    va_copy(ap_len, ap);
+    int needed = vsnprintf(NULL, 0, fmt, ap_len);
+    va_end(ap_len);
+    if (needed < 0) {
+        return;
+    }
+    char *buf = (char *)malloc((size_t)needed + 1);
+    if (!buf) {
+        return;
+    }
+    va_list ap_fmt;
+    va_copy(ap_fmt, ap);
+    vsnprintf(buf, (size_t)needed + 1, fmt, ap_fmt);
+    va_end(ap_fmt);
+
+    size_t start = 0;
+    for (size_t i = 0; i <= (size_t)needed; i++) {
+        if (i == (size_t)needed || buf[i] == '\n') {
+            size_t end = i;
+            size_t scan = end;
+            while (scan > start) {
+                char ch = buf[scan - 1];
+                if (ch != ' ' && ch != '\t' && ch != '\r') {
+                    end = scan;
+                    break;
+                }
+                scan--;
+            }
+            if (end > start) {
+                (void)fwrite(buf + start, 1, end - start, file);
+            }
+            if (i < (size_t)needed && buf[i] == '\n') {
+                (void)fputc('\n', file);
+            }
+            start = i + 1;
+        }
+    }
+    free(buf);
+}
+
 void f77_write(int unit, const char *fmt, ...) {
     va_list ap;
     if (unit == 6 || unit == 0) {
         va_start(ap, fmt);
-        vfprintf(stdout, fmt, ap);
+        f77_write_trimmed(stdout, fmt, ap);
         va_end(ap);
         fflush(stdout);
         return;
@@ -49,7 +91,7 @@ void f77_write(int unit, const char *fmt, ...) {
         (void)fseek(file, unit_pos[unit], SEEK_SET);
     }
     va_start(ap, fmt);
-    vfprintf(file, fmt, ap);
+    f77_write_trimmed(file, fmt, ap);
     va_end(ap);
     unit_pos[unit] = ftell(file);
     fclose(file);

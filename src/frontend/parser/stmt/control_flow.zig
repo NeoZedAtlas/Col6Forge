@@ -46,6 +46,7 @@ pub fn parseDoStatement(arena: std.mem.Allocator, lp: *LineParser, do_ctx: *DoCo
     var var_name: []const u8 = undefined;
     if (next_tok.kind == .integer) {
         end_label = try helpers.parseLabelToken(lp);
+        _ = lp.consume(.comma);
         var_name = lp.readName(arena) orelse return error.MissingName;
     } else if (next_tok.kind == .identifier and helpers.nextTokenIs(lp.*, .equals)) {
         end_label = try do_ctx.nextLabel(arena);
@@ -53,6 +54,7 @@ pub fn parseDoStatement(arena: std.mem.Allocator, lp: *LineParser, do_ctx: *DoCo
         var_name = lp.readName(arena) orelse return error.MissingName;
     } else {
         end_label = try helpers.parseLabelToken(lp);
+        _ = lp.consume(.comma);
         var_name = lp.readName(arena) orelse return error.MissingName;
     }
     _ = lp.expect(.equals) orelse return error.UnexpectedToken;

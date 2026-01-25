@@ -116,17 +116,22 @@ fn parseDataValue(arena: std.mem.Allocator, text: []const u8, index: *usize) Par
     const ch = text[index.*];
     if (ch == '\'' or ch == '"') {
         const quote = ch;
-        index.* += 1;
         const start = index.*;
-        while (index.* < text.len) : (index.* += 1) {
+        index.* += 1;
+        while (index.* < text.len) {
             if (text[index.*] == quote) {
-                const end = index.*;
-                index.* += 1;
+                if (index.* + 1 < text.len and text[index.* + 1] == quote) {
+                    index.* += 2;
+                    continue;
+                }
+                const end = index.* + 1;
+                index.* = end;
                 const lit = text[start..end];
                 const node = try arena.create(Expr);
                 node.* = .{ .literal = .{ .kind = .string, .text = lit } };
                 return node;
             }
+            index.* += 1;
         }
         return error.UnexpectedToken;
     }
