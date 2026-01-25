@@ -183,6 +183,9 @@ fn parseDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_char_len:
             }
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         }
+        if (lp.consume(.star)) {
+            char_len = try expr.parseExpr(lp, arena, 6);
+        }
         try items.append(.{
             .name = name,
             .dims = try dims.toOwnedSlice(),
@@ -254,6 +257,45 @@ test "parseDecl handles character length prefix" {
             try testing.expect(td.items[1].char_len != null);
             switch (td.items[0].char_len.?.*) {
                 .literal => |lit| try testing.expectEqualStrings("1", lit.text),
+                else => return error.UnexpectedToken,
+            }
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles character length after dims" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CHARACTER CATN11(6)*3,CATN12(7)*7,CATN13(3)*12\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.character, td.type_kind);
+            try testing.expectEqual(@as(usize, 3), td.items.len);
+            try testing.expectEqualStrings("CATN11", td.items[0].name);
+            try testing.expectEqualStrings("CATN12", td.items[1].name);
+            try testing.expectEqualStrings("CATN13", td.items[2].name);
+            switch (td.items[0].char_len.?.*) {
+                .literal => |lit| try testing.expectEqualStrings("3", lit.text),
+                else => return error.UnexpectedToken,
+            }
+            switch (td.items[1].char_len.?.*) {
+                .literal => |lit| try testing.expectEqualStrings("7", lit.text),
+                else => return error.UnexpectedToken,
+            }
+            switch (td.items[2].char_len.?.*) {
+                .literal => |lit| try testing.expectEqualStrings("12", lit.text),
                 else => return error.UnexpectedToken,
             }
         },
