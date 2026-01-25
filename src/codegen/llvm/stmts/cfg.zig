@@ -17,6 +17,9 @@ pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !Local
         const name = if (stmt.label) |label| blk: {
             const block_name = try std.fmt.allocPrint(ctx.allocator, "L{s}", .{label});
             try label_map.put(label, block_name);
+            if (!ctx.label_map.contains(label)) {
+                try ctx.label_map.put(label, block_name);
+            }
             break :blk block_name;
         } else try ctx.nextLabel(prefix);
         try names.append(name);

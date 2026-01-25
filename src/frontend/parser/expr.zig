@@ -131,7 +131,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
             }
             if (dotOpIs(lp.*, "NOT")) {
                 _ = lp.next();
-                const expr = try parseExpr(lp, arena, 6);
+                const expr = try parseExpr(lp, arena, 3);
                 const node = try arena.create(Expr);
                 node.* = .{ .unary = .{ .op = .not, .expr = expr } };
                 return node;
