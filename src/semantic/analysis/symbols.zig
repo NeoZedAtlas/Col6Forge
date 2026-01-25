@@ -7,9 +7,9 @@ const SymbolKind = symbols.SymbolKind;
 const Symbol = symbols.Symbol;
 
 pub fn initImplicitDefaults(self: *context.Context) !void {
-    try self.implicit.append(.{ .start = 'I', .end = 'N', .type_kind = .integer });
-    try self.implicit.append(.{ .start = 'A', .end = 'H', .type_kind = .real });
-    try self.implicit.append(.{ .start = 'O', .end = 'Z', .type_kind = .real });
+    try self.implicit.append(.{ .start = 'I', .end = 'N', .type_kind = .integer, .char_len = null });
+    try self.implicit.append(.{ .start = 'A', .end = 'H', .type_kind = .real, .char_len = null });
+    try self.implicit.append(.{ .start = 'O', .end = 'Z', .type_kind = .real, .char_len = null });
 }
 
 pub fn installUnitSymbol(self: *context.Context) !void {
@@ -19,11 +19,12 @@ pub fn installUnitSymbol(self: *context.Context) !void {
         .function => .function,
         .block_data => .subroutine,
     };
+    const info = implicitInfo(self, self.unit.name);
     const symbol = Symbol{
         .name = self.unit.name,
-        .type_kind = implicitType(self, self.unit.name),
+        .type_kind = info.type_kind,
         .dims = &.{},
-        .char_len = null,
+        .char_len = info.char_len,
         .kind = kind,
         .storage = .local,
         .is_external = false,
@@ -36,11 +37,12 @@ pub fn installUnitSymbol(self: *context.Context) !void {
 
 pub fn installDummyArgs(self: *context.Context) !void {
     for (self.unit.args) |arg| {
+        const info = implicitInfo(self, arg);
         const symbol = Symbol{
             .name = arg,
-            .type_kind = implicitType(self, arg),
+            .type_kind = info.type_kind,
             .dims = &.{},
-            .char_len = null,
+            .char_len = info.char_len,
             .kind = .variable,
             .storage = .dummy,
             .is_external = false,
@@ -56,11 +58,12 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
     if (self.table.get(name)) |idx| {
         return idx;
     }
+    const info = implicitInfo(self, name);
     const symbol = Symbol{
         .name = name,
-        .type_kind = implicitType(self, name),
+        .type_kind = info.type_kind,
         .dims = &.{},
-        .char_len = null,
+        .char_len = info.char_len,
         .kind = .variable,
         .storage = .local,
         .is_external = false,
@@ -78,16 +81,32 @@ pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
     return idx;
 }
 
-pub fn implicitType(self: *context.Context, name: []const u8) ast.TypeKind {
-    if (name.len == 0) return .real;
+const ImplicitInfo = struct {
+    type_kind: ast.TypeKind,
+    char_len: ?usize,
+};
+
+fn implicitInfo(self: *context.Context, name: []const u8) ImplicitInfo {
+    if (name.len == 0) return .{ .type_kind = .real, .char_len = null };
     const first = std.ascii.toUpper(name[0]);
     var idx = self.implicit.items.len;
     while (idx > 0) {
         idx -= 1;
         const rule = self.implicit.items[idx];
-        if (first >= rule.start and first <= rule.end) return rule.type_kind;
+        if (first >= rule.start and first <= rule.end) {
+            const char_len = if (rule.type_kind == .character) rule.char_len orelse 1 else null;
+            return .{ .type_kind = rule.type_kind, .char_len = char_len };
+        }
     }
-    return .real;
+    return .{ .type_kind = .real, .char_len = null };
+}
+
+pub fn implicitType(self: *context.Context, name: []const u8) ast.TypeKind {
+    return implicitInfo(self, name).type_kind;
+}
+
+pub fn implicitCharLen(self: *context.Context, name: []const u8) ?usize {
+    return implicitInfo(self, name).char_len;
 }
 
 pub fn isIntrinsicName(name: []const u8) bool {

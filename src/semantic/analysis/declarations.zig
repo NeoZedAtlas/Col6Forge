@@ -11,10 +11,25 @@ pub fn applyDecl(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {
         .implicit => |imp| {
             for (imp.rules) |rule| {
+                var char_len: ?usize = null;
+                if (rule.type_kind == .character) {
+                    char_len = 1;
+                    if (rule.char_len) |len_expr| {
+                        const value = try constants.evalConst(self, len_expr) orelse return error.InvalidCharLen;
+                        switch (value) {
+                            .integer => |int_val| {
+                                if (int_val <= 0) return error.InvalidCharLen;
+                                char_len = @intCast(int_val);
+                            },
+                            .real => return error.InvalidCharLen,
+                        }
+                    }
+                }
                 try self.implicit.append(.{
                     .start = rule.start,
                     .end = rule.end,
                     .type_kind = rule.type_kind,
+                    .char_len = char_len,
                 });
             }
         },
@@ -96,6 +111,10 @@ pub fn applyDeclarator(
                     length = @intCast(int_val);
                 },
                 .real => return error.InvalidCharLen,
+            }
+        } else if (!explicit_type) {
+            if (symbols_mod.implicitCharLen(self, item.name)) |implicit_len| {
+                length = implicit_len;
             }
         }
         self.symbols.items[idx].char_len = length;

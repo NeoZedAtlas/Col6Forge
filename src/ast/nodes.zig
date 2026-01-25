@@ -80,6 +80,7 @@ pub const ImplicitRule = struct {
     start: u8,
     end: u8,
     type_kind: TypeKind,
+    char_len: ?*Expr,
 };
 
 pub const NameListDecl = struct {

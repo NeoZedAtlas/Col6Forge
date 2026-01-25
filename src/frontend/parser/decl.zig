@@ -35,7 +35,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         if (lp.isKeywordSplit("NONE")) return error.ImplicitNoneUnsupported;
         var rules = std.array_list.Managed(ImplicitRule).init(arena);
         while (lp.peek()) |_| {
-            const type_kind = try parseImplicitTypeKind(lp, arena);
+            const type_spec = try parseImplicitTypeKind(lp, arena);
             _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
             while (!lp.peekIs(.r_paren)) {
                 const start_tok = lp.expectIdentifier() orelse return error.UnexpectedToken;
@@ -45,7 +45,12 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
                     end_char = std.ascii.toUpper(lp.tokenText(end_tok)[0]);
                 }
                 const start_char = std.ascii.toUpper(lp.tokenText(start_tok)[0]);
-                try rules.append(.{ .start = start_char, .end = end_char, .type_kind = type_kind });
+                try rules.append(.{
+                    .start = start_char,
+                    .end = end_char,
+                    .type_kind = type_spec.type_kind,
+                    .char_len = type_spec.char_len,
+                });
                 _ = lp.consume(.comma);
             }
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
@@ -125,15 +130,21 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     return .{ .type_decl = .{ .type_kind = type_kind, .items = items } };
 }
 
-fn parseImplicitTypeKind(lp: *LineParser, arena: std.mem.Allocator) !TypeKind {
+const ImplicitTypeSpec = struct {
+    type_kind: TypeKind,
+    char_len: ?*ast.Expr,
+};
+
+fn parseImplicitTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ImplicitTypeSpec {
     if (lp.isKeywordSplit("CHARACTER")) {
         _ = lp.consumeKeyword("CHARACTER");
+        var char_len: ?*ast.Expr = null;
         if (lp.consume(.star)) {
-            _ = try expr.parseExpr(lp, arena, 6);
+            char_len = try expr.parseExpr(lp, arena, 6);
         }
-        return .character;
+        return .{ .type_kind = .character, .char_len = char_len };
     }
-    return parseTypeKind(lp);
+    return .{ .type_kind = try parseTypeKind(lp), .char_len = null };
 }
 
 fn parseTypeKind(lp: *LineParser) !TypeKind {

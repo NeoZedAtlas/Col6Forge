@@ -35,6 +35,7 @@ pub const ImplicitRule = struct {
     start: u8,
     end: u8,
     type_kind: ast.TypeKind,
+    char_len: ?usize,
 };
 
 pub const ResolvedRefKind = enum {
