@@ -81,7 +81,10 @@ pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
 pub fn implicitType(self: *context.Context, name: []const u8) ast.TypeKind {
     if (name.len == 0) return .real;
     const first = std.ascii.toUpper(name[0]);
-    for (self.implicit.items) |rule| {
+    var idx = self.implicit.items.len;
+    while (idx > 0) {
+        idx -= 1;
+        const rule = self.implicit.items[idx];
         if (first >= rule.start and first <= rule.end) return rule.type_kind;
     }
     return .real;

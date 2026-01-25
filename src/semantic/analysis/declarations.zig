@@ -10,7 +10,6 @@ const StorageClass = symbols.StorageClass;
 pub fn applyDecl(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {
         .implicit => |imp| {
-            self.implicit.clearRetainingCapacity();
             for (imp.rules) |rule| {
                 try self.implicit.append(.{
                     .start = rule.start,
