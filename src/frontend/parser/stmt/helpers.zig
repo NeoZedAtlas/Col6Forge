@@ -203,7 +203,7 @@ pub fn parseGotoStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
         _ = lp.next();
         const labels = try parseLabelList(arena, lp);
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-        _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+        _ = lp.consume(.comma);
         const selector = try expr.parseExpr(lp, arena, 0);
         return .{ .computed_goto = .{ .labels = labels, .selector = selector } };
     }
@@ -212,6 +212,12 @@ pub fn parseGotoStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
         const name = lp.readName(arena) orelse return error.UnexpectedToken;
         if (lp.consume(.comma)) {
             _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+            const labels = try parseLabelList(arena, lp);
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            return .{ .assigned_goto = .{ .var_name = name, .labels = labels } };
+        }
+        if (lp.peekIs(.l_paren)) {
+            _ = lp.next();
             const labels = try parseLabelList(arena, lp);
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
             return .{ .assigned_goto = .{ .var_name = name, .labels = labels } };
