@@ -88,9 +88,11 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
                 }
                 _ = lp.expect(.slash) orelse return error.UnexpectedToken;
             }
-            const items = try parseDeclarators(lp, arena, null);
+            const items = try parseCommonDeclarators(lp, arena, null);
             try blocks.append(.{ .name = block_name, .items = items });
-            if (!lp.consume(.comma)) break;
+            if (lp.peekIs(.slash)) continue;
+            if (lp.consume(.comma)) continue;
+            break;
         }
         return .{ .common = .{ .blocks = try blocks.toOwnedSlice() } };
     }
@@ -203,6 +205,38 @@ fn parseDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_char_len:
             .char_len = char_len,
         });
         if (!lp.consume(.comma)) break;
+    }
+    return items.toOwnedSlice();
+}
+
+fn parseCommonDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_char_len: ?*ast.Expr) ![]Declarator {
+    var items = std.array_list.Managed(Declarator).init(arena);
+    while (lp.peek()) |_| {
+        if (lp.peekIs(.slash)) break;
+        const name = lp.readName(arena) orelse return error.MissingName;
+        var dims = std.array_list.Managed(*ast.Expr).init(arena);
+        var char_len: ?*ast.Expr = default_char_len;
+        if (lp.consume(.star)) {
+            char_len = try expr.parseExpr(lp, arena, 6);
+        }
+        if (lp.consume(.l_paren)) {
+            while (!lp.peekIs(.r_paren)) {
+                const dim = try expr.parseDimExpr(lp, arena);
+                try dims.append(dim);
+                _ = lp.consume(.comma);
+            }
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        }
+        if (lp.consume(.star)) {
+            char_len = try expr.parseExpr(lp, arena, 6);
+        }
+        try items.append(.{
+            .name = name,
+            .dims = try dims.toOwnedSlice(),
+            .char_len = char_len,
+        });
+        if (!lp.consume(.comma)) break;
+        if (lp.peekIs(.slash)) break;
     }
     return items.toOwnedSlice();
 }

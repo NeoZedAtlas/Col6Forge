@@ -9,6 +9,7 @@ pub const CommonItem = struct {
     name: []const u8,
     offset: usize,
     ty: ir.IRType,
+    size: usize,
 };
 
 pub const CommonBlockLayout = struct {
@@ -67,7 +68,7 @@ pub fn buildUnitCommonLayouts(allocator: std.mem.Allocator, unit: ast.ProgramUni
             if (size_mul[1] != 0) return error.ArraySizeOverflow;
             const item_size = size_mul[0];
             offset = alignForward(offset, sa.alignment);
-            try items.append(.{ .name = name, .offset = offset, .ty = ty });
+            try items.append(.{ .name = name, .offset = offset, .ty = ty, .size = item_size });
             offset += item_size;
             if (sa.alignment > max_align) max_align = sa.alignment;
         }
