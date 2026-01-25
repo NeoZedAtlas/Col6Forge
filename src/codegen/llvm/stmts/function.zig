@@ -179,11 +179,21 @@ fn applyEquivalencePair(ctx: *Context, builder: anytype, anchor: *ast.Expr, othe
         return;
     }
     if (anchor.* == .call_or_subscript and other.* == .identifier) {
-        try applyEquivalenceSubscriptScalar(ctx, builder, anchor, other.identifier);
+        const other_sym = ctx.findSymbol(other.identifier) orelse return;
+        if (other_sym.dims.len > 0) {
+            try applyEquivalenceSubscriptArray(ctx, builder, anchor, other.identifier);
+        } else {
+            try applyEquivalenceSubscriptScalar(ctx, builder, anchor, other.identifier);
+        }
         return;
     }
     if (anchor.* == .identifier and other.* == .call_or_subscript) {
-        try applyEquivalenceSubscriptScalar(ctx, builder, other, anchor.identifier);
+        const anchor_sym = ctx.findSymbol(anchor.identifier) orelse return;
+        if (anchor_sym.dims.len > 0) {
+            try applyEquivalenceSubscriptArray(ctx, builder, other, anchor.identifier);
+        } else {
+            try applyEquivalenceSubscriptScalar(ctx, builder, other, anchor.identifier);
+        }
         return;
     }
     if (anchor.* == .identifier and other.* == .identifier) {
@@ -207,6 +217,18 @@ fn applyEquivalenceSubscriptScalar(ctx: *Context, builder: anytype, sub_expr: *a
     if (sub_sym.type_kind != scalar_sym.type_kind) return;
     const ptr = try expression.emitSubscriptPtr(ctx, builder, call);
     try ctx.locals.put(scalar_name, ptr);
+}
+
+fn applyEquivalenceSubscriptArray(ctx: *Context, builder: anytype, sub_expr: *ast.Expr, array_name: []const u8) EmitError!void {
+    const call = sub_expr.call_or_subscript;
+    const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(sub_expr))) orelse .unknown;
+    if (kind != .subscript) return;
+    const sub_sym = ctx.findSymbol(call.name) orelse return;
+    const array_sym = ctx.findSymbol(array_name) orelse return;
+    if (array_sym.dims.len == 0) return;
+    if (sub_sym.type_kind != array_sym.type_kind) return;
+    const ptr = try expression.emitSubscriptPtr(ctx, builder, call);
+    try ctx.locals.put(array_name, ptr);
 }
 
 fn argsEqual(a: []*ast.Expr, b: []*ast.Expr) bool {
