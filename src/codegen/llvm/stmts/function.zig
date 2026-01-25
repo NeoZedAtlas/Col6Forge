@@ -61,6 +61,19 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             std.mem.eql(u8, sym.name, ctx.unit.name);
         if (sym.kind == .parameter or sym.kind == .subroutine or (sym.kind == .function and !is_return_symbol)) continue;
         if (ctx.locals.contains(sym.name)) continue;
+        if (sym.type_kind == .character) {
+            const char_len = sym.char_len orelse 1;
+            const elem_count = if (sym.dims.len > 0) try common.arrayElementCount(ctx.sem, sym.dims) else 1;
+            const total = elem_count * char_len;
+            const alloca_name = try ctx.nextTemp();
+            if (total == 1) {
+                try builder.alloca(alloca_name, .i8);
+            } else {
+                try builder.allocaArray(alloca_name, .i8, total);
+            }
+            try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
+            continue;
+        }
         const ty = llvm_types.typeFromKind(sym.type_kind);
         if (sym.dims.len > 0) {
             const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
@@ -268,6 +281,7 @@ test "emitFunction emits a simple assignment" {
         .name = "A",
         .type_kind = .integer,
         .dims = try a.alloc(*ast.Expr, 0),
+        .char_len = null,
         .kind = .variable,
         .storage = .local,
         .is_external = false,

@@ -28,8 +28,8 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
     const Arg = struct { ty: llvm_types.IRType, name: []const u8 };
     var args = std.array_list.Managed(Arg).init(ctx.allocator);
     defer args.deinit();
-    const expanded_values = try expandWriteArgs(ctx, builder, write.args);
-    defer ctx.allocator.free(expanded_values);
+    var expanded_values = try expandWriteArgs(ctx, builder, write.args);
+    defer expanded_values.deinit();
 
     const descriptor_count = countFormatDescriptors(fmt_info.items);
     if (descriptor_count == 0) {
@@ -50,7 +50,7 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
     } else {
         var arg_index: usize = 0;
         var pending_spaces: usize = 0;
-        while (arg_index < expanded_values.len) {
+        while (arg_index < expanded_values.values.items.len) {
             var scale_factor: i32 = 0;
             var idx: usize = 0;
             while (idx < fmt_info.items.len) : (idx += 1) {
@@ -64,18 +64,18 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                         pending_spaces += count;
                     },
                     .int => |spec| {
-                        if (arg_index >= expanded_values.len) break;
+                        if (arg_index >= expanded_values.values.items.len) break;
                         try flushPendingSpaces(&fmt_buf, &pending_spaces);
-                        const value = expanded_values[arg_index];
+                        const value = expanded_values.values.items[arg_index];
                         const coerced = try expr.coerce(ctx, builder, value, .i32);
                         try appendIntFormat(&fmt_buf, spec.width);
                         try args.append(.{ .ty = .i32, .name = coerced.name });
                         arg_index += 1;
                     },
                     .real, .real_fixed => |spec| {
-                        if (arg_index >= expanded_values.len) break;
+                        if (arg_index >= expanded_values.values.items.len) break;
                         try flushPendingSpaces(&fmt_buf, &pending_spaces);
-                        const value = expanded_values[arg_index];
+                        const value = expanded_values.values.items[arg_index];
                         var coerced = try expr.coerce(ctx, builder, value, .f64);
                         if (scale_factor != 0) {
                             const scale = std.math.pow(f64, 10.0, @as(f64, @floatFromInt(scale_factor)));
@@ -166,15 +166,17 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                         arg_index += 1;
                     },
                     .char => |spec| {
-                        if (arg_index >= expanded_values.len) break;
+                        if (arg_index >= expanded_values.values.items.len) break;
                         try flushPendingSpaces(&fmt_buf, &pending_spaces);
-                        const value = expanded_values[arg_index];
+                        const value = expanded_values.values.items[arg_index];
                         if (value.ty != .ptr) return error.UnsupportedCharArg;
-                        if (spec.width == 0) {
-                            try fmt_buf.appendSlice("%s");
-                        } else {
-                            try fmt_buf.writer().print("%{d}s", .{spec.width});
-                        }
+                        const arg_len = expanded_values.char_lens.items[arg_index];
+                        const field_width = if (spec.width > 0) spec.width else arg_len;
+                        try fmt_buf.appendSlice("%-*.*s");
+                        const width_text = utils.formatInt(ctx.allocator, @intCast(field_width));
+                        const prec_text = utils.formatInt(ctx.allocator, @intCast(field_width));
+                        try args.append(.{ .ty = .i32, .name = width_text });
+                        try args.append(.{ .ty = .i32, .name = prec_text });
                         try args.append(.{ .ty = .ptr, .name = value.name });
                         arg_index += 1;
                     },
@@ -184,7 +186,7 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                     .blank_control => {},
                 }
             }
-            if (arg_index >= expanded_values.len) {
+            if (arg_index >= expanded_values.values.items.len) {
                 pending_spaces = 0;
                 break;
             }
@@ -340,6 +342,23 @@ const ExpandedReadTargets = struct {
     }
 };
 
+const ExpandedWriteValues = struct {
+    values: std.array_list.Managed(ValueRef),
+    char_lens: std.array_list.Managed(usize),
+
+    fn init(allocator: std.mem.Allocator) ExpandedWriteValues {
+        return .{
+            .values = std.array_list.Managed(ValueRef).init(allocator),
+            .char_lens = std.array_list.Managed(usize).init(allocator),
+        };
+    }
+
+    fn deinit(self: *ExpandedWriteValues) void {
+        self.values.deinit();
+        self.char_lens.deinit();
+    }
+};
+
 fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedReadTargets {
     var expanded = ExpandedReadTargets.init(ctx.allocator);
     for (args) |arg| {
@@ -348,15 +367,19 @@ fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitErr
             if (sym.dims.len > 0) {
                 const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
                 const base_ptr = try ctx.getPointer(sym.name);
-                const elem_ty = llvm_types.typeFromKind(sym.type_kind);
+                const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
+                const char_len = sym.char_len orelse 1;
                 var idx: usize = 0;
                 while (idx < elem_count) : (idx += 1) {
-                    const offset_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{idx});
-                    const offset_val = ValueRef{ .name = offset_text, .ty = .i32, .is_ptr = false };
+                    var offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                    if (sym.type_kind == .character and char_len > 1) {
+                        const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = .i32, .is_ptr = false };
+                        offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
+                    }
                     const ptr_name = try ctx.nextTemp();
                     try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
                     try expanded.ptrs.append(.{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
-                    try expanded.types.append(elem_ty);
+                    try expanded.types.append(if (sym.type_kind == .character) llvm_types.IRType.ptr else elem_ty);
                 }
                 continue;
             }
@@ -369,32 +392,60 @@ fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitErr
     return expanded;
 }
 
-fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError![]ValueRef {
-    var values = std.array_list.Managed(ValueRef).init(ctx.allocator);
+fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedWriteValues {
+    var expanded = ExpandedWriteValues.init(ctx.allocator);
     for (args) |arg| {
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
                 const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
                 const base_ptr = try ctx.getPointer(sym.name);
-                const elem_ty = llvm_types.typeFromKind(sym.type_kind);
+                const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
+                const char_len = sym.char_len orelse 1;
                 var idx: usize = 0;
                 while (idx < elem_count) : (idx += 1) {
-                    const offset_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{idx});
-                    const offset_val = ValueRef{ .name = offset_text, .ty = .i32, .is_ptr = false };
+                    var offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                    if (sym.type_kind == .character and char_len > 1) {
+                        const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = .i32, .is_ptr = false };
+                        offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
+                    }
                     const ptr_name = try ctx.nextTemp();
                     try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
-                    const tmp = try ctx.nextTemp();
-                    try builder.load(tmp, elem_ty, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
-                    try values.append(.{ .name = tmp, .ty = elem_ty, .is_ptr = false });
+                    if (sym.type_kind == .character) {
+                        try expanded.values.append(.{ .name = ptr_name, .ty = .ptr, .is_ptr = false });
+                        try expanded.char_lens.append(sym.char_len orelse 1);
+                    } else {
+                        const tmp = try ctx.nextTemp();
+                        try builder.load(tmp, elem_ty, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
+                        try expanded.values.append(.{ .name = tmp, .ty = elem_ty, .is_ptr = false });
+                        try expanded.char_lens.append(0);
+                    }
                 }
                 continue;
             }
         }
         const value = try expr.emitExpr(ctx, builder, arg);
-        try values.append(value);
+        const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
+        try expanded.values.append(value);
+        try expanded.char_lens.append(len);
     }
-    return values.toOwnedSlice();
+    return expanded;
+}
+
+fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
+    switch (expr_node.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return null;
+            if (sym.type_kind != .character) return null;
+            return sym.char_len orelse 1;
+        },
+        .call_or_subscript => |call| {
+            const sym = ctx.findSymbol(call.name) orelse return null;
+            if (sym.type_kind != .character) return null;
+            return sym.char_len orelse 1;
+        },
+        else => return null,
+    }
 }
 
 fn appendScanfLiteral(buffer: *std.array_list.Managed(u8), text: []const u8) !void {

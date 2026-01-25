@@ -87,4 +87,18 @@ pub fn applyDeclarator(
     if (self.symbols.items[idx].storage != .common or storage == .common) {
         self.symbols.items[idx].storage = storage;
     }
+    if (type_kind == .character) {
+        var length: usize = 1;
+        if (item.char_len) |len_expr| {
+            const value = try constants.evalConst(self, len_expr) orelse return error.InvalidCharLen;
+            switch (value) {
+                .integer => |int_val| {
+                    if (int_val <= 0) return error.InvalidCharLen;
+                    length = @intCast(int_val);
+                },
+                .real => return error.InvalidCharLen,
+            }
+        }
+        self.symbols.items[idx].char_len = length;
+    }
 }

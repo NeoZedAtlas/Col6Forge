@@ -17,6 +17,7 @@ pub const Symbol = struct {
     name: []const u8,
     type_kind: ast.TypeKind,
     dims: []*ast.Expr,
+    char_len: ?usize,
     kind: SymbolKind,
     storage: StorageClass,
     is_external: bool,

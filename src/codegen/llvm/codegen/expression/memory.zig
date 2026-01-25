@@ -18,7 +18,7 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     if (sym.dims.len == 0) return error.ArraysUnsupported;
     if (sym.dims.len == 0) return error.ArraysUnsupported;
     const base_ptr = try ctx.getPointer(call.name);
-    const elem_ty = llvm_types.typeFromKind(sym.type_kind);
+    const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
 
     if (call.args.len == 0) return error.InvalidSubscript;
     if (call.args.len != sym.dims.len) return error.InvalidSubscript;
@@ -40,6 +40,14 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
         }
     }
 
+    if (sym.type_kind == .character) {
+        const char_len: i64 = @intCast(sym.char_len orelse 1);
+        if (char_len != 1) {
+            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, char_len), .ty = .i32, .is_ptr = false };
+            offset = try binary.emitMul(ctx, builder, offset, scale);
+        }
+    }
+
     const gep = try ctx.nextTemp();
     try builder.gep(gep, elem_ty, base_ptr, offset);
     return .{ .name = gep, .ty = .ptr, .is_ptr = true };
@@ -49,11 +57,18 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
     if (sym.dims.len == 0) return error.ArraysUnsupported;
     const base_ptr = try ctx.getPointer(call.name);
-    const elem_ty = llvm_types.typeFromKind(sym.type_kind);
+    const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
 
     if (call.args.len != 1) return error.InvalidSubscript;
     const idx1 = try emitIndex(ctx, builder, call.args[0]);
-    const idx1_adj = try binary.emitSub(ctx, builder, idx1, utils.oneValue());
+    var idx1_adj = try binary.emitSub(ctx, builder, idx1, utils.oneValue());
+    if (sym.type_kind == .character) {
+        const char_len: i64 = @intCast(sym.char_len orelse 1);
+        if (char_len != 1) {
+            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, char_len), .ty = .i32, .is_ptr = false };
+            idx1_adj = try binary.emitMul(ctx, builder, idx1_adj, scale);
+        }
+    }
     const gep = try ctx.nextTemp();
     try builder.gep(gep, elem_ty, base_ptr, idx1_adj);
     return .{ .name = gep, .ty = .ptr, .is_ptr = true };

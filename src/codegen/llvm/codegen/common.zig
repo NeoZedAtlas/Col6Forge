@@ -59,10 +59,11 @@ pub fn buildUnitCommonLayouts(allocator: std.mem.Allocator, unit: ast.ProgramUni
         for (list.items) |name| {
             const sym = findSymbol(sem, name) orelse return error.UnknownSymbol;
             if (sym.storage != .common) return error.InvalidCommonSymbol;
-            const ty = llvm_types.typeFromKind(sym.type_kind);
-            const sa = try sizeAlign(ty);
+            const ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
+            const sa = if (sym.type_kind == .character) SizeAlign{ .size = sym.char_len orelse 1, .alignment = 1 } else try sizeAlign(ty);
             const elem_count = if (sym.dims.len > 0) try arrayElementCount(sem, sym.dims) else 1;
-            const size_mul = @mulWithOverflow(sa.size, elem_count);
+            const elem_size = sa.size;
+            const size_mul = @mulWithOverflow(elem_size, elem_count);
             if (size_mul[1] != 0) return error.ArraySizeOverflow;
             const item_size = size_mul[0];
             offset = alignForward(offset, sa.alignment);
@@ -203,6 +204,7 @@ test "buildUnitCommonLayouts computes offsets and alignment" {
         .name = "A",
         .type_kind = .integer,
         .dims = empty_exprs,
+        .char_len = null,
         .kind = .variable,
         .storage = .common,
         .is_external = false,
@@ -214,6 +216,7 @@ test "buildUnitCommonLayouts computes offsets and alignment" {
         .name = "B",
         .type_kind = .real,
         .dims = empty_exprs,
+        .char_len = null,
         .kind = .variable,
         .storage = .common,
         .is_external = false,
