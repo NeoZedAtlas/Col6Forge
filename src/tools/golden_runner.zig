@@ -38,12 +38,19 @@ pub fn main() !void {
     var updated: usize = 0;
 
     for (cases) |case| {
+        var timer = try std.time.Timer.start();
         const result = Col6Forge.runPipeline(allocator, case.input_path, options.emit) catch |err| {
             failures += 1;
             try reportPipelineError(case.input_path, err);
             continue;
         };
         defer allocator.free(result.output);
+
+        if (isTimedOut(options.timeout_ms, &timer)) {
+            failures += 1;
+            try logStderr("timeout: {s}\n", .{case.input_path});
+            continue;
+        }
 
         if (options.update) {
             try writeFile(case.golden_path, result.output);
@@ -61,6 +68,12 @@ pub fn main() !void {
             continue;
         };
         defer allocator.free(expected);
+
+        if (isTimedOut(options.timeout_ms, &timer)) {
+            failures += 1;
+            try logStderr("timeout: {s}\n", .{case.input_path});
+            continue;
+        }
 
         const comparison = try Comparator.compareText(allocator, expected, result.output);
         if (!comparison.ok) {
@@ -92,6 +105,7 @@ const Options = struct {
     update: bool,
     emit: Col6Forge.EmitKind,
     show_help: bool,
+    timeout_ms: u64,
 };
 
 fn parseArgs(args: []const []const u8) !Options {
@@ -100,6 +114,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var update = false;
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
+    var timeout_ms: u64 = 30_000;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -128,6 +143,12 @@ fn parseArgs(args: []const []const u8) !Options {
             tests_dir = args[i];
             continue;
         }
+        if (std.mem.eql(u8, arg, "--timeout")) {
+            if (i + 1 >= args.len) return error.MissingTimeout;
+            i += 1;
+            timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
+            continue;
+        }
         return error.UnknownFlag;
     }
 
@@ -137,16 +158,18 @@ fn parseArgs(args: []const []const u8) !Options {
         .update = update,
         .emit = emit,
         .show_help = show_help,
+        .timeout_ms = timeout_ms,
     };
 }
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: golden_runner [--tests-dir <dir>] [--filter <text>] [--update] [-emit-llvm]
+        \\Usage: golden_runner [--tests-dir <dir>] [--filter <text>] [--update] [--timeout <ms>] [-emit-llvm]
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
         \\  --filter <text>    Only run tests whose relative path contains this text
         \\  --update           Overwrite golden .ll files with current output
+        \\  --timeout <ms>     Per-test timeout in milliseconds (default: 30000)
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
         \\
@@ -291,6 +314,12 @@ const Comparator = struct {
 
 fn trimCr(line: []const u8) []const u8 {
     return std.mem.trimRight(u8, line, "\r");
+}
+
+fn isTimedOut(timeout_ms: u64, timer: *std.time.Timer) bool {
+    if (timeout_ms == 0) return false;
+    const elapsed_ms = timer.read() / std.time.ns_per_ms;
+    return elapsed_ms >= timeout_ms;
 }
 
 fn logStderr(comptime fmt: []const u8, args: anytype) !void {

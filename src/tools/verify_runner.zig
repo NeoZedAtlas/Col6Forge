@@ -52,6 +52,7 @@ pub fn main() !void {
     var failures: usize = 0;
 
     for (cases) |case| {
+        var timer = try std.time.Timer.start();
         const abs_input_path = try std.fs.path.join(allocator, &.{ root_path, case.input_path });
         defer allocator.free(abs_input_path);
 
@@ -82,7 +83,27 @@ pub fn main() !void {
         defer allocator.free(ir.output);
         try writeFile(ll_path, ir.output);
 
-        const ref_compile = runProcessCapture(allocator, &.{ gfortran_cmd, "-std=legacy", "-o", ref_exe, abs_input_path }, work_dir) catch |err| {
+        if (isTimedOut(options.timeout_ms, &timer)) {
+            failures += 1;
+            try logStderr("timeout: {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            continue;
+        }
+
+        const ref_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+        if (ref_timeout != null and ref_timeout.? == 0) {
+            failures += 1;
+            try logStderr("timeout: {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            continue;
+        }
+
+        const ref_compile = runProcessCapture(
+            allocator,
+            &.{ gfortran_cmd, "-std=legacy", "-o", ref_exe, abs_input_path },
+            work_dir,
+            ref_timeout,
+        ) catch |err| {
             failures += 1;
             if (err == error.FileNotFound) {
                 try logStderr("gfortran not found (use --gfortran or set GFORTRAN/FC)\n", .{});
@@ -91,6 +112,12 @@ pub fn main() !void {
             continue;
         };
         defer ref_compile.deinit(allocator);
+        if (ref_compile.timed_out) {
+            failures += 1;
+            try logStderr("timeout: gfortran compile {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            continue;
+        }
         if (!isZeroExit(ref_compile.term)) {
             failures += 1;
             const code = exitCode(ref_compile.term);
@@ -104,31 +131,88 @@ pub fn main() !void {
             continue;
         }
 
-        const our_compile = runProcessCapture(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path, runtime_path }, work_dir) catch |err| {
+        const compile_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+        if (compile_timeout != null and compile_timeout.? == 0) {
+            failures += 1;
+            try logStderr("timeout: {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            continue;
+        }
+
+        const our_compile = runProcessCapture(
+            allocator,
+            &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path, runtime_path },
+            work_dir,
+            compile_timeout,
+        ) catch |err| {
             failures += 1;
             try logStderr("zig cc failed: {s} ({s})\n", .{ ll_path, @errorName(err) });
             continue;
         };
         defer our_compile.deinit(allocator);
+        if (our_compile.timed_out) {
+            failures += 1;
+            try logStderr("timeout: zig cc {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            continue;
+        }
         if (!isZeroExit(our_compile.term)) {
             failures += 1;
             try logStderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, our_compile.stderr });
             continue;
         }
 
-        const ref_run = runProcessCapture(allocator, &.{ ref_exe }, abs_case_dir) catch |err| {
+        const ref_run_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+        if (ref_run_timeout != null and ref_run_timeout.? == 0) {
+            failures += 1;
+            try logStderr("timeout: {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            continue;
+        }
+
+        const ref_run = runProcessCapture(
+            allocator,
+            &.{ ref_exe },
+            abs_case_dir,
+            ref_run_timeout,
+        ) catch |err| {
             failures += 1;
             try logStderr("reference run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
             continue;
         };
         defer ref_run.deinit(allocator);
+        if (ref_run.timed_out) {
+            failures += 1;
+            try logStderr("timeout: reference run {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            continue;
+        }
 
-        const test_run = runProcessCapture(allocator, &.{ test_exe }, abs_case_dir) catch |err| {
+        const test_run_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+        if (test_run_timeout != null and test_run_timeout.? == 0) {
+            failures += 1;
+            try logStderr("timeout: {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            continue;
+        }
+
+        const test_run = runProcessCapture(
+            allocator,
+            &.{ test_exe },
+            abs_case_dir,
+            test_run_timeout,
+        ) catch |err| {
             failures += 1;
             try logStderr("translated run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
             continue;
         };
         defer test_run.deinit(allocator);
+        if (test_run.timed_out) {
+            failures += 1;
+            try logStderr("timeout: translated run {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            continue;
+        }
 
         const comparison = try Comparator.compare(allocator, ref_run.term, test_run.term, ref_run.stdout, test_run.stdout);
         if (!comparison.ok) {
@@ -155,6 +239,7 @@ const Options = struct {
     gfortran_path: []const u8,
     emit: Col6Forge.EmitKind,
     show_help: bool,
+    timeout_ms: u64,
 };
 
 fn parseArgs(args: []const []const u8) !Options {
@@ -163,6 +248,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var gfortran_path: []const u8 = defaultGfortran();
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
+    var timeout_ms: u64 = 30_000;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -189,6 +275,12 @@ fn parseArgs(args: []const []const u8) !Options {
             gfortran_path = args[i];
             continue;
         }
+        if (std.mem.eql(u8, arg, "--timeout")) {
+            if (i + 1 >= args.len) return error.MissingTimeout;
+            i += 1;
+            timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
+            continue;
+        }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
             continue;
@@ -202,16 +294,18 @@ fn parseArgs(args: []const []const u8) !Options {
         .gfortran_path = gfortran_path,
         .emit = emit,
         .show_help = show_help,
+        .timeout_ms = timeout_ms,
     };
 }
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: verify_runner [--tests-dir <dir>] [--filter <text>] [-emit-llvm]
+        \\Usage: verify_runner [--tests-dir <dir>] [--filter <text>] [--timeout <ms>] [-emit-llvm]
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
         \\  --filter <text>    Only run tests whose relative path contains this text
         \\  --gfortran <path>  Path to gfortran executable (default: gfortran or gfortran.exe)
+        \\  --timeout <ms>     Per-test timeout in milliseconds (default: 30000)
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
         \\
@@ -369,6 +463,7 @@ const ProcessResult = struct {
     stdout: []const u8,
     stderr: []const u8,
     term: std.process.Child.Term,
+    timed_out: bool,
 
     fn deinit(self: ProcessResult, allocator: std.mem.Allocator) void {
         allocator.free(self.stdout);
@@ -380,14 +475,72 @@ fn runProcessCapture(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     cwd: ?[]const u8,
+    timeout_ms: ?u64,
 ) !ProcessResult {
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-        .cwd = cwd,
-        .max_output_bytes = 64 * 1024 * 1024,
-    });
-    return .{ .stdout = result.stdout, .stderr = result.stderr, .term = result.term };
+    var child = std.process.Child.init(argv, allocator);
+    child.cwd = cwd;
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    try child.spawn();
+
+    var done = std.atomic.Value(bool).init(false);
+    var timed_out = std.atomic.Value(bool).init(false);
+    var monitor: ?std.Thread = null;
+    if (timeout_ms) |limit| {
+        if (limit > 0) {
+            monitor = try std.Thread.spawn(.{}, timeoutMonitor, .{ &child, &done, &timed_out, limit });
+        }
+    }
+
+    var stdout_buf: std.ArrayList(u8) = .empty;
+    var stderr_buf: std.ArrayList(u8) = .empty;
+    errdefer stdout_buf.deinit(allocator);
+    errdefer stderr_buf.deinit(allocator);
+    try child.collectOutput(allocator, &stdout_buf, &stderr_buf, 64 * 1024 * 1024);
+    done.store(true, .seq_cst);
+    if (monitor) |thread| thread.join();
+
+    return .{
+        .stdout = try stdout_buf.toOwnedSlice(allocator),
+        .stderr = try stderr_buf.toOwnedSlice(allocator),
+        .term = try child.wait(),
+        .timed_out = timed_out.load(.seq_cst),
+    };
+}
+
+fn remainingTimeoutMs(timeout_ms: u64, timer: *std.time.Timer) ?u64 {
+    if (timeout_ms == 0) return null;
+    const elapsed_ms = timer.read() / std.time.ns_per_ms;
+    if (elapsed_ms >= timeout_ms) return 0;
+    return timeout_ms - elapsed_ms;
+}
+
+fn isTimedOut(timeout_ms: u64, timer: *std.time.Timer) bool {
+    if (timeout_ms == 0) return false;
+    const elapsed_ms = timer.read() / std.time.ns_per_ms;
+    return elapsed_ms >= timeout_ms;
+}
+
+fn cleanupWorkDir(path: []const u8) void {
+    std.fs.cwd().deleteTree(path) catch {};
+}
+
+fn timeoutMonitor(
+    child: *std.process.Child,
+    done: *std.atomic.Value(bool),
+    timed_out: *std.atomic.Value(bool),
+    timeout_ms: u64,
+) void {
+    std.Thread.sleep(timeout_ms * std.time.ns_per_ms);
+    if (done.load(.seq_cst)) return;
+    timed_out.store(true, .seq_cst);
+    terminateChild(child);
+}
+
+fn terminateChild(child: *std.process.Child) void {
+    _ = child.kill() catch {};
 }
 
 fn isZeroExit(term: std.process.Child.Term) bool {

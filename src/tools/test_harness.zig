@@ -2,6 +2,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const TimeoutConfig = struct {
+    suite_timeout_ms: u64 = 300_000,
+    test_timeout_ms: u64 = 30_000,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -78,6 +83,7 @@ const Options = struct {
     list_suites: bool,
     show_help: bool,
     verbose: bool,
+    timeout: TimeoutConfig,
 };
 
 const suites = [_]Suite{
@@ -110,6 +116,9 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !Options {
     var list_suites = false;
     var show_help = false;
     var verbose = false;
+    const default_timeout = TimeoutConfig{};
+    var suite_timeout_ms: u64 = default_timeout.suite_timeout_ms;
+    var test_timeout_ms: u64 = default_timeout.test_timeout_ms;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -158,6 +167,18 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !Options {
             update_golden = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--timeout")) {
+            if (i + 1 >= args.len) return error.MissingTimeout;
+            i += 1;
+            test_timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--suite-timeout")) {
+            if (i + 1 >= args.len) return error.MissingSuiteTimeout;
+            i += 1;
+            suite_timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose = true;
             continue;
@@ -176,6 +197,10 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !Options {
         .list_suites = list_suites,
         .show_help = show_help,
         .verbose = verbose,
+        .timeout = .{
+            .suite_timeout_ms = suite_timeout_ms,
+            .test_timeout_ms = test_timeout_ms,
+        },
     };
 }
 
@@ -207,6 +232,8 @@ fn runSuite(
 
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
+    var timeout_arg: ?[]const u8 = null;
+    defer if (timeout_arg) |value| allocator.free(value);
 
     try argv.append(allocator, exe_path);
     if (options.tests_dir) |dir| {
@@ -229,18 +256,18 @@ fn runSuite(
     if (options.emit_llvm) {
         try argv.append(allocator, "-emit-llvm");
     }
+    if (options.timeout.test_timeout_ms > 0) {
+        timeout_arg = try std.fmt.allocPrint(allocator, "{d}", .{options.timeout.test_timeout_ms});
+        try argv.append(allocator, "--timeout");
+        try argv.append(allocator, timeout_arg.?);
+    }
 
     if (options.verbose) {
         try logStdout("running {s}\n", .{suite.name});
         try logCommand(argv.items);
     }
 
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv.items,
-        .cwd = root_dir,
-        .max_output_bytes = 64 * 1024 * 1024,
-    });
+    const result = try runChildWithTimeout(allocator, argv.items, root_dir, options.timeout.suite_timeout_ms);
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -251,6 +278,10 @@ fn runSuite(
         try std.fs.File.stderr().writeAll(result.stderr);
     }
 
+    if (result.timed_out) {
+        try logStderr("suite timed out: {s}\n", .{suite.name});
+        return false;
+    }
     if (!isZeroExit(result.term)) {
         return false;
     }
@@ -286,10 +317,72 @@ fn printUsage(file: std.fs.File) !void {
         \\  --update-golden     Overwrite golden files (golden suite only)
         \\  -emit-llvm          Emit LLVM IR (default for suites)
         \\  --keep-going        Continue running suites after failures
+        \\  --timeout <ms>      Per-test timeout passed to suite runners
+        \\  --suite-timeout <ms> Suite timeout for each runner
         \\  --verbose           Print command lines and suite names
         \\  -h, --help          Show this help
         \\
     );
+}
+
+const RunResult = struct {
+    stdout: []u8,
+    stderr: []u8,
+    term: std.process.Child.Term,
+    timed_out: bool,
+};
+
+fn runChildWithTimeout(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    cwd: ?[]const u8,
+    timeout_ms: u64,
+) !RunResult {
+    var child = std.process.Child.init(argv, allocator);
+    child.cwd = cwd;
+    child.stdin_behavior = .Inherit;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    try child.spawn();
+
+    var done = std.atomic.Value(bool).init(false);
+    var timed_out = std.atomic.Value(bool).init(false);
+    var monitor: ?std.Thread = null;
+    if (timeout_ms > 0) {
+        monitor = try std.Thread.spawn(.{}, timeoutMonitor, .{ &child, &done, &timed_out, timeout_ms });
+    }
+
+    var stdout_buf: std.ArrayList(u8) = .empty;
+    var stderr_buf: std.ArrayList(u8) = .empty;
+    errdefer stdout_buf.deinit(allocator);
+    errdefer stderr_buf.deinit(allocator);
+    try child.collectOutput(allocator, &stdout_buf, &stderr_buf, 64 * 1024 * 1024);
+    done.store(true, .seq_cst);
+    if (monitor) |thread| thread.join();
+
+    return .{
+        .stdout = try stdout_buf.toOwnedSlice(allocator),
+        .stderr = try stderr_buf.toOwnedSlice(allocator),
+        .term = try child.wait(),
+        .timed_out = timed_out.load(.seq_cst),
+    };
+}
+
+fn timeoutMonitor(
+    child: *std.process.Child,
+    done: *std.atomic.Value(bool),
+    timed_out: *std.atomic.Value(bool),
+    timeout_ms: u64,
+) void {
+    std.Thread.sleep(timeout_ms * std.time.ns_per_ms);
+    if (done.load(.seq_cst)) return;
+    timed_out.store(true, .seq_cst);
+    terminateChild(child);
+}
+
+fn terminateChild(child: *std.process.Child) void {
+    _ = child.kill() catch {};
 }
 
 fn isZeroExit(term: std.process.Child.Term) bool {
