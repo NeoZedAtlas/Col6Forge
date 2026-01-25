@@ -107,6 +107,15 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const test_harness = b.addExecutable(.{
+        .name = "test_harness",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/test_harness.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
@@ -114,6 +123,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
     b.installArtifact(golden_runner);
     b.installArtifact(verify_runner);
+    b.installArtifact(test_harness);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -182,6 +192,14 @@ pub fn build(b: *std.Build) void {
     run_verify.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_verify.addArgs(args);
+    }
+
+    const test_all_step = b.step("test-all", "Run unified test harness");
+    const run_test_all = b.addRunArtifact(test_harness);
+    test_all_step.dependOn(&run_test_all.step);
+    run_test_all.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_test_all.addArgs(args);
     }
 
     // Just like flags, top level steps are also listed in the `--help` menu.

@@ -28,7 +28,7 @@ pub fn main() !void {
         return;
     }
 
-    const cases = try collectTestCases(arena_allocator, options.tests_dir);
+    const cases = try collectTestCases(arena_allocator, options.tests_dir, options.filter);
     if (cases.len == 0) {
         try logStdout("no .f tests found\n", .{});
         return;
@@ -88,6 +88,7 @@ pub fn main() !void {
 
 const Options = struct {
     tests_dir: []const u8,
+    filter: ?[]const u8,
     update: bool,
     emit: Col6Forge.EmitKind,
     show_help: bool,
@@ -95,6 +96,7 @@ const Options = struct {
 
 fn parseArgs(args: []const []const u8) !Options {
     var tests_dir: []const u8 = "tests/NIST_F78_test_suite";
+    var filter: ?[]const u8 = null;
     var update = false;
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
@@ -114,6 +116,12 @@ fn parseArgs(args: []const []const u8) !Options {
             emit = .llvm;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--filter")) {
+            if (i + 1 >= args.len) return error.MissingFilter;
+            i += 1;
+            filter = args[i];
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--tests-dir")) {
             if (i + 1 >= args.len) return error.MissingTestsDir;
             i += 1;
@@ -125,6 +133,7 @@ fn parseArgs(args: []const []const u8) !Options {
 
     return .{
         .tests_dir = tests_dir,
+        .filter = filter,
         .update = update,
         .emit = emit,
         .show_help = show_help,
@@ -133,9 +142,10 @@ fn parseArgs(args: []const []const u8) !Options {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: golden_runner [--tests-dir <dir>] [--update] [-emit-llvm]
+        \\Usage: golden_runner [--tests-dir <dir>] [--filter <text>] [--update] [-emit-llvm]
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
+        \\  --filter <text>    Only run tests whose relative path contains this text
         \\  --update           Overwrite golden .ll files with current output
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
@@ -148,7 +158,7 @@ const TestCase = struct {
     golden_path: []const u8,
 };
 
-fn collectTestCases(allocator: std.mem.Allocator, tests_dir: []const u8) ![]TestCase {
+fn collectTestCases(allocator: std.mem.Allocator, tests_dir: []const u8, filter: ?[]const u8) ![]TestCase {
     var list: std.ArrayList(TestCase) = .empty;
     var dir = try std.fs.cwd().openDir(tests_dir, .{ .iterate = true });
     defer dir.close();
@@ -159,6 +169,9 @@ fn collectTestCases(allocator: std.mem.Allocator, tests_dir: []const u8) ![]Test
     while (try walker.next()) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.path, ".f")) continue;
+        if (filter) |needle| {
+            if (!std.mem.containsAtLeast(u8, entry.path, 1, needle)) continue;
+        }
 
         const input_path = try std.fs.path.join(allocator, &.{ tests_dir, entry.path });
         const golden_path = try replaceExtension(allocator, input_path, "ll");
