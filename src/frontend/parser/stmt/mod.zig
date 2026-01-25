@@ -21,6 +21,9 @@ const ParseStmtError = anyerror;
 pub const DoContext = control_flow.DoContext;
 
 pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize, do_ctx: *DoContext) ParseStmtError!Stmt {
+    if (do_ctx.popPending()) |pending| {
+        return pending;
+    }
     const line = lines[index.*];
     const tokens = try lexer.lexLogicalLine(arena, line);
     defer arena.free(tokens);
@@ -243,6 +246,9 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
         defer arena.free(end_tokens);
         var end_lp = LineParser.init(end_line, end_tokens);
         if (!end_lp.isKeywordSplit("ENDIF") and !helpers.isEndIfLine(end_lp)) return error.ExpectedEndIf;
+        if (end_line.label) |end_label| {
+            try do_ctx.pushPending(.{ .label = end_label, .node = .{ .cont = {} } });
+        }
         index.* += 1;
         return .{
             .label = label,
@@ -410,4 +416,35 @@ test "parseIfBlock stops at ENDIF" {
     try testing.expectEqual(@as(usize, 1), stmts.len);
     try testing.expectEqual(@as(usize, 1), idx);
     try testing.expect(stmts[0].node == .assignment);
+}
+
+test "parseStatement preserves labeled END IF as pending continue" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      IF (A) THEN\n" ++
+        "      A=1\n" ++
+        " 0010 END IF\n" ++
+        "      A=2\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+
+    const stmt1 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx);
+    try testing.expect(stmt1.node == .if_block);
+    try testing.expectEqual(@as(usize, 3), idx);
+
+    const stmt2 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx);
+    try testing.expectEqualStrings("0010", stmt2.label.?);
+    try testing.expect(stmt2.node == .cont);
+    try testing.expectEqual(@as(usize, 3), idx);
+
+    const stmt3 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx);
+    try testing.expect(stmt3.node == .assignment);
+    try testing.expectEqual(@as(usize, 4), idx);
 }

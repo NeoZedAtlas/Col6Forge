@@ -5,6 +5,7 @@ const expr = @import("../expr.zig");
 const helpers = @import("helpers.zig");
 
 const LineParser = context.LineParser;
+const Stmt = ast.Stmt;
 const StmtNode = ast.StmtNode;
 const Expr = ast.Expr;
 
@@ -13,11 +14,13 @@ const ParseStmtError = anyerror;
 pub const DoContext = struct {
     stack: std.array_list.Managed([]const u8),
     counter: usize,
+    pending: std.array_list.Managed(Stmt),
 
     pub fn init(arena: std.mem.Allocator) DoContext {
         return .{
             .stack = std.array_list.Managed([]const u8).init(arena),
             .counter = 0,
+            .pending = std.array_list.Managed(Stmt).init(arena),
         };
     }
 
@@ -37,6 +40,18 @@ pub const DoContext = struct {
         const label = self.stack.items[idx];
         self.stack.items.len = idx;
         return label;
+    }
+
+    pub fn pushPending(self: *DoContext, stmt: Stmt) !void {
+        try self.pending.append(stmt);
+    }
+
+    pub fn popPending(self: *DoContext) ?Stmt {
+        if (self.pending.items.len == 0) return null;
+        const idx = self.pending.items.len - 1;
+        const stmt = self.pending.items[idx];
+        self.pending.items.len = idx;
+        return stmt;
     }
 };
 
