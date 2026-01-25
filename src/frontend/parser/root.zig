@@ -5,7 +5,7 @@ const lexer = @import("../lexer.zig");
 const context = @import("context.zig");
 const decl = @import("decl.zig");
 const expr = @import("expr.zig");
-const stmt = @import("stmt.zig");
+const stmt = @import("stmt/mod.zig");
 
 const Program = ast.Program;
 const ProgramUnitKind = ast.ProgramUnitKind;
