@@ -121,17 +121,55 @@ pub fn emitComplexBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: Val
             return buildComplex(ctx, builder, real, imag, lhs.ty);
         },
         .div => {
-            const br_br = try emitBinaryOp(ctx, builder, "fmul", elem_ty, br, br);
-            const bi_bi = try emitBinaryOp(ctx, builder, "fmul", elem_ty, bi, bi);
-            const denom = try emitBinaryOp(ctx, builder, "fadd", elem_ty, br_br, bi_bi);
-            const ar_br = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ar, br);
-            const ai_bi = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ai, bi);
-            const ai_br = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ai, br);
-            const ar_bi = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ar, bi);
-            const real_num = try emitBinaryOp(ctx, builder, "fadd", elem_ty, ar_br, ai_bi);
-            const imag_num = try emitBinaryOp(ctx, builder, "fsub", elem_ty, ai_br, ar_bi);
-            const real = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, real_num, denom);
-            const imag = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, imag_num, denom);
+            const zero = utils.zeroValue(elem_ty);
+            const abs_br = blk: {
+                const cond_name = try ctx.nextTemp();
+                try builder.compare(cond_name, "fcmp", "olt", elem_ty, br, zero);
+                const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
+                const neg = try emitBinaryOp(ctx, builder, "fsub", elem_ty, zero, br);
+                const tmp = try ctx.nextTemp();
+                try builder.select(tmp, elem_ty, cond, neg, br);
+                break :blk ValueRef{ .name = tmp, .ty = elem_ty, .is_ptr = false };
+            };
+            const abs_bi = blk: {
+                const cond_name = try ctx.nextTemp();
+                try builder.compare(cond_name, "fcmp", "olt", elem_ty, bi, zero);
+                const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
+                const neg = try emitBinaryOp(ctx, builder, "fsub", elem_ty, zero, bi);
+                const tmp = try ctx.nextTemp();
+                try builder.select(tmp, elem_ty, cond, neg, bi);
+                break :blk ValueRef{ .name = tmp, .ty = elem_ty, .is_ptr = false };
+            };
+            const cond_name = try ctx.nextTemp();
+            try builder.compare(cond_name, "fcmp", "oge", elem_ty, abs_br, abs_bi);
+            const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
+
+            const r1 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, bi, br);
+            const bi_r1 = try emitBinaryOp(ctx, builder, "fmul", elem_ty, bi, r1);
+            const denom1 = try emitBinaryOp(ctx, builder, "fadd", elem_ty, br, bi_r1);
+            const ai_r1 = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ai, r1);
+            const ar_r1 = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ar, r1);
+            const real_num1 = try emitBinaryOp(ctx, builder, "fadd", elem_ty, ar, ai_r1);
+            const imag_num1 = try emitBinaryOp(ctx, builder, "fsub", elem_ty, ai, ar_r1);
+            const real1 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, real_num1, denom1);
+            const imag1 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, imag_num1, denom1);
+
+            const r2 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, br, bi);
+            const br_r2 = try emitBinaryOp(ctx, builder, "fmul", elem_ty, br, r2);
+            const denom2 = try emitBinaryOp(ctx, builder, "fadd", elem_ty, bi, br_r2);
+            const ar_r2 = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ar, r2);
+            const ai_r2 = try emitBinaryOp(ctx, builder, "fmul", elem_ty, ai, r2);
+            const real_num2 = try emitBinaryOp(ctx, builder, "fadd", elem_ty, ar_r2, ai);
+            const imag_num2 = try emitBinaryOp(ctx, builder, "fsub", elem_ty, ai_r2, ar);
+            const real2 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, real_num2, denom2);
+            const imag2 = try emitBinaryOp(ctx, builder, "fdiv", elem_ty, imag_num2, denom2);
+
+            const real_name = try ctx.nextTemp();
+            try builder.select(real_name, elem_ty, cond, real1, real2);
+            const imag_name = try ctx.nextTemp();
+            try builder.select(imag_name, elem_ty, cond, imag1, imag2);
+            const real = ValueRef{ .name = real_name, .ty = elem_ty, .is_ptr = false };
+            const imag = ValueRef{ .name = imag_name, .ty = elem_ty, .is_ptr = false };
             return buildComplex(ctx, builder, real, imag, lhs.ty);
         },
         else => return error.UnsupportedComplexOp,
