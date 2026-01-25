@@ -46,6 +46,16 @@ pub fn emitStmt(
             try builder.br(next_block);
             return true;
         },
+        .backspace => |backspace| {
+            try io.emitBackspace(ctx, builder, backspace);
+            try builder.br(next_block);
+            return true;
+        },
+        .endfile => |endfile| {
+            try io.emitEndfile(ctx, builder, endfile);
+            try builder.br(next_block);
+            return true;
+        },
         .data => |data| {
             try execution.emitData(ctx, builder, data);
             try builder.br(next_block);

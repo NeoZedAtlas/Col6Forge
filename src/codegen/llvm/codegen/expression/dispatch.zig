@@ -94,7 +94,6 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                 const ptr = try memory.emitSubscriptPtr(ctx, builder, call_or_sub);
                 const sym = ctx.findSymbol(call_or_sub.name) orelse return error.UnknownSymbol;
                 const ty = llvm_types.typeFromKind(sym.type_kind);
-                if (ty == .ptr) return error.UnsupportedArrayElementType;
                 const tmp = try ctx.nextTemp();
                 try builder.load(tmp, ty, ptr);
                 return .{ .name = tmp, .ty = ty, .is_ptr = false };

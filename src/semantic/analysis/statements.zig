@@ -33,6 +33,12 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
         .rewind => |rewind| {
             try expressions.resolveExpr(self, rewind.unit);
         },
+        .backspace => |backspace| {
+            try expressions.resolveExpr(self, backspace.unit);
+        },
+        .endfile => |endfile| {
+            try expressions.resolveExpr(self, endfile.unit);
+        },
         .data => |data| {
             for (data.inits) |data_init| {
                 try expressions.resolveExpr(self, data_init.target);
@@ -97,6 +103,12 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         },
         .rewind => |rewind| {
             try expressions.resolveExpr(self, rewind.unit);
+        },
+        .backspace => |backspace| {
+            try expressions.resolveExpr(self, backspace.unit);
+        },
+        .endfile => |endfile| {
+            try expressions.resolveExpr(self, endfile.unit);
         },
         .data => |data| {
             for (data.inits) |data_init| {

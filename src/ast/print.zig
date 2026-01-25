@@ -80,6 +80,12 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         .rewind => {
             try writer.print(";   stmt label={s} rewind\n", .{label_text});
         },
+        .backspace => {
+            try writer.print(";   stmt label={s} backspace\n", .{label_text});
+        },
+        .endfile => {
+            try writer.print(";   stmt label={s} endfile\n", .{label_text});
+        },
         .data => |data| {
             try writer.print(";   stmt label={s} data inits({d})\n", .{ label_text, data.inits.len });
         },

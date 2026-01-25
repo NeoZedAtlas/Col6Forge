@@ -19,7 +19,6 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     if (sym.dims.len == 0) return error.ArraysUnsupported;
     const base_ptr = try ctx.getPointer(call.name);
     const elem_ty = llvm_types.typeFromKind(sym.type_kind);
-    if (elem_ty == .ptr) return error.UnsupportedArrayElementType;
 
     if (call.args.len == 0) return error.InvalidSubscript;
     if (call.args.len != sym.dims.len) return error.InvalidSubscript;
@@ -51,7 +50,6 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
     if (sym.dims.len == 0) return error.ArraysUnsupported;
     const base_ptr = try ctx.getPointer(call.name);
     const elem_ty = llvm_types.typeFromKind(sym.type_kind);
-    if (elem_ty == .ptr) return error.UnsupportedArrayElementType;
 
     if (call.args.len != 1) return error.InvalidSubscript;
     const idx1 = try emitIndex(ctx, builder, call.args[0]);

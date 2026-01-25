@@ -100,6 +100,16 @@ pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine,
         index.* += 1;
         return .{ .label = label, .node = stmt_node };
     }
+    if (lp.isKeywordSplit("BACKSPACE")) {
+        const stmt_node = try parseBackspaceStatement(arena, &lp);
+        index.* += 1;
+        return .{ .label = label, .node = stmt_node };
+    }
+    if (lp.isKeywordSplit("ENDFILE")) {
+        const stmt_node = try parseEndfileStatement(arena, &lp);
+        index.* += 1;
+        return .{ .label = label, .node = stmt_node };
+    }
     if (lp.isKeywordSplit("CALL")) {
         if (lineHasEquals(lp)) {
             if (tryParseBlankInsensitiveAssignment(arena, line, lp)) |stmt_node| {
@@ -277,6 +287,16 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator) ParseStmtError
         node.* = try parseRewindStatement(arena, lp);
         return node;
     }
+    if (lp.isKeywordSplit("BACKSPACE")) {
+        const node = try arena.create(StmtNode);
+        node.* = try parseBackspaceStatement(arena, lp);
+        return node;
+    }
+    if (lp.isKeywordSplit("ENDFILE")) {
+        const node = try arena.create(StmtNode);
+        node.* = try parseEndfileStatement(arena, lp);
+        return node;
+    }
     if (lp.isKeywordSplit("STOP")) {
         _ = lp.consumeKeyword("STOP");
         const node = try arena.create(StmtNode);
@@ -382,6 +402,18 @@ fn parseRewindStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtErro
     _ = lp.consumeKeyword("REWIND");
     const unit_expr = try expr.parseExpr(lp, arena, 0);
     return .{ .rewind = .{ .unit = unit_expr } };
+}
+
+fn parseBackspaceStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    _ = lp.consumeKeyword("BACKSPACE");
+    const unit_expr = try expr.parseExpr(lp, arena, 0);
+    return .{ .backspace = .{ .unit = unit_expr } };
+}
+
+fn parseEndfileStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    _ = lp.consumeKeyword("ENDFILE");
+    const unit_expr = try expr.parseExpr(lp, arena, 0);
+    return .{ .endfile = .{ .unit = unit_expr } };
 }
 
 fn parseInlineFormatSpec(

@@ -71,6 +71,8 @@ pub fn main() !void {
         defer allocator.free(ref_exe);
         const test_exe = try std.fs.path.join(allocator, &.{ work_dir, exeName("test") });
         defer allocator.free(test_exe);
+        const runtime_path = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "f77_io.c" });
+        defer allocator.free(runtime_path);
 
         const ir = Col6Forge.runPipeline(allocator, abs_input_path, options.emit) catch |err| {
             failures += 1;
@@ -102,7 +104,7 @@ pub fn main() !void {
             continue;
         }
 
-        const our_compile = runProcessCapture(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path }, work_dir) catch |err| {
+        const our_compile = runProcessCapture(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path, runtime_path }, work_dir) catch |err| {
             failures += 1;
             try logStderr("zig cc failed: {s} ({s})\n", .{ ll_path, @errorName(err) });
             continue;

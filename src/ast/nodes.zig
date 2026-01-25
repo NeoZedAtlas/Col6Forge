@@ -106,6 +106,8 @@ pub const StmtNode = union(enum) {
     write: WriteStmt,
     read: ReadStmt,
     rewind: RewindStmt,
+    backspace: BackspaceStmt,
+    endfile: EndfileStmt,
     data: DataStmt,
     format: FormatStmt,
     arith_if: ArithIfStmt,
@@ -140,6 +142,14 @@ pub const ReadStmt = struct {
 };
 
 pub const RewindStmt = struct {
+    unit: *Expr,
+};
+
+pub const BackspaceStmt = struct {
+    unit: *Expr,
+};
+
+pub const EndfileStmt = struct {
     unit: *Expr,
 };
 
