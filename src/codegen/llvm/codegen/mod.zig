@@ -15,6 +15,16 @@ const FormatMaps = struct {
     inline_items: std.AutoHashMap(usize, FormatInfo),
 };
 
+fn commonLayoutsCompatible(a: []const common.CommonItem, b: []const common.CommonItem) bool {
+    const min_len = if (a.len < b.len) a.len else b.len;
+    var idx: usize = 0;
+    while (idx < min_len) : (idx += 1) {
+        if (a[idx].offset != b[idx].offset) return false;
+        if (a[idx].ty != b[idx].ty) return false;
+    }
+    return true;
+}
+
 pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: sema.SemanticProgram, source_name: []const u8) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
     errdefer buffer.deinit();
@@ -65,13 +75,17 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
         const sem_unit = sem_map.get(unit.name) orelse return error.MissingSemanticUnit;
         const layouts = try common.buildUnitCommonLayouts(scratch, unit, sem_unit);
         for (layouts) |layout| {
-            if (common_blocks.get(layout.key)) |info| {
-                if (info.size != layout.size or info.alignment != layout.alignment) return error.CommonBlockMismatch;
+            if (common_blocks.getPtr(layout.key)) |info| {
+                if (!commonLayoutsCompatible(info.items, layout.items)) return error.CommonBlockMismatch;
+                if (layout.items.len > info.items.len) info.items = layout.items;
+                if (layout.size > info.size) info.size = layout.size;
+                if (layout.alignment > info.alignment) info.alignment = layout.alignment;
             } else {
                 try common_blocks.put(layout.key, .{
                     .global_name = layout.global_name,
                     .size = layout.size,
                     .alignment = layout.alignment,
+                    .items = layout.items,
                 });
             }
         }

@@ -3,6 +3,7 @@ const ast = @import("../../../../ast/nodes.zig");
 const ir = @import("../../../ir.zig");
 const context = @import("../context.zig");
 const memory = @import("memory.zig");
+const dispatch = @import("dispatch.zig");
 
 const Expr = ast.Expr;
 const IRType = ir.IRType;
@@ -40,9 +41,16 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
             if (kind == .subscript) {
                 return memory.emitSubscriptPtr(ctx, builder, call);
             }
-            return error.NonAddressableArgument;
+            // Non-subscript call expressions are not addressable.
         },
-        .substring => return error.NonAddressableArgument,
-        else => return error.NonAddressableArgument,
+        .substring => {},
+        else => {},
     }
+    // For non-addressable actual arguments (literals/expressions), pass a temp.
+    const value = try dispatch.emitExpr(ctx, builder, expr);
+    const tmp = try ctx.nextTemp();
+    try builder.alloca(tmp, value.ty);
+    const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+    try builder.store(value, ptr);
+    return ptr;
 }

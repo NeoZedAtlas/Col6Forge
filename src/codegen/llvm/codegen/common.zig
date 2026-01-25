@@ -23,6 +23,7 @@ pub const CommonBlockInfo = struct {
     global_name: []const u8,
     size: usize,
     alignment: usize,
+    items: []const CommonItem,
 };
 
 pub fn buildUnitCommonLayouts(allocator: std.mem.Allocator, unit: ast.ProgramUnit, sem: *const sema.SemanticUnit) ![]CommonBlockLayout {
