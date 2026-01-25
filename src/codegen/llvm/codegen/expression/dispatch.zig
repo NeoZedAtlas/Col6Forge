@@ -123,6 +123,10 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                 return intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args);
             }
             const ret_ty = llvm_types.typeFromKind(sym.type_kind);
+            if (sym.storage == .dummy) {
+                const fn_ptr = try ctx.getPointer(call_or_sub.name);
+                return call.emitIndirectCall(ctx, builder, fn_ptr, ret_ty, call_or_sub.args, false);
+            }
             const fn_name = try ctx.ensureDecl(call_or_sub.name, ret_ty);
             return call.emitCall(ctx, builder, fn_name, ret_ty, call_or_sub.args, false);
         },

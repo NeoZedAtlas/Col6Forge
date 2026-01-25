@@ -192,6 +192,15 @@ pub fn Builder(comptime WriterType: type) type {
             }
         }
 
+        pub fn callIndirect(self: *@This(), tmp: ?[]const u8, ret_ty: IRType, fn_ptr: []const u8, args: []const u8) !void {
+            try self.bump();
+            if (tmp) |name| {
+                try self.writer.print("  {s} = call {s} {s}({s})\n", .{ name, llvm_types.irTypeText(ret_ty), fn_ptr, args });
+            } else {
+                try self.writer.print("  call {s} {s}({s})\n", .{ llvm_types.irTypeText(ret_ty), fn_ptr, args });
+            }
+        }
+
         pub fn extractValue(self: *@This(), tmp: []const u8, agg_ty: IRType, agg_val: ValueRef, index: usize) !void {
             try self.bump();
             try self.writer.print("  {s} = extractvalue {s} {s}, {d}\n", .{ tmp, llvm_types.irTypeText(agg_ty), agg_val.name, index });

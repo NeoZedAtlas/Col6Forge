@@ -112,10 +112,17 @@ pub fn implicitCharLen(self: *context.Context, name: []const u8) ?usize {
 pub fn isIntrinsicName(name: []const u8) bool {
     return std.ascii.eqlIgnoreCase(name, "SIN") or
         std.ascii.eqlIgnoreCase(name, "COS") or
+        std.ascii.eqlIgnoreCase(name, "TAN") or
+        std.ascii.eqlIgnoreCase(name, "ASIN") or
+        std.ascii.eqlIgnoreCase(name, "ACOS") or
+        std.ascii.eqlIgnoreCase(name, "SINH") or
+        std.ascii.eqlIgnoreCase(name, "COSH") or
         std.ascii.eqlIgnoreCase(name, "SQRT") or
         std.ascii.eqlIgnoreCase(name, "ABS") or
         std.ascii.eqlIgnoreCase(name, "IABS") or
         std.ascii.eqlIgnoreCase(name, "AINT") or
+        std.ascii.eqlIgnoreCase(name, "ANINT") or
+        std.ascii.eqlIgnoreCase(name, "NINT") or
         std.ascii.eqlIgnoreCase(name, "INT") or
         std.ascii.eqlIgnoreCase(name, "IFIX") or
         std.ascii.eqlIgnoreCase(name, "AMOD") or

@@ -100,14 +100,28 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
 
     var string_pool = context.StringPool.init(scratch);
     defer string_pool.deinit();
+    var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(scratch);
+    defer intrinsic_wrappers.deinit();
 
     for (program.units) |unit| {
         const sem_unit = sem_map.get(unit.name) orelse return error.MissingSemanticUnit;
         var format_maps = try buildFormatMaps(scratch, &builder, unit);
-        var ctx = context.Context.init(scratch, unit, sem_unit, &decls, &defined, &format_maps.labels, &format_maps.inline_items, &string_pool);
+        var ctx = context.Context.init(
+            scratch,
+            unit,
+            sem_unit,
+            &decls,
+            &defined,
+            &format_maps.labels,
+            &format_maps.inline_items,
+            &string_pool,
+            &intrinsic_wrappers,
+        );
         defer ctx.deinit();
         try stmts.emitFunction(&ctx, &builder);
     }
+
+    try emitIntrinsicWrappers(&builder, &intrinsic_wrappers);
 
     for (string_pool.items.items) |entry| {
         try builder.globalString(entry.name, entry.bytes);
@@ -133,6 +147,33 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
     }
 
     return;
+}
+
+fn emitIntrinsicWrappers(builder: anytype, wrappers: *const std.StringHashMap(context.IntrinsicWrapperKind)) !void {
+    var it = wrappers.iterator();
+    while (it.next()) |entry| {
+        switch (entry.value_ptr.*) {
+            .iabs => try emitIabsWrapper(builder, entry.key_ptr.*),
+        }
+    }
+}
+
+fn emitIabsWrapper(builder: anytype, name: []const u8) !void {
+    try builder.defineStartWithRet(.i32, name);
+    try builder.defineArgPtr("%arg0", true);
+    try builder.defineEnd();
+    try builder.entryLabel();
+    const arg_ptr = context.ValueRef{ .name = "%arg0", .ty = .ptr, .is_ptr = true };
+    try builder.load("%t0", .i32, arg_ptr);
+    const value = context.ValueRef{ .name = "%t0", .ty = .i32, .is_ptr = false };
+    const zero = context.ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+    try builder.compare("%t1", "icmp", "slt", .i32, value, zero);
+    const cond = context.ValueRef{ .name = "%t1", .ty = .i1, .is_ptr = false };
+    try builder.binary("%t2", "sub", .i32, zero, value);
+    const neg = context.ValueRef{ .name = "%t2", .ty = .i32, .is_ptr = false };
+    try builder.select("%t3", .i32, cond, neg, value);
+    try builder.retValue(.i32, "%t3");
+    try builder.functionEnd();
 }
 
 fn buildFormatMaps(allocator: std.mem.Allocator, builder: anytype, unit: ast.ProgramUnit) !FormatMaps {

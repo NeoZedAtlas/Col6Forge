@@ -79,6 +79,27 @@ pub fn emitIntrinsicUnaryFloat(ctx: *Context, builder: anytype, base: []const u8
     return emitIntrinsicUnaryFloatValue(ctx, builder, base, value);
 }
 
+fn emitIntrinsicAnint(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    if (value.ty != .f32 and value.ty != .f64) {
+        value = try casting.coerce(ctx, builder, value, .f32);
+    }
+    return emitIntrinsicUnaryFloatValue(ctx, builder, "rint", value);
+}
+
+fn emitIntrinsicNint(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    if (value.ty != .f32 and value.ty != .f64) {
+        value = try casting.coerce(ctx, builder, value, .f32);
+    }
+    const rounded = try emitIntrinsicUnaryFloatValue(ctx, builder, "rint", value);
+    const tmp = try ctx.nextTemp();
+    try builder.cast(tmp, "fptosi", rounded.ty, rounded, .i32);
+    return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+}
+
 pub fn emitIntrinsicAbs(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
@@ -393,7 +414,34 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
     if (std.ascii.eqlIgnoreCase(name, "CONJG")) return emitIntrinsicConjg(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "FLOAT")) return emitIntrinsicFloat(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "REAL")) return emitIntrinsicFloat(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "ANINT")) return emitIntrinsicAnint(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "NINT")) return emitIntrinsicNint(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "ICHAR")) return emitIntrinsicIchar(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "TAN")) {
+        if (args.len != 1) return error.InvalidIntrinsicCall;
+        const value = try dispatch.emitExpr(ctx, builder, args[0]);
+        return emitLibmUnaryFloatValue(ctx, builder, "tanf", "tan", value);
+    }
+    if (std.ascii.eqlIgnoreCase(name, "ASIN")) {
+        if (args.len != 1) return error.InvalidIntrinsicCall;
+        const value = try dispatch.emitExpr(ctx, builder, args[0]);
+        return emitLibmUnaryFloatValue(ctx, builder, "asinf", "asin", value);
+    }
+    if (std.ascii.eqlIgnoreCase(name, "ACOS")) {
+        if (args.len != 1) return error.InvalidIntrinsicCall;
+        const value = try dispatch.emitExpr(ctx, builder, args[0]);
+        return emitLibmUnaryFloatValue(ctx, builder, "acosf", "acos", value);
+    }
+    if (std.ascii.eqlIgnoreCase(name, "SINH")) {
+        if (args.len != 1) return error.InvalidIntrinsicCall;
+        const value = try dispatch.emitExpr(ctx, builder, args[0]);
+        return emitLibmUnaryFloatValue(ctx, builder, "sinhf", "sinh", value);
+    }
+    if (std.ascii.eqlIgnoreCase(name, "COSH")) {
+        if (args.len != 1) return error.InvalidIntrinsicCall;
+        const value = try dispatch.emitExpr(ctx, builder, args[0]);
+        return emitLibmUnaryFloatValue(ctx, builder, "coshf", "cosh", value);
+    }
     if (std.ascii.eqlIgnoreCase(name, "EXP")) {
         if (args.len != 1) return error.InvalidIntrinsicCall;
         const value = try dispatch.emitExpr(ctx, builder, args[0]);

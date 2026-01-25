@@ -32,6 +32,12 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
 }
 
 pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!void {
+    const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
+    if (sym.storage == .dummy and sym.is_external) {
+        const fn_ptr = try ctx.getPointer(call.name);
+        _ = try expr.emitIndirectCall(ctx, builder, fn_ptr, .void, call.args, true);
+        return;
+    }
     const fn_name = try ctx.ensureDecl(call.name, .void);
     _ = try expr.emitCall(ctx, builder, fn_name, .void, call.args, true);
 }

@@ -26,6 +26,7 @@ pub const loadValue = memory.loadValue;
 pub const loadI32 = memory.loadI32;
 
 pub const emitCall = call_mod.emitCall;
+pub const emitIndirectCall = call_mod.emitIndirectCall;
 pub const emitArgPointer = call_mod.emitArgPointer;
 
 const std = @import("std");
@@ -47,6 +48,7 @@ const TestHarness = struct {
     sem_unit: sema.SemanticUnit,
     decls: std.StringHashMap(context.IRDecl),
     defined: std.StringHashMap(void),
+    intrinsic_wrappers: std.StringHashMap(context.IntrinsicWrapperKind),
     ctx: Context,
 
     fn init(allocator: std.mem.Allocator) !TestHarness {
@@ -105,7 +107,8 @@ const TestHarness = struct {
         var formats = std.StringHashMap(context.FormatInfo).init(a);
         var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
         var string_pool = context.StringPool.init(a);
-        var ctx = Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool);
+        var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
+        var ctx = Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers);
         try ctx.locals.put("A", .{ .name = "%a", .ty = .ptr, .is_ptr = true });
         try ctx.locals.put("ARR", .{ .name = "%arr", .ty = .ptr, .is_ptr = true });
 
@@ -115,6 +118,7 @@ const TestHarness = struct {
             .sem_unit = sem_unit,
             .decls = decls,
             .defined = defined,
+            .intrinsic_wrappers = intrinsic_wrappers,
             .ctx = ctx,
         };
     }
@@ -123,6 +127,7 @@ const TestHarness = struct {
         self.ctx.deinit();
         self.decls.deinit();
         self.defined.deinit();
+        self.intrinsic_wrappers.deinit();
         self.arena.deinit();
     }
 };

@@ -59,6 +59,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         const is_return_symbol = ctx.unit.kind == .function and
             sym.kind == .function and
             std.mem.eql(u8, sym.name, ctx.unit.name);
+        if (sym.is_external) continue;
         if (sym.kind == .parameter or sym.kind == .subroutine or (sym.kind == .function and !is_return_symbol)) continue;
         if (ctx.locals.contains(sym.name)) continue;
         if (sym.type_kind == .character) {
@@ -326,7 +327,9 @@ test "emitFunction emits a simple assignment" {
     var formats = std.StringHashMap(context.FormatInfo).init(a);
     var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
     var string_pool = context.StringPool.init(a);
-    var ctx = Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool);
+    var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
+    defer intrinsic_wrappers.deinit();
+    var ctx = Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers);
     defer ctx.deinit();
 
     var buffer = std.array_list.Managed(u8).init(allocator);

@@ -33,6 +33,10 @@ pub const StatementFunctionSubst = struct {
     actuals: []*ast.Expr,
 };
 
+pub const IntrinsicWrapperKind = enum {
+    iabs,
+};
+
 pub const StringPool = struct {
     allocator: std.mem.Allocator,
     names: std.StringHashMap([]const u8),
@@ -91,6 +95,7 @@ pub const Context = struct {
     string_pool: *StringPool,
     statement_functions: std.StringHashMap(StatementFunction),
     stmt_func_stack: std.array_list.Managed(StatementFunctionSubst),
+    intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -101,6 +106,7 @@ pub const Context = struct {
         formats: *const std.StringHashMap(FormatInfo),
         inline_formats: *const std.AutoHashMap(usize, FormatInfo),
         string_pool: *StringPool,
+        intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
     ) Context {
         return .{
             .allocator = allocator,
@@ -119,6 +125,7 @@ pub const Context = struct {
             .string_pool = string_pool,
             .statement_functions = std.StringHashMap(StatementFunction).init(allocator),
             .stmt_func_stack = std.array_list.Managed(StatementFunctionSubst).init(allocator),
+            .intrinsic_wrappers = intrinsic_wrappers,
         };
     }
 
@@ -201,6 +208,17 @@ pub const Context = struct {
         const decl = IRDecl{ .ret_type = ret_ty, .sig = sig, .varargs = varargs };
         try self.decls.put(name, decl);
         return name;
+    }
+
+    pub fn ensureIntrinsicWrapper(self: *Context, name: []const u8) !?[]const u8 {
+        if (std.ascii.eqlIgnoreCase(name, "IABS")) {
+            const wrapper = "__cf_intrinsic_iabs";
+            if (!self.intrinsic_wrappers.contains(wrapper)) {
+                try self.intrinsic_wrappers.put(wrapper, .iabs);
+            }
+            return wrapper;
+        }
+        return null;
     }
 
     pub fn implicitType(self: *Context, name: []const u8) TypeKind {

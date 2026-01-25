@@ -15,22 +15,34 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         .call_or_subscript => |call| {
             const idx = try symbols_mod.ensureSymbol(self, call.name);
             var sym = self.symbols.items[idx];
-            if (!sym.is_intrinsic and symbols_mod.isIntrinsicName(call.name)) {
-                sym.is_intrinsic = true;
-                self.symbols.items[idx] = sym;
-            }
             var kind: ResolvedRefKind = .unknown;
-            if (sym.dims.len > 0) {
-                kind = .subscript;
-            } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
-                kind = .call;
-            } else {
-                // Default to function call when nothing declares it as an array.
-                kind = .call;
-                if (sym.kind == .variable) {
-                    sym.kind = .function;
+            if (sym.storage == .dummy) {
+                if (sym.dims.len > 0) {
+                    kind = .subscript;
+                } else {
+                    kind = .call;
+                    if (sym.kind == .variable) {
+                        sym.kind = .function;
+                    }
+                    self.symbols.items[idx] = sym;
                 }
-                self.symbols.items[idx] = sym;
+            } else {
+                if (!sym.is_intrinsic and symbols_mod.isIntrinsicName(call.name)) {
+                    sym.is_intrinsic = true;
+                    self.symbols.items[idx] = sym;
+                }
+                if (sym.dims.len > 0) {
+                    kind = .subscript;
+                } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                    kind = .call;
+                } else {
+                    // Default to function call when nothing declares it as an array.
+                    kind = .call;
+                    if (sym.kind == .variable) {
+                        sym.kind = .function;
+                    }
+                    self.symbols.items[idx] = sym;
+                }
             }
             try self.refs.append(.{ .expr = expr, .name = call.name, .kind = kind });
             for (call.args) |arg| {
