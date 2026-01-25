@@ -28,25 +28,39 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
 
     const descriptor_count = countFormatDescriptors(fmt_info.items);
     if (descriptor_count == 0) {
+        var pending_spaces: usize = 0;
         for (fmt_info.items) |item| {
             switch (item) {
-                .literal => |text| try fmt_buf.appendSlice(text),
-                .spaces => |count| try appendSpaces(&fmt_buf, count),
+                .literal => |text| {
+                    try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                    try fmt_buf.appendSlice(text);
+                },
+                .spaces => |count| {
+                    pending_spaces += count;
+                },
                 else => {},
             }
         }
+        pending_spaces = 0;
     } else {
         var arg_index: usize = 0;
+        var pending_spaces: usize = 0;
         while (arg_index < write.args.len) {
             var scale_factor: i32 = 0;
             var idx: usize = 0;
             while (idx < fmt_info.items.len) : (idx += 1) {
                 const item = fmt_info.items[idx];
                 switch (item) {
-                    .literal => |text| try fmt_buf.appendSlice(text),
-                    .spaces => |count| try appendSpaces(&fmt_buf, count),
+                    .literal => |text| {
+                        try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                        try fmt_buf.appendSlice(text);
+                    },
+                    .spaces => |count| {
+                        pending_spaces += count;
+                    },
                     .int => |spec| {
                         if (arg_index >= write.args.len) break;
+                        try flushPendingSpaces(&fmt_buf, &pending_spaces);
                         const value = try expr.emitExpr(ctx, builder, write.args[arg_index]);
                         const coerced = try expr.coerce(ctx, builder, value, .i32);
                         try appendIntFormat(&fmt_buf, spec.width);
@@ -55,6 +69,7 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                     },
                     .real, .real_fixed => |spec| {
                         if (arg_index >= write.args.len) break;
+                        try flushPendingSpaces(&fmt_buf, &pending_spaces);
                         const value = try expr.emitExpr(ctx, builder, write.args[arg_index]);
                         var coerced = try expr.coerce(ctx, builder, value, .f64);
                         if (scale_factor != 0) {
@@ -77,6 +92,7 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                     },
                     .char => |spec| {
                         if (arg_index >= write.args.len) break;
+                        try flushPendingSpaces(&fmt_buf, &pending_spaces);
                         const value = try expr.emitExpr(ctx, builder, write.args[arg_index]);
                         if (value.ty != .ptr) return error.UnsupportedCharArg;
                         if (spec.width == 0) {
@@ -93,7 +109,10 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                     .blank_control => {},
                 }
             }
-            if (arg_index >= write.args.len) break;
+            if (arg_index >= write.args.len) {
+                pending_spaces = 0;
+                break;
+            }
         }
     }
 
@@ -220,6 +239,12 @@ fn appendSpaces(buffer: *std.array_list.Managed(u8), count: usize) !void {
     while (i < count) : (i += 1) {
         try buffer.append(' ');
     }
+}
+
+fn flushPendingSpaces(buffer: *std.array_list.Managed(u8), pending: *usize) !void {
+    if (pending.* == 0) return;
+    try appendSpaces(buffer, pending.*);
+    pending.* = 0;
 }
 
 fn appendIntFormat(buffer: *std.array_list.Managed(u8), width: usize) !void {

@@ -18,13 +18,21 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try ctx.buildRefMap();
     try ctx.buildLocals();
 
-    if (ctx.unit.kind != .subroutine and ctx.unit.kind != .program and ctx.unit.kind != .block_data) {
+    if (ctx.unit.kind != .subroutine and ctx.unit.kind != .program and ctx.unit.kind != .block_data and ctx.unit.kind != .function) {
         return error.UnsupportedProgramUnit;
     }
 
     const func_name = utils.mangleName(ctx.allocator, ctx.unit.name) catch return error.OutOfMemory;
+    const return_ty = if (ctx.unit.kind == .function) blk: {
+        const sym = ctx.findSymbol(ctx.unit.name) orelse return error.UnknownSymbol;
+        break :blk llvm_types.typeFromKind(sym.type_kind);
+    } else null;
 
-    try builder.defineStart(func_name);
+    if (return_ty) |ret_ty| {
+        try builder.defineStartWithRet(ret_ty, func_name);
+    } else {
+        try builder.defineStart(func_name);
+    }
     var arg_names = std.array_list.Managed([]const u8).init(ctx.allocator);
     defer arg_names.deinit();
 
@@ -48,7 +56,10 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
 
     for (ctx.sem.symbols) |sym| {
         if (sym.storage != .local) continue;
-        if (sym.kind == .parameter or sym.kind == .function or sym.kind == .subroutine) continue;
+        const is_return_symbol = ctx.unit.kind == .function and
+            sym.kind == .function and
+            std.mem.eql(u8, sym.name, ctx.unit.name);
+        if (sym.kind == .parameter or sym.kind == .subroutine or (sym.kind == .function and !is_return_symbol)) continue;
         if (ctx.locals.contains(sym.name)) continue;
         const ty = llvm_types.typeFromKind(sym.type_kind);
         if (sym.dims.len > 0) {
@@ -75,7 +86,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     }
 
     if (block_names.len == 0) {
-        try builder.retVoid();
+        try emitReturn(ctx, builder, return_ty);
         try builder.functionEnd();
         return;
     }
@@ -83,8 +94,18 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try builder.br(block_names[0]);
     try dispatch.emitSequence(ctx, builder, block_names, 0, ctx.unit.stmts.len - 1);
     try builder.label("exit");
-    try builder.retVoid();
+    try emitReturn(ctx, builder, return_ty);
     try builder.functionEnd();
+}
+
+fn emitReturn(ctx: *Context, builder: anytype, return_ty: ?llvm_types.IRType) EmitError!void {
+    if (return_ty == null) {
+        try builder.retVoid();
+        return;
+    }
+    const ret_ptr = ctx.locals.get(ctx.unit.name) orelse return error.UnknownSymbol;
+    const ret_val = try expression.loadValue(ctx, builder, ret_ptr, return_ty.?);
+    try builder.retValue(return_ty.?, ret_val.name);
 }
 
 fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {
