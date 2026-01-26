@@ -85,7 +85,7 @@ fn emitIntrinsicAnint(ctx: *Context, builder: anytype, args: []*Expr) EmitError!
     if (value.ty != .f32 and value.ty != .f64) {
         value = try casting.coerce(ctx, builder, value, .f32);
     }
-    return emitIntrinsicUnaryFloatValue(ctx, builder, "rint", value);
+    return emitIntrinsicUnaryFloatValue(ctx, builder, "round", value);
 }
 
 fn emitIntrinsicNint(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
@@ -94,7 +94,7 @@ fn emitIntrinsicNint(ctx: *Context, builder: anytype, args: []*Expr) EmitError!V
     if (value.ty != .f32 and value.ty != .f64) {
         value = try casting.coerce(ctx, builder, value, .f32);
     }
-    const rounded = try emitIntrinsicUnaryFloatValue(ctx, builder, "rint", value);
+    const rounded = try emitIntrinsicUnaryFloatValue(ctx, builder, "round", value);
     const tmp = try ctx.nextTemp();
     try builder.cast(tmp, "fptosi", rounded.ty, rounded, .i32);
     return .{ .name = tmp, .ty = .i32, .is_ptr = false };
