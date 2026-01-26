@@ -160,6 +160,24 @@ fn parseLabel(allocator: std.mem.Allocator, line: []const u8) !?[]const u8 {
         buffer.deinit();
         return null;
     }
+    var all_digits = true;
+    for (buffer.items) |ch| {
+        if (!std.ascii.isDigit(ch)) {
+            all_digits = false;
+            break;
+        }
+    }
+    if (all_digits) {
+        var start: usize = 0;
+        while (start < buffer.items.len and buffer.items[start] == '0') : (start += 1) {}
+        if (start == buffer.items.len) {
+            buffer.items.len = 1;
+            buffer.items[0] = '0';
+        } else if (start > 0) {
+            std.mem.copyForwards(u8, buffer.items[0 .. buffer.items.len - start], buffer.items[start..]);
+            buffer.items.len -= start;
+        }
+    }
     const owned = try buffer.toOwnedSlice();
     return owned;
 }

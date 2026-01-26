@@ -201,9 +201,10 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                         if (value.ty != .ptr) return error.UnsupportedCharArg;
                         const arg_len = expanded_values.char_lens.items[arg_index];
                         const field_width = if (spec.width > 0) spec.width else arg_len;
-                        try fmt_buf.appendSlice("%-*.*s");
+                        const precision = if (arg_len > 0 and field_width > arg_len) arg_len else field_width;
+                        try fmt_buf.appendSlice("%*.*s");
                         const width_text = utils.formatInt(ctx.allocator, @intCast(field_width));
-                        const prec_text = utils.formatInt(ctx.allocator, @intCast(field_width));
+                        const prec_text = utils.formatInt(ctx.allocator, @intCast(precision));
                         try args.append(.{ .ty = .i32, .name = width_text });
                         try args.append(.{ .ty = .i32, .name = prec_text });
                         try args.append(.{ .ty = .ptr, .name = value.name });
@@ -428,15 +429,17 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
 
     for (char_fixups.items) |fixup| {
         if (fixup.temp_ptr) |temp_ptr| {
+            const start = if (fixup.field_width > fixup.target_len) fixup.field_width - fixup.target_len else 0;
             var idx: usize = 0;
             while (idx < fixup.target_len) : (idx += 1) {
-                const offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                const src_offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(start + idx)), .ty = .i32, .is_ptr = false };
+                const dst_offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
                 const src_gep = try ctx.nextTemp();
-                try builder.gep(src_gep, .i8, temp_ptr, offset);
+                try builder.gep(src_gep, .i8, temp_ptr, src_offset);
                 const tmp_val = try ctx.nextTemp();
                 try builder.load(tmp_val, .i8, .{ .name = src_gep, .ty = .ptr, .is_ptr = true });
                 const dst_gep = try ctx.nextTemp();
-                try builder.gep(dst_gep, .i8, fixup.target_ptr, offset);
+                try builder.gep(dst_gep, .i8, fixup.target_ptr, dst_offset);
                 try builder.store(.{ .name = tmp_val, .ty = .i8, .is_ptr = false }, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
             }
         } else if (fixup.field_width < fixup.target_len) {

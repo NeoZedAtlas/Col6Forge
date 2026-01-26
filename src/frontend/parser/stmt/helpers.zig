@@ -37,7 +37,7 @@ pub fn parseLabelToken(lp: *LineParser) ParseStmtError![]const u8 {
     const tok = lp.peek() orelse return error.UnexpectedToken;
     if (tok.kind != .integer and tok.kind != .identifier) return error.UnexpectedToken;
     _ = lp.next();
-    return lp.tokenText(tok);
+    return normalizeLabelText(lp.tokenText(tok));
 }
 
 pub fn isEndDo(lp: LineParser) bool {
@@ -235,8 +235,25 @@ pub fn parseLabelList(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!
         const tok = lp.peek() orelse return error.UnexpectedToken;
         if (tok.kind != .integer and tok.kind != .identifier) return error.UnexpectedToken;
         _ = lp.next();
-        try labels.append(lp.tokenText(tok));
+        const normalized = normalizeLabelText(lp.tokenText(tok));
+        try labels.append(normalized);
         _ = lp.consume(.comma);
     }
     return labels.toOwnedSlice();
+}
+
+fn normalizeLabelText(text: []const u8) []const u8 {
+    var all_digits = true;
+    for (text) |ch| {
+        if (!std.ascii.isDigit(ch)) {
+            all_digits = false;
+            break;
+        }
+    }
+    if (!all_digits) {
+        return text;
+    }
+    var start: usize = 0;
+    while (start < text.len and text[start] == '0') : (start += 1) {}
+    return if (start == text.len) "0" else text[start..];
 }

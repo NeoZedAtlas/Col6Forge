@@ -20,7 +20,7 @@ pub fn parseWriteStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtE
     const format_spec = switch (fmt_tok.kind) {
         .integer, .identifier => blk: {
             _ = lp.next();
-            break :blk ast.FormatSpec{ .label = lp.tokenText(fmt_tok) };
+            break :blk ast.FormatSpec{ .label = normalizeLabelText(lp.tokenText(fmt_tok)) };
         },
         .string, .hollerith => blk: {
             _ = lp.next();
@@ -44,7 +44,7 @@ pub fn parseReadStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
     const format_spec = switch (fmt_tok.kind) {
         .integer, .identifier => blk: {
             _ = lp.next();
-            break :blk ast.FormatSpec{ .label = lp.tokenText(fmt_tok) };
+            break :blk ast.FormatSpec{ .label = normalizeLabelText(lp.tokenText(fmt_tok)) };
         },
         .string, .hollerith => blk: {
             _ = lp.next();
@@ -53,10 +53,32 @@ pub fn parseReadStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
         },
         else => return error.UnexpectedToken,
     };
+    while (!lp.peekIs(.r_paren)) {
+        if (!lp.consume(.comma)) return error.UnexpectedToken;
+        _ = lp.expectIdentifier() orelse return error.UnexpectedToken;
+        _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+        _ = try expr.parseExpr(lp, arena, 0);
+    }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
 
     const args = try parseIoList(arena, lp);
     return .{ .read = .{ .unit = unit_expr, .format = format_spec, .args = args } };
+}
+
+fn normalizeLabelText(text: []const u8) []const u8 {
+    var all_digits = true;
+    for (text) |ch| {
+        if (!std.ascii.isDigit(ch)) {
+            all_digits = false;
+            break;
+        }
+    }
+    if (!all_digits) {
+        return text;
+    }
+    var start: usize = 0;
+    while (start < text.len and text[start] == '0') : (start += 1) {}
+    return if (start == text.len) "0" else text[start..];
 }
 
 pub fn parseRewindStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
