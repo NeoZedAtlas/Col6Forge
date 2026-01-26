@@ -143,6 +143,10 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
     var args_list = std.array_list.Managed([]const u8).init(arena);
     if (lp.consume(.l_paren)) {
         while (!lp.peekIs(.r_paren)) {
+            if (lp.consume(.star)) {
+                _ = lp.consume(.comma);
+                continue;
+            }
             const arg_name = lp.readName(arena) orelse return error.MissingName;
             try args_list.append(arg_name);
             _ = lp.consume(.comma);
@@ -351,4 +355,27 @@ test "parseProgram parses a basic subroutine" {
     try testing.expectEqualStrings("A", unit.args[0]);
     try testing.expectEqual(@as(usize, 1), unit.decls.len);
     try testing.expectEqual(@as(usize, 1), unit.stmts.len);
+}
+
+test "parseProgram accepts alternate return dummies in subroutine header" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE FOO(A,*,*)\n" ++
+        "      INTEGER A\n" ++
+        "      RETURN 1\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqualStrings("FOO", unit.name);
+    try testing.expectEqual(@as(usize, 1), unit.args.len);
+    try testing.expectEqualStrings("A", unit.args[0]);
 }
