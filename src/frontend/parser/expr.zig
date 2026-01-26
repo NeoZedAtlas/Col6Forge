@@ -98,9 +98,16 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
         },
         .l_paren => {
             _ = lp.next();
-            const inner = try parseExpr(lp, arena, 0);
+            const real = try parseExpr(lp, arena, 0);
+            if (lp.consume(.comma)) {
+                const imag = try parseExpr(lp, arena, 0);
+                _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+                const node = try arena.create(Expr);
+                node.* = .{ .complex_literal = .{ .real = real, .imag = imag } };
+                return node;
+            }
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-            return inner;
+            return real;
         },
         .plus => {
             _ = lp.next();

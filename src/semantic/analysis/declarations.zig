@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../../sema/symbol.zig");
 const context = @import("context.zig");
@@ -15,13 +16,25 @@ pub fn applyDecl(self: *context.Context, decl: ast.Decl) !void {
                 if (rule.type_kind == .character) {
                     char_len = 1;
                     if (rule.char_len) |len_expr| {
-                        const value = try constants.evalConst(self, len_expr) orelse return error.InvalidCharLen;
+                        const value = constants.evalConst(self, len_expr) catch |err| {
+                            std.debug.print("implicit char len eval error: {s}\n", .{@errorName(err)});
+                            return err;
+                        } orelse {
+                            std.debug.print("implicit char len not const\n", .{});
+                            return error.InvalidCharLen;
+                        };
                         switch (value) {
                             .integer => |int_val| {
-                                if (int_val <= 0) return error.InvalidCharLen;
+                                if (int_val <= 0) {
+                                    std.debug.print("implicit char len invalid: {d}\n", .{int_val});
+                                    return error.InvalidCharLen;
+                                }
                                 char_len = @intCast(int_val);
                             },
-                            .real => return error.InvalidCharLen,
+                            .real => {
+                                std.debug.print("implicit char len real\n", .{});
+                                return error.InvalidCharLen;
+                            },
                         }
                     }
                 }
@@ -78,6 +91,7 @@ pub fn applyDecl(self: *context.Context, decl: ast.Decl) !void {
                 self.symbols.items[idx].is_intrinsic = true;
             }
         },
+        .save => |_| {},
     }
 }
 
@@ -104,13 +118,25 @@ pub fn applyDeclarator(
     if (type_kind == .character) {
         var length: usize = 1;
         if (item.char_len) |len_expr| {
-            const value = try constants.evalConst(self, len_expr) orelse return error.InvalidCharLen;
+            const value = constants.evalConst(self, len_expr) catch |err| {
+                std.debug.print("decl char len eval error: {s}\n", .{@errorName(err)});
+                return err;
+            } orelse {
+                std.debug.print("decl char len not const\n", .{});
+                return error.InvalidCharLen;
+            };
             switch (value) {
                 .integer => |int_val| {
-                    if (int_val <= 0) return error.InvalidCharLen;
+                    if (int_val <= 0) {
+                        std.debug.print("decl char len invalid: {d}\n", .{int_val});
+                        return error.InvalidCharLen;
+                    }
                     length = @intCast(int_val);
                 },
-                .real => return error.InvalidCharLen,
+                .real => {
+                    std.debug.print("decl char len real for {s}\n", .{item.name});
+                    return error.InvalidCharLen;
+                },
             }
         } else if (!explicit_type) {
             if (symbols_mod.implicitCharLen(self, item.name)) |implicit_len| {

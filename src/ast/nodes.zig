@@ -35,6 +35,7 @@ pub const Decl = union(enum) {
     equivalence: EquivalenceDecl,
     external: NameListDecl,
     intrinsic: NameListDecl,
+    save: SaveDecl,
 };
 
 pub const TypeDecl = struct {
@@ -85,6 +86,16 @@ pub const ImplicitRule = struct {
 
 pub const NameListDecl = struct {
     names: []const []const u8,
+};
+
+pub const SaveItem = union(enum) {
+    name: []const u8,
+    common: ?[]const u8,
+};
+
+pub const SaveDecl = struct {
+    items: []SaveItem,
+    save_all: bool,
 };
 
 pub const Declarator = struct {
@@ -266,6 +277,7 @@ pub const Expr = union(enum) {
     substring: SubstringExpr,
     unary: UnaryExpr,
     binary: BinaryExpr,
+    complex_literal: ComplexLiteral,
 };
 
 pub const Literal = struct {
@@ -291,6 +303,11 @@ pub const SubstringExpr = struct {
     name: []const u8,
     start: ?*Expr,
     end: ?*Expr,
+};
+
+pub const ComplexLiteral = struct {
+    real: *Expr,
+    imag: *Expr,
 };
 
 pub const UnaryExpr = struct {

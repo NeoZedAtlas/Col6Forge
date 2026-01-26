@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
 const sema = @import("../../../../sema/mod.zig");
 const ir = @import("../../../ir.zig");
@@ -60,7 +61,9 @@ pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) 
     if (value.ty == target) return value;
     if (value.is_ptr) return error.UnexpectedPointerValue;
     if (complex.isComplexType(target)) return complex.coerceToComplex(ctx, builder, value, target);
-    if (complex.isComplexType(value.ty)) return error.UnsupportedCast;
+    if (complex.isComplexType(value.ty)) {
+        return unsupportedCast(value.ty, target);
+    }
     const tmp = try ctx.nextTemp();
     const from = value.ty;
     const to = target;
@@ -70,39 +73,44 @@ pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) 
             .f64 => "sitofp",
             .i64 => "sext",
             .i1 => "trunc",
-            else => return error.UnsupportedCast,
+            else => return unsupportedCast(from, to),
         },
-        .i8 => return error.UnsupportedCast,
+        .i8 => return unsupportedCast(from, to),
         .i64 => switch (to) {
             .i32 => "trunc",
             .f32 => "sitofp",
             .f64 => "sitofp",
-            else => return error.UnsupportedCast,
+            else => return unsupportedCast(from, to),
         },
         .f32 => switch (to) {
             .f64 => "fpext",
             .i32 => "fptosi",
             .i64 => "fptosi",
-            else => return error.UnsupportedCast,
+            else => return unsupportedCast(from, to),
         },
         .f64 => switch (to) {
             .f32 => "fptrunc",
             .i32 => "fptosi",
             .i64 => "fptosi",
-            else => return error.UnsupportedCast,
+            else => return unsupportedCast(from, to),
         },
         .i1 => switch (to) {
             .i32 => "zext",
             .i64 => "zext",
-            else => return error.UnsupportedCast,
+            else => return unsupportedCast(from, to),
         },
-        .complex_f32 => return error.UnsupportedCast,
-        .complex_f64 => return error.UnsupportedCast,
-        .ptr => return error.UnsupportedCast,
-        .void => return error.UnsupportedCast,
+        .complex_f32 => return unsupportedCast(from, to),
+        .complex_f64 => return unsupportedCast(from, to),
+        .ptr => return unsupportedCast(from, to),
+        .void => return unsupportedCast(from, to),
     };
     try builder.cast(tmp, instr, from, value, to);
     return .{ .name = tmp, .ty = to, .is_ptr = false };
+}
+
+fn unsupportedCast(from: IRType, to: IRType) EmitError!ValueRef {
+    std.debug.print("unsupported cast from {s} to {s}\n", .{ @tagName(from), @tagName(to) });
+    return error.UnsupportedCast;
 }
 
 pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
@@ -117,6 +125,12 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
             .logical => .i1,
             .string, .hollerith => .ptr,
             else => return error.UnsupportedLiteral,
+        },
+        .complex_literal => |lit| {
+            const real_ty = try exprType(ctx, lit.real);
+            const imag_ty = try exprType(ctx, lit.imag);
+            const elem_ty: IRType = if (real_ty == .f64 or imag_ty == .f64) .f64 else .f32;
+            return if (elem_ty == .f64) .complex_f64 else .complex_f32;
         },
         .unary => |un| return exprType(ctx, un.expr),
         .binary => |bin| {

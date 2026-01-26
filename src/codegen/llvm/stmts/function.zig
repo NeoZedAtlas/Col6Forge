@@ -202,9 +202,20 @@ fn applyEquivalencePair(ctx: *Context, builder: anytype, anchor: *ast.Expr, othe
         const b_name = other.identifier;
         const a_sym = ctx.findSymbol(a_name) orelse return;
         const b_sym = ctx.findSymbol(b_name) orelse return;
-        if (a_sym.type_kind != b_sym.type_kind) return;
-        const base = ctx.locals.get(a_name) orelse return;
-        try ctx.locals.put(b_name, base);
+        if (a_sym.type_kind != b_sym.type_kind) {
+            if (a_sym.dims.len != 0 or b_sym.dims.len != 0) return;
+        }
+        var base_name = a_name;
+        var alias_name = b_name;
+        if (a_sym.storage == .common and b_sym.storage != .common) {
+            base_name = a_name;
+            alias_name = b_name;
+        } else if (b_sym.storage == .common and a_sym.storage != .common) {
+            base_name = b_name;
+            alias_name = a_name;
+        }
+        const base = ctx.locals.get(base_name) orelse return;
+        try ctx.locals.put(alias_name, base);
     }
 }
 

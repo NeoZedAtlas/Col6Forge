@@ -43,9 +43,18 @@ fn emitLlvmModule(allocator: std.mem.Allocator, input_path: []const u8, logical_
     }
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const program = try parser.parseProgram(arena.allocator(), logical_lines);
-    const sem = try semantic.analyzeProgram(arena.allocator(), program);
-    return codegen.emitModule(allocator, program, sem, input_path);
+    const program = parser.parseProgram(arena.allocator(), logical_lines) catch |err| {
+        std.debug.print("parse error: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    const sem = semantic.analyzeProgram(arena.allocator(), program) catch |err| {
+        std.debug.print("semantic error: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    return codegen.emitModule(allocator, program, sem, input_path) catch |err| {
+        std.debug.print("codegen error: {s}\n", .{@errorName(err)});
+        return err;
+    };
 }
 
 fn emitLlvmModuleToWriter(
@@ -59,8 +68,17 @@ fn emitLlvmModuleToWriter(
     }
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const program = try parser.parseProgram(arena.allocator(), logical_lines);
-    const sem = try semantic.analyzeProgram(arena.allocator(), program);
-    return codegen.emitModuleToWriter(writer, allocator, program, sem, input_path);
+    const program = parser.parseProgram(arena.allocator(), logical_lines) catch |err| {
+        std.debug.print("parse error: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    const sem = semantic.analyzeProgram(arena.allocator(), program) catch |err| {
+        std.debug.print("semantic error: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    return codegen.emitModuleToWriter(writer, allocator, program, sem, input_path) catch |err| {
+        std.debug.print("codegen error: {s}\n", .{@errorName(err)});
+        return err;
+    };
 }
 

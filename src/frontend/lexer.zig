@@ -206,6 +206,9 @@ fn scanExponent(text: []const u8, index: usize) usize {
     const start_digits = i;
     while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
     if (i == start_digits) return index;
+    if (i < text.len and (std.ascii.isAlphabetic(text[i]) or std.ascii.isDigit(text[i]) or text[i] == '_')) {
+        return index;
+    }
     return i;
 }
 

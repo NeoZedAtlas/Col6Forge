@@ -40,24 +40,44 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
             const right = (try evalConst(bin.right, resolver)) orelse return null;
             return evalBinary(bin.op, left, right);
         },
+        .complex_literal => return null,
         .substring => return null,
         .call_or_subscript => return null,
     }
 }
 
 fn parseInt(text: []const u8) !i64 {
-    return std.fmt.parseInt(i64, text, 10);
+    var buffer: [64]u8 = undefined;
+    if (text.len > buffer.len) return error.NumberTooLong;
+    var i: usize = 0;
+    var out: usize = 0;
+    while (i < text.len) : (i += 1) {
+        const ch = text[i];
+        if (ch == ' ' or ch == '\t') continue;
+        buffer[out] = ch;
+        out += 1;
+    }
+    return std.fmt.parseInt(i64, buffer[0..out], 10) catch |err| {
+        std.debug.print("invalid integer literal: {s}\n", .{text});
+        return err;
+    };
 }
 
 fn parseReal(text: []const u8) !f64 {
     var buffer: [64]u8 = undefined;
     if (text.len > buffer.len) return error.NumberTooLong;
     var i: usize = 0;
+    var out: usize = 0;
     while (i < text.len) : (i += 1) {
         const ch = text[i];
-        buffer[i] = if (ch == 'D' or ch == 'd') 'e' else ch;
+        if (ch == ' ' or ch == '\t') continue;
+        buffer[out] = if (ch == 'D' or ch == 'd') 'e' else ch;
+        out += 1;
     }
-    return std.fmt.parseFloat(f64, buffer[0..text.len]);
+    return std.fmt.parseFloat(f64, buffer[0..out]) catch |err| {
+        std.debug.print("invalid real literal: {s}\n", .{text});
+        return err;
+    };
 }
 
 fn negateConst(value: ConstValue) ConstValue {

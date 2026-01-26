@@ -20,7 +20,15 @@ const ParseStmtError = anyerror;
 
 pub const DoContext = control_flow.DoContext;
 
-pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize, do_ctx: *DoContext) ParseStmtError!Stmt {
+pub fn parseStatement(
+    arena: std.mem.Allocator,
+    lines: []fixed_form.LogicalLine,
+    index: *usize,
+    do_ctx: *DoContext,
+    param_ints: *const std.StringHashMap(i64),
+    param_strings: *const std.StringHashMap(ast.Literal),
+    array_names: *const std.StringHashMap(void),
+) ParseStmtError!Stmt {
     if (do_ctx.popPending()) |pending| {
         return pending;
     }
@@ -44,7 +52,7 @@ pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine,
                 return .{ .label = label, .node = stmt_node };
             }
         }
-        return parseIfStatement(arena, lines, index, label, &lp, do_ctx);
+        return parseIfStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names);
     }
     if (lp.isKeywordSplit("FORMAT")) {
         const items = try format.parseFormatItems(arena, line.text);
@@ -52,7 +60,7 @@ pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine,
         return .{ .label = label, .node = .{ .format = .{ .items = items } } };
     }
     if (lp.isKeywordSplit("DATA")) {
-        const stmt_node = try data_stmt.parseDataStatement(arena, line);
+        const stmt_node = try data_stmt.parseDataStatement(arena, line, param_ints, param_strings, array_names);
         index.* += 1;
         return .{ .label = label, .node = stmt_node };
     }
@@ -181,7 +189,17 @@ pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine,
     return .{ .label = label, .node = .{ .assignment = .{ .target = target, .value = value } } };
 }
 
-fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize, label: ?[]const u8, lp: *LineParser, do_ctx: *DoContext) ParseStmtError!Stmt {
+fn parseIfStatement(
+    arena: std.mem.Allocator,
+    lines: []fixed_form.LogicalLine,
+    index: *usize,
+    label: ?[]const u8,
+    lp: *LineParser,
+    do_ctx: *DoContext,
+    param_ints: *const std.StringHashMap(i64),
+    param_strings: *const std.StringHashMap(ast.Literal),
+    array_names: *const std.StringHashMap(void),
+) ParseStmtError!Stmt {
     if (!lp.consumeKeyword("IF")) return error.UnexpectedToken;
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
     const cond = try expr.parseExpr(lp, arena, 0);
@@ -208,7 +226,7 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
     if (lp.isKeywordSplit("THEN")) {
         _ = lp.consumeKeyword("THEN");
         index.* += 1;
-        const then_stmts = try parseIfBlock(arena, lines, index, do_ctx);
+        const then_stmts = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
         var else_stmts: []Stmt = &.{};
         var else_if_blocks = std.array_list.Managed(ElseIfBlock).init(arena);
         var else_block: ?[]Stmt = null;
@@ -219,19 +237,19 @@ fn parseIfStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
             defer arena.free(next_tokens);
             var next_lp = LineParser.init(next_line, next_tokens);
             if (next_lp.isKeywordSplit("ELSEIF")) {
-                const else_if_block = try parseElseIfBlock(arena, lines, index, do_ctx);
+                const else_if_block = try parseElseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
                 try else_if_blocks.append(else_if_block);
                 continue;
             }
             if (!next_lp.isKeywordSplit("ELSE")) break;
             _ = next_lp.consumeKeyword("ELSE");
             if (next_lp.isKeywordSplit("IF")) {
-                const else_if_block = try parseElseIfBlock(arena, lines, index, do_ctx);
+                const else_if_block = try parseElseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
                 try else_if_blocks.append(else_if_block);
                 continue;
             }
             index.* += 1;
-            else_block = try parseIfBlock(arena, lines, index, do_ctx);
+            else_block = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
             break;
         }
 
@@ -280,7 +298,15 @@ const ElseIfBlock = struct {
     stmts: []Stmt,
 };
 
-fn parseElseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize, do_ctx: *DoContext) ParseStmtError!ElseIfBlock {
+fn parseElseIfBlock(
+    arena: std.mem.Allocator,
+    lines: []fixed_form.LogicalLine,
+    index: *usize,
+    do_ctx: *DoContext,
+    param_ints: *const std.StringHashMap(i64),
+    param_strings: *const std.StringHashMap(ast.Literal),
+    array_names: *const std.StringHashMap(void),
+) ParseStmtError!ElseIfBlock {
     const line = lines[index.*];
     const tokens = try lexer.lexLogicalLine(arena, line);
     defer arena.free(tokens);
@@ -297,11 +323,19 @@ fn parseElseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
     if (!lp.isKeywordSplit("THEN")) return error.UnexpectedToken;
     _ = lp.consumeKeyword("THEN");
     index.* += 1;
-    const stmts = try parseIfBlock(arena, lines, index, do_ctx);
+    const stmts = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
     return .{ .cond = cond, .stmts = stmts };
 }
 
-pub fn parseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, index: *usize, do_ctx: *DoContext) ParseStmtError![]Stmt {
+pub fn parseIfBlock(
+    arena: std.mem.Allocator,
+    lines: []fixed_form.LogicalLine,
+    index: *usize,
+    do_ctx: *DoContext,
+    param_ints: *const std.StringHashMap(i64),
+    param_strings: *const std.StringHashMap(ast.Literal),
+    array_names: *const std.StringHashMap(void),
+) ParseStmtError![]Stmt {
     var stmts = std.array_list.Managed(Stmt).init(arena);
     while (index.* < lines.len) {
         const line = lines[index.*];
@@ -312,7 +346,7 @@ pub fn parseIfBlock(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine, i
             break;
         }
         if (decl.isDeclarationStart(lp)) return error.DeclarationInIfBlock;
-        const node = try parseStatement(arena, lines, index, do_ctx);
+        const node = try parseStatement(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
         try stmts.append(node);
     }
     return stmts.toOwnedSlice();
@@ -415,7 +449,10 @@ test "parseStatement parses assignment" {
     defer arena.deinit();
     var idx: usize = 0;
     var do_ctx = DoContext.init(arena.allocator());
-    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx);
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(void).init(arena.allocator());
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
 
     try testing.expectEqual(@as(usize, 1), idx);
     try testing.expect(stmt_node.node == .assignment);
@@ -435,7 +472,10 @@ test "parseIfBlock stops at ENDIF" {
     defer arena.deinit();
     var idx: usize = 0;
     var do_ctx = DoContext.init(arena.allocator());
-    const stmts = try parseIfBlock(arena.allocator(), lines, &idx, &do_ctx);
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(void).init(arena.allocator());
+    const stmts = try parseIfBlock(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
 
     try testing.expectEqual(@as(usize, 1), stmts.len);
     try testing.expectEqual(@as(usize, 1), idx);
@@ -458,17 +498,20 @@ test "parseStatement preserves labeled END IF as pending continue" {
     defer arena.deinit();
     var idx: usize = 0;
     var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(void).init(arena.allocator());
 
-    const stmt1 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx);
+    const stmt1 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expect(stmt1.node == .if_block);
     try testing.expectEqual(@as(usize, 3), idx);
 
-    const stmt2 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx);
+    const stmt2 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expectEqualStrings("0010", stmt2.label.?);
     try testing.expect(stmt2.node == .cont);
     try testing.expectEqual(@as(usize, 3), idx);
 
-    const stmt3 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx);
+    const stmt3 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expect(stmt3.node == .assignment);
     try testing.expectEqual(@as(usize, 4), idx);
 }

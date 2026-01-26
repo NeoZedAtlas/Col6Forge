@@ -308,6 +308,11 @@ fn cloneExprWithSubst(arena: std.mem.Allocator, node: *Expr, name: []const u8, r
             const right = try cloneExprWithSubst(arena, bin.right, name, replacement);
             cloned.* = .{ .binary = .{ .op = bin.op, .left = left, .right = right } };
         },
+        .complex_literal => |lit| {
+            const real = try cloneExprWithSubst(arena, lit.real, name, replacement);
+            const imag = try cloneExprWithSubst(arena, lit.imag, name, replacement);
+            cloned.* = .{ .complex_literal = .{ .real = real, .imag = imag } };
+        },
         .call_or_subscript => |call| {
             const args = try arena.alloc(*Expr, call.args.len);
             for (call.args, 0..) |arg, idx| {

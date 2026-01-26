@@ -20,14 +20,31 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
         }
     }
     if (charLenForExpr(ctx, assign.target)) |char_len| {
-        const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
+        const target_ptr = expr.emitLValue(ctx, builder, assign.target) catch |err| {
+            std.debug.print("emitLValue fail (assignment): {s}\n", .{@tagName(assign.target.*)});
+            return err;
+        };
         try storeCharacterValue(ctx, builder, target_ptr, char_len, assign.value);
         return;
     }
-    const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
+    const target_ptr = expr.emitLValue(ctx, builder, assign.target) catch |err| {
+        std.debug.print("emitLValue fail (assignment): {s}\n", .{@tagName(assign.target.*)});
+        return err;
+    };
     const value = try expr.emitExpr(ctx, builder, assign.value);
     const sym_ty = try expr.exprType(ctx, assign.target);
-    const coerced = try expr.coerce(ctx, builder, value, sym_ty);
+    const coerced = expr.coerce(ctx, builder, value, sym_ty) catch |err| {
+        const name = switch (assign.target.*) {
+            .identifier => |n| n,
+            .call_or_subscript => |call| call.name,
+            else => "?",
+        };
+        std.debug.print(
+            "assignment cast fail: target={s} from={s} to={s}\n",
+            .{ name, @tagName(value.ty), @tagName(sym_ty) },
+        );
+        return err;
+    };
     try builder.store(coerced, target_ptr);
 }
 
@@ -53,15 +70,24 @@ pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!v
                 target_len = sym.char_len orelse 1;
             }
             if (sym.dims.len > 1 and call.args.len == 1) {
-                target_ptr = try expr.emitLinearSubscriptPtr(ctx, builder, call);
+                target_ptr = expr.emitLinearSubscriptPtr(ctx, builder, call) catch |err| {
+                    std.debug.print("emitLinearSubscriptPtr fail: {s}\n", .{call.name});
+                    return err;
+                };
             } else {
-                target_ptr = try expr.emitLValue(ctx, builder, init.target);
+                target_ptr = expr.emitLValue(ctx, builder, init.target) catch |err| {
+                    std.debug.print("emitLValue fail (data): {s}\n", .{call.name});
+                    return err;
+                };
             }
         } else {
             if (charLenForExpr(ctx, init.target)) |char_len| {
                 target_len = char_len;
             }
-            target_ptr = try expr.emitLValue(ctx, builder, init.target);
+            target_ptr = expr.emitLValue(ctx, builder, init.target) catch |err| {
+                std.debug.print("emitLValue fail (data): {s}\n", .{@tagName(init.target.*)});
+                return err;
+            };
         }
         if (target_len) |char_len| {
             try storeCharacterValue(ctx, builder, target_ptr, char_len, init.value);
@@ -69,7 +95,18 @@ pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!v
         }
         const value = try expr.emitExpr(ctx, builder, init.value);
         const sym_ty = try expr.exprType(ctx, init.target);
-        const coerced = try expr.coerce(ctx, builder, value, sym_ty);
+        const coerced = expr.coerce(ctx, builder, value, sym_ty) catch |err| {
+            const name = switch (init.target.*) {
+                .identifier => |n| n,
+                .call_or_subscript => |call| call.name,
+                else => "?",
+            };
+            std.debug.print(
+                "data cast fail: target={s} from={s} to={s}\n",
+                .{ name, @tagName(value.ty), @tagName(sym_ty) },
+            );
+            return err;
+        };
         try builder.store(coerced, target_ptr);
     }
 }

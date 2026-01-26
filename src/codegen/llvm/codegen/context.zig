@@ -175,6 +175,7 @@ pub const Context = struct {
 
     pub fn getPointer(self: *Context, name: []const u8) !ValueRef {
         if (self.locals.get(name)) |val| return val;
+        std.debug.print("unknown symbol: {s}\n", .{name});
         return error.UnknownSymbol;
     }
 

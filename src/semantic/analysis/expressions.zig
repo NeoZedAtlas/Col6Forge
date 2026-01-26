@@ -54,6 +54,10 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             if (sub.start) |start| try resolveExpr(self, start);
             if (sub.end) |end| try resolveExpr(self, end);
         },
+        .complex_literal => |lit| {
+            try resolveExpr(self, lit.real);
+            try resolveExpr(self, lit.imag);
+        },
         .unary => |un| try resolveExpr(self, un.expr),
         .binary => |bin| {
             try resolveExpr(self, bin.left);
@@ -93,6 +97,7 @@ pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKi
                 .assumed_size => .integer,
             };
         },
+        .complex_literal => return .complex,
         .unary => |un| {
             return switch (un.op) {
                 .not => .logical,

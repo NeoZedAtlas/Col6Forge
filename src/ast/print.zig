@@ -51,6 +51,11 @@ fn printDecl(writer: anytype, decl: ast.Decl) !void {
         .intrinsic => |intr| {
             try writer.print(";   decl intrinsic names({d})\n", .{intr.names.len});
         },
+        .save => |save| {
+            const count = save.items.len;
+            const mode = if (save.save_all) "all" else "list";
+            try writer.print(";   decl save {s} items({d})\n", .{ mode, count });
+        },
     }
 }
 

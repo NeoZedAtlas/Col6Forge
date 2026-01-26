@@ -26,7 +26,7 @@ pub fn isDeclarationStart(lp: LineParser) bool {
             }
         }
     }
-    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC");
+    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE");
 }
 
 pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
@@ -121,6 +121,30 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         _ = lp.consumeKeyword("INTRINSIC");
         const names = try parseNameList(lp, arena);
         return .{ .intrinsic = .{ .names = names } };
+    }
+    if (lp.isKeywordSplit("SAVE")) {
+        _ = lp.consumeKeyword("SAVE");
+        var items = std.array_list.Managed(ast.SaveItem).init(arena);
+        var save_all = true;
+        while (lp.peek()) |_| {
+            save_all = false;
+            if (lp.consume(.comma)) {
+                continue;
+            }
+            if (lp.consume(.slash)) {
+                var block_name: ?[]const u8 = null;
+                if (!lp.peekIs(.slash)) {
+                    block_name = lp.readName(arena) orelse return error.MissingName;
+                }
+                _ = lp.expect(.slash) orelse return error.UnexpectedToken;
+                try items.append(.{ .common = block_name });
+            } else {
+                const name = lp.readName(arena) orelse return error.MissingName;
+                try items.append(.{ .name = name });
+            }
+            _ = lp.consume(.comma);
+        }
+        return .{ .save = .{ .items = try items.toOwnedSlice(), .save_all = save_all } };
     }
 
     const type_kind = try parseTypeKind(lp);

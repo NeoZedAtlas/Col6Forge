@@ -5,6 +5,7 @@ const llvm_types = @import("../types.zig");
 const common = @import("../codegen/common.zig");
 const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
+const complex = @import("../codegen/expression/complex.zig");
 const utils = @import("../codegen/utils.zig");
 
 const Context = context.Context;
@@ -682,17 +683,36 @@ fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError
                     } else {
                         const tmp = try ctx.nextTemp();
                         try builder.load(tmp, elem_ty, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
-                        try expanded.values.append(.{ .name = tmp, .ty = elem_ty, .is_ptr = false });
-                        try expanded.char_lens.append(0);
+                        const loaded = ValueRef{ .name = tmp, .ty = elem_ty, .is_ptr = false };
+                        if (complex.isComplexType(loaded.ty)) {
+                            const real = try complex.extractComplex(ctx, builder, loaded, 0);
+                            const imag = try complex.extractComplex(ctx, builder, loaded, 1);
+                            try expanded.values.append(real);
+                            try expanded.char_lens.append(0);
+                            try expanded.values.append(imag);
+                            try expanded.char_lens.append(0);
+                        } else {
+                            try expanded.values.append(loaded);
+                            try expanded.char_lens.append(0);
+                        }
                     }
                 }
                 continue;
             }
         }
         const value = try expr.emitExpr(ctx, builder, arg);
-        const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
-        try expanded.values.append(value);
-        try expanded.char_lens.append(len);
+        if (complex.isComplexType(value.ty)) {
+            const real = try complex.extractComplex(ctx, builder, value, 0);
+            const imag = try complex.extractComplex(ctx, builder, value, 1);
+            try expanded.values.append(real);
+            try expanded.char_lens.append(0);
+            try expanded.values.append(imag);
+            try expanded.char_lens.append(0);
+        } else {
+            const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
+            try expanded.values.append(value);
+            try expanded.char_lens.append(len);
+        }
     }
     return expanded;
 }

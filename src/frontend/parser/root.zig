@@ -42,6 +42,10 @@ const Parser = struct {
 
     fn parseProgramUnit(self: *Parser) !ProgramUnit {
         if (self.index >= self.lines.len) return error.UnexpectedEOF;
+        errdefer {
+            const line = self.lines[self.index];
+            std.debug.print("parse error near line {d}: {s}\n", .{ line.span.start_line, line.text });
+        }
         const header_line = self.lines[self.index];
         const header_tokens = try lexer.lexLogicalLine(self.arena, header_line);
         defer self.arena.free(header_tokens);
@@ -52,6 +56,9 @@ const Parser = struct {
         var decls = std.array_list.Managed(Decl).init(self.arena);
         var stmts = std.array_list.Managed(Stmt).init(self.arena);
         var do_ctx = stmt.DoContext.init(self.arena);
+        var param_ints = std.StringHashMap(i64).init(self.arena);
+        var param_strings = std.StringHashMap(ast.Literal).init(self.arena);
+        var array_names = std.StringHashMap(void).init(self.arena);
         if (header.type_decl) |type_decl| {
             try decls.append(type_decl);
         }
@@ -66,11 +73,16 @@ const Parser = struct {
             }
             if (decl.isDeclarationStart(stmt_lp)) {
                 const decl_node = try decl.parseDecl(&stmt_lp, self.arena);
+                if (decl_node == .parameter) {
+                    try recordParamInts(&param_ints, decl_node.parameter.assigns);
+                    try recordParamStrings(&param_strings, decl_node.parameter.assigns);
+                }
+                try recordArrayNames(&array_names, decl_node);
                 try decls.append(decl_node);
                 self.index += 1;
                 continue;
             }
-            const stmt_node = try stmt.parseStatement(self.arena, self.lines, &self.index, &do_ctx);
+            const stmt_node = try stmt.parseStatement(self.arena, self.lines, &self.index, &do_ctx, &param_ints, &param_strings, &array_names);
             try stmts.append(stmt_node);
         }
 
@@ -206,6 +218,92 @@ fn isEndIfLine(lp: LineParser) bool {
     const next_tok = lp.tokens[next_idx];
     if (next_tok.kind != .identifier) return false;
     return context.eqNoCase(lp.tokenText(next_tok), "IF");
+}
+
+fn recordParamInts(param_ints: *std.StringHashMap(i64), assigns: []ast.ParamAssign) !void {
+    for (assigns) |assign| {
+        if (evalParamInt(assign.value, param_ints)) |value| {
+            try param_ints.put(assign.name, value);
+        }
+    }
+}
+
+fn recordParamStrings(param_strings: *std.StringHashMap(ast.Literal), assigns: []ast.ParamAssign) !void {
+    for (assigns) |assign| {
+        if (assign.value.* == .literal) {
+            const lit = assign.value.literal;
+            if (lit.kind == .string or lit.kind == .hollerith) {
+                try param_strings.put(assign.name, lit);
+            }
+        }
+    }
+}
+
+fn recordArrayNames(array_names: *std.StringHashMap(void), decl_node: Decl) !void {
+    switch (decl_node) {
+        .type_decl => |td| {
+            for (td.items) |item| {
+                if (item.dims.len > 0) {
+                    try array_names.put(item.name, {});
+                }
+            }
+        },
+        .dimension => |dim| {
+            for (dim.items) |item| {
+                if (item.dims.len > 0) {
+                    try array_names.put(item.name, {});
+                }
+            }
+        },
+        .common => |com| {
+            for (com.blocks) |block| {
+                for (block.items) |item| {
+                    if (item.dims.len > 0) {
+                        try array_names.put(item.name, {});
+                    }
+                }
+            }
+        },
+        else => {},
+    }
+}
+
+fn evalParamInt(expr_node: *ast.Expr, param_ints: *const std.StringHashMap(i64)) ?i64 {
+    return switch (expr_node.*) {
+        .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
+        .identifier => |name| param_ints.get(name),
+        .unary => |un| {
+            const value = evalParamInt(un.expr, param_ints) orelse return null;
+            return switch (un.op) {
+                .plus => value,
+                .minus => -value,
+                else => null,
+            };
+        },
+        .binary => |bin| {
+            const left = evalParamInt(bin.left, param_ints) orelse return null;
+            const right = evalParamInt(bin.right, param_ints) orelse return null;
+            return switch (bin.op) {
+                .add => left + right,
+                .sub => left - right,
+                .mul => left * right,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                .power => if (right < 0) null else powInt(left, right),
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
+fn powInt(base: i64, exp: i64) i64 {
+    if (exp <= 0) return 1;
+    var result: i64 = 1;
+    var i: i64 = 0;
+    while (i < exp) : (i += 1) {
+        result *= base;
+    }
+    return result;
 }
 
 test "parseProgram parses a basic subroutine" {

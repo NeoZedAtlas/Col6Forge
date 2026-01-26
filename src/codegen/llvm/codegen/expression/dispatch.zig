@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
+const ir = @import("../../../ir.zig");
 const llvm_types = @import("../../types.zig");
 const context = @import("../context.zig");
 const utils = @import("../utils.zig");
@@ -67,6 +68,15 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
         },
         .literal => |lit| {
             return casting.emitLiteral(ctx, builder, lit);
+        },
+        .complex_literal => |lit| {
+            var real_val = try emitExprImpl(ctx, builder, lit.real, subst_depth);
+            var imag_val = try emitExprImpl(ctx, builder, lit.imag, subst_depth);
+            const elem_ty: ir.IRType = if (real_val.ty == .f64 or imag_val.ty == .f64) .f64 else .f32;
+            if (real_val.ty != elem_ty) real_val = try casting.coerce(ctx, builder, real_val, elem_ty);
+            if (imag_val.ty != elem_ty) imag_val = try casting.coerce(ctx, builder, imag_val, elem_ty);
+            const complex_ty: ir.IRType = if (elem_ty == .f64) .complex_f64 else .complex_f32;
+            return complex.buildComplex(ctx, builder, real_val, imag_val, complex_ty);
         },
         .unary => |un| {
             const inner = try emitExprImpl(ctx, builder, un.expr, subst_depth);
