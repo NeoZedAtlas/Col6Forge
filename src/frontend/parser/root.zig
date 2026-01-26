@@ -59,7 +59,7 @@ const Parser = struct {
         var do_ctx = stmt.DoContext.init(self.arena);
         var param_ints = std.StringHashMap(i64).init(self.arena);
         var param_strings = std.StringHashMap(ast.Literal).init(self.arena);
-        var array_names = std.StringHashMap(void).init(self.arena);
+        var array_names = std.StringHashMap(?usize).init(self.arena);
         if (header.type_decl) |type_decl| {
             try decls.append(type_decl);
         }
@@ -78,7 +78,7 @@ const Parser = struct {
                     try recordParamInts(&param_ints, decl_node.parameter.assigns);
                     try recordParamStrings(&param_strings, decl_node.parameter.assigns);
                 }
-                try recordArrayNames(&array_names, decl_node);
+                try recordArrayNames(&array_names, decl_node, &param_ints);
                 try decls.append(decl_node);
                 self.index += 1;
                 continue;
@@ -244,19 +244,23 @@ fn recordParamStrings(param_strings: *std.StringHashMap(ast.Literal), assigns: [
     }
 }
 
-fn recordArrayNames(array_names: *std.StringHashMap(void), decl_node: Decl) !void {
+fn recordArrayNames(
+    array_names: *std.StringHashMap(?usize),
+    decl_node: Decl,
+    param_ints: *const std.StringHashMap(i64),
+) !void {
     switch (decl_node) {
         .type_decl => |td| {
             for (td.items) |item| {
                 if (item.dims.len > 0) {
-                    try array_names.put(item.name, {});
+                    try array_names.put(item.name, arraySizeFromDims(item.dims, param_ints));
                 }
             }
         },
         .dimension => |dim| {
             for (dim.items) |item| {
                 if (item.dims.len > 0) {
-                    try array_names.put(item.name, {});
+                    try array_names.put(item.name, arraySizeFromDims(item.dims, param_ints));
                 }
             }
         },
@@ -264,13 +268,34 @@ fn recordArrayNames(array_names: *std.StringHashMap(void), decl_node: Decl) !voi
             for (com.blocks) |block| {
                 for (block.items) |item| {
                     if (item.dims.len > 0) {
-                        try array_names.put(item.name, {});
+                        try array_names.put(item.name, arraySizeFromDims(item.dims, param_ints));
                     }
                 }
             }
         },
         else => {},
     }
+}
+
+fn arraySizeFromDims(dims: []*ast.Expr, param_ints: *const std.StringHashMap(i64)) ?usize {
+    if (dims.len == 0) return null;
+    var total: u64 = 1;
+    const max_u64 = std.math.maxInt(u64);
+    const max_usize = std.math.maxInt(usize);
+    for (dims) |dim_expr| {
+        const dim_val_i = evalDimValue(dim_expr, param_ints) orelse return null;
+        if (dim_val_i <= 0) return null;
+        const dim_val = @as(u64, @intCast(dim_val_i));
+        if (total > max_u64 / dim_val) return null;
+        total *= dim_val;
+        if (total > max_usize) return null;
+    }
+    return @intCast(total);
+}
+
+fn evalDimValue(expr_node: *ast.Expr, param_ints: *const std.StringHashMap(i64)) ?i64 {
+    if (expr_node.* == .literal and expr_node.literal.kind == .assumed_size) return null;
+    return evalParamInt(expr_node, param_ints);
 }
 
 fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {

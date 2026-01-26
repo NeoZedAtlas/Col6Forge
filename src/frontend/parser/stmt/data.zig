@@ -16,7 +16,7 @@ pub fn parseDataStatement(
     line: fixed_form.LogicalLine,
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
-    array_names: *const std.StringHashMap(void),
+    array_names: *const std.StringHashMap(?usize),
 ) ParseStmtError!ast.StmtNode {
     const text = line.text;
     var i: usize = 0;
@@ -47,21 +47,24 @@ pub fn parseDataStatement(
             const var_expr = vars[var_idx];
             const remaining_vars = vars.len - var_idx;
             const remaining_vals = values.len - v_idx;
-            if (var_expr.* == .identifier and remaining_vals > remaining_vars and array_names.contains(var_expr.identifier)) {
-                const name = var_expr.identifier;
-                const take = remaining_vals - (remaining_vars - 1);
-                var local_idx: usize = 0;
-                while (local_idx < take) : (local_idx += 1) {
-                    const idx_expr = try arena.create(Expr);
-                    idx_expr.* = .{ .literal = .{ .kind = .integer, .text = try std.fmt.allocPrint(arena, "{d}", .{local_idx + 1}) } };
-                    const args = try arena.alloc(*Expr, 1);
-                    args[0] = idx_expr;
-                    const target = try arena.create(Expr);
-                    target.* = .{ .call_or_subscript = .{ .name = name, .args = args } };
-                    try inits.append(.{ .target = target, .value = values[v_idx] });
-                    v_idx += 1;
+            if (var_expr.* == .identifier) {
+                if (array_names.get(var_expr.identifier)) |maybe_size| {
+                    const name = var_expr.identifier;
+                    const take = if (maybe_size) |size| size else remaining_vals - (remaining_vars - 1);
+                    if (v_idx + take > values.len) return error.DataValueCountMismatch;
+                    var local_idx: usize = 0;
+                    while (local_idx < take) : (local_idx += 1) {
+                        const idx_expr = try arena.create(Expr);
+                        idx_expr.* = .{ .literal = .{ .kind = .integer, .text = try std.fmt.allocPrint(arena, "{d}", .{local_idx + 1}) } };
+                        const args = try arena.alloc(*Expr, 1);
+                        args[0] = idx_expr;
+                        const target = try arena.create(Expr);
+                        target.* = .{ .call_or_subscript = .{ .name = name, .args = args } };
+                        try inits.append(.{ .target = target, .value = values[v_idx] });
+                        v_idx += 1;
+                    }
+                    continue;
                 }
-                continue;
             }
             try inits.append(.{ .target = var_expr, .value = values[v_idx] });
             v_idx += 1;

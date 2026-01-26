@@ -28,7 +28,7 @@ pub fn parseStatement(
     do_ctx: *DoContext,
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
-    array_names: *const std.StringHashMap(void),
+    array_names: *const std.StringHashMap(?usize),
 ) ParseStmtError!Stmt {
     if (do_ctx.popPending()) |pending| {
         return pending;
@@ -232,7 +232,7 @@ fn parseIfStatement(
     do_ctx: *DoContext,
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
-    array_names: *const std.StringHashMap(void),
+    array_names: *const std.StringHashMap(?usize),
 ) ParseStmtError!Stmt {
     if (!lp.consumeKeyword("IF")) return error.UnexpectedToken;
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
@@ -339,7 +339,7 @@ fn parseElseIfBlock(
     do_ctx: *DoContext,
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
-    array_names: *const std.StringHashMap(void),
+    array_names: *const std.StringHashMap(?usize),
 ) ParseStmtError!ElseIfBlock {
     const line = lines[index.*];
     const tokens = try lexer.lexLogicalLine(arena, line);
@@ -368,7 +368,7 @@ pub fn parseIfBlock(
     do_ctx: *DoContext,
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
-    array_names: *const std.StringHashMap(void),
+    array_names: *const std.StringHashMap(?usize),
 ) ParseStmtError![]Stmt {
     var stmts = std.array_list.Managed(Stmt).init(arena);
     while (index.* < lines.len) {
@@ -498,7 +498,7 @@ test "parseStatement parses assignment" {
     var do_ctx = DoContext.init(arena.allocator());
     var param_ints = std.StringHashMap(i64).init(arena.allocator());
     var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
-    var array_names = std.StringHashMap(void).init(arena.allocator());
+    var array_names = std.StringHashMap(?usize).init(arena.allocator());
     const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
 
     try testing.expectEqual(@as(usize, 1), idx);
@@ -521,7 +521,7 @@ test "parseIfBlock stops at ENDIF" {
     var do_ctx = DoContext.init(arena.allocator());
     var param_ints = std.StringHashMap(i64).init(arena.allocator());
     var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
-    var array_names = std.StringHashMap(void).init(arena.allocator());
+    var array_names = std.StringHashMap(?usize).init(arena.allocator());
     const stmts = try parseIfBlock(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
 
     try testing.expectEqual(@as(usize, 1), stmts.len);
@@ -547,7 +547,7 @@ test "parseStatement preserves labeled END IF as pending continue" {
     var do_ctx = DoContext.init(arena.allocator());
     var param_ints = std.StringHashMap(i64).init(arena.allocator());
     var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
-    var array_names = std.StringHashMap(void).init(arena.allocator());
+    var array_names = std.StringHashMap(?usize).init(arena.allocator());
 
     const stmt1 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expect(stmt1.node == .if_block);
