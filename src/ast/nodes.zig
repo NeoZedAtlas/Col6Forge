@@ -109,6 +109,7 @@ pub const StmtNode = union(enum) {
     rewind: RewindStmt,
     backspace: BackspaceStmt,
     endfile: EndfileStmt,
+    open: OpenStmt,
     data: DataStmt,
     format: FormatStmt,
     arith_if: ArithIfStmt,
@@ -134,13 +135,21 @@ pub const CallStmt = struct {
 pub const WriteStmt = struct {
     unit: *Expr,
     format: FormatSpec,
+    rec: ?*Expr,
     args: []*Expr,
 };
 
 pub const ReadStmt = struct {
     unit: *Expr,
     format: FormatSpec,
+    rec: ?*Expr,
     args: []*Expr,
+};
+
+pub const OpenStmt = struct {
+    unit: *Expr,
+    recl: ?*Expr,
+    direct: bool,
 };
 
 pub const RewindStmt = struct {
@@ -169,6 +178,7 @@ pub const FormatStmt = struct {
 };
 
 pub const FormatSpec = union(enum) {
+    none: void,
     label: []const u8,
     inline_items: []FormatItem,
 };
@@ -198,6 +208,7 @@ pub const IntFormat = struct {
 pub const RealFormat = struct {
     width: usize,
     precision: usize,
+    exp_width: usize,
 };
 
 pub const CharFormat = struct {

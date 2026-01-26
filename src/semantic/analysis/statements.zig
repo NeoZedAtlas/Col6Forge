@@ -20,12 +20,18 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
         },
         .write => |write| {
             try expressions.resolveExpr(self, write.unit);
+            if (write.rec) |rec| {
+                try expressions.resolveExpr(self, rec);
+            }
             for (write.args) |arg| {
                 try expressions.resolveExpr(self, arg);
             }
         },
         .read => |read| {
             try expressions.resolveExpr(self, read.unit);
+            if (read.rec) |rec| {
+                try expressions.resolveExpr(self, rec);
+            }
             for (read.args) |arg| {
                 try expressions.resolveExpr(self, arg);
             }
@@ -38,6 +44,12 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
         },
         .endfile => |endfile| {
             try expressions.resolveExpr(self, endfile.unit);
+        },
+        .open => |open_stmt| {
+            try expressions.resolveExpr(self, open_stmt.unit);
+            if (open_stmt.recl) |recl| {
+                try expressions.resolveExpr(self, recl);
+            }
         },
         .data => |data| {
             for (data.inits) |data_init| {
@@ -92,12 +104,18 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         },
         .write => |write| {
             try expressions.resolveExpr(self, write.unit);
+            if (write.rec) |rec| {
+                try expressions.resolveExpr(self, rec);
+            }
             for (write.args) |arg| {
                 try expressions.resolveExpr(self, arg);
             }
         },
         .read => |read| {
             try expressions.resolveExpr(self, read.unit);
+            if (read.rec) |rec| {
+                try expressions.resolveExpr(self, rec);
+            }
             for (read.args) |arg| {
                 try expressions.resolveExpr(self, arg);
             }
@@ -110,6 +128,12 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         },
         .endfile => |endfile| {
             try expressions.resolveExpr(self, endfile.unit);
+        },
+        .open => |open_stmt| {
+            try expressions.resolveExpr(self, open_stmt.unit);
+            if (open_stmt.recl) |recl| {
+                try expressions.resolveExpr(self, recl);
+            }
         },
         .data => |data| {
             for (data.inits) |data_init| {

@@ -323,11 +323,16 @@ fn parseIntFormat(text: []const u8, index: *usize) !IntFormat {
 fn parseRealFormat(text: []const u8, index: *usize) !RealFormat {
     const width = parseUnsigned(text, index) orelse return error.UnexpectedToken;
     var precision: usize = 0;
+    var exp_width: usize = 0;
     if (index.* < text.len and text[index.*] == '.') {
         index.* += 1;
         precision = parseUnsigned(text, index) orelse return error.UnexpectedToken;
     }
-    return .{ .width = width, .precision = precision };
+    if (index.* < text.len and (text[index.*] == 'E' or text[index.*] == 'e')) {
+        index.* += 1;
+        exp_width = parseUnsigned(text, index) orelse return error.UnexpectedToken;
+    }
+    return .{ .width = width, .precision = precision, .exp_width = exp_width };
 }
 
 fn parseCharFormat(text: []const u8, index: *usize) CharFormat {

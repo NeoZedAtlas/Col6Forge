@@ -15,54 +15,115 @@ pub fn parseWriteStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtE
     _ = lp.consumeKeyword("WRITE");
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
     const unit_expr = try expr.parseExpr(lp, arena, 0);
-    _ = lp.expect(.comma) orelse return error.UnexpectedToken;
-    const fmt_tok = lp.peek() orelse return error.UnexpectedToken;
-    const format_spec = switch (fmt_tok.kind) {
-        .integer, .identifier => blk: {
-            _ = lp.next();
-            break :blk ast.FormatSpec{ .label = normalizeLabelText(lp.tokenText(fmt_tok)) };
-        },
-        .string, .hollerith => blk: {
-            _ = lp.next();
-            const items = try format.parseInlineFormatSpec(arena, lp.tokenText(fmt_tok), fmt_tok.kind);
-            break :blk ast.FormatSpec{ .inline_items = items };
-        },
-        else => return error.UnexpectedToken,
-    };
+    var format_spec: ast.FormatSpec = .{ .none = {} };
+    var rec_expr: ?*Expr = null;
+    var saw_format = false;
+    while (!lp.peekIs(.r_paren)) {
+        _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        if (!saw_format) {
+            if ((tok.kind == .integer or tok.kind == .identifier) and !helpers.nextTokenIs(lp.*, .equals)) {
+                _ = lp.next();
+                format_spec = .{ .label = normalizeLabelText(lp.tokenText(tok)) };
+                saw_format = true;
+                continue;
+            }
+            if (tok.kind == .string or tok.kind == .hollerith) {
+                _ = lp.next();
+                const items = try format.parseInlineFormatSpec(arena, lp.tokenText(tok), tok.kind);
+                format_spec = .{ .inline_items = items };
+                saw_format = true;
+                continue;
+            }
+        }
+        const name_tok = lp.expectIdentifier() orelse return error.UnexpectedToken;
+        _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+        const value = try expr.parseExpr(lp, arena, 0);
+        if (context.eqNoCase(lp.tokenText(name_tok), "REC")) {
+            rec_expr = value;
+        }
+    }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
 
     const args = try parseIoList(arena, lp);
-    return .{ .write = .{ .unit = unit_expr, .format = format_spec, .args = args } };
+    return .{ .write = .{ .unit = unit_expr, .format = format_spec, .rec = rec_expr, .args = args } };
 }
 
 pub fn parseReadStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
     _ = lp.consumeKeyword("READ");
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
     const unit_expr = try expr.parseExpr(lp, arena, 0);
-    _ = lp.expect(.comma) orelse return error.UnexpectedToken;
-    const fmt_tok = lp.peek() orelse return error.UnexpectedToken;
-    const format_spec = switch (fmt_tok.kind) {
-        .integer, .identifier => blk: {
-            _ = lp.next();
-            break :blk ast.FormatSpec{ .label = normalizeLabelText(lp.tokenText(fmt_tok)) };
-        },
-        .string, .hollerith => blk: {
-            _ = lp.next();
-            const items = try format.parseInlineFormatSpec(arena, lp.tokenText(fmt_tok), fmt_tok.kind);
-            break :blk ast.FormatSpec{ .inline_items = items };
-        },
-        else => return error.UnexpectedToken,
-    };
+    var format_spec: ast.FormatSpec = .{ .none = {} };
+    var rec_expr: ?*Expr = null;
+    var saw_format = false;
     while (!lp.peekIs(.r_paren)) {
-        if (!lp.consume(.comma)) return error.UnexpectedToken;
-        _ = lp.expectIdentifier() orelse return error.UnexpectedToken;
+        _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        if (!saw_format) {
+            if ((tok.kind == .integer or tok.kind == .identifier) and !helpers.nextTokenIs(lp.*, .equals)) {
+                _ = lp.next();
+                format_spec = .{ .label = normalizeLabelText(lp.tokenText(tok)) };
+                saw_format = true;
+                continue;
+            }
+            if (tok.kind == .string or tok.kind == .hollerith) {
+                _ = lp.next();
+                const items = try format.parseInlineFormatSpec(arena, lp.tokenText(tok), tok.kind);
+                format_spec = .{ .inline_items = items };
+                saw_format = true;
+                continue;
+            }
+        }
+        const name_tok = lp.expectIdentifier() orelse return error.UnexpectedToken;
         _ = lp.expect(.equals) orelse return error.UnexpectedToken;
-        _ = try expr.parseExpr(lp, arena, 0);
+        const value = try expr.parseExpr(lp, arena, 0);
+        if (context.eqNoCase(lp.tokenText(name_tok), "REC")) {
+            rec_expr = value;
+        }
     }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
 
     const args = try parseIoList(arena, lp);
-    return .{ .read = .{ .unit = unit_expr, .format = format_spec, .args = args } };
+    return .{ .read = .{ .unit = unit_expr, .format = format_spec, .rec = rec_expr, .args = args } };
+}
+
+pub fn parseOpenStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    _ = lp.consumeKeyword("OPEN");
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    const unit_expr = try expr.parseExpr(lp, arena, 0);
+    var recl_expr: ?*Expr = null;
+    var direct_access = false;
+    while (!lp.peekIs(.r_paren)) {
+        _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+        const name_tok = lp.expectIdentifier() orelse return error.UnexpectedToken;
+        _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+        const name = lp.tokenText(name_tok);
+        if (context.eqNoCase(name, "ACCESS")) {
+            const tok = lp.peek() orelse return error.UnexpectedToken;
+            _ = lp.next();
+            if (tok.kind == .string or tok.kind == .hollerith) {
+                const raw = lp.tokenText(tok);
+                if (raw.len >= 2 and raw[0] == raw[raw.len - 1] and (raw[0] == '\'' or raw[0] == '"')) {
+                    const inner = raw[1 .. raw.len - 1];
+                    if (context.eqNoCase(inner, "DIRECT")) {
+                        direct_access = true;
+                    }
+                }
+            } else if (tok.kind == .identifier) {
+                if (context.eqNoCase(lp.tokenText(tok), "DIRECT")) {
+                    direct_access = true;
+                }
+            }
+            continue;
+        }
+        if (context.eqNoCase(name, "RECL")) {
+            recl_expr = try expr.parseExpr(lp, arena, 0);
+            continue;
+        }
+        _ = try expr.parseExpr(lp, arena, 0);
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return .{ .open = .{ .unit = unit_expr, .recl = recl_expr, .direct = direct_access } };
 }
 
 fn normalizeLabelText(text: []const u8) []const u8 {

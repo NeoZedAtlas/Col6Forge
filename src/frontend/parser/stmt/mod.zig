@@ -89,6 +89,11 @@ pub fn parseStatement(arena: std.mem.Allocator, lines: []fixed_form.LogicalLine,
         index.* += 1;
         return .{ .label = label, .node = stmt_node };
     }
+    if (lp.isKeywordSplit("OPEN")) {
+        const stmt_node = try io.parseOpenStatement(arena, &lp);
+        index.* += 1;
+        return .{ .label = label, .node = stmt_node };
+    }
     if (lp.isKeywordSplit("CALL")) {
         if (helpers.lineHasEquals(lp)) {
             if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp)) |stmt_node| {

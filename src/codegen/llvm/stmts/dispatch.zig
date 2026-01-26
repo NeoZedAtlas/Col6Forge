@@ -41,6 +41,11 @@ pub fn emitStmt(
             try builder.br(next_block);
             return true;
         },
+        .open => |open_stmt| {
+            try io.emitOpen(ctx, builder, open_stmt);
+            try builder.br(next_block);
+            return true;
+        },
         .rewind => |rewind| {
             try io.emitRewind(ctx, builder, rewind);
             try builder.br(next_block);
