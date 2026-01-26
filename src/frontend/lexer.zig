@@ -196,9 +196,12 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
 
 fn scanExponent(text: []const u8, index: usize) usize {
     if (index >= text.len) return index;
-    const ch = text[index];
+    var i = index;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
+    if (i >= text.len) return index;
+    const ch = text[i];
     if (ch != 'E' and ch != 'e' and ch != 'D' and ch != 'd') return index;
-    var i = index + 1;
+    i += 1;
     if (i < text.len and (text[i] == '+' or text[i] == '-')) i += 1;
     const start_digits = i;
     while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
@@ -231,5 +234,22 @@ test "lexLogicalLine tokenizes basic expression" {
     }
     try testing.expectEqual(@as(usize, 1), tokens[0].line);
     try testing.expectEqual(@as(usize, 7), tokens[0].column);
+}
+
+test "lexLogicalLine merges blank-separated exponents" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A=1.0001 E17\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+
+    const expected = [_]TokenKind{ .identifier, .equals, .real };
+    try testing.expectEqual(expected.len, tokens.len);
+    for (tokens, 0..) |tok, idx| {
+        try testing.expectEqual(expected[idx], tok.kind);
+    }
 }
 

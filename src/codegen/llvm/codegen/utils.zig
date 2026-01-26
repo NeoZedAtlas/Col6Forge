@@ -33,6 +33,7 @@ pub fn normalizeFloatLiteral(allocator: std.mem.Allocator, text: []const u8) ![]
         start = 1;
     }
     for (text[start..]) |ch| {
+        if (ch == ' ' or ch == '\t') continue;
         const out = if (ch == 'D' or ch == 'd') 'E' else ch;
         try buffer.append(out);
     }

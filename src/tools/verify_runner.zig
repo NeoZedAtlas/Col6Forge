@@ -533,7 +533,15 @@ fn timeoutMonitor(
     timed_out: *std.atomic.Value(bool),
     timeout_ms: u64,
 ) void {
-    std.Thread.sleep(timeout_ms * std.time.ns_per_ms);
+    const deadline = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
+    while (true) {
+        if (done.load(.seq_cst)) return;
+        const now = std.time.milliTimestamp();
+        if (now >= deadline) break;
+        const remaining_ms = @as(u64, @intCast(deadline - now));
+        const sleep_ms = if (remaining_ms > 50) 50 else remaining_ms;
+        std.Thread.sleep(sleep_ms * std.time.ns_per_ms);
+    }
     if (done.load(.seq_cst)) return;
     timed_out.store(true, .seq_cst);
     terminateChild(child);
