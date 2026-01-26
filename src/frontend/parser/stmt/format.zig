@@ -6,6 +6,7 @@ const FormatItem = ast.FormatItem;
 const IntFormat = ast.IntFormat;
 const RealFormat = ast.RealFormat;
 const CharFormat = ast.CharFormat;
+const LogicalFormat = ast.LogicalFormat;
 
 const ParseStmtError = anyerror;
 
@@ -234,6 +235,13 @@ fn parseFormatSequence(
                 has_descriptor = true;
                 continue;
             }
+            if (index.* < text.len and (text[index.*] == 'L' or text[index.*] == 'l')) {
+                index.* += 1;
+                const spec = try parseLogicalFormat(text, index);
+                try appendRepeatedItem(&items, .{ .logical = spec }, count);
+                has_descriptor = true;
+                continue;
+            }
 
             return error.UnexpectedToken;
         }
@@ -270,6 +278,13 @@ fn parseFormatSequence(
             index.* += 1;
             const spec = parseCharFormat(text, index);
             try items.append(.{ .char = spec });
+            has_descriptor = true;
+            continue;
+        }
+        if (ch == 'L' or ch == 'l') {
+            index.* += 1;
+            const spec = try parseLogicalFormat(text, index);
+            try items.append(.{ .logical = spec });
             has_descriptor = true;
             continue;
         }
@@ -317,6 +332,11 @@ fn parseRealFormat(text: []const u8, index: *usize) !RealFormat {
 
 fn parseCharFormat(text: []const u8, index: *usize) CharFormat {
     const width = parseUnsigned(text, index) orelse 0;
+    return .{ .width = width };
+}
+
+fn parseLogicalFormat(text: []const u8, index: *usize) !LogicalFormat {
+    const width = parseUnsigned(text, index) orelse return error.UnexpectedToken;
     return .{ .width = width };
 }
 

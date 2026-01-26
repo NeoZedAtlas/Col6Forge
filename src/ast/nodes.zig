@@ -185,6 +185,7 @@ pub const FormatItem = union(enum) {
     real: RealFormat,
     real_fixed: RealFormat,
     char: CharFormat,
+    logical: LogicalFormat,
     scale: i32,
     blank_control: BlankControl,
     reversion_anchor: void,
@@ -200,6 +201,10 @@ pub const RealFormat = struct {
 };
 
 pub const CharFormat = struct {
+    width: usize,
+};
+
+pub const LogicalFormat = struct {
     width: usize,
 };
 

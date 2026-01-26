@@ -292,6 +292,13 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem
                     try buffer.writer().print("%{d}s", .{spec.width});
                 }
             },
+            .logical => |spec| {
+                if (spec.width == 0) {
+                    try buffer.appendSlice("%c");
+                } else {
+                    try buffer.writer().print("%{d}c", .{spec.width});
+                }
+            },
             .scale => {},
             .blank_control => {},
             .reversion_anchor => {},

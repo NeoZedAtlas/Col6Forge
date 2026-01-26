@@ -209,6 +209,26 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
                         try args.append(.{ .ty = .ptr, .name = value.name });
                         arg_index += 1;
                     },
+                    .logical => |spec| {
+                        if (arg_index >= expanded_values.values.items.len) break;
+                        try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                        const value = expanded_values.values.items[arg_index];
+                        var cond = value;
+                        if (cond.ty != .i1) {
+                            cond = try expr.coerce(ctx, builder, value, .i1);
+                        }
+                        const true_val = ValueRef{ .name = "84", .ty = .i32, .is_ptr = false };
+                        const false_val = ValueRef{ .name = "70", .ty = .i32, .is_ptr = false };
+                        const select_tmp = try ctx.nextTemp();
+                        try builder.select(select_tmp, .i32, cond, true_val, false_val);
+                        if (spec.width > 0) {
+                            try fmt_buf.writer().print("%{d}c", .{spec.width});
+                        } else {
+                            try fmt_buf.appendSlice("%c");
+                        }
+                        try args.append(.{ .ty = .i32, .name = select_tmp });
+                        arg_index += 1;
+                    },
                     .scale => |value| {
                         scale_factor = value;
                     },
@@ -370,6 +390,17 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
                                 });
                             }
                         }
+                        arg_index += 1;
+                    },
+                    .logical => |spec| {
+                        if (arg_index >= expanded.ptrs.items.len) break;
+                        const width = if (spec.width > 0) spec.width else 0;
+                        if (width > 0) {
+                            try fmt_buf.writer().print("%{d}L", .{width});
+                        } else {
+                            try fmt_buf.appendSlice("%L");
+                        }
+                        try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
                         arg_index += 1;
                     },
                     .scale => {},
@@ -563,7 +594,7 @@ fn countFormatDescriptors(items: []const ast.FormatItem) usize {
     var count: usize = 0;
     for (items) |item| {
         switch (item) {
-            .int, .real, .real_fixed, .char => count += 1,
+            .int, .real, .real_fixed, .char, .logical => count += 1,
             else => {},
         }
     }

@@ -38,6 +38,29 @@ static void f77_write_trimmed(FILE *file, const char *fmt, va_list ap) {
     free(buf);
 }
 
+static int f77_parse_logical_field(const char *buf, int len) {
+    int i = 0;
+    while (i < len && isspace((unsigned char)buf[i])) {
+        i++;
+    }
+    if (i < len && buf[i] == '.') {
+        i++;
+    }
+    while (i < len && isspace((unsigned char)buf[i])) {
+        i++;
+    }
+    if (i >= len) {
+        return 0;
+    }
+    if (buf[i] == 'T' || buf[i] == 't') {
+        return 1;
+    }
+    if (buf[i] == 'F' || buf[i] == 'f') {
+        return 0;
+    }
+    return 0;
+}
+
 void f77_write(int unit, const char *fmt, ...) {
     va_list ap;
     if (unit == 6 || unit == 0) {
@@ -198,6 +221,10 @@ int f77_read(int unit, const char *fmt, ...) {
             if (used > 0) {
                 memcpy(out, buf, (size_t)used);
             }
+            assigned++;
+        } else if (conv == 'L') {
+            unsigned char *out = va_arg(ap, unsigned char *);
+            *out = (unsigned char)f77_parse_logical_field(buf, used);
             assigned++;
         }
     }
