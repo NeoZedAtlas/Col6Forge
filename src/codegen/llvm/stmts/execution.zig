@@ -3,6 +3,9 @@ const ast = @import("../../../ast/nodes.zig");
 const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
 const utils = @import("../codegen/utils.zig");
+const cfg = @import("cfg.zig");
+const ir = @import("../../ir.zig");
+const llvm_types = @import("../types.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -49,14 +52,92 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
 }
 
 pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!void {
+    const args = try collectCallExprArgs(ctx.allocator, call);
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
     if (sym.storage == .dummy and sym.is_external) {
         const fn_ptr = try ctx.getPointer(call.name);
-        _ = try expr.emitIndirectCall(ctx, builder, fn_ptr, .void, call.args, true);
+        _ = try expr.emitIndirectCall(ctx, builder, fn_ptr, .void, args, true);
         return;
     }
     const fn_name = try ctx.ensureDecl(call.name, .void);
-    _ = try expr.emitCall(ctx, builder, fn_name, .void, call.args, true);
+    _ = try expr.emitCall(ctx, builder, fn_name, .void, args, true);
+}
+
+pub fn emitCallValue(ctx: *Context, builder: anytype, call: ast.CallStmt, ret_ty: ir.IRType) EmitError!ValueRef {
+    const args = try collectCallExprArgs(ctx.allocator, call);
+    const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
+    if (sym.storage == .dummy and sym.is_external) {
+        const fn_ptr = try ctx.getPointer(call.name);
+        return expr.emitIndirectCall(ctx, builder, fn_ptr, ret_ty, args, false);
+    }
+    const fn_name = try ctx.ensureDecl(call.name, ret_ty);
+    return expr.emitCall(ctx, builder, fn_name, ret_ty, args, false);
+}
+
+pub fn emitCallWithAlternateReturns(
+    ctx: *Context,
+    builder: anytype,
+    call: ast.CallStmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!void {
+    const alt_labels = try collectAltReturnLabels(ctx.allocator, call);
+    if (alt_labels.len == 0) {
+        try emitCall(ctx, builder, call);
+        try builder.br(next_block);
+        return;
+    }
+    const result = try emitCallValue(ctx, builder, call, .i32);
+    var idx: usize = 0;
+    while (idx < alt_labels.len) : (idx += 1) {
+        const label = alt_labels[idx];
+        const target = cfg.resolveLabel(ctx, local_label_map, label) orelse return error.MissingLabel;
+        const idx_val = ValueRef{
+            .name = utils.formatInt(ctx.allocator, @as(i64, @intCast(idx + 1))),
+            .ty = .i32,
+            .is_ptr = false,
+        };
+        const cmp_tmp = try ctx.nextTemp();
+        try builder.compare(cmp_tmp, "icmp", "eq", .i32, result, idx_val);
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        const fallthrough = if (idx + 1 == alt_labels.len) next_block else try ctx.nextLabel("altret");
+        try builder.brCond(cond, target, fallthrough);
+        if (idx + 1 != alt_labels.len) {
+            try builder.label(fallthrough);
+        }
+    }
+}
+
+pub fn callHasAltReturns(call: ast.CallStmt) bool {
+    for (call.args) |arg| {
+        switch (arg) {
+            .alt_return => return true,
+            .expr => {},
+        }
+    }
+    return false;
+}
+
+pub fn collectCallExprArgs(allocator: std.mem.Allocator, call: ast.CallStmt) EmitError![]*ast.Expr {
+    var args = std.array_list.Managed(*ast.Expr).init(allocator);
+    for (call.args) |arg| {
+        switch (arg) {
+            .expr => |expr_node| try args.append(expr_node),
+            .alt_return => {},
+        }
+    }
+    return args.toOwnedSlice();
+}
+
+fn collectAltReturnLabels(allocator: std.mem.Allocator, call: ast.CallStmt) EmitError![]const []const u8 {
+    var labels = std.array_list.Managed([]const u8).init(allocator);
+    for (call.args) |arg| {
+        switch (arg) {
+            .alt_return => |label| try labels.append(label),
+            .expr => {},
+        }
+    }
+    return labels.toOwnedSlice();
 }
 
 pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!void {
@@ -111,6 +192,62 @@ pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!v
     }
 }
 
+pub fn emitReturnStmt(ctx: *Context, builder: anytype, ret: ast.ReturnStmt) EmitError!void {
+    if (ret.value) |value| {
+        if (ctx.unit.kind == .subroutine) {
+            const raw = try expr.emitExpr(ctx, builder, value);
+            const coerced = try expr.coerce(ctx, builder, raw, .i32);
+            try builder.retValue(.i32, coerced.name);
+            return;
+        }
+    }
+    try emitDefaultReturn(ctx, builder);
+}
+
+pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
+    if (ctx.unit.kind == .function) {
+        const sym = ctx.findSymbol(ctx.unit.name) orelse return error.UnknownSymbol;
+        const ret_ty = llvm_types.typeFromKind(sym.type_kind);
+        const ret_ptr = ctx.locals.get(ctx.unit.name) orelse return error.UnknownSymbol;
+        const ret_val = try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
+        try builder.retValue(ret_ty, ret_val.name);
+        return;
+    }
+    if (ctx.unit.kind == .subroutine and unitHasAltReturn(ctx.unit)) {
+        try builder.retValue(.i32, "0");
+        return;
+    }
+    try builder.retVoid();
+}
+
+pub fn unitHasAltReturn(unit: ast.ProgramUnit) bool {
+    for (unit.stmts) |stmt| {
+        if (stmtHasAltReturn(stmt)) return true;
+    }
+    return false;
+}
+
+fn stmtHasAltReturn(stmt: ast.Stmt) bool {
+    return stmtNodeHasAltReturn(stmt.node);
+}
+
+fn stmtNodeHasAltReturn(node: ast.StmtNode) bool {
+    switch (node) {
+        .ret => return node.ret.value != null,
+        .if_single => |ifs| return stmtNodeHasAltReturn(ifs.stmt.*),
+        .if_block => |ifb| {
+            for (ifb.then_stmts) |inner| {
+                if (stmtHasAltReturn(inner)) return true;
+            }
+            for (ifb.else_stmts) |inner| {
+                if (stmtHasAltReturn(inner)) return true;
+            }
+            return false;
+        },
+        else => return false,
+    }
+}
+
 fn storeCharacterValue(ctx: *Context, builder: anytype, target_ptr: ValueRef, char_len: usize, value_expr: *ast.Expr) EmitError!void {
     if (value_expr.* == .literal) {
         const lit = value_expr.literal;
@@ -160,8 +297,51 @@ fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
             if (sym.type_kind != .character) return null;
             return sym.char_len orelse 1;
         },
+        .substring => |sub| {
+            return substringLen(ctx, sub);
+        },
+        .literal => |lit| switch (lit.kind) {
+            .string => return utils.decodedStringLen(lit.text),
+            .hollerith => {
+                const bytes = utils.hollerithBytes(lit.text) orelse return null;
+                return bytes.len;
+            },
+            else => return null,
+        },
+        .binary => |bin| {
+            if (bin.op != .concat) return null;
+            const left_len = charLenForExpr(ctx, bin.left) orelse return null;
+            const right_len = charLenForExpr(ctx, bin.right) orelse return null;
+            return left_len + right_len;
+        },
         else => return null,
     }
+}
+
+fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
+    const sym = ctx.findSymbol(sub.name) orelse return null;
+    if (sym.type_kind != .character) return null;
+    const base_len: i64 = @intCast(sym.char_len orelse 1);
+    const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;
+    const end_val = if (sub.end) |end_expr| intLiteralValue(end_expr) orelse return null else base_len;
+    const length = end_val - start_val + 1;
+    if (length <= 0) return null;
+    return @intCast(length);
+}
+
+fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
+    return switch (expr_node.*) {
+        .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
+        .unary => |un| {
+            const value = intLiteralValue(un.expr) orelse return null;
+            return switch (un.op) {
+                .plus => value,
+                .minus => -value,
+                else => null,
+            };
+        },
+        else => null,
+    };
 }
 
 fn literalBytes(allocator: std.mem.Allocator, lit: ast.Literal) ![]const u8 {

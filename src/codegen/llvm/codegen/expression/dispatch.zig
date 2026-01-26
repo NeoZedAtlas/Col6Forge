@@ -30,7 +30,9 @@ pub fn emitLValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
             }
             return error.InvalidAssignmentTarget;
         },
-        .substring => return error.UnsupportedSubstring,
+        .substring => |sub| {
+            return emitSubstringPtr(ctx, builder, sub);
+        },
         else => return error.InvalidAssignmentTarget,
     }
 }
@@ -107,6 +109,9 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                     }
                 }
             }
+            if (bin.op == .concat) {
+                return emitConcat(ctx, builder, bin, subst_depth);
+            }
             const lhs = try emitExprImpl(ctx, builder, bin.left, subst_depth);
             const rhs = try emitExprImpl(ctx, builder, bin.right, subst_depth);
             return binary.emitBinary(ctx, builder, bin.op, lhs, rhs);
@@ -140,7 +145,10 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             const fn_name = try ctx.ensureDecl(call_or_sub.name, ret_ty);
             return call.emitCall(ctx, builder, fn_name, ret_ty, call_or_sub.args, false);
         },
-        .substring => return error.UnsupportedSubstring,
+        .substring => |sub| {
+            const ptr = try emitSubstringPtr(ctx, builder, sub);
+            return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
+        },
     }
 }
 
@@ -183,6 +191,9 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
             if (sym.type_kind != .character) return null;
             return sym.char_len orelse 1;
         },
+        .substring => |sub| {
+            return substringLen(ctx, sub);
+        },
         .literal => |lit| switch (lit.kind) {
             .string => return utils.decodedStringLen(lit.text),
             .hollerith => {
@@ -191,7 +202,97 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
             },
             else => return null,
         },
+        .binary => |bin| {
+            if (bin.op != .concat) return null;
+            const left_len = charLenForExpr(ctx, bin.left) orelse return null;
+            const right_len = charLenForExpr(ctx, bin.right) orelse return null;
+            return left_len + right_len;
+        },
         else => return null,
+    }
+}
+
+fn emitSubstringPtr(ctx: *Context, builder: anytype, sub: ast.SubstringExpr) !ValueRef {
+    const sym = ctx.findSymbol(sub.name) orelse return error.UnknownSymbol;
+    if (sym.type_kind != .character) return error.UnsupportedSubstring;
+
+    var base_ptr: ValueRef = undefined;
+    if (sub.args.len > 0) {
+        base_ptr = try memory.emitSubscriptPtr(ctx, builder, .{ .name = sub.name, .args = sub.args });
+    } else {
+        base_ptr = try ctx.getPointer(sub.name);
+    }
+
+    var offset = utils.zeroValue(.i32);
+    if (sub.start) |start_expr| {
+        const start_val = try memory.emitIndex(ctx, builder, start_expr);
+        offset = try binary.emitSub(ctx, builder, start_val, utils.oneValue());
+    }
+    const gep = try ctx.nextTemp();
+    try builder.gep(gep, .i8, base_ptr, offset);
+    return .{ .name = gep, .ty = .ptr, .is_ptr = true };
+}
+
+fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
+    const sym = ctx.findSymbol(sub.name) orelse return null;
+    if (sym.type_kind != .character) return null;
+    const base_len: i64 = @intCast(sym.char_len orelse 1);
+    const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;
+    const end_val = if (sub.end) |end_expr| intLiteralValue(end_expr) orelse return null else base_len;
+    const length = end_val - start_val + 1;
+    if (length <= 0) return null;
+    return @intCast(length);
+}
+
+fn intLiteralValue(expr: *Expr) ?i64 {
+    return switch (expr.*) {
+        .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
+        .unary => |un| {
+            const value = intLiteralValue(un.expr) orelse return null;
+            return switch (un.op) {
+                .plus => value,
+                .minus => -value,
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
+fn emitConcat(ctx: *Context, builder: anytype, bin: ast.BinaryExpr, subst_depth: usize) EmitError!ValueRef {
+    const left_len = charLenForExpr(ctx, bin.left) orelse return error.UnsupportedConcat;
+    const right_len = charLenForExpr(ctx, bin.right) orelse return error.UnsupportedConcat;
+    const left_ptr = try emitExprImpl(ctx, builder, bin.left, subst_depth);
+    const right_ptr = try emitExprImpl(ctx, builder, bin.right, subst_depth);
+    if (left_ptr.ty != .ptr or right_ptr.ty != .ptr) return error.UnsupportedConcat;
+
+    const total_len = left_len + right_len;
+    const buf_name = try ctx.nextTemp();
+    if (total_len == 1) {
+        try builder.alloca(buf_name, .i8);
+    } else {
+        try builder.allocaArray(buf_name, .i8, total_len);
+    }
+    const buf_ptr = ValueRef{ .name = buf_name, .ty = .ptr, .is_ptr = true };
+    try copyChars(ctx, builder, buf_ptr, left_ptr, left_len, 0);
+    try copyChars(ctx, builder, buf_ptr, right_ptr, right_len, left_len);
+    return .{ .name = buf_name, .ty = .ptr, .is_ptr = false };
+}
+
+fn copyChars(ctx: *Context, builder: anytype, dst_ptr: ValueRef, src_ptr: ValueRef, len: usize, dst_offset: usize) EmitError!void {
+    var idx: usize = 0;
+    while (idx < len) : (idx += 1) {
+        const src_off = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+        const src_gep = try ctx.nextTemp();
+        try builder.gep(src_gep, .i8, src_ptr, src_off);
+        const tmp = try ctx.nextTemp();
+        try builder.load(tmp, .i8, .{ .name = src_gep, .ty = .ptr, .is_ptr = true });
+
+        const dst_idx = dst_offset + idx;
+        const dst_off = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(dst_idx)), .ty = .i32, .is_ptr = false };
+        const dst_gep = try ctx.nextTemp();
+        try builder.gep(dst_gep, .i8, dst_ptr, dst_off);
+        try builder.store(.{ .name = tmp, .ty = .i8, .is_ptr = false }, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
     }
 }
 

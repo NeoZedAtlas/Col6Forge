@@ -22,7 +22,8 @@ pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []fixed_form.Logi
         .index = 0,
         .block_data_counter = 0,
     };
-    return parser.parseProgram();
+    const program = try parser.parseProgram();
+    return expandEntries(arena_allocator, program);
 }
 
 const Parser = struct {
@@ -266,6 +267,27 @@ fn recordArrayNames(array_names: *std.StringHashMap(void), decl_node: Decl) !voi
         },
         else => {},
     }
+}
+
+fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {
+    var units = std.array_list.Managed(ProgramUnit).init(arena);
+    for (program.units) |unit| {
+        try units.append(unit);
+        if (unit.kind != .subroutine and unit.kind != .function) continue;
+        for (unit.stmts, 0..) |stmt_item, idx| {
+            if (stmt_item.node != .entry) continue;
+            const entry = stmt_item.node.entry;
+            const entry_unit = ProgramUnit{
+                .kind = unit.kind,
+                .name = entry.name,
+                .args = entry.args,
+                .decls = unit.decls,
+                .stmts = unit.stmts[idx..],
+            };
+            try units.append(entry_unit);
+        }
+    }
+    return .{ .units = try units.toOwnedSlice() };
 }
 
 fn evalParamInt(expr_node: *ast.Expr, param_ints: *const std.StringHashMap(i64)) ?i64 {

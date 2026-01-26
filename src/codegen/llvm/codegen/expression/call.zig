@@ -5,6 +5,7 @@ const context = @import("../context.zig");
 const memory = @import("memory.zig");
 const dispatch = @import("dispatch.zig");
 const llvm_types = @import("../../types.zig");
+const casting = @import("casting.zig");
 
 const Expr = ast.Expr;
 const IRType = ir.IRType;
@@ -63,6 +64,17 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
                         return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
                     }
                 }
+                if (sym.kind == .parameter) {
+                    if (sym.const_value) |cv| {
+                        const ty = llvm_types.typeFromKind(sym.type_kind);
+                        const tmp = try ctx.nextTemp();
+                        try builder.alloca(tmp, ty);
+                        const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                        const value = casting.emitConstTyped(ctx, cv, sym.type_kind);
+                        try builder.store(value, ptr);
+                        return ptr;
+                    }
+                }
                 if (sym.storage == .dummy and sym.is_external) {
                     return ctx.getPointer(name);
                 }
@@ -82,7 +94,9 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
             }
             // Non-subscript call expressions are not addressable.
         },
-        .substring => {},
+        .substring => {
+            return dispatch.emitLValue(ctx, builder, expr);
+        },
         else => {},
     }
     // For non-addressable actual arguments (literals/expressions), pass a temp.

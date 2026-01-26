@@ -134,6 +134,7 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
         },
         .unary => |un| return exprType(ctx, un.expr),
         .binary => |bin| {
+            if (bin.op == .concat) return .ptr;
             const left = try exprType(ctx, bin.left);
             const right = try exprType(ctx, bin.right);
             return ir.commonType(left, right);

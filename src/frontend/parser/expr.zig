@@ -15,7 +15,10 @@ pub fn parseExpr(lp: *LineParser, arena: std.mem.Allocator, min_prec: u8) ParseE
     while (true) {
         const op_info = peekBinaryOp(lp.*) orelse break;
         if (op_info.prec < min_prec) break;
-        _ = lp.next();
+        var consumed: usize = 0;
+        while (consumed < op_info.token_count) : (consumed += 1) {
+            _ = lp.next();
+        }
         const next_min = if (op_info.right_assoc) op_info.prec else op_info.prec + 1;
         const right = try parseExpr(lp, arena, next_min);
         const node = try arena.create(Expr);
@@ -42,6 +45,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
             const name = lp.readName(arena) orelse return error.UnexpectedToken;
             if (lp.consume(.l_paren)) {
                 if (hasSubstringRange(lp.*)) {
+                    const args = try arena.alloc(*Expr, 0);
                     var start_expr: ?*Expr = null;
                     if (!lp.peekIs(.colon)) {
                         start_expr = try parseExpr(lp, arena, 0);
@@ -53,7 +57,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
                     }
                     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
                     const node = try arena.create(Expr);
-                    node.* = .{ .substring = .{ .name = name, .start = start_expr, .end = end_expr } };
+                    node.* = .{ .substring = .{ .name = name, .args = args, .start = start_expr, .end = end_expr } };
                     return node;
                 } else {
                     var args = std.array_list.Managed(*Expr).init(arena);
@@ -63,8 +67,32 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
                         _ = lp.consume(.comma);
                     }
                     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+                    const call_args = try args.toOwnedSlice();
+                    if (lp.peekIs(.l_paren)) {
+                        var lookahead = lp.*;
+                        _ = lookahead.consume(.l_paren);
+                        if (!hasSubstringRange(lookahead)) {
+                            const node = try arena.create(Expr);
+                            node.* = .{ .call_or_subscript = .{ .name = name, .args = call_args } };
+                            return node;
+                        }
+                        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+                        var start_expr: ?*Expr = null;
+                        if (!lp.peekIs(.colon)) {
+                            start_expr = try parseExpr(lp, arena, 0);
+                        }
+                        _ = lp.expect(.colon) orelse return error.UnexpectedToken;
+                        var end_expr: ?*Expr = null;
+                        if (!lp.peekIs(.r_paren)) {
+                            end_expr = try parseExpr(lp, arena, 0);
+                        }
+                        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+                        const node = try arena.create(Expr);
+                        node.* = .{ .substring = .{ .name = name, .args = call_args, .start = start_expr, .end = end_expr } };
+                        return node;
+                    }
                     const node = try arena.create(Expr);
-                    node.* = .{ .call_or_subscript = .{ .name = name, .args = try args.toOwnedSlice() } };
+                    node.* = .{ .call_or_subscript = .{ .name = name, .args = call_args } };
                     return node;
                 }
             }
@@ -184,25 +212,31 @@ const BinOpInfo = struct {
     op: BinaryOp,
     prec: u8,
     right_assoc: bool,
+    token_count: usize,
 };
 
 fn peekBinaryOp(lp: LineParser) ?BinOpInfo {
     const tok = lp.peek() orelse return null;
     switch (tok.kind) {
-        .plus => return .{ .op = .add, .prec = 4, .right_assoc = false },
-        .minus => return .{ .op = .sub, .prec = 4, .right_assoc = false },
-        .star => return .{ .op = .mul, .prec = 5, .right_assoc = false },
-        .slash => return .{ .op = .div, .prec = 5, .right_assoc = false },
-        .power => return .{ .op = .power, .prec = 6, .right_assoc = true },
+        .plus => return .{ .op = .add, .prec = 4, .right_assoc = false, .token_count = 1 },
+        .minus => return .{ .op = .sub, .prec = 4, .right_assoc = false, .token_count = 1 },
+        .star => return .{ .op = .mul, .prec = 5, .right_assoc = false, .token_count = 1 },
+        .slash => {
+            if (lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .slash) {
+                return .{ .op = .concat, .prec = 4, .right_assoc = false, .token_count = 2 };
+            }
+            return .{ .op = .div, .prec = 5, .right_assoc = false, .token_count = 1 };
+        },
+        .power => return .{ .op = .power, .prec = 6, .right_assoc = true, .token_count = 1 },
         .dot_op => {
-            if (dotOpIs(lp, "OR")) return .{ .op = .or_, .prec = 1, .right_assoc = false };
-            if (dotOpIs(lp, "AND")) return .{ .op = .and_, .prec = 2, .right_assoc = false };
-            if (dotOpIs(lp, "EQ")) return .{ .op = .eq, .prec = 3, .right_assoc = false };
-            if (dotOpIs(lp, "NE")) return .{ .op = .ne, .prec = 3, .right_assoc = false };
-            if (dotOpIs(lp, "LT")) return .{ .op = .lt, .prec = 3, .right_assoc = false };
-            if (dotOpIs(lp, "LE")) return .{ .op = .le, .prec = 3, .right_assoc = false };
-            if (dotOpIs(lp, "GT")) return .{ .op = .gt, .prec = 3, .right_assoc = false };
-            if (dotOpIs(lp, "GE")) return .{ .op = .ge, .prec = 3, .right_assoc = false };
+            if (dotOpIs(lp, "OR")) return .{ .op = .or_, .prec = 1, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "AND")) return .{ .op = .and_, .prec = 2, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "EQ")) return .{ .op = .eq, .prec = 3, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "NE")) return .{ .op = .ne, .prec = 3, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "LT")) return .{ .op = .lt, .prec = 3, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "LE")) return .{ .op = .le, .prec = 3, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "GT")) return .{ .op = .gt, .prec = 3, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "GE")) return .{ .op = .ge, .prec = 3, .right_assoc = false, .token_count = 1 };
             return null;
         },
         else => return null,

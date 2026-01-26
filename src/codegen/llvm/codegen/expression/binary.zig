@@ -69,6 +69,7 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
             try builder.binary(tmp, op_text, .i1, left, right);
             return .{ .name = tmp, .ty = .i1, .is_ptr = false };
         },
+        .concat => return error.UnsupportedConcat,
         .power => unreachable,
     }
 }

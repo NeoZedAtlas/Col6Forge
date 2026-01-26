@@ -570,7 +570,7 @@ fn buildDirectSignature(ctx: *Context, args: []*ast.Expr) ![]const u8 {
 
 fn ensureValuePtr(ctx: *Context, builder: anytype, node: *ast.Expr) EmitError!ValueRef {
     switch (node.*) {
-        .identifier, .call_or_subscript => {
+        .identifier, .call_or_subscript, .substring => {
             return expr.emitLValue(ctx, builder, node);
         },
         else => {},
@@ -729,6 +729,15 @@ fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
             if (sym.type_kind != .character) return null;
             return sym.char_len orelse 1;
         },
+        .substring => |sub| {
+            return substringLen(ctx, sub);
+        },
+        .binary => |bin| {
+            if (bin.op != .concat) return null;
+            const left_len = charLenForExpr(ctx, bin.left) orelse return null;
+            const right_len = charLenForExpr(ctx, bin.right) orelse return null;
+            return left_len + right_len;
+        },
         .literal => |lit| switch (lit.kind) {
             .string => return utils.decodedStringLen(lit.text),
             .hollerith => {
@@ -739,6 +748,32 @@ fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
         },
         else => return null,
     }
+}
+
+fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
+    const sym = ctx.findSymbol(sub.name) orelse return null;
+    if (sym.type_kind != .character) return null;
+    const base_len: i64 = @intCast(sym.char_len orelse 1);
+    const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;
+    const end_val = if (sub.end) |end_expr| intLiteralValue(end_expr) orelse return null else base_len;
+    const length = end_val - start_val + 1;
+    if (length <= 0) return null;
+    return @intCast(length);
+}
+
+fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
+    return switch (expr_node.*) {
+        .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
+        .unary => |un| {
+            const value = intLiteralValue(un.expr) orelse return null;
+            return switch (un.op) {
+                .plus => value,
+                .minus => -value,
+                else => null,
+            };
+        },
+        else => null,
+    };
 }
 
 fn appendScanfLiteral(buffer: *std.array_list.Managed(u8), text: []const u8) !void {

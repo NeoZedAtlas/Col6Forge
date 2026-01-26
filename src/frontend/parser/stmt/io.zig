@@ -321,9 +321,13 @@ fn cloneExprWithSubst(arena: std.mem.Allocator, node: *Expr, name: []const u8, r
             cloned.* = .{ .call_or_subscript = .{ .name = call.name, .args = args } };
         },
         .substring => |sub| {
+            const args = try arena.alloc(*Expr, sub.args.len);
+            for (sub.args, 0..) |arg, idx| {
+                args[idx] = try cloneExprWithSubst(arena, arg, name, replacement);
+            }
             const start_expr = if (sub.start) |s| try cloneExprWithSubst(arena, s, name, replacement) else null;
             const end_expr = if (sub.end) |e| try cloneExprWithSubst(arena, e, name, replacement) else null;
-            cloned.* = .{ .substring = .{ .name = sub.name, .start = start_expr, .end = end_expr } };
+            cloned.* = .{ .substring = .{ .name = sub.name, .args = args, .start = start_expr, .end = end_expr } };
         },
     }
     return cloned;

@@ -127,8 +127,9 @@ pub const StmtNode = union(enum) {
     pause: void,
     stop: void,
     do_loop: DoLoopStmt,
-    ret: void,
+    ret: ReturnStmt,
     cont: void,
+    entry: EntryStmt,
     if_single: IfSingle,
     if_block: IfBlock,
 };
@@ -140,7 +141,21 @@ pub const Assignment = struct {
 
 pub const CallStmt = struct {
     name: []const u8,
-    args: []*Expr,
+    args: []CallArg,
+};
+
+pub const CallArg = union(enum) {
+    expr: *Expr,
+    alt_return: []const u8,
+};
+
+pub const ReturnStmt = struct {
+    value: ?*Expr,
+};
+
+pub const EntryStmt = struct {
+    name: []const u8,
+    args: []const []const u8,
 };
 
 pub const WriteStmt = struct {
@@ -301,6 +316,7 @@ pub const CallOrSubscript = struct {
 
 pub const SubstringExpr = struct {
     name: []const u8,
+    args: []*Expr,
     start: ?*Expr,
     end: ?*Expr,
 };
@@ -332,6 +348,7 @@ pub const BinaryOp = enum {
     sub,
     mul,
     div,
+    concat,
     power,
     eq,
     ne,

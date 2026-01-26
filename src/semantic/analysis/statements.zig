@@ -15,7 +15,10 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
             const idx = try symbols_mod.ensureSymbol(self, call.name);
             self.symbols.items[idx].is_external = true;
             for (call.args) |arg| {
-                try expressions.resolveExpr(self, arg);
+                switch (arg) {
+                    .expr => |expr_node| try expressions.resolveExpr(self, expr_node),
+                    .alt_return => {},
+                }
             }
         },
         .write => |write| {
@@ -85,7 +88,13 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
             for (ifb.then_stmts) |inner| try resolveStmt(self, inner);
             for (ifb.else_stmts) |inner| try resolveStmt(self, inner);
         },
-        .ret, .cont => {},
+        .ret => |ret| {
+            if (ret.value) |value| {
+                try expressions.resolveExpr(self, value);
+            }
+        },
+        .cont => {},
+        .entry => {},
     }
 }
 
@@ -99,7 +108,10 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             const idx = try symbols_mod.ensureSymbol(self, call.name);
             self.symbols.items[idx].is_external = true;
             for (call.args) |arg| {
-                try expressions.resolveExpr(self, arg);
+                switch (arg) {
+                    .expr => |expr_node| try expressions.resolveExpr(self, expr_node),
+                    .alt_return => {},
+                }
             }
         },
         .write => |write| {
@@ -169,6 +181,12 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             for (ifb.then_stmts) |inner| try resolveStmt(self, inner);
             for (ifb.else_stmts) |inner| try resolveStmt(self, inner);
         },
-        .ret, .cont => {},
+        .ret => |ret| {
+            if (ret.value) |value| {
+                try expressions.resolveExpr(self, value);
+            }
+        },
+        .cont => {},
+        .entry => {},
     }
 }

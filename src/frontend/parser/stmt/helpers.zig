@@ -242,7 +242,7 @@ pub fn parseLabelList(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!
     return labels.toOwnedSlice();
 }
 
-fn normalizeLabelText(text: []const u8) []const u8 {
+pub fn normalizeLabelText(text: []const u8) []const u8 {
     var all_digits = true;
     for (text) |ch| {
         if (!std.ascii.isDigit(ch)) {

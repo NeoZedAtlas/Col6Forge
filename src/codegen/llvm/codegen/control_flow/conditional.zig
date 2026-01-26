@@ -6,7 +6,6 @@ const cfg = @import("../../stmts/cfg.zig");
 const execution = @import("../../stmts/execution.zig");
 const io = @import("../../stmts/io.zig");
 const utils = @import("../utils.zig");
-const llvm_types = @import("../../types.zig");
 const logic = @import("logic.zig");
 const branch = @import("branch.zig");
 
@@ -92,11 +91,11 @@ pub fn emitIfSingle(
             try branch.emitAssignedGoto(ctx, builder, gt, next_block, local_label_map);
             return true;
         },
-        .ret => {
+        .ret => |ret| {
             const then_label = try ctx.nextLabel("if_ret");
             try builder.brCond(cond, then_label, next_block);
             try builder.label(then_label);
-            try emitReturn(ctx, builder);
+            try execution.emitReturnStmt(ctx, builder, ret);
             return true;
         },
         .assignment => |assign| {
@@ -111,6 +110,10 @@ pub fn emitIfSingle(
             const then_label = try ctx.nextLabel("if_call");
             try builder.brCond(cond, then_label, next_block);
             try builder.label(then_label);
+            if (execution.callHasAltReturns(call)) {
+                try execution.emitCallWithAlternateReturns(ctx, builder, call, next_block, local_label_map);
+                return true;
+            }
             try execution.emitCall(ctx, builder, call);
             try builder.br(next_block);
             return true;
@@ -134,17 +137,21 @@ pub fn emitIfSingle(
             const then_label = try ctx.nextLabel("if_pause");
             try builder.brCond(cond, then_label, next_block);
             try builder.label(then_label);
-            try emitReturn(ctx, builder);
+            try execution.emitDefaultReturn(ctx, builder);
             return true;
         },
         .stop => {
             const then_label = try ctx.nextLabel("if_stop");
             try builder.brCond(cond, then_label, next_block);
             try builder.label(then_label);
-            try emitReturn(ctx, builder);
+            try execution.emitDefaultReturn(ctx, builder);
             return true;
         },
         .cont => {
+            try builder.br(next_block);
+            return true;
+        },
+        .entry => {
             try builder.br(next_block);
             return true;
         },
@@ -164,18 +171,6 @@ pub fn emitIfSingle(
         },
         else => return error.ControlFlowUnsupported,
     }
-}
-
-fn emitReturn(ctx: *Context, builder: anytype) EmitError!void {
-    if (ctx.unit.kind != .function) {
-        try builder.retVoid();
-        return;
-    }
-    const sym = ctx.findSymbol(ctx.unit.name) orelse return error.UnknownSymbol;
-    const ret_ty = llvm_types.typeFromKind(sym.type_kind);
-    const ret_ptr = ctx.locals.get(ctx.unit.name) orelse return error.UnknownSymbol;
-    const ret_val = try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
-    try builder.retValue(ret_ty, ret_val.name);
 }
 
 pub fn emitIfBlock(

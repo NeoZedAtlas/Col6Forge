@@ -51,6 +51,9 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         },
         .substring => |sub| {
             _ = try symbols_mod.ensureSymbol(self, sub.name);
+            for (sub.args) |arg| {
+                try resolveExpr(self, arg);
+            }
             if (sub.start) |start| try resolveExpr(self, start);
             if (sub.end) |end| try resolveExpr(self, end);
         },
@@ -107,6 +110,7 @@ pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKi
         .binary => |bin| {
             switch (bin.op) {
                 .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_ => return .logical,
+                .concat => return .character,
                 else => {},
             }
             const left = try exprType(self, bin.left);

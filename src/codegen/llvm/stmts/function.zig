@@ -5,6 +5,7 @@ const context = @import("../codegen/context.zig");
 const common = @import("../codegen/common.zig");
 const expression = @import("../codegen/expression/mod.zig");
 const dispatch = @import("dispatch.zig");
+const execution = @import("execution.zig");
 const sema = @import("../../../sema/mod.zig");
 const utils = @import("../codegen/utils.zig");
 const builder_mod = @import("../codegen/builder.zig");
@@ -23,10 +24,14 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     }
 
     const func_name = utils.mangleName(ctx.allocator, ctx.unit.name) catch return error.OutOfMemory;
-    const return_ty = if (ctx.unit.kind == .function) blk: {
+    const has_alt_return = ctx.unit.kind == .subroutine and execution.unitHasAltReturn(ctx.unit);
+    var return_ty: ?llvm_types.IRType = null;
+    if (ctx.unit.kind == .function) {
         const sym = ctx.findSymbol(ctx.unit.name) orelse return error.UnknownSymbol;
-        break :blk llvm_types.typeFromKind(sym.type_kind);
-    } else null;
+        return_ty = llvm_types.typeFromKind(sym.type_kind);
+    } else if (has_alt_return) {
+        return_ty = .i32;
+    }
 
     if (return_ty) |ret_ty| {
         try builder.defineStartWithRet(ret_ty, func_name);
@@ -100,7 +105,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     }
 
     if (block_names.len == 0) {
-        try emitReturn(ctx, builder, return_ty);
+        try execution.emitDefaultReturn(ctx, builder);
         try builder.functionEnd();
         return;
     }
@@ -108,18 +113,8 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try builder.br(block_names[0]);
     try dispatch.emitSequence(ctx, builder, block_names, 0, ctx.unit.stmts.len - 1);
     try builder.label("exit");
-    try emitReturn(ctx, builder, return_ty);
+    try execution.emitDefaultReturn(ctx, builder);
     try builder.functionEnd();
-}
-
-fn emitReturn(ctx: *Context, builder: anytype, return_ty: ?llvm_types.IRType) EmitError!void {
-    if (return_ty == null) {
-        try builder.retVoid();
-        return;
-    }
-    const ret_ptr = ctx.locals.get(ctx.unit.name) orelse return error.UnknownSymbol;
-    const ret_val = try expression.loadValue(ctx, builder, ret_ptr, return_ty.?);
-    try builder.retValue(return_ty.?, ret_val.name);
 }
 
 fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {

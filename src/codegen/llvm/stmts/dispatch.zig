@@ -5,8 +5,6 @@ const cfg = @import("cfg.zig");
 const control = @import("../codegen/control_flow/mod.zig");
 const execution = @import("execution.zig");
 const io = @import("io.zig");
-const expr = @import("../codegen/expression/mod.zig");
-const llvm_types = @import("../types.zig");
 
 const Stmt = ast.Stmt;
 const Context = context.Context;
@@ -27,6 +25,10 @@ pub fn emitStmt(
             return true;
         },
         .call => |call| {
+            if (execution.callHasAltReturns(call)) {
+                try execution.emitCallWithAlternateReturns(ctx, builder, call, next_block, local_label_map);
+                return true;
+            }
             try execution.emitCall(ctx, builder, call);
             try builder.br(next_block);
             return true;
@@ -75,11 +77,11 @@ pub fn emitStmt(
             return true;
         },
         .pause => {
-            try emitReturn(ctx, builder);
+            try execution.emitDefaultReturn(ctx, builder);
             return true;
         },
         .stop => {
-            try emitReturn(ctx, builder);
+            try execution.emitDefaultReturn(ctx, builder);
             return true;
         },
         .goto => |gt| {
@@ -96,11 +98,12 @@ pub fn emitStmt(
             return true;
         },
         .do_loop => return error.UnexpectedToken,
-        .ret => {
-            try emitReturn(ctx, builder);
+        .ret => |ret| {
+            try execution.emitReturnStmt(ctx, builder, ret);
             return true;
         },
         .cont => {},
+        .entry => {},
         .if_single => |ifs| {
             return control.emitIfSingle(ctx, builder, ifs, next_block, local_label_map, emitStmtListRange);
         },
@@ -110,18 +113,6 @@ pub fn emitStmt(
     }
     try builder.br(next_block);
     return true;
-}
-
-fn emitReturn(ctx: *Context, builder: anytype) EmitError!void {
-    if (ctx.unit.kind != .function) {
-        try builder.retVoid();
-        return;
-    }
-    const sym = ctx.findSymbol(ctx.unit.name) orelse return error.UnknownSymbol;
-    const ret_ty = llvm_types.typeFromKind(sym.type_kind);
-    const ret_ptr = ctx.locals.get(ctx.unit.name) orelse return error.UnknownSymbol;
-    const ret_val = try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
-    try builder.retValue(ret_ty, ret_val.name);
 }
 
 pub fn emitSequence(ctx: *Context, builder: anytype, block_names: [][]const u8, start_idx: usize, end_idx: usize) EmitError!void {

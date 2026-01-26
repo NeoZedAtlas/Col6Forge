@@ -15,6 +15,7 @@ const LineParser = context.LineParser;
 const Stmt = ast.Stmt;
 const StmtNode = ast.StmtNode;
 const Expr = ast.Expr;
+const CallArg = ast.CallArg;
 
 const ParseStmtError = anyerror;
 
@@ -102,6 +103,25 @@ pub fn parseStatement(
         index.* += 1;
         return .{ .label = label, .node = stmt_node };
     }
+    if (lp.isKeywordSplit("ENTRY")) {
+        _ = lp.consumeKeyword("ENTRY");
+        const name = lp.readName(arena) orelse return error.MissingName;
+        var args = std.array_list.Managed([]const u8).init(arena);
+        if (lp.consume(.l_paren)) {
+            while (!lp.peekIs(.r_paren)) {
+                if (lp.consume(.star)) {
+                    _ = lp.consume(.comma);
+                    continue;
+                }
+                const arg_name = lp.readName(arena) orelse return error.MissingName;
+                try args.append(arg_name);
+                _ = lp.consume(.comma);
+            }
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        }
+        index.* += 1;
+        return .{ .label = label, .node = .{ .entry = .{ .name = name, .args = try args.toOwnedSlice() } } };
+    }
     if (lp.isKeywordSplit("CALL")) {
         if (helpers.lineHasEquals(lp)) {
             if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp)) |stmt_node| {
@@ -111,11 +131,20 @@ pub fn parseStatement(
         }
         _ = lp.next();
         const name = lp.readName(arena) orelse return error.MissingName;
-        var args = std.array_list.Managed(*Expr).init(arena);
+        var args = std.array_list.Managed(CallArg).init(arena);
         if (lp.consume(.l_paren)) {
             while (!lp.peekIs(.r_paren)) {
-                const arg = try expr.parseExpr(&lp, arena, 0);
-                try args.append(arg);
+                if (lp.consume(.star)) {
+                    const label_tok = lp.peek() orelse return error.UnexpectedToken;
+                    if (label_tok.kind != .integer and label_tok.kind != .identifier) return error.UnexpectedToken;
+                    _ = lp.next();
+                    const normalized = helpers.normalizeLabelText(lp.tokenText(label_tok));
+                    const alt_label = try arena.dupe(u8, normalized);
+                    try args.append(.{ .alt_return = alt_label });
+                } else {
+                    const arg = try expr.parseExpr(&lp, arena, 0);
+                    try args.append(.{ .expr = arg });
+                }
                 _ = lp.consume(.comma);
             }
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
@@ -166,8 +195,13 @@ pub fn parseStatement(
         return .{ .label = label, .node = stmt_node };
     }
     if (lp.isKeywordSplit("RETURN")) {
+        _ = lp.consumeKeyword("RETURN");
+        var ret_value: ?*Expr = null;
+        if (lp.peek() != null) {
+            ret_value = try expr.parseExpr(&lp, arena, 0);
+        }
         index.* += 1;
-        return .{ .label = label, .node = .{ .ret = {} } };
+        return .{ .label = label, .node = .{ .ret = .{ .value = ret_value } } };
     }
     if (lp.isKeywordSplit("CONTINUE")) {
         index.* += 1;
@@ -393,11 +427,20 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator) ParseStmtError
     if (lp.isKeywordSplit("CALL")) {
         _ = lp.consumeKeyword("CALL");
         const name = lp.readName(arena) orelse return error.MissingName;
-        var args = std.array_list.Managed(*Expr).init(arena);
+        var args = std.array_list.Managed(CallArg).init(arena);
         if (lp.consume(.l_paren)) {
             while (!lp.peekIs(.r_paren)) {
-                const arg = try expr.parseExpr(lp, arena, 0);
-                try args.append(arg);
+                if (lp.consume(.star)) {
+                    const label_tok = lp.peek() orelse return error.UnexpectedToken;
+                    if (label_tok.kind != .integer and label_tok.kind != .identifier) return error.UnexpectedToken;
+                    _ = lp.next();
+                    const normalized = helpers.normalizeLabelText(lp.tokenText(label_tok));
+                    const alt_label = try arena.dupe(u8, normalized);
+                    try args.append(.{ .alt_return = alt_label });
+                } else {
+                    const arg = try expr.parseExpr(lp, arena, 0);
+                    try args.append(.{ .expr = arg });
+                }
                 _ = lp.consume(.comma);
             }
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
@@ -420,7 +463,11 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator) ParseStmtError
     if (lp.isKeywordSplit("RETURN")) {
         _ = lp.consumeKeyword("RETURN");
         const node = try arena.create(StmtNode);
-        node.* = .{ .ret = {} };
+        var ret_value: ?*Expr = null;
+        if (lp.peek() != null) {
+            ret_value = try expr.parseExpr(lp, arena, 0);
+        }
+        node.* = .{ .ret = .{ .value = ret_value } };
         return node;
     }
     if (lp.isKeywordSplit("CONTINUE")) {
