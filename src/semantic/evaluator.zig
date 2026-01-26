@@ -43,6 +43,7 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
         .complex_literal => return null,
         .substring => return null,
         .call_or_subscript => return null,
+        .dim_range => return null,
     }
 }
 

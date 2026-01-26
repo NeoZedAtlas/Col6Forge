@@ -290,9 +290,15 @@ pub const Expr = union(enum) {
     literal: Literal,
     call_or_subscript: CallOrSubscript,
     substring: SubstringExpr,
+    dim_range: DimRange,
     unary: UnaryExpr,
     binary: BinaryExpr,
     complex_literal: ComplexLiteral,
+};
+
+pub const DimRange = struct {
+    lower: ?*Expr,
+    upper: *Expr,
 };
 
 pub const Literal = struct {

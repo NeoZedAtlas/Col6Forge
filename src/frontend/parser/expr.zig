@@ -35,7 +35,25 @@ pub fn parseDimExpr(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*E
         node.* = .{ .literal = .{ .kind = .assumed_size, .text = lp.tokenText(tok) } };
         return node;
     }
-    return parseExpr(lp, arena, 0);
+    var lower: ?*Expr = null;
+    if (!lp.peekIs(.colon)) {
+        lower = try parseExpr(lp, arena, 0);
+    }
+    if (lp.consume(.colon)) {
+        var upper: *Expr = undefined;
+        if (lp.peekIs(.star)) {
+            const tok = lp.next();
+            const assumed = try arena.create(Expr);
+            assumed.* = .{ .literal = .{ .kind = .assumed_size, .text = lp.tokenText(tok) } };
+            upper = assumed;
+        } else {
+            upper = try parseExpr(lp, arena, 0);
+        }
+        const node = try arena.create(Expr);
+        node.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
+        return node;
+    }
+    return lower orelse error.UnexpectedToken;
 }
 
 fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr {

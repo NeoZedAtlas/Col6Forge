@@ -139,13 +139,7 @@ pub fn arrayElementCount(sem: *const sema.SemanticUnit, dims: []*ast.Expr) !usiz
     if (dims.len == 0) return 1;
     var total: usize = 1;
     for (dims) |dim| {
-        switch (dim.*) {
-            .literal => |lit| {
-                if (lit.kind == .assumed_size) return error.AssumedSizeDimUnsupported;
-            },
-            else => {},
-        }
-        const value = (try evalConstInt(sem, dim)) orelse return error.ArrayDimNotConstant;
+        const value = try dimSizeValue(sem, dim) orelse return error.ArrayDimNotConstant;
         if (value <= 0) return error.InvalidArrayDim;
         const dim_u: usize = @intCast(value);
         const mul = @mulWithOverflow(total, dim_u);
@@ -153,6 +147,27 @@ pub fn arrayElementCount(sem: *const sema.SemanticUnit, dims: []*ast.Expr) !usiz
         total = mul[0];
     }
     return total;
+}
+
+fn dimSizeValue(sem: *const sema.SemanticUnit, dim: *ast.Expr) !?i64 {
+    switch (dim.*) {
+        .literal => |lit| {
+            if (lit.kind == .assumed_size) return error.AssumedSizeDimUnsupported;
+            return evalConstInt(sem, dim);
+        },
+        .dim_range => |range| {
+            if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) {
+                return error.AssumedSizeDimUnsupported;
+            }
+            const upper = (try evalConstInt(sem, range.upper)) orelse return null;
+            const lower = if (range.lower) |lower_expr|
+                (try evalConstInt(sem, lower_expr)) orelse return null
+            else
+                1;
+            return upper - lower + 1;
+        },
+        else => return evalConstInt(sem, dim),
+    }
 }
 
 fn evalConstInt(sem: *const sema.SemanticUnit, expr: *ast.Expr) !?i64 {

@@ -4,6 +4,7 @@ const fixed_form = @import("../../fixed_form.zig");
 const lexer = @import("../../lexer.zig");
 const context = @import("../context.zig");
 const expr = @import("../expr.zig");
+const array_info = @import("../array_info.zig");
 
 const LineParser = context.LineParser;
 const Segment = fixed_form.Segment;
@@ -16,7 +17,7 @@ pub fn parseDataStatement(
     line: fixed_form.LogicalLine,
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
-    array_names: *const std.StringHashMap(?usize),
+    array_names: *const std.StringHashMap(array_info.ArrayInfo),
 ) ParseStmtError!ast.StmtNode {
     const text = line.text;
     var i: usize = 0;
@@ -48,14 +49,16 @@ pub fn parseDataStatement(
             const remaining_vars = vars.len - var_idx;
             const remaining_vals = values.len - v_idx;
             if (var_expr.* == .identifier) {
-                if (array_names.get(var_expr.identifier)) |maybe_size| {
+                if (array_names.get(var_expr.identifier)) |info| {
                     const name = var_expr.identifier;
-                    const take = if (maybe_size) |size| size else remaining_vals - (remaining_vars - 1);
+                    const take = if (info.size) |size| size else remaining_vals - (remaining_vars - 1);
                     if (v_idx + take > values.len) return error.DataValueCountMismatch;
+                    const base: i64 = if (info.rank == 1) info.lower orelse 1 else 1;
                     var local_idx: usize = 0;
                     while (local_idx < take) : (local_idx += 1) {
+                        const idx_value: i64 = base + @as(i64, @intCast(local_idx));
                         const idx_expr = try arena.create(Expr);
-                        idx_expr.* = .{ .literal = .{ .kind = .integer, .text = try std.fmt.allocPrint(arena, "{d}", .{local_idx + 1}) } };
+                        idx_expr.* = .{ .literal = .{ .kind = .integer, .text = try std.fmt.allocPrint(arena, "{d}", .{idx_value}) } };
                         const args = try arena.alloc(*Expr, 1);
                         args[0] = idx_expr;
                         const target = try arena.create(Expr);
@@ -344,6 +347,11 @@ fn cloneExprWithSubst(arena: std.mem.Allocator, node: *Expr, name: []const u8, r
             const end_expr = if (sub.end) |e| try cloneExprWithSubst(arena, e, name, replacement) else null;
             cloned.* = .{ .substring = .{ .name = sub.name, .args = args, .start = start_expr, .end = end_expr } };
         },
+        .dim_range => |range| {
+            const lower = if (range.lower) |l| try cloneExprWithSubst(arena, l, name, replacement) else null;
+            const upper = try cloneExprWithSubst(arena, range.upper, name, replacement);
+            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
+        },
     }
     return cloned;
 }
@@ -377,6 +385,7 @@ fn evalIntConst(expr_node: *Expr, param_ints: *const std.StringHashMap(i64)) ?i6
                 else => null,
             };
         },
+        .dim_range => null,
         else => null,
     };
 }

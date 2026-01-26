@@ -275,6 +275,7 @@ fn evalImpliedDoBound(node: *Expr) ?i64 {
                 else => null,
             };
         },
+        .dim_range => null,
         else => null,
     };
 }
@@ -328,6 +329,11 @@ fn cloneExprWithSubst(arena: std.mem.Allocator, node: *Expr, name: []const u8, r
             const start_expr = if (sub.start) |s| try cloneExprWithSubst(arena, s, name, replacement) else null;
             const end_expr = if (sub.end) |e| try cloneExprWithSubst(arena, e, name, replacement) else null;
             cloned.* = .{ .substring = .{ .name = sub.name, .args = args, .start = start_expr, .end = end_expr } };
+        },
+        .dim_range => |range| {
+            const lower = if (range.lower) |l| try cloneExprWithSubst(arena, l, name, replacement) else null;
+            const upper = try cloneExprWithSubst(arena, range.upper, name, replacement);
+            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
         },
     }
     return cloned;

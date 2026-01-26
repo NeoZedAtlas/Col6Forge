@@ -6,6 +6,7 @@ const context = @import("context.zig");
 const decl = @import("decl.zig");
 const expr = @import("expr.zig");
 const stmt = @import("stmt/mod.zig");
+const array_info = @import("array_info.zig");
 
 const Program = ast.Program;
 const ProgramUnitKind = ast.ProgramUnitKind;
@@ -59,7 +60,7 @@ const Parser = struct {
         var do_ctx = stmt.DoContext.init(self.arena);
         var param_ints = std.StringHashMap(i64).init(self.arena);
         var param_strings = std.StringHashMap(ast.Literal).init(self.arena);
-        var array_names = std.StringHashMap(?usize).init(self.arena);
+        var array_names = std.StringHashMap(array_info.ArrayInfo).init(self.arena);
         if (header.type_decl) |type_decl| {
             try decls.append(type_decl);
         }
@@ -245,7 +246,7 @@ fn recordParamStrings(param_strings: *std.StringHashMap(ast.Literal), assigns: [
 }
 
 fn recordArrayNames(
-    array_names: *std.StringHashMap(?usize),
+    array_names: *std.StringHashMap(array_info.ArrayInfo),
     decl_node: Decl,
     param_ints: *const std.StringHashMap(i64),
 ) !void {
@@ -253,14 +254,14 @@ fn recordArrayNames(
         .type_decl => |td| {
             for (td.items) |item| {
                 if (item.dims.len > 0) {
-                    try array_names.put(item.name, arraySizeFromDims(item.dims, param_ints));
+                    try array_names.put(item.name, arrayInfoFromDims(item.dims, param_ints));
                 }
             }
         },
         .dimension => |dim| {
             for (dim.items) |item| {
                 if (item.dims.len > 0) {
-                    try array_names.put(item.name, arraySizeFromDims(item.dims, param_ints));
+                    try array_names.put(item.name, arrayInfoFromDims(item.dims, param_ints));
                 }
             }
         },
@@ -268,7 +269,7 @@ fn recordArrayNames(
             for (com.blocks) |block| {
                 for (block.items) |item| {
                     if (item.dims.len > 0) {
-                        try array_names.put(item.name, arraySizeFromDims(item.dims, param_ints));
+                        try array_names.put(item.name, arrayInfoFromDims(item.dims, param_ints));
                     }
                 }
             }
@@ -293,9 +294,45 @@ fn arraySizeFromDims(dims: []*ast.Expr, param_ints: *const std.StringHashMap(i64
     return @intCast(total);
 }
 
+fn arrayInfoFromDims(dims: []*ast.Expr, param_ints: *const std.StringHashMap(i64)) array_info.ArrayInfo {
+    const size = arraySizeFromDims(dims, param_ints);
+    const rank = dims.len;
+    var lower: ?i64 = null;
+    if (rank > 0) {
+        lower = evalDimLowerValue(dims[0], param_ints);
+    }
+    return .{ .size = size, .lower = lower, .rank = rank };
+}
+
 fn evalDimValue(expr_node: *ast.Expr, param_ints: *const std.StringHashMap(i64)) ?i64 {
-    if (expr_node.* == .literal and expr_node.literal.kind == .assumed_size) return null;
-    return evalParamInt(expr_node, param_ints);
+    switch (expr_node.*) {
+        .literal => |lit| {
+            if (lit.kind == .assumed_size) return null;
+            return evalParamInt(expr_node, param_ints);
+        },
+        .dim_range => |range| {
+            if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return null;
+            const upper = evalParamInt(range.upper, param_ints) orelse return null;
+            const lower = if (range.lower) |lower_expr|
+                evalParamInt(lower_expr, param_ints) orelse return null
+            else
+                1;
+            return upper - lower + 1;
+        },
+        else => return evalParamInt(expr_node, param_ints),
+    }
+}
+
+fn evalDimLowerValue(expr_node: *ast.Expr, param_ints: *const std.StringHashMap(i64)) ?i64 {
+    switch (expr_node.*) {
+        .dim_range => |range| {
+            if (range.lower) |lower_expr| {
+                return evalParamInt(lower_expr, param_ints);
+            }
+            return 1;
+        },
+        else => return 1,
+    }
 }
 
 fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {

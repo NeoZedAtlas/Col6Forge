@@ -772,8 +772,30 @@ fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
                 else => null,
             };
         },
+        .binary => |bin| {
+            const left = intLiteralValue(bin.left) orelse return null;
+            const right = intLiteralValue(bin.right) orelse return null;
+            return switch (bin.op) {
+                .add => left + right,
+                .sub => left - right,
+                .mul => left * right,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                .power => if (right < 0) null else powInt(left, right),
+                else => null,
+            };
+        },
         else => null,
     };
+}
+
+fn powInt(base: i64, exp: i64) i64 {
+    if (exp <= 0) return 1;
+    var result: i64 = 1;
+    var i: i64 = 0;
+    while (i < exp) : (i += 1) {
+        result *= base;
+    }
+    return result;
 }
 
 fn appendScanfLiteral(buffer: *std.array_list.Managed(u8), text: []const u8) !void {

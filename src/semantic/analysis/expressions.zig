@@ -57,6 +57,10 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             if (sub.start) |start| try resolveExpr(self, start);
             if (sub.end) |end| try resolveExpr(self, end);
         },
+        .dim_range => |range| {
+            if (range.lower) |lower| try resolveExpr(self, lower);
+            try resolveExpr(self, range.upper);
+        },
         .complex_literal => |lit| {
             try resolveExpr(self, lit.real);
             try resolveExpr(self, lit.imag);
@@ -91,6 +95,7 @@ pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKi
             _ = try symbols_mod.ensureSymbol(self, sub.name);
             return .character;
         },
+        .dim_range => return .integer,
         .literal => |lit| {
             return switch (lit.kind) {
                 .integer => .integer,

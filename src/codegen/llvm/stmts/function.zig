@@ -253,9 +253,12 @@ fn constLinearOffset(sym: sema.Symbol, call: ast.CallOrSubscript) ?i64 {
     var idx: usize = 0;
     while (idx < call.args.len) : (idx += 1) {
         const idx_val = constIndexValue(call.args[idx]) orelse return null;
-        const dim_val = constIndexValue(sym.dims[idx]) orelse return null;
-        if (idx_val <= 0 or dim_val <= 0) return null;
-        offset += (idx_val - 1) * stride;
+        const dim_val = dimSizeConst(sym.dims[idx]) orelse return null;
+        const lower_val = dimLowerConst(sym.dims[idx]) orelse return null;
+        if (dim_val <= 0) return null;
+        const rel = idx_val - lower_val;
+        if (rel < 0) return null;
+        offset += rel * stride;
         if (idx + 1 < call.args.len) {
             const mul = @mulWithOverflow(stride, dim_val);
             if (mul[1] != 0) return null;
@@ -265,11 +268,50 @@ fn constLinearOffset(sym: sema.Symbol, call: ast.CallOrSubscript) ?i64 {
     return offset;
 }
 
+fn dimSizeConst(expr: *ast.Expr) ?i64 {
+    if (expr.* == .dim_range) {
+        const range = expr.dim_range;
+        if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return null;
+        const upper = constIndexValue(range.upper) orelse return null;
+        const lower = if (range.lower) |lower_expr| constIndexValue(lower_expr) orelse return null else 1;
+        return upper - lower + 1;
+    }
+    return constIndexValue(expr);
+}
+
+fn dimLowerConst(expr: *ast.Expr) ?i64 {
+    if (expr.* == .dim_range) {
+        const range = expr.dim_range;
+        if (range.lower) |lower_expr| return constIndexValue(lower_expr);
+        return 1;
+    }
+    return 1;
+}
+
 fn constIndexValue(expr: *ast.Expr) ?i64 {
     switch (expr.*) {
         .literal => |lit| {
             if (lit.kind != .integer) return null;
             return std.fmt.parseInt(i64, lit.text, 10) catch return null;
+        },
+        .unary => |un| {
+            const value = constIndexValue(un.expr) orelse return null;
+            return switch (un.op) {
+                .plus => value,
+                .minus => -value,
+                else => null,
+            };
+        },
+        .binary => |bin| {
+            const left = constIndexValue(bin.left) orelse return null;
+            const right = constIndexValue(bin.right) orelse return null;
+            return switch (bin.op) {
+                .add => left + right,
+                .sub => left - right,
+                .mul => left * right,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                else => null,
+            };
         },
         else => return null,
     }

@@ -149,6 +149,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             const ptr = try emitSubstringPtr(ctx, builder, sub);
             return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
         },
+        .dim_range => return error.InvalidExpression,
     }
 }
 
@@ -194,6 +195,7 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
         .substring => |sub| {
             return substringLen(ctx, sub);
         },
+        .dim_range => return null,
         .literal => |lit| switch (lit.kind) {
             .string => return utils.decodedStringLen(lit.text),
             .hollerith => {
@@ -255,8 +257,30 @@ fn intLiteralValue(expr: *Expr) ?i64 {
                 else => null,
             };
         },
+        .binary => |bin| {
+            const left = intLiteralValue(bin.left) orelse return null;
+            const right = intLiteralValue(bin.right) orelse return null;
+            return switch (bin.op) {
+                .add => left + right,
+                .sub => left - right,
+                .mul => left * right,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                .power => if (right < 0) null else powInt(left, right),
+                else => null,
+            };
+        },
         else => null,
     };
+}
+
+fn powInt(base: i64, exp: i64) i64 {
+    if (exp <= 0) return 1;
+    var result: i64 = 1;
+    var i: i64 = 0;
+    while (i < exp) : (i += 1) {
+        result *= base;
+    }
+    return result;
 }
 
 fn emitConcat(ctx: *Context, builder: anytype, bin: ast.BinaryExpr, subst_depth: usize) EmitError!ValueRef {

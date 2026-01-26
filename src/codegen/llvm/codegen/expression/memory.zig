@@ -23,14 +23,16 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     if (call.args.len == 0) return error.InvalidSubscript;
     if (call.args.len != sym.dims.len) return error.InvalidSubscript;
     const idx1 = try emitIndex(ctx, builder, call.args[0]);
-    const idx1_adj = try binary.emitSub(ctx, builder, idx1, utils.oneValue());
+    const lb1 = try emitDimLower(ctx, builder, sym.dims[0]);
+    const idx1_adj = try binary.emitSub(ctx, builder, idx1, lb1);
     var offset = idx1_adj;
     if (sym.dims.len >= 2) {
         var stride = try emitDimValue(ctx, builder, sym.dims[0]);
         var dim_idx: usize = 1;
         while (dim_idx < sym.dims.len) : (dim_idx += 1) {
             const idx_val = try emitIndex(ctx, builder, call.args[dim_idx]);
-            const idx_adj = try binary.emitSub(ctx, builder, idx_val, utils.oneValue());
+            const lb = try emitDimLower(ctx, builder, sym.dims[dim_idx]);
+            const idx_adj = try binary.emitSub(ctx, builder, idx_val, lb);
             const term = try binary.emitMul(ctx, builder, idx_adj, stride);
             offset = try binary.emitAdd(ctx, builder, offset, term);
             if (dim_idx + 1 < sym.dims.len) {
@@ -79,10 +81,36 @@ pub fn emitDimValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
         .literal => |lit| {
             if (lit.kind == .assumed_size) return error.AssumedSizeDimUnsupported;
         },
+        .dim_range => |range| {
+            if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) {
+                return error.AssumedSizeDimUnsupported;
+            }
+            var upper = try dispatch.emitExpr(ctx, builder, range.upper);
+            upper = try casting.coerce(ctx, builder, upper, .i32);
+            var lower_val = utils.oneValue();
+            if (range.lower) |lower_expr| {
+                lower_val = try dispatch.emitExpr(ctx, builder, lower_expr);
+                lower_val = try casting.coerce(ctx, builder, lower_val, .i32);
+            }
+            const diff = try binary.emitSub(ctx, builder, upper, lower_val);
+            return binary.emitAdd(ctx, builder, diff, utils.oneValue());
+        },
         else => {},
     }
     const value = try dispatch.emitExpr(ctx, builder, expr);
     return casting.coerce(ctx, builder, value, .i32);
+}
+
+fn emitDimLower(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
+    if (expr.* == .dim_range) {
+        const range = expr.dim_range;
+        if (range.lower) |lower_expr| {
+            var lower_val = try dispatch.emitExpr(ctx, builder, lower_expr);
+            lower_val = try casting.coerce(ctx, builder, lower_val, .i32);
+            return lower_val;
+        }
+    }
+    return utils.oneValue();
 }
 
 pub fn emitIndex(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
