@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <math.h>
+#include <complex.h>
 
 #define F77_MAX_UNITS 256
 
@@ -721,4 +722,78 @@ const char *f77_fmt_e(int width, int precision, int exp_width, double value) {
     memcpy(buf + tmp_len, exp_buf, exp_len);
     buf[total_len] = '\0';
     return buf;
+}
+
+typedef struct {
+    float r;
+    float i;
+} f77_complex32;
+
+typedef struct {
+    double r;
+    double i;
+} f77_complex64;
+
+static f77_complex32 f77_from_c32(float complex z) {
+    f77_complex32 out;
+    out.r = crealf(z);
+    out.i = cimagf(z);
+    return out;
+}
+
+static f77_complex64 f77_from_c64(double complex z) {
+    f77_complex64 out;
+    out.r = creal(z);
+    out.i = cimag(z);
+    return out;
+}
+
+f77_complex32 f77_csin(f77_complex32 z) {
+    float complex in = z.r + z.i * I;
+    return f77_from_c32(csinf(in));
+}
+
+f77_complex32 f77_ccos(f77_complex32 z) {
+    float complex in = z.r + z.i * I;
+    return f77_from_c32(ccosf(in));
+}
+
+f77_complex32 f77_cexp(f77_complex32 z) {
+    float complex in = z.r + z.i * I;
+    return f77_from_c32(cexpf(in));
+}
+
+f77_complex32 f77_clog(f77_complex32 z) {
+    float complex in = z.r + z.i * I;
+    return f77_from_c32(clogf(in));
+}
+
+f77_complex32 f77_csqrt(f77_complex32 z) {
+    float complex in = z.r + z.i * I;
+    return f77_from_c32(csqrtf(in));
+}
+
+f77_complex64 f77_zsin(f77_complex64 z) {
+    double complex in = z.r + z.i * I;
+    return f77_from_c64(csin(in));
+}
+
+f77_complex64 f77_zcos(f77_complex64 z) {
+    double complex in = z.r + z.i * I;
+    return f77_from_c64(ccos(in));
+}
+
+f77_complex64 f77_zexp(f77_complex64 z) {
+    double complex in = z.r + z.i * I;
+    return f77_from_c64(cexp(in));
+}
+
+f77_complex64 f77_zlog(f77_complex64 z) {
+    double complex in = z.r + z.i * I;
+    return f77_from_c64(clog(in));
+}
+
+f77_complex64 f77_zsqrt(f77_complex64 z) {
+    double complex in = z.r + z.i * I;
+    return f77_from_c64(csqrt(in));
 }
