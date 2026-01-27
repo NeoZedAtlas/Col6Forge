@@ -364,4 +364,6 @@ pub const BinaryOp = enum {
     ge,
     and_,
     or_,
+    eqv,
+    neqv,
 };

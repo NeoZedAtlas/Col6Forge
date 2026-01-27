@@ -247,6 +247,9 @@ fn peekBinaryOp(lp: LineParser) ?BinOpInfo {
         },
         .power => return .{ .op = .power, .prec = 6, .right_assoc = true, .token_count = 1 },
         .dot_op => {
+            // Fortran logical equivalence/nonequivalence have the lowest logical precedence.
+            if (dotOpIs(lp, "EQV")) return .{ .op = .eqv, .prec = 0, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "NEQV")) return .{ .op = .neqv, .prec = 0, .right_assoc = false, .token_count = 1 };
             if (dotOpIs(lp, "OR")) return .{ .op = .or_, .prec = 1, .right_assoc = false, .token_count = 1 };
             if (dotOpIs(lp, "AND")) return .{ .op = .and_, .prec = 2, .right_assoc = false, .token_count = 1 };
             if (dotOpIs(lp, "EQ")) return .{ .op = .eq, .prec = 3, .right_assoc = false, .token_count = 1 };
@@ -283,6 +286,31 @@ test "parseExpr respects precedence" {
             try testing.expect(bin.right.* == .binary);
             const right = bin.right.binary;
             try testing.expectEqual(BinaryOp.mul, right.op);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles EQV with lowest logical precedence" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      .TRUE..OR..FALSE..EQV..TRUE.\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .binary => |bin| {
+            try testing.expectEqual(BinaryOp.eqv, bin.op);
+            try testing.expect(bin.left.* == .binary);
+            try testing.expectEqual(BinaryOp.or_, bin.left.binary.op);
         },
         else => return error.UnexpectedToken,
     }

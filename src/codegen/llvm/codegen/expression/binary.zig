@@ -73,6 +73,12 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
             try builder.binary(tmp, op_text, .i1, left, right);
             return .{ .name = tmp, .ty = .i1, .is_ptr = false };
         },
+        .eqv, .neqv => {
+            if (left.ty != .i1 or right.ty != .i1) return error.UnsupportedLogicalOp;
+            const pred = if (op == .eqv) "eq" else "ne";
+            try builder.compare(tmp, "icmp", pred, .i1, left, right);
+            return .{ .name = tmp, .ty = .i1, .is_ptr = false };
+        },
         .concat => return error.UnsupportedConcat,
         .power => unreachable,
     }

@@ -114,7 +114,7 @@ pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKi
         },
         .binary => |bin| {
             switch (bin.op) {
-                .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_ => return .logical,
+                .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => return .logical,
                 .concat => return .character,
                 else => {},
             }
