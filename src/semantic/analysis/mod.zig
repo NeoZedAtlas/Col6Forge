@@ -8,14 +8,25 @@ const symbols_mod = @import("symbols.zig");
 
 pub const UnitAnalyzer = struct {
     ctx: context.Context,
+    initial_implicit: []const symbols.ImplicitRule,
 
-    pub fn init(arena: std.mem.Allocator, unit: ast.ProgramUnit) UnitAnalyzer {
-        return .{ .ctx = context.Context.init(arena, unit) };
+    pub fn init(
+        arena: std.mem.Allocator,
+        unit: ast.ProgramUnit,
+        initial_implicit: []const symbols.ImplicitRule,
+    ) UnitAnalyzer {
+        return .{
+            .ctx = context.Context.init(arena, unit),
+            .initial_implicit = initial_implicit,
+        };
     }
 
     pub fn analyze(self: *UnitAnalyzer) !symbols.SemanticUnit {
         var ctx = &self.ctx;
         try symbols_mod.initImplicitDefaults(ctx);
+        for (self.initial_implicit) |rule| {
+            try ctx.implicit.append(rule);
+        }
         try symbols_mod.installUnitSymbol(ctx);
         try symbols_mod.installDummyArgs(ctx);
         for (ctx.unit.decls) |decl| {

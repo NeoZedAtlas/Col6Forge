@@ -18,10 +18,12 @@ pub const SemanticProgram = symbols.SemanticProgram;
 
 pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticProgram {
     var units = std.array_list.Managed(SemanticUnit).init(arena);
+    var inherited_implicit: []const symbols.ImplicitRule = &.{};
     for (program.units) |unit| {
-        var unit_analyzer = analyzer.UnitAnalyzer.init(arena, unit);
+        var unit_analyzer = analyzer.UnitAnalyzer.init(arena, unit, inherited_implicit);
         const sem_unit = try unit_analyzer.analyze();
         try units.append(sem_unit);
+        inherited_implicit = sem_unit.implicit_rules;
     }
     return .{ .units = try units.toOwnedSlice() };
 }

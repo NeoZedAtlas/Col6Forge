@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../../sema/symbol.zig");
 const context = @import("context.zig");
@@ -29,6 +30,10 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             } else {
                 if (!sym.is_intrinsic and symbols_mod.isIntrinsicName(call.name)) {
                     sym.is_intrinsic = true;
+                    self.symbols.items[idx] = sym;
+                }
+                if (sym.is_intrinsic) {
+                    sym.type_kind = intrinsicReturnType(call.name, sym.type_kind);
                     self.symbols.items[idx] = sym;
                 }
                 if (sym.dims.len > 0) {
@@ -139,4 +144,9 @@ pub fn isPowerOperandSupported(kind: ast.TypeKind) bool {
         .integer, .real, .double_precision => true,
         else => false,
     };
+}
+
+fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
+    if (std.ascii.eqlIgnoreCase(name, "CMPLX")) return .complex;
+    return current;
 }

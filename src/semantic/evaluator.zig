@@ -3,6 +3,7 @@ const ast = @import("../ast/nodes.zig");
 const symbols = @import("../sema/symbol.zig");
 
 const ConstValue = symbols.ConstValue;
+const ComplexConst = symbols.ComplexConst;
 
 pub const ConstResolver = struct {
     ctx: *anyopaque,
@@ -41,7 +42,14 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
             const right = (try evalConst(bin.right, resolver)) orelse return null;
             return evalBinary(bin.op, left, right);
         },
-        .complex_literal => return null,
+        .complex_literal => |lit| {
+            const real_val = (try evalConst(lit.real, resolver)) orelse return null;
+            const imag_val = (try evalConst(lit.imag, resolver)) orelse return null;
+            const real = toComplex(real_val) orelse return null;
+            const imag = toComplex(imag_val) orelse return null;
+            if (real.imag != 0.0 or imag.imag != 0.0) return null;
+            return .{ .complex = .{ .real = real.real, .imag = imag.real } };
+        },
         .substring => return null,
         .call_or_subscript => return null,
         .dim_range => return null,
@@ -86,11 +94,36 @@ fn negateConst(value: ConstValue) ConstValue {
     return switch (value) {
         .integer => |v| .{ .integer = -v },
         .real => |v| .{ .real = -v },
+        .complex => |v| .{ .complex = .{ .real = -v.real, .imag = -v.imag } },
         .string => value,
     };
 }
 
 fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue) ?ConstValue {
+    if (left == .string or right == .string) return null;
+
+    if (left == .complex or right == .complex) {
+        const l = toComplex(left) orelse return null;
+        const r = toComplex(right) orelse return null;
+        return switch (op) {
+            .add => .{ .complex = .{ .real = l.real + r.real, .imag = l.imag + r.imag } },
+            .sub => .{ .complex = .{ .real = l.real - r.real, .imag = l.imag - r.imag } },
+            .mul => .{ .complex = .{
+                .real = (l.real * r.real) - (l.imag * r.imag),
+                .imag = (l.real * r.imag) + (l.imag * r.real),
+            } },
+            .div => blk: {
+                const denom = (r.real * r.real) + (r.imag * r.imag);
+                if (denom == 0.0) break :blk .{ .complex = .{ .real = 0.0, .imag = 0.0 } };
+                break :blk .{ .complex = .{
+                    .real = ((l.real * r.real) + (l.imag * r.imag)) / denom,
+                    .imag = ((l.imag * r.real) - (l.real * r.imag)) / denom,
+                } };
+            },
+            else => null,
+        };
+    }
+
     const left_is_real = switch (left) {
         .real => true,
         else => false,
@@ -99,7 +132,6 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue) ?ConstValue
         .real => true,
         else => false,
     };
-    if (left == .string or right == .string) return null;
     if (left_is_real or right_is_real) {
         const l = toReal(left);
         const r = toReal(right);
@@ -138,6 +170,16 @@ fn toReal(value: ConstValue) f64 {
     return switch (value) {
         .real => |v| v,
         .integer => |v| @as(f64, @floatFromInt(v)),
+        .complex => |v| v.real,
         .string => 0,
+    };
+}
+
+fn toComplex(value: ConstValue) ?ComplexConst {
+    return switch (value) {
+        .integer => |v| .{ .real = @as(f64, @floatFromInt(v)), .imag = 0.0 },
+        .real => |v| .{ .real = v, .imag = 0.0 },
+        .complex => |v| v,
+        .string => null,
     };
 }

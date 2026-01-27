@@ -179,6 +179,7 @@ fn evalConstInt(sem: *const sema.SemanticUnit, expr: *ast.Expr) !?i64 {
     return switch (value orelse return null) {
         .integer => |v| v,
         .real => null,
+        .complex => null,
         .string => null,
     };
 }

@@ -143,6 +143,7 @@ pub fn isIntrinsicName(name: []const u8) bool {
         std.ascii.eqlIgnoreCase(name, "DIM") or
         std.ascii.eqlIgnoreCase(name, "IDIM") or
         std.ascii.eqlIgnoreCase(name, "CONJG") or
+        std.ascii.eqlIgnoreCase(name, "CMPLX") or
         std.ascii.eqlIgnoreCase(name, "FLOAT") or
         std.ascii.eqlIgnoreCase(name, "REAL") or
         std.ascii.eqlIgnoreCase(name, "ICHAR") or

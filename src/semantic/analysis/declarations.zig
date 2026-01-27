@@ -39,6 +39,10 @@ pub fn applyDecl(self: *context.Context, decl: ast.Decl) !void {
                                     std.debug.print("implicit char len real\n", .{});
                                     return error.InvalidCharLen;
                                 },
+                                .complex => {
+                                    std.debug.print("implicit char len complex\n", .{});
+                                    return error.InvalidCharLen;
+                                },
                                 .string => {
                                     std.debug.print("implicit char len string\n", .{});
                                     return error.InvalidCharLen;
@@ -168,6 +172,10 @@ pub fn applyDeclarator(
                 },
                 .real => {
                     std.debug.print("decl char len real for {s}\n", .{item.name});
+                    return error.InvalidCharLen;
+                },
+                .complex => {
+                    std.debug.print("decl char len complex for {s}\n", .{item.name});
                     return error.InvalidCharLen;
                 },
                 .string => {

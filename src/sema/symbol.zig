@@ -26,9 +26,15 @@ pub const Symbol = struct {
     type_explicit: bool,
 };
 
+pub const ComplexConst = struct {
+    real: f64,
+    imag: f64,
+};
+
 pub const ConstValue = union(enum) {
     integer: i64,
     real: f64,
+    complex: ComplexConst,
     string: ast.Literal,
 };
 
