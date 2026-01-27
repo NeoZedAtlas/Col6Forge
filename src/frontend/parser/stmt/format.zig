@@ -138,6 +138,17 @@ fn parseFormatSequence(
             continue;
         }
 
+        if (ch == 'T' or ch == 't') {
+            index.* += 1;
+            // Support Tn, TRn, TLn. We approximate these as space counts.
+            if (index.* < text.len and (text[index.*] == 'R' or text[index.*] == 'r' or text[index.*] == 'L' or text[index.*] == 'l')) {
+                index.* += 1;
+            }
+            const count = parseUnsigned(text, index) orelse return error.UnexpectedToken;
+            try items.append(.{ .spaces = count });
+            continue;
+        }
+
         if (ch == '+' or ch == '-' or std.ascii.isDigit(ch)) {
             var sign: i32 = 1;
             if (ch == '+' or ch == '-') {
@@ -181,6 +192,15 @@ fn parseFormatSequence(
             if (index.* < text.len and (text[index.*] == 'X' or text[index.*] == 'x')) {
                 index.* += 1;
                 try items.append(.{ .spaces = count });
+                continue;
+            }
+            if (index.* < text.len and (text[index.*] == 'T' or text[index.*] == 't')) {
+                index.* += 1;
+                if (index.* < text.len and (text[index.*] == 'R' or text[index.*] == 'r' or text[index.*] == 'L' or text[index.*] == 'l')) {
+                    index.* += 1;
+                }
+                const tab_count = parseUnsigned(text, index) orelse return error.UnexpectedToken;
+                try appendRepeatedItem(&items, .{ .spaces = tab_count }, count);
                 continue;
             }
             if (index.* < text.len and text[index.*] == '/') {
