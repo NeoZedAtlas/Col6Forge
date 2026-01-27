@@ -693,11 +693,8 @@ const char *f77_fmt_e(int width, int precision, int exp_width, double value) {
     double mantissa = (scale != 0.0) ? value / scale : 0.0;
 
     (void)snprintf(tmp, sizeof(tmp), "%.*f", precision, mantissa);
-    if (tmp[0] == '0' && tmp[1] == '.') {
-        memmove(tmp, tmp + 1, strlen(tmp));
-    } else if (tmp[0] == '-' && tmp[1] == '0' && tmp[2] == '.') {
-        memmove(tmp + 1, tmp + 2, strlen(tmp + 2) + 1);
-    }
+    // Keep the leading zero before the decimal point to match NIST reference
+    // output such as "-0.12345E+03" rather than "-.12345E+03".
 
     if (exp_width <= 0) {
         exp_width = 2;

@@ -231,7 +231,8 @@ pub fn Builder(comptime WriterType: type) type {
                 if (idx != 0) {
                     try self.writer.writeAll(", ");
                 }
-                try self.writer.print("[ {s} {s}, %{s} ]", .{ llvm_types.irTypeText(ty), entry.value.name, entry.label });
+                // In LLVM IR, the incoming value in a phi node must not repeat the type.
+                try self.writer.print("[ {s}, %{s} ]", .{ entry.value.name, entry.label });
             }
             try self.writer.writeAll("\n");
         }

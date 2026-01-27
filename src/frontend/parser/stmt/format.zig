@@ -214,6 +214,15 @@ fn parseFormatSequence(
                 has_descriptor = true;
                 continue;
             }
+            if (index.* < text.len and (text[index.*] == 'G' or text[index.*] == 'g')) {
+                index.* += 1;
+                const spec = try parseRealFormat(text, index);
+                // Treat G editing as real editing for now. This is sufficient
+                // for NIST format parsing and avoids MissingFormatLabel.
+                try appendRepeatedItem(&items, .{ .real = spec }, count);
+                has_descriptor = true;
+                continue;
+            }
             if (index.* < text.len and (text[index.*] == 'D' or text[index.*] == 'd')) {
                 index.* += 1;
                 const spec = try parseRealFormat(text, index);
@@ -256,6 +265,14 @@ fn parseFormatSequence(
         if (ch == 'E' or ch == 'e') {
             index.* += 1;
             const spec = try parseRealFormat(text, index);
+            try items.append(.{ .real = spec });
+            has_descriptor = true;
+            continue;
+        }
+        if (ch == 'G' or ch == 'g') {
+            index.* += 1;
+            const spec = try parseRealFormat(text, index);
+            // Treat G editing as real editing for now.
             try items.append(.{ .real = spec });
             has_descriptor = true;
             continue;

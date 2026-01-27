@@ -267,11 +267,17 @@ fn parseCommonDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_cha
 
 fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
     if (lp.consume(.l_paren)) {
-        if (!lp.consume(.star)) return error.UnexpectedToken;
+        if (lp.consume(.star)) {
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            const node = try arena.create(ast.Expr);
+            node.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
+            return node;
+        }
+        // Support CHARACTER*(expr) in addition to CHARACTER*(*) by
+        // delegating to the normal expression parser within parentheses.
+        const inner = try expr.parseExpr(lp, arena, 0);
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-        const node = try arena.create(ast.Expr);
-        node.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
-        return node;
+        return inner;
     }
     return expr.parseExpr(lp, arena, 6);
 }
