@@ -105,14 +105,14 @@ pub fn tryParseBlankInsensitiveAssignment(arena: std.mem.Allocator, line: fixed_
     var name_buf = std.array_list.Managed(u8).init(arena);
     for (lp.tokens[lp.index..idx]) |tok| {
         if (tok.kind != .identifier and tok.kind != .integer) return null;
-        appendSansBlanks(&name_buf, lp.tokenText(tok)) catch return null;
+        appendSansBlanks(&name_buf, lp.tokenText(tok), tok.kind) catch return null;
     }
     const target_name = name_buf.toOwnedSlice() catch return null;
     if (target_name.len == 0) return null;
 
     var rhs_buf = std.array_list.Managed(u8).init(arena);
     for (lp.tokens[idx + 1 ..]) |tok| {
-        appendSansBlanks(&rhs_buf, lp.tokenText(tok)) catch return null;
+        appendSansBlanks(&rhs_buf, lp.tokenText(tok), tok.kind) catch return null;
     }
     const rhs_text = rhs_buf.toOwnedSlice() catch return null;
     if (rhs_text.len == 0) return null;
@@ -134,7 +134,13 @@ pub fn tryParseBlankInsensitiveAssignment(arena: std.mem.Allocator, line: fixed_
     return .{ .assignment = .{ .target = target_expr, .value = value_expr } };
 }
 
-fn appendSansBlanks(buf: *std.array_list.Managed(u8), text: []const u8) !void {
+fn appendSansBlanks(buf: *std.array_list.Managed(u8), text: []const u8, kind: lexer.TokenKind) !void {
+    // Blanks are insignificant in fixed-form source, except inside character
+    // and Hollerith literals. Preserve literal contents verbatim.
+    if (kind == .string or kind == .hollerith) {
+        try buf.appendSlice(text);
+        return;
+    }
     for (text) |ch| {
         if (ch == ' ' or ch == '\t') continue;
         try buf.append(ch);

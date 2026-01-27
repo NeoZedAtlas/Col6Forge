@@ -138,6 +138,23 @@ fn parseFormatSequence(
             continue;
         }
 
+        if (ch == ':') {
+            // Colon edit descriptor: terminate format reversion. We model it
+            // as a no-op so parsing can proceed.
+            index.* += 1;
+            continue;
+        }
+
+        if (ch == 'S' or ch == 's') {
+            // Sign control descriptors S, SP, SS. We treat them as no-ops for
+            // now to avoid parse failures in the NIST suite.
+            index.* += 1;
+            if (index.* < text.len and (text[index.*] == 'P' or text[index.*] == 'p' or text[index.*] == 'S' or text[index.*] == 's')) {
+                index.* += 1;
+            }
+            continue;
+        }
+
         if (ch == 'T' or ch == 't') {
             index.* += 1;
             // Support Tn, TRn, TLn. We approximate these as space counts.
@@ -192,6 +209,17 @@ fn parseFormatSequence(
             if (index.* < text.len and (text[index.*] == 'X' or text[index.*] == 'x')) {
                 index.* += 1;
                 try items.append(.{ .spaces = count });
+                continue;
+            }
+            if (index.* < text.len and text[index.*] == ':') {
+                index.* += 1;
+                continue;
+            }
+            if (index.* < text.len and (text[index.*] == 'S' or text[index.*] == 's')) {
+                index.* += 1;
+                if (index.* < text.len and (text[index.*] == 'P' or text[index.*] == 'p' or text[index.*] == 'S' or text[index.*] == 's')) {
+                    index.* += 1;
+                }
                 continue;
             }
             if (index.* < text.len and (text[index.*] == 'T' or text[index.*] == 't')) {

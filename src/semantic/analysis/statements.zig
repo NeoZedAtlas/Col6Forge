@@ -54,6 +54,16 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
                 try expressions.resolveExpr(self, recl);
             }
         },
+        .inquire => |inq| {
+            for (inq.controls) |ctrl| {
+                try expressions.resolveExpr(self, ctrl);
+            }
+        },
+        .close => |cls| {
+            for (cls.controls) |ctrl| {
+                try expressions.resolveExpr(self, ctrl);
+            }
+        },
         .data => |data| {
             for (data.inits) |data_init| {
                 try expressions.resolveExpr(self, data_init.target);
@@ -145,6 +155,16 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             try expressions.resolveExpr(self, open_stmt.unit);
             if (open_stmt.recl) |recl| {
                 try expressions.resolveExpr(self, recl);
+            }
+        },
+        .inquire => |inq| {
+            for (inq.controls) |ctrl| {
+                try expressions.resolveExpr(self, ctrl);
+            }
+        },
+        .close => |cls| {
+            for (cls.controls) |ctrl| {
+                try expressions.resolveExpr(self, ctrl);
             }
         },
         .data => |data| {

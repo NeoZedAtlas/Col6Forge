@@ -104,6 +104,16 @@ pub fn parseStatement(
         index.* += 1;
         return .{ .label = label, .node = stmt_node };
     }
+    if (lp.isKeywordSplit("INQUIRE")) {
+        const stmt_node = try io.parseInquireStatement(arena, &lp);
+        index.* += 1;
+        return .{ .label = label, .node = stmt_node };
+    }
+    if (lp.isKeywordSplit("CLOSE")) {
+        const stmt_node = try io.parseCloseStatement(arena, &lp);
+        index.* += 1;
+        return .{ .label = label, .node = stmt_node };
+    }
     if (lp.isKeywordSplit("ENTRY")) {
         _ = lp.consumeKeyword("ENTRY");
         const name = lp.readName(arena) orelse return error.MissingName;
@@ -411,6 +421,16 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator) ParseStmtError
     if (lp.isKeywordSplit("ENDFILE")) {
         const node = try arena.create(StmtNode);
         node.* = try io.parseEndfileStatement(arena, lp);
+        return node;
+    }
+    if (lp.isKeywordSplit("INQUIRE")) {
+        const node = try arena.create(StmtNode);
+        node.* = try io.parseInquireStatement(arena, lp);
+        return node;
+    }
+    if (lp.isKeywordSplit("CLOSE")) {
+        const node = try arena.create(StmtNode);
+        node.* = try io.parseCloseStatement(arena, lp);
         return node;
     }
     if (lp.isKeywordSplit("PAUSE")) {

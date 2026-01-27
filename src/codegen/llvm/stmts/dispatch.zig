@@ -48,6 +48,16 @@ pub fn emitStmt(
             try builder.br(next_block);
             return true;
         },
+        .inquire => |inquire| {
+            try io.emitInquire(ctx, builder, inquire);
+            try builder.br(next_block);
+            return true;
+        },
+        .close => |close_stmt| {
+            try io.emitClose(ctx, builder, close_stmt);
+            try builder.br(next_block);
+            return true;
+        },
         .rewind => |rewind| {
             try io.emitRewind(ctx, builder, rewind);
             try builder.br(next_block);

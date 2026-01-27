@@ -7,6 +7,7 @@ const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
 const complex = @import("../codegen/expression/complex.zig");
 const utils = @import("../codegen/utils.zig");
+const format_parser = @import("../../../frontend/parser/stmt/format.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -26,27 +27,58 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
     const unit_char_len = charLenForExpr(ctx, write.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
-    const fmt_info = switch (write.format) {
-        .label => |label| ctx.formats.get(label) orelse return error.MissingFormatLabel,
-        .inline_items => |items| blk: {
+    var expanded_values = try expandWriteArgs(ctx, builder, write.args);
+    defer expanded_values.deinit();
+
+    switch (write.format) {
+        .label => |label| {
+            if (ctx.formats.get(label)) |fmt_info| {
+                return emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded_values);
+            }
+            if (ctx.findSymbol(label)) |sym| {
+                if (sym.type_kind == .character) {
+                    if (try formatFromCharArrayData(ctx, label)) |items| {
+                        return emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, items, &expanded_values);
+                    }
+                    return error.MissingFormatLabel;
+                }
+                // Assigned FORMAT via a label variable: select at runtime by value.
+                return emitWriteDynamicFormat(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, label, &expanded_values);
+            }
+            return error.MissingFormatLabel;
+        },
+        .inline_items => |items| {
             const key = @as(usize, @intFromPtr(items.ptr));
-            break :blk ctx.inline_formats.get(key) orelse return error.MissingFormatLabel;
+            const fmt_info = ctx.inline_formats.get(key) orelse return error.MissingFormatLabel;
+            return emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded_values);
         },
         .none => unreachable,
-    };
+    }
+}
+
+fn emitWriteFormatted(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    fmt_items: []const ast.FormatItem,
+    expanded_values: *ExpandedWriteValues,
+) EmitError!void {
+    _ = write;
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();
 
     const Arg = struct { ty: llvm_types.IRType, name: []const u8 };
     var args = std.array_list.Managed(Arg).init(ctx.allocator);
     defer args.deinit();
-    var expanded_values = try expandWriteArgs(ctx, builder, write.args);
-    defer expanded_values.deinit();
 
-    const descriptor_count = countFormatDescriptors(fmt_info.items);
+    const descriptor_count = countFormatDescriptors(fmt_items);
     if (descriptor_count == 0) {
         var pending_spaces: usize = 0;
-        for (fmt_info.items) |item| {
+        for (fmt_items) |item| {
             switch (item) {
                 .literal => |text| {
                     if (isAllNewlines(text)) {
@@ -65,7 +97,7 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
         pending_spaces = 0;
     } else if (expanded_values.values.items.len == 0) {
         var pending_spaces: usize = 0;
-        for (fmt_info.items) |item| {
+        for (fmt_items) |item| {
             switch (item) {
                 .literal => |text| {
                     if (isAllNewlines(text)) {
@@ -88,7 +120,7 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
     } else {
         var arg_index: usize = 0;
         var pending_spaces: usize = 0;
-        const reversion_start = findReversionStart(fmt_info.items);
+        const reversion_start = findReversionStart(fmt_items);
         var format_start: usize = 0;
         var first_pass = true;
         while (arg_index < expanded_values.values.items.len) {
@@ -99,8 +131,8 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
             first_pass = false;
             var scale_factor: i32 = 0;
             var idx: usize = format_start;
-            while (idx < fmt_info.items.len) : (idx += 1) {
-                const item = fmt_info.items[idx];
+            while (idx < fmt_items.len) : (idx += 1) {
+                const item = fmt_items[idx];
                 switch (item) {
                     .literal => |text| {
                         if (isAllNewlines(text)) {
@@ -278,20 +310,48 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
     const unit_char_len = charLenForExpr(ctx, read.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
-    const fmt_info = switch (read.format) {
-        .label => |label| ctx.formats.get(label) orelse return error.MissingFormatLabel,
-        .inline_items => |items| blk: {
-            const key = @as(usize, @intFromPtr(items.ptr));
-            break :blk ctx.inline_formats.get(key) orelse return error.MissingFormatLabel;
-        },
-        .none => unreachable,
-    };
-
-    var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
-    defer fmt_buf.deinit();
-
     var expanded = try expandReadTargets(ctx, builder, read.args);
     defer expanded.deinit();
+
+    switch (read.format) {
+        .label => |label| {
+            if (ctx.formats.get(label)) |fmt_info| {
+                return emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+            }
+            if (ctx.findSymbol(label)) |sym| {
+                if (sym.type_kind == .character) {
+                    if (try formatFromCharArrayData(ctx, label)) |items| {
+                        return emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, items, &expanded);
+                    }
+                    return error.MissingFormatLabel;
+                }
+                return emitReadDynamicFormat(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, label, &expanded);
+            }
+            return error.MissingFormatLabel;
+        },
+        .inline_items => |items| {
+            const key = @as(usize, @intFromPtr(items.ptr));
+            const fmt_info = ctx.inline_formats.get(key) orelse return error.MissingFormatLabel;
+            return emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+        },
+        .none => unreachable,
+    }
+}
+
+fn emitReadFormatted(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    fmt_items: []const ast.FormatItem,
+    expanded: *ExpandedReadTargets,
+) EmitError!void {
+    _ = read;
+    var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer fmt_buf.deinit();
 
     var arg_ptrs = std.array_list.Managed([]const u8).init(ctx.allocator);
     defer arg_ptrs.deinit();
@@ -312,9 +372,9 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
     var scale_fixups = std.array_list.Managed(ScaleFixup).init(ctx.allocator);
     defer scale_fixups.deinit();
 
-    const descriptor_count = countFormatDescriptors(fmt_info.items);
+    const descriptor_count = countFormatDescriptors(fmt_items);
     if (descriptor_count == 0) {
-        for (fmt_info.items) |item| {
+        for (fmt_items) |item| {
             switch (item) {
                 .literal => |text| {
                     try appendScanfLiteral(&fmt_buf, text);
@@ -327,7 +387,7 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
         }
     } else {
         var arg_index: usize = 0;
-        const reversion_start = findReversionStart(fmt_info.items);
+        const reversion_start = findReversionStart(fmt_items);
         var format_start: usize = 0;
         var first_pass = true;
         while (arg_index < expanded.ptrs.items.len) {
@@ -337,8 +397,8 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
             first_pass = false;
             var scale_factor: i32 = 0;
             var fmt_index: usize = format_start;
-            while (fmt_index < fmt_info.items.len) : (fmt_index += 1) {
-                const item = fmt_info.items[fmt_index];
+            while (fmt_index < fmt_items.len) : (fmt_index += 1) {
+                const item = fmt_items[fmt_index];
                 switch (item) {
                     .literal => |text| {
                         try appendScanfLiteral(&fmt_buf, text);
@@ -470,6 +530,8 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
         try builder.store(.{ .name = scaled_tmp, .ty = fixup.ty, .is_ptr = false }, fixup.target_ptr);
     }
 
+    try applyComplexFixups(ctx, builder, expanded);
+
     for (char_fixups.items) |fixup| {
         if (fixup.temp_ptr) |temp_ptr| {
             const start = if (fixup.field_width > fixup.target_len) fixup.field_width - fixup.target_len else 0;
@@ -554,6 +616,188 @@ fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError
     }
     const read_name = try ctx.ensureDeclRaw("f77_read_direct", .i32, "i32, i32, ptr", true);
     try builder.call(null, .i32, read_name, arg_buf.items);
+}
+
+fn formatFromCharArrayData(ctx: *Context, name: []const u8) EmitError!?[]const ast.FormatItem {
+    const sym = ctx.findSymbol(name) orelse return null;
+    if (sym.type_kind != .character or sym.dims.len == 0) return null;
+    const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return null;
+    if (elem_count == 0) return null;
+    const char_len = sym.char_len orelse 1;
+
+    var elements = try ctx.allocator.alloc(?[]const u8, elem_count);
+    defer ctx.allocator.free(elements);
+    @memset(elements, null);
+
+    for (ctx.unit.stmts) |stmt_item| {
+        if (stmt_item.node != .data) continue;
+        for (stmt_item.node.data.inits) |init| {
+            var idx_opt: ?usize = null;
+            switch (init.target.*) {
+                .call_or_subscript => |call| {
+                    if (!std.mem.eql(u8, call.name, name)) continue;
+                    if (call.args.len != 1) continue;
+                    const idx_val = intLiteralValue(call.args[0]) orelse continue;
+                    if (idx_val <= 0) continue;
+                    const idx_usize: usize = @intCast(idx_val - 1);
+                    if (idx_usize >= elem_count) continue;
+                    idx_opt = idx_usize;
+                },
+                .identifier => |ident| {
+                    if (!std.mem.eql(u8, ident, name)) continue;
+                    if (elem_count != 1) continue;
+                    idx_opt = 0;
+                },
+                else => continue,
+            }
+            const idx = idx_opt orelse continue;
+            if (init.value.* != .literal) continue;
+            const lit = init.value.literal;
+            const raw_bytes: []const u8 = switch (lit.kind) {
+                .string => utils.decodeStringLiteral(ctx.allocator, lit.text) catch continue,
+                .hollerith => utils.hollerithBytes(lit.text) orelse continue,
+                else => continue,
+            };
+            var padded = try ctx.allocator.alloc(u8, char_len);
+            @memset(padded, ' ');
+            const copy_len = @min(raw_bytes.len, char_len);
+            @memcpy(padded[0..copy_len], raw_bytes[0..copy_len]);
+            elements[idx] = padded;
+        }
+    }
+
+    for (elements) |elem_opt| {
+        if (elem_opt == null) return null;
+    }
+
+    var buffer = std.array_list.Managed(u8).init(ctx.allocator);
+    errdefer buffer.deinit();
+    for (elements) |elem_opt| {
+        const elem = elem_opt.?;
+        try buffer.appendSlice(elem);
+    }
+
+    const items = format_parser.parseFormatItems(ctx.allocator, buffer.items) catch return null;
+    return items;
+}
+
+fn emitWriteDynamicFormat(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    label_var: []const u8,
+    expanded_values: *ExpandedWriteValues,
+) EmitError!void {
+    const var_value = try expr.emitExpr(ctx, builder, try makeIdentifierExpr(ctx, label_var));
+    const var_i32 = try expr.coerce(ctx, builder, var_value, .i32);
+
+    var numeric_formats = std.array_list.Managed(struct {
+        value: i32,
+        items: []const ast.FormatItem,
+    }).init(ctx.allocator);
+    defer numeric_formats.deinit();
+
+    var it = ctx.formats.iterator();
+    while (it.next()) |entry| {
+        const label_text = entry.key_ptr.*;
+        const parsed = std.fmt.parseInt(i32, label_text, 10) catch continue;
+        try numeric_formats.append(.{ .value = parsed, .items = entry.value_ptr.items });
+    }
+    if (numeric_formats.items.len == 0) return error.MissingFormatLabel;
+
+    const done_label = try ctx.nextLabel("fmt_done");
+    var check_label = try ctx.nextLabel("fmt_check");
+    try builder.br(check_label);
+
+    for (numeric_formats.items, 0..) |fmt_entry, idx| {
+        try builder.label(check_label);
+        const cmp_tmp = try ctx.nextTemp();
+        const const_text = utils.formatInt(ctx.allocator, fmt_entry.value);
+        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
+        try builder.compare(cmp_tmp, "icmp", "eq", .i32, var_i32, const_val);
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        const use_label = try ctx.nextLabel("fmt_use");
+        const next_label = if (idx + 1 < numeric_formats.items.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
+        try builder.brCond(cond, use_label, next_label);
+
+        try builder.label(use_label);
+        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_entry.items, expanded_values);
+        try builder.br(done_label);
+
+        check_label = next_label;
+    }
+
+    try builder.label(check_label);
+    // Fallback: use the first available format.
+    try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, numeric_formats.items[0].items, expanded_values);
+    try builder.br(done_label);
+    try builder.label(done_label);
+}
+
+fn emitReadDynamicFormat(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    label_var: []const u8,
+    expanded: *ExpandedReadTargets,
+) EmitError!void {
+    const var_value = try expr.emitExpr(ctx, builder, try makeIdentifierExpr(ctx, label_var));
+    const var_i32 = try expr.coerce(ctx, builder, var_value, .i32);
+
+    var numeric_formats = std.array_list.Managed(struct {
+        value: i32,
+        items: []const ast.FormatItem,
+    }).init(ctx.allocator);
+    defer numeric_formats.deinit();
+
+    var it = ctx.formats.iterator();
+    while (it.next()) |entry| {
+        const label_text = entry.key_ptr.*;
+        const parsed = std.fmt.parseInt(i32, label_text, 10) catch continue;
+        try numeric_formats.append(.{ .value = parsed, .items = entry.value_ptr.items });
+    }
+    if (numeric_formats.items.len == 0) return error.MissingFormatLabel;
+
+    const done_label = try ctx.nextLabel("fmt_done");
+    var check_label = try ctx.nextLabel("fmt_check");
+    try builder.br(check_label);
+
+    for (numeric_formats.items, 0..) |fmt_entry, idx| {
+        try builder.label(check_label);
+        const cmp_tmp = try ctx.nextTemp();
+        const const_text = utils.formatInt(ctx.allocator, fmt_entry.value);
+        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
+        try builder.compare(cmp_tmp, "icmp", "eq", .i32, var_i32, const_val);
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        const use_label = try ctx.nextLabel("fmt_use");
+        const next_label = if (idx + 1 < numeric_formats.items.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
+        try builder.brCond(cond, use_label, next_label);
+
+        try builder.label(use_label);
+        try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_entry.items, expanded);
+        try builder.br(done_label);
+
+        check_label = next_label;
+    }
+
+    try builder.label(check_label);
+    try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, numeric_formats.items[0].items, expanded);
+    try builder.br(done_label);
+    try builder.label(done_label);
+}
+
+fn makeIdentifierExpr(ctx: *Context, name: []const u8) !*ast.Expr {
+    const node = try ctx.allocator.create(ast.Expr);
+    node.* = .{ .identifier = name };
+    return node;
 }
 
 fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
@@ -706,6 +950,8 @@ fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) Emi
         const read_name = try ctx.ensureDeclRaw("f77_read", .i32, "i32, ptr", true);
         try builder.call(null, .i32, read_name, arg_buf.items);
     }
+
+    try applyComplexFixups(ctx, builder, &expanded);
 }
 
 fn buildDirectSignature(ctx: *Context, args: []*ast.Expr) ![]const u8 {
@@ -746,16 +992,25 @@ fn ensureValuePtr(ctx: *Context, builder: anytype, node: *ast.Expr) EmitError!Va
     return ptr;
 }
 
+const ComplexFixup = struct {
+    target_ptr: ValueRef,
+    elem_ty: llvm_types.IRType,
+    real_ptr: ValueRef,
+    imag_ptr: ValueRef,
+};
+
 const ExpandedReadTargets = struct {
     ptrs: std.array_list.Managed(ValueRef),
     types: std.array_list.Managed(llvm_types.IRType),
     char_lens: std.array_list.Managed(usize),
+    complex_fixups: std.array_list.Managed(ComplexFixup),
 
     fn init(allocator: std.mem.Allocator) ExpandedReadTargets {
         return .{
             .ptrs = std.array_list.Managed(ValueRef).init(allocator),
             .types = std.array_list.Managed(llvm_types.IRType).init(allocator),
             .char_lens = std.array_list.Managed(usize).init(allocator),
+            .complex_fixups = std.array_list.Managed(ComplexFixup).init(allocator),
         };
     }
 
@@ -763,6 +1018,7 @@ const ExpandedReadTargets = struct {
         self.ptrs.deinit();
         self.types.deinit();
         self.char_lens.deinit();
+        self.complex_fixups.deinit();
     }
 };
 
@@ -802,20 +1058,81 @@ fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitErr
                     }
                     const ptr_name = try ctx.nextTemp();
                     try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
-                    try expanded.ptrs.append(.{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
-                    try expanded.types.append(if (sym.type_kind == .character) llvm_types.IRType.ptr else elem_ty);
-                    try expanded.char_lens.append(if (sym.type_kind == .character) char_len else 0);
+                    const elem_ptr = ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+                    if (complex.isComplexType(elem_ty)) {
+                        const elem_real_ty = complex.complexElemType(elem_ty) orelse return error.UnsupportedComplexType;
+                        const real_tmp = try ctx.nextTemp();
+                        try builder.alloca(real_tmp, elem_real_ty);
+                        const real_ptr = ValueRef{ .name = real_tmp, .ty = .ptr, .is_ptr = true };
+                        const imag_tmp = try ctx.nextTemp();
+                        try builder.alloca(imag_tmp, elem_real_ty);
+                        const imag_ptr = ValueRef{ .name = imag_tmp, .ty = .ptr, .is_ptr = true };
+
+                        try expanded.ptrs.append(real_ptr);
+                        try expanded.types.append(elem_real_ty);
+                        try expanded.char_lens.append(0);
+                        try expanded.ptrs.append(imag_ptr);
+                        try expanded.types.append(elem_real_ty);
+                        try expanded.char_lens.append(0);
+                        try expanded.complex_fixups.append(.{
+                            .target_ptr = elem_ptr,
+                            .elem_ty = elem_real_ty,
+                            .real_ptr = real_ptr,
+                            .imag_ptr = imag_ptr,
+                        });
+                    } else {
+                        try expanded.ptrs.append(elem_ptr);
+                        try expanded.types.append(if (sym.type_kind == .character) llvm_types.IRType.ptr else elem_ty);
+                        try expanded.char_lens.append(if (sym.type_kind == .character) char_len else 0);
+                    }
                 }
                 continue;
             }
         }
         const ptr = try expr.emitLValue(ctx, builder, arg);
         const ty = try expr.exprType(ctx, arg);
-        try expanded.ptrs.append(ptr);
-        try expanded.types.append(ty);
-        try expanded.char_lens.append(if (ty == .ptr) (charLenForExpr(ctx, arg) orelse 1) else 0);
+        if (complex.isComplexType(ty)) {
+            const elem_real_ty = complex.complexElemType(ty) orelse return error.UnsupportedComplexType;
+            const real_tmp = try ctx.nextTemp();
+            try builder.alloca(real_tmp, elem_real_ty);
+            const real_ptr = ValueRef{ .name = real_tmp, .ty = .ptr, .is_ptr = true };
+            const imag_tmp = try ctx.nextTemp();
+            try builder.alloca(imag_tmp, elem_real_ty);
+            const imag_ptr = ValueRef{ .name = imag_tmp, .ty = .ptr, .is_ptr = true };
+
+            try expanded.ptrs.append(real_ptr);
+            try expanded.types.append(elem_real_ty);
+            try expanded.char_lens.append(0);
+            try expanded.ptrs.append(imag_ptr);
+            try expanded.types.append(elem_real_ty);
+            try expanded.char_lens.append(0);
+            try expanded.complex_fixups.append(.{
+                .target_ptr = ptr,
+                .elem_ty = elem_real_ty,
+                .real_ptr = real_ptr,
+                .imag_ptr = imag_ptr,
+            });
+        } else {
+            try expanded.ptrs.append(ptr);
+            try expanded.types.append(ty);
+            try expanded.char_lens.append(if (ty == .ptr) (charLenForExpr(ctx, arg) orelse 1) else 0);
+        }
     }
     return expanded;
+}
+
+fn applyComplexFixups(ctx: *Context, builder: anytype, expanded: *ExpandedReadTargets) EmitError!void {
+    for (expanded.complex_fixups.items) |fixup| {
+        const real_tmp = try ctx.nextTemp();
+        try builder.load(real_tmp, fixup.elem_ty, fixup.real_ptr);
+        const imag_tmp = try ctx.nextTemp();
+        try builder.load(imag_tmp, fixup.elem_ty, fixup.imag_ptr);
+        const real_val = ValueRef{ .name = real_tmp, .ty = fixup.elem_ty, .is_ptr = false };
+        const imag_val = ValueRef{ .name = imag_tmp, .ty = fixup.elem_ty, .is_ptr = false };
+        const complex_ty: llvm_types.IRType = if (fixup.elem_ty == .f64) .complex_f64 else .complex_f32;
+        const complex_val = try complex.buildComplex(ctx, builder, real_val, imag_val, complex_ty);
+        try builder.store(complex_val, fixup.target_ptr);
+    }
 }
 
 fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedWriteValues {
@@ -1026,6 +1343,21 @@ pub fn emitRewind(ctx: *Context, builder: anytype, rewind: ast.RewindStmt) EmitE
     try arg_buf.writer().print("i32 {s}", .{unit_i32.name});
     const rewind_name = try ctx.ensureDeclRaw("f77_rewind", .void, "i32", false);
     try builder.call(null, .void, rewind_name, arg_buf.items);
+}
+
+pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) EmitError!void {
+    _ = ctx;
+    _ = builder;
+    _ = inquire;
+    // INQUIRE is currently a no-op in the runtime. We still parse and resolve
+    // its control expressions to keep the pipeline moving.
+}
+
+pub fn emitClose(ctx: *Context, builder: anytype, close_stmt: ast.CloseStmt) EmitError!void {
+    _ = ctx;
+    _ = builder;
+    _ = close_stmt;
+    // CLOSE is currently a no-op in the runtime.
 }
 
 pub fn emitBackspace(ctx: *Context, builder: anytype, backspace: ast.BackspaceStmt) EmitError!void {

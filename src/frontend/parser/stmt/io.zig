@@ -226,6 +226,18 @@ pub fn parseOpenStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
     return .{ .open = .{ .unit = unit_final, .recl = recl_expr, .direct = direct_access } };
 }
 
+pub fn parseInquireStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    _ = lp.consumeKeyword("INQUIRE");
+    const controls = try parseControlList(arena, lp);
+    return .{ .inquire = .{ .controls = controls } };
+}
+
+pub fn parseCloseStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    _ = lp.consumeKeyword("CLOSE");
+    const controls = try parseControlList(arena, lp);
+    return .{ .close = .{ .controls = controls } };
+}
+
 fn normalizeLabelText(text: []const u8) []const u8 {
     var all_digits = true;
     for (text) |ch| {
@@ -258,6 +270,27 @@ pub fn parseEndfileStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStm
     _ = lp.consumeKeyword("ENDFILE");
     const unit_expr = try expr.parseExpr(lp, arena, 0);
     return .{ .endfile = .{ .unit = unit_expr } };
+}
+
+fn parseControlList(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError![]*Expr {
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    var controls = std.array_list.Managed(*Expr).init(arena);
+    var first = true;
+    while (!lp.peekIs(.r_paren)) {
+        if (!first) {
+            _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+        }
+        first = false;
+
+        if (lp.peekIs(.identifier) and helpers.nextTokenIs(lp.*, .equals)) {
+            _ = lp.next(); // keyword
+            _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+        }
+        const value = try expr.parseExpr(lp, arena, 0);
+        try controls.append(value);
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return controls.toOwnedSlice();
 }
 
 fn parseIoList(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError![]*Expr {

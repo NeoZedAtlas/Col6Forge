@@ -91,6 +91,12 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         .endfile => {
             try writer.print(";   stmt label={s} endfile\n", .{label_text});
         },
+        .inquire => |inq| {
+            try writer.print(";   stmt label={s} inquire controls({d})\n", .{ label_text, inq.controls.len });
+        },
+        .close => |cls| {
+            try writer.print(";   stmt label={s} close controls({d})\n", .{ label_text, cls.controls.len });
+        },
         .data => |data| {
             try writer.print(";   stmt label={s} data inits({d})\n", .{ label_text, data.inits.len });
         },

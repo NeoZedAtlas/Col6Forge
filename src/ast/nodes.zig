@@ -121,6 +121,8 @@ pub const StmtNode = union(enum) {
     backspace: BackspaceStmt,
     endfile: EndfileStmt,
     open: OpenStmt,
+    inquire: InquireStmt,
+    close: CloseStmt,
     data: DataStmt,
     format: FormatStmt,
     arith_if: ArithIfStmt,
@@ -176,6 +178,14 @@ pub const OpenStmt = struct {
     unit: *Expr,
     recl: ?*Expr,
     direct: bool,
+};
+
+pub const InquireStmt = struct {
+    controls: []*Expr,
+};
+
+pub const CloseStmt = struct {
+    controls: []*Expr,
 };
 
 pub const RewindStmt = struct {
