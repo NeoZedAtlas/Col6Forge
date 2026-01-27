@@ -47,6 +47,15 @@ pub fn hasDExponent(text: []const u8) bool {
     return std.mem.indexOfAny(u8, text, "Dd") != null;
 }
 
+pub fn normalizeIntLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    for (text) |ch| {
+        if (ch == ' ' or ch == '\t') continue;
+        try buffer.append(ch);
+    }
+    return buffer.toOwnedSlice();
+}
+
 pub fn zeroValue(ty: IRType) ValueRef {
     return switch (ty) {
         .i1 => .{ .name = "0", .ty = .i1, .is_ptr = false },

@@ -93,7 +93,8 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
 
         if (std.ascii.isDigit(ch)) {
             const start = i;
-            while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
+            const digits = scanDigitsAllowBlanks(text, i);
+            i = digits.idx;
             const digit_end = i;
             if (i < text.len and (text[i] == 'H' or text[i] == 'h')) {
                 const count = parseDecimal(text[start..digit_end]);
@@ -109,7 +110,8 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
             if (i < text.len and text[i] == '.') {
                 is_real = true;
                 i += 1;
-                while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
+                const frac_digits = scanDigitsAllowBlanks(text, i);
+                i = frac_digits.idx;
             }
             const exp_i = scanExponent(text, i);
             if (exp_i != i) {
@@ -203,9 +205,9 @@ fn scanExponent(text: []const u8, index: usize) usize {
     if (ch != 'E' and ch != 'e' and ch != 'D' and ch != 'd') return index;
     i += 1;
     if (i < text.len and (text[i] == '+' or text[i] == '-')) i += 1;
-    const start_digits = i;
-    while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
-    if (i == start_digits) return index;
+    const exp_digits = scanDigitsAllowBlanks(text, i);
+    if (!exp_digits.had_digit) return index;
+    i = exp_digits.idx;
     if (i < text.len and (std.ascii.isAlphabetic(text[i]) or std.ascii.isDigit(text[i]) or text[i] == '_')) {
         return index;
     }
@@ -215,9 +217,33 @@ fn scanExponent(text: []const u8, index: usize) usize {
 fn parseDecimal(text: []const u8) usize {
     var value: usize = 0;
     for (text) |ch| {
+        if (ch == ' ' or ch == '\t') continue;
         value = value * 10 + @as(usize, ch - '0');
     }
     return value;
+}
+
+fn scanDigitsAllowBlanks(text: []const u8, index: usize) struct { idx: usize, had_digit: bool } {
+    var i = index;
+    var had_digit = false;
+    while (i < text.len) {
+        const ch = text[i];
+        if (std.ascii.isDigit(ch)) {
+            had_digit = true;
+            i += 1;
+            continue;
+        }
+        if (ch == ' ' or ch == '\t') {
+            var j = i;
+            while (j < text.len and (text[j] == ' ' or text[j] == '\t')) : (j += 1) {}
+            if (j < text.len and std.ascii.isDigit(text[j])) {
+                i = j;
+                continue;
+            }
+        }
+        break;
+    }
+    return .{ .idx = i, .had_digit = had_digit };
 }
 
 test "lexLogicalLine tokenizes basic expression" {

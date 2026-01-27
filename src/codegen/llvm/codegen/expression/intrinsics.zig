@@ -296,6 +296,17 @@ fn emitIntrinsicInt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!Va
     return error.UnsupportedIntrinsicType;
 }
 
+fn emitIntrinsicIdint(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    if (complex.isComplexType(value.ty)) return error.UnsupportedIntrinsicType;
+    // IDINT takes a DOUBLE PRECISION argument; coerce to f64 first to match legacy semantics.
+    if (value.ty != .f64) {
+        value = try casting.coerce(ctx, builder, value, .f64);
+    }
+    return casting.coerce(ctx, builder, value, .i32);
+}
+
 fn emitIntrinsicIabs(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     var value = try dispatch.emitExpr(ctx, builder, args[0]);
@@ -455,6 +466,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
     if (std.ascii.eqlIgnoreCase(name, "AINT")) return emitIntrinsicUnaryFloat(ctx, builder, "trunc", args);
     if (std.ascii.eqlIgnoreCase(name, "INT")) return emitIntrinsicInt(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "IFIX")) return emitIntrinsicInt(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "IDINT")) return emitIntrinsicIdint(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "AMOD")) return emitIntrinsicRemainder(ctx, builder, args, false, true);
     if (std.ascii.eqlIgnoreCase(name, "MOD")) return emitIntrinsicRemainder(ctx, builder, args, true, true);
     if (std.ascii.eqlIgnoreCase(name, "MIN")) return emitIntrinsicMinMax(ctx, builder, args, false);

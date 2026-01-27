@@ -19,7 +19,10 @@ const EmitError = anyerror;
 
 pub fn emitLiteral(ctx: *Context, builder: anytype, lit: Literal) !ValueRef {
     switch (lit.kind) {
-        .integer => return .{ .name = lit.text, .ty = .i32, .is_ptr = false },
+        .integer => {
+            const normalized = try utils.normalizeIntLiteral(ctx.allocator, lit.text);
+            return .{ .name = normalized, .ty = .i32, .is_ptr = false };
+        },
         .real => {
             const ty: IRType = if (utils.hasDExponent(lit.text)) .f64 else .f32;
             const normalized = try utils.formatFloatLiteral(ctx.allocator, lit.text, ty);

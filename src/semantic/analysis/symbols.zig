@@ -126,6 +126,7 @@ pub fn isIntrinsicName(name: []const u8) bool {
         std.ascii.eqlIgnoreCase(name, "NINT") or
         std.ascii.eqlIgnoreCase(name, "INT") or
         std.ascii.eqlIgnoreCase(name, "IFIX") or
+        std.ascii.eqlIgnoreCase(name, "IDINT") or
         std.ascii.eqlIgnoreCase(name, "AMOD") or
         std.ascii.eqlIgnoreCase(name, "MOD") or
         std.ascii.eqlIgnoreCase(name, "MIN") or

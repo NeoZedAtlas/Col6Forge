@@ -148,5 +148,6 @@ pub fn isPowerOperandSupported(kind: ast.TypeKind) bool {
 
 fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
     if (std.ascii.eqlIgnoreCase(name, "CMPLX")) return .complex;
+    if (std.ascii.eqlIgnoreCase(name, "IDINT")) return .integer;
     return current;
 }
