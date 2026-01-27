@@ -59,6 +59,9 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
         return idx;
     }
     const info = implicitInfo(self, name);
+    if (std.mem.eql(u8, name, "CPN001")) {
+        std.debug.print("ensureSymbol CPN001 implicit={s} char_len={any}\n", .{ @tagName(info.type_kind), info.char_len });
+    }
     const symbol = Symbol{
         .name = name,
         .type_kind = info.type_kind,
@@ -113,6 +116,7 @@ pub fn isIntrinsicName(name: []const u8) bool {
     return std.ascii.eqlIgnoreCase(name, "SIN") or
         std.ascii.eqlIgnoreCase(name, "COS") or
         std.ascii.eqlIgnoreCase(name, "TAN") or
+        std.ascii.eqlIgnoreCase(name, "LEN") or
         std.ascii.eqlIgnoreCase(name, "ASIN") or
         std.ascii.eqlIgnoreCase(name, "ACOS") or
         std.ascii.eqlIgnoreCase(name, "SINH") or

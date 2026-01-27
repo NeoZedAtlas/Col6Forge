@@ -29,6 +29,7 @@ pub const Symbol = struct {
 pub const ConstValue = union(enum) {
     integer: i64,
     real: f64,
+    string: ast.Literal,
 };
 
 pub const ImplicitRule = struct {

@@ -20,7 +20,8 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
                 .integer => .{ .integer = try parseInt(lit.text) },
                 .real => .{ .real = try parseReal(lit.text) },
                 .logical => .{ .integer = try parseInt(lit.text) },
-                .string, .hollerith, .assumed_size => null,
+                .string, .hollerith => .{ .string = lit },
+                .assumed_size => null,
             };
         },
         .identifier => |name| {
@@ -85,6 +86,7 @@ fn negateConst(value: ConstValue) ConstValue {
     return switch (value) {
         .integer => |v| .{ .integer = -v },
         .real => |v| .{ .real = -v },
+        .string => value,
     };
 }
 
@@ -97,6 +99,7 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue) ?ConstValue
         .real => true,
         else => false,
     };
+    if (left == .string or right == .string) return null;
     if (left_is_real or right_is_real) {
         const l = toReal(left);
         const r = toReal(right);
@@ -135,5 +138,6 @@ fn toReal(value: ConstValue) f64 {
     return switch (value) {
         .real => |v| v,
         .integer => |v| @as(f64, @floatFromInt(v)),
+        .string => 0,
     };
 }

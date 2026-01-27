@@ -164,6 +164,59 @@ fn emitIntrinsicIchar(ctx: *Context, builder: anytype, args: []*Expr) EmitError!
     return .{ .name = tmp_int, .ty = .i32, .is_ptr = false };
 }
 
+fn lenForExpr(ctx: *Context, expr: *Expr) ?usize {
+    switch (expr.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return null;
+            if (sym.kind == .parameter) {
+                if (sym.const_value) |cv| switch (cv) {
+                    .string => |lit| return utils.decodedStringLen(lit.text),
+                    else => {},
+                };
+            }
+            if (sym.type_kind != .character) return null;
+            return sym.char_len orelse 1;
+        },
+        .literal => |lit| switch (lit.kind) {
+            .string => return utils.decodedStringLen(lit.text),
+            .hollerith => {
+                const bytes = utils.hollerithBytes(lit.text) orelse return null;
+                return bytes.len;
+            },
+            else => return null,
+        },
+        .call_or_subscript => |call| {
+            const sym = ctx.findSymbol(call.name) orelse return null;
+            if (sym.type_kind != .character) return null;
+            return sym.char_len orelse 1;
+        },
+        .substring => |sub| {
+            const sym = ctx.findSymbol(sub.name) orelse return null;
+            if (sym.type_kind != .character) return null;
+            const base_len: i64 = @intCast(sym.char_len orelse 1);
+            const start = if (sub.start) |s| intLiteralValue(s) orelse return null else 1;
+            const end_ = if (sub.end) |e| intLiteralValue(e) orelse return null else base_len;
+            const span = end_ - start + 1;
+            if (span <= 0) return 0;
+            return @intCast(span);
+        },
+        .binary => |bin| {
+            if (bin.op != .concat) return null;
+            const left = lenForExpr(ctx, bin.left) orelse return null;
+            const right = lenForExpr(ctx, bin.right) orelse return null;
+            return left + right;
+        },
+        else => return null,
+    }
+}
+
+fn intLiteralValue(expr: *Expr) ?i64 {
+    if (expr.* != .literal) return null;
+    const lit = expr.literal;
+    if (lit.kind != .integer) return null;
+    return std.fmt.parseInt(i64, lit.text, 10) catch null;
+}
+
 fn emitMinMaxValue(ctx: *Context, builder: anytype, left_in: ValueRef, right_in: ValueRef, is_max: bool) EmitError!ValueRef {
     if (complex.isComplexType(left_in.ty) or complex.isComplexType(right_in.ty)) return error.UnsupportedIntrinsicType;
     const common_ty = ir.commonType(left_in.ty, right_in.ty);
@@ -369,6 +422,7 @@ fn emitLibmBinaryFloatValue(
 }
 
 pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args: []*Expr) EmitError!ValueRef {
+    std.debug.print("emitIntrinsicCall {s}\n", .{name});
     if (std.ascii.eqlIgnoreCase(name, "SIN")) return emitIntrinsicUnaryFloat(ctx, builder, "sin", args);
     if (std.ascii.eqlIgnoreCase(name, "COS")) return emitIntrinsicUnaryFloat(ctx, builder, "cos", args);
     if (std.ascii.eqlIgnoreCase(name, "SQRT")) return emitIntrinsicUnaryFloat(ctx, builder, "sqrt", args);
@@ -417,6 +471,11 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
     if (std.ascii.eqlIgnoreCase(name, "ANINT")) return emitIntrinsicAnint(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "NINT")) return emitIntrinsicNint(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "ICHAR")) return emitIntrinsicIchar(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "LEN")) {
+        if (args.len != 1) return error.InvalidIntrinsicCall;
+        const len = lenForExpr(ctx, args[0]) orelse return error.UnsupportedIntrinsicType;
+        return .{ .name = utils.formatInt(ctx.allocator, @as(i64, @intCast(len))), .ty = .i32, .is_ptr = false };
+    }
     if (std.ascii.eqlIgnoreCase(name, "TAN")) {
         if (args.len != 1) return error.InvalidIntrinsicCall;
         const value = try dispatch.emitExpr(ctx, builder, args[0]);

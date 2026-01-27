@@ -16,25 +16,34 @@ pub fn applyDecl(self: *context.Context, decl: ast.Decl) !void {
                 if (rule.type_kind == .character) {
                     char_len = 1;
                     if (rule.char_len) |len_expr| {
-                        const value = constants.evalConst(self, len_expr) catch |err| {
-                            std.debug.print("implicit char len eval error: {s}\n", .{@errorName(err)});
-                            return err;
-                        } orelse {
-                            std.debug.print("implicit char len not const\n", .{});
-                            return error.InvalidCharLen;
-                        };
-                        switch (value) {
-                            .integer => |int_val| {
-                                if (int_val <= 0) {
-                                    std.debug.print("implicit char len invalid: {d}\n", .{int_val});
-                                    return error.InvalidCharLen;
-                                }
-                                char_len = @intCast(int_val);
-                            },
-                            .real => {
-                                std.debug.print("implicit char len real\n", .{});
+                        if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) {
+                            // Assumed-length CHARACTER*(*) isn't a constant length; fall back to 1.
+                            char_len = 1;
+                        } else {
+                            const value = constants.evalConst(self, len_expr) catch |err| {
+                                std.debug.print("implicit char len eval error: {s}\n", .{@errorName(err)});
+                                return err;
+                            } orelse {
+                                std.debug.print("implicit char len not const\n", .{});
                                 return error.InvalidCharLen;
-                            },
+                            };
+                            switch (value) {
+                                .integer => |int_val| {
+                                    if (int_val <= 0) {
+                                        std.debug.print("implicit char len invalid: {d}\n", .{int_val});
+                                        return error.InvalidCharLen;
+                                    }
+                                    char_len = @intCast(int_val);
+                                },
+                                .real => {
+                                    std.debug.print("implicit char len real\n", .{});
+                                    return error.InvalidCharLen;
+                                },
+                                .string => {
+                                    std.debug.print("implicit char len string\n", .{});
+                                    return error.InvalidCharLen;
+                                },
+                            }
                         }
                     }
                 }
@@ -62,7 +71,14 @@ pub fn applyDecl(self: *context.Context, decl: ast.Decl) !void {
                 const idx = try symbols_mod.ensureSymbol(self, assign.name);
                 self.symbols.items[idx].kind = .parameter;
                 self.symbols.items[idx].storage = .local;
-                self.symbols.items[idx].const_value = try constants.evalConst(self, assign.value);
+                const const_val = try constants.evalConst(self, assign.value);
+                if (const_val) |cv| {
+                    self.symbols.items[idx].const_value = cv;
+                } else if (assign.value.* == .literal and (assign.value.literal.kind == .string or assign.value.literal.kind == .hollerith)) {
+                    self.symbols.items[idx].const_value = .{ .string = assign.value.literal };
+                } else {
+                    self.symbols.items[idx].const_value = null;
+                }
             }
         },
         .common => |common| {
@@ -118,6 +134,11 @@ pub fn applyDeclarator(
     if (type_kind == .character) {
         var length: usize = 1;
         if (item.char_len) |len_expr| {
+            if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) {
+                length = 1;
+                self.symbols.items[idx].char_len = length;
+                return;
+            }
             const value = constants.evalConst(self, len_expr) catch |err| {
                 std.debug.print("decl char len eval error: {s}\n", .{@errorName(err)});
                 return err;
@@ -135,6 +156,10 @@ pub fn applyDeclarator(
                 },
                 .real => {
                     std.debug.print("decl char len real for {s}\n", .{item.name});
+                    return error.InvalidCharLen;
+                },
+                .string => {
+                    std.debug.print("decl char len string for {s}\n", .{item.name});
                     return error.InvalidCharLen;
                 },
             }

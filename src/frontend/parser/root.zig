@@ -195,7 +195,7 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
         _ = lp.consumeKeyword("CHARACTER");
         var char_len: ?*ast.Expr = null;
         if (lp.consume(.star)) {
-            char_len = try expr.parseExpr(lp, arena, 6);
+            char_len = try parseCharacterLen(lp, arena);
         }
         return .{ .type_kind = .character, .char_len = char_len };
     }
@@ -206,6 +206,17 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
         return .{ .type_kind = .double_precision, .char_len = null };
     }
     return null;
+}
+
+fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
+    if (lp.consume(.l_paren)) {
+        if (!lp.consume(.star)) return error.UnexpectedToken;
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        const node = try arena.create(ast.Expr);
+        node.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
+        return node;
+    }
+    return expr.parseExpr(lp, arena, 6);
 }
 
 fn isEndDoLine(lp: LineParser) bool {

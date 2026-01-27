@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
 const ir = @import("../../../ir.zig");
 const context = @import("../context.zig");
@@ -33,6 +34,9 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
     const common_ty = ir.commonType(lhs.ty, rhs.ty);
     var left = lhs;
     var right = rhs;
+    if (left.ty == .ptr or right.ty == .ptr) {
+        std.debug.print("binary op {s} on ptrs lhs={s} rhs={s}\n", .{ @tagName(op), left.name, right.name });
+    }
     left = try casting.coerce(ctx, builder, left, common_ty);
     right = try casting.coerce(ctx, builder, right, common_ty);
     const tmp = try ctx.nextTemp();

@@ -164,7 +164,7 @@ test "emitLiteral and emitConstTyped produce expected IR types" {
     try testing.expectEqual(IRType.f64, lit_real.ty);
     try testing.expectEqualStrings("1.0e0", lit_real.name);
 
-    const const_val = emitConstTyped(&harness.ctx, .{ .integer = 7 }, .real);
+    const const_val = emitConstTyped(&harness.ctx, &builder, .{ .integer = 7 }, .real);
     try testing.expectEqual(IRType.f32, const_val.ty);
 }
 

@@ -45,7 +45,7 @@ fn emitStringLiteral(ctx: *Context, builder: anytype, bytes: []const u8) !ValueR
     return .{ .name = ptr_name, .ty = .ptr, .is_ptr = false };
 }
 
-pub fn emitConstTyped(ctx: *Context, value: sema.ConstValue, type_kind: TypeKind) ValueRef {
+pub fn emitConstTyped(ctx: *Context, builder: anytype, value: sema.ConstValue, type_kind: TypeKind) ValueRef {
     const ty = llvm_types.typeFromKind(type_kind);
     return switch (value) {
         .integer => |v| .{
@@ -54,12 +54,20 @@ pub fn emitConstTyped(ctx: *Context, value: sema.ConstValue, type_kind: TypeKind
             .is_ptr = false,
         },
         .real => |v| .{ .name = utils.formatFloatValue(ctx.allocator, v, ty), .ty = ty, .is_ptr = false },
+        .string => |lit| {
+            // Character parameters should behave like string literals.
+            const bytes = utils.decodeStringLiteral(ctx.allocator, lit.text) catch return .{ .name = "0", .ty = ty, .is_ptr = false };
+            return emitStringLiteral(ctx, builder, bytes) catch .{ .name = "0", .ty = ty, .is_ptr = false };
+        },
     };
 }
 
 pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) EmitError!ValueRef {
     if (value.ty == target) return value;
     if (value.is_ptr) return error.UnexpectedPointerValue;
+    if (value.ty == .ptr and target != .ptr) {
+        std.debug.print("coerce ptr({s}) -> {s} for unit {s}\n", .{ value.name, @tagName(target), ctx.unit.name });
+    }
     if (complex.isComplexType(target)) return complex.coerceToComplex(ctx, builder, value, target);
     if (complex.isComplexType(value.ty)) {
         return unsupportedCast(value.ty, target);

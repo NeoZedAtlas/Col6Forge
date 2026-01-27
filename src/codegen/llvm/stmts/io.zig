@@ -17,6 +17,7 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
     if (write.format == .none) {
         return emitDirectWrite(ctx, builder, write);
     }
+    std.debug.print("emitWrite unit kind={s} unit_name={s}\n", .{ @tagName(write.unit.*), if (write.unit.* == .identifier) write.unit.identifier else "-" });
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
     const unit_char_len = charLenForExpr(ctx, write.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;

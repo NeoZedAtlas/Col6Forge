@@ -70,7 +70,7 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
                         const tmp = try ctx.nextTemp();
                         try builder.alloca(tmp, ty);
                         const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
-                        const value = casting.emitConstTyped(ctx, cv, sym.type_kind);
+                        const value = casting.emitConstTyped(ctx, builder, cv, sym.type_kind);
                         try builder.store(value, ptr);
                         return ptr;
                     }
