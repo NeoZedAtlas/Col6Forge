@@ -59,9 +59,6 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                 if (sym.const_value) |cv| return casting.emitConstTyped(ctx, builder, cv, sym.type_kind);
             }
             if (sym.type_kind == .character) {
-                if (std.mem.eql(u8, name, "I02")) {
-                    std.debug.print("I02 resolved as character (kind={s})\n", .{@tagName(sym.kind)});
-                }
                 const ptr = try ctx.getPointer(name);
                 return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
             }
@@ -113,18 +110,6 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                         return emitCharCompare(ctx, builder, bin.op, lhs_ptr, rhs_ptr, lhs_len, rhs_len);
                     }
                 }
-                if (lhs_len_opt == null or rhs_len_opt == null) {
-                    if (bin.left.* == .identifier) {
-                        const name = bin.left.identifier;
-                        if (ctx.findSymbol(name)) |sym| {
-                            std.debug.print("lhs ident {s} type={s} kind={s}\n", .{ name, @tagName(sym.type_kind), @tagName(sym.kind) });
-                        }
-                    }
-                    std.debug.print(
-                        "char compare not taken op={s} lhs_kind={s} rhs_kind={s}\n",
-                        .{ @tagName(bin.op), @tagName(bin.left.*), @tagName(bin.right.*) },
-                    );
-                }
             }
             if (bin.op == .concat) {
                 return emitConcat(ctx, builder, bin, subst_depth);
@@ -155,6 +140,16 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                 return intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args);
             }
             const ret_ty = llvm_types.typeFromKind(sym.type_kind);
+            const is_character_function = sym.kind == .function and sym.type_kind == .character;
+            if (is_character_function) {
+                const result_len = sym.char_len orelse 1;
+                if (sym.storage == .dummy) {
+                    const fn_ptr = try ctx.getPointer(call_or_sub.name);
+                    return call.emitIndirectCharacterCall(ctx, builder, fn_ptr, result_len, call_or_sub.args);
+                }
+                const fn_name = try ctx.ensureDecl(call_or_sub.name, .void);
+                return call.emitCharacterCall(ctx, builder, fn_name, result_len, call_or_sub.args);
+            }
             if (sym.storage == .dummy) {
                 const fn_ptr = try ctx.getPointer(call_or_sub.name);
                 return call.emitIndirectCall(ctx, builder, fn_ptr, ret_ty, call_or_sub.args, false);
@@ -183,9 +178,6 @@ fn emitStatementFunctionCall(
     var value = try emitExprImpl(ctx, builder, def.expr, ctx.stmt_func_stack.items.len);
     if (ctx.findSymbol(name)) |sym| {
         const target_ty = llvm_types.typeFromKind(sym.type_kind);
-        if (value.ty == .ptr and target_ty != .ptr) {
-            std.debug.print("stmt func coerce ptr -> {s} for {s}\n", .{ @tagName(target_ty), name });
-        }
         value = try casting.coerce(ctx, builder, value, target_ty);
     }
     return value;
@@ -204,9 +196,6 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
             const sym = ctx.findSymbol(name) orelse return null;
             if (sym.type_kind != .character) return null;
             const len = sym.char_len orelse 1;
-            if (sym.kind == .parameter) {
-                std.debug.print("charLenForExpr param {s} len={d}\n", .{ name, len });
-            }
             return len;
         },
         .call_or_subscript => |call_or_sub| {
@@ -232,14 +221,8 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
         },
         .binary => |bin| {
             if (bin.op != .concat) return null;
-            const left_len = charLenForExpr(ctx, bin.left) orelse {
-                std.debug.print("charLenForExpr concat left null\n", .{});
-                return null;
-            };
-            const right_len = charLenForExpr(ctx, bin.right) orelse {
-                std.debug.print("charLenForExpr concat right null\n", .{});
-                return null;
-            };
+            const left_len = charLenForExpr(ctx, bin.left) orelse return null;
+            const right_len = charLenForExpr(ctx, bin.right) orelse return null;
             return left_len + right_len;
         },
         else => return null,

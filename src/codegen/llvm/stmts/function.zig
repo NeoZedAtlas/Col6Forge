@@ -26,9 +26,13 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     const func_name = utils.mangleName(ctx.allocator, ctx.unit.name) catch return error.OutOfMemory;
     const has_alt_return = ctx.unit.kind == .subroutine and execution.unitHasAltReturn(ctx.unit);
     var return_ty: ?llvm_types.IRType = null;
+    var is_character_function = false;
     if (ctx.unit.kind == .function) {
         const sym = ctx.findSymbol(ctx.unit.name) orelse return error.UnknownSymbol;
-        return_ty = llvm_types.typeFromKind(sym.type_kind);
+        is_character_function = sym.type_kind == .character;
+        if (!is_character_function) {
+            return_ty = llvm_types.typeFromKind(sym.type_kind);
+        }
     } else if (has_alt_return) {
         return_ty = .i32;
     }
@@ -41,16 +45,29 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     var arg_names = std.array_list.Managed([]const u8).init(ctx.allocator);
     defer arg_names.deinit();
 
+    if (is_character_function) {
+        const result_arg_name = try utils.formatTempName(ctx.allocator, "arg", 0);
+        try builder.defineArgPtr(result_arg_name, true);
+        try arg_names.append(result_arg_name);
+    }
+
+    const arg_offset: usize = if (is_character_function) 1 else 0;
     for (ctx.unit.args, 0..) |_, idx| {
-        const arg_name = try utils.formatTempName(ctx.allocator, "arg", idx);
-        try builder.defineArgPtr(arg_name, idx == 0);
+        const arg_index = idx + arg_offset;
+        const arg_name = try utils.formatTempName(ctx.allocator, "arg", arg_index);
+        try builder.defineArgPtr(arg_name, arg_index == 0);
         try arg_names.append(arg_name);
     }
     try builder.defineEnd();
     try builder.entryLabel();
 
+    if (is_character_function) {
+        const result_ptr_name = arg_names.items[0];
+        try ctx.locals.put(ctx.unit.name, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
+    }
+
     for (ctx.unit.args, 0..) |arg, idx| {
-        const arg_name = arg_names.items[idx];
+        const arg_name = arg_names.items[idx + arg_offset];
         const val = ValueRef{
             .name = arg_name,
             .ty = .ptr,
@@ -66,6 +83,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             std.mem.eql(u8, sym.name, ctx.unit.name);
         if (sym.is_external) continue;
         if (sym.kind == .parameter or sym.kind == .subroutine or (sym.kind == .function and !is_return_symbol)) continue;
+        if (is_character_function and is_return_symbol) continue;
         if (ctx.locals.contains(sym.name)) continue;
         if (sym.type_kind == .character) {
             const char_len = sym.char_len orelse 1;

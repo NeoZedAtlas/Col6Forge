@@ -54,6 +54,44 @@ pub fn emitIndirectCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, ret_t
     return .{ .name = tmp, .ty = ret_ty, .is_ptr = false };
 }
 
+pub fn emitCharacterCall(ctx: *Context, builder: anytype, fn_name: []const u8, result_len: usize, args: []*Expr) !ValueRef {
+    const result_ptr = try allocaCharBuffer(ctx, builder, result_len);
+
+    var arg_text = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_text.deinit();
+
+    try arg_text.appendSlice("ptr ");
+    try arg_text.appendSlice(result_ptr.name);
+
+    for (args) |arg| {
+        const ptr = try emitArgPointer(ctx, builder, arg);
+        try arg_text.appendSlice(", ptr ");
+        try arg_text.appendSlice(ptr.name);
+    }
+
+    try builder.call(null, .void, fn_name, arg_text.items);
+    return .{ .name = result_ptr.name, .ty = .ptr, .is_ptr = false };
+}
+
+pub fn emitIndirectCharacterCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, result_len: usize, args: []*Expr) !ValueRef {
+    const result_ptr = try allocaCharBuffer(ctx, builder, result_len);
+
+    var arg_text = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_text.deinit();
+
+    try arg_text.appendSlice("ptr ");
+    try arg_text.appendSlice(result_ptr.name);
+
+    for (args) |arg| {
+        const ptr = try emitArgPointer(ctx, builder, arg);
+        try arg_text.appendSlice(", ptr ");
+        try arg_text.appendSlice(ptr.name);
+    }
+
+    try builder.callIndirect(null, .void, fn_ptr.name, arg_text.items);
+    return .{ .name = result_ptr.name, .ty = .ptr, .is_ptr = false };
+}
+
 pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     switch (expr.*) {
         .identifier => |name| {
@@ -106,4 +144,14 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
     try builder.store(value, ptr);
     return ptr;
+}
+
+fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
+    const ptr_name = try ctx.nextTemp();
+    if (len <= 1) {
+        try builder.alloca(ptr_name, .i8);
+    } else {
+        try builder.allocaArray(ptr_name, .i8, len);
+    }
+    return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
 }

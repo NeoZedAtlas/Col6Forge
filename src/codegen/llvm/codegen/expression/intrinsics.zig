@@ -422,7 +422,6 @@ fn emitLibmBinaryFloatValue(
 }
 
 pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args: []*Expr) EmitError!ValueRef {
-    std.debug.print("emitIntrinsicCall {s}\n", .{name});
     if (std.ascii.eqlIgnoreCase(name, "SIN")) return emitIntrinsicUnaryFloat(ctx, builder, "sin", args);
     if (std.ascii.eqlIgnoreCase(name, "COS")) return emitIntrinsicUnaryFloat(ctx, builder, "cos", args);
     if (std.ascii.eqlIgnoreCase(name, "SQRT")) return emitIntrinsicUnaryFloat(ctx, builder, "sqrt", args);

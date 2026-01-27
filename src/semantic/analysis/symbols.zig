@@ -59,9 +59,6 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
         return idx;
     }
     const info = implicitInfo(self, name);
-    if (std.mem.eql(u8, name, "CPN001")) {
-        std.debug.print("ensureSymbol CPN001 implicit={s} char_len={any}\n", .{ @tagName(info.type_kind), info.char_len });
-    }
     const symbol = Symbol{
         .name = name,
         .type_kind = info.type_kind,
