@@ -140,29 +140,46 @@ fn parseFormatSequence(
 
         if (ch == ':') {
             // Colon edit descriptor: terminate format reversion. We model it
-            // as a no-op so parsing can proceed.
+            // as a format item so codegen can honor it.
             index.* += 1;
+            try items.append(.{ .colon = {} });
             continue;
         }
 
         if (ch == 'S' or ch == 's') {
-            // Sign control descriptors S, SP, SS. We treat them as no-ops for
-            // now to avoid parse failures in the NIST suite.
+            // Sign control descriptors S, SP, SS.
             index.* += 1;
-            if (index.* < text.len and (text[index.*] == 'P' or text[index.*] == 'p' or text[index.*] == 'S' or text[index.*] == 's')) {
-                index.* += 1;
+            var control = ast.SignControl.default;
+            if (index.* < text.len) {
+                const next = text[index.*];
+                if (next == 'P' or next == 'p') {
+                    control = ast.SignControl.plus;
+                    index.* += 1;
+                } else if (next == 'S' or next == 's') {
+                    control = ast.SignControl.suppress;
+                    index.* += 1;
+                }
             }
+            try items.append(.{ .sign_control = control });
             continue;
         }
 
         if (ch == 'T' or ch == 't') {
             index.* += 1;
-            // Support Tn, TRn, TLn. We approximate these as space counts.
-            if (index.* < text.len and (text[index.*] == 'R' or text[index.*] == 'r' or text[index.*] == 'L' or text[index.*] == 'l')) {
-                index.* += 1;
+            // Support Tn, TRn, TLn.
+            var kind = ast.TabControl.absolute;
+            if (index.* < text.len) {
+                const next = text[index.*];
+                if (next == 'R' or next == 'r') {
+                    kind = ast.TabControl.relative_right;
+                    index.* += 1;
+                } else if (next == 'L' or next == 'l') {
+                    kind = ast.TabControl.relative_left;
+                    index.* += 1;
+                }
             }
             const count = parseUnsigned(text, index) orelse return error.UnexpectedToken;
-            try items.append(.{ .spaces = count });
+            try items.append(.{ .tab = .{ .kind = kind, .count = count } });
             continue;
         }
 
@@ -213,22 +230,40 @@ fn parseFormatSequence(
             }
             if (index.* < text.len and text[index.*] == ':') {
                 index.* += 1;
+                try appendRepeatedItem(&items, .{ .colon = {} }, count);
                 continue;
             }
             if (index.* < text.len and (text[index.*] == 'S' or text[index.*] == 's')) {
                 index.* += 1;
-                if (index.* < text.len and (text[index.*] == 'P' or text[index.*] == 'p' or text[index.*] == 'S' or text[index.*] == 's')) {
-                    index.* += 1;
+                var control = ast.SignControl.default;
+                if (index.* < text.len) {
+                    const next = text[index.*];
+                    if (next == 'P' or next == 'p') {
+                        control = ast.SignControl.plus;
+                        index.* += 1;
+                    } else if (next == 'S' or next == 's') {
+                        control = ast.SignControl.suppress;
+                        index.* += 1;
+                    }
                 }
+                try appendRepeatedItem(&items, .{ .sign_control = control }, count);
                 continue;
             }
             if (index.* < text.len and (text[index.*] == 'T' or text[index.*] == 't')) {
                 index.* += 1;
-                if (index.* < text.len and (text[index.*] == 'R' or text[index.*] == 'r' or text[index.*] == 'L' or text[index.*] == 'l')) {
-                    index.* += 1;
+                var kind = ast.TabControl.absolute;
+                if (index.* < text.len) {
+                    const next = text[index.*];
+                    if (next == 'R' or next == 'r') {
+                        kind = ast.TabControl.relative_right;
+                        index.* += 1;
+                    } else if (next == 'L' or next == 'l') {
+                        kind = ast.TabControl.relative_left;
+                        index.* += 1;
+                    }
                 }
                 const tab_count = parseUnsigned(text, index) orelse return error.UnexpectedToken;
-                try appendRepeatedItem(&items, .{ .spaces = tab_count }, count);
+                try appendRepeatedItem(&items, .{ .tab = .{ .kind = kind, .count = tab_count } }, count);
                 continue;
             }
             if (index.* < text.len and text[index.*] == '/') {
@@ -382,7 +417,13 @@ fn appendRepeatedItem(items: *std.array_list.Managed(FormatItem), item: FormatIt
 
 fn parseIntFormat(text: []const u8, index: *usize) !IntFormat {
     const width = parseUnsigned(text, index) orelse return error.UnexpectedToken;
-    return .{ .width = width };
+    var min_digits: usize = 0;
+    // Support Fortran integer edit descriptor with minimum digits: Iw.m.
+    if (index.* < text.len and text[index.*] == '.') {
+        index.* += 1;
+        min_digits = parseUnsigned(text, index) orelse return error.UnexpectedToken;
+    }
+    return .{ .width = width, .min_digits = min_digits };
 }
 
 fn parseRealFormat(text: []const u8, index: *usize) !RealFormat {

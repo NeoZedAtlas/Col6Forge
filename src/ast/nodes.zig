@@ -224,21 +224,42 @@ pub const BlankControl = enum {
     zeros,
 };
 
+pub const SignControl = enum {
+    default,
+    plus,
+    suppress,
+};
+
+pub const TabControl = enum {
+    absolute,
+    relative_left,
+    relative_right,
+};
+
+pub const TabFormat = struct {
+    kind: TabControl,
+    count: usize,
+};
+
 pub const FormatItem = union(enum) {
     literal: []const u8,
     spaces: usize,
+    tab: TabFormat,
     int: IntFormat,
     real: RealFormat,
     real_fixed: RealFormat,
     char: CharFormat,
     logical: LogicalFormat,
+    colon: void,
     scale: i32,
     blank_control: BlankControl,
+    sign_control: SignControl,
     reversion_anchor: void,
 };
 
 pub const IntFormat = struct {
     width: usize,
+    min_digits: usize,
 };
 
 pub const RealFormat = struct {

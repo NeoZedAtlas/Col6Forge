@@ -402,6 +402,55 @@ static void direct_ensure_capacity(int unit, size_t needed) {
     du->size = new_size;
 }
 
+char *f77_direct_record_ptr(int unit, int rec, int recl) {
+    if (unit < 0 || unit >= F77_MAX_UNITS || rec <= 0) {
+        return NULL;
+    }
+    DirectUnit *du = &direct_units[unit];
+    int recl_local = du->recl > 0 ? du->recl : recl;
+    if (recl_local <= 0) {
+        return NULL;
+    }
+    du->recl = recl_local;
+    size_t recl_size = (size_t)recl_local;
+    size_t offset = (size_t)(rec - 1) * recl_size;
+    direct_ensure_capacity(unit, offset + recl_size);
+    if (!du->data || du->size < offset + recl_size) {
+        return NULL;
+    }
+    unsigned char *record = du->data + offset;
+    /* Direct formatted writes overwrite the whole record; initialize to spaces. */
+    memset(record, ' ', recl_size);
+    return (char *)record;
+}
+
+char *f77_direct_record_ptr_ro(int unit, int rec) {
+    if (unit < 0 || unit >= F77_MAX_UNITS || rec <= 0) {
+        return NULL;
+    }
+    DirectUnit *du = &direct_units[unit];
+    if (du->recl <= 0 || !du->data) {
+        return NULL;
+    }
+    size_t recl_size = (size_t)du->recl;
+    size_t offset = (size_t)(rec - 1) * recl_size;
+    if (du->size < offset + recl_size) {
+        return NULL;
+    }
+    return (char *)(du->data + offset);
+}
+
+void f77_direct_record_commit(int unit, int rec) {
+    if (unit < 0 || unit >= F77_MAX_UNITS || rec <= 0) {
+        return;
+    }
+    DirectUnit *du = &direct_units[unit];
+    int next = rec + 1;
+    if (next > du->nextrec) {
+        du->nextrec = next;
+    }
+}
+
 static size_t direct_signature_size(const char *sig) {
     size_t total = 0;
     for (size_t i = 0; sig[i] != '\0'; i++) {
@@ -665,17 +714,54 @@ void f77_endfile(int unit) {
     (void)unit;
 }
 
-const char *f77_fmt_f(int width, int precision, double value) {
+const char *f77_fmt_i(int width, int min_digits, int sign_plus, int value) {
+    char tmp[128];
+    char digits[128];
+    char *buf = fmt_buffers[fmt_index++ % 8];
+    unsigned int v = (value < 0) ? (unsigned int)(-value) : (unsigned int)value;
+    if (min_digits <= 0) {
+        (void)snprintf(digits, sizeof(digits), "%u", v);
+    } else {
+        (void)snprintf(digits, sizeof(digits), "%0*u", min_digits, v);
+    }
+    if (value < 0) {
+        (void)snprintf(tmp, sizeof(tmp), "-%s", digits);
+    } else if (sign_plus) {
+        (void)snprintf(tmp, sizeof(tmp), "+%s", digits);
+    } else {
+        (void)snprintf(tmp, sizeof(tmp), "%s", digits);
+    }
+    size_t len = strlen(tmp);
+    if (width <= 0 || (size_t)width <= len) {
+        (void)snprintf(buf, 64, "%s", tmp);
+        return buf;
+    }
+    size_t pad = (size_t)width - len;
+    if (pad >= 64) pad = 63;
+    memset(buf, ' ', pad);
+    (void)snprintf(buf + pad, 64 - pad, "%s", tmp);
+    return buf;
+}
+
+const char *f77_fmt_f(int width, int precision, int sign_plus, double value) {
     char tmp[128];
     char *buf = fmt_buffers[fmt_index++ % 8];
     if (precision < 0) precision = 0;
 
     if (width <= 0) {
-        (void)snprintf(buf, 64, "%.*f", precision, value);
+        if (sign_plus) {
+            (void)snprintf(buf, 64, "%+.*f", precision, value);
+        } else {
+            (void)snprintf(buf, 64, "%.*f", precision, value);
+        }
         return buf;
     }
 
-    (void)snprintf(tmp, sizeof(tmp), "%.*f", precision, value);
+    if (sign_plus) {
+        (void)snprintf(tmp, sizeof(tmp), "%+.*f", precision, value);
+    } else {
+        (void)snprintf(tmp, sizeof(tmp), "%.*f", precision, value);
+    }
 
     if (precision == 0 && strchr(tmp, '.') == NULL) {
         size_t tmp_len = strlen(tmp);
@@ -707,7 +793,7 @@ const char *f77_fmt_f(int width, int precision, double value) {
     return buf;
 }
 
-const char *f77_fmt_e(int width, int precision, int exp_width, double value) {
+const char *f77_fmt_e(int width, int precision, int exp_width, int scale_factor, int sign_plus, double value) {
     char tmp[128];
     char exp_buf[16];
     char *buf = fmt_buffers[fmt_index++ % 8];
@@ -720,8 +806,22 @@ const char *f77_fmt_e(int width, int precision, int exp_width, double value) {
     }
     double scale = pow(10.0, (double)exp_val);
     double mantissa = (scale != 0.0) ? value / scale : 0.0;
+    int exp_out = exp_val;
+    if (scale_factor != 0) {
+        mantissa *= pow(10.0, (double)scale_factor);
+        exp_out -= scale_factor;
+    }
 
-    (void)snprintf(tmp, sizeof(tmp), "%.*f", precision, mantissa);
+    int eff_prec = precision;
+    if (scale_factor > 0) {
+        eff_prec = precision - (scale_factor - 1);
+        if (eff_prec < 0) eff_prec = 0;
+    }
+    if (sign_plus) {
+        (void)snprintf(tmp, sizeof(tmp), "%+.*f", eff_prec, mantissa);
+    } else {
+        (void)snprintf(tmp, sizeof(tmp), "%.*f", eff_prec, mantissa);
+    }
     // Keep the leading zero before the decimal point to match NIST reference
     // output such as "-0.12345E+03" rather than "-.12345E+03".
 
@@ -730,7 +830,7 @@ const char *f77_fmt_e(int width, int precision, int exp_width, double value) {
     }
     char exp_fmt[16];
     (void)snprintf(exp_fmt, sizeof(exp_fmt), "E%%+0%dd", exp_width + 1);
-    (void)snprintf(exp_buf, sizeof(exp_buf), exp_fmt, exp_val);
+    (void)snprintf(exp_buf, sizeof(exp_buf), exp_fmt, exp_out);
 
     size_t tmp_len = strlen(tmp);
     size_t exp_len = strlen(exp_buf);

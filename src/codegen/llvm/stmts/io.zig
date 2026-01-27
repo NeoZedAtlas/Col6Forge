@@ -8,6 +8,8 @@ const expr = @import("../codegen/expression/mod.zig");
 const complex = @import("../codegen/expression/complex.zig");
 const utils = @import("../codegen/utils.zig");
 const format_parser = @import("../../../frontend/parser/stmt/format.zig");
+const evaluator = @import("../../../semantic/evaluator.zig");
+const sema_mod = @import("../../../sema/mod.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -78,18 +80,51 @@ fn emitWriteFormatted(
     const descriptor_count = countFormatDescriptors(fmt_items);
     if (descriptor_count == 0) {
         var pending_spaces: usize = 0;
-        for (fmt_items) |item| {
+        var column: usize = 1;
+        format_loop: for (fmt_items) |item| {
             switch (item) {
                 .literal => |text| {
                     if (isAllNewlines(text)) {
                         pending_spaces = 0;
+                        column = 1;
                     } else {
                         try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                        column += text.len;
                     }
                     try fmt_buf.appendSlice(text);
                 },
                 .spaces => |count| {
                     pending_spaces += count;
+                    column += count;
+                },
+                .tab => |tab| {
+                    switch (tab.kind) {
+                        .absolute => {
+                            if (tab.count > column) {
+                                const delta = tab.count - column;
+                                pending_spaces += delta;
+                                column = tab.count;
+                            } else if (tab.count < column) {
+                                const move_left = column - tab.count;
+                                const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
+                                pending_spaces -= reduce;
+                                column -= reduce;
+                            }
+                        },
+                        .relative_right => {
+                            pending_spaces += tab.count;
+                            column += tab.count;
+                        },
+                        .relative_left => {
+                            const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
+                            const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
+                            pending_spaces -= reduce;
+                            column -= reduce;
+                        },
+                    }
+                },
+                .colon => {
+                    break :format_loop;
                 },
                 else => {},
             }
@@ -97,24 +132,57 @@ fn emitWriteFormatted(
         pending_spaces = 0;
     } else if (expanded_values.values.items.len == 0) {
         var pending_spaces: usize = 0;
-        for (fmt_items) |item| {
+        var column: usize = 1;
+        format_loop: for (fmt_items) |item| {
             switch (item) {
                 .literal => |text| {
                     if (isAllNewlines(text)) {
                         pending_spaces = 0;
+                        column = 1;
                     } else {
                         try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                        column += text.len;
                     }
                     try fmt_buf.appendSlice(text);
                 },
                 .spaces => |count| {
                     pending_spaces += count;
+                    column += count;
+                },
+                .tab => |tab| {
+                    switch (tab.kind) {
+                        .absolute => {
+                            if (tab.count > column) {
+                                const delta = tab.count - column;
+                                pending_spaces += delta;
+                                column = tab.count;
+                            } else if (tab.count < column) {
+                                const move_left = column - tab.count;
+                                const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
+                                pending_spaces -= reduce;
+                                column -= reduce;
+                            }
+                        },
+                        .relative_right => {
+                            pending_spaces += tab.count;
+                            column += tab.count;
+                        },
+                        .relative_left => {
+                            const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
+                            const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
+                            pending_spaces -= reduce;
+                            column -= reduce;
+                        },
+                    }
+                },
+                .colon => {
+                    break :format_loop;
                 },
                 .int, .real, .real_fixed, .char, .logical => {
                     pending_spaces = 0;
                     break;
                 },
-                .scale, .blank_control, .reversion_anchor => {},
+                .scale, .blank_control, .sign_control, .reversion_anchor => {},
             }
         }
     } else {
@@ -130,36 +198,87 @@ fn emitWriteFormatted(
             }
             first_pass = false;
             var scale_factor: i32 = 0;
+            var sign_plus = false;
+            var column: usize = 1;
             var idx: usize = format_start;
+            var stop_format = false;
             while (idx < fmt_items.len) : (idx += 1) {
                 const item = fmt_items[idx];
                 switch (item) {
                     .literal => |text| {
                         if (isAllNewlines(text)) {
                             pending_spaces = 0;
+                            column = 1;
                         } else {
                             try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                            column += text.len;
                         }
                         try fmt_buf.appendSlice(text);
                     },
                     .spaces => |count| {
                         pending_spaces += count;
+                        column += count;
+                    },
+                    .tab => |tab| {
+                        switch (tab.kind) {
+                            .absolute => {
+                                if (tab.count > column) {
+                                    const delta = tab.count - column;
+                                    pending_spaces += delta;
+                                    column = tab.count;
+                                } else if (tab.count < column) {
+                                    const move_left = column - tab.count;
+                                    const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
+                                    pending_spaces -= reduce;
+                                    column -= reduce;
+                                }
+                            },
+                            .relative_right => {
+                                pending_spaces += tab.count;
+                                column += tab.count;
+                            },
+                            .relative_left => {
+                                const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
+                                const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
+                                pending_spaces -= reduce;
+                                column -= reduce;
+                            },
+                        }
                     },
                     .int => |spec| {
                         if (arg_index >= expanded_values.values.items.len) break;
                         try flushPendingSpaces(&fmt_buf, &pending_spaces);
                         const value = expanded_values.values.items[arg_index];
                         const coerced = try expr.coerce(ctx, builder, value, .i32);
-                        try appendIntFormat(&fmt_buf, spec.width);
-                        try args.append(.{ .ty = .i32, .name = coerced.name });
+                        if (spec.min_digits == 0) {
+                            try appendIntFormat(&fmt_buf, spec.width, sign_plus);
+                            try args.append(.{ .ty = .i32, .name = coerced.name });
+                        } else {
+                            const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, "i32, i32, i32, i32", false);
+                            const tmp = try ctx.nextTemp();
+                            const width_text = utils.formatInt(ctx.allocator, @intCast(spec.width));
+                            const min_text = utils.formatInt(ctx.allocator, @intCast(spec.min_digits));
+                            var call_args = std.array_list.Managed(u8).init(ctx.allocator);
+                            defer call_args.deinit();
+                            try call_args.writer().print(
+                                "i32 {s}, i32 {s}, i32 {s}, i32 {s}",
+                                .{ width_text, min_text, if (sign_plus) "1" else "0", coerced.name },
+                            );
+                            try builder.call(tmp, .ptr, fmt_i_name, call_args.items);
+                            try fmt_buf.appendSlice("%s");
+                            try args.append(.{ .ty = .ptr, .name = tmp });
+                        }
                         arg_index += 1;
+                        if (spec.width > 0) {
+                            column += spec.width;
+                        }
                     },
                     .real, .real_fixed => |spec| {
                         if (arg_index >= expanded_values.values.items.len) break;
                         try flushPendingSpaces(&fmt_buf, &pending_spaces);
                         const value = expanded_values.values.items[arg_index];
                         var coerced = try expr.coerce(ctx, builder, value, .f64);
-                        if (scale_factor != 0) {
+                        if (item == .real_fixed and scale_factor != 0) {
                             const scale = std.math.pow(f64, 10.0, @as(f64, @floatFromInt(scale_factor)));
                             const scale_text = utils.formatFloatValue(ctx.allocator, scale, .f64);
                             const scale_val = ValueRef{ .name = scale_text, .ty = .f64, .is_ptr = false };
@@ -173,35 +292,41 @@ fn emitWriteFormatted(
                             const prec_text = utils.formatInt(ctx.allocator, @intCast(spec.precision));
                             const call_args = try std.fmt.allocPrint(
                                 ctx.allocator,
-                                "i32 {s}, i32 {s}, double {s}",
-                                .{ width_text, prec_text, coerced.name },
+                                "i32 {s}, i32 {s}, i32 {s}, double {s}",
+                                .{ width_text, prec_text, if (sign_plus) "1" else "0", coerced.name },
                             );
-                            const fmt_name = try ctx.ensureDeclRaw("f77_fmt_f", .ptr, "i32, i32, double", false);
+                            const fmt_name = try ctx.ensureDeclRaw("f77_fmt_f", .ptr, "i32, i32, i32, double", false);
                             try builder.call(fmt_tmp, .ptr, fmt_name, call_args);
                             try fmt_buf.appendSlice("%s");
                             try args.append(.{ .ty = .ptr, .name = fmt_tmp });
                         } else if (item == .real_fixed and spec.precision == 0) {
-                            try fmt_buf.writer().print("%#{d}.0f", .{spec.width});
+                            const sign_flag = if (sign_plus) "+" else "";
+                            try fmt_buf.writer().print("%{s}#{d}.0f", .{ sign_flag, spec.width });
                             try args.append(.{ .ty = .f64, .name = coerced.name });
                         } else if (item == .real_fixed) {
-                            try fmt_buf.writer().print("%{d}.{d}f", .{ spec.width, spec.precision });
+                            const sign_flag = if (sign_plus) "+" else "";
+                            try fmt_buf.writer().print("%{s}{d}.{d}f", .{ sign_flag, spec.width, spec.precision });
                             try args.append(.{ .ty = .f64, .name = coerced.name });
                         } else {
                             const fmt_tmp = try ctx.nextTemp();
                             const width_text = utils.formatInt(ctx.allocator, @intCast(spec.width));
                             const prec_text = utils.formatInt(ctx.allocator, @intCast(spec.precision));
                             const exp_text = utils.formatInt(ctx.allocator, @intCast(spec.exp_width));
+                            const scale_text = utils.formatInt(ctx.allocator, @intCast(scale_factor));
                             const call_args = try std.fmt.allocPrint(
                                 ctx.allocator,
-                                "i32 {s}, i32 {s}, i32 {s}, double {s}",
-                                .{ width_text, prec_text, exp_text, coerced.name },
+                                "i32 {s}, i32 {s}, i32 {s}, i32 {s}, i32 {s}, double {s}",
+                                .{ width_text, prec_text, exp_text, scale_text, if (sign_plus) "1" else "0", coerced.name },
                             );
-                            const fmt_name = try ctx.ensureDeclRaw("f77_fmt_e", .ptr, "i32, i32, i32, double", false);
+                            const fmt_name = try ctx.ensureDeclRaw("f77_fmt_e", .ptr, "i32, i32, i32, i32, i32, double", false);
                             try builder.call(fmt_tmp, .ptr, fmt_name, call_args);
                             try fmt_buf.appendSlice("%s");
                             try args.append(.{ .ty = .ptr, .name = fmt_tmp });
                         }
                         arg_index += 1;
+                        if (spec.width > 0) {
+                            column += spec.width;
+                        }
                     },
                     .char => |spec| {
                         if (arg_index >= expanded_values.values.items.len) break;
@@ -218,6 +343,9 @@ fn emitWriteFormatted(
                         try args.append(.{ .ty = .i32, .name = prec_text });
                         try args.append(.{ .ty = .ptr, .name = value.name });
                         arg_index += 1;
+                        if (field_width > 0) {
+                            column += field_width;
+                        }
                     },
                     .logical => |spec| {
                         if (arg_index >= expanded_values.values.items.len) break;
@@ -238,13 +366,24 @@ fn emitWriteFormatted(
                         }
                         try args.append(.{ .ty = .i32, .name = select_tmp });
                         arg_index += 1;
+                        column += if (spec.width > 0) spec.width else 1;
+                    },
+                    .colon => {
+                        if (arg_index >= expanded_values.values.items.len) {
+                            pending_spaces = 0;
+                            stop_format = true;
+                        }
                     },
                     .scale => |value| {
                         scale_factor = value;
                     },
                     .blank_control => {},
+                    .sign_control => |ctrl| {
+                        sign_plus = (ctrl == .plus);
+                    },
                     .reversion_anchor => {},
                 }
+                if (stop_format) break;
             }
             if (arg_index >= expanded_values.values.items.len) {
                 pending_spaces = 0;
@@ -382,6 +521,10 @@ fn emitReadFormatted(
                 .spaces => |count| {
                     if (count > 0) try appendSpaces(&fmt_buf, count);
                 },
+                .tab => |tab| {
+                    if (tab.count > 0) try appendSpaces(&fmt_buf, tab.count);
+                },
+                .colon => {},
                 else => {},
             }
         }
@@ -406,6 +549,10 @@ fn emitReadFormatted(
                     .spaces => |count| {
                         if (count > 0) try appendSpaces(&fmt_buf, count);
                     },
+                    .tab => |tab| {
+                        if (tab.count > 0) try appendSpaces(&fmt_buf, tab.count);
+                    },
+                    .colon => {},
                     .int => |spec| {
                         if (arg_index >= expanded.ptrs.items.len) break;
                         const width = if (spec.width > 0) spec.width else 0;
@@ -488,6 +635,7 @@ fn emitReadFormatted(
                         scale_factor = value;
                     },
                     .blank_control => {},
+                    .sign_control => {},
                     .reversion_anchor => {},
                 }
             }
@@ -567,6 +715,19 @@ pub fn emitOpen(ctx: *Context, builder: anytype, open: ast.OpenStmt) EmitError!v
     const recl_expr = open.recl orelse return;
     const recl_value = try expr.emitExpr(ctx, builder, recl_expr);
     const recl_i32 = try expr.coerce(ctx, builder, recl_value, .i32);
+
+    // Track constant RECL by unit number (when constant) and by unit variable
+    // name (when the unit is an identifier).
+    if (try evalConstIntSem(ctx.sem, recl_expr)) |recl_const| {
+        const recl_key: usize = @intCast(recl_const);
+        if (open.unit.* == .identifier) {
+            try ctx.direct_recl_by_name.put(open.unit.identifier, recl_key);
+        }
+        if (try evalConstIntSem(ctx.sem, open.unit)) |unit_const| {
+            const unit_key: i32 = @intCast(unit_const);
+            try ctx.direct_recl.put(unit_key, recl_key);
+        }
+    }
     const open_name = try ctx.ensureDeclRaw("f77_open_direct", .void, "i32, i32", true);
     const args = try std.fmt.allocPrint(ctx.allocator, "i32 {s}, i32 {s}", .{ unit_i32.name, recl_i32.name });
     try builder.call(null, .void, open_name, args);
@@ -579,20 +740,64 @@ fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitEr
     const rec_value = try expr.emitExpr(ctx, builder, rec_expr);
     const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
 
-    const sig_ptrs = try buildDirectWriteSignatureAndPtrs(ctx, builder, write.args);
-    const sig = sig_ptrs.sig;
-    const sig_global = try ctx.string_pool.intern(sig);
-    const sig_ptr = try ctx.nextTemp();
-    try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
+    // If we can resolve the format at compile time, honor record advances
+    // caused by '/' by splitting a single direct write into per-record writes.
+    if (try resolveFormatItemsForDirect(ctx, write.format)) |fmt_items| {
+        const recl_const = try lookupDirectRecl(ctx, write.unit);
 
-    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_buf.deinit();
-    try arg_buf.writer().print("i32 {s}, i32 {s}, ptr {s}", .{ unit_i32.name, rec_i32.name, sig_ptr });
-    for (sig_ptrs.ptrs.items) |ptr| {
-        try arg_buf.writer().print(", ptr {s}", .{ptr.name});
+        // Prefer formatted direct I/O when we know the record length.
+        if (recl_const) |recl_len| {
+            const plans = try planDirectFormattedRecords(ctx.allocator, fmt_items, write.args.len);
+            defer ctx.allocator.free(plans);
+
+            const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr", .ptr, "i32, i32, i32", false);
+            const commit_name = try ctx.ensureDeclRaw("f77_direct_record_commit", .void, "i32, i32", false);
+            const recl_val = ValueRef{
+                .name = utils.formatInt(ctx.allocator, @intCast(recl_len)),
+                .ty = .i32,
+                .is_ptr = false,
+            };
+
+            for (plans) |plan| {
+                var rec_for_plan = rec_i32;
+                if (plan.rec_offset != 0) {
+                    const offset_val = ValueRef{
+                        .name = utils.formatInt(ctx.allocator, @intCast(plan.rec_offset)),
+                        .ty = .i32,
+                        .is_ptr = false,
+                    };
+                    const rec_tmp = try ctx.nextTemp();
+                    try builder.binary(rec_tmp, "add", .i32, rec_i32, offset_val);
+                    rec_for_plan = .{ .name = rec_tmp, .ty = .i32, .is_ptr = false };
+                }
+
+                var ptr_args = std.array_list.Managed(u8).init(ctx.allocator);
+                defer ptr_args.deinit();
+                try ptr_args.writer().print(
+                    "i32 {s}, i32 {s}, i32 {s}",
+                    .{ unit_i32.name, rec_for_plan.name, recl_val.name },
+                );
+                const record_ptr_tmp = try ctx.nextTemp();
+                try builder.call(record_ptr_tmp, .ptr, record_ptr_name, ptr_args.items);
+                const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
+
+                var expanded_values = try expandWriteArgs(ctx, builder, write.args[plan.start_arg..plan.end_arg]);
+                defer expanded_values.deinit();
+
+                const fmt_slice = fmt_items[plan.fmt_start..plan.fmt_end];
+                try emitWriteFormatted(ctx, builder, write, record_ptr, recl_len, true, unit_i32, fmt_slice, &expanded_values);
+
+                var commit_args = std.array_list.Managed(u8).init(ctx.allocator);
+                defer commit_args.deinit();
+                try commit_args.writer().print("i32 {s}, i32 {s}", .{ unit_i32.name, rec_for_plan.name });
+                try builder.call(null, .void, commit_name, commit_args.items);
+            }
+            return;
+        }
     }
-    const write_name = try ctx.ensureDeclRaw("f77_write_direct", .void, "i32, i32, ptr", true);
-    try builder.call(null, .void, write_name, arg_buf.items);
+
+    // Fallback: no format information available, keep the previous behavior.
+    try emitDirectWriteCall(ctx, builder, unit_i32, rec_i32, write.args);
 }
 
 fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
@@ -601,6 +806,45 @@ fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
     const rec_value = try expr.emitExpr(ctx, builder, rec_expr);
     const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+
+    if (try resolveFormatItemsForDirect(ctx, read.format)) |fmt_items| {
+        const recl_const = try lookupDirectRecl(ctx, read.unit);
+
+        if (recl_const) |recl_len| {
+            const plans = try planDirectFormattedRecords(ctx.allocator, fmt_items, read.args.len);
+            defer ctx.allocator.free(plans);
+
+            const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr_ro", .ptr, "i32, i32", false);
+
+            for (plans) |plan| {
+                var rec_for_plan = rec_i32;
+                if (plan.rec_offset != 0) {
+                    const offset_val = ValueRef{
+                        .name = utils.formatInt(ctx.allocator, @intCast(plan.rec_offset)),
+                        .ty = .i32,
+                        .is_ptr = false,
+                    };
+                    const rec_tmp = try ctx.nextTemp();
+                    try builder.binary(rec_tmp, "add", .i32, rec_i32, offset_val);
+                    rec_for_plan = .{ .name = rec_tmp, .ty = .i32, .is_ptr = false };
+                }
+
+                var ptr_args = std.array_list.Managed(u8).init(ctx.allocator);
+                defer ptr_args.deinit();
+                try ptr_args.writer().print("i32 {s}, i32 {s}", .{ unit_i32.name, rec_for_plan.name });
+                const record_ptr_tmp = try ctx.nextTemp();
+                try builder.call(record_ptr_tmp, .ptr, record_ptr_name, ptr_args.items);
+                const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
+
+                var expanded = try expandReadTargets(ctx, builder, read.args[plan.start_arg..plan.end_arg]);
+                defer expanded.deinit();
+
+                const fmt_slice = fmt_items[plan.fmt_start..plan.fmt_end];
+                try emitReadFormatted(ctx, builder, read, record_ptr, recl_len, true, unit_i32, fmt_slice, &expanded);
+            }
+            return;
+        }
+    }
 
     const sig_ptrs = try buildDirectReadSignatureAndPtrs(ctx, builder, read.args);
     const sig = sig_ptrs.sig;
@@ -618,6 +862,171 @@ fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError
     try builder.call(null, .i32, read_name, arg_buf.items);
 
     try applyComplexFixupsList(ctx, builder, sig_ptrs.complex_fixups.items);
+}
+
+const DirectRecordPlan = struct {
+    start_arg: usize,
+    end_arg: usize,
+    rec_offset: usize,
+    fmt_start: usize,
+    fmt_end: usize,
+};
+
+fn emitDirectWriteCall(
+    ctx: *Context,
+    builder: anytype,
+    unit_i32: ValueRef,
+    rec_i32: ValueRef,
+    args: []*ast.Expr,
+) EmitError!void {
+    var sig_ptrs = try buildDirectWriteSignatureAndPtrs(ctx, builder, args);
+    defer sig_ptrs.deinit(ctx.allocator);
+    const sig = sig_ptrs.sig;
+    const sig_global = try ctx.string_pool.intern(sig);
+    const sig_ptr = try ctx.nextTemp();
+    try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
+
+    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_buf.deinit();
+    try arg_buf.writer().print("i32 {s}, i32 {s}, ptr {s}", .{ unit_i32.name, rec_i32.name, sig_ptr });
+    for (sig_ptrs.ptrs.items) |ptr| {
+        try arg_buf.writer().print(", ptr {s}", .{ptr.name});
+    }
+    const write_name = try ctx.ensureDeclRaw("f77_write_direct", .void, "i32, i32, ptr", true);
+    try builder.call(null, .void, write_name, arg_buf.items);
+}
+
+fn resolveFormatItemsForDirect(ctx: *Context, format: ast.FormatSpec) EmitError!?[]const ast.FormatItem {
+    switch (format) {
+        .label => |label| {
+            if (ctx.formats.get(label)) |fmt_info| return fmt_info.items;
+            if (ctx.findSymbol(label)) |sym| {
+                if (sym.type_kind == .character) {
+                    if (try formatFromCharArrayData(ctx, label)) |items| return items;
+                }
+            }
+            return null;
+        },
+        .inline_items => |items| {
+            const key = @as(usize, @intFromPtr(items.ptr));
+            const fmt_info = ctx.inline_formats.get(key) orelse return null;
+            return fmt_info.items;
+        },
+        .none => return null,
+    }
+}
+
+fn planDirectFormattedRecords(
+    allocator: std.mem.Allocator,
+    fmt_items: []const ast.FormatItem,
+    arg_count: usize,
+) EmitError![]DirectRecordPlan {
+    var plans = std.array_list.Managed(DirectRecordPlan).init(allocator);
+    errdefer plans.deinit();
+
+    const reversion_start = findReversionStart(fmt_items);
+
+    var record_offset: usize = 0;
+    var record_start_arg: usize = 0;
+    var record_fmt_start: usize = 0;
+    var arg_index: usize = 0;
+    var format_start: usize = 0;
+
+    while (arg_index < arg_count) {
+        var i = format_start;
+        var saw_descriptor = false;
+        var advanced_record = false;
+
+        while (i < fmt_items.len and arg_index < arg_count) : (i += 1) {
+            const item = fmt_items[i];
+            switch (item) {
+                .int, .real, .real_fixed, .char, .logical => {
+                    arg_index += 1;
+                    saw_descriptor = true;
+                },
+                .literal => |text| {
+                    const newline_count = countNewlinesLiteral(text);
+                    if (newline_count != 0) {
+                        try plans.append(.{
+                            .start_arg = record_start_arg,
+                            .end_arg = arg_index,
+                            .rec_offset = record_offset,
+                            .fmt_start = record_fmt_start,
+                            .fmt_end = i,
+                        });
+                        record_offset += 1;
+                        record_start_arg = arg_index;
+                        record_fmt_start = i + 1;
+                        var extra: usize = 1;
+                        while (extra < newline_count) : (extra += 1) {
+                            try plans.append(.{
+                                .start_arg = record_start_arg,
+                                .end_arg = record_start_arg,
+                                .rec_offset = record_offset,
+                                .fmt_start = record_fmt_start,
+                                .fmt_end = record_fmt_start,
+                            });
+                            record_offset += 1;
+                        }
+                        advanced_record = true;
+                    }
+                },
+                .spaces, .tab, .colon, .scale, .blank_control, .sign_control, .reversion_anchor => {},
+            }
+        }
+
+        if (arg_index >= arg_count) break;
+        if (!saw_descriptor and !advanced_record) break;
+        format_start = reversion_start;
+    }
+
+    // Even after all data items are consumed, trailing record advances ('/')
+    // and literal-only tail sections must still be materialized.
+    var tail_i = record_fmt_start;
+    while (tail_i < fmt_items.len) : (tail_i += 1) {
+        const item = fmt_items[tail_i];
+        switch (item) {
+            .literal => |text| {
+                const newline_count = countNewlinesLiteral(text);
+                if (newline_count != 0) {
+                    try plans.append(.{
+                        .start_arg = record_start_arg,
+                        .end_arg = arg_index,
+                        .rec_offset = record_offset,
+                        .fmt_start = record_fmt_start,
+                        .fmt_end = tail_i,
+                    });
+                    record_offset += 1;
+                    record_start_arg = arg_index;
+                    record_fmt_start = tail_i + 1;
+                    var extra: usize = 1;
+                    while (extra < newline_count) : (extra += 1) {
+                        try plans.append(.{
+                            .start_arg = record_start_arg,
+                            .end_arg = record_start_arg,
+                            .rec_offset = record_offset,
+                            .fmt_start = record_fmt_start,
+                            .fmt_end = record_fmt_start,
+                        });
+                        record_offset += 1;
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    // Emit the final record, even if it has zero descriptors, so that a
+    // trailing '/' still materializes blank records in the direct file.
+    try plans.append(.{
+        .start_arg = record_start_arg,
+        .end_arg = arg_index,
+        .rec_offset = record_offset,
+        .fmt_start = record_fmt_start,
+        .fmt_end = fmt_items.len,
+    });
+
+    return plans.toOwnedSlice();
 }
 
 fn formatFromCharArrayData(ctx: *Context, name: []const u8) EmitError!?[]const ast.FormatItem {
@@ -1452,6 +1861,37 @@ fn countFormatDescriptors(items: []const ast.FormatItem) usize {
     return count;
 }
 
+fn evalConstIntSem(sem: *const sema_mod.SemanticUnit, expr_node: *ast.Expr) EmitError!?i64 {
+    const resolver = evaluator.ConstResolver{
+        .ctx = @ptrCast(@constCast(sem)),
+        .resolveFn = resolveConstValueSem,
+    };
+    const value = try evaluator.evalConst(expr_node, resolver);
+    return switch (value orelse return null) {
+        .integer => |v| v,
+        else => null,
+    };
+}
+
+fn lookupDirectRecl(ctx: *Context, unit_expr: *ast.Expr) EmitError!?usize {
+    if (try evalConstIntSem(ctx.sem, unit_expr)) |unit_const| {
+        const unit_key: i32 = @intCast(unit_const);
+        if (ctx.direct_recl.get(unit_key)) |recl| return recl;
+    }
+    if (unit_expr.* == .identifier) {
+        return ctx.direct_recl_by_name.get(unit_expr.identifier);
+    }
+    return null;
+}
+
+fn resolveConstValueSem(ctx: *anyopaque, name: []const u8) ?sema_mod.ConstValue {
+    const sem: *const sema_mod.SemanticUnit = @ptrCast(@alignCast(ctx));
+    for (sem.symbols) |sym| {
+        if (std.mem.eql(u8, sym.name, name)) return sym.const_value;
+    }
+    return null;
+}
+
 fn findReversionStart(items: []const ast.FormatItem) usize {
     var idx: ?usize = null;
     for (items, 0..) |item, i| {
@@ -1483,11 +1923,17 @@ fn isAllNewlines(text: []const u8) bool {
     return true;
 }
 
-fn appendIntFormat(buffer: *std.array_list.Managed(u8), width: usize) !void {
+fn countNewlinesLiteral(text: []const u8) usize {
+    if (!isAllNewlines(text)) return 0;
+    return text.len;
+}
+
+fn appendIntFormat(buffer: *std.array_list.Managed(u8), width: usize, sign_plus: bool) !void {
+    const sign_flag = if (sign_plus) "+" else "";
     if (width == 0) {
-        try buffer.appendSlice("%d");
+        try buffer.writer().print("%{s}d", .{sign_flag});
     } else {
-        try buffer.writer().print("%{d}d", .{width});
+        try buffer.writer().print("%{s}{d}d", .{ sign_flag, width });
     }
 }
 

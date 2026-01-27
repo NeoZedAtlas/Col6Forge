@@ -89,6 +89,8 @@ pub const Context = struct {
     temp_index: usize,
     locals: std.StringHashMap(ValueRef),
     ref_kinds: std.AutoHashMap(usize, sema.ResolvedRefKind),
+    direct_recl: std.AutoHashMap(i32, usize),
+    direct_recl_by_name: std.StringHashMap(usize),
     label_map: std.StringHashMap([]const u8),
     label_index: std.StringHashMap(usize),
     label_counter: usize,
@@ -119,6 +121,8 @@ pub const Context = struct {
             .temp_index = 0,
             .locals = std.StringHashMap(ValueRef).init(allocator),
             .ref_kinds = std.AutoHashMap(usize, sema.ResolvedRefKind).init(allocator),
+            .direct_recl = std.AutoHashMap(i32, usize).init(allocator),
+            .direct_recl_by_name = std.StringHashMap(usize).init(allocator),
             .label_map = std.StringHashMap([]const u8).init(allocator),
             .label_index = std.StringHashMap(usize).init(allocator),
             .label_counter = 0,
@@ -132,6 +136,8 @@ pub const Context = struct {
     pub fn deinit(self: *Context) void {
         self.locals.deinit();
         self.ref_kinds.deinit();
+        self.direct_recl.deinit();
+        self.direct_recl_by_name.deinit();
         self.label_map.deinit();
         self.label_index.deinit();
         self.statement_functions.deinit();

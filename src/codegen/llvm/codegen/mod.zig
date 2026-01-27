@@ -254,7 +254,7 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem
     errdefer buffer.deinit();
     var last_non_space: ?usize = null;
     for (items, 0..) |item, idx| {
-        if (item != .spaces and item != .scale and item != .blank_control and item != .reversion_anchor) {
+        if (item != .spaces and item != .tab and item != .colon and item != .scale and item != .blank_control and item != .sign_control and item != .reversion_anchor) {
             last_non_space = idx;
         }
     }
@@ -272,6 +272,13 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem
                     try buffer.append(' ');
                 }
             },
+            .tab => |tab| {
+                var i: usize = 0;
+                while (i < tab.count) : (i += 1) {
+                    try buffer.append(' ');
+                }
+            },
+            .colon => {},
             .int => |spec| {
                 try buffer.writer().print("%{d}d", .{spec.width});
             },
@@ -301,6 +308,7 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem
             },
             .scale => {},
             .blank_control => {},
+            .sign_control => {},
             .reversion_anchor => {},
         }
     }
