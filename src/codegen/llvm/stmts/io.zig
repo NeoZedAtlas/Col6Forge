@@ -579,7 +579,8 @@ fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitEr
     const rec_value = try expr.emitExpr(ctx, builder, rec_expr);
     const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
 
-    const sig = try buildDirectSignature(ctx, write.args);
+    const sig_ptrs = try buildDirectWriteSignatureAndPtrs(ctx, builder, write.args);
+    const sig = sig_ptrs.sig;
     const sig_global = try ctx.string_pool.intern(sig);
     const sig_ptr = try ctx.nextTemp();
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
@@ -587,8 +588,7 @@ fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitEr
     var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_buf.deinit();
     try arg_buf.writer().print("i32 {s}, i32 {s}, ptr {s}", .{ unit_i32.name, rec_i32.name, sig_ptr });
-    for (write.args) |arg| {
-        const ptr = try ensureValuePtr(ctx, builder, arg);
+    for (sig_ptrs.ptrs.items) |ptr| {
         try arg_buf.writer().print(", ptr {s}", .{ptr.name});
     }
     const write_name = try ctx.ensureDeclRaw("f77_write_direct", .void, "i32, i32, ptr", true);
@@ -602,7 +602,8 @@ fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError
     const rec_value = try expr.emitExpr(ctx, builder, rec_expr);
     const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
 
-    const sig = try buildDirectSignature(ctx, read.args);
+    const sig_ptrs = try buildDirectReadSignatureAndPtrs(ctx, builder, read.args);
+    const sig = sig_ptrs.sig;
     const sig_global = try ctx.string_pool.intern(sig);
     const sig_ptr = try ctx.nextTemp();
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
@@ -610,12 +611,13 @@ fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError
     var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_buf.deinit();
     try arg_buf.writer().print("i32 {s}, i32 {s}, ptr {s}", .{ unit_i32.name, rec_i32.name, sig_ptr });
-    for (read.args) |arg| {
-        const ptr = try expr.emitLValue(ctx, builder, arg);
+    for (sig_ptrs.ptrs.items) |ptr| {
         try arg_buf.writer().print(", ptr {s}", .{ptr.name});
     }
     const read_name = try ctx.ensureDeclRaw("f77_read_direct", .i32, "i32, i32, ptr", true);
     try builder.call(null, .i32, read_name, arg_buf.items);
+
+    try applyComplexFixupsList(ctx, builder, sig_ptrs.complex_fixups.items);
 }
 
 fn formatFromCharArrayData(ctx: *Context, name: []const u8) EmitError!?[]const ast.FormatItem {
@@ -972,6 +974,160 @@ fn buildDirectSignature(ctx: *Context, args: []*ast.Expr) ![]const u8 {
         }
     }
     return buf.toOwnedSlice();
+}
+
+const DirectSigPtrs = struct {
+    sig: []const u8,
+    ptrs: std.array_list.Managed(ValueRef),
+    complex_fixups: std.array_list.Managed(ComplexFixup),
+
+    fn init(allocator: std.mem.Allocator) DirectSigPtrs {
+        return .{
+            .sig = "",
+            .ptrs = std.array_list.Managed(ValueRef).init(allocator),
+            .complex_fixups = std.array_list.Managed(ComplexFixup).init(allocator),
+        };
+    }
+
+    fn deinit(self: *DirectSigPtrs, allocator: std.mem.Allocator) void {
+        if (self.sig.len != 0) allocator.free(self.sig);
+        self.ptrs.deinit();
+        self.complex_fixups.deinit();
+    }
+};
+
+fn buildDirectWriteSignatureAndPtrs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!DirectSigPtrs {
+    var result = DirectSigPtrs.init(ctx.allocator);
+    errdefer result.deinit(ctx.allocator);
+
+    var sig_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer sig_buf.deinit();
+
+    for (args) |arg| {
+        const ty = try expr.exprType(ctx, arg);
+        if (complex.isComplexType(ty)) {
+            const elem_ty = complex.complexElemType(ty) orelse return error.UnsupportedComplexType;
+            try sig_buf.append(if (elem_ty == .f64) 'd' else 'r');
+            try sig_buf.append(if (elem_ty == .f64) 'd' else 'r');
+
+            const value = try expr.emitExpr(ctx, builder, arg);
+            const coerced = try complex.coerceToComplex(ctx, builder, value, ty);
+            const real = try complex.extractComplex(ctx, builder, coerced, 0);
+            const imag = try complex.extractComplex(ctx, builder, coerced, 1);
+
+            const real_tmp = try ctx.nextTemp();
+            try builder.alloca(real_tmp, elem_ty);
+            const real_ptr = ValueRef{ .name = real_tmp, .ty = .ptr, .is_ptr = true };
+            try builder.store(real, real_ptr);
+
+            const imag_tmp = try ctx.nextTemp();
+            try builder.alloca(imag_tmp, elem_ty);
+            const imag_ptr = ValueRef{ .name = imag_tmp, .ty = .ptr, .is_ptr = true };
+            try builder.store(imag, imag_ptr);
+
+            try result.ptrs.append(real_ptr);
+            try result.ptrs.append(imag_ptr);
+            continue;
+        }
+
+        switch (ty) {
+            .i32 => try sig_buf.append('i'),
+            .f32 => try sig_buf.append('r'),
+            .f64 => try sig_buf.append('d'),
+            .i1 => try sig_buf.append('l'),
+            .ptr => {
+                const len = charLenForExpr(ctx, arg) orelse return error.UnsupportedCharArg;
+                try sig_buf.append('c');
+                try sig_buf.writer().print("{d};", .{len});
+            },
+            else => return error.UnsupportedCast,
+        }
+        const ptr = try ensureValuePtr(ctx, builder, arg);
+        try result.ptrs.append(ptr);
+    }
+
+    result.sig = try sig_buf.toOwnedSlice();
+    return result;
+}
+
+fn buildDirectReadSignatureAndPtrs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!DirectSigPtrs {
+    var result = DirectSigPtrs.init(ctx.allocator);
+    errdefer result.deinit(ctx.allocator);
+
+    var sig_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer sig_buf.deinit();
+
+    for (args) |arg| {
+        const ty = try expr.exprType(ctx, arg);
+        if (complex.isComplexType(ty)) {
+            const elem_ty = complex.complexElemType(ty) orelse return error.UnsupportedComplexType;
+            try sig_buf.append(if (elem_ty == .f64) 'd' else 'r');
+            try sig_buf.append(if (elem_ty == .f64) 'd' else 'r');
+
+            const target_ptr = try expr.emitLValue(ctx, builder, arg);
+
+            const real_tmp = try ctx.nextTemp();
+            try builder.alloca(real_tmp, elem_ty);
+            const real_ptr = ValueRef{ .name = real_tmp, .ty = .ptr, .is_ptr = true };
+            const imag_tmp = try ctx.nextTemp();
+            try builder.alloca(imag_tmp, elem_ty);
+            const imag_ptr = ValueRef{ .name = imag_tmp, .ty = .ptr, .is_ptr = true };
+
+            try result.ptrs.append(real_ptr);
+            try result.ptrs.append(imag_ptr);
+            try result.complex_fixups.append(.{
+                .target_ptr = target_ptr,
+                .elem_ty = elem_ty,
+                .real_ptr = real_ptr,
+                .imag_ptr = imag_ptr,
+            });
+            continue;
+        }
+
+        switch (ty) {
+            .i32 => try sig_buf.append('i'),
+            .f32 => try sig_buf.append('r'),
+            .f64 => try sig_buf.append('d'),
+            .i1 => try sig_buf.append('l'),
+            .ptr => {
+                const len = charLenForExpr(ctx, arg) orelse return error.UnsupportedCharArg;
+                try sig_buf.append('c');
+                try sig_buf.writer().print("{d};", .{len});
+            },
+            else => return error.UnsupportedCast,
+        }
+        const ptr = try expr.emitLValue(ctx, builder, arg);
+        try result.ptrs.append(ptr);
+    }
+
+    result.sig = try sig_buf.toOwnedSlice();
+    return result;
+}
+
+fn applyComplexFixupsList(ctx: *Context, builder: anytype, fixups: []const ComplexFixup) EmitError!void {
+    for (fixups) |fixup| {
+        const real_tmp = try ctx.nextTemp();
+        try builder.load(real_tmp, fixup.elem_ty, fixup.real_ptr);
+        const imag_tmp = try ctx.nextTemp();
+        try builder.load(imag_tmp, fixup.elem_ty, fixup.imag_ptr);
+        const real_val = ValueRef{ .name = real_tmp, .ty = fixup.elem_ty, .is_ptr = false };
+        const imag_val = ValueRef{ .name = imag_tmp, .ty = fixup.elem_ty, .is_ptr = false };
+        const complex_ty: llvm_types.IRType = if (fixup.elem_ty == .f64) .complex_f64 else .complex_f32;
+        const complex_val = try complex.buildComplex(ctx, builder, real_val, imag_val, complex_ty);
+        try builder.store(complex_val, fixup.target_ptr);
+    }
+}
+
+fn storeCharacterLiteral(ctx: *Context, builder: anytype, target_ptr: ValueRef, char_len: usize, text: []const u8) EmitError!void {
+    var i: usize = 0;
+    while (i < char_len) : (i += 1) {
+        const byte: u8 = if (i < text.len) text[i] else ' ';
+        const offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(i)), .ty = .i32, .is_ptr = false };
+        const gep = try ctx.nextTemp();
+        try builder.gep(gep, .i8, target_ptr, offset);
+        const val = ValueRef{ .name = utils.formatInt(ctx.allocator, byte), .ty = .i8, .is_ptr = false };
+        try builder.store(val, .{ .name = gep, .ty = .ptr, .is_ptr = true });
+    }
 }
 
 fn ensureValuePtr(ctx: *Context, builder: anytype, node: *ast.Expr) EmitError!ValueRef {
@@ -1346,11 +1502,31 @@ pub fn emitRewind(ctx: *Context, builder: anytype, rewind: ast.RewindStmt) EmitE
 }
 
 pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) EmitError!void {
-    _ = ctx;
-    _ = builder;
-    _ = inquire;
-    // INQUIRE is currently a no-op in the runtime. We still parse and resolve
-    // its control expressions to keep the pipeline moving.
+    if (inquire.controls.len == 0) return;
+    const unit_value = try expr.emitExpr(ctx, builder, inquire.controls[0]);
+    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+
+    // Heuristic handling for common NIST patterns:
+    // INQUIRE(UNIT=u, SEQUENTIAL=char)
+    // INQUIRE(UNIT=u, RECL=i, NEXTREC=j)
+    if (inquire.controls.len == 2) {
+        if (charLenForExpr(ctx, inquire.controls[1])) |char_len| {
+            const seq_ptr = try expr.emitLValue(ctx, builder, inquire.controls[1]);
+            // A direct-access unit is not sequential.
+            try storeCharacterLiteral(ctx, builder, seq_ptr, char_len, "NO ");
+        }
+        return;
+    }
+    if (inquire.controls.len >= 3) {
+        const recl_ptr = try expr.emitLValue(ctx, builder, inquire.controls[1]);
+        const nextrec_ptr = try expr.emitLValue(ctx, builder, inquire.controls[2]);
+        var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
+        defer arg_buf.deinit();
+        try arg_buf.writer().print("i32 {s}, ptr {s}, ptr {s}", .{ unit_i32.name, recl_ptr.name, nextrec_ptr.name });
+        const fn_name = try ctx.ensureDeclRaw("f77_inquire_direct", .void, "i32, ptr, ptr", true);
+        try builder.call(null, .void, fn_name, arg_buf.items);
+        return;
+    }
 }
 
 pub fn emitClose(ctx: *Context, builder: anytype, close_stmt: ast.CloseStmt) EmitError!void {

@@ -173,8 +173,13 @@ fn emitIntrinsicCmplx(ctx: *Context, builder: anytype, args: []*Expr) EmitError!
 
 pub fn emitIntrinsicFloat(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
-    const value = try dispatch.emitExpr(ctx, builder, args[0]);
-    if (complex.isComplexType(value.ty)) return error.UnsupportedIntrinsicType;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    if (complex.isComplexType(value.ty)) {
+        const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
+        value = try complex.coerceToComplex(ctx, builder, value, target_ty);
+        const real_part = try complex.extractComplex(ctx, builder, value, 0);
+        return casting.coerce(ctx, builder, real_part, .f32);
+    }
     return casting.coerce(ctx, builder, value, .f32);
 }
 

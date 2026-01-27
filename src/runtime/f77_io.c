@@ -13,6 +13,7 @@ static unsigned int fmt_index;
 static char fmt_buffers[8][64];
 typedef struct {
     int recl;
+    int nextrec;
     unsigned char *data;
     size_t size;
 } DirectUnit;
@@ -383,6 +384,7 @@ void f77_open_direct(int unit, int recl) {
         return;
     }
     direct_units[unit].recl = recl;
+    direct_units[unit].nextrec = 1;
 }
 
 static void direct_ensure_capacity(int unit, size_t needed) {
@@ -499,6 +501,7 @@ void f77_write_direct(int unit, int rec, const char *sig, ...) {
         }
     }
     va_end(ap);
+    du->nextrec = rec + 1;
 }
 
 int f77_read_direct(int unit, int rec, const char *sig, ...) {
@@ -577,7 +580,32 @@ int f77_read_direct(int unit, int rec, const char *sig, ...) {
         }
     }
     va_end(ap);
+    du->nextrec = rec + 1;
     return assigned;
+}
+
+void f77_inquire_direct(int unit, int *recl, int *nextrec) {
+    if (!recl || !nextrec) return;
+    if (unit < 0 || unit >= F77_MAX_UNITS) {
+        *recl = 0;
+        *nextrec = 1;
+        return;
+    }
+    DirectUnit *du = &direct_units[unit];
+    const int r = du->recl;
+    *recl = r;
+    if (du->nextrec > 0) {
+        *nextrec = du->nextrec;
+        return;
+    }
+    if (r > 0) {
+        const size_t records = du->size / (size_t)r;
+        *nextrec = (int)records + 1;
+        du->nextrec = *nextrec;
+        return;
+    }
+    *nextrec = 1;
+    du->nextrec = 1;
 }
 
 void f77_rewind(int unit) {

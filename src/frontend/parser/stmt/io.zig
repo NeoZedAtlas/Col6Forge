@@ -256,20 +256,57 @@ fn normalizeLabelText(text: []const u8) []const u8 {
 
 pub fn parseRewindStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
     _ = lp.consumeKeyword("REWIND");
-    const unit_expr = try expr.parseExpr(lp, arena, 0);
+    const unit_expr = try parseUnitStatementControl(arena, lp);
     return .{ .rewind = .{ .unit = unit_expr } };
 }
 
 pub fn parseBackspaceStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
     _ = lp.consumeKeyword("BACKSPACE");
-    const unit_expr = try expr.parseExpr(lp, arena, 0);
+    const unit_expr = try parseUnitStatementControl(arena, lp);
     return .{ .backspace = .{ .unit = unit_expr } };
 }
 
 pub fn parseEndfileStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
     _ = lp.consumeKeyword("ENDFILE");
-    const unit_expr = try expr.parseExpr(lp, arena, 0);
+    const unit_expr = try parseUnitStatementControl(arena, lp);
     return .{ .endfile = .{ .unit = unit_expr } };
+}
+
+fn parseUnitStatementControl(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!*Expr {
+    // Support both positional UNIT and control-list forms:
+    // REWIND 10
+    // REWIND(UNIT=10)
+    if (!lp.peekIs(.l_paren)) {
+        return expr.parseExpr(lp, arena, 0);
+    }
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    var unit_expr: ?*Expr = null;
+    var first = true;
+    while (!lp.peekIs(.r_paren)) {
+        if (!first) {
+            _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+        }
+        first = false;
+        if (lp.peekIs(.identifier) and helpers.nextTokenIs(lp.*, .equals)) {
+            const name_tok = lp.expectIdentifier() orelse return error.UnexpectedToken;
+            _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+            const value = try expr.parseExpr(lp, arena, 0);
+            const name = lp.tokenText(name_tok);
+            if (context.eqNoCase(name, "UNIT")) {
+                unit_expr = value;
+            }
+            continue;
+        }
+        // Positional unit inside parentheses.
+        if (unit_expr == null) {
+            unit_expr = try expr.parseExpr(lp, arena, 0);
+            continue;
+        }
+        // Consume and ignore any other controls we do not yet model.
+        _ = try expr.parseExpr(lp, arena, 0);
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return unit_expr orelse error.UnexpectedToken;
 }
 
 fn parseControlList(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError![]*Expr {
