@@ -24,7 +24,16 @@ pub fn emitLValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
             return ctx.getPointer(name);
         },
         .call_or_subscript => |call_or_sub| {
-            const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            if (kind == .unknown) {
+                if (ctx.findSymbol(call_or_sub.name)) |sym| {
+                    if (sym.dims.len > 0) {
+                        kind = .subscript;
+                    } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                        kind = .call;
+                    }
+                }
+            }
             if (kind == .subscript) {
                 return memory.emitSubscriptPtr(ctx, builder, call_or_sub);
             }
@@ -33,6 +42,7 @@ pub fn emitLValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
         .substring => |sub| {
             return emitSubstringPtr(ctx, builder, sub);
         },
+        .implied_do => return error.InvalidAssignmentTarget,
         else => return error.InvalidAssignmentTarget,
     }
 }
@@ -119,7 +129,16 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             return binary.emitBinary(ctx, builder, bin.op, lhs, rhs);
         },
         .call_or_subscript => |call_or_sub| {
-            const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            if (kind == .unknown) {
+                if (ctx.findSymbol(call_or_sub.name)) |sym| {
+                    if (sym.dims.len > 0) {
+                        kind = .subscript;
+                    } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                        kind = .call;
+                    }
+                }
+            }
             if (kind == .subscript) {
                 const ptr = try memory.emitSubscriptPtr(ctx, builder, call_or_sub);
                 const sym = ctx.findSymbol(call_or_sub.name) orelse return error.UnknownSymbol;
@@ -162,6 +181,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
         },
         .dim_range => return error.InvalidExpression,
+        .implied_do => return error.UnsupportedImpliedDo,
     }
 }
 
@@ -225,6 +245,7 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
             const right_len = charLenForExpr(ctx, bin.right) orelse return null;
             return left_len + right_len;
         },
+        .implied_do => return null,
         else => return null,
     }
 }

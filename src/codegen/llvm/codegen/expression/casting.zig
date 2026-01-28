@@ -162,7 +162,16 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
         .dim_range => return .i32,
         .substring => return .ptr,
         .call_or_subscript => |call| {
-            const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            if (kind == .unknown) {
+                if (ctx.findSymbol(call.name)) |sym| {
+                    if (sym.dims.len > 0) {
+                        kind = .subscript;
+                    } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                        kind = .call;
+                    }
+                }
+            }
             if (kind == .subscript) {
                 const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
                 return llvm_types.typeFromKind(sym.type_kind);
@@ -171,5 +180,6 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
             const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
             return llvm_types.typeFromKind(sym.type_kind);
         },
+        .implied_do => return error.UnsupportedImpliedDo,
     }
 }

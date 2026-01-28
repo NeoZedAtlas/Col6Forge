@@ -70,6 +70,15 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             try resolveExpr(self, lit.real);
             try resolveExpr(self, lit.imag);
         },
+        .implied_do => |implied| {
+            _ = try symbols_mod.ensureSymbol(self, implied.var_name);
+            try resolveExpr(self, implied.start);
+            try resolveExpr(self, implied.end);
+            if (implied.step) |step| try resolveExpr(self, step);
+            for (implied.items) |item| {
+                try resolveExpr(self, item);
+            }
+        },
         .unary => |un| try resolveExpr(self, un.expr),
         .binary => |bin| {
             try resolveExpr(self, bin.left);
@@ -77,6 +86,9 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             if (bin.op == .power) {
                 const left_kind = try exprType(self, bin.left);
                 const right_kind = try exprType(self, bin.right);
+                if (left_kind == .complex and right_kind == .integer) {
+                    return;
+                }
                 if (!isPowerOperandSupported(left_kind) or !isPowerOperandSupported(right_kind)) {
                     return error.PowerUnsupported;
                 }
@@ -127,6 +139,7 @@ pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKi
             const right = try exprType(self, bin.right);
             return promoteNumericType(left, right);
         },
+        .implied_do => return error.UnsupportedImpliedDo,
     }
 }
 

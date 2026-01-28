@@ -3,6 +3,7 @@ const ast = @import("../../../../ast/nodes.zig");
 const ir = @import("../../../ir.zig");
 const context = @import("../context.zig");
 const utils = @import("../utils.zig");
+const llvm_types = @import("../../types.zig");
 
 const casting = @import("casting.zig");
 const complex = @import("complex.zig");
@@ -85,7 +86,19 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
 }
 
 fn emitPower(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
-    if (complex.isComplexType(lhs.ty) or complex.isComplexType(rhs.ty)) return error.UnsupportedComplexOp;
+    if (complex.isComplexType(lhs.ty)) {
+        const base_ty = if (lhs.ty == .complex_f64) llvm_types.IRType.complex_f64 else llvm_types.IRType.complex_f32;
+        const base = try complex.coerceToComplex(ctx, builder, lhs, base_ty);
+        const exp = try casting.coerce(ctx, builder, rhs, .i32);
+        const fn_name = if (base_ty == .complex_f64) "f77_zpowi" else "f77_cpowi";
+        const sig = try std.fmt.allocPrint(ctx.allocator, "{s}, i32", .{llvm_types.irTypeText(base_ty)});
+        _ = try ctx.ensureDeclRaw(fn_name, base_ty, sig, false);
+        const args = try std.fmt.allocPrint(ctx.allocator, "{s} {s}, i32 {s}", .{ llvm_types.irTypeText(base_ty), base.name, exp.name });
+        const tmp = try ctx.nextTemp();
+        try builder.call(tmp, base_ty, fn_name, args);
+        return .{ .name = tmp, .ty = base_ty, .is_ptr = false };
+    }
+    if (complex.isComplexType(rhs.ty)) return error.UnsupportedComplexOp;
     const common_ty = ir.commonType(lhs.ty, rhs.ty);
     if (common_ty == .f32 or common_ty == .f64) {
         const left = try casting.coerce(ctx, builder, lhs, common_ty);

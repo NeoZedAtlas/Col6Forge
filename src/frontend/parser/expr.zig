@@ -223,7 +223,17 @@ fn dotOpIs(lp: LineParser, name: []const u8) bool {
     if (tok.kind != .dot_op) return false;
     const text = lp.tokenText(tok);
     if (text.len < 3) return false;
-    return context.eqNoCase(text[1 .. text.len - 1], name);
+    var buffer: [16]u8 = undefined;
+    var out: usize = 0;
+    var i: usize = 1;
+    while (i + 1 < text.len) : (i += 1) {
+        const ch = text[i];
+        if (std.ascii.isWhitespace(ch)) continue;
+        if (out >= buffer.len) return false;
+        buffer[out] = ch;
+        out += 1;
+    }
+    return context.eqNoCase(buffer[0..out], name);
 }
 
 const BinOpInfo = struct {

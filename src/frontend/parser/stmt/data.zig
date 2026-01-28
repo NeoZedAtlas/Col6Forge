@@ -352,6 +352,7 @@ fn cloneExprWithSubst(arena: std.mem.Allocator, node: *Expr, name: []const u8, r
             const upper = try cloneExprWithSubst(arena, range.upper, name, replacement);
             cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
         },
+        .implied_do => return error.UnsupportedImpliedDo,
     }
     return cloned;
 }

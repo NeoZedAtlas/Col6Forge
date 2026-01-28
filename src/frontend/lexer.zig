@@ -136,10 +136,14 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
 
         if (ch == '.') {
             var j = i + 1;
-            while (j < text.len and std.ascii.isAlphabetic(text[j])) : (j += 1) {}
-            if (j < text.len and text[j] == '.' and j > i + 1) {
+            while (j < text.len and std.ascii.isWhitespace(text[j])) : (j += 1) {}
+            var k = j;
+            while (k < text.len and std.ascii.isAlphabetic(text[k])) : (k += 1) {}
+            var m = k;
+            while (m < text.len and std.ascii.isWhitespace(text[m])) : (m += 1) {}
+            if (k > j and m < text.len and text[m] == '.') {
                 const start = i;
-                const end = j + 1;
+                const end = m + 1;
                 const pos = fixed_form.mapIndexToPos(line, start);
                 try tokens.append(.{ .kind = .dot_op, .start = start, .end = end, .line = pos.line, .column = pos.column });
                 i = end;

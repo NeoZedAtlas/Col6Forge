@@ -236,6 +236,7 @@ fn lenForExpr(ctx: *Context, expr: *Expr) ?usize {
             const right = lenForExpr(ctx, bin.right) orelse return null;
             return left + right;
         },
+        .implied_do => return null,
         else => return null,
     }
 }
@@ -292,8 +293,12 @@ fn emitMinMaxNInt(ctx: *Context, builder: anytype, args: []*Expr, is_max: bool) 
 
 fn emitIntrinsicInt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
-    const value = try dispatch.emitExpr(ctx, builder, args[0]);
-    if (complex.isComplexType(value.ty)) return error.UnsupportedIntrinsicType;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    if (complex.isComplexType(value.ty)) {
+        const target = if (value.ty == .complex_f64) IRType.complex_f64 else IRType.complex_f32;
+        value = try complex.coerceToComplex(ctx, builder, value, target);
+        value = try complex.extractComplex(ctx, builder, value, 0);
+    }
     if (value.ty == .i32) return value;
     if (value.ty == .f32 or value.ty == .f64) {
         return casting.coerce(ctx, builder, value, .i32);
@@ -304,7 +309,11 @@ fn emitIntrinsicInt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!Va
 fn emitIntrinsicIdint(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     var value = try dispatch.emitExpr(ctx, builder, args[0]);
-    if (complex.isComplexType(value.ty)) return error.UnsupportedIntrinsicType;
+    if (complex.isComplexType(value.ty)) {
+        const target = if (value.ty == .complex_f64) IRType.complex_f64 else IRType.complex_f32;
+        value = try complex.coerceToComplex(ctx, builder, value, target);
+        value = try complex.extractComplex(ctx, builder, value, 0);
+    }
     // IDINT takes a DOUBLE PRECISION argument; coerce to f64 first to match legacy semantics.
     if (value.ty != .f64) {
         value = try casting.coerce(ctx, builder, value, .f64);
@@ -571,15 +580,23 @@ fn emitIntrinsicDprod(ctx: *Context, builder: anytype, args: []*Expr) EmitError!
 
 fn emitIntrinsicDble(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
-    const value = try dispatch.emitExpr(ctx, builder, args[0]);
-    if (complex.isComplexType(value.ty)) return error.UnsupportedIntrinsicType;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    if (complex.isComplexType(value.ty)) {
+        const target = if (value.ty == .complex_f64) IRType.complex_f64 else IRType.complex_f32;
+        value = try complex.coerceToComplex(ctx, builder, value, target);
+        value = try complex.extractComplex(ctx, builder, value, 0);
+    }
     return casting.coerce(ctx, builder, value, .f64);
 }
 
 fn emitIntrinsicSngl(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
-    const value = try dispatch.emitExpr(ctx, builder, args[0]);
-    if (complex.isComplexType(value.ty)) return error.UnsupportedIntrinsicType;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    if (complex.isComplexType(value.ty)) {
+        const target = if (value.ty == .complex_f64) IRType.complex_f64 else IRType.complex_f32;
+        value = try complex.coerceToComplex(ctx, builder, value, target);
+        value = try complex.extractComplex(ctx, builder, value, 0);
+    }
     return casting.coerce(ctx, builder, value, .f32);
 }
 

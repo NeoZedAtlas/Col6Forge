@@ -122,8 +122,10 @@ pub fn emitIfSingle(
             const then_label = try ctx.nextLabel("if_write");
             try builder.brCond(cond, then_label, next_block);
             try builder.label(then_label);
-            try io.emitWrite(ctx, builder, write);
-            try builder.br(next_block);
+            const terminated = try io.emitWrite(ctx, builder, write, next_block, local_label_map);
+            if (!terminated) {
+                try builder.br(next_block);
+            }
             return true;
         },
         .arith_if => |arith| {

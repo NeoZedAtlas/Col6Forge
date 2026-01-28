@@ -7,6 +7,7 @@ const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
 const complex = @import("../codegen/expression/complex.zig");
 const utils = @import("../codegen/utils.zig");
+const cfg = @import("cfg.zig");
 const format_parser = @import("../../../frontend/parser/stmt/format.zig");
 const evaluator = @import("../../../semantic/evaluator.zig");
 const sema_mod = @import("../../../sema/mod.zig");
@@ -16,14 +17,33 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 
-pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
+pub fn emitWrite(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!bool {
+    _ = next_block;
+    _ = local_label_map;
+    if (write.iostat) |iostat_expr| {
+        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
+        const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+        try builder.store(zero, iostat_ptr);
+    }
     // Direct access I/O requires a record number; list-directed I/O uses FMT=*
     // (represented as .none without REC).
     if (write.rec != null) {
-        return emitDirectWrite(ctx, builder, write);
+        try emitDirectWrite(ctx, builder, write);
+        return false;
+    }
+    if (write.format == .list_directed) {
+        try emitListDirectedWrite(ctx, builder, write);
+        return false;
     }
     if (write.format == .none) {
-        return emitListDirectedWrite(ctx, builder, write);
+        try emitUnformattedWrite(ctx, builder, write);
+        return false;
     }
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
     const unit_char_len = charLenForExpr(ctx, write.unit);
@@ -35,26 +55,35 @@ pub fn emitWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitErro
     switch (write.format) {
         .label => |label| {
             if (ctx.formats.get(label)) |fmt_info| {
-                return emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded_values);
+                try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded_values);
+                return false;
             }
             if (ctx.findSymbol(label)) |sym| {
                 if (sym.type_kind == .character) {
                     if (try formatFromCharArrayData(ctx, label)) |items| {
-                        return emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, items, &expanded_values);
+                        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, items, &expanded_values);
+                        return false;
                     }
                     return error.MissingFormatLabel;
                 }
                 // Assigned FORMAT via a label variable: select at runtime by value.
-                return emitWriteDynamicFormat(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, label, &expanded_values);
+                try emitWriteDynamicFormat(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, label, &expanded_values);
+                return false;
             }
             return error.MissingFormatLabel;
         },
         .inline_items => |items| {
             const key = @as(usize, @intFromPtr(items.ptr));
             const fmt_info = ctx.inline_formats.get(key) orelse return error.MissingFormatLabel;
-            return emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded_values);
+            try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded_values);
+            return false;
+        },
+        .expr => |fmt_expr| {
+            try emitWriteFormatExpr(ctx, builder, write, fmt_expr, unit_value, unit_char_len, is_internal, unit_i32, &expanded_values);
+            return false;
         },
         .none => unreachable,
+        .list_directed => unreachable,
     }
 }
 
@@ -438,12 +467,38 @@ fn emitWriteFormatted(
     }
 }
 
-pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
+pub fn emitRead(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!bool {
     if (read.rec != null) {
-        return emitDirectRead(ctx, builder, read);
+        try emitDirectRead(ctx, builder, read);
+        if (read.iostat) |iostat_expr| {
+            const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
+            const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+            try builder.store(zero, iostat_ptr);
+        }
+        return false;
+    }
+    const need_status = read.end_label != null or read.err_label != null or read.iostat != null;
+    if (read.format == .list_directed) {
+        if (!need_status) {
+            try emitListDirectedRead(ctx, builder, read);
+            return false;
+        }
+        const status = try emitListDirectedReadStatus(ctx, builder, read);
+        return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
     }
     if (read.format == .none) {
-        return emitListDirectedRead(ctx, builder, read);
+        if (!need_status) {
+            try emitUnformattedRead(ctx, builder, read);
+            return false;
+        }
+        const status = try emitUnformattedReadStatus(ctx, builder, read);
+        return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
     }
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
     const unit_char_len = charLenForExpr(ctx, read.unit);
@@ -455,25 +510,54 @@ pub fn emitRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!v
     switch (read.format) {
         .label => |label| {
             if (ctx.formats.get(label)) |fmt_info| {
-                return emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+                if (!need_status) {
+                    try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+                    return false;
+                }
+                const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+                return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
             }
             if (ctx.findSymbol(label)) |sym| {
                 if (sym.type_kind == .character) {
                     if (try formatFromCharArrayData(ctx, label)) |items| {
-                        return emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, items, &expanded);
+                        if (!need_status) {
+                            try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, items, &expanded);
+                            return false;
+                        }
+                        const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, items, &expanded);
+                        return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
                     }
                     return error.MissingFormatLabel;
                 }
-                return emitReadDynamicFormat(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, label, &expanded);
+                if (!need_status) {
+                    try emitReadDynamicFormat(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, label, &expanded);
+                    return false;
+                }
+                const status = try emitReadDynamicFormatStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, label, &expanded);
+                return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
             }
             return error.MissingFormatLabel;
         },
         .inline_items => |items| {
             const key = @as(usize, @intFromPtr(items.ptr));
             const fmt_info = ctx.inline_formats.get(key) orelse return error.MissingFormatLabel;
-            return emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+            if (!need_status) {
+                try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+                return false;
+            }
+            const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+            return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
+        },
+        .expr => |fmt_expr| {
+            if (!need_status) {
+                try emitReadFormatExpr(ctx, builder, read, fmt_expr, unit_value, unit_char_len, is_internal, unit_i32, &expanded);
+                return false;
+            }
+            const status = try emitReadFormatExprStatus(ctx, builder, read, fmt_expr, unit_value, unit_char_len, is_internal, unit_i32, &expanded);
+            return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
         },
         .none => unreachable,
+        .list_directed => unreachable,
     }
 }
 
@@ -708,10 +792,280 @@ fn emitReadFormatted(
     }
 }
 
+fn emitReadFormattedStatus(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    fmt_items: []const ast.FormatItem,
+    expanded: *ExpandedReadTargets,
+) EmitError!ValueRef {
+    _ = read;
+    var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer fmt_buf.deinit();
+
+    var arg_ptrs = std.array_list.Managed([]const u8).init(ctx.allocator);
+    defer arg_ptrs.deinit();
+    const CharFixup = struct {
+        target_ptr: ValueRef,
+        target_len: usize,
+        field_width: usize,
+        temp_ptr: ?ValueRef,
+    };
+    var char_fixups = std.array_list.Managed(CharFixup).init(ctx.allocator);
+    defer char_fixups.deinit();
+    const ScaleFixup = struct {
+        target_ptr: ValueRef,
+        temp_ptr: ValueRef,
+        ty: llvm_types.IRType,
+        scale_factor: i32,
+    };
+    var scale_fixups = std.array_list.Managed(ScaleFixup).init(ctx.allocator);
+    defer scale_fixups.deinit();
+
+    const descriptor_count = countFormatDescriptors(fmt_items);
+    if (descriptor_count == 0) {
+        for (fmt_items) |item| {
+            switch (item) {
+                .literal => |text| {
+                    try appendScanfLiteral(&fmt_buf, text);
+                },
+                .spaces => |count| {
+                    if (count > 0) try appendSpaces(&fmt_buf, count);
+                },
+                .tab => |tab| {
+                    if (tab.count > 0) try appendSpaces(&fmt_buf, tab.count);
+                },
+                .colon => {},
+                else => {},
+            }
+        }
+    } else {
+        var arg_index: usize = 0;
+        const reversion_start = findReversionStart(fmt_items);
+        var format_start: usize = 0;
+        var first_pass = true;
+        while (arg_index < expanded.ptrs.items.len) {
+            if (!first_pass) {
+                try fmt_buf.append('\n');
+            }
+            first_pass = false;
+            var scale_factor: i32 = 0;
+            var fmt_index: usize = format_start;
+            while (fmt_index < fmt_items.len) : (fmt_index += 1) {
+                const item = fmt_items[fmt_index];
+                switch (item) {
+                    .literal => |text| {
+                        try appendScanfLiteral(&fmt_buf, text);
+                    },
+                    .spaces => |count| {
+                        if (count > 0) try appendSpaces(&fmt_buf, count);
+                    },
+                    .tab => |tab| {
+                        if (tab.count > 0) try appendSpaces(&fmt_buf, tab.count);
+                    },
+                    .colon => {},
+                    .int => |spec| {
+                        if (arg_index >= expanded.ptrs.items.len) break;
+                        const width = if (spec.width > 0) spec.width else 0;
+                        if (width > 0) {
+                            try fmt_buf.writer().print("%{d}d", .{width});
+                        } else {
+                            try fmt_buf.appendSlice("%d");
+                        }
+                        try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                        arg_index += 1;
+                    },
+                    .real, .real_fixed => |spec| {
+                        if (arg_index >= expanded.ptrs.items.len) break;
+                        const ty = expanded.types.items[arg_index];
+                        const width = if (spec.width > 0) spec.width else 0;
+                        const fmt_spec = if (ty == .f64) "lf" else "f";
+                        if (width > 0) {
+                            try fmt_buf.writer().print("%{d}{s}", .{ width, fmt_spec });
+                        } else {
+                            try fmt_buf.writer().print("%{s}", .{fmt_spec});
+                        }
+                        if (scale_factor != 0) {
+                            const tmp_name = try ctx.nextTemp();
+                            try builder.alloca(tmp_name, ty);
+                            const tmp_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
+                            try arg_ptrs.append(tmp_name);
+                            try scale_fixups.append(.{
+                                .target_ptr = expanded.ptrs.items[arg_index],
+                                .temp_ptr = tmp_ptr,
+                                .ty = ty,
+                                .scale_factor = scale_factor,
+                            });
+                        } else {
+                            try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                        }
+                        arg_index += 1;
+                    },
+                    .char => |spec| {
+                        if (arg_index >= expanded.ptrs.items.len) break;
+                        const target_ptr = expanded.ptrs.items[arg_index];
+                        const target_len = expanded.char_lens.items[arg_index];
+                        const field_width = if (spec.width > 0) spec.width else target_len;
+                        const width = if (field_width > 0) field_width else 1;
+                        try fmt_buf.writer().print("%{d}c", .{width});
+                        var temp_ptr: ?ValueRef = null;
+                        if (field_width > 0 and field_width > target_len) {
+                            const tmp_name = try ctx.nextTemp();
+                            try builder.alloca(tmp_name, .i8);
+                            temp_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
+                            try arg_ptrs.append(tmp_name);
+                        } else {
+                            try arg_ptrs.append(target_ptr.name);
+                        }
+                        try char_fixups.append(.{
+                            .target_ptr = target_ptr,
+                            .target_len = target_len,
+                            .field_width = field_width,
+                            .temp_ptr = temp_ptr,
+                        });
+                        arg_index += 1;
+                    },
+                    .logical => {
+                        if (arg_index >= expanded.ptrs.items.len) break;
+                        try fmt_buf.appendSlice("%L");
+                        try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                        arg_index += 1;
+                    },
+                    .scale => |factor| {
+                        scale_factor = factor;
+                    },
+                    .blank_control => {},
+                    .sign_control => {},
+                    .reversion_anchor => {},
+                }
+            }
+            format_start = reversion_start;
+        }
+    }
+
+    const fmt_global = try ctx.string_pool.intern(fmt_buf.items);
+    const fmt_ptr = try ctx.nextTemp();
+    try builder.gepConstString(fmt_ptr, fmt_global, fmt_buf.items.len + 1);
+
+    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_buf.deinit();
+    if (is_internal) {
+        const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
+        try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+    } else {
+        try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, fmt_ptr });
+    }
+    for (arg_ptrs.items) |ptr_name| {
+        try arg_buf.writer().print(", ptr {s}", .{ptr_name});
+    }
+
+    var status_val: ValueRef = .{ .name = "0", .ty = .i32, .is_ptr = false };
+    if (is_internal) {
+        const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
+        try builder.call(null, .i32, read_name, arg_buf.items);
+    } else {
+        const read_name = try ctx.ensureDeclRaw("f77_read_status", .i32, "i32, ptr", true);
+        const tmp = try ctx.nextTemp();
+        try builder.call(tmp, .i32, read_name, arg_buf.items);
+        status_val = .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    }
+
+    for (scale_fixups.items) |fixup| {
+        const tmp_val = try ctx.nextTemp();
+        try builder.load(tmp_val, fixup.ty, fixup.temp_ptr);
+        const scale = std.math.pow(f64, 10.0, @as(f64, @floatFromInt(-fixup.scale_factor)));
+        const scale_text = utils.formatFloatValue(ctx.allocator, scale, if (fixup.ty == .f64) .f64 else .f32);
+        const scale_val = ValueRef{ .name = scale_text, .ty = fixup.ty, .is_ptr = false };
+        const scaled_tmp = try ctx.nextTemp();
+        try builder.binary(scaled_tmp, "fmul", fixup.ty, .{ .name = tmp_val, .ty = fixup.ty, .is_ptr = false }, scale_val);
+        try builder.store(.{ .name = scaled_tmp, .ty = fixup.ty, .is_ptr = false }, fixup.target_ptr);
+    }
+
+    try applyComplexFixups(ctx, builder, expanded);
+
+    for (char_fixups.items) |fixup| {
+        if (fixup.temp_ptr) |temp_ptr| {
+            const start = if (fixup.field_width > fixup.target_len) fixup.field_width - fixup.target_len else 0;
+            var idx: usize = 0;
+            while (idx < fixup.target_len) : (idx += 1) {
+                const src_offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(start + idx)), .ty = .i32, .is_ptr = false };
+                const dst_offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                const src_gep = try ctx.nextTemp();
+                try builder.gep(src_gep, .i8, temp_ptr, src_offset);
+                const tmp_val = try ctx.nextTemp();
+                try builder.load(tmp_val, .i8, .{ .name = src_gep, .ty = .ptr, .is_ptr = true });
+                const dst_gep = try ctx.nextTemp();
+                try builder.gep(dst_gep, .i8, fixup.target_ptr, dst_offset);
+                try builder.store(.{ .name = tmp_val, .ty = .i8, .is_ptr = false }, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
+            }
+        } else if (fixup.field_width < fixup.target_len) {
+            var idx: usize = fixup.field_width;
+            while (idx < fixup.target_len) : (idx += 1) {
+                const offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                const dst_gep = try ctx.nextTemp();
+                try builder.gep(dst_gep, .i8, fixup.target_ptr, offset);
+                const space_val = ValueRef{ .name = "32", .ty = .i8, .is_ptr = false };
+                try builder.store(space_val, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
+            }
+        }
+    }
+    return status_val;
+}
+
 pub fn emitOpen(ctx: *Context, builder: anytype, open: ast.OpenStmt) EmitError!void {
-    if (!open.direct) return;
     const unit_value = try expr.emitExpr(ctx, builder, open.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+
+    var file_ptr: ?ValueRef = null;
+    var file_len: usize = 0;
+    if (open.file) |file_expr| {
+        const file_val = try expr.emitExpr(ctx, builder, file_expr);
+        file_ptr = file_val;
+        file_len = charLenForExpr(ctx, file_expr) orelse 0;
+    }
+    const access_code: i32 = if (open.access) |acc| if (std.ascii.eqlIgnoreCase(acc, "DIRECT")) 1 else 0 else if (open.direct) 1 else 0;
+    const form_code: i32 = if (open.form) |form| if (std.ascii.eqlIgnoreCase(form, "UNFORMATTED")) 1 else 0 else 0;
+    const blank_code: i32 = if (open.blank) |blank| blk: {
+        if (std.ascii.eqlIgnoreCase(blank, "NULL")) break :blk 1;
+        if (std.ascii.eqlIgnoreCase(blank, "ZERO")) break :blk 2;
+        break :blk 0;
+    } else 0;
+    const status_code: i32 = if (open.status) |status| blk: {
+        if (std.ascii.eqlIgnoreCase(status, "DELETE")) break :blk 2;
+        if (std.ascii.eqlIgnoreCase(status, "KEEP")) break :blk 1;
+        break :blk 0;
+    } else 0;
+
+    const open_meta = try ctx.ensureDeclRaw("f77_open", .void, "i32, ptr, i32, i32, i32, i32, i32", true);
+    var meta_args = std.array_list.Managed(u8).init(ctx.allocator);
+    defer meta_args.deinit();
+    if (file_ptr) |ptr| {
+        const len_text = utils.formatInt(ctx.allocator, @intCast(file_len));
+        try meta_args.writer().print("i32 {s}, ptr {s}, i32 {s}, i32 {d}, i32 {d}, i32 {d}, i32 {d}", .{
+            unit_i32.name,
+            ptr.name,
+            len_text,
+            access_code,
+            form_code,
+            blank_code,
+            status_code,
+        });
+    } else {
+        try meta_args.writer().print("i32 {s}, ptr null, i32 0, i32 {d}, i32 {d}, i32 {d}, i32 {d}", .{
+            unit_i32.name,
+            access_code,
+            form_code,
+            blank_code,
+            status_code,
+        });
+    }
+    try builder.call(null, .void, open_meta, meta_args.items);
+
+    if (!open.direct) return;
     const recl_expr = open.recl orelse return;
     const recl_value = try expr.emitExpr(ctx, builder, recl_expr);
     const recl_i32 = try expr.coerce(ctx, builder, recl_value, .i32);
@@ -739,6 +1093,8 @@ fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitEr
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
     const rec_value = try expr.emitExpr(ctx, builder, rec_expr);
     const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const expanded_args = try expandIoArgs(ctx, write.args);
+    defer ctx.allocator.free(expanded_args);
 
     // If we can resolve the format at compile time, honor record advances
     // caused by '/' by splitting a single direct write into per-record writes.
@@ -747,7 +1103,7 @@ fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitEr
 
         // Prefer formatted direct I/O when we know the record length.
         if (recl_const) |recl_len| {
-            const plans = try planDirectFormattedRecords(ctx.allocator, fmt_items, write.args.len);
+            const plans = try planDirectFormattedRecords(ctx.allocator, fmt_items, expanded_args.len);
             defer ctx.allocator.free(plans);
 
             const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr", .ptr, "i32, i32, i32", false);
@@ -781,7 +1137,7 @@ fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitEr
                 try builder.call(record_ptr_tmp, .ptr, record_ptr_name, ptr_args.items);
                 const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
 
-                var expanded_values = try expandWriteArgs(ctx, builder, write.args[plan.start_arg..plan.end_arg]);
+                var expanded_values = try expandWriteArgs(ctx, builder, expanded_args[plan.start_arg..plan.end_arg]);
                 defer expanded_values.deinit();
 
                 const fmt_slice = fmt_items[plan.fmt_start..plan.fmt_end];
@@ -797,7 +1153,7 @@ fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitEr
     }
 
     // Fallback: no format information available, keep the previous behavior.
-    try emitDirectWriteCall(ctx, builder, unit_i32, rec_i32, write.args);
+    try emitDirectWriteCall(ctx, builder, unit_i32, rec_i32, expanded_args);
 }
 
 fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
@@ -806,12 +1162,14 @@ fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
     const rec_value = try expr.emitExpr(ctx, builder, rec_expr);
     const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const expanded_args = try expandIoArgs(ctx, read.args);
+    defer ctx.allocator.free(expanded_args);
 
     if (try resolveFormatItemsForDirect(ctx, read.format)) |fmt_items| {
         const recl_const = try lookupDirectRecl(ctx, read.unit);
 
         if (recl_const) |recl_len| {
-            const plans = try planDirectFormattedRecords(ctx.allocator, fmt_items, read.args.len);
+            const plans = try planDirectFormattedRecords(ctx.allocator, fmt_items, expanded_args.len);
             defer ctx.allocator.free(plans);
 
             const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr_ro", .ptr, "i32, i32", false);
@@ -836,7 +1194,7 @@ fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError
                 try builder.call(record_ptr_tmp, .ptr, record_ptr_name, ptr_args.items);
                 const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
 
-                var expanded = try expandReadTargets(ctx, builder, read.args[plan.start_arg..plan.end_arg]);
+                var expanded = try expandReadTargets(ctx, builder, expanded_args[plan.start_arg..plan.end_arg]);
                 defer expanded.deinit();
 
                 const fmt_slice = fmt_items[plan.fmt_start..plan.fmt_end];
@@ -846,7 +1204,7 @@ fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError
         }
     }
 
-    const sig_ptrs = try buildDirectReadSignatureAndPtrs(ctx, builder, read.args);
+    const sig_ptrs = try buildDirectReadSignatureAndPtrs(ctx, builder, expanded_args);
     const sig = sig_ptrs.sig;
     const sig_global = try ctx.string_pool.intern(sig);
     const sig_ptr = try ctx.nextTemp();
@@ -912,7 +1270,9 @@ fn resolveFormatItemsForDirect(ctx: *Context, format: ast.FormatSpec) EmitError!
             const fmt_info = ctx.inline_formats.get(key) orelse return null;
             return fmt_info.items;
         },
+        .expr => return null,
         .none => return null,
+        .list_directed => return null,
     }
 }
 
@@ -1149,6 +1509,346 @@ fn emitWriteDynamicFormat(
     try builder.label(done_label);
 }
 
+fn trimRightSpaces(bytes: []const u8) []const u8 {
+    if (bytes.len == 0) return bytes;
+    var end = bytes.len;
+    while (end > 0 and bytes[end - 1] == ' ') : (end -= 1) {}
+    return bytes[0..end];
+}
+
+fn resolveCharFormatItemsFromExpr(ctx: *Context, expr_node: *ast.Expr) EmitError!?[]const ast.FormatItem {
+    const raw = try resolveCharFormatString(ctx, expr_node) orelse return null;
+    const trimmed = trimRightSpaces(raw);
+    if (trimmed.len == 0) return null;
+    return format_parser.parseFormatItems(ctx.allocator, trimmed) catch return null;
+}
+
+fn resolveCharFormatString(ctx: *Context, expr_node: *ast.Expr) EmitError!?[]const u8 {
+    switch (expr_node.*) {
+        .literal => |lit| {
+            return switch (lit.kind) {
+                .string => utils.decodeStringLiteral(ctx.allocator, lit.text) catch null,
+                .hollerith => utils.hollerithBytes(lit.text),
+                else => null,
+            };
+        },
+        .identifier => |name| {
+            if (ctx.char_values.get(name)) |val| return val;
+            const sym = ctx.findSymbol(name) orelse return null;
+            if (sym.type_kind == .character and sym.dims.len > 0) {
+                const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return null;
+                const char_len = sym.char_len orelse 1;
+                var buffer = std.array_list.Managed(u8).init(ctx.allocator);
+                errdefer buffer.deinit();
+                var idx: usize = 1;
+                while (idx <= elem_count) : (idx += 1) {
+                    const key = try std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ name, idx });
+                    defer ctx.allocator.free(key);
+                    if (ctx.char_array_values.get(key)) |val| {
+                        try buffer.appendSlice(val);
+                    } else {
+                        const pad = try ctx.allocator.alloc(u8, char_len);
+                        defer ctx.allocator.free(pad);
+                        @memset(pad, ' ');
+                        try buffer.appendSlice(pad);
+                    }
+                }
+                const owned = try buffer.toOwnedSlice();
+                return owned;
+            }
+            return null;
+        },
+        .binary => |bin| {
+            if (bin.op != .concat) return null;
+            const left = try resolveCharFormatString(ctx, bin.left) orelse return null;
+            const right = try resolveCharFormatString(ctx, bin.right) orelse return null;
+            const combined = try std.mem.concat(ctx.allocator, u8, &.{ left, right });
+            return combined;
+        },
+        .call_or_subscript => |call| {
+            if (call.args.len != 1) return null;
+            const idx_val = intLiteralValue(call.args[0]) orelse return null;
+            const key = try std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ call.name, idx_val });
+            defer ctx.allocator.free(key);
+            if (ctx.char_array_values.get(key)) |val| return val;
+            return null;
+        },
+        else => return null,
+    }
+}
+
+const CharFormatEntry = struct {
+    index: i32,
+    items: []const ast.FormatItem,
+};
+
+fn buildCharArrayFormatEntries(ctx: *Context, name: []const u8) EmitError![]CharFormatEntry {
+    const sym = ctx.findSymbol(name) orelse return &.{};
+    if (sym.type_kind != .character or sym.dims.len == 0) return &.{};
+    const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return &.{};
+    var entries = std.array_list.Managed(CharFormatEntry).init(ctx.allocator);
+    errdefer entries.deinit();
+    var idx: usize = 1;
+    while (idx <= elem_count) : (idx += 1) {
+        const key = try std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ name, idx });
+        defer ctx.allocator.free(key);
+        const value = ctx.char_array_values.get(key) orelse continue;
+        const trimmed = trimRightSpaces(value);
+        if (trimmed.len == 0) continue;
+        const items = format_parser.parseFormatItems(ctx.allocator, trimmed) catch continue;
+        try entries.append(.{ .index = @intCast(idx), .items = items });
+    }
+    return entries.toOwnedSlice();
+}
+
+fn emitWriteDynamicCharArrayFormat(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    array_name: []const u8,
+    index_expr: *ast.Expr,
+    expanded_values: *ExpandedWriteValues,
+) EmitError!bool {
+    const entries = try buildCharArrayFormatEntries(ctx, array_name);
+    if (entries.len == 0) return false;
+    const idx_val = try expr.emitExpr(ctx, builder, index_expr);
+    const idx_i32 = try expr.coerce(ctx, builder, idx_val, .i32);
+
+    const done_label = try ctx.nextLabel("fmt_done");
+    var check_label = try ctx.nextLabel("fmt_check");
+    try builder.br(check_label);
+
+    for (entries, 0..) |entry, idx| {
+        try builder.label(check_label);
+        const cmp_tmp = try ctx.nextTemp();
+        const const_text = utils.formatInt(ctx.allocator, entry.index);
+        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
+        try builder.compare(cmp_tmp, "icmp", "eq", .i32, idx_i32, const_val);
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        const use_label = try ctx.nextLabel("fmt_use");
+        const next_label = if (idx + 1 < entries.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
+        try builder.brCond(cond, use_label, next_label);
+
+        try builder.label(use_label);
+        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, entry.items, expanded_values);
+        try builder.br(done_label);
+
+        check_label = next_label;
+    }
+
+    try builder.label(check_label);
+    try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, entries[0].items, expanded_values);
+    try builder.br(done_label);
+    try builder.label(done_label);
+    return true;
+}
+
+fn emitReadDynamicCharArrayFormat(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    array_name: []const u8,
+    index_expr: *ast.Expr,
+    expanded: *ExpandedReadTargets,
+) EmitError!bool {
+    const entries = try buildCharArrayFormatEntries(ctx, array_name);
+    if (entries.len == 0) return false;
+    const idx_val = try expr.emitExpr(ctx, builder, index_expr);
+    const idx_i32 = try expr.coerce(ctx, builder, idx_val, .i32);
+
+    const done_label = try ctx.nextLabel("fmt_done");
+    var check_label = try ctx.nextLabel("fmt_check");
+    try builder.br(check_label);
+
+    for (entries, 0..) |entry, idx| {
+        try builder.label(check_label);
+        const cmp_tmp = try ctx.nextTemp();
+        const const_text = utils.formatInt(ctx.allocator, entry.index);
+        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
+        try builder.compare(cmp_tmp, "icmp", "eq", .i32, idx_i32, const_val);
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        const use_label = try ctx.nextLabel("fmt_use");
+        const next_label = if (idx + 1 < entries.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
+        try builder.brCond(cond, use_label, next_label);
+
+        try builder.label(use_label);
+        try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, entry.items, expanded);
+        try builder.br(done_label);
+
+        check_label = next_label;
+    }
+
+    try builder.label(check_label);
+    try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, entries[0].items, expanded);
+    try builder.br(done_label);
+    try builder.label(done_label);
+    return true;
+}
+
+fn emitReadDynamicCharArrayFormatStatus(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    array_name: []const u8,
+    index_expr: *ast.Expr,
+    expanded: *ExpandedReadTargets,
+) EmitError!?ValueRef {
+    const entries = try buildCharArrayFormatEntries(ctx, array_name);
+    if (entries.len == 0) return null;
+    const idx_val = try expr.emitExpr(ctx, builder, index_expr);
+    const idx_i32 = try expr.coerce(ctx, builder, idx_val, .i32);
+
+    const status_ptr_tmp = try ctx.nextTemp();
+    try builder.alloca(status_ptr_tmp, .i32);
+    const status_ptr = ValueRef{ .name = status_ptr_tmp, .ty = .ptr, .is_ptr = true };
+
+    const done_label = try ctx.nextLabel("fmt_done");
+    var check_label = try ctx.nextLabel("fmt_check");
+    try builder.br(check_label);
+
+    for (entries, 0..) |entry, idx| {
+        try builder.label(check_label);
+        const cmp_tmp = try ctx.nextTemp();
+        const const_text = utils.formatInt(ctx.allocator, entry.index);
+        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
+        try builder.compare(cmp_tmp, "icmp", "eq", .i32, idx_i32, const_val);
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        const use_label = try ctx.nextLabel("fmt_use");
+        const next_label = if (idx + 1 < entries.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
+        try builder.brCond(cond, use_label, next_label);
+
+        try builder.label(use_label);
+        const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, entry.items, expanded);
+        try builder.store(status_val, status_ptr);
+        try builder.br(done_label);
+
+        check_label = next_label;
+    }
+
+    try builder.label(check_label);
+    const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, entries[0].items, expanded);
+    try builder.store(status_val, status_ptr);
+    try builder.br(done_label);
+    try builder.label(done_label);
+    const status_load = try ctx.nextTemp();
+    try builder.load(status_load, .i32, status_ptr);
+    return .{ .name = status_load, .ty = .i32, .is_ptr = false };
+}
+
+fn emitWriteFormatExpr(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    fmt_expr: *ast.Expr,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    expanded_values: *ExpandedWriteValues,
+) EmitError!void {
+    const fmt_ty = try expr.exprType(ctx, fmt_expr);
+    if (fmt_ty == .i32) {
+        if (fmt_expr.* != .identifier) return error.MissingFormatLabel;
+        return emitWriteDynamicFormat(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_expr.identifier, expanded_values);
+    }
+    if (fmt_ty != .ptr) return error.MissingFormatLabel;
+
+    if (try resolveCharFormatItemsFromExpr(ctx, fmt_expr)) |items| {
+        return emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, items, expanded_values);
+    }
+
+    if (fmt_expr.* == .call_or_subscript) {
+        const call = fmt_expr.call_or_subscript;
+        if (call.args.len == 1) {
+            if (try emitWriteDynamicCharArrayFormat(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, call.name, call.args[0], expanded_values)) {
+                return;
+            }
+        }
+    }
+    return error.MissingFormatLabel;
+}
+
+fn emitReadFormatExpr(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    fmt_expr: *ast.Expr,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    expanded: *ExpandedReadTargets,
+) EmitError!void {
+    const fmt_ty = try expr.exprType(ctx, fmt_expr);
+    if (fmt_ty == .i32) {
+        if (fmt_expr.* != .identifier) return error.MissingFormatLabel;
+        return emitReadDynamicFormat(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_expr.identifier, expanded);
+    }
+    if (fmt_ty != .ptr) return error.MissingFormatLabel;
+
+    if (try resolveCharFormatItemsFromExpr(ctx, fmt_expr)) |items| {
+        return emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, items, expanded);
+    }
+
+    if (fmt_expr.* == .call_or_subscript) {
+        const call = fmt_expr.call_or_subscript;
+        if (call.args.len == 1) {
+            if (try emitReadDynamicCharArrayFormat(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, call.name, call.args[0], expanded)) {
+                return;
+            }
+        }
+    }
+    // Fallback: unresolved character format expression, treat as list-directed.
+    try emitListDirectedRead(ctx, builder, read);
+    return;
+}
+
+fn emitReadFormatExprStatus(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    fmt_expr: *ast.Expr,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    expanded: *ExpandedReadTargets,
+) EmitError!ValueRef {
+    const fmt_ty = try expr.exprType(ctx, fmt_expr);
+    if (fmt_ty == .i32) {
+        if (fmt_expr.* != .identifier) return error.MissingFormatLabel;
+        return emitReadDynamicFormatStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_expr.identifier, expanded);
+    }
+    if (fmt_ty != .ptr) return error.MissingFormatLabel;
+
+    if (try resolveCharFormatItemsFromExpr(ctx, fmt_expr)) |items| {
+        return emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, items, expanded);
+    }
+
+    if (fmt_expr.* == .call_or_subscript) {
+        const call = fmt_expr.call_or_subscript;
+        if (call.args.len == 1) {
+            if (try emitReadDynamicCharArrayFormatStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, call.name, call.args[0], expanded)) |status| {
+                return status;
+            }
+        }
+    }
+    // Fallback: unresolved character format expression, treat as list-directed.
+    return emitListDirectedReadStatus(ctx, builder, read);
+}
+
 fn emitReadDynamicFormat(
     ctx: *Context,
     builder: anytype,
@@ -1205,6 +1905,71 @@ fn emitReadDynamicFormat(
     try builder.label(done_label);
 }
 
+fn emitReadDynamicFormatStatus(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    label_var: []const u8,
+    expanded: *ExpandedReadTargets,
+) EmitError!ValueRef {
+    const var_value = try expr.emitExpr(ctx, builder, try makeIdentifierExpr(ctx, label_var));
+    const var_i32 = try expr.coerce(ctx, builder, var_value, .i32);
+
+    var numeric_formats = std.array_list.Managed(struct {
+        value: i32,
+        items: []const ast.FormatItem,
+    }).init(ctx.allocator);
+    defer numeric_formats.deinit();
+
+    var it = ctx.formats.iterator();
+    while (it.next()) |entry| {
+        const label_text = entry.key_ptr.*;
+        const parsed = std.fmt.parseInt(i32, label_text, 10) catch continue;
+        try numeric_formats.append(.{ .value = parsed, .items = entry.value_ptr.items });
+    }
+    if (numeric_formats.items.len == 0) return error.MissingFormatLabel;
+
+    const status_ptr_tmp = try ctx.nextTemp();
+    try builder.alloca(status_ptr_tmp, .i32);
+    const status_ptr = ValueRef{ .name = status_ptr_tmp, .ty = .ptr, .is_ptr = true };
+
+    const done_label = try ctx.nextLabel("fmt_done");
+    var check_label = try ctx.nextLabel("fmt_check");
+    try builder.br(check_label);
+
+    for (numeric_formats.items, 0..) |fmt_entry, idx| {
+        try builder.label(check_label);
+        const cmp_tmp = try ctx.nextTemp();
+        const const_text = utils.formatInt(ctx.allocator, fmt_entry.value);
+        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
+        try builder.compare(cmp_tmp, "icmp", "eq", .i32, var_i32, const_val);
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        const use_label = try ctx.nextLabel("fmt_use");
+        const next_label = if (idx + 1 < numeric_formats.items.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
+        try builder.brCond(cond, use_label, next_label);
+
+        try builder.label(use_label);
+        const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_entry.items, expanded);
+        try builder.store(status_val, status_ptr);
+        try builder.br(done_label);
+
+        check_label = next_label;
+    }
+
+    try builder.label(check_label);
+    const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, numeric_formats.items[0].items, expanded);
+    try builder.store(status_val, status_ptr);
+    try builder.br(done_label);
+    try builder.label(done_label);
+    const status_load = try ctx.nextTemp();
+    try builder.load(status_load, .i32, status_ptr);
+    return .{ .name = status_load, .ty = .i32, .is_ptr = false };
+}
+
 fn makeIdentifierExpr(ctx: *Context, name: []const u8) !*ast.Expr {
     const node = try ctx.allocator.create(ast.Expr);
     node.* = .{ .identifier = name };
@@ -1238,6 +2003,15 @@ fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) 
                 try fmt_buf.appendSlice("%g");
                 const coerced = try expr.coerce(ctx, builder, value, .f64);
                 try args.append(.{ .ty = .f64, .name = coerced.name });
+            },
+            .complex_f32, .complex_f64 => {
+                try fmt_buf.appendSlice("(%g,%g)");
+                const real = try complex.extractComplex(ctx, builder, value, 0);
+                const imag = try complex.extractComplex(ctx, builder, value, 1);
+                const real_f64 = try expr.coerce(ctx, builder, real, .f64);
+                const imag_f64 = try expr.coerce(ctx, builder, imag, .f64);
+                try args.append(.{ .ty = .f64, .name = real_f64.name });
+                try args.append(.{ .ty = .f64, .name = imag_f64.name });
             },
             .ptr => {
                 const arg_len = expanded_values.char_lens.items[idx];
@@ -1306,6 +2080,28 @@ fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) 
     }
 }
 
+fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
+    const unit_value = try expr.emitExpr(ctx, builder, write.unit);
+    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+
+    var sig_ptrs = try buildDirectWriteSignatureAndPtrs(ctx, builder, write.args);
+    defer sig_ptrs.deinit(ctx.allocator);
+    const sig = sig_ptrs.sig;
+    const sig_global = try ctx.string_pool.intern(sig);
+    const sig_ptr = try ctx.nextTemp();
+    try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
+
+    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_buf.deinit();
+    try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, sig_ptr });
+    for (sig_ptrs.ptrs.items) |ptr| {
+        try arg_buf.writer().print(", ptr {s}", .{ptr.name});
+    }
+
+    const write_name = try ctx.ensureDeclRaw("f77_write_unformatted", .void, "i32, ptr", true);
+    try builder.call(null, .void, write_name, arg_buf.items);
+}
+
 fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
     const unit_char_len = charLenForExpr(ctx, read.unit);
@@ -1365,9 +2161,164 @@ fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) Emi
     try applyComplexFixups(ctx, builder, &expanded);
 }
 
+fn emitListDirectedReadStatus(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!ValueRef {
+    const unit_value = try expr.emitExpr(ctx, builder, read.unit);
+    const unit_char_len = charLenForExpr(ctx, read.unit);
+    const is_internal = unit_char_len != null and unit_value.ty == .ptr;
+    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
+
+    var expanded = try expandReadTargets(ctx, builder, read.args);
+    defer expanded.deinit();
+
+    var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer fmt_buf.deinit();
+    var arg_ptrs = std.array_list.Managed([]const u8).init(ctx.allocator);
+    defer arg_ptrs.deinit();
+
+    for (expanded.ptrs.items, 0..) |ptr, idx| {
+        if (idx != 0) try fmt_buf.append(' ');
+        const ty = expanded.types.items[idx];
+        switch (ty) {
+            .i32 => try fmt_buf.appendSlice("%d"),
+            .f32 => try fmt_buf.appendSlice("%f"),
+            .f64 => try fmt_buf.appendSlice("%lf"),
+            .i1 => try fmt_buf.appendSlice("%L"),
+            .ptr => {
+                const len = expanded.char_lens.items[idx];
+                const width = if (len > 0) len else 1;
+                try fmt_buf.writer().print("%{d}c", .{width});
+            },
+            else => return error.UnsupportedIntrinsicType,
+        }
+        try arg_ptrs.append(ptr.name);
+    }
+
+    const fmt_global = try ctx.string_pool.intern(fmt_buf.items);
+    const fmt_ptr = try ctx.nextTemp();
+    try builder.gepConstString(fmt_ptr, fmt_global, fmt_buf.items.len + 1);
+
+    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_buf.deinit();
+    if (is_internal) {
+        const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
+        try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+    } else {
+        try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, fmt_ptr });
+    }
+    for (arg_ptrs.items) |ptr_name| {
+        try arg_buf.writer().print(", ptr {s}", .{ptr_name});
+    }
+
+    var status_val: ValueRef = .{ .name = "0", .ty = .i32, .is_ptr = false };
+    if (is_internal) {
+        const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
+        try builder.call(null, .i32, read_name, arg_buf.items);
+    } else {
+        const read_name = try ctx.ensureDeclRaw("f77_read_status", .i32, "i32, ptr", true);
+        const tmp = try ctx.nextTemp();
+        try builder.call(tmp, .i32, read_name, arg_buf.items);
+        status_val = .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    }
+
+    try applyComplexFixups(ctx, builder, &expanded);
+    return status_val;
+}
+
+fn emitUnformattedReadStatus(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!ValueRef {
+    const unit_value = try expr.emitExpr(ctx, builder, read.unit);
+    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+
+    var sig_ptrs = try buildDirectReadSignatureAndPtrs(ctx, builder, read.args);
+    defer sig_ptrs.deinit(ctx.allocator);
+    const sig = sig_ptrs.sig;
+    const sig_global = try ctx.string_pool.intern(sig);
+    const sig_ptr = try ctx.nextTemp();
+    try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
+
+    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_buf.deinit();
+    try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, sig_ptr });
+    for (sig_ptrs.ptrs.items) |ptr| {
+        try arg_buf.writer().print(", ptr {s}", .{ptr.name});
+    }
+    const read_name = try ctx.ensureDeclRaw("f77_read_unformatted", .i32, "i32, ptr", true);
+    const tmp = try ctx.nextTemp();
+    try builder.call(tmp, .i32, read_name, arg_buf.items);
+
+    try applyComplexFixupsList(ctx, builder, sig_ptrs.complex_fixups.items);
+    return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+}
+
+fn emitIoStatusBranches(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    status: ValueRef,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!bool {
+    if (read.iostat) |iostat_expr| {
+        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
+        try builder.store(status, iostat_ptr);
+    }
+
+    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+
+    if (read.err_label != null or read.end_label != null) {
+        var cont_label = next_block;
+        if (read.err_label) |err_label| {
+            const err_target = cfg.resolveLabel(ctx, local_label_map, err_label) orelse return error.MissingLabel;
+            const cmp_tmp = try ctx.nextTemp();
+            try builder.compare(cmp_tmp, "icmp", "sgt", .i32, status, zero);
+            const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+            const next = try ctx.nextLabel("iochk");
+            try builder.brCond(cond, err_target, next);
+            try builder.label(next);
+            cont_label = next_block;
+        }
+        if (read.end_label) |end_label| {
+            const end_target = cfg.resolveLabel(ctx, local_label_map, end_label) orelse return error.MissingLabel;
+            const cmp_tmp = try ctx.nextTemp();
+            try builder.compare(cmp_tmp, "icmp", "slt", .i32, status, zero);
+            const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+            try builder.brCond(cond, end_target, cont_label);
+            return true;
+        }
+        try builder.br(cont_label);
+        return true;
+    }
+    return false;
+}
+
+fn emitUnformattedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
+    const unit_value = try expr.emitExpr(ctx, builder, read.unit);
+    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+
+    var sig_ptrs = try buildDirectReadSignatureAndPtrs(ctx, builder, read.args);
+    defer sig_ptrs.deinit(ctx.allocator);
+    const sig = sig_ptrs.sig;
+    const sig_global = try ctx.string_pool.intern(sig);
+    const sig_ptr = try ctx.nextTemp();
+    try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
+
+    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_buf.deinit();
+    try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, sig_ptr });
+    for (sig_ptrs.ptrs.items) |ptr| {
+        try arg_buf.writer().print(", ptr {s}", .{ptr.name});
+    }
+    const read_name = try ctx.ensureDeclRaw("f77_read_unformatted", .i32, "i32, ptr", true);
+    try builder.call(null, .i32, read_name, arg_buf.items);
+
+    try applyComplexFixupsList(ctx, builder, sig_ptrs.complex_fixups.items);
+}
+
+
 fn buildDirectSignature(ctx: *Context, args: []*ast.Expr) ![]const u8 {
     var buf = std.array_list.Managed(u8).init(ctx.allocator);
-    for (args) |arg| {
+    const flat_args = try expandIoArgs(ctx, args);
+    defer ctx.allocator.free(flat_args);
+    for (flat_args) |arg| {
         const ty = try expr.exprType(ctx, arg);
         switch (ty) {
             .i32 => try buf.append('i'),
@@ -1412,7 +2363,9 @@ fn buildDirectWriteSignatureAndPtrs(ctx: *Context, builder: anytype, args: []*as
     var sig_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer sig_buf.deinit();
 
-    for (args) |arg| {
+    const flat_args = try expandIoArgs(ctx, args);
+    defer ctx.allocator.free(flat_args);
+    for (flat_args) |arg| {
         const ty = try expr.exprType(ctx, arg);
         if (complex.isComplexType(ty)) {
             const elem_ty = complex.complexElemType(ty) orelse return error.UnsupportedComplexType;
@@ -1466,7 +2419,9 @@ fn buildDirectReadSignatureAndPtrs(ctx: *Context, builder: anytype, args: []*ast
     var sig_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer sig_buf.deinit();
 
-    for (args) |arg| {
+    const flat_args = try expandIoArgs(ctx, args);
+    defer ctx.allocator.free(flat_args);
+    for (flat_args) |arg| {
         const ty = try expr.exprType(ctx, arg);
         if (complex.isComplexType(ty)) {
             const elem_ty = complex.complexElemType(ty) orelse return error.UnsupportedComplexType;
@@ -1606,7 +2561,9 @@ const ExpandedWriteValues = struct {
 
 fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedReadTargets {
     var expanded = ExpandedReadTargets.init(ctx.allocator);
-    for (args) |arg| {
+    const flat_args = try expandIoArgs(ctx, args);
+    defer ctx.allocator.free(flat_args);
+    for (flat_args) |arg| {
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
@@ -1700,9 +2657,212 @@ fn applyComplexFixups(ctx: *Context, builder: anytype, expanded: *ExpandedReadTa
     }
 }
 
+fn expandIoArgs(ctx: *Context, args: []*ast.Expr) EmitError![]*ast.Expr {
+    var expanded = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
+    errdefer expanded.deinit();
+    for (args) |arg| {
+        try appendExpandedIoArg(ctx, &expanded, arg);
+    }
+    return expanded.toOwnedSlice();
+}
+
+fn appendExpandedIoArg(ctx: *Context, expanded: *std.array_list.Managed(*ast.Expr), arg: *ast.Expr) EmitError!void {
+    if (arg.* == .implied_do) {
+        const implied_expanded = try expandImpliedDo(ctx, arg.implied_do);
+        defer ctx.allocator.free(implied_expanded);
+        for (implied_expanded) |item| {
+            try appendExpandedIoArg(ctx, expanded, item);
+        }
+        return;
+    }
+    try expanded.append(arg);
+}
+
+fn expandImpliedDo(ctx: *Context, implied: ast.ImpliedDo) EmitError![]*ast.Expr {
+    const start_val_opt = try evalImpliedDoBound(ctx, implied.start);
+    const end_val_opt = try evalImpliedDoBound(ctx, implied.end);
+    const step_val_opt = if (implied.step) |step| try evalImpliedDoBound(ctx, step) else 1;
+
+    const start_val = start_val_opt orelse return error.UnsupportedImpliedDo;
+    const step_val = step_val_opt orelse return error.UnsupportedImpliedDo;
+    if (step_val == 0) return error.UnsupportedImpliedDo;
+
+    var end_val = end_val_opt;
+    if (end_val == null) {
+        end_val = inferImpliedDoEndFromItems(ctx, implied);
+    }
+    const end_val_final = end_val orelse return error.UnsupportedImpliedDo;
+
+    var expanded = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
+    errdefer expanded.deinit();
+
+    var idx: i64 = start_val;
+    if (step_val > 0) {
+        while (idx <= end_val_final) : (idx += step_val) {
+            const iter_expr = try makeIntegerLiteral(ctx.allocator, idx);
+            for (implied.items) |item| {
+                const clone = try cloneExprWithSubst(ctx, ctx.allocator, item, implied.var_name, iter_expr);
+                try expanded.append(clone);
+            }
+        }
+    } else {
+        while (idx >= end_val_final) : (idx += step_val) {
+            const iter_expr = try makeIntegerLiteral(ctx.allocator, idx);
+            for (implied.items) |item| {
+                const clone = try cloneExprWithSubst(ctx, ctx.allocator, item, implied.var_name, iter_expr);
+                try expanded.append(clone);
+            }
+        }
+    }
+
+    return expanded.toOwnedSlice();
+}
+
+fn evalImpliedDoBound(ctx: *Context, node: *ast.Expr) EmitError!?i64 {
+    if (try evalConstIntSem(ctx.sem, node)) |value| return value;
+    return intLiteralValue(node);
+}
+
+fn inferImpliedDoEndFromItems(ctx: *Context, implied: ast.ImpliedDo) ?i64 {
+    for (implied.items) |item| {
+        if (item.* != .call_or_subscript) continue;
+        const call = item.call_or_subscript;
+        if (!subscriptUsesLoopVar(call.args, implied.var_name)) continue;
+        const sym = ctx.findSymbol(call.name) orelse continue;
+        if (sym.dims.len != 1) continue;
+        const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch continue;
+        return @intCast(elem_count);
+    }
+    return null;
+}
+
+fn subscriptUsesLoopVar(args: []*ast.Expr, name: []const u8) bool {
+    for (args) |arg| {
+        if (arg.* == .identifier and std.ascii.eqlIgnoreCase(arg.identifier, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn makeIntegerLiteral(allocator: std.mem.Allocator, value: i64) EmitError!*ast.Expr {
+    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
+    const node = try allocator.create(ast.Expr);
+    node.* = .{ .literal = .{ .kind = .integer, .text = text } };
+    return node;
+}
+
+fn cloneExprWithSubst(
+    ctx: *Context,
+    allocator: std.mem.Allocator,
+    node: *ast.Expr,
+    name: []const u8,
+    replacement: *ast.Expr,
+) EmitError!*ast.Expr {
+    const cloned = try allocator.create(ast.Expr);
+    switch (node.*) {
+        .identifier => |ident| {
+            if (std.ascii.eqlIgnoreCase(ident, name)) {
+                cloned.* = replacement.*;
+                return cloned;
+            }
+            cloned.* = .{ .identifier = ident };
+        },
+        .literal => |lit| {
+            cloned.* = .{ .literal = lit };
+        },
+        .unary => |un| {
+            const expr_node = try cloneExprWithSubst(ctx, allocator, un.expr, name, replacement);
+            cloned.* = .{ .unary = .{ .op = un.op, .expr = expr_node } };
+        },
+        .binary => |bin| {
+            const left = try cloneExprWithSubst(ctx, allocator, bin.left, name, replacement);
+            const right = try cloneExprWithSubst(ctx, allocator, bin.right, name, replacement);
+            cloned.* = .{ .binary = .{ .op = bin.op, .left = left, .right = right } };
+        },
+        .complex_literal => |lit| {
+            const real = try cloneExprWithSubst(ctx, allocator, lit.real, name, replacement);
+            const imag = try cloneExprWithSubst(ctx, allocator, lit.imag, name, replacement);
+            cloned.* = .{ .complex_literal = .{ .real = real, .imag = imag } };
+        },
+        .call_or_subscript => |call| {
+            const args = try allocator.alloc(*ast.Expr, call.args.len);
+            for (call.args, 0..) |arg, idx| {
+                args[idx] = try cloneExprWithSubst(ctx, allocator, arg, name, replacement);
+            }
+            cloned.* = .{ .call_or_subscript = .{ .name = call.name, .args = args } };
+            if (ctx.ref_kinds.get(@as(usize, @intFromPtr(node)))) |kind| {
+                try ctx.ref_kinds.put(@as(usize, @intFromPtr(cloned)), kind);
+            }
+        },
+        .substring => |sub| {
+            const args = try allocator.alloc(*ast.Expr, sub.args.len);
+            for (sub.args, 0..) |arg, idx| {
+                args[idx] = try cloneExprWithSubst(ctx, allocator, arg, name, replacement);
+            }
+            const start_expr = if (sub.start) |s| try cloneExprWithSubst(ctx, allocator, s, name, replacement) else null;
+            const end_expr = if (sub.end) |e| try cloneExprWithSubst(ctx, allocator, e, name, replacement) else null;
+            cloned.* = .{ .substring = .{ .name = sub.name, .args = args, .start = start_expr, .end = end_expr } };
+        },
+        .dim_range => |range| {
+            const lower = if (range.lower) |l| try cloneExprWithSubst(ctx, allocator, l, name, replacement) else null;
+            const upper = try cloneExprWithSubst(ctx, allocator, range.upper, name, replacement);
+            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
+        },
+        .implied_do => |implied| {
+            if (std.ascii.eqlIgnoreCase(implied.var_name, name)) {
+                const items = implied.items;
+                const start_expr = implied.start;
+                const end_expr = implied.end;
+                const step_expr = implied.step;
+                cloned.* = .{
+                    .implied_do = .{
+                        .items = items,
+                        .var_name = implied.var_name,
+                        .start = start_expr,
+                        .end = end_expr,
+                        .step = step_expr,
+                    },
+                };
+            } else {
+                const items = try cloneExprListWithSubst(ctx, allocator, implied.items, name, replacement);
+                const start_expr = try cloneExprWithSubst(ctx, allocator, implied.start, name, replacement);
+                const end_expr = try cloneExprWithSubst(ctx, allocator, implied.end, name, replacement);
+                const step_expr = if (implied.step) |step| try cloneExprWithSubst(ctx, allocator, step, name, replacement) else null;
+                cloned.* = .{
+                    .implied_do = .{
+                        .items = items,
+                        .var_name = implied.var_name,
+                        .start = start_expr,
+                        .end = end_expr,
+                        .step = step_expr,
+                    },
+                };
+            }
+        },
+    }
+    return cloned;
+}
+
+fn cloneExprListWithSubst(
+    ctx: *Context,
+    allocator: std.mem.Allocator,
+    items: []*ast.Expr,
+    name: []const u8,
+    replacement: *ast.Expr,
+) EmitError![]*ast.Expr {
+    const cloned = try allocator.alloc(*ast.Expr, items.len);
+    for (items, 0..) |item, idx| {
+        cloned[idx] = try cloneExprWithSubst(ctx, allocator, item, name, replacement);
+    }
+    return cloned;
+}
+
 fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedWriteValues {
     var expanded = ExpandedWriteValues.init(ctx.allocator);
-    for (args) |arg| {
+    const flat_args = try expandIoArgs(ctx, args);
+    defer ctx.allocator.free(flat_args);
+    for (flat_args) |arg| {
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
@@ -1755,6 +2915,49 @@ fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError
             try expanded.values.append(value);
             try expanded.char_lens.append(len);
         }
+    }
+    return expanded;
+}
+
+fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedWriteValues {
+    var expanded = ExpandedWriteValues.init(ctx.allocator);
+    const flat_args = try expandIoArgs(ctx, args);
+    defer ctx.allocator.free(flat_args);
+    for (flat_args) |arg| {
+        if (arg.* == .identifier) {
+            const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
+            if (sym.dims.len > 0) {
+                const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
+                const base_ptr = try ctx.getPointer(sym.name);
+                const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
+                const char_len = sym.char_len orelse 1;
+                var idx: usize = 0;
+                while (idx < elem_count) : (idx += 1) {
+                    var offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                    if (sym.type_kind == .character and char_len > 1) {
+                        const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = .i32, .is_ptr = false };
+                        offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
+                    }
+                    const ptr_name = try ctx.nextTemp();
+                    try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
+                    if (sym.type_kind == .character) {
+                        try expanded.values.append(.{ .name = ptr_name, .ty = .ptr, .is_ptr = false });
+                        try expanded.char_lens.append(sym.char_len orelse 1);
+                    } else {
+                        const tmp = try ctx.nextTemp();
+                        try builder.load(tmp, elem_ty, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
+                        const loaded = ValueRef{ .name = tmp, .ty = elem_ty, .is_ptr = false };
+                        try expanded.values.append(loaded);
+                        try expanded.char_lens.append(0);
+                    }
+                }
+                continue;
+            }
+        }
+        const value = try expr.emitExpr(ctx, builder, arg);
+        const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
+        try expanded.values.append(value);
+        try expanded.char_lens.append(len);
     }
     return expanded;
 }
@@ -1949,37 +3152,182 @@ pub fn emitRewind(ctx: *Context, builder: anytype, rewind: ast.RewindStmt) EmitE
 
 pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) EmitError!void {
     if (inquire.controls.len == 0) return;
-    const unit_value = try expr.emitExpr(ctx, builder, inquire.controls[0]);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    var unit_expr: ?*ast.Expr = null;
+    var file_expr: ?*ast.Expr = null;
+    var iostat_expr: ?*ast.Expr = null;
+    var exist_expr: ?*ast.Expr = null;
+    var opened_expr: ?*ast.Expr = null;
+    var number_expr: ?*ast.Expr = null;
+    var access_expr: ?*ast.Expr = null;
+    var sequential_expr: ?*ast.Expr = null;
+    var direct_expr: ?*ast.Expr = null;
+    var form_expr: ?*ast.Expr = null;
+    var formatted_expr: ?*ast.Expr = null;
+    var unformatted_expr: ?*ast.Expr = null;
+    var blank_expr: ?*ast.Expr = null;
+    var recl_expr: ?*ast.Expr = null;
+    var nextrec_expr: ?*ast.Expr = null;
 
-    // Heuristic handling for common NIST patterns:
-    // INQUIRE(UNIT=u, SEQUENTIAL=char)
-    // INQUIRE(UNIT=u, RECL=i, NEXTREC=j)
-    if (inquire.controls.len == 2) {
-        if (charLenForExpr(ctx, inquire.controls[1])) |char_len| {
-            const seq_ptr = try expr.emitLValue(ctx, builder, inquire.controls[1]);
-            // A direct-access unit is not sequential.
-            try storeCharacterLiteral(ctx, builder, seq_ptr, char_len, "NO ");
+    for (inquire.controls) |control| {
+        if (control.name) |name| {
+            if (std.ascii.eqlIgnoreCase(name, "UNIT")) {
+                unit_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "FILE")) {
+                file_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "IOSTAT")) {
+                iostat_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "EXIST")) {
+                exist_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "OPENED")) {
+                opened_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "NUMBER")) {
+                number_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "ACCESS")) {
+                access_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "SEQUENTIAL")) {
+                sequential_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "DIRECT")) {
+                direct_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "FORM")) {
+                form_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "FORMATTED")) {
+                formatted_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "UNFORMATTED")) {
+                unformatted_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "BLANK")) {
+                blank_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "RECL")) {
+                recl_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "NEXTREC")) {
+                nextrec_expr = control.value;
+            }
         }
-        return;
     }
-    if (inquire.controls.len >= 3) {
-        const recl_ptr = try expr.emitLValue(ctx, builder, inquire.controls[1]);
-        const nextrec_ptr = try expr.emitLValue(ctx, builder, inquire.controls[2]);
-        var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
-        defer arg_buf.deinit();
-        try arg_buf.writer().print("i32 {s}, ptr {s}, ptr {s}", .{ unit_i32.name, recl_ptr.name, nextrec_ptr.name });
-        const fn_name = try ctx.ensureDeclRaw("f77_inquire_direct", .void, "i32, ptr, ptr", true);
+
+    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_buf.deinit();
+
+    const iostat_ptr = if (iostat_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const exist_ptr = if (exist_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const opened_ptr = if (opened_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const number_ptr = if (number_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const access_ptr = if (access_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const access_len = if (access_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const sequential_ptr = if (sequential_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const sequential_len = if (sequential_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const direct_ptr = if (direct_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const direct_len = if (direct_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const form_ptr = if (form_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const form_len = if (form_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const formatted_ptr = if (formatted_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const formatted_len = if (formatted_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const unformatted_ptr = if (unformatted_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const unformatted_len = if (unformatted_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const blank_ptr = if (blank_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const blank_len = if (blank_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const recl_ptr = if (recl_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const nextrec_ptr = if (nextrec_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+
+    if (file_expr) |file_node| {
+        const file_val = try expr.emitExpr(ctx, builder, file_node);
+        const file_len = charLenForExpr(ctx, file_node) orelse 0;
+        const len_text = utils.formatInt(ctx.allocator, @intCast(file_len));
+        try arg_buf.writer().print(
+            "ptr {s}, i32 {s}, ptr {s}, ptr {s}, ptr {s}, ptr {s}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, ptr {s}",
+            .{
+                file_val.name,
+                len_text,
+                iostat_ptr.name,
+                exist_ptr.name,
+                opened_ptr.name,
+                number_ptr.name,
+                access_ptr.name,
+                access_len,
+                sequential_ptr.name,
+                sequential_len,
+                direct_ptr.name,
+                direct_len,
+                form_ptr.name,
+                form_len,
+                formatted_ptr.name,
+                formatted_len,
+                unformatted_ptr.name,
+                unformatted_len,
+                blank_ptr.name,
+                blank_len,
+                recl_ptr.name,
+                nextrec_ptr.name,
+            },
+        );
+        const fn_name = try ctx.ensureDeclRaw("f77_inquire_file", .void, "ptr, i32, ptr, ptr, ptr, ptr, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, ptr", true);
         try builder.call(null, .void, fn_name, arg_buf.items);
         return;
     }
+
+    const unit_node = unit_expr orelse inquire.controls[0].value;
+    const unit_value = try expr.emitExpr(ctx, builder, unit_node);
+    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    try arg_buf.writer().print(
+        "i32 {s}, ptr {s}, ptr {s}, ptr {s}, ptr {s}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, ptr {s}",
+        .{
+            unit_i32.name,
+            iostat_ptr.name,
+            exist_ptr.name,
+            opened_ptr.name,
+            number_ptr.name,
+            access_ptr.name,
+            access_len,
+            sequential_ptr.name,
+            sequential_len,
+            direct_ptr.name,
+            direct_len,
+            form_ptr.name,
+            form_len,
+            formatted_ptr.name,
+            formatted_len,
+            unformatted_ptr.name,
+            unformatted_len,
+            blank_ptr.name,
+            blank_len,
+            recl_ptr.name,
+            nextrec_ptr.name,
+        },
+    );
+    const fn_name = try ctx.ensureDeclRaw("f77_inquire_unit", .void, "i32, ptr, ptr, ptr, ptr, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, ptr", true);
+    try builder.call(null, .void, fn_name, arg_buf.items);
 }
 
 pub fn emitClose(ctx: *Context, builder: anytype, close_stmt: ast.CloseStmt) EmitError!void {
-    _ = ctx;
-    _ = builder;
-    _ = close_stmt;
-    // CLOSE is currently a no-op in the runtime.
+    var unit_expr: ?*ast.Expr = null;
+    var status_text: ?[]const u8 = null;
+    for (close_stmt.controls) |control| {
+        if (control.name) |name| {
+            if (std.ascii.eqlIgnoreCase(name, "UNIT")) unit_expr = control.value;
+            if (std.ascii.eqlIgnoreCase(name, "STATUS")) {
+                if (control.value.* == .literal) {
+                    const lit = control.value.literal;
+                    if (lit.kind == .string or lit.kind == .hollerith) {
+                        var text = lit.text;
+                        if (text.len >= 2 and text[0] == text[text.len - 1] and (text[0] == '\'' or text[0] == '"')) {
+                            text = text[1 .. text.len - 1];
+                        }
+                        status_text = text;
+                    }
+                }
+            }
+        }
+    }
+    const unit_node = unit_expr orelse return;
+    const unit_value = try expr.emitExpr(ctx, builder, unit_node);
+    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const status_code: i32 = if (status_text) |status| blk: {
+        if (std.ascii.eqlIgnoreCase(status, "DELETE")) break :blk 2;
+        if (std.ascii.eqlIgnoreCase(status, "KEEP")) break :blk 1;
+        break :blk 0;
+    } else 0;
+    const fn_name = try ctx.ensureDeclRaw("f77_close", .void, "i32, i32", true);
+    const args = try std.fmt.allocPrint(ctx.allocator, "i32 {s}, i32 {d}", .{ unit_i32.name, status_code });
+    try builder.call(null, .void, fn_name, args);
 }
 
 pub fn emitBackspace(ctx: *Context, builder: anytype, backspace: ast.BackspaceStmt) EmitError!void {

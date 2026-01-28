@@ -19,8 +19,39 @@ typedef struct {
 } DirectUnit;
 static DirectUnit direct_units[F77_MAX_UNITS];
 
+typedef struct {
+    unsigned char *data;
+    size_t len;
+} UnformattedRecord;
+
+typedef struct {
+    UnformattedRecord *records;
+    size_t count;
+    size_t capacity;
+    size_t pos;
+} UnformattedUnit;
+
+static UnformattedUnit unformatted_units[F77_MAX_UNITS];
+
+static void unformatted_truncate(UnformattedUnit *unit, size_t new_count);
+
+typedef struct {
+    int opened;
+    char filename[256];
+    int access;
+    int form;
+    int blank;
+} OpenUnit;
+
+static OpenUnit open_units[F77_MAX_UNITS];
+
 static void unit_filename(int unit, char *buf, size_t len) {
     if (len == 0) {
+        return;
+    }
+    if (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened && open_units[unit].filename[0] != '\0') {
+        (void)snprintf(buf, len, "%s", open_units[unit].filename);
+        buf[len - 1] = '\0';
         return;
     }
     (void)snprintf(buf, len, "fort.%d", unit);
@@ -105,6 +136,44 @@ void f77_write(int unit, const char *fmt, ...) {
     va_end(ap);
     unit_pos[unit] = ftell(file);
     fclose(file);
+}
+
+int f77_write_status(int unit, const char *fmt, ...) {
+    va_list ap;
+    if (unit == 6 || unit == 0) {
+        va_start(ap, fmt);
+        f77_write_trimmed(stdout, fmt, ap);
+        va_end(ap);
+        fflush(stdout);
+        return 0;
+    }
+    if (unit < 0 || unit >= F77_MAX_UNITS) {
+        return 1;
+    }
+    char name[32];
+    unit_filename(unit, name, sizeof(name));
+
+    FILE *file = NULL;
+    if (unit_pos[unit] == 0) {
+        file = fopen(name, "w");
+    } else {
+        file = fopen(name, "r+");
+        if (!file) {
+            file = fopen(name, "w");
+        }
+    }
+    if (!file) {
+        return 1;
+    }
+    if (unit_pos[unit] != 0) {
+        (void)fseek(file, unit_pos[unit], SEEK_SET);
+    }
+    va_start(ap, fmt);
+    f77_write_trimmed(file, fmt, ap);
+    va_end(ap);
+    unit_pos[unit] = ftell(file);
+    fclose(file);
+    return 0;
 }
 
 int f77_read(int unit, const char *fmt, ...) {
@@ -246,6 +315,145 @@ int f77_read(int unit, const char *fmt, ...) {
     return assigned;
 }
 
+int f77_read_status(int unit, const char *fmt, ...) {
+    va_list ap;
+    FILE *file = NULL;
+    if (unit == 5 || unit == 0) {
+        file = stdin;
+    } else {
+        if (unit < 0 || unit >= F77_MAX_UNITS) {
+            return 1;
+        }
+        char name[32];
+        unit_filename(unit, name, sizeof(name));
+        file = fopen(name, "r");
+        if (!file) {
+            return 1;
+        }
+        if (unit_pos[unit] != 0) {
+            (void)fseek(file, unit_pos[unit], SEEK_SET);
+        }
+    }
+
+    char record[4096];
+    if (!fgets(record, (int)sizeof(record), file)) {
+        if (file != stdin) fclose(file);
+        return -1;
+    }
+    size_t record_len = strlen(record);
+    if (record_len > 0 && record[record_len - 1] == '\n') {
+        record[record_len - 1] = '\0';
+        record_len -= 1;
+    }
+    if (record_len > 0 && record[record_len - 1] == '\r') {
+        record[record_len - 1] = '\0';
+        record_len -= 1;
+    }
+
+    va_start(ap, fmt);
+    const char *p = fmt;
+    size_t idx = 0;
+    int assigned = 0;
+    while (*p != '\0') {
+        if (*p != '%') {
+            if (*p == '\n') {
+                if (!fgets(record, (int)sizeof(record), file)) {
+                    break;
+                }
+                record_len = strlen(record);
+                if (record_len > 0 && record[record_len - 1] == '\n') {
+                    record[record_len - 1] = '\0';
+                    record_len -= 1;
+                }
+                if (record_len > 0 && record[record_len - 1] == '\r') {
+                    record[record_len - 1] = '\0';
+                    record_len -= 1;
+                }
+                idx = 0;
+                p++;
+                continue;
+            }
+            if (idx < record_len) {
+                idx += 1;
+            }
+            p++;
+            continue;
+        }
+        p++;
+        int width = 0;
+        while (isdigit((unsigned char)*p)) {
+            width = width * 10 + (*p - '0');
+            p++;
+        }
+        int is_long = 0;
+        if (*p == 'l') {
+            is_long = 1;
+            p++;
+        }
+        char conv = *p++;
+        if (conv == '\0') break;
+        char buf[128];
+        int used = 0;
+        if (width <= 0) {
+            while (idx < record_len && isspace((unsigned char)record[idx])) {
+                idx++;
+            }
+            while (idx < record_len && !isspace((unsigned char)record[idx]) && used < (int)sizeof(buf) - 1) {
+                buf[used++] = record[idx++];
+            }
+        } else {
+            if (width >= (int)sizeof(buf)) width = (int)sizeof(buf) - 1;
+            for (int i = 0; i < width; i++) {
+                if (idx < record_len) {
+                    buf[used++] = record[idx++];
+                } else {
+                    buf[used++] = ' ';
+                }
+            }
+        }
+        buf[used] = '\0';
+        if (conv == 'd') {
+            for (int i = 0; i < used; i++) {
+                if (buf[i] == ' ') buf[i] = '0';
+            }
+            int *out = va_arg(ap, int *);
+            *out = (int)strtol(buf, NULL, 10);
+            assigned++;
+        } else if (conv == 'f' && is_long) {
+            for (int i = 0; i < used; i++) {
+                if (buf[i] == ' ') buf[i] = '0';
+            }
+            double *out = va_arg(ap, double *);
+            *out = strtod(buf, NULL);
+            assigned++;
+        } else if (conv == 'f') {
+            for (int i = 0; i < used; i++) {
+                if (buf[i] == ' ') buf[i] = '0';
+            }
+            float *out = va_arg(ap, float *);
+            *out = (float)strtod(buf, NULL);
+            assigned++;
+        } else if (conv == 'c') {
+            char *out = va_arg(ap, char *);
+            if (used > 0) {
+                memcpy(out, buf, (size_t)used);
+            }
+            assigned++;
+        } else if (conv == 'L') {
+            unsigned char *out = va_arg(ap, unsigned char *);
+            *out = (unsigned char)f77_parse_logical_field(buf, used);
+            assigned++;
+        }
+    }
+    va_end(ap);
+
+    if (file != stdin) {
+        unit_pos[unit] = ftell(file);
+        fclose(file);
+    }
+    return 0;
+}
+
 int f77_read_internal(const char *buf, int len, const char *fmt, ...) {
     if (!buf || len <= 0) {
         return 0;
@@ -376,6 +584,185 @@ void f77_write_internal(char *buf, int len, const char *fmt, ...) {
     free(tmp);
 }
 
+static void f77_store_char(char *dst, int len, const char *src) {
+    if (!dst || len <= 0) return;
+    memset(dst, ' ', (size_t)len);
+    if (!src) return;
+    size_t src_len = strlen(src);
+    size_t copy_len = src_len < (size_t)len ? src_len : (size_t)len;
+    memcpy(dst, src, copy_len);
+}
+
+static void f77_trim_filename(const char *file, int file_len, char *out, size_t out_len) {
+    if (!out || out_len == 0) return;
+    out[0] = '\0';
+    if (!file || file_len <= 0) return;
+    int start = 0;
+    int end = file_len;
+    while (start < end && isspace((unsigned char)file[start])) start++;
+    while (end > start && isspace((unsigned char)file[end - 1])) end--;
+    if (end <= start) return;
+    size_t copy_len = (size_t)(end - start);
+    if (copy_len >= out_len) copy_len = out_len - 1;
+    memcpy(out, file + start, copy_len);
+    out[copy_len] = '\0';
+}
+
+void f77_open(int unit, const char *file, int file_len, int access, int form, int blank, int status) {
+    (void)status;
+    if (unit < 0 || unit >= F77_MAX_UNITS) {
+        return;
+    }
+    OpenUnit *ou = &open_units[unit];
+    ou->opened = 1;
+    ou->access = access;
+    ou->form = form;
+    ou->blank = blank;
+    if (file && file_len > 0) {
+        f77_trim_filename(file, file_len, ou->filename, sizeof(ou->filename));
+    } else {
+        ou->filename[0] = '\0';
+    }
+}
+
+void f77_close(int unit, int status) {
+    if (unit < 0 || unit >= F77_MAX_UNITS) {
+        return;
+    }
+    OpenUnit *ou = &open_units[unit];
+    if (status == 2) {
+        char name[32];
+        if (ou->opened && ou->filename[0] != '\0') {
+            remove(ou->filename);
+        } else {
+            unit_filename(unit, name, sizeof(name));
+            remove(name);
+        }
+    }
+    ou->opened = 0;
+    ou->filename[0] = '\0';
+    unit_pos[unit] = 0;
+    unformatted_truncate(&unformatted_units[unit], 0);
+}
+
+static int f77_file_exists(const char *name) {
+    if (!name || name[0] == '\0') return 0;
+    FILE *f = fopen(name, "r");
+    if (!f) return 0;
+    fclose(f);
+    return 1;
+}
+
+void f77_inquire_unit(
+    int unit,
+    int *iostat,
+    unsigned char *exist,
+    unsigned char *opened,
+    int *number,
+    char *access,
+    int access_len,
+    char *sequential,
+    int sequential_len,
+    char *direct,
+    int direct_len,
+    char *form,
+    int form_len,
+    char *formatted,
+    int formatted_len,
+    char *unformatted,
+    int unformatted_len,
+    char *blank,
+    int blank_len,
+    int *recl,
+    int *nextrec
+) {
+    if (iostat) *iostat = 0;
+    if (unit < 0 || unit >= F77_MAX_UNITS) {
+        if (exist) *exist = 0;
+        if (opened) *opened = 0;
+        if (number) *number = 0;
+        return;
+    }
+    OpenUnit *ou = &open_units[unit];
+    int is_open = ou->opened;
+    int exists = is_open ? 1 : f77_file_exists(ou->filename);
+    if (exist) *exist = (unsigned char)(exists ? 1 : 0);
+    if (opened) *opened = (unsigned char)(is_open ? 1 : 0);
+    if (number) *number = is_open ? unit : 0;
+
+    const char *access_str = is_open ? (ou->access == 1 ? "DIRECT" : "SEQUENTIAL") : "UNKNOWN";
+    const char *seq_str = is_open ? (ou->access == 1 ? "NO" : "YES") : "UNKNOWN";
+    const char *dir_str = is_open ? (ou->access == 1 ? "YES" : "NO") : "UNKNOWN";
+    const char *form_str = is_open ? (ou->form == 1 ? "UNFORMATTED" : "FORMATTED") : "UNKNOWN";
+    const char *fmt_str = is_open ? (ou->form == 1 ? "NO" : "YES") : "UNKNOWN";
+    const char *unf_str = is_open ? (ou->form == 1 ? "YES" : "NO") : "UNKNOWN";
+    const char *blank_str = is_open ? (ou->blank == 1 ? "NULL" : (ou->blank == 2 ? "ZERO" : "UNKNOWN")) : "UNKNOWN";
+
+    f77_store_char(access, access_len, access_str);
+    f77_store_char(sequential, sequential_len, seq_str);
+    f77_store_char(direct, direct_len, dir_str);
+    f77_store_char(form, form_len, form_str);
+    f77_store_char(formatted, formatted_len, fmt_str);
+    f77_store_char(unformatted, unformatted_len, unf_str);
+    f77_store_char(blank, blank_len, blank_str);
+
+    if (recl) *recl = (ou->access == 1) ? direct_units[unit].recl : 0;
+    if (nextrec) *nextrec = (ou->access == 1) ? (direct_units[unit].nextrec > 0 ? direct_units[unit].nextrec : 1) : 0;
+}
+
+void f77_inquire_file(
+    const char *file,
+    int file_len,
+    int *iostat,
+    unsigned char *exist,
+    unsigned char *opened,
+    int *number,
+    char *access,
+    int access_len,
+    char *sequential,
+    int sequential_len,
+    char *direct,
+    int direct_len,
+    char *form,
+    int form_len,
+    char *formatted,
+    int formatted_len,
+    char *unformatted,
+    int unformatted_len,
+    char *blank,
+    int blank_len,
+    int *recl,
+    int *nextrec
+) {
+    if (iostat) *iostat = 0;
+    char name[256];
+    f77_trim_filename(file, file_len, name, sizeof(name));
+    int found_unit = -1;
+    for (int i = 0; i < F77_MAX_UNITS; i++) {
+        if (open_units[i].opened && open_units[i].filename[0] != '\0' && strcmp(open_units[i].filename, name) == 0) {
+            found_unit = i;
+            break;
+        }
+    }
+    if (found_unit >= 0) {
+        f77_inquire_unit(found_unit, iostat, exist, opened, number, access, access_len, sequential, sequential_len, direct, direct_len, form, form_len, formatted, formatted_len, unformatted, unformatted_len, blank, blank_len, recl, nextrec);
+        return;
+    }
+    int exists = f77_file_exists(name);
+    if (exist) *exist = (unsigned char)(exists ? 1 : 0);
+    if (opened) *opened = 0;
+    if (number) *number = 0;
+    f77_store_char(access, access_len, "UNKNOWN");
+    f77_store_char(sequential, sequential_len, "UNKNOWN");
+    f77_store_char(direct, direct_len, "UNKNOWN");
+    f77_store_char(form, form_len, "UNKNOWN");
+    f77_store_char(formatted, formatted_len, "UNKNOWN");
+    f77_store_char(unformatted, unformatted_len, "UNKNOWN");
+    f77_store_char(blank, blank_len, "UNKNOWN");
+    if (recl) *recl = 0;
+    if (nextrec) *nextrec = 0;
+}
+
 void f77_open_direct(int unit, int recl) {
     if (unit < 0 || unit >= F77_MAX_UNITS) {
         return;
@@ -400,6 +787,40 @@ static void direct_ensure_capacity(int unit, size_t needed) {
     }
     du->data = new_data;
     du->size = new_size;
+}
+
+static void unformatted_ensure_capacity(UnformattedUnit *unit, size_t needed) {
+    if (unit->capacity >= needed) return;
+    size_t new_cap = unit->capacity == 0 ? 8 : unit->capacity;
+    while (new_cap < needed) {
+        new_cap *= 2;
+    }
+    UnformattedRecord *new_records = (UnformattedRecord *)realloc(unit->records, new_cap * sizeof(UnformattedRecord));
+    if (!new_records) {
+        return;
+    }
+    for (size_t i = unit->capacity; i < new_cap; i++) {
+        new_records[i].data = NULL;
+        new_records[i].len = 0;
+    }
+    unit->records = new_records;
+    unit->capacity = new_cap;
+}
+
+static void unformatted_truncate(UnformattedUnit *unit, size_t new_count) {
+    if (new_count >= unit->count) {
+        unit->count = new_count;
+        return;
+    }
+    for (size_t i = new_count; i < unit->count; i++) {
+        free(unit->records[i].data);
+        unit->records[i].data = NULL;
+        unit->records[i].len = 0;
+    }
+    unit->count = new_count;
+    if (unit->pos > unit->count) {
+        unit->pos = unit->count;
+    }
 }
 
 char *f77_direct_record_ptr(int unit, int rec, int recl) {
@@ -633,6 +1054,176 @@ int f77_read_direct(int unit, int rec, const char *sig, ...) {
     return assigned;
 }
 
+void f77_write_unformatted(int unit, const char *sig, ...) {
+    if (unit < 0 || unit >= F77_MAX_UNITS || !sig) {
+        return;
+    }
+    UnformattedUnit *uu = &unformatted_units[unit];
+    size_t record_size = direct_signature_size(sig);
+    unsigned char *record = NULL;
+    if (record_size > 0) {
+        record = (unsigned char *)malloc(record_size);
+        if (!record) {
+            return;
+        }
+        memset(record, 0, record_size);
+    }
+
+    va_list ap;
+    va_start(ap, sig);
+    size_t pos = 0;
+    for (size_t i = 0; sig[i] != '\0' && pos < record_size; i++) {
+        switch (sig[i]) {
+            case 'i': {
+                int *val = va_arg(ap, int *);
+                if (pos + 4 <= record_size) {
+                    memcpy(record + pos, val, 4);
+                }
+                pos += 4;
+                break;
+            }
+            case 'r': {
+                float *val = va_arg(ap, float *);
+                if (pos + 4 <= record_size) {
+                    memcpy(record + pos, val, 4);
+                }
+                pos += 4;
+                break;
+            }
+            case 'd': {
+                double *val = va_arg(ap, double *);
+                if (pos + 8 <= record_size) {
+                    memcpy(record + pos, val, 8);
+                }
+                pos += 8;
+                break;
+            }
+            case 'l': {
+                unsigned char *val = va_arg(ap, unsigned char *);
+                if (pos + 1 <= record_size) {
+                    record[pos] = *val ? 1 : 0;
+                }
+                pos += 1;
+                break;
+            }
+            case 'c': {
+                size_t len = 0;
+                i++;
+                while (sig[i] && sig[i] != ';') {
+                    len = len * 10 + (size_t)(sig[i] - '0');
+                    i++;
+                }
+                char *val = va_arg(ap, char *);
+                if (pos + len <= record_size) {
+                    memcpy(record + pos, val, len);
+                } else if (pos < record_size) {
+                    memcpy(record + pos, val, record_size - pos);
+                }
+                pos += len;
+                break;
+            }
+            default: break;
+        }
+    }
+    va_end(ap);
+
+    if (uu->pos < uu->count) {
+        free(uu->records[uu->pos].data);
+        uu->records[uu->pos].data = record;
+        uu->records[uu->pos].len = record_size;
+        uu->pos += 1;
+        unformatted_truncate(uu, uu->pos);
+        return;
+    }
+    unformatted_ensure_capacity(uu, uu->count + 1);
+    if (!uu->records) {
+        free(record);
+        return;
+    }
+    uu->records[uu->count].data = record;
+    uu->records[uu->count].len = record_size;
+    uu->count += 1;
+    uu->pos = uu->count;
+}
+
+int f77_read_unformatted(int unit, const char *sig, ...) {
+    if (unit < 0 || unit >= F77_MAX_UNITS || !sig) {
+        return 1;
+    }
+    UnformattedUnit *uu = &unformatted_units[unit];
+    if (uu->pos >= uu->count) {
+        return -1;
+    }
+    UnformattedRecord *rec = &uu->records[uu->pos];
+    uu->pos += 1;
+
+    va_list ap;
+    va_start(ap, sig);
+    size_t pos = 0;
+    int assigned = 0;
+    for (size_t i = 0; sig[i] != '\0' && pos < rec->len; i++) {
+        switch (sig[i]) {
+            case 'i': {
+                int *out = va_arg(ap, int *);
+                if (pos + 4 <= rec->len) {
+                    memcpy(out, rec->data + pos, 4);
+                    assigned++;
+                }
+                pos += 4;
+                break;
+            }
+            case 'r': {
+                float *out = va_arg(ap, float *);
+                if (pos + 4 <= rec->len) {
+                    memcpy(out, rec->data + pos, 4);
+                    assigned++;
+                }
+                pos += 4;
+                break;
+            }
+            case 'd': {
+                double *out = va_arg(ap, double *);
+                if (pos + 8 <= rec->len) {
+                    memcpy(out, rec->data + pos, 8);
+                    assigned++;
+                }
+                pos += 8;
+                break;
+            }
+            case 'l': {
+                unsigned char *out = va_arg(ap, unsigned char *);
+                if (pos + 1 <= rec->len) {
+                    *out = rec->data[pos] ? 1 : 0;
+                    assigned++;
+                }
+                pos += 1;
+                break;
+            }
+            case 'c': {
+                size_t len = 0;
+                i++;
+                while (sig[i] && sig[i] != ';') {
+                    len = len * 10 + (size_t)(sig[i] - '0');
+                    i++;
+                }
+                char *out = va_arg(ap, char *);
+                if (pos + len <= rec->len) {
+                    memcpy(out, rec->data + pos, len);
+                    assigned++;
+                } else if (pos < rec->len) {
+                    memcpy(out, rec->data + pos, rec->len - pos);
+                    assigned++;
+                }
+                pos += len;
+                break;
+            }
+            default: break;
+        }
+    }
+    va_end(ap);
+    return 0;
+}
+
 void f77_inquire_direct(int unit, int *recl, int *nextrec) {
     if (!recl || !nextrec) return;
     if (unit < 0 || unit >= F77_MAX_UNITS) {
@@ -661,11 +1252,21 @@ void f77_rewind(int unit) {
     if (unit < 0 || unit >= F77_MAX_UNITS) {
         return;
     }
+    if (unformatted_units[unit].count > 0 || unformatted_units[unit].pos > 0) {
+        unformatted_units[unit].pos = 0;
+        return;
+    }
     unit_pos[unit] = 0;
 }
 
 void f77_backspace(int unit) {
     if (unit < 0 || unit >= F77_MAX_UNITS) {
+        return;
+    }
+    if (unformatted_units[unit].count > 0 || unformatted_units[unit].pos > 0) {
+        if (unformatted_units[unit].pos > 0) {
+            unformatted_units[unit].pos -= 1;
+        }
         return;
     }
     long pos = unit_pos[unit];
@@ -711,7 +1312,13 @@ void f77_backspace(int unit) {
 }
 
 void f77_endfile(int unit) {
-    (void)unit;
+    if (unit < 0 || unit >= F77_MAX_UNITS) {
+        return;
+    }
+    if (unformatted_units[unit].count > 0 || unformatted_units[unit].pos > 0) {
+        unformatted_truncate(&unformatted_units[unit], unformatted_units[unit].pos);
+        return;
+    }
 }
 
 const char *f77_fmt_i(int width, int min_digits, int sign_plus, int value) {
@@ -924,4 +1531,86 @@ f77_complex64 f77_zlog(f77_complex64 z) {
 f77_complex64 f77_zsqrt(f77_complex64 z) {
     double complex in = z.r + z.i * I;
     return f77_from_c64(csqrt(in));
+}
+
+static f77_complex32 f77_cmul(f77_complex32 a, f77_complex32 b) {
+    f77_complex32 out;
+    out.r = (a.r * b.r) - (a.i * b.i);
+    out.i = (a.r * b.i) + (a.i * b.r);
+    return out;
+}
+
+static f77_complex64 f77_zmul(f77_complex64 a, f77_complex64 b) {
+    f77_complex64 out;
+    out.r = (a.r * b.r) - (a.i * b.i);
+    out.i = (a.r * b.i) + (a.i * b.r);
+    return out;
+}
+
+static f77_complex32 f77_cinv(f77_complex32 a) {
+    f77_complex32 out;
+    float denom = (a.r * a.r) + (a.i * a.i);
+    if (denom == 0.0f) {
+        out.r = 0.0f;
+        out.i = 0.0f;
+        return out;
+    }
+    out.r = a.r / denom;
+    out.i = -a.i / denom;
+    return out;
+}
+
+static f77_complex64 f77_zinv(f77_complex64 a) {
+    f77_complex64 out;
+    double denom = (a.r * a.r) + (a.i * a.i);
+    if (denom == 0.0) {
+        out.r = 0.0;
+        out.i = 0.0;
+        return out;
+    }
+    out.r = a.r / denom;
+    out.i = -a.i / denom;
+    return out;
+}
+
+f77_complex32 f77_cpowi(f77_complex32 z, int n) {
+    f77_complex32 result = { 1.0f, 0.0f };
+    if (n == 0) return result;
+    int exp = n;
+    if (exp < 0) exp = -exp;
+    f77_complex32 base = z;
+    while (exp > 0) {
+        if (exp & 1) {
+            result = f77_cmul(result, base);
+        }
+        exp >>= 1;
+        if (exp > 0) {
+            base = f77_cmul(base, base);
+        }
+    }
+    if (n < 0) {
+        result = f77_cinv(result);
+    }
+    return result;
+}
+
+f77_complex64 f77_zpowi(f77_complex64 z, int n) {
+    f77_complex64 result = { 1.0, 0.0 };
+    if (n == 0) return result;
+    int exp = n;
+    if (exp < 0) exp = -exp;
+    f77_complex64 base = z;
+    while (exp > 0) {
+        if (exp & 1) {
+            result = f77_zmul(result, base);
+        }
+        exp >>= 1;
+        if (exp > 0) {
+            base = f77_zmul(base, base);
+        }
+    }
+    if (n < 0) {
+        result = f77_zinv(result);
+    }
+    return result;
 }

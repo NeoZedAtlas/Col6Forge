@@ -53,15 +53,18 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
             if (open_stmt.recl) |recl| {
                 try expressions.resolveExpr(self, recl);
             }
+            if (open_stmt.file) |file_expr| {
+                try expressions.resolveExpr(self, file_expr);
+            }
         },
         .inquire => |inq| {
             for (inq.controls) |ctrl| {
-                try expressions.resolveExpr(self, ctrl);
+                try expressions.resolveExpr(self, ctrl.value);
             }
         },
         .close => |cls| {
             for (cls.controls) |ctrl| {
-                try expressions.resolveExpr(self, ctrl);
+                try expressions.resolveExpr(self, ctrl.value);
             }
         },
         .data => |data| {
@@ -159,12 +162,12 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         },
         .inquire => |inq| {
             for (inq.controls) |ctrl| {
-                try expressions.resolveExpr(self, ctrl);
+                try expressions.resolveExpr(self, ctrl.value);
             }
         },
         .close => |cls| {
             for (cls.controls) |ctrl| {
-                try expressions.resolveExpr(self, ctrl);
+                try expressions.resolveExpr(self, ctrl.value);
             }
         },
         .data => |data| {

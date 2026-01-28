@@ -165,6 +165,8 @@ pub const WriteStmt = struct {
     format: FormatSpec,
     rec: ?*Expr,
     args: []*Expr,
+    err_label: ?[]const u8,
+    iostat: ?*Expr,
 };
 
 pub const ReadStmt = struct {
@@ -172,20 +174,33 @@ pub const ReadStmt = struct {
     format: FormatSpec,
     rec: ?*Expr,
     args: []*Expr,
+    err_label: ?[]const u8,
+    end_label: ?[]const u8,
+    iostat: ?*Expr,
 };
 
 pub const OpenStmt = struct {
     unit: *Expr,
     recl: ?*Expr,
     direct: bool,
+    file: ?*Expr,
+    access: ?[]const u8,
+    form: ?[]const u8,
+    blank: ?[]const u8,
+    status: ?[]const u8,
 };
 
 pub const InquireStmt = struct {
-    controls: []*Expr,
+    controls: []ControlItem,
 };
 
 pub const CloseStmt = struct {
-    controls: []*Expr,
+    controls: []ControlItem,
+};
+
+pub const ControlItem = struct {
+    name: ?[]const u8,
+    value: *Expr,
 };
 
 pub const RewindStmt = struct {
@@ -215,8 +230,10 @@ pub const FormatStmt = struct {
 
 pub const FormatSpec = union(enum) {
     none: void,
+    list_directed: void,
     label: []const u8,
     inline_items: []FormatItem,
+    expr: *Expr,
 };
 
 pub const BlankControl = enum {
@@ -316,6 +333,14 @@ pub const DoLoopStmt = struct {
     step: ?*Expr,
 };
 
+pub const ImpliedDo = struct {
+    items: []*Expr,
+    var_name: []const u8,
+    start: *Expr,
+    end: *Expr,
+    step: ?*Expr,
+};
+
 pub const Expr = union(enum) {
     identifier: []const u8,
     literal: Literal,
@@ -325,6 +350,7 @@ pub const Expr = union(enum) {
     unary: UnaryExpr,
     binary: BinaryExpr,
     complex_literal: ComplexLiteral,
+    implied_do: ImpliedDo,
 };
 
 pub const DimRange = struct {

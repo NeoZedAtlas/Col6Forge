@@ -26,6 +26,7 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
         const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
         const target_len = try emitSubstringLenValue(ctx, builder, assign.target.substring);
         try storeCharacterValueDynamic(ctx, builder, target_ptr, target_len, assign.value);
+        trackCharAssignment(ctx, assign.target, null);
         return;
     }
     if (charLenForExpr(ctx, assign.target)) |char_len| {
@@ -36,6 +37,8 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
         } else {
             try storeCharacterValue(ctx, builder, target_ptr, char_len, assign.value);
         }
+        const const_value = try evalCharConst(ctx, assign.value, char_len);
+        trackCharAssignment(ctx, assign.target, const_value);
         return;
     }
     const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
@@ -43,6 +46,81 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
     const sym_ty = try expr.exprType(ctx, assign.target);
     const coerced = try expr.coerce(ctx, builder, value, sym_ty);
     try builder.store(coerced, target_ptr);
+}
+
+fn evalCharConst(ctx: *Context, value: *ast.Expr, target_len: usize) !?[]const u8 {
+    const raw = try evalCharExprRaw(ctx, value) orelse return null;
+    var padded = try ctx.allocator.alloc(u8, target_len);
+    @memset(padded, ' ');
+    const copy_len = @min(raw.len, target_len);
+    @memcpy(padded[0..copy_len], raw[0..copy_len]);
+    return padded;
+}
+
+fn evalCharExprRaw(ctx: *Context, value: *ast.Expr) !?[]const u8 {
+    switch (value.*) {
+        .literal => |lit| {
+            return switch (lit.kind) {
+                .string => utils.decodeStringLiteral(ctx.allocator, lit.text) catch null,
+                .hollerith => utils.hollerithBytes(lit.text),
+                else => null,
+            };
+        },
+        .identifier => |name| {
+            if (ctx.char_values.get(name)) |val| return val;
+            return null;
+        },
+        .binary => |bin| {
+            if (bin.op != .concat) return null;
+            const left = try evalCharExprRaw(ctx, bin.left) orelse return null;
+            const right = try evalCharExprRaw(ctx, bin.right) orelse return null;
+            const joined = try std.mem.concat(ctx.allocator, u8, &.{ left, right });
+            return joined;
+        },
+        .call_or_subscript => |call| {
+            if (call.args.len != 1) return null;
+            const idx_val = intLiteralValue(call.args[0]) orelse return null;
+            const key = try std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ call.name, idx_val });
+            defer ctx.allocator.free(key);
+            if (ctx.char_array_values.get(key)) |val| return val;
+            return null;
+        },
+        else => return null,
+    }
+}
+
+fn trackCharAssignment(ctx: *Context, target: *ast.Expr, value: ?[]const u8) void {
+    switch (target.*) {
+        .identifier => |name| {
+            updateCharMap(&ctx.char_values, ctx, name, value);
+        },
+        .call_or_subscript => |call| {
+            if (call.args.len != 1) return;
+            const idx_val = intLiteralValue(call.args[0]) orelse return;
+            const key = std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ call.name, idx_val }) catch return;
+            defer ctx.allocator.free(key);
+            updateCharMap(&ctx.char_array_values, ctx, key, value);
+        },
+        else => {},
+    }
+}
+
+fn updateCharMap(map: *std.StringHashMap([]const u8), ctx: *Context, key: []const u8, value: ?[]const u8) void {
+    if (map.get(key)) |existing| {
+        ctx.allocator.free(existing);
+        _ = map.remove(key);
+    }
+    if (value) |val| {
+        const key_dup = ctx.allocator.dupe(u8, key) catch return;
+        const val_dup = ctx.allocator.dupe(u8, val) catch {
+            ctx.allocator.free(key_dup);
+            return;
+        };
+        map.put(key_dup, val_dup) catch {
+            ctx.allocator.free(key_dup);
+            ctx.allocator.free(val_dup);
+        };
+    }
 }
 
 pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!void {
@@ -157,6 +235,8 @@ pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!v
         }
         if (target_len) |char_len| {
             try storeCharacterValue(ctx, builder, target_ptr, char_len, init.value);
+            const const_value = try evalCharConst(ctx, init.value, char_len);
+            trackCharAssignment(ctx, init.target, const_value);
             continue;
         }
         const value = try expr.emitExpr(ctx, builder, init.value);

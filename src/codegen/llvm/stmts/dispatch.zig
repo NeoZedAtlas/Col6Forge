@@ -34,13 +34,17 @@ pub fn emitStmt(
             return true;
         },
         .write => |write| {
-            try io.emitWrite(ctx, builder, write);
-            try builder.br(next_block);
+            const terminated = try io.emitWrite(ctx, builder, write, next_block, local_label_map);
+            if (!terminated) {
+                try builder.br(next_block);
+            }
             return true;
         },
         .read => |read| {
-            try io.emitRead(ctx, builder, read);
-            try builder.br(next_block);
+            const terminated = try io.emitRead(ctx, builder, read, next_block, local_label_map);
+            if (!terminated) {
+                try builder.br(next_block);
+            }
             return true;
         },
         .open => |open_stmt| {

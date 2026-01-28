@@ -98,6 +98,8 @@ pub const Context = struct {
     statement_functions: std.StringHashMap(StatementFunction),
     stmt_func_stack: std.array_list.Managed(StatementFunctionSubst),
     intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
+    char_values: std.StringHashMap([]const u8),
+    char_array_values: std.StringHashMap([]const u8),
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -130,6 +132,8 @@ pub const Context = struct {
             .statement_functions = std.StringHashMap(StatementFunction).init(allocator),
             .stmt_func_stack = std.array_list.Managed(StatementFunctionSubst).init(allocator),
             .intrinsic_wrappers = intrinsic_wrappers,
+            .char_values = std.StringHashMap([]const u8).init(allocator),
+            .char_array_values = std.StringHashMap([]const u8).init(allocator),
         };
     }
 
@@ -142,6 +146,18 @@ pub const Context = struct {
         self.label_index.deinit();
         self.statement_functions.deinit();
         self.stmt_func_stack.deinit();
+        var it = self.char_values.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.char_values.deinit();
+        var it_arr = self.char_array_values.iterator();
+        while (it_arr.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.char_array_values.deinit();
     }
 
     pub fn buildBlockNames(self: *Context) ![][]const u8 {
