@@ -72,8 +72,26 @@ pub fn main() !void {
         defer allocator.free(ref_exe);
         const test_exe = try prepareExePath(allocator, work_dir, "test");
         defer allocator.free(test_exe);
-        const runtime_path = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "f77_io.c" });
-        defer allocator.free(runtime_path);
+        const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
+        defer allocator.free(runtime_dir);
+        const runtime_sources = [_][]const u8{
+            "f77_io_core.c",
+            "f77_io_formatted.c",
+            "f77_io_internal.c",
+            "f77_io_control.c",
+            "f77_io_direct.c",
+            "f77_io_unformatted.c",
+            "f77_io_format.c",
+            "f77_complex.c",
+        };
+        var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);
+        defer {
+            for (runtime_paths) |path| allocator.free(path);
+            allocator.free(runtime_paths);
+        }
+        for (runtime_sources, 0..) |name, idx| {
+            runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
+        }
 
         const ir = Col6Forge.runPipeline(allocator, abs_input_path, options.emit) catch |err| {
             failures += 1;
@@ -139,9 +157,13 @@ pub fn main() !void {
             continue;
         }
 
+        var compile_args = std.ArrayList([]const u8).init(allocator);
+        defer compile_args.deinit();
+        try compile_args.appendSlice(&.{ "zig", "cc", "-O0", "-o", test_exe, ll_path });
+        try compile_args.appendSlice(runtime_paths);
         const our_compile = runProcessCapture(
             allocator,
-            &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path, runtime_path },
+            compile_args.items,
             work_dir,
             compile_timeout,
         ) catch |err| {
