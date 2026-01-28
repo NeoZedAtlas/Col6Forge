@@ -101,6 +101,15 @@ static int f77_parse_logical_field(const char *buf, int len) {
     return 0;
 }
 
+static void f77_normalize_exponent(char *buf) {
+    if (!buf) return;
+    for (size_t i = 0; buf[i] != '\0'; i++) {
+        if (buf[i] == 'D' || buf[i] == 'd') {
+            buf[i] = 'E';
+        }
+    }
+}
+
 void f77_write(int unit, const char *fmt, ...) {
     va_list ap;
     if (unit == 6 || unit == 0) {
@@ -284,6 +293,7 @@ int f77_read(int unit, const char *fmt, ...) {
             for (int i = 0; i < used; i++) {
                 if (buf[i] == ' ') buf[i] = '0';
             }
+            f77_normalize_exponent(buf);
             double *out = va_arg(ap, double *);
             *out = strtod(buf, NULL);
             assigned++;
@@ -291,6 +301,7 @@ int f77_read(int unit, const char *fmt, ...) {
             for (int i = 0; i < used; i++) {
                 if (buf[i] == ' ') buf[i] = '0';
             }
+            f77_normalize_exponent(buf);
             float *out = va_arg(ap, float *);
             *out = (float)strtod(buf, NULL);
             assigned++;
@@ -423,6 +434,7 @@ int f77_read_status(int unit, const char *fmt, ...) {
             for (int i = 0; i < used; i++) {
                 if (buf[i] == ' ') buf[i] = '0';
             }
+            f77_normalize_exponent(buf);
             double *out = va_arg(ap, double *);
             *out = strtod(buf, NULL);
             assigned++;
@@ -430,6 +442,7 @@ int f77_read_status(int unit, const char *fmt, ...) {
             for (int i = 0; i < used; i++) {
                 if (buf[i] == ' ') buf[i] = '0';
             }
+            f77_normalize_exponent(buf);
             float *out = va_arg(ap, float *);
             *out = (float)strtod(buf, NULL);
             assigned++;
@@ -529,6 +542,7 @@ int f77_read_internal(const char *buf, int len, const char *fmt, ...) {
             for (int i = 0; i < used; i++) {
                 if (buf_field[i] == ' ') buf_field[i] = '0';
             }
+            f77_normalize_exponent(buf_field);
             double *out = va_arg(ap, double *);
             *out = strtod(buf_field, NULL);
             assigned++;
@@ -536,6 +550,7 @@ int f77_read_internal(const char *buf, int len, const char *fmt, ...) {
             for (int i = 0; i < used; i++) {
                 if (buf_field[i] == ' ') buf_field[i] = '0';
             }
+            f77_normalize_exponent(buf_field);
             float *out = va_arg(ap, float *);
             *out = (float)strtod(buf_field, NULL);
             assigned++;
@@ -1402,6 +1417,7 @@ const char *f77_fmt_f(int width, int precision, int sign_plus, double value) {
 
 const char *f77_fmt_e(int width, int precision, int exp_width, int scale_factor, int sign_plus, double value) {
     char tmp[128];
+    char tmp2[128];
     char exp_buf[16];
     char *buf = fmt_buffers[fmt_index++ % 8];
     if (precision < 0) precision = 0;
@@ -1429,8 +1445,6 @@ const char *f77_fmt_e(int width, int precision, int exp_width, int scale_factor,
     } else {
         (void)snprintf(tmp, sizeof(tmp), "%.*f", eff_prec, mantissa);
     }
-    // Keep the leading zero before the decimal point to match NIST reference
-    // output such as "-0.12345E+03" rather than "-.12345E+03".
 
     if (exp_width <= 0) {
         exp_width = 2;
@@ -1442,6 +1456,28 @@ const char *f77_fmt_e(int width, int precision, int exp_width, int scale_factor,
     size_t tmp_len = strlen(tmp);
     size_t exp_len = strlen(exp_buf);
     size_t total_len = tmp_len + exp_len;
+    if (width > 0 && total_len > (size_t)width) {
+        const char *src = tmp;
+        if (tmp[0] == '0' && tmp[1] == '.') {
+            (void)snprintf(tmp2, sizeof(tmp2), ".%s", tmp + 2);
+            src = tmp2;
+        } else if ((tmp[0] == '+' || tmp[0] == '-') && tmp[1] == '0' && tmp[2] == '.') {
+            (void)snprintf(tmp2, sizeof(tmp2), "%c.%s", tmp[0], tmp + 3);
+            src = tmp2;
+        }
+        if (src != tmp) {
+            tmp_len = strlen(src);
+            total_len = tmp_len + exp_len;
+            (void)snprintf(tmp, sizeof(tmp), "%s", src);
+        }
+        if (total_len > (size_t)width) {
+            for (int i = 0; i < width && i < 63; i++) {
+                buf[i] = '*';
+            }
+            buf[width < 63 ? width : 63] = '\0';
+            return buf;
+        }
+    }
     if (width > 0 && (size_t)width > total_len) {
         size_t pad = (size_t)width - total_len;
         if (pad + total_len >= 64) pad = 63 - total_len;

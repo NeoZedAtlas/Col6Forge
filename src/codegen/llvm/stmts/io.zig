@@ -1993,19 +1993,22 @@ fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) 
     defer fmt_buf.deinit();
 
     for (expanded_values.values.items, 0..) |value, idx| {
-        if (idx != 0) try fmt_buf.append(' ');
+        _ = idx;
+        try fmt_buf.append(' ');
         switch (value.ty) {
             .i32 => {
                 try fmt_buf.appendSlice("%d");
                 try args.append(.{ .ty = .i32, .name = value.name });
             },
             .f32, .f64 => {
-                try fmt_buf.appendSlice("%g");
+                const fmt = if (value.ty == .f64) "%#.17G" else "%#.7G";
+                try fmt_buf.appendSlice(fmt);
                 const coerced = try expr.coerce(ctx, builder, value, .f64);
                 try args.append(.{ .ty = .f64, .name = coerced.name });
             },
             .complex_f32, .complex_f64 => {
-                try fmt_buf.appendSlice("(%g,%g)");
+                const fmt = if (value.ty == .complex_f64) "(%#.17G,%#.17G)" else "(%#.7G,%#.7G)";
+                try fmt_buf.appendSlice(fmt);
                 const real = try complex.extractComplex(ctx, builder, value, 0);
                 const imag = try complex.extractComplex(ctx, builder, value, 1);
                 const real_f64 = try expr.coerce(ctx, builder, real, .f64);

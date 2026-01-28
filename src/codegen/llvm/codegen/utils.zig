@@ -22,6 +22,20 @@ pub fn mangleName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
     return buffer.toOwnedSlice();
 }
 
+pub fn lowerName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    for (name) |ch| {
+        try buffer.append(std.ascii.toLower(ch));
+    }
+    return buffer.toOwnedSlice();
+}
+
+pub fn savedGlobalName(allocator: std.mem.Allocator, unit_name: []const u8, symbol_name: []const u8) ![]const u8 {
+    const unit_mangled = try mangleName(allocator, unit_name);
+    const sym_lower = try lowerName(allocator, symbol_name);
+    return std.fmt.allocPrint(allocator, "save_{s}{s}", .{ unit_mangled, sym_lower });
+}
+
 pub fn normalizeFloatLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
     var start: usize = 0;

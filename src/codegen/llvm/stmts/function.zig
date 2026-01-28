@@ -23,6 +23,9 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         return error.UnsupportedProgramUnit;
     }
 
+    var save_info = try buildSaveInfo(ctx);
+    defer save_info.deinit();
+
     const func_name = utils.mangleName(ctx.allocator, ctx.unit.name) catch return error.OutOfMemory;
     const has_alt_return = ctx.unit.kind == .subroutine and execution.unitHasAltReturn(ctx.unit);
     var return_ty: ?llvm_types.IRType = null;
@@ -36,6 +39,8 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     } else if (has_alt_return) {
         return_ty = .i32;
     }
+
+    try installSavedGlobals(ctx, builder, &save_info);
 
     if (return_ty) |ret_ty| {
         try builder.defineStartWithRet(ret_ty, func_name);
@@ -85,6 +90,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         if (sym.kind == .parameter or sym.kind == .subroutine or (sym.kind == .function and !is_return_symbol)) continue;
         if (is_character_function and is_return_symbol) continue;
         if (ctx.locals.contains(sym.name)) continue;
+        if (isSaved(&save_info, sym.name)) continue;
         if (sym.type_kind == .character) {
             const char_len = sym.char_len orelse 1;
             const elem_count = if (sym.dims.len > 0) try common.arrayElementCount(ctx.sem, sym.dims) else 1;
@@ -133,6 +139,96 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try builder.label("exit");
     try execution.emitDefaultReturn(ctx, builder);
     try builder.functionEnd();
+}
+
+const SaveInfo = struct {
+    save_all: bool,
+    names: std.StringHashMap(void),
+
+    fn deinit(self: *SaveInfo) void {
+        self.names.deinit();
+    }
+};
+
+fn buildSaveInfo(ctx: *Context) !SaveInfo {
+    var names = std.StringHashMap(void).init(ctx.allocator);
+    var save_all = false;
+    for (ctx.unit.decls) |decl| {
+        if (decl != .save) continue;
+        if (decl.save.save_all) {
+            save_all = true;
+            continue;
+        }
+        for (decl.save.items) |item| {
+            switch (item) {
+                .name => |name| {
+                    try names.put(name, {});
+                },
+                .common => {},
+            }
+        }
+    }
+    return .{ .save_all = save_all, .names = names };
+}
+
+fn isSaved(save_info: *const SaveInfo, name: []const u8) bool {
+    if (save_info.save_all) return true;
+    return save_info.names.contains(name);
+}
+
+const SizeAlign = struct {
+    size: usize,
+    alignment: usize,
+};
+
+fn sizeAlignForType(ty: llvm_types.IRType) SizeAlign {
+    return switch (ty) {
+        .i1 => .{ .size = 1, .alignment = 1 },
+        .i8 => .{ .size = 1, .alignment = 1 },
+        .i32 => .{ .size = 4, .alignment = 4 },
+        .i64 => .{ .size = 8, .alignment = 8 },
+        .f32 => .{ .size = 4, .alignment = 4 },
+        .f64 => .{ .size = 8, .alignment = 8 },
+        .complex_f32 => .{ .size = 8, .alignment = 4 },
+        .complex_f64 => .{ .size = 16, .alignment = 8 },
+        .ptr => .{ .size = @sizeOf(usize), .alignment = @alignOf(usize) },
+        .void => .{ .size = 1, .alignment = 1 },
+    };
+}
+
+fn installSavedGlobals(ctx: *Context, builder: anytype, save_info: *const SaveInfo) EmitError!void {
+    for (ctx.sem.symbols) |sym| {
+        if (sym.storage != .local) continue;
+        if (!isSaved(save_info, sym.name)) continue;
+        if (sym.is_external) continue;
+        const is_return_symbol = ctx.unit.kind == .function and
+            sym.kind == .function and
+            std.mem.eql(u8, sym.name, ctx.unit.name);
+        if (sym.kind == .parameter or sym.kind == .subroutine or is_return_symbol) continue;
+        if (ctx.locals.contains(sym.name)) continue;
+
+        const global_name = try utils.savedGlobalName(ctx.allocator, ctx.unit.name, sym.name);
+        const base_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{global_name});
+
+        var total_size: usize = 1;
+        var alignment: usize = 1;
+        if (sym.type_kind == .character) {
+            const char_len = sym.char_len orelse 1;
+            const elem_count = if (sym.dims.len > 0) try common.arrayElementCount(ctx.sem, sym.dims) else 1;
+            total_size = elem_count * char_len;
+            alignment = 1;
+        } else {
+            const ty = llvm_types.typeFromKind(sym.type_kind);
+            const sa = sizeAlignForType(ty);
+            const elem_count = if (sym.dims.len > 0) try common.arrayElementCount(ctx.sem, sym.dims) else 1;
+            total_size = sa.size * elem_count;
+            alignment = sa.alignment;
+        }
+
+        if (total_size == 0) total_size = 1;
+        try builder.commonGlobal(global_name, total_size, alignment);
+        try ctx.locals.put(sym.name, .{ .name = base_name, .ty = .ptr, .is_ptr = true });
+    }
 }
 
 fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {

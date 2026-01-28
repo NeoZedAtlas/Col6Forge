@@ -82,7 +82,11 @@ pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) 
     }
     if (complex.isComplexType(target)) return complex.coerceToComplex(ctx, builder, value, target);
     if (complex.isComplexType(value.ty)) {
-        return unsupportedCast(value.ty, target);
+        const real = try complex.extractComplex(ctx, builder, value, 0);
+        switch (target) {
+            .f32, .f64, .i32, .i64 => return coerce(ctx, builder, real, target),
+            else => return unsupportedCast(value.ty, target),
+        }
     }
     const tmp = try ctx.nextTemp();
     const from = value.ty;

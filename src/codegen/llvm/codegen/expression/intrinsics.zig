@@ -749,9 +749,24 @@ fn emitRuntimeComplexUnary(
 }
 
 pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args: []*Expr) EmitError!ValueRef {
-    if (std.ascii.eqlIgnoreCase(name, "SIN")) return emitIntrinsicUnaryFloat(ctx, builder, "sin", args);
-    if (std.ascii.eqlIgnoreCase(name, "COS")) return emitIntrinsicUnaryFloat(ctx, builder, "cos", args);
-    if (std.ascii.eqlIgnoreCase(name, "SQRT")) return emitIntrinsicUnaryFloat(ctx, builder, "sqrt", args);
+    if (std.ascii.eqlIgnoreCase(name, "SIN")) {
+        if (args.len != 1) return error.InvalidIntrinsicCall;
+        const arg_ty = try casting.exprType(ctx, args[0]);
+        if (complex.isComplexType(arg_ty)) return emitComplexCsin(ctx, builder, args);
+        return emitIntrinsicUnaryFloat(ctx, builder, "sin", args);
+    }
+    if (std.ascii.eqlIgnoreCase(name, "COS")) {
+        if (args.len != 1) return error.InvalidIntrinsicCall;
+        const arg_ty = try casting.exprType(ctx, args[0]);
+        if (complex.isComplexType(arg_ty)) return emitComplexCcos(ctx, builder, args);
+        return emitIntrinsicUnaryFloat(ctx, builder, "cos", args);
+    }
+    if (std.ascii.eqlIgnoreCase(name, "SQRT")) {
+        if (args.len != 1) return error.InvalidIntrinsicCall;
+        const arg_ty = try casting.exprType(ctx, args[0]);
+        if (complex.isComplexType(arg_ty)) return emitComplexCsqrt(ctx, builder, args);
+        return emitIntrinsicUnaryFloat(ctx, builder, "sqrt", args);
+    }
     if (std.ascii.eqlIgnoreCase(name, "ABS")) return emitIntrinsicAbs(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "IABS")) return emitIntrinsicIabs(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "AINT")) return emitIntrinsicUnaryFloat(ctx, builder, "trunc", args);
@@ -853,6 +868,8 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
     if (std.ascii.eqlIgnoreCase(name, "DCOS")) return emitDoubleUnaryLibm(ctx, builder, "cos", args);
     if (std.ascii.eqlIgnoreCase(name, "EXP")) {
         if (args.len != 1) return error.InvalidIntrinsicCall;
+        const arg_ty = try casting.exprType(ctx, args[0]);
+        if (complex.isComplexType(arg_ty)) return emitComplexCexp(ctx, builder, args);
         const value = try dispatch.emitExpr(ctx, builder, args[0]);
         return emitLibmUnaryFloatValue(ctx, builder, "expf", "exp", value);
     }
@@ -862,7 +879,12 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         const value = try dispatch.emitExpr(ctx, builder, args[0]);
         return emitLibmUnaryFloatValue(ctx, builder, "logf", "log", value);
     }
-    if (std.ascii.eqlIgnoreCase(name, "LOG")) return emitDoubleUnaryLibm(ctx, builder, "log", args);
+    if (std.ascii.eqlIgnoreCase(name, "LOG")) {
+        if (args.len != 1) return error.InvalidIntrinsicCall;
+        const arg_ty = try casting.exprType(ctx, args[0]);
+        if (complex.isComplexType(arg_ty)) return emitComplexClog(ctx, builder, args);
+        return emitDoubleUnaryLibm(ctx, builder, "log", args);
+    }
     if (std.ascii.eqlIgnoreCase(name, "DLOG")) return emitDoubleUnaryLibm(ctx, builder, "log", args);
     if (std.ascii.eqlIgnoreCase(name, "ALOG10")) {
         if (args.len != 1) return error.InvalidIntrinsicCall;
