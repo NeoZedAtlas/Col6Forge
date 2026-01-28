@@ -48,6 +48,7 @@ pub fn emitWrite(
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
     const unit_char_len = charLenForExpr(ctx, write.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
+    const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, write.unit) else null;
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
     var expanded_values = try expandWriteArgs(ctx, builder, write.args);
     defer expanded_values.deinit();
@@ -55,19 +56,19 @@ pub fn emitWrite(
     switch (write.format) {
         .label => |label| {
             if (ctx.formats.get(label)) |fmt_info| {
-                try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded_values);
+                try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded_values);
                 return false;
             }
             if (ctx.findSymbol(label)) |sym| {
                 if (sym.type_kind == .character) {
                     if (try formatFromCharArrayData(ctx, label)) |items| {
-                        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, items, &expanded_values);
+                        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, &expanded_values);
                         return false;
                     }
                     return error.MissingFormatLabel;
                 }
                 // Assigned FORMAT via a label variable: select at runtime by value.
-                try emitWriteDynamicFormat(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, label, &expanded_values);
+                try emitWriteDynamicFormat(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, label, &expanded_values);
                 return false;
             }
             return error.MissingFormatLabel;
@@ -75,11 +76,11 @@ pub fn emitWrite(
         .inline_items => |items| {
             const key = @as(usize, @intFromPtr(items.ptr));
             const fmt_info = ctx.inline_formats.get(key) orelse return error.MissingFormatLabel;
-            try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded_values);
+            try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded_values);
             return false;
         },
         .expr => |fmt_expr| {
-            try emitWriteFormatExpr(ctx, builder, write, fmt_expr, unit_value, unit_char_len, is_internal, unit_i32, &expanded_values);
+            try emitWriteFormatExpr(ctx, builder, write, fmt_expr, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, &expanded_values);
             return false;
         },
         .none => unreachable,
@@ -93,6 +94,7 @@ fn emitWriteFormatted(
     write: ast.WriteStmt,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     fmt_items: []const ast.FormatItem,
@@ -450,7 +452,16 @@ fn emitWriteFormatted(
     defer arg_buf.deinit();
     if (is_internal) {
         const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
-        try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+        if (unit_record_count) |count| {
+            if (count > 1) {
+                const count_text = utils.formatInt(ctx.allocator, @intCast(count));
+                try arg_buf.writer().print("ptr {s}, i32 {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, count_text, fmt_ptr });
+            } else {
+                try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+            }
+        } else {
+            try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+        }
     } else {
         try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, fmt_ptr });
     }
@@ -503,6 +514,7 @@ pub fn emitRead(
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
     const unit_char_len = charLenForExpr(ctx, read.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
+    const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, read.unit) else null;
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
     var expanded = try expandReadTargets(ctx, builder, read.args);
     defer expanded.deinit();
@@ -511,29 +523,29 @@ pub fn emitRead(
         .label => |label| {
             if (ctx.formats.get(label)) |fmt_info| {
                 if (!need_status) {
-                    try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+                    try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded);
                     return false;
                 }
-                const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+                const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded);
                 return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
             }
             if (ctx.findSymbol(label)) |sym| {
                 if (sym.type_kind == .character) {
                     if (try formatFromCharArrayData(ctx, label)) |items| {
                         if (!need_status) {
-                            try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, items, &expanded);
+                            try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, &expanded);
                             return false;
                         }
-                        const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, items, &expanded);
+                        const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, &expanded);
                         return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
                     }
                     return error.MissingFormatLabel;
                 }
                 if (!need_status) {
-                    try emitReadDynamicFormat(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, label, &expanded);
+                    try emitReadDynamicFormat(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, label, &expanded);
                     return false;
                 }
-                const status = try emitReadDynamicFormatStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, label, &expanded);
+                const status = try emitReadDynamicFormatStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, label, &expanded);
                 return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
             }
             return error.MissingFormatLabel;
@@ -542,18 +554,18 @@ pub fn emitRead(
             const key = @as(usize, @intFromPtr(items.ptr));
             const fmt_info = ctx.inline_formats.get(key) orelse return error.MissingFormatLabel;
             if (!need_status) {
-                try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+                try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded);
                 return false;
             }
-            const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_info.items, &expanded);
+            const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded);
             return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
         },
         .expr => |fmt_expr| {
             if (!need_status) {
-                try emitReadFormatExpr(ctx, builder, read, fmt_expr, unit_value, unit_char_len, is_internal, unit_i32, &expanded);
+                try emitReadFormatExpr(ctx, builder, read, fmt_expr, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, &expanded);
                 return false;
             }
-            const status = try emitReadFormatExprStatus(ctx, builder, read, fmt_expr, unit_value, unit_char_len, is_internal, unit_i32, &expanded);
+            const status = try emitReadFormatExprStatus(ctx, builder, read, fmt_expr, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, &expanded);
             return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
         },
         .none => unreachable,
@@ -567,6 +579,7 @@ fn emitReadFormatted(
     read: ast.ReadStmt,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     fmt_items: []const ast.FormatItem,
@@ -606,9 +619,18 @@ fn emitReadFormatted(
                     if (count > 0) try appendSpaces(&fmt_buf, count);
                 },
                 .tab => |tab| {
-                    if (tab.count > 0) try appendSpaces(&fmt_buf, tab.count);
+                    const directive: u8 = switch (tab.kind) {
+                        .absolute => 'T',
+                        .relative_right => 'R',
+                        .relative_left => 'U',
+                    };
+                    try fmt_buf.writer().print("%%{d}{c}", .{ tab.count, directive });
                 },
                 .colon => {},
+                .blank_control => |ctrl| {
+                    const directive: u8 = if (ctrl == .nulls) 'N' else 'Z';
+                    try fmt_buf.writer().print("%%{c}", .{directive});
+                },
                 else => {},
             }
         }
@@ -634,7 +656,12 @@ fn emitReadFormatted(
                         if (count > 0) try appendSpaces(&fmt_buf, count);
                     },
                     .tab => |tab| {
-                        if (tab.count > 0) try appendSpaces(&fmt_buf, tab.count);
+                        const directive: u8 = switch (tab.kind) {
+                            .absolute => 'T',
+                            .relative_right => 'R',
+                            .relative_left => 'U',
+                        };
+                        try fmt_buf.writer().print("%%{d}{c}", .{ tab.count, directive });
                     },
                     .colon => {},
                     .int => |spec| {
@@ -718,7 +745,10 @@ fn emitReadFormatted(
                     .scale => |value| {
                         scale_factor = value;
                     },
-                    .blank_control => {},
+                    .blank_control => |ctrl| {
+                        const directive: u8 = if (ctrl == .nulls) 'N' else 'Z';
+                        try fmt_buf.writer().print("%%{c}", .{directive});
+                    },
                     .sign_control => {},
                     .reversion_anchor => {},
                 }
@@ -744,8 +774,18 @@ fn emitReadFormatted(
     }
 
     if (is_internal) {
-        const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
-        try builder.call(null, .i32, read_name, arg_buf.items);
+        if (unit_record_count) |count| {
+            if (count > 1) {
+                const read_name = try ctx.ensureDeclRaw("f77_read_internal_n", .i32, "ptr, i32, i32, ptr", true);
+                try builder.call(null, .i32, read_name, arg_buf.items);
+            } else {
+                const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
+                try builder.call(null, .i32, read_name, arg_buf.items);
+            }
+        } else {
+            const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
+            try builder.call(null, .i32, read_name, arg_buf.items);
+        }
     } else {
         const read_name = try ctx.ensureDeclRaw("f77_read", .i32, "i32, ptr", true);
         try builder.call(null, .i32, read_name, arg_buf.items);
@@ -798,6 +838,7 @@ fn emitReadFormattedStatus(
     read: ast.ReadStmt,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     fmt_items: []const ast.FormatItem,
@@ -837,9 +878,18 @@ fn emitReadFormattedStatus(
                     if (count > 0) try appendSpaces(&fmt_buf, count);
                 },
                 .tab => |tab| {
-                    if (tab.count > 0) try appendSpaces(&fmt_buf, tab.count);
+                    const directive: u8 = switch (tab.kind) {
+                        .absolute => 'T',
+                        .relative_right => 'R',
+                        .relative_left => 'U',
+                    };
+                    try fmt_buf.writer().print("%%{d}{c}", .{ tab.count, directive });
                 },
                 .colon => {},
+                .blank_control => |ctrl| {
+                    const directive: u8 = if (ctrl == .nulls) 'N' else 'Z';
+                    try fmt_buf.writer().print("%%{c}", .{directive});
+                },
                 else => {},
             }
         }
@@ -865,7 +915,12 @@ fn emitReadFormattedStatus(
                         if (count > 0) try appendSpaces(&fmt_buf, count);
                     },
                     .tab => |tab| {
-                        if (tab.count > 0) try appendSpaces(&fmt_buf, tab.count);
+                        const directive: u8 = switch (tab.kind) {
+                            .absolute => 'T',
+                            .relative_right => 'R',
+                            .relative_left => 'U',
+                        };
+                        try fmt_buf.writer().print("%%{d}{c}", .{ tab.count, directive });
                     },
                     .colon => {},
                     .int => |spec| {
@@ -938,7 +993,10 @@ fn emitReadFormattedStatus(
                     .scale => |factor| {
                         scale_factor = factor;
                     },
-                    .blank_control => {},
+                    .blank_control => |ctrl| {
+                        const directive: u8 = if (ctrl == .nulls) 'N' else 'Z';
+                        try fmt_buf.writer().print("%%{c}", .{directive});
+                    },
                     .sign_control => {},
                     .reversion_anchor => {},
                 }
@@ -955,7 +1013,16 @@ fn emitReadFormattedStatus(
     defer arg_buf.deinit();
     if (is_internal) {
         const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
-        try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+        if (unit_record_count) |count| {
+            if (count > 1) {
+                const count_text = utils.formatInt(ctx.allocator, @intCast(count));
+                try arg_buf.writer().print("ptr {s}, i32 {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, count_text, fmt_ptr });
+            } else {
+                try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+            }
+        } else {
+            try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+        }
     } else {
         try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, fmt_ptr });
     }
@@ -965,8 +1032,18 @@ fn emitReadFormattedStatus(
 
     var status_val: ValueRef = .{ .name = "0", .ty = .i32, .is_ptr = false };
     if (is_internal) {
-        const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
-        try builder.call(null, .i32, read_name, arg_buf.items);
+        if (unit_record_count) |count| {
+            if (count > 1) {
+                const read_name = try ctx.ensureDeclRaw("f77_read_internal_n", .i32, "ptr, i32, i32, ptr", true);
+                try builder.call(null, .i32, read_name, arg_buf.items);
+            } else {
+                const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
+                try builder.call(null, .i32, read_name, arg_buf.items);
+            }
+        } else {
+            const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
+            try builder.call(null, .i32, read_name, arg_buf.items);
+        }
     } else {
         const read_name = try ctx.ensureDeclRaw("f77_read_status", .i32, "i32, ptr", true);
         const tmp = try ctx.nextTemp();
@@ -1141,7 +1218,7 @@ fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitEr
                 defer expanded_values.deinit();
 
                 const fmt_slice = fmt_items[plan.fmt_start..plan.fmt_end];
-                try emitWriteFormatted(ctx, builder, write, record_ptr, recl_len, true, unit_i32, fmt_slice, &expanded_values);
+                try emitWriteFormatted(ctx, builder, write, record_ptr, recl_len, null, true, unit_i32, fmt_slice, &expanded_values);
 
                 var commit_args = std.array_list.Managed(u8).init(ctx.allocator);
                 defer commit_args.deinit();
@@ -1198,7 +1275,7 @@ fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError
                 defer expanded.deinit();
 
                 const fmt_slice = fmt_items[plan.fmt_start..plan.fmt_end];
-                try emitReadFormatted(ctx, builder, read, record_ptr, recl_len, true, unit_i32, fmt_slice, &expanded);
+                try emitReadFormatted(ctx, builder, read, record_ptr, recl_len, null, true, unit_i32, fmt_slice, &expanded);
             }
             return;
         }
@@ -1458,6 +1535,7 @@ fn emitWriteDynamicFormat(
     write: ast.WriteStmt,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     label_var: []const u8,
@@ -1496,7 +1574,7 @@ fn emitWriteDynamicFormat(
         try builder.brCond(cond, use_label, next_label);
 
         try builder.label(use_label);
-        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_entry.items, expanded_values);
+        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_entry.items, expanded_values);
         try builder.br(done_label);
 
         check_label = next_label;
@@ -1504,7 +1582,7 @@ fn emitWriteDynamicFormat(
 
     try builder.label(check_label);
     // Fallback: use the first available format.
-    try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, numeric_formats.items[0].items, expanded_values);
+    try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, numeric_formats.items[0].items, expanded_values);
     try builder.br(done_label);
     try builder.label(done_label);
 }
@@ -1607,6 +1685,7 @@ fn emitWriteDynamicCharArrayFormat(
     write: ast.WriteStmt,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     array_name: []const u8,
@@ -1634,14 +1713,14 @@ fn emitWriteDynamicCharArrayFormat(
         try builder.brCond(cond, use_label, next_label);
 
         try builder.label(use_label);
-        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, entry.items, expanded_values);
+        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entry.items, expanded_values);
         try builder.br(done_label);
 
         check_label = next_label;
     }
 
     try builder.label(check_label);
-    try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, entries[0].items, expanded_values);
+    try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entries[0].items, expanded_values);
     try builder.br(done_label);
     try builder.label(done_label);
     return true;
@@ -1653,6 +1732,7 @@ fn emitReadDynamicCharArrayFormat(
     read: ast.ReadStmt,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     array_name: []const u8,
@@ -1680,14 +1760,14 @@ fn emitReadDynamicCharArrayFormat(
         try builder.brCond(cond, use_label, next_label);
 
         try builder.label(use_label);
-        try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, entry.items, expanded);
+        try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entry.items, expanded);
         try builder.br(done_label);
 
         check_label = next_label;
     }
 
     try builder.label(check_label);
-    try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, entries[0].items, expanded);
+    try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entries[0].items, expanded);
     try builder.br(done_label);
     try builder.label(done_label);
     return true;
@@ -1699,6 +1779,7 @@ fn emitReadDynamicCharArrayFormatStatus(
     read: ast.ReadStmt,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     array_name: []const u8,
@@ -1730,7 +1811,7 @@ fn emitReadDynamicCharArrayFormatStatus(
         try builder.brCond(cond, use_label, next_label);
 
         try builder.label(use_label);
-        const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, entry.items, expanded);
+        const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entry.items, expanded);
         try builder.store(status_val, status_ptr);
         try builder.br(done_label);
 
@@ -1738,7 +1819,7 @@ fn emitReadDynamicCharArrayFormatStatus(
     }
 
     try builder.label(check_label);
-    const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, entries[0].items, expanded);
+    const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entries[0].items, expanded);
     try builder.store(status_val, status_ptr);
     try builder.br(done_label);
     try builder.label(done_label);
@@ -1754,6 +1835,7 @@ fn emitWriteFormatExpr(
     fmt_expr: *ast.Expr,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     expanded_values: *ExpandedWriteValues,
@@ -1761,18 +1843,18 @@ fn emitWriteFormatExpr(
     const fmt_ty = try expr.exprType(ctx, fmt_expr);
     if (fmt_ty == .i32) {
         if (fmt_expr.* != .identifier) return error.MissingFormatLabel;
-        return emitWriteDynamicFormat(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, fmt_expr.identifier, expanded_values);
+        return emitWriteDynamicFormat(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_expr.identifier, expanded_values);
     }
     if (fmt_ty != .ptr) return error.MissingFormatLabel;
 
     if (try resolveCharFormatItemsFromExpr(ctx, fmt_expr)) |items| {
-        return emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, items, expanded_values);
+        return emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, expanded_values);
     }
 
     if (fmt_expr.* == .call_or_subscript) {
         const call = fmt_expr.call_or_subscript;
         if (call.args.len == 1) {
-            if (try emitWriteDynamicCharArrayFormat(ctx, builder, write, unit_value, unit_char_len, is_internal, unit_i32, call.name, call.args[0], expanded_values)) {
+            if (try emitWriteDynamicCharArrayFormat(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, call.name, call.args[0], expanded_values)) {
                 return;
             }
         }
@@ -1787,6 +1869,7 @@ fn emitReadFormatExpr(
     fmt_expr: *ast.Expr,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     expanded: *ExpandedReadTargets,
@@ -1794,18 +1877,18 @@ fn emitReadFormatExpr(
     const fmt_ty = try expr.exprType(ctx, fmt_expr);
     if (fmt_ty == .i32) {
         if (fmt_expr.* != .identifier) return error.MissingFormatLabel;
-        return emitReadDynamicFormat(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_expr.identifier, expanded);
+        return emitReadDynamicFormat(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_expr.identifier, expanded);
     }
     if (fmt_ty != .ptr) return error.MissingFormatLabel;
 
     if (try resolveCharFormatItemsFromExpr(ctx, fmt_expr)) |items| {
-        return emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, items, expanded);
+        return emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, expanded);
     }
 
     if (fmt_expr.* == .call_or_subscript) {
         const call = fmt_expr.call_or_subscript;
         if (call.args.len == 1) {
-            if (try emitReadDynamicCharArrayFormat(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, call.name, call.args[0], expanded)) {
+            if (try emitReadDynamicCharArrayFormat(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, call.name, call.args[0], expanded)) {
                 return;
             }
         }
@@ -1822,6 +1905,7 @@ fn emitReadFormatExprStatus(
     fmt_expr: *ast.Expr,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     expanded: *ExpandedReadTargets,
@@ -1829,18 +1913,18 @@ fn emitReadFormatExprStatus(
     const fmt_ty = try expr.exprType(ctx, fmt_expr);
     if (fmt_ty == .i32) {
         if (fmt_expr.* != .identifier) return error.MissingFormatLabel;
-        return emitReadDynamicFormatStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_expr.identifier, expanded);
+        return emitReadDynamicFormatStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_expr.identifier, expanded);
     }
     if (fmt_ty != .ptr) return error.MissingFormatLabel;
 
     if (try resolveCharFormatItemsFromExpr(ctx, fmt_expr)) |items| {
-        return emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, items, expanded);
+        return emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, expanded);
     }
 
     if (fmt_expr.* == .call_or_subscript) {
         const call = fmt_expr.call_or_subscript;
         if (call.args.len == 1) {
-            if (try emitReadDynamicCharArrayFormatStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, call.name, call.args[0], expanded)) |status| {
+            if (try emitReadDynamicCharArrayFormatStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, call.name, call.args[0], expanded)) |status| {
                 return status;
             }
         }
@@ -1855,6 +1939,7 @@ fn emitReadDynamicFormat(
     read: ast.ReadStmt,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     label_var: []const u8,
@@ -1893,14 +1978,14 @@ fn emitReadDynamicFormat(
         try builder.brCond(cond, use_label, next_label);
 
         try builder.label(use_label);
-        try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_entry.items, expanded);
+        try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_entry.items, expanded);
         try builder.br(done_label);
 
         check_label = next_label;
     }
 
     try builder.label(check_label);
-    try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, numeric_formats.items[0].items, expanded);
+    try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, numeric_formats.items[0].items, expanded);
     try builder.br(done_label);
     try builder.label(done_label);
 }
@@ -1911,6 +1996,7 @@ fn emitReadDynamicFormatStatus(
     read: ast.ReadStmt,
     unit_value: ValueRef,
     unit_char_len: ?usize,
+    unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
     label_var: []const u8,
@@ -1953,7 +2039,7 @@ fn emitReadDynamicFormatStatus(
         try builder.brCond(cond, use_label, next_label);
 
         try builder.label(use_label);
-        const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, fmt_entry.items, expanded);
+        const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_entry.items, expanded);
         try builder.store(status_val, status_ptr);
         try builder.br(done_label);
 
@@ -1961,7 +2047,7 @@ fn emitReadDynamicFormatStatus(
     }
 
     try builder.label(check_label);
-    const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, is_internal, unit_i32, numeric_formats.items[0].items, expanded);
+    const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, numeric_formats.items[0].items, expanded);
     try builder.store(status_val, status_ptr);
     try builder.br(done_label);
     try builder.label(done_label);
@@ -1980,6 +2066,7 @@ fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) 
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
     const unit_char_len = charLenForExpr(ctx, write.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
+    const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, write.unit) else null;
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
 
     const Arg = struct { ty: llvm_types.IRType, name: []const u8 };
@@ -1993,8 +2080,9 @@ fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) 
     defer fmt_buf.deinit();
 
     for (expanded_values.values.items, 0..) |value, idx| {
-        _ = idx;
-        try fmt_buf.append(' ');
+        if (idx != 0) {
+            try fmt_buf.append(' ');
+        }
         switch (value.ty) {
             .i32 => {
                 try fmt_buf.appendSlice("%d");
@@ -2066,7 +2154,16 @@ fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) 
     defer arg_buf.deinit();
     if (is_internal) {
         const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
-        try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+        if (unit_record_count) |count| {
+            if (count > 1) {
+                const count_text = utils.formatInt(ctx.allocator, @intCast(count));
+                try arg_buf.writer().print("ptr {s}, i32 {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, count_text, fmt_ptr });
+            } else {
+                try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+            }
+        } else {
+            try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+        }
     } else {
         try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, fmt_ptr });
     }
@@ -2075,6 +2172,13 @@ fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) 
     }
 
     if (is_internal) {
+        if (unit_record_count) |count| {
+            if (count > 1) {
+                const write_name = try ctx.ensureDeclRaw("f77_write_internal_n", .void, "ptr, i32, i32, ptr", true);
+                try builder.call(null, .void, write_name, arg_buf.items);
+                return;
+            }
+        }
         const write_name = try ctx.ensureDeclRaw("f77_write_internal", .void, "ptr, i32, ptr", true);
         try builder.call(null, .void, write_name, arg_buf.items);
     } else {
@@ -2109,6 +2213,7 @@ fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) Emi
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
     const unit_char_len = charLenForExpr(ctx, read.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
+    const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, read.unit) else null;
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
 
     var expanded = try expandReadTargets(ctx, builder, read.args);
@@ -2145,7 +2250,16 @@ fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) Emi
     defer arg_buf.deinit();
     if (is_internal) {
         const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
-        try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+        if (unit_record_count) |count| {
+            if (count > 1) {
+                const count_text = utils.formatInt(ctx.allocator, @intCast(count));
+                try arg_buf.writer().print("ptr {s}, i32 {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, count_text, fmt_ptr });
+            } else {
+                try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+            }
+        } else {
+            try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+        }
     } else {
         try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, fmt_ptr });
     }
@@ -2154,6 +2268,13 @@ fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) Emi
     }
 
     if (is_internal) {
+        if (unit_record_count) |count| {
+            if (count > 1) {
+                const read_name = try ctx.ensureDeclRaw("f77_read_internal_n", .i32, "ptr, i32, i32, ptr", true);
+                try builder.call(null, .i32, read_name, arg_buf.items);
+                return;
+            }
+        }
         const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
         try builder.call(null, .i32, read_name, arg_buf.items);
     } else {
@@ -2168,6 +2289,7 @@ fn emitListDirectedReadStatus(ctx: *Context, builder: anytype, read: ast.ReadStm
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
     const unit_char_len = charLenForExpr(ctx, read.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
+    const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, read.unit) else null;
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
 
     var expanded = try expandReadTargets(ctx, builder, read.args);
@@ -2204,7 +2326,16 @@ fn emitListDirectedReadStatus(ctx: *Context, builder: anytype, read: ast.ReadStm
     defer arg_buf.deinit();
     if (is_internal) {
         const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
-        try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+        if (unit_record_count) |count| {
+            if (count > 1) {
+                const count_text = utils.formatInt(ctx.allocator, @intCast(count));
+                try arg_buf.writer().print("ptr {s}, i32 {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, count_text, fmt_ptr });
+            } else {
+                try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+            }
+        } else {
+            try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
+        }
     } else {
         try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, fmt_ptr });
     }
@@ -2214,8 +2345,18 @@ fn emitListDirectedReadStatus(ctx: *Context, builder: anytype, read: ast.ReadStm
 
     var status_val: ValueRef = .{ .name = "0", .ty = .i32, .is_ptr = false };
     if (is_internal) {
-        const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
-        try builder.call(null, .i32, read_name, arg_buf.items);
+        if (unit_record_count) |count| {
+            if (count > 1) {
+                const read_name = try ctx.ensureDeclRaw("f77_read_internal_n", .i32, "ptr, i32, i32, ptr", true);
+                try builder.call(null, .i32, read_name, arg_buf.items);
+            } else {
+                const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
+                try builder.call(null, .i32, read_name, arg_buf.items);
+            }
+        } else {
+            const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
+            try builder.call(null, .i32, read_name, arg_buf.items);
+        }
     } else {
         const read_name = try ctx.ensureDeclRaw("f77_read_status", .i32, "i32, ptr", true);
         const tmp = try ctx.nextTemp();
@@ -2329,7 +2470,7 @@ fn buildDirectSignature(ctx: *Context, args: []*ast.Expr) ![]const u8 {
             .f64 => try buf.append('d'),
             .i1 => try buf.append('l'),
             .ptr => {
-                const len = charLenForExpr(ctx, arg) orelse return error.UnsupportedCharArg;
+                const len = charLenForExpr(ctx, arg) orelse 1;
                 try buf.append('c');
                 try buf.writer().print("{d};", .{len});
             },
@@ -2401,7 +2542,7 @@ fn buildDirectWriteSignatureAndPtrs(ctx: *Context, builder: anytype, args: []*as
             .f64 => try sig_buf.append('d'),
             .i1 => try sig_buf.append('l'),
             .ptr => {
-                const len = charLenForExpr(ctx, arg) orelse return error.UnsupportedCharArg;
+                const len = charLenForExpr(ctx, arg) orelse 1;
                 try sig_buf.append('c');
                 try sig_buf.writer().print("{d};", .{len});
             },
@@ -2457,7 +2598,7 @@ fn buildDirectReadSignatureAndPtrs(ctx: *Context, builder: anytype, args: []*ast
             .f64 => try sig_buf.append('d'),
             .i1 => try sig_buf.append('l'),
             .ptr => {
-                const len = charLenForExpr(ctx, arg) orelse return error.UnsupportedCharArg;
+                const len = charLenForExpr(ctx, arg) orelse 1;
                 try sig_buf.append('c');
                 try sig_buf.writer().print("{d};", .{len});
             },
@@ -2993,6 +3134,18 @@ fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
                 return bytes.len;
             },
             else => return null,
+        },
+        else => return null,
+    }
+}
+
+fn internalUnitRecordCount(ctx: *Context, expr_node: *ast.Expr) ?usize {
+    switch (expr_node.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return null;
+            if (sym.type_kind != .character) return null;
+            if (sym.dims.len == 0) return 1;
+            return common.arrayElementCount(ctx.sem, sym.dims) catch null;
         },
         else => return null,
     }
