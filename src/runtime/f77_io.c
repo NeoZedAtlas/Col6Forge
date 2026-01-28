@@ -1484,53 +1484,105 @@ static f77_complex64 f77_from_c64(double complex z) {
 }
 
 f77_complex32 f77_csin(f77_complex32 z) {
-    float complex in = z.r + z.i * I;
-    return f77_from_c32(csinf(in));
+    float a = z.r;
+    float b = z.i;
+    f77_complex32 out;
+    out.r = sinf(a) * coshf(b);
+    out.i = cosf(a) * sinhf(b);
+    return out;
 }
 
 f77_complex32 f77_ccos(f77_complex32 z) {
-    float complex in = z.r + z.i * I;
-    return f77_from_c32(ccosf(in));
+    float a = z.r;
+    float b = z.i;
+    f77_complex32 out;
+    out.r = cosf(a) * coshf(b);
+    out.i = -sinf(a) * sinhf(b);
+    return out;
 }
 
 f77_complex32 f77_cexp(f77_complex32 z) {
-    float complex in = z.r + z.i * I;
-    return f77_from_c32(cexpf(in));
+    float a = z.r;
+    float b = z.i;
+    float expa = expf(a);
+    f77_complex32 out;
+    out.r = expa * cosf(b);
+    out.i = expa * sinf(b);
+    return out;
 }
 
 f77_complex32 f77_clog(f77_complex32 z) {
-    float complex in = z.r + z.i * I;
-    return f77_from_c32(clogf(in));
+    float a = z.r;
+    float b = z.i;
+    float mag = hypotf(a, b);
+    f77_complex32 out;
+    out.r = logf(mag);
+    out.i = atan2f(b, a);
+    return out;
 }
 
 f77_complex32 f77_csqrt(f77_complex32 z) {
-    float complex in = z.r + z.i * I;
-    return f77_from_c32(csqrtf(in));
+    float a = z.r;
+    float b = z.i;
+    float mag = hypotf(a, b);
+    float t = sqrtf((mag + a) * 0.5f);
+    float u = sqrtf((mag - a) * 0.5f);
+    if (b < 0.0f) u = -u;
+    f77_complex32 out;
+    out.r = t;
+    out.i = u;
+    return out;
 }
 
 f77_complex64 f77_zsin(f77_complex64 z) {
-    double complex in = z.r + z.i * I;
-    return f77_from_c64(csin(in));
+    double a = z.r;
+    double b = z.i;
+    f77_complex64 out;
+    out.r = sin(a) * cosh(b);
+    out.i = cos(a) * sinh(b);
+    return out;
 }
 
 f77_complex64 f77_zcos(f77_complex64 z) {
-    double complex in = z.r + z.i * I;
-    return f77_from_c64(ccos(in));
+    double a = z.r;
+    double b = z.i;
+    f77_complex64 out;
+    out.r = cos(a) * cosh(b);
+    out.i = -sin(a) * sinh(b);
+    return out;
 }
 
 f77_complex64 f77_zexp(f77_complex64 z) {
-    double complex in = z.r + z.i * I;
-    return f77_from_c64(cexp(in));
+    double a = z.r;
+    double b = z.i;
+    double expa = exp(a);
+    f77_complex64 out;
+    out.r = expa * cos(b);
+    out.i = expa * sin(b);
+    return out;
 }
 
 f77_complex64 f77_zlog(f77_complex64 z) {
-    double complex in = z.r + z.i * I;
-    return f77_from_c64(clog(in));
+    double a = z.r;
+    double b = z.i;
+    double mag = hypot(a, b);
+    f77_complex64 out;
+    out.r = log(mag);
+    out.i = atan2(b, a);
+    return out;
 }
 
 f77_complex64 f77_zsqrt(f77_complex64 z) {
-    double complex in = z.r + z.i * I;
-    return f77_from_c64(csqrt(in));
+    double a = z.r;
+    double b = z.i;
+    double mag = hypot(a, b);
+    double t = sqrt((mag + a) * 0.5);
+    double u = sqrt((mag - a) * 0.5);
+    if (b < 0.0) u = -u;
+    f77_complex64 out;
+    out.r = t;
+    out.i = u;
+    return out;
 }
 
 static f77_complex32 f77_cmul(f77_complex32 a, f77_complex32 b) {

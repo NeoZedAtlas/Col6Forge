@@ -622,6 +622,112 @@ fn emitIntrinsicCabs(ctx: *Context, builder: anytype, args: []*Expr) EmitError!V
     return emitIntrinsicUnaryFloatValue(ctx, builder, "sqrt", sum);
 }
 
+fn constFloat(ctx: *Context, ty: IRType, value: f64) ValueRef {
+    return .{ .name = utils.formatFloatValue(ctx.allocator, value, ty), .ty = ty, .is_ptr = false };
+}
+
+fn emitComplexCexp(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
+    value = try complex.coerceToComplex(ctx, builder, value, target_ty);
+    const elem_ty = complex.complexElemType(value.ty) orelse return error.UnsupportedIntrinsicType;
+    const real = try complex.extractComplex(ctx, builder, value, 0);
+    const imag = try complex.extractComplex(ctx, builder, value, 1);
+
+    const expa = try emitLibmUnaryFloatValue(ctx, builder, "expf", "exp", real);
+    const cosb = try emitLibmUnaryFloatValue(ctx, builder, "cosf", "cos", imag);
+    const sinb = try emitLibmUnaryFloatValue(ctx, builder, "sinf", "sin", imag);
+    const out_r = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, expa, cosb);
+    const out_i = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, expa, sinb);
+    return complex.buildComplex(ctx, builder, out_r, out_i, value.ty);
+}
+
+fn emitComplexCsin(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
+    value = try complex.coerceToComplex(ctx, builder, value, target_ty);
+    const elem_ty = complex.complexElemType(value.ty) orelse return error.UnsupportedIntrinsicType;
+    const real = try complex.extractComplex(ctx, builder, value, 0);
+    const imag = try complex.extractComplex(ctx, builder, value, 1);
+
+    const sin_a = try emitLibmUnaryFloatValue(ctx, builder, "sinf", "sin", real);
+    const cos_a = try emitLibmUnaryFloatValue(ctx, builder, "cosf", "cos", real);
+    const cosh_b = try emitLibmUnaryFloatValue(ctx, builder, "coshf", "cosh", imag);
+    const sinh_b = try emitLibmUnaryFloatValue(ctx, builder, "sinhf", "sinh", imag);
+    const out_r = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, sin_a, cosh_b);
+    const out_i = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, cos_a, sinh_b);
+    return complex.buildComplex(ctx, builder, out_r, out_i, value.ty);
+}
+
+fn emitComplexCcos(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
+    value = try complex.coerceToComplex(ctx, builder, value, target_ty);
+    const elem_ty = complex.complexElemType(value.ty) orelse return error.UnsupportedIntrinsicType;
+    const real = try complex.extractComplex(ctx, builder, value, 0);
+    const imag = try complex.extractComplex(ctx, builder, value, 1);
+
+    const cos_a = try emitLibmUnaryFloatValue(ctx, builder, "cosf", "cos", real);
+    const sin_a = try emitLibmUnaryFloatValue(ctx, builder, "sinf", "sin", real);
+    const cosh_b = try emitLibmUnaryFloatValue(ctx, builder, "coshf", "cosh", imag);
+    const sinh_b = try emitLibmUnaryFloatValue(ctx, builder, "sinhf", "sinh", imag);
+    const out_r = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, cos_a, cosh_b);
+    var out_i = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, sin_a, sinh_b);
+    const zero = utils.zeroValue(elem_ty);
+    out_i = try complex.emitBinaryOp(ctx, builder, "fsub", elem_ty, zero, out_i);
+    return complex.buildComplex(ctx, builder, out_r, out_i, value.ty);
+}
+
+fn emitComplexClog(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
+    value = try complex.coerceToComplex(ctx, builder, value, target_ty);
+    const elem_ty = complex.complexElemType(value.ty) orelse return error.UnsupportedIntrinsicType;
+    const real = try complex.extractComplex(ctx, builder, value, 0);
+    const imag = try complex.extractComplex(ctx, builder, value, 1);
+
+    const real_sq = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, real, real);
+    const imag_sq = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, imag, imag);
+    const sum = try complex.emitBinaryOp(ctx, builder, "fadd", elem_ty, real_sq, imag_sq);
+    const mag = try emitIntrinsicUnaryFloatValue(ctx, builder, "sqrt", sum);
+    const log_mag = try emitLibmUnaryFloatValue(ctx, builder, "logf", "log", mag);
+    const arg = try emitLibmBinaryFloatValue(ctx, builder, "atan2f", "atan2", imag, real);
+    return complex.buildComplex(ctx, builder, log_mag, arg, value.ty);
+}
+
+fn emitComplexCsqrt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
+    value = try complex.coerceToComplex(ctx, builder, value, target_ty);
+    const elem_ty = complex.complexElemType(value.ty) orelse return error.UnsupportedIntrinsicType;
+    const real = try complex.extractComplex(ctx, builder, value, 0);
+    const imag = try complex.extractComplex(ctx, builder, value, 1);
+
+    const real_sq = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, real, real);
+    const imag_sq = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, imag, imag);
+    const sum = try complex.emitBinaryOp(ctx, builder, "fadd", elem_ty, real_sq, imag_sq);
+    const mag = try emitIntrinsicUnaryFloatValue(ctx, builder, "sqrt", sum);
+    const half = constFloat(ctx, elem_ty, 0.5);
+    const mag_plus = try complex.emitBinaryOp(ctx, builder, "fadd", elem_ty, mag, real);
+    const mag_minus = try complex.emitBinaryOp(ctx, builder, "fsub", elem_ty, mag, real);
+    const t = try emitIntrinsicUnaryFloatValue(ctx, builder, "sqrt", try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, mag_plus, half));
+    const u = try emitIntrinsicUnaryFloatValue(ctx, builder, "sqrt", try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, mag_minus, half));
+    const zero = utils.zeroValue(elem_ty);
+    const neg_u = try complex.emitBinaryOp(ctx, builder, "fsub", elem_ty, zero, u);
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "fcmp", "olt", elem_ty, imag, zero);
+    const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
+    const imag_name = try ctx.nextTemp();
+    try builder.select(imag_name, elem_ty, cond, neg_u, u);
+    const imag_val = ValueRef{ .name = imag_name, .ty = elem_ty, .is_ptr = false };
+    return complex.buildComplex(ctx, builder, t, imag_val, value.ty);
+}
+
 fn emitRuntimeComplexUnary(
     ctx: *Context,
     builder: anytype,
@@ -784,10 +890,10 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         return emitLibmBinaryFloatValue(ctx, builder, "atan2f", "atan2", left, right);
     }
     if (std.ascii.eqlIgnoreCase(name, "DATAN2")) return emitDoubleBinaryLibm(ctx, builder, "atan2", args);
-    if (std.ascii.eqlIgnoreCase(name, "CSIN")) return emitRuntimeComplexUnary(ctx, builder, "f77_csin", "f77_zsin", args);
-    if (std.ascii.eqlIgnoreCase(name, "CCOS")) return emitRuntimeComplexUnary(ctx, builder, "f77_ccos", "f77_zcos", args);
-    if (std.ascii.eqlIgnoreCase(name, "CEXP")) return emitRuntimeComplexUnary(ctx, builder, "f77_cexp", "f77_zexp", args);
-    if (std.ascii.eqlIgnoreCase(name, "CLOG")) return emitRuntimeComplexUnary(ctx, builder, "f77_clog", "f77_zlog", args);
-    if (std.ascii.eqlIgnoreCase(name, "CSQRT")) return emitRuntimeComplexUnary(ctx, builder, "f77_csqrt", "f77_zsqrt", args);
+    if (std.ascii.eqlIgnoreCase(name, "CSIN")) return emitComplexCsin(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "CCOS")) return emitComplexCcos(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "CEXP")) return emitComplexCexp(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "CLOG")) return emitComplexClog(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "CSQRT")) return emitComplexCsqrt(ctx, builder, args);
     return error.UnknownIntrinsic;
 }

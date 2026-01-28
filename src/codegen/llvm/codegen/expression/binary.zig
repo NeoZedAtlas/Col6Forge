@@ -87,16 +87,7 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
 
 fn emitPower(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
     if (complex.isComplexType(lhs.ty)) {
-        const base_ty = if (lhs.ty == .complex_f64) llvm_types.IRType.complex_f64 else llvm_types.IRType.complex_f32;
-        const base = try complex.coerceToComplex(ctx, builder, lhs, base_ty);
-        const exp = try casting.coerce(ctx, builder, rhs, .i32);
-        const fn_name = if (base_ty == .complex_f64) "f77_zpowi" else "f77_cpowi";
-        const sig = try std.fmt.allocPrint(ctx.allocator, "{s}, i32", .{llvm_types.irTypeText(base_ty)});
-        _ = try ctx.ensureDeclRaw(fn_name, base_ty, sig, false);
-        const args = try std.fmt.allocPrint(ctx.allocator, "{s} {s}, i32 {s}", .{ llvm_types.irTypeText(base_ty), base.name, exp.name });
-        const tmp = try ctx.nextTemp();
-        try builder.call(tmp, base_ty, fn_name, args);
-        return .{ .name = tmp, .ty = base_ty, .is_ptr = false };
+        return emitComplexPowI(ctx, builder, lhs, rhs);
     }
     if (complex.isComplexType(rhs.ty)) return error.UnsupportedComplexOp;
     const common_ty = ir.commonType(lhs.ty, rhs.ty);
@@ -114,6 +105,98 @@ fn emitPower(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) Emit
         return .{ .name = tmp, .ty = .i32, .is_ptr = false };
     }
     return error.PowerUnsupported;
+}
+
+fn constFloat(ctx: *Context, ty: IRType, value: f64) ValueRef {
+    return .{ .name = utils.formatFloatValue(ctx.allocator, value, ty), .ty = ty, .is_ptr = false };
+}
+
+fn emitComplexPowI(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
+    const base_ty: IRType = if (lhs.ty == .complex_f64) .complex_f64 else .complex_f32;
+    const base = try complex.coerceToComplex(ctx, builder, lhs, base_ty);
+    const exp_in = try casting.coerce(ctx, builder, rhs, .i32);
+    const elem_ty = complex.complexElemType(base_ty) orelse return error.UnsupportedComplexType;
+
+    const zero_i32 = utils.zeroValue(.i32);
+    const zero = utils.zeroValue(elem_ty);
+    const one = constFloat(ctx, elem_ty, 1.0);
+    const one_c = try complex.buildComplex(ctx, builder, one, zero, base_ty);
+
+    const neg_cond_name = try ctx.nextTemp();
+    try builder.compare(neg_cond_name, "icmp", "slt", .i32, exp_in, zero_i32);
+    const neg_cond = ValueRef{ .name = neg_cond_name, .ty = .i1, .is_ptr = false };
+
+    const neg_exp_name = try ctx.nextTemp();
+    try builder.binary(neg_exp_name, "sub", .i32, zero_i32, exp_in);
+    const neg_exp = ValueRef{ .name = neg_exp_name, .ty = .i32, .is_ptr = false };
+
+    const exp_abs_name = try ctx.nextTemp();
+    try builder.select(exp_abs_name, .i32, neg_cond, neg_exp, exp_in);
+    const exp_abs = ValueRef{ .name = exp_abs_name, .ty = .i32, .is_ptr = false };
+
+    const inv_base = try complex.emitComplexBinary(ctx, builder, .div, one_c, base);
+    const base_sel_name = try ctx.nextTemp();
+    try builder.select(base_sel_name, base_ty, neg_cond, inv_base, base);
+    const base_sel = ValueRef{ .name = base_sel_name, .ty = base_ty, .is_ptr = false };
+
+    const exp_ptr_name = try ctx.nextTemp();
+    const base_ptr_name = try ctx.nextTemp();
+    const result_ptr_name = try ctx.nextTemp();
+    try builder.alloca(exp_ptr_name, .i32);
+    try builder.alloca(base_ptr_name, base_ty);
+    try builder.alloca(result_ptr_name, base_ty);
+    try builder.store(exp_abs, .{ .name = exp_ptr_name, .ty = .ptr, .is_ptr = true });
+    try builder.store(base_sel, .{ .name = base_ptr_name, .ty = .ptr, .is_ptr = true });
+    try builder.store(one_c, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
+
+    const label_header = try ctx.nextLabel("cpow_header");
+    const label_body = try ctx.nextLabel("cpow_body");
+    const label_done = try ctx.nextLabel("cpow_done");
+
+    try builder.br(label_header);
+
+    try builder.label(label_header);
+    const exp_val_name = try ctx.nextTemp();
+    try builder.load(exp_val_name, .i32, .{ .name = exp_ptr_name, .ty = .ptr, .is_ptr = true });
+    const exp_val = ValueRef{ .name = exp_val_name, .ty = .i32, .is_ptr = false };
+    const loop_cond_name = try ctx.nextTemp();
+    try builder.compare(loop_cond_name, "icmp", "ne", .i32, exp_val, zero_i32);
+    const loop_cond = ValueRef{ .name = loop_cond_name, .ty = .i1, .is_ptr = false };
+    try builder.brCond(loop_cond, label_body, label_done);
+
+    try builder.label(label_body);
+    const base_val_name = try ctx.nextTemp();
+    try builder.load(base_val_name, base_ty, .{ .name = base_ptr_name, .ty = .ptr, .is_ptr = true });
+    const base_val = ValueRef{ .name = base_val_name, .ty = base_ty, .is_ptr = false };
+    const result_val_name = try ctx.nextTemp();
+    try builder.load(result_val_name, base_ty, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
+    const result_val = ValueRef{ .name = result_val_name, .ty = base_ty, .is_ptr = false };
+
+    const exp_and_name = try ctx.nextTemp();
+    try builder.binary(exp_and_name, "and", .i32, exp_val, .{ .name = "1", .ty = .i32, .is_ptr = false });
+    const exp_and = ValueRef{ .name = exp_and_name, .ty = .i32, .is_ptr = false };
+    const odd_cond_name = try ctx.nextTemp();
+    try builder.compare(odd_cond_name, "icmp", "ne", .i32, exp_and, zero_i32);
+    const odd_cond = ValueRef{ .name = odd_cond_name, .ty = .i1, .is_ptr = false };
+    const result_mul = try complex.emitComplexBinary(ctx, builder, .mul, result_val, base_val);
+    const result_sel_name = try ctx.nextTemp();
+    try builder.select(result_sel_name, base_ty, odd_cond, result_mul, result_val);
+    const result_sel = ValueRef{ .name = result_sel_name, .ty = base_ty, .is_ptr = false };
+    try builder.store(result_sel, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
+
+    const base_next = try complex.emitComplexBinary(ctx, builder, .mul, base_val, base_val);
+    try builder.store(base_next, .{ .name = base_ptr_name, .ty = .ptr, .is_ptr = true });
+
+    const exp_next_name = try ctx.nextTemp();
+    try builder.binary(exp_next_name, "lshr", .i32, exp_val, .{ .name = "1", .ty = .i32, .is_ptr = false });
+    const exp_next = ValueRef{ .name = exp_next_name, .ty = .i32, .is_ptr = false };
+    try builder.store(exp_next, .{ .name = exp_ptr_name, .ty = .ptr, .is_ptr = true });
+    try builder.br(label_header);
+
+    try builder.label(label_done);
+    const result_out_name = try ctx.nextTemp();
+    try builder.load(result_out_name, base_ty, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
+    return .{ .name = result_out_name, .ty = base_ty, .is_ptr = false };
 }
 
 pub fn emitAdd(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
