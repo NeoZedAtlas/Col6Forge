@@ -307,16 +307,65 @@ pub fn emitWriteFormatted(
                         if (arg_index >= expanded_values.values.items.len) break;
                         try flushPendingSpaces(&fmt_buf, &pending_spaces);
                         const value = expanded_values.values.items[arg_index];
-                        if (value.ty != .ptr) return error.UnsupportedCharArg;
                         const arg_len = expanded_values.char_lens.items[arg_index];
                         const field_width = if (spec.width > 0) spec.width else arg_len;
                         const precision = if (arg_len > 0 and field_width > arg_len) arg_len else field_width;
-                        try fmt_buf.appendSlice("%*.*s");
-                        const width_text = utils.formatInt(ctx.allocator, @intCast(field_width));
-                        const prec_text = utils.formatInt(ctx.allocator, @intCast(precision));
-                        try args.append(.{ .ty = .i32, .name = width_text });
-                        try args.append(.{ .ty = .i32, .name = prec_text });
-                        try args.append(.{ .ty = .ptr, .name = value.name });
+                        if (value.ty != .ptr) {
+                            // For dynamic formats, allow non-character args to flow through by
+                            // materializing a temporary formatted string.
+                            const width_text = utils.formatInt(ctx.allocator, @intCast(field_width));
+                            switch (value.ty) {
+                                .i32 => {
+                                    const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, "i32, i32, i32, i32", false);
+                                    const tmp = try ctx.nextTemp();
+                                    var call_args = std.array_list.Managed(u8).init(ctx.allocator);
+                                    defer call_args.deinit();
+                                    try call_args.writer().print("i32 {s}, i32 0, i32 0, i32 {s}", .{ width_text, value.name });
+                                    try builder.call(tmp, .ptr, fmt_i_name, call_args.items);
+                                    try fmt_buf.appendSlice("%s");
+                                    try args.append(.{ .ty = .ptr, .name = tmp });
+                                },
+                                .i1 => {
+                                    const select_tmp = try ctx.nextTemp();
+                                    const one_val = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+                                    const zero_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+                                    try builder.select(select_tmp, .i32, value, one_val, zero_val);
+                                    const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, "i32, i32, i32, i32", false);
+                                    const tmp = try ctx.nextTemp();
+                                    var call_args = std.array_list.Managed(u8).init(ctx.allocator);
+                                    defer call_args.deinit();
+                                    try call_args.writer().print("i32 {s}, i32 0, i32 0, i32 {s}", .{ width_text, select_tmp });
+                                    try builder.call(tmp, .ptr, fmt_i_name, call_args.items);
+                                    try fmt_buf.appendSlice("%s");
+                                    try args.append(.{ .ty = .ptr, .name = tmp });
+                                },
+                                .f32, .f64 => {
+                                    const coerced = try expr.coerce(ctx, builder, value, .f64);
+                                    const fmt_f_name = try ctx.ensureDeclRaw("f77_fmt_f", .ptr, "i32, i32, i32, double", false);
+                                    const tmp = try ctx.nextTemp();
+                                    var call_args = std.array_list.Managed(u8).init(ctx.allocator);
+                                    defer call_args.deinit();
+                                    try call_args.writer().print("i32 {s}, i32 0, i32 0, double {s}", .{ width_text, coerced.name });
+                                    try builder.call(tmp, .ptr, fmt_f_name, call_args.items);
+                                    try fmt_buf.appendSlice("%s");
+                                    try args.append(.{ .ty = .ptr, .name = tmp });
+                                },
+                                else => {
+                                    const empty_name = try ctx.string_pool.intern("");
+                                    const empty_ptr = try ctx.nextTemp();
+                                    try builder.gepConstString(empty_ptr, empty_name, 1);
+                                    try fmt_buf.appendSlice("%s");
+                                    try args.append(.{ .ty = .ptr, .name = empty_ptr });
+                                },
+                            }
+                        } else {
+                            try fmt_buf.appendSlice("%*.*s");
+                            const width_text = utils.formatInt(ctx.allocator, @intCast(field_width));
+                            const prec_text = utils.formatInt(ctx.allocator, @intCast(precision));
+                            try args.append(.{ .ty = .i32, .name = width_text });
+                            try args.append(.{ .ty = .i32, .name = prec_text });
+                            try args.append(.{ .ty = .ptr, .name = value.name });
+                        }
                         arg_index += 1;
                         if (field_width > 0) {
                             column += field_width;
@@ -1016,10 +1065,11 @@ pub fn emitWriteDynamicFormat(
     const var_value = try expr.emitExpr(ctx, builder, try makeIdentifierExpr(ctx, label_var));
     const var_i32 = try expr.coerce(ctx, builder, var_value, .i32);
 
-    var numeric_formats = std.array_list.Managed(struct {
+    const NumericFormat = struct {
         value: i32,
         items: []const ast.FormatItem,
-    }).init(ctx.allocator);
+    };
+    var numeric_formats = std.array_list.Managed(NumericFormat).init(ctx.allocator);
     defer numeric_formats.deinit();
 
     var it = ctx.formats.iterator();
@@ -1030,11 +1080,20 @@ pub fn emitWriteDynamicFormat(
     }
     if (numeric_formats.items.len == 0) return error.MissingFormatLabel;
 
+    var compatible_formats = std.array_list.Managed(NumericFormat).init(ctx.allocator);
+    defer compatible_formats.deinit();
+    for (numeric_formats.items) |fmt_entry| {
+        if (isWriteFormatCompatible(fmt_entry.items, expanded_values)) {
+            try compatible_formats.append(fmt_entry);
+        }
+    }
+    const formats = if (compatible_formats.items.len > 0) compatible_formats.items else numeric_formats.items;
+
     const done_label = try ctx.nextLabel("fmt_done");
     var check_label = try ctx.nextLabel("fmt_check");
     try builder.br(check_label);
 
-    for (numeric_formats.items, 0..) |fmt_entry, idx| {
+    for (formats, 0..) |fmt_entry, idx| {
         try builder.label(check_label);
         const cmp_tmp = try ctx.nextTemp();
         const const_text = utils.formatInt(ctx.allocator, fmt_entry.value);
@@ -1042,7 +1101,7 @@ pub fn emitWriteDynamicFormat(
         try builder.compare(cmp_tmp, "icmp", "eq", .i32, var_i32, const_val);
         const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
         const use_label = try ctx.nextLabel("fmt_use");
-        const next_label = if (idx + 1 < numeric_formats.items.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
+        const next_label = if (idx + 1 < formats.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
         try builder.brCond(cond, use_label, next_label);
 
         try builder.label(use_label);
@@ -1054,9 +1113,54 @@ pub fn emitWriteDynamicFormat(
 
     try builder.label(check_label);
     // Fallback: use the first available format.
-    try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, numeric_formats.items[0].items, expanded_values);
+    try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, formats[0].items, expanded_values);
     try builder.br(done_label);
     try builder.label(done_label);
+}
+
+fn isWriteFormatCompatible(fmt_items: []const ast.FormatItem, expanded_values: *ExpandedWriteValues) bool {
+    if (expanded_values.values.items.len == 0) return true;
+    const descriptor_count = countFormatDescriptors(fmt_items);
+    if (descriptor_count == 0) return false;
+    var has_char_arg = false;
+    for (expanded_values.values.items) |value| {
+        if (value.ty == .ptr) {
+            has_char_arg = true;
+            break;
+        }
+    }
+    if (!has_char_arg) {
+        for (fmt_items) |item| {
+            if (item == .char) return false;
+        }
+    }
+    var arg_index: usize = 0;
+    const reversion_start = findReversionStart(fmt_items);
+    var format_start: usize = 0;
+    var first_pass = true;
+    while (arg_index < expanded_values.values.items.len) {
+        if (!first_pass) {
+            // New record; format reversion controls descriptors only.
+        }
+        first_pass = false;
+        var idx: usize = format_start;
+        while (idx < fmt_items.len) : (idx += 1) {
+            const item = fmt_items[idx];
+            switch (item) {
+                .int, .real, .real_fixed, .logical, .char => {
+                    if (arg_index >= expanded_values.values.items.len) return true;
+                    if (item == .char and expanded_values.values.items[arg_index].ty != .ptr) return false;
+                    arg_index += 1;
+                },
+                .colon => {
+                    if (arg_index >= expanded_values.values.items.len) return true;
+                },
+                else => {},
+            }
+        }
+        format_start = reversion_start;
+    }
+    return true;
 }
 fn trimRightSpaces(bytes: []const u8) []const u8 {
     if (bytes.len == 0) return bytes;
