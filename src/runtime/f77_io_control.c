@@ -18,6 +18,7 @@ static void unformatted_ensure_capacity_local(UnformattedUnit *unit, size_t need
     for (size_t i = unit->capacity; i < new_cap; i++) {
         new_records[i].data = NULL;
         new_records[i].len = 0;
+        new_records[i].is_endfile = 0;
     }
     unit->records = new_records;
     unit->capacity = new_cap;
@@ -197,8 +198,9 @@ void f77_rewind(int unit) {
     if (unit < 0 || unit >= F77_MAX_UNITS) {
         return;
     }
-    if (unformatted_units[unit].count > 0 || unformatted_units[unit].pos > 0) {
-        unformatted_units[unit].pos = 0;
+    UnformattedUnit *uu = &unformatted_units[unit];
+    if (uu->used && (uu->count > 0 || uu->pos > 0)) {
+        uu->pos = 0;
         return;
     }
     unit_pos[unit] = 0;
@@ -208,9 +210,10 @@ void f77_backspace(int unit) {
     if (unit < 0 || unit >= F77_MAX_UNITS) {
         return;
     }
-    if (unformatted_units[unit].count > 0 || unformatted_units[unit].pos > 0) {
-        if (unformatted_units[unit].pos > 0) {
-            unformatted_units[unit].pos -= 1;
+    UnformattedUnit *uu = &unformatted_units[unit];
+    if (uu->used && (uu->count > 0 || uu->pos > 0)) {
+        if (uu->pos > 0) {
+            uu->pos -= 1;
         }
         return;
     }
@@ -260,19 +263,23 @@ void f77_endfile(int unit) {
     if (unit < 0 || unit >= F77_MAX_UNITS) {
         return;
     }
-    if (unformatted_units[unit].count > 0 || unformatted_units[unit].pos > 0) {
-        unformatted_truncate(&unformatted_units[unit], unformatted_units[unit].pos);
+    UnformattedUnit *uu = &unformatted_units[unit];
+    if (!uu->used) {
         return;
     }
-    UnformattedUnit *uu = &unformatted_units[unit];
-    if (uu->count == 0) {
-        unformatted_ensure_capacity_local(uu, 1);
-        if (!uu->records) {
-            return;
-        }
-        uu->records[0].data = NULL;
-        uu->records[0].len = 0;
-        uu->count = 1;
-        uu->pos = 0;
+    if (uu->count > 0 || uu->pos > 0) {
+        unformatted_truncate(uu, uu->pos);
     }
+    unformatted_ensure_capacity_local(uu, uu->pos + 1);
+    if (!uu->records) {
+        return;
+    }
+    if (uu->pos < uu->count) {
+        free(uu->records[uu->pos].data);
+    }
+    uu->records[uu->pos].data = NULL;
+    uu->records[uu->pos].len = 0;
+    uu->records[uu->pos].is_endfile = 1;
+    uu->count = uu->pos + 1;
+    uu->pos = uu->count;
 }

@@ -17,7 +17,7 @@ const expansion = @import("expansion.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
 const internalUnitRecordCount = io_utils.internalUnitRecordCount;
-const expandWriteArgs = expansion.expandWriteArgs;
+const expandWriteArgsList = expansion.expandWriteArgsList;
 const expandReadTargets = expansion.expandReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
 
@@ -32,7 +32,7 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
     var args = std.array_list.Managed(Arg).init(ctx.allocator);
     defer args.deinit();
 
-    var expanded_values = try expandWriteArgs(ctx, builder, write.args);
+    var expanded_values = try expandWriteArgsList(ctx, builder, write.args);
     defer expanded_values.deinit();
 
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
@@ -48,13 +48,13 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
                 try args.append(.{ .ty = .i32, .name = value.name });
             },
             .f32, .f64 => {
-                const fmt = if (value.ty == .f64) "%#.17G" else "%#.7G";
+                const fmt = if (value.ty == .f64) "%#.17G" else "%#.9G";
                 try fmt_buf.appendSlice(fmt);
                 const coerced = try expr.coerce(ctx, builder, value, .f64);
                 try args.append(.{ .ty = .f64, .name = coerced.name });
             },
             .complex_f32, .complex_f64 => {
-                const fmt = if (value.ty == .complex_f64) "(%#.17G,%#.17G)" else "(%#.7G,%#.7G)";
+                const fmt = if (value.ty == .complex_f64) "(%#.17G,%#.17G)" else "(%#.9G,%#.9G)";
                 try fmt_buf.appendSlice(fmt);
                 const real = try complex.extractComplex(ctx, builder, value, 0);
                 const imag = try complex.extractComplex(ctx, builder, value, 1);

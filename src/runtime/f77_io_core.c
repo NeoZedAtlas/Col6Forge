@@ -108,6 +108,7 @@ void unformatted_truncate(UnformattedUnit *unit, size_t new_count) {
         free(unit->records[i].data);
         unit->records[i].data = NULL;
         unit->records[i].len = 0;
+        unit->records[i].is_endfile = 0;
     }
     unit->count = new_count;
     if (unit->pos > unit->count) {

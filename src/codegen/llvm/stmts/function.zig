@@ -118,7 +118,15 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     }
 
     try installCommonLocals(ctx, builder);
-    try applyEquivalences(ctx, builder);
+    var orig_locals = std.StringHashMap(ValueRef).init(ctx.allocator);
+    defer orig_locals.deinit();
+    {
+        var it = ctx.locals.iterator();
+        while (it.next()) |entry| {
+            try orig_locals.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+    try applyEquivalences(ctx, builder, &orig_locals);
 
     const block_names = try ctx.buildBlockNames();
     defer {
@@ -246,15 +254,28 @@ fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {
     }
 }
 
-fn applyEquivalences(ctx: *Context, builder: anytype) EmitError!void {
+fn applyEquivalences(ctx: *Context, builder: anytype, orig_locals: *const std.StringHashMap(ValueRef)) EmitError!void {
     for (ctx.unit.decls) |decl| {
         if (decl != .equivalence) continue;
         for (decl.equivalence.groups) |group| {
             if (group.items.len < 2) continue;
-            const anchor = group.items[0];
-            var idx: usize = 1;
-            while (idx < group.items.len) : (idx += 1) {
-                const other = group.items[idx];
+            var anchor = group.items[0];
+            for (group.items) |item| {
+                const name = switch (item.*) {
+                    .identifier => |id| id,
+                    .call_or_subscript => |call| call.name,
+                    else => null,
+                } orelse continue;
+                const current = ctx.locals.get(name) orelse continue;
+                if (orig_locals.get(name)) |orig| {
+                    if (!std.mem.eql(u8, current.name, orig.name)) {
+                        anchor = item;
+                        break;
+                    }
+                }
+            }
+            for (group.items) |other| {
+                if (other == anchor) continue;
                 try applyEquivalencePair(ctx, builder, anchor, other);
             }
         }
@@ -329,10 +350,8 @@ fn applyEquivalenceSubscriptScalar(ctx: *Context, builder: anytype, sub_expr: *a
     const call = sub_expr.call_or_subscript;
     const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(sub_expr))) orelse .unknown;
     if (kind != .subscript) return;
-    const sub_sym = ctx.findSymbol(call.name) orelse return;
     const scalar_sym = ctx.findSymbol(scalar_name) orelse return;
     if (scalar_sym.dims.len != 0) return;
-    if (sub_sym.type_kind != scalar_sym.type_kind) return;
     const ptr = try expression.emitSubscriptPtr(ctx, builder, call);
     try ctx.locals.put(scalar_name, ptr);
 }
@@ -341,10 +360,8 @@ fn applyEquivalenceSubscriptArray(ctx: *Context, builder: anytype, sub_expr: *as
     const call = sub_expr.call_or_subscript;
     const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(sub_expr))) orelse .unknown;
     if (kind != .subscript) return;
-    const sub_sym = ctx.findSymbol(call.name) orelse return;
     const array_sym = ctx.findSymbol(array_name) orelse return;
     if (array_sym.dims.len == 0) return;
-    if (sub_sym.type_kind != array_sym.type_kind) return;
     const ptr = try expression.emitSubscriptPtr(ctx, builder, call);
     try ctx.locals.put(array_name, ptr);
 }

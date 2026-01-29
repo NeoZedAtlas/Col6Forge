@@ -23,6 +23,9 @@ static void f77_write_trimmed(FILE *file, const char *fmt, va_list ap) {
     vsnprintf(buf, (size_t)needed + 1, fmt, ap_fmt);
     va_end(ap_fmt);
     (void)fwrite(buf, 1, (size_t)needed, file);
+    if (needed == 0 || buf[needed - 1] != '\n') {
+        (void)fwrite("\n", 1, 1, file);
+    }
     free(buf);
 }
 

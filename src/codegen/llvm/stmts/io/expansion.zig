@@ -417,19 +417,16 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
                 const char_len = sym.char_len orelse 1;
-                var idx: usize = 0;
-                while (idx < elem_count) : (idx += 1) {
-                    var offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
-                    if (sym.type_kind == .character and char_len > 1) {
-                        const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = .i32, .is_ptr = false };
-                        offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
-                    }
-                    const ptr_name = try ctx.nextTemp();
-                    try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
-                    if (sym.type_kind == .character) {
-                        try expanded.values.append(.{ .name = ptr_name, .ty = .ptr, .is_ptr = false });
-                        try expanded.char_lens.append(sym.char_len orelse 1);
-                    } else {
+                if (sym.type_kind == .character) {
+                    const total_len = elem_count * char_len;
+                    try expanded.values.append(.{ .name = base_ptr.name, .ty = .ptr, .is_ptr = true });
+                    try expanded.char_lens.append(total_len);
+                } else {
+                    var idx: usize = 0;
+                    while (idx < elem_count) : (idx += 1) {
+                        const offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                        const ptr_name = try ctx.nextTemp();
+                        try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
                         const tmp = try ctx.nextTemp();
                         try builder.load(tmp, elem_ty, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
                         const loaded = ValueRef{ .name = tmp, .ty = elem_ty, .is_ptr = false };

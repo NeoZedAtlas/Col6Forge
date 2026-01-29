@@ -15,6 +15,7 @@ typedef struct {
 typedef struct {
     unsigned char *data;
     size_t len;
+    unsigned char is_endfile;
 } UnformattedRecord;
 
 typedef struct {
@@ -22,6 +23,7 @@ typedef struct {
     size_t count;
     size_t capacity;
     size_t pos;
+    unsigned char used;
 } UnformattedUnit;
 
 typedef struct {

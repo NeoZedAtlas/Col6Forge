@@ -17,6 +17,7 @@ static void unformatted_ensure_capacity(UnformattedUnit *unit, size_t needed) {
     for (size_t i = unit->capacity; i < new_cap; i++) {
         new_records[i].data = NULL;
         new_records[i].len = 0;
+        new_records[i].is_endfile = 0;
     }
     unit->records = new_records;
     unit->capacity = new_cap;
@@ -27,6 +28,7 @@ void f77_write_unformatted(int unit, const char *sig, ...) {
         return;
     }
     UnformattedUnit *uu = &unformatted_units[unit];
+    uu->used = 1;
     size_t record_size = direct_signature_size(sig);
     unsigned char *record = NULL;
     if (record_size > 0) {
@@ -99,6 +101,7 @@ void f77_write_unformatted(int unit, const char *sig, ...) {
         free(uu->records[uu->pos].data);
         uu->records[uu->pos].data = record;
         uu->records[uu->pos].len = record_size;
+        uu->records[uu->pos].is_endfile = 0;
         uu->pos += 1;
         unformatted_truncate(uu, uu->pos);
         return;
@@ -110,6 +113,7 @@ void f77_write_unformatted(int unit, const char *sig, ...) {
     }
     uu->records[uu->count].data = record;
     uu->records[uu->count].len = record_size;
+    uu->records[uu->count].is_endfile = 0;
     uu->count += 1;
     uu->pos = uu->count;
 }
@@ -119,10 +123,15 @@ int f77_read_unformatted(int unit, const char *sig, ...) {
         return 1;
     }
     UnformattedUnit *uu = &unformatted_units[unit];
+    uu->used = 1;
     if (uu->pos >= uu->count) {
         return -1;
     }
     UnformattedRecord *rec = &uu->records[uu->pos];
+    if (rec->is_endfile) {
+        uu->pos += 1;
+        return -1;
+    }
     uu->pos += 1;
 
     va_list ap;
