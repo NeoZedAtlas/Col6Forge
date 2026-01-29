@@ -15,8 +15,11 @@ const EmitError = anyerror;
 const io_utils = @import("utils.zig");
 const expansion = @import("expansion.zig");
 
-usingnamespace io_utils;
-usingnamespace expansion;
+const charLenForExpr = io_utils.charLenForExpr;
+const internalUnitRecordCount = io_utils.internalUnitRecordCount;
+const expandWriteArgs = expansion.expandWriteArgs;
+const expandReadTargets = expansion.expandReadTargets;
+const applyComplexFixups = expansion.applyComplexFixups;
 
 pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);

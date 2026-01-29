@@ -18,9 +18,19 @@ const io_utils = @import("utils.zig");
 const expansion = @import("expansion.zig");
 const list_directed = @import("list_directed.zig");
 
-usingnamespace io_utils;
-usingnamespace expansion;
-usingnamespace list_directed;
+const countFormatDescriptors = io_utils.countFormatDescriptors;
+const isAllNewlines = io_utils.isAllNewlines;
+const flushPendingSpaces = io_utils.flushPendingSpaces;
+const findReversionStart = io_utils.findReversionStart;
+const appendIntFormat = io_utils.appendIntFormat;
+const appendScanfLiteral = io_utils.appendScanfLiteral;
+const appendSpaces = io_utils.appendSpaces;
+const intLiteralValue = io_utils.intLiteralValue;
+const ExpandedWriteValues = expansion.ExpandedWriteValues;
+const ExpandedReadTargets = expansion.ExpandedReadTargets;
+const applyComplexFixups = expansion.applyComplexFixups;
+const emitListDirectedRead = list_directed.emitListDirectedRead;
+const emitListDirectedReadStatus = list_directed.emitListDirectedReadStatus;
 
 pub fn emitWriteFormatted(
     ctx: *Context,

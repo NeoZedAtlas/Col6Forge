@@ -11,7 +11,8 @@ const EmitError = anyerror;
 
 const io_utils = @import("utils.zig");
 
-usingnamespace io_utils;
+const charLenForExpr = io_utils.charLenForExpr;
+const evalConstIntSem = io_utils.evalConstIntSem;
 
 pub fn emitOpen(ctx: *Context, builder: anytype, open: ast.OpenStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, open.unit);

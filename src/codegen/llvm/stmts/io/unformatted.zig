@@ -12,8 +12,10 @@ const EmitError = anyerror;
 const io_utils = @import("utils.zig");
 const expansion = @import("expansion.zig");
 
-usingnamespace io_utils;
-usingnamespace expansion;
+const buildDirectWriteSignatureAndPtrs = io_utils.buildDirectWriteSignatureAndPtrs;
+const buildDirectReadSignatureAndPtrs = io_utils.buildDirectReadSignatureAndPtrs;
+const applyComplexFixupsList = io_utils.applyComplexFixupsList;
+const expandIoArgs = expansion.expandIoArgs;
 
 pub fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);

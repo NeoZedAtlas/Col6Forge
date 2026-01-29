@@ -13,9 +13,18 @@ const io_utils = @import("utils.zig");
 const expansion = @import("expansion.zig");
 const formatted = @import("formatted.zig");
 
-usingnamespace io_utils;
-usingnamespace expansion;
-usingnamespace formatted;
+const buildDirectWriteSignatureAndPtrs = io_utils.buildDirectWriteSignatureAndPtrs;
+const buildDirectReadSignatureAndPtrs = io_utils.buildDirectReadSignatureAndPtrs;
+const applyComplexFixupsList = io_utils.applyComplexFixupsList;
+const findReversionStart = io_utils.findReversionStart;
+const countNewlinesLiteral = io_utils.countNewlinesLiteral;
+const evalConstIntSem = io_utils.evalConstIntSem;
+const expandIoArgs = expansion.expandIoArgs;
+const expandWriteArgs = expansion.expandWriteArgs;
+const expandReadTargets = expansion.expandReadTargets;
+const emitWriteFormatted = formatted.emitWriteFormatted;
+const emitReadFormatted = formatted.emitReadFormatted;
+const formatFromCharArrayData = formatted.formatFromCharArrayData;
 
 pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
     const rec_expr = write.rec orelse return error.MissingRecordNumber;

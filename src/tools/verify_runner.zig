@@ -157,10 +157,10 @@ pub fn main() !void {
             continue;
         }
 
-        var compile_args = std.ArrayList([]const u8).init(allocator);
-        defer compile_args.deinit();
-        try compile_args.appendSlice(&.{ "zig", "cc", "-O0", "-o", test_exe, ll_path });
-        try compile_args.appendSlice(runtime_paths);
+        var compile_args: std.ArrayList([]const u8) = .empty;
+        defer compile_args.deinit(allocator);
+        try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path });
+        try compile_args.appendSlice(allocator, runtime_paths);
         const our_compile = runProcessCapture(
             allocator,
             compile_args.items,

@@ -14,7 +14,10 @@ const EmitError = anyerror;
 
 const io_utils = @import("utils.zig");
 
-usingnamespace io_utils;
+const ComplexFixup = io_utils.ComplexFixup;
+const charLenForExpr = io_utils.charLenForExpr;
+const evalConstIntSem = io_utils.evalConstIntSem;
+const intLiteralValue = io_utils.intLiteralValue;
 
 pub const ExpandedReadTargets = struct {
     ptrs: std.array_list.Managed(ValueRef),
