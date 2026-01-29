@@ -521,12 +521,12 @@ pub fn emitReadFormatted(
                         .relative_right => 'R',
                         .relative_left => 'U',
                     };
-                    try fmt_buf.writer().print("%%{d}{c}", .{ tab.count, directive });
+                    try fmt_buf.writer().print("%{d}{c}", .{ tab.count, directive });
                 },
                 .colon => {},
                 .blank_control => |ctrl| {
                     const directive: u8 = if (ctrl == .nulls) 'N' else 'Z';
-                    try fmt_buf.writer().print("%%{c}", .{directive});
+                    try fmt_buf.writer().print("%{c}", .{directive});
                 },
                 else => {},
             }
@@ -558,7 +558,7 @@ pub fn emitReadFormatted(
                             .relative_right => 'R',
                             .relative_left => 'U',
                         };
-                        try fmt_buf.writer().print("%%{d}{c}", .{ tab.count, directive });
+                        try fmt_buf.writer().print("%{d}{c}", .{ tab.count, directive });
                     },
                     .colon => {},
                     .int => |spec| {
@@ -644,7 +644,7 @@ pub fn emitReadFormatted(
                     },
                     .blank_control => |ctrl| {
                         const directive: u8 = if (ctrl == .nulls) 'N' else 'Z';
-                        try fmt_buf.writer().print("%%{c}", .{directive});
+                        try fmt_buf.writer().print("%{c}", .{directive});
                     },
                     .sign_control => {},
                     .reversion_anchor => {},
@@ -779,12 +779,12 @@ pub fn emitReadFormattedStatus(
                         .relative_right => 'R',
                         .relative_left => 'U',
                     };
-                    try fmt_buf.writer().print("%%{d}{c}", .{ tab.count, directive });
+                    try fmt_buf.writer().print("%{d}{c}", .{ tab.count, directive });
                 },
                 .colon => {},
                 .blank_control => |ctrl| {
                     const directive: u8 = if (ctrl == .nulls) 'N' else 'Z';
-                    try fmt_buf.writer().print("%%{c}", .{directive});
+                    try fmt_buf.writer().print("%{c}", .{directive});
                 },
                 else => {},
             }
@@ -816,7 +816,7 @@ pub fn emitReadFormattedStatus(
                             .relative_right => 'R',
                             .relative_left => 'U',
                         };
-                        try fmt_buf.writer().print("%%{d}{c}", .{ tab.count, directive });
+                        try fmt_buf.writer().print("%{d}{c}", .{ tab.count, directive });
                     },
                     .colon => {},
                     .int => |spec| {
@@ -891,7 +891,7 @@ pub fn emitReadFormattedStatus(
                     },
                     .blank_control => |ctrl| {
                         const directive: u8 = if (ctrl == .nulls) 'N' else 'Z';
-                        try fmt_buf.writer().print("%%{c}", .{directive});
+                        try fmt_buf.writer().print("%{c}", .{directive});
                     },
                     .sign_control => {},
                     .reversion_anchor => {},
