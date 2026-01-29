@@ -5,6 +5,24 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void unformatted_ensure_capacity_local(UnformattedUnit *unit, size_t needed) {
+    if (unit->capacity >= needed) return;
+    size_t new_cap = unit->capacity == 0 ? 8 : unit->capacity;
+    while (new_cap < needed) {
+        new_cap *= 2;
+    }
+    UnformattedRecord *new_records = (UnformattedRecord *)realloc(unit->records, new_cap * sizeof(UnformattedRecord));
+    if (!new_records) {
+        return;
+    }
+    for (size_t i = unit->capacity; i < new_cap; i++) {
+        new_records[i].data = NULL;
+        new_records[i].len = 0;
+    }
+    unit->records = new_records;
+    unit->capacity = new_cap;
+}
+
 void f77_open(int unit, const char *file, int file_len, int access, int form, int blank, int status) {
     (void)status;
     if (unit < 0 || unit >= F77_MAX_UNITS) {
@@ -245,5 +263,16 @@ void f77_endfile(int unit) {
     if (unformatted_units[unit].count > 0 || unformatted_units[unit].pos > 0) {
         unformatted_truncate(&unformatted_units[unit], unformatted_units[unit].pos);
         return;
+    }
+    UnformattedUnit *uu = &unformatted_units[unit];
+    if (uu->count == 0) {
+        unformatted_ensure_capacity_local(uu, 1);
+        if (!uu->records) {
+            return;
+        }
+        uu->records[0].data = NULL;
+        uu->records[0].len = 0;
+        uu->count = 1;
+        uu->pos = 0;
     }
 }

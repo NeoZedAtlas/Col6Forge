@@ -101,6 +101,66 @@ pub fn buildDirectWriteSignatureAndPtrs(ctx: *Context, builder: anytype, args: [
     defer sig_buf.deinit();
 
     for (args) |arg| {
+        if (arg.* == .identifier) {
+            const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
+            if (sym.dims.len > 0) {
+                const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
+                const base_ptr = try ctx.getPointer(sym.name);
+                const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
+                const char_len = sym.char_len orelse 1;
+                var idx: usize = 0;
+                while (idx < elem_count) : (idx += 1) {
+                    var offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                    if (sym.type_kind == .character and char_len > 1) {
+                        const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = .i32, .is_ptr = false };
+                        offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
+                    }
+                    const ptr_name = try ctx.nextTemp();
+                    try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
+                    const elem_ptr = ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+
+                    if (complex.isComplexType(elem_ty)) {
+                        const elem_real_ty = complex.complexElemType(elem_ty) orelse return error.UnsupportedComplexType;
+                        const load_tmp = try ctx.nextTemp();
+                        try builder.load(load_tmp, elem_ty, elem_ptr);
+                        const elem_val = ValueRef{ .name = load_tmp, .ty = elem_ty, .is_ptr = false };
+
+                        const real = try complex.extractComplex(ctx, builder, elem_val, 0);
+                        const imag = try complex.extractComplex(ctx, builder, elem_val, 1);
+
+                        const real_tmp = try ctx.nextTemp();
+                        try builder.alloca(real_tmp, elem_real_ty);
+                        const real_ptr = ValueRef{ .name = real_tmp, .ty = .ptr, .is_ptr = true };
+                        try builder.store(real, real_ptr);
+
+                        const imag_tmp = try ctx.nextTemp();
+                        try builder.alloca(imag_tmp, elem_real_ty);
+                        const imag_ptr = ValueRef{ .name = imag_tmp, .ty = .ptr, .is_ptr = true };
+                        try builder.store(imag, imag_ptr);
+
+                        try sig_buf.append(if (elem_real_ty == .f64) 'd' else 'r');
+                        try sig_buf.append(if (elem_real_ty == .f64) 'd' else 'r');
+                        try result.ptrs.append(real_ptr);
+                        try result.ptrs.append(imag_ptr);
+                        continue;
+                    }
+
+                    switch (sym.type_kind) {
+                        .integer => try sig_buf.append('i'),
+                        .real => try sig_buf.append('r'),
+                        .double_precision => try sig_buf.append('d'),
+                        .logical => try sig_buf.append('l'),
+                        .character => {
+                            try sig_buf.append('c');
+                            try sig_buf.writer().print("{d};", .{char_len});
+                        },
+                        else => return error.UnsupportedCast,
+                    }
+                    try result.ptrs.append(elem_ptr);
+                }
+                continue;
+            }
+        }
         const ty = try expr.exprType(ctx, arg);
         if (complex.isComplexType(ty)) {
             const elem_ty = complex.complexElemType(ty) orelse return error.UnsupportedComplexType;
@@ -154,6 +214,63 @@ pub fn buildDirectReadSignatureAndPtrs(ctx: *Context, builder: anytype, args: []
     defer sig_buf.deinit();
 
     for (args) |arg| {
+        if (arg.* == .identifier) {
+            const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
+            if (sym.dims.len > 0) {
+                const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
+                const base_ptr = try ctx.getPointer(sym.name);
+                const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
+                const char_len = sym.char_len orelse 1;
+                var idx: usize = 0;
+                while (idx < elem_count) : (idx += 1) {
+                    var offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                    if (sym.type_kind == .character and char_len > 1) {
+                        const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = .i32, .is_ptr = false };
+                        offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
+                    }
+                    const ptr_name = try ctx.nextTemp();
+                    try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
+                    const elem_ptr = ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+
+                    if (complex.isComplexType(elem_ty)) {
+                        const elem_real_ty = complex.complexElemType(elem_ty) orelse return error.UnsupportedComplexType;
+                        try sig_buf.append(if (elem_real_ty == .f64) 'd' else 'r');
+                        try sig_buf.append(if (elem_real_ty == .f64) 'd' else 'r');
+
+                        const real_tmp = try ctx.nextTemp();
+                        try builder.alloca(real_tmp, elem_real_ty);
+                        const real_ptr = ValueRef{ .name = real_tmp, .ty = .ptr, .is_ptr = true };
+                        const imag_tmp = try ctx.nextTemp();
+                        try builder.alloca(imag_tmp, elem_real_ty);
+                        const imag_ptr = ValueRef{ .name = imag_tmp, .ty = .ptr, .is_ptr = true };
+
+                        try result.ptrs.append(real_ptr);
+                        try result.ptrs.append(imag_ptr);
+                        try result.complex_fixups.append(.{
+                            .target_ptr = elem_ptr,
+                            .elem_ty = elem_real_ty,
+                            .real_ptr = real_ptr,
+                            .imag_ptr = imag_ptr,
+                        });
+                        continue;
+                    }
+
+                    switch (sym.type_kind) {
+                        .integer => try sig_buf.append('i'),
+                        .real => try sig_buf.append('r'),
+                        .double_precision => try sig_buf.append('d'),
+                        .logical => try sig_buf.append('l'),
+                        .character => {
+                            try sig_buf.append('c');
+                            try sig_buf.writer().print("{d};", .{char_len});
+                        },
+                        else => return error.UnsupportedCast,
+                    }
+                    try result.ptrs.append(elem_ptr);
+                }
+                continue;
+            }
+        }
         const ty = try expr.exprType(ctx, arg);
         if (complex.isComplexType(ty)) {
             const elem_ty = complex.complexElemType(ty) orelse return error.UnsupportedComplexType;

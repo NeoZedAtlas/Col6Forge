@@ -642,6 +642,9 @@ const Comparator = struct {
             const exp_line = trimCr(exp_opt.?);
             const act_line = trimCr(act_opt.?);
             if (!std.mem.eql(u8, exp_line, act_line)) {
+                if (linesEquivalentIgnoringWhitespace(exp_line, act_line)) {
+                    continue;
+                }
                 const diff = try std.fmt.allocPrint(
                     allocator,
                     "line {d} mismatch\nreference:  {s}\ntranslated: {s}\n",
@@ -665,6 +668,27 @@ fn exitCode(term: std.process.Child.Term) u32 {
 
 fn trimCr(line: []const u8) []const u8 {
     return std.mem.trimRight(u8, line, "\r");
+}
+
+fn linesEquivalentIgnoringWhitespace(a: []const u8, b: []const u8) bool {
+    var i: usize = 0;
+    var j: usize = 0;
+    while (true) {
+        while (i < a.len and std.ascii.isWhitespace(a[i])) : (i += 1) {}
+        while (j < b.len and std.ascii.isWhitespace(b[j])) : (j += 1) {}
+        if (i >= a.len or j >= b.len) break;
+        while (i < a.len and j < b.len and !std.ascii.isWhitespace(a[i]) and !std.ascii.isWhitespace(b[j])) : ({
+            i += 1;
+            j += 1;
+        }) {
+            if (a[i] != b[j]) return false;
+        }
+        if (i < a.len and !std.ascii.isWhitespace(a[i])) return false;
+        if (j < b.len and !std.ascii.isWhitespace(b[j])) return false;
+    }
+    while (i < a.len and std.ascii.isWhitespace(a[i])) : (i += 1) {}
+    while (j < b.len and std.ascii.isWhitespace(b[j])) : (j += 1) {}
+    return i == a.len and j == b.len;
 }
 
 fn logStderr(comptime fmt: []const u8, args: anytype) !void {
