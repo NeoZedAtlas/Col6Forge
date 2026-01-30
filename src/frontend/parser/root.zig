@@ -69,6 +69,12 @@ const Parser = struct {
             const tokens = try lexer.lexLogicalLine(self.arena, line);
             defer self.arena.free(tokens);
             var stmt_lp = LineParser.init(line, tokens);
+            if (decls.items.len == 0 and stmts.items.len == 0) {
+                if (isDuplicateProgramUnitLine(self.arena, line, header)) {
+                    self.index += 1;
+                    continue;
+                }
+            }
             if (stmt_lp.isKeywordSplit("END") and !isEndDoLine(stmt_lp) and !isEndIfLine(stmt_lp)) {
                 self.index += 1;
                 break;
@@ -172,6 +178,17 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
         .args = try args_list.toOwnedSlice(),
         .type_decl = type_decl,
     };
+}
+
+fn isDuplicateProgramUnitLine(arena: std.mem.Allocator, line: fixed_form.LogicalLine, header: ProgramUnitHeader) bool {
+    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
+    defer arena.free(tokens);
+    var lp = LineParser.init(line, tokens);
+    var block_data_counter: usize = 0;
+    const parsed = parseProgramUnitHeader(arena, &lp, &block_data_counter) catch return false;
+    if (lp.peek() != null) return false;
+    if (parsed.kind != header.kind) return false;
+    return context.eqNoCase(parsed.name, header.name);
 }
 
 fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {

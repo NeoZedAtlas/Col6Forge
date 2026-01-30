@@ -27,7 +27,8 @@ pub fn parseInlineFormatSpec(
             const quote = token_text[0];
             if (token_text[token_text.len - 1] != quote) return error.UnexpectedToken;
             const inner = token_text[1 .. token_text.len - 1];
-            return parseFormatItems(arena, inner);
+            const normalized = try unescapeFormatString(arena, inner, quote);
+            return parseFormatItems(arena, normalized);
         },
         .hollerith => {
             const idx = std.mem.indexOfScalar(u8, token_text, 'H') orelse std.mem.indexOfScalar(u8, token_text, 'h') orelse return error.UnexpectedToken;
@@ -37,6 +38,21 @@ pub fn parseInlineFormatSpec(
         },
         else => return error.UnexpectedToken,
     }
+}
+
+fn unescapeFormatString(arena: std.mem.Allocator, inner: []const u8, quote: u8) ![]const u8 {
+    var buf = std.array_list.Managed(u8).init(arena);
+    var i: usize = 0;
+    while (i < inner.len) {
+        if (inner[i] == quote and i + 1 < inner.len and inner[i + 1] == quote) {
+            try buf.append(quote);
+            i += 2;
+            continue;
+        }
+        try buf.append(inner[i]);
+        i += 1;
+    }
+    return buf.toOwnedSlice();
 }
 
 pub fn parseFormatItems(arena: std.mem.Allocator, text: []const u8) ![]FormatItem {

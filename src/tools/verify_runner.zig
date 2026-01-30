@@ -116,9 +116,12 @@ pub fn main() !void {
             continue;
         }
 
+        const ref_source = try prepareGfortranSource(allocator, abs_input_path, work_dir);
+        defer if (ref_source.owned) allocator.free(ref_source.path);
+
         const ref_compile = runProcessCapture(
             allocator,
-            &.{ gfortran_cmd, "-std=legacy", "-o", ref_exe, abs_input_path },
+            &.{ gfortran_cmd, "-std=legacy", "-o", ref_exe, ref_source.path },
             work_dir,
             ref_timeout,
         ) catch |err| {
@@ -142,7 +145,7 @@ pub fn main() !void {
             try logStderr("\n=== GFORTRAN COMPILE ERROR ===\n", .{});
             try logStderr("Exit Code: {d}\n", .{code});
             try logStderr("Work Dir : {s}\n", .{work_dir});
-            try logStderr("Command  : {s} -std=legacy -o {s} {s}\n", .{ gfortran_cmd, ref_exe, abs_input_path });
+            try logStderr("Command  : {s} -std=legacy -o {s} {s}\n", .{ gfortran_cmd, ref_exe, ref_source.path });
             try logStderr("STDOUT   : \n{s}\n", .{ref_compile.stdout});
             try logStderr("STDERR   : \n{s}\n", .{ref_compile.stderr});
             try logStderr("==============================\n", .{});
@@ -192,6 +195,7 @@ pub fn main() !void {
             continue;
         }
 
+        try cleanupFortranScratchFiles(abs_case_dir);
         const ref_run = runProcessCapture(
             allocator,
             &.{ ref_exe },
@@ -218,6 +222,7 @@ pub fn main() !void {
             continue;
         }
 
+        try cleanupFortranScratchFiles(abs_case_dir);
         const test_run = runProcessCapture(
             allocator,
             &.{ test_exe },
@@ -294,12 +299,12 @@ fn parseArgs(args: []const []const u8) !Options {
             filter = args[i];
             continue;
         }
-        if (std.mem.eql(u8, arg, "--fcvs21_f95")) {
+        if (std.ascii.eqlIgnoreCase(arg, "--fcvs21_f95")) {
             if (suite != null) return error.DuplicateSuiteFlag;
             suite = .fcvs21_f95;
             continue;
         }
-        if (std.mem.eql(u8, arg, "--fcsv78")) {
+        if (std.ascii.eqlIgnoreCase(arg, "--fcsv78")) {
             if (suite != null) return error.DuplicateSuiteFlag;
             suite = .fcsv78;
             continue;
@@ -408,7 +413,19 @@ fn testCaseLessThan(_: void, a: TestCase, b: TestCase) bool {
 }
 
 fn isFortranSource(path: []const u8) bool {
-    return std.mem.endsWith(u8, path, ".f") or std.mem.endsWith(u8, path, ".F");
+    const exts = [_][]const u8{
+        ".f",
+        ".for",
+        ".f77",
+        ".f90",
+        ".f95",
+        ".f03",
+        ".f08",
+    };
+    for (exts) |ext| {
+        if (std.ascii.endsWithIgnoreCase(path, ext)) return true;
+    }
+    return false;
 }
 
 fn sanitizeWorkName(allocator: std.mem.Allocator, rel_path: []const u8) ![]const u8 {
@@ -437,6 +454,109 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
     var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(contents);
+}
+
+const RefSource = struct {
+    path: []const u8,
+    owned: bool,
+};
+
+fn prepareGfortranSource(
+    allocator: std.mem.Allocator,
+    abs_input_path: []const u8,
+    work_dir: []const u8,
+) !RefSource {
+    const max_size = 64 * 1024 * 1024;
+    const contents = try std.fs.cwd().readFileAlloc(allocator, abs_input_path, max_size);
+    defer allocator.free(contents);
+
+    const sanitized = try sanitizeDuplicateProgramHeader(allocator, contents);
+    defer allocator.free(sanitized);
+
+    const out_path = try std.fs.path.join(allocator, &.{ work_dir, "gfortran_input.for" });
+    try writeFile(out_path, sanitized);
+    return .{ .path = out_path, .owned = true };
+}
+
+fn sanitizeDuplicateProgramHeader(allocator: std.mem.Allocator, contents: []const u8) ![]const u8 {
+    var out = std.array_list.Managed(u8).init(allocator);
+    var it = std.mem.splitScalar(u8, contents, '\n');
+    var wrote_any = false;
+    var first_header: ?[]const u8 = null;
+    var skipped = false;
+    defer if (first_header) |hdr| allocator.free(hdr);
+
+    while (it.next()) |line_raw| {
+        const line = stripTrailingCarriage(line_raw);
+        const normalized = normalizeHeaderLine(allocator, line) catch null;
+        defer if (normalized) |value| allocator.free(value);
+
+        var skip_line = false;
+        if (!skipped) {
+            if (normalized) |value| {
+                if (first_header == null) {
+                    if (isProgramUnitHeader(value)) {
+                        first_header = try allocator.dupe(u8, value);
+                    }
+                } else if (std.mem.eql(u8, value, first_header.?)) {
+                    skip_line = true;
+                    skipped = true;
+                }
+            }
+        }
+
+        if (!skip_line) {
+            if (wrote_any) try out.append('\n');
+            try out.appendSlice(line_raw);
+            wrote_any = true;
+        }
+    }
+
+    return out.toOwnedSlice();
+}
+
+fn stripTrailingCarriage(line: []const u8) []const u8 {
+    if (line.len > 0 and line[line.len - 1] == '\r') {
+        return line[0 .. line.len - 1];
+    }
+    return line;
+}
+
+fn normalizeHeaderLine(allocator: std.mem.Allocator, line: []const u8) !?[]const u8 {
+    if (line.len == 0) return null;
+    if (isCommentLine(line)) return null;
+
+    const limited = line[0..@min(line.len, 72)];
+    const trimmed = std.mem.trim(u8, limited, " \t");
+    if (trimmed.len == 0) return null;
+
+    var buf = std.array_list.Managed(u8).init(allocator);
+    var in_space = false;
+    for (trimmed) |ch| {
+        if (ch == ' ' or ch == '\t') {
+            if (!in_space) {
+                try buf.append(' ');
+                in_space = true;
+            }
+            continue;
+        }
+        try buf.append(std.ascii.toUpper(ch));
+        in_space = false;
+    }
+    return try buf.toOwnedSlice();
+}
+
+fn isProgramUnitHeader(text: []const u8) bool {
+    return std.mem.startsWith(u8, text, "PROGRAM ") or
+        std.mem.startsWith(u8, text, "SUBROUTINE ") or
+        std.mem.startsWith(u8, text, "FUNCTION ") or
+        std.mem.eql(u8, text, "BLOCKDATA") or
+        std.mem.startsWith(u8, text, "BLOCK DATA");
+}
+
+fn isCommentLine(line: []const u8) bool {
+    if (line.len == 0) return false;
+    return line[0] == 'c' or line[0] == 'C' or line[0] == '*' or line[0] == '!';
 }
 
 fn prepareExePath(allocator: std.mem.Allocator, work_dir: []const u8, base: []const u8) ![]const u8 {
@@ -584,6 +704,28 @@ fn isTimedOut(timeout_ms: u64, timer: *std.time.Timer) bool {
 
 fn cleanupWorkDir(path: []const u8) void {
     std.fs.cwd().deleteTree(path) catch {};
+}
+
+fn cleanupFortranScratchFiles(case_dir: []const u8) !void {
+    var dir = try std.fs.cwd().openDir(case_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!isFortranScratchName(entry.name)) continue;
+        dir.deleteFile(entry.name) catch {};
+    }
+}
+
+fn isFortranScratchName(name: []const u8) bool {
+    if (name.len < 6) return false;
+    if (!std.ascii.eqlIgnoreCase(name[0..5], "fort.")) return false;
+    var i: usize = 5;
+    while (i < name.len) : (i += 1) {
+        if (!std.ascii.isDigit(name[i])) return false;
+    }
+    return true;
 }
 
 fn timeoutMonitor(
