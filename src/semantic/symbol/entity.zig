@@ -26,6 +26,20 @@ pub const Symbol = struct {
     type_explicit: bool,
 };
 
+pub const EntityKind = enum {
+    symbol,
+    scope,
+    unit,
+    unknown,
+};
+
+pub const EntityPayload = union(EntityKind) {
+    symbol: Symbol,
+    scope: void,
+    unit: void,
+    unknown: void,
+};
+
 pub const ComplexConst = struct {
     real: f64,
     imag: f64,

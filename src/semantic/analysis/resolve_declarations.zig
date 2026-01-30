@@ -2,9 +2,9 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
-const symbols_mod = @import("symbols.zig");
-const constants = @import("constants.zig");
-const expressions = @import("expressions.zig");
+const symbols_mod = @import("resolve_symbols.zig");
+const constants = @import("resolve_constants.zig");
+const expressions = @import("resolve_expressions.zig");
 
 const StorageClass = symbols.StorageClass;
 

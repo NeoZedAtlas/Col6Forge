@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
-const symbols_mod = @import("symbols.zig");
+const symbols_mod = @import("resolve_symbols.zig");
 
 const ResolvedRefKind = symbols.ResolvedRefKind;
 

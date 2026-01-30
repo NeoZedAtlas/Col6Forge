@@ -1,7 +1,7 @@
 const ast = @import("../../ast/nodes.zig");
 const context = @import("context.zig");
-const expressions = @import("expressions.zig");
-const symbols_mod = @import("symbols.zig");
+const expressions = @import("resolve_expressions.zig");
+const symbols_mod = @import("resolve_symbols.zig");
 
 const ResolveError = expressions.ResolveError;
 
