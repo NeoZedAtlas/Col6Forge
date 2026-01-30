@@ -266,11 +266,13 @@ const Options = struct {
 
 fn parseArgs(args: []const []const u8) !Options {
     var tests_dir: []const u8 = "tests/NIST_F78_test_suite";
+    var tests_dir_set = false;
     var filter: ?[]const u8 = null;
     var gfortran_path: []const u8 = defaultGfortran();
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
     var timeout_ms: u64 = 30_000;
+    var suite: ?TestSuite = null;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -283,12 +285,23 @@ fn parseArgs(args: []const []const u8) !Options {
             if (i + 1 >= args.len) return error.MissingTestsDir;
             i += 1;
             tests_dir = args[i];
+            tests_dir_set = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--filter")) {
             if (i + 1 >= args.len) return error.MissingFilter;
             i += 1;
             filter = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--fcvs21_f95")) {
+            if (suite != null) return error.DuplicateSuiteFlag;
+            suite = .fcvs21_f95;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--fcsv78")) {
+            if (suite != null) return error.DuplicateSuiteFlag;
+            suite = .fcsv78;
             continue;
         }
         if (std.mem.eql(u8, arg, "--gfortran")) {
@@ -310,6 +323,11 @@ fn parseArgs(args: []const []const u8) !Options {
         return error.UnknownFlag;
     }
 
+    if (suite != null) {
+        if (tests_dir_set) return error.ConflictingSuiteSelection;
+        tests_dir = suiteTestsDir(suite.?);
+    }
+
     return .{
         .tests_dir = tests_dir,
         .filter = filter,
@@ -322,16 +340,35 @@ fn parseArgs(args: []const []const u8) !Options {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: verify_runner [--tests-dir <dir>] [--filter <text>] [--timeout <ms>] [-emit-llvm]
+        \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--timeout <ms>] [-emit-llvm]
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
+        \\  --fcvs21_f95       Use the Fortran 95 adapted NIST F78 suite
+        \\  --fcsv78           Use the original NIST F78 suite
         \\  --filter <text>    Only run tests whose relative path contains this text
         \\  --gfortran <path>  Path to gfortran executable (default: gfortran or gfortran.exe)
         \\  --timeout <ms>     Per-test timeout in milliseconds (default: 30000)
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
         \\
+        \\Examples:
+        \\  zig build verify -- --filter FM715
+        \\  zig build verify -- --fcvs21_f95 --filter FM715
+        \\  zig build verify -- --fcsv78 --filter FM715
+        \\
     );
+}
+
+const TestSuite = enum {
+    fcvs21_f95,
+    fcsv78,
+};
+
+fn suiteTestsDir(suite: TestSuite) []const u8 {
+    return switch (suite) {
+        .fcvs21_f95 => "tests/NIST_F78_test_suite/fcvs21_f95",
+        .fcsv78 => "tests/NIST_F78_test_suite/FCSV78",
+    };
 }
 
 const TestCase = struct {

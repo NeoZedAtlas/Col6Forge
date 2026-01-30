@@ -187,9 +187,19 @@ pub fn build(b: *std.Build) void {
     }
 
     const verify_step = b.step("verify", "Run NIST F78 verification tests");
+    const verify_fcvs21_f95 = b.option(bool, "fcvs21_f95", "Verify with the Fortran 95 adapted NIST F78 suite (example: zig build verify -Dfcvs21_f95 -- --filter FM715)") orelse false;
+    const verify_fcsv78 = b.option(bool, "fcsv78", "Verify with the original NIST F78 suite (example: zig build verify -Dfcsv78 -- --filter FM715)") orelse false;
+    if (verify_fcvs21_f95 and verify_fcsv78) {
+        @panic("choose at most one of -Dfcvs21_f95 or -Dfcsv78");
+    }
     const run_verify = b.addRunArtifact(verify_runner);
     verify_step.dependOn(&run_verify.step);
     run_verify.step.dependOn(b.getInstallStep());
+    if (verify_fcvs21_f95) {
+        run_verify.addArgs(&.{ "--tests-dir", "tests/NIST_F78_test_suite/fcvs21_f95" });
+    } else if (verify_fcsv78) {
+        run_verify.addArgs(&.{ "--tests-dir", "tests/NIST_F78_test_suite/FCSV78" });
+    }
     if (b.args) |args| {
         run_verify.addArgs(args);
     }
