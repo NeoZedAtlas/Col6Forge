@@ -10,7 +10,8 @@ const Col6Forge = @import("Col6Forge");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var thread_safe = std.heap.ThreadSafeAllocator{ .child_allocator = gpa.allocator() };
+    const allocator = thread_safe.allocator();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -28,75 +29,74 @@ pub fn main() !void {
         return;
     }
 
+    var log_state: LogState = .{};
     const cases = try collectTestCases(arena_allocator, options.tests_dir, options.filter);
     if (cases.len == 0) {
-        try logStdout("no .f tests found\n", .{});
+        log_state.stdout("no .f tests found\n", .{});
+        return;
+    }
+    var progress = try Progress.init(cases.len);
+    defer progress.deinit();
+
+    if (options.jobs == 1 or cases.len == 1) {
+        var failures: usize = 0;
+        var updated: usize = 0;
+        for (cases) |case| {
+            logProgress(&log_state, &progress, case.input_path);
+            const result = processCase(allocator, case, options, &log_state) catch {
+                failures += 1;
+                _ = progress.completed.fetchAdd(1, .seq_cst);
+                continue;
+            };
+            if (!result.ok) failures += 1;
+            if (result.updated) updated += 1;
+            _ = progress.completed.fetchAdd(1, .seq_cst);
+        }
+        if (options.update) {
+            log_state.stdout("updated {d} golden files\n", .{updated});
+            return;
+        }
+        if (failures > 0) {
+            log_state.stderr("golden tests failed: {d}\n", .{failures});
+            return error.GoldenTestsFailed;
+        }
+        log_state.stdout("golden tests passed\n", .{});
         return;
     }
 
-    var failures: usize = 0;
-    var updated: usize = 0;
+    var failures = std.atomic.Value(usize).init(0);
+    var updated = std.atomic.Value(usize).init(0);
+    var pool: std.Thread.Pool = undefined;
+    try pool.init(.{
+        .allocator = allocator,
+        .n_jobs = options.jobs,
+    });
+    defer pool.deinit();
 
+    var wait_group = std.Thread.WaitGroup{};
     for (cases) |case| {
-        var timer = try std.time.Timer.start();
-        const result = Col6Forge.runPipeline(allocator, case.input_path, options.emit) catch |err| {
-            failures += 1;
-            try reportPipelineError(case.input_path, err);
-            continue;
-        };
-        defer allocator.free(result.output);
-
-        if (isTimedOut(options.timeout_ms, &timer)) {
-            failures += 1;
-            try logStderr("timeout: {s}\n", .{case.input_path});
-            continue;
-        }
-
-        if (options.update) {
-            try writeFile(case.golden_path, result.output);
-            updated += 1;
-            continue;
-        }
-
-        const expected = std.fs.cwd().readFileAlloc(allocator, case.golden_path, 64 * 1024 * 1024) catch |err| {
-            failures += 1;
-            if (err == error.FileNotFound) {
-                try logStderr("missing golden file: {s}\n", .{case.golden_path});
-            } else {
-                try logStderr("failed to read golden file {s}: {s}\n", .{ case.golden_path, @errorName(err) });
-            }
-            continue;
-        };
-        defer allocator.free(expected);
-
-        if (isTimedOut(options.timeout_ms, &timer)) {
-            failures += 1;
-            try logStderr("timeout: {s}\n", .{case.input_path});
-            continue;
-        }
-
-        const comparison = try Comparator.compareText(allocator, expected, result.output);
-        if (!comparison.ok) {
-            failures += 1;
-            try logStderr("mismatch: {s}\n{s}\n", .{ case.input_path, comparison.diff.? });
-            allocator.free(comparison.diff.?);
-            continue;
-        }
-        if (comparison.diff) |diff| {
-            allocator.free(diff);
-        }
+        pool.spawnWg(&wait_group, runCaseParallel, .{
+            allocator,
+            case,
+            options,
+            &log_state,
+            &progress,
+            &failures,
+            &updated,
+        });
     }
+    pool.waitAndWork(&wait_group);
 
     if (options.update) {
-        try logStdout("updated {d} golden files\n", .{updated});
+        log_state.stdout("updated {d} golden files\n", .{updated.load(.seq_cst)});
         return;
     }
-
-    if (failures > 0) {
-        try logStderr("golden tests failed: {d}\n", .{failures});
+    const failure_count = failures.load(.seq_cst);
+    if (failure_count > 0) {
+        log_state.stderr("golden tests failed: {d}\n", .{failure_count});
         return error.GoldenTestsFailed;
     }
-    try logStdout("golden tests passed\n", .{});
+    log_state.stdout("golden tests passed\n", .{});
 }
 
 const Options = struct {
@@ -106,6 +106,7 @@ const Options = struct {
     emit: Col6Forge.EmitKind,
     show_help: bool,
     timeout_ms: u64,
+    jobs: usize,
 };
 
 fn parseArgs(args: []const []const u8) !Options {
@@ -115,6 +116,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
     var timeout_ms: u64 = 30_000;
+    var jobs = defaultJobs();
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -149,6 +151,13 @@ fn parseArgs(args: []const []const u8) !Options {
             timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
             continue;
         }
+        if (std.mem.eql(u8, arg, "--jobs") or std.mem.eql(u8, arg, "-j")) {
+            if (i + 1 >= args.len) return error.MissingJobs;
+            i += 1;
+            jobs = try std.fmt.parseInt(usize, args[i], 10);
+            if (jobs == 0) return error.InvalidJobs;
+            continue;
+        }
         return error.UnknownFlag;
     }
 
@@ -159,17 +168,19 @@ fn parseArgs(args: []const []const u8) !Options {
         .emit = emit,
         .show_help = show_help,
         .timeout_ms = timeout_ms,
+        .jobs = jobs,
     };
 }
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: golden_runner [--tests-dir <dir>] [--filter <text>] [--update] [--timeout <ms>] [-emit-llvm]
+        \\Usage: golden_runner [--tests-dir <dir>] [--filter <text>] [--update] [--timeout <ms>] [--jobs <n>] [-emit-llvm]
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
         \\  --filter <text>    Only run tests whose relative path contains this text
         \\  --update           Overwrite golden .ll files with current output
         \\  --timeout <ms>     Per-test timeout in milliseconds (default: 30000)
+        \\  --jobs <n>, -j <n> Parallel job count (default: CPU cores)
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
         \\
@@ -227,10 +238,12 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
     try file.writeAll(contents);
 }
 
-fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
+fn reportPipelineError(log_state: *LogState, input_path: []const u8, err: anyerror) !void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
+    log_state.lock();
+    defer log_state.unlock();
     switch (err) {
         error.FileNotFound => {
             try Col6Forge.writeDiagnostic(&writer.interface, .{
@@ -322,18 +335,168 @@ fn isTimedOut(timeout_ms: u64, timer: *std.time.Timer) bool {
     return elapsed_ms >= timeout_ms;
 }
 
-fn logStderr(comptime fmt: []const u8, args: anytype) !void {
-    var stderr_file = std.fs.File.stderr();
-    var buffer: [4096]u8 = undefined;
-    var writer = stderr_file.writer(&buffer);
-    try writer.interface.print(fmt, args);
-    try writer.interface.flush();
+const CaseResult = struct {
+    ok: bool,
+    updated: bool,
+};
+
+fn processCase(
+    allocator: std.mem.Allocator,
+    case: TestCase,
+    options: Options,
+    log_state: *LogState,
+) !CaseResult {
+    var timer = try std.time.Timer.start();
+    const result = Col6Forge.runPipeline(allocator, case.input_path, options.emit) catch |err| {
+        try reportPipelineError(log_state, case.input_path, err);
+        return .{ .ok = false, .updated = false };
+    };
+    defer allocator.free(result.output);
+
+    if (isTimedOut(options.timeout_ms, &timer)) {
+        log_state.stderr("timeout: {s}\n", .{case.input_path});
+        return .{ .ok = false, .updated = false };
+    }
+
+    if (options.update) {
+        try writeFile(case.golden_path, result.output);
+        return .{ .ok = true, .updated = true };
+    }
+
+    const expected = std.fs.cwd().readFileAlloc(allocator, case.golden_path, 64 * 1024 * 1024) catch |err| {
+        if (err == error.FileNotFound) {
+            log_state.stderr("missing golden file: {s}\n", .{case.golden_path});
+        } else {
+            log_state.stderr("failed to read golden file {s}: {s}\n", .{ case.golden_path, @errorName(err) });
+        }
+        return .{ .ok = false, .updated = false };
+    };
+    defer allocator.free(expected);
+
+    if (isTimedOut(options.timeout_ms, &timer)) {
+        log_state.stderr("timeout: {s}\n", .{case.input_path});
+        return .{ .ok = false, .updated = false };
+    }
+
+    const comparison = try Comparator.compareText(allocator, expected, result.output);
+    if (!comparison.ok) {
+        log_state.stderr("mismatch: {s}\n{s}\n", .{ case.input_path, comparison.diff.? });
+        allocator.free(comparison.diff.?);
+        return .{ .ok = false, .updated = false };
+    }
+    if (comparison.diff) |diff| {
+        allocator.free(diff);
+    }
+
+    return .{ .ok = true, .updated = false };
 }
 
-fn logStdout(comptime fmt: []const u8, args: anytype) !void {
-    var stdout_file = std.fs.File.stdout();
-    var buffer: [4096]u8 = undefined;
-    var writer = stdout_file.writer(&buffer);
-    try writer.interface.print(fmt, args);
-    try writer.interface.flush();
+fn runCaseParallel(
+    allocator: std.mem.Allocator,
+    case: TestCase,
+    options: Options,
+    log_state: *LogState,
+    progress: *Progress,
+    failures: *std.atomic.Value(usize),
+    updated: *std.atomic.Value(usize),
+) void {
+    logProgress(log_state, progress, case.input_path);
+    const result = processCase(allocator, case, options, log_state) catch {
+        _ = failures.fetchAdd(1, .seq_cst);
+        _ = progress.completed.fetchAdd(1, .seq_cst);
+        return;
+    };
+    if (!result.ok) {
+        _ = failures.fetchAdd(1, .seq_cst);
+    }
+    if (result.updated) {
+        _ = updated.fetchAdd(1, .seq_cst);
+    }
+    _ = progress.completed.fetchAdd(1, .seq_cst);
+}
+
+const LogState = struct {
+    mutex: std.Thread.Mutex = .{},
+
+    fn lock(self: *LogState) void {
+        self.mutex.lock();
+    }
+
+    fn unlock(self: *LogState) void {
+        self.mutex.unlock();
+    }
+
+    fn stdout(self: *LogState, comptime fmt: []const u8, args: anytype) void {
+        self.print(std.fs.File.stdout(), fmt, args);
+    }
+
+    fn stderr(self: *LogState, comptime fmt: []const u8, args: anytype) void {
+        self.print(std.fs.File.stderr(), fmt, args);
+    }
+
+    fn print(self: *LogState, file: std.fs.File, comptime fmt: []const u8, args: anytype) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        var buffer: [4096]u8 = undefined;
+        var writer = file.writer(&buffer);
+        writer.interface.print(fmt, args) catch {};
+        writer.interface.flush() catch {};
+    }
+};
+
+const Progress = struct {
+    total: usize,
+    started: std.atomic.Value(usize),
+    completed: std.atomic.Value(usize),
+    timer: std.time.Timer,
+
+    fn init(total: usize) !Progress {
+        return .{
+            .total = total,
+            .started = std.atomic.Value(usize).init(0),
+            .completed = std.atomic.Value(usize).init(0),
+            .timer = try std.time.Timer.start(),
+        };
+    }
+
+    fn deinit(_: *Progress) void {}
+};
+
+fn logProgress(log_state: *LogState, progress: *Progress, path: []const u8) void {
+    const started = progress.started.fetchAdd(1, .seq_cst) + 1;
+    const completed = progress.completed.load(.seq_cst);
+    const elapsed_ms = progress.timer.read() / std.time.ns_per_ms;
+    const eta_ms = estimateEtaMs(elapsed_ms, completed, progress.total);
+
+    var elapsed_buf: [32]u8 = undefined;
+    var eta_buf: [32]u8 = undefined;
+    const elapsed_str = formatDuration(&elapsed_buf, elapsed_ms);
+    const eta_str = formatDuration(&eta_buf, eta_ms);
+    const name = std.fs.path.basename(path);
+
+    log_state.stdout("[{d}/{d}] Running {s} | elapsed {s} | eta {s}\n", .{
+        started,
+        progress.total,
+        name,
+        elapsed_str,
+        eta_str,
+    });
+}
+
+fn estimateEtaMs(elapsed_ms: u64, completed: usize, total: usize) u64 {
+    if (completed == 0 or total <= completed) return 0;
+    const avg_ms = elapsed_ms / completed;
+    return avg_ms * (total - completed);
+}
+
+fn formatDuration(buf: []u8, total_ms: u64) []const u8 {
+    const total_seconds = total_ms / 1000;
+    const seconds = total_seconds % 60;
+    const minutes = (total_seconds / 60) % 60;
+    const hours = total_seconds / 3600;
+    return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hours, minutes, seconds }) catch "00:00:00";
+}
+
+fn defaultJobs() usize {
+    return std.Thread.getCpuCount() catch 1;
 }

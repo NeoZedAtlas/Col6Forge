@@ -11,7 +11,8 @@ const Col6Forge = @import("Col6Forge");
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var thread_safe = std.heap.ThreadSafeAllocator{ .child_allocator = gpa.allocator() };
+    const allocator = thread_safe.allocator();
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -29,6 +30,8 @@ pub fn main() !void {
         return;
     }
 
+    var log_state: LogState = .{};
+
     const root_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(root_path);
 
@@ -45,219 +48,66 @@ pub fn main() !void {
 
     const cases = try collectTestCases(arena_allocator, options.tests_dir, options.filter);
     if (cases.len == 0) {
-        try std.fs.File.stdout().writeAll("no .f tests found\n");
+        log_state.stdout("no .f tests found\n", .{});
         return;
     }
 
-    var failures: usize = 0;
+    var progress = try Progress.init(cases.len);
+    defer progress.deinit();
 
-    for (cases) |case| {
-        var timer = try std.time.Timer.start();
-        const abs_input_path = try std.fs.path.join(allocator, &.{ root_path, case.input_path });
-        defer allocator.free(abs_input_path);
+    var dir_locks = DirLocks.init(allocator);
+    defer dir_locks.deinit();
 
-        const abs_case_dir = try std.fs.path.join(allocator, &.{ root_path, case.case_dir });
-        defer allocator.free(abs_case_dir);
-
-        const work_dir_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "verify", case.work_name });
-        defer allocator.free(work_dir_rel);
-        try std.fs.cwd().makePath(work_dir_rel);
-
-        const work_dir = try std.fs.path.join(allocator, &.{ root_path, work_dir_rel });
-        defer allocator.free(work_dir);
-
-        const ll_path = try std.fs.path.join(allocator, &.{ work_dir, "translated.ll" });
-        defer allocator.free(ll_path);
-        const ref_exe = try prepareExePath(allocator, work_dir, "ref");
-        defer allocator.free(ref_exe);
-        const test_exe = try prepareExePath(allocator, work_dir, "test");
-        defer allocator.free(test_exe);
-        const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
-        defer allocator.free(runtime_dir);
-        const runtime_sources = [_][]const u8{
-            "f77_io_core.c",
-            "f77_io_formatted.c",
-            "f77_io_internal.c",
-            "f77_io_control.c",
-            "f77_io_direct.c",
-            "f77_io_unformatted.c",
-            "f77_io_format.c",
-            "f77_complex.c",
-        };
-        var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);
-        defer {
-            for (runtime_paths) |path| allocator.free(path);
-            allocator.free(runtime_paths);
+    if (options.jobs == 1 or cases.len == 1) {
+        var failures: usize = 0;
+        for (cases) |case| {
+            logProgress(&log_state, &progress, case.input_path);
+            const ok = processCase(allocator, root_path, gfortran_cmd, case, options, &log_state, &dir_locks) catch {
+                failures += 1;
+                _ = progress.completed.fetchAdd(1, .seq_cst);
+                continue;
+            };
+            if (!ok) failures += 1;
+            _ = progress.completed.fetchAdd(1, .seq_cst);
         }
-        for (runtime_sources, 0..) |name, idx| {
-            runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
+        if (failures > 0) {
+            log_state.stderr("verification failed: {d}\n", .{failures});
+            return error.VerificationFailed;
         }
-
-        const ir = Col6Forge.runPipeline(allocator, abs_input_path, options.emit) catch |err| {
-            failures += 1;
-            try reportPipelineError(abs_input_path, err);
-            continue;
-        };
-        defer allocator.free(ir.output);
-        try writeFile(ll_path, ir.output);
-
-        if (isTimedOut(options.timeout_ms, &timer)) {
-            failures += 1;
-            try logStderr("timeout: {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
-            continue;
-        }
-
-        const ref_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
-        if (ref_timeout != null and ref_timeout.? == 0) {
-            failures += 1;
-            try logStderr("timeout: {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
-            continue;
-        }
-
-        const ref_source = try prepareGfortranSource(allocator, abs_input_path, work_dir);
-        defer if (ref_source.owned) allocator.free(ref_source.path);
-
-        const ref_compile = runProcessCapture(
-            allocator,
-            &.{ gfortran_cmd, "-std=legacy", "-o", ref_exe, ref_source.path },
-            work_dir,
-            ref_timeout,
-        ) catch |err| {
-            failures += 1;
-            if (err == error.FileNotFound) {
-                try logStderr("gfortran not found (use --gfortran or set GFORTRAN/FC)\n", .{});
-            }
-            try logStderr("gfortran failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
-            continue;
-        };
-        defer ref_compile.deinit(allocator);
-        if (ref_compile.timed_out) {
-            failures += 1;
-            try logStderr("timeout: gfortran compile {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
-            continue;
-        }
-        if (!isZeroExit(ref_compile.term)) {
-            failures += 1;
-            const code = exitCode(ref_compile.term);
-            try logStderr("\n=== GFORTRAN COMPILE ERROR ===\n", .{});
-            try logStderr("Exit Code: {d}\n", .{code});
-            try logStderr("Work Dir : {s}\n", .{work_dir});
-            try logStderr("Command  : {s} -std=legacy -o {s} {s}\n", .{ gfortran_cmd, ref_exe, ref_source.path });
-            try logStderr("STDOUT   : \n{s}\n", .{ref_compile.stdout});
-            try logStderr("STDERR   : \n{s}\n", .{ref_compile.stderr});
-            try logStderr("==============================\n", .{});
-            continue;
-        }
-
-        const compile_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
-        if (compile_timeout != null and compile_timeout.? == 0) {
-            failures += 1;
-            try logStderr("timeout: {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
-            continue;
-        }
-
-        var compile_args: std.ArrayList([]const u8) = .empty;
-        defer compile_args.deinit(allocator);
-        try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path });
-        try compile_args.appendSlice(allocator, runtime_paths);
-        const our_compile = runProcessCapture(
-            allocator,
-            compile_args.items,
-            work_dir,
-            compile_timeout,
-        ) catch |err| {
-            failures += 1;
-            try logStderr("zig cc failed: {s} ({s})\n", .{ ll_path, @errorName(err) });
-            continue;
-        };
-        defer our_compile.deinit(allocator);
-        if (our_compile.timed_out) {
-            failures += 1;
-            try logStderr("timeout: zig cc {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
-            continue;
-        }
-        if (!isZeroExit(our_compile.term)) {
-            failures += 1;
-            try logStderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, our_compile.stderr });
-            continue;
-        }
-
-        const ref_run_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
-        if (ref_run_timeout != null and ref_run_timeout.? == 0) {
-            failures += 1;
-            try logStderr("timeout: {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
-            continue;
-        }
-
-        try cleanupFortranScratchFiles(abs_case_dir);
-        const ref_run = runProcessCapture(
-            allocator,
-            &.{ ref_exe },
-            abs_case_dir,
-            ref_run_timeout,
-        ) catch |err| {
-            failures += 1;
-            try logStderr("reference run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
-            continue;
-        };
-        defer ref_run.deinit(allocator);
-        if (ref_run.timed_out) {
-            failures += 1;
-            try logStderr("timeout: reference run {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
-            continue;
-        }
-
-        const test_run_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
-        if (test_run_timeout != null and test_run_timeout.? == 0) {
-            failures += 1;
-            try logStderr("timeout: {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
-            continue;
-        }
-
-        try cleanupFortranScratchFiles(abs_case_dir);
-        const test_run = runProcessCapture(
-            allocator,
-            &.{ test_exe },
-            abs_case_dir,
-            test_run_timeout,
-        ) catch |err| {
-            failures += 1;
-            try logStderr("translated run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
-            continue;
-        };
-        defer test_run.deinit(allocator);
-        if (test_run.timed_out) {
-            failures += 1;
-            try logStderr("timeout: translated run {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
-            continue;
-        }
-
-        const comparison = try Comparator.compare(allocator, ref_run.term, test_run.term, ref_run.stdout, test_run.stdout);
-        if (!comparison.ok) {
-            failures += 1;
-            try logStderr("mismatch: {s}\n{s}\n", .{ abs_input_path, comparison.diff.? });
-            allocator.free(comparison.diff.?);
-            continue;
-        }
-        if (comparison.diff) |diff| {
-            allocator.free(diff);
-        }
+        log_state.stdout("verification passed\n", .{});
+        return;
     }
 
-    if (failures > 0) {
-        try logStderr("verification failed: {d}\n", .{failures});
+    var failures = std.atomic.Value(usize).init(0);
+    var pool: std.Thread.Pool = undefined;
+    try pool.init(.{
+        .allocator = allocator,
+        .n_jobs = options.jobs,
+    });
+    defer pool.deinit();
+
+    var wait_group = std.Thread.WaitGroup{};
+    for (cases) |case| {
+        pool.spawnWg(&wait_group, runCaseParallel, .{
+            allocator,
+            root_path,
+            gfortran_cmd,
+            case,
+            options,
+            &log_state,
+            &progress,
+            &dir_locks,
+            &failures,
+        });
+    }
+    pool.waitAndWork(&wait_group);
+
+    const failure_count = failures.load(.seq_cst);
+    if (failure_count > 0) {
+        log_state.stderr("verification failed: {d}\n", .{failure_count});
         return error.VerificationFailed;
     }
-    try logStdout("verification passed\n", .{});
+    log_state.stdout("verification passed\n", .{});
 }
 
 const Options = struct {
@@ -267,6 +117,7 @@ const Options = struct {
     emit: Col6Forge.EmitKind,
     show_help: bool,
     timeout_ms: u64,
+    jobs: usize,
 };
 
 fn parseArgs(args: []const []const u8) !Options {
@@ -277,6 +128,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
     var timeout_ms: u64 = 30_000;
+    var jobs = defaultJobs();
     var suite: ?TestSuite = null;
 
     var i: usize = 1;
@@ -321,6 +173,13 @@ fn parseArgs(args: []const []const u8) !Options {
             timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
             continue;
         }
+        if (std.mem.eql(u8, arg, "--jobs") or std.mem.eql(u8, arg, "-j")) {
+            if (i + 1 >= args.len) return error.MissingJobs;
+            i += 1;
+            jobs = try std.fmt.parseInt(usize, args[i], 10);
+            if (jobs == 0) return error.InvalidJobs;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
             continue;
@@ -340,12 +199,13 @@ fn parseArgs(args: []const []const u8) !Options {
         .emit = emit,
         .show_help = show_help,
         .timeout_ms = timeout_ms,
+        .jobs = jobs,
     };
 }
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--timeout <ms>] [-emit-llvm]
+        \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--timeout <ms>] [--jobs <n>] [-emit-llvm]
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
         \\  --fcvs21_f95       Use the Fortran 95 adapted NIST F78 suite
@@ -353,6 +213,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  --filter <text>    Only run tests whose relative path contains this text
         \\  --gfortran <path>  Path to gfortran executable (default: gfortran or gfortran.exe)
         \\  --timeout <ms>     Per-test timeout in milliseconds (default: 30000)
+        \\  --jobs <n>, -j <n> Parallel job count (default: CPU cores)
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
         \\
@@ -608,10 +469,12 @@ fn buildExePath(
     return std.fs.path.join(allocator, &.{ work_dir, file_name });
 }
 
-fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
+fn reportPipelineError(log_state: *LogState, input_path: []const u8, err: anyerror) !void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
+    log_state.lock();
+    defer log_state.unlock();
     switch (err) {
         error.FileNotFound => {
             try Col6Forge.writeDiagnostic(&writer.interface, .{
@@ -870,18 +733,345 @@ fn linesEquivalentIgnoringWhitespace(a: []const u8, b: []const u8) bool {
     return i == a.len and j == b.len;
 }
 
-fn logStderr(comptime fmt: []const u8, args: anytype) !void {
-    var stderr_file = std.fs.File.stderr();
-    var buffer: [4096]u8 = undefined;
-    var writer = stderr_file.writer(&buffer);
-    try writer.interface.print(fmt, args);
-    try writer.interface.flush();
+fn processCase(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    gfortran_cmd: []const u8,
+    case: TestCase,
+    options: Options,
+    log_state: *LogState,
+    dir_locks: *DirLocks,
+) !bool {
+    var timer = try std.time.Timer.start();
+    const abs_input_path = try std.fs.path.join(allocator, &.{ root_path, case.input_path });
+    defer allocator.free(abs_input_path);
+
+    const abs_case_dir = try std.fs.path.join(allocator, &.{ root_path, case.case_dir });
+    defer allocator.free(abs_case_dir);
+
+    const work_dir_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "verify", case.work_name });
+    defer allocator.free(work_dir_rel);
+    try std.fs.cwd().makePath(work_dir_rel);
+
+    const work_dir = try std.fs.path.join(allocator, &.{ root_path, work_dir_rel });
+    defer allocator.free(work_dir);
+
+    const ll_path = try std.fs.path.join(allocator, &.{ work_dir, "translated.ll" });
+    defer allocator.free(ll_path);
+    const ref_exe = try prepareExePath(allocator, work_dir, "ref");
+    defer allocator.free(ref_exe);
+    const test_exe = try prepareExePath(allocator, work_dir, "test");
+    defer allocator.free(test_exe);
+    const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
+    defer allocator.free(runtime_dir);
+    const runtime_sources = [_][]const u8{
+        "f77_io_core.c",
+        "f77_io_formatted.c",
+        "f77_io_internal.c",
+        "f77_io_control.c",
+        "f77_io_direct.c",
+        "f77_io_unformatted.c",
+        "f77_io_format.c",
+        "f77_complex.c",
+    };
+    var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);
+    defer {
+        for (runtime_paths) |path| allocator.free(path);
+        allocator.free(runtime_paths);
+    }
+    for (runtime_sources, 0..) |name, idx| {
+        runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
+    }
+
+    const ir = Col6Forge.runPipeline(allocator, abs_input_path, options.emit) catch |err| {
+        try reportPipelineError(log_state, abs_input_path, err);
+        return false;
+    };
+    defer allocator.free(ir.output);
+    try writeFile(ll_path, ir.output);
+
+    if (isTimedOut(options.timeout_ms, &timer)) {
+        log_state.stderr("timeout: {s}\n", .{abs_input_path});
+        cleanupWorkDir(work_dir_rel);
+        return false;
+    }
+
+    const ref_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+    if (ref_timeout != null and ref_timeout.? == 0) {
+        log_state.stderr("timeout: {s}\n", .{abs_input_path});
+        cleanupWorkDir(work_dir_rel);
+        return false;
+    }
+
+    const ref_source = try prepareGfortranSource(allocator, abs_input_path, work_dir);
+    defer if (ref_source.owned) allocator.free(ref_source.path);
+
+    const ref_compile = runProcessCapture(
+        allocator,
+        &.{ gfortran_cmd, "-std=legacy", "-o", ref_exe, ref_source.path },
+        work_dir,
+        ref_timeout,
+    ) catch |err| {
+        if (err == error.FileNotFound) {
+            log_state.stderr("gfortran not found (use --gfortran or set GFORTRAN/FC)\n", .{});
+        }
+        log_state.stderr("gfortran failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+        return false;
+    };
+    defer ref_compile.deinit(allocator);
+    if (ref_compile.timed_out) {
+        log_state.stderr("timeout: gfortran compile {s}\n", .{abs_input_path});
+        cleanupWorkDir(work_dir_rel);
+        return false;
+    }
+    if (!isZeroExit(ref_compile.term)) {
+        const code = exitCode(ref_compile.term);
+        log_state.lock();
+        defer log_state.unlock();
+        var stderr_file = std.fs.File.stderr();
+        var buffer: [4096]u8 = undefined;
+        var writer = stderr_file.writer(&buffer);
+        writer.interface.print("\n=== GFORTRAN COMPILE ERROR ===\n", .{}) catch {};
+        writer.interface.print("Exit Code: {d}\n", .{code}) catch {};
+        writer.interface.print("Work Dir : {s}\n", .{work_dir}) catch {};
+        writer.interface.print("Command  : {s} -std=legacy -o {s} {s}\n", .{ gfortran_cmd, ref_exe, ref_source.path }) catch {};
+        writer.interface.print("STDOUT   : \n{s}\n", .{ref_compile.stdout}) catch {};
+        writer.interface.print("STDERR   : \n{s}\n", .{ref_compile.stderr}) catch {};
+        writer.interface.print("==============================\n", .{}) catch {};
+        writer.interface.flush() catch {};
+        return false;
+    }
+
+    const compile_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+    if (compile_timeout != null and compile_timeout.? == 0) {
+        log_state.stderr("timeout: {s}\n", .{abs_input_path});
+        cleanupWorkDir(work_dir_rel);
+        return false;
+    }
+
+    var compile_args: std.ArrayList([]const u8) = .empty;
+    defer compile_args.deinit(allocator);
+    try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path });
+    try compile_args.appendSlice(allocator, runtime_paths);
+    const our_compile = runProcessCapture(
+        allocator,
+        compile_args.items,
+        work_dir,
+        compile_timeout,
+    ) catch |err| {
+        log_state.stderr("zig cc failed: {s} ({s})\n", .{ ll_path, @errorName(err) });
+        return false;
+    };
+    defer our_compile.deinit(allocator);
+    if (our_compile.timed_out) {
+        log_state.stderr("timeout: zig cc {s}\n", .{abs_input_path});
+        cleanupWorkDir(work_dir_rel);
+        return false;
+    }
+    if (!isZeroExit(our_compile.term)) {
+        log_state.stderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, our_compile.stderr });
+        return false;
+    }
+
+    const ref_run_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+    if (ref_run_timeout != null and ref_run_timeout.? == 0) {
+        log_state.stderr("timeout: {s}\n", .{abs_input_path});
+        cleanupWorkDir(work_dir_rel);
+        return false;
+    }
+
+    const dir_lock = try dir_locks.get(abs_case_dir);
+    dir_lock.lock();
+    defer dir_lock.unlock();
+
+    try cleanupFortranScratchFiles(abs_case_dir);
+    const ref_run = runProcessCapture(
+        allocator,
+        &.{ ref_exe },
+        abs_case_dir,
+        ref_run_timeout,
+    ) catch |err| {
+        log_state.stderr("reference run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+        return false;
+    };
+    defer ref_run.deinit(allocator);
+    if (ref_run.timed_out) {
+        log_state.stderr("timeout: reference run {s}\n", .{abs_input_path});
+        cleanupWorkDir(work_dir_rel);
+        return false;
+    }
+
+    const test_run_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+    if (test_run_timeout != null and test_run_timeout.? == 0) {
+        log_state.stderr("timeout: {s}\n", .{abs_input_path});
+        cleanupWorkDir(work_dir_rel);
+        return false;
+    }
+
+    try cleanupFortranScratchFiles(abs_case_dir);
+    const test_run = runProcessCapture(
+        allocator,
+        &.{ test_exe },
+        abs_case_dir,
+        test_run_timeout,
+    ) catch |err| {
+        log_state.stderr("translated run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+        return false;
+    };
+    defer test_run.deinit(allocator);
+    if (test_run.timed_out) {
+        log_state.stderr("timeout: translated run {s}\n", .{abs_input_path});
+        cleanupWorkDir(work_dir_rel);
+        return false;
+    }
+
+    const comparison = try Comparator.compare(allocator, ref_run.term, test_run.term, ref_run.stdout, test_run.stdout);
+    if (!comparison.ok) {
+        log_state.stderr("mismatch: {s}\n{s}\n", .{ abs_input_path, comparison.diff.? });
+        allocator.free(comparison.diff.?);
+        return false;
+    }
+    if (comparison.diff) |diff| {
+        allocator.free(diff);
+    }
+
+    return true;
 }
 
-fn logStdout(comptime fmt: []const u8, args: anytype) !void {
-    var stdout_file = std.fs.File.stdout();
-    var buffer: [4096]u8 = undefined;
-    var writer = stdout_file.writer(&buffer);
-    try writer.interface.print(fmt, args);
-    try writer.interface.flush();
+fn runCaseParallel(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    gfortran_cmd: []const u8,
+    case: TestCase,
+    options: Options,
+    log_state: *LogState,
+    progress: *Progress,
+    dir_locks: *DirLocks,
+    failures: *std.atomic.Value(usize),
+) void {
+    logProgress(log_state, progress, case.input_path);
+    const ok = processCase(allocator, root_path, gfortran_cmd, case, options, log_state, dir_locks) catch |err| {
+        log_state.stderr("internal error: {s}\n", .{@errorName(err)});
+        _ = failures.fetchAdd(1, .seq_cst);
+        _ = progress.completed.fetchAdd(1, .seq_cst);
+        return;
+    };
+    if (!ok) {
+        _ = failures.fetchAdd(1, .seq_cst);
+    }
+    _ = progress.completed.fetchAdd(1, .seq_cst);
+}
+
+const LogState = struct {
+    mutex: std.Thread.Mutex = .{},
+
+    fn lock(self: *LogState) void {
+        self.mutex.lock();
+    }
+
+    fn unlock(self: *LogState) void {
+        self.mutex.unlock();
+    }
+
+    fn stdout(self: *LogState, comptime fmt: []const u8, args: anytype) void {
+        self.print(std.fs.File.stdout(), fmt, args);
+    }
+
+    fn stderr(self: *LogState, comptime fmt: []const u8, args: anytype) void {
+        self.print(std.fs.File.stderr(), fmt, args);
+    }
+
+    fn print(self: *LogState, file: std.fs.File, comptime fmt: []const u8, args: anytype) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        var buffer: [4096]u8 = undefined;
+        var writer = file.writer(&buffer);
+        writer.interface.print(fmt, args) catch {};
+        writer.interface.flush() catch {};
+    }
+};
+
+const Progress = struct {
+    total: usize,
+    started: std.atomic.Value(usize),
+    completed: std.atomic.Value(usize),
+    timer: std.time.Timer,
+
+    fn init(total: usize) !Progress {
+        return .{
+            .total = total,
+            .started = std.atomic.Value(usize).init(0),
+            .completed = std.atomic.Value(usize).init(0),
+            .timer = try std.time.Timer.start(),
+        };
+    }
+
+    fn deinit(_: *Progress) void {}
+};
+
+const DirLocks = struct {
+    allocator: std.mem.Allocator,
+    mutex: std.Thread.Mutex = .{},
+    map: std.StringHashMapUnmanaged(std.Thread.Mutex) = .{},
+
+    fn init(allocator: std.mem.Allocator) DirLocks {
+        return .{ .allocator = allocator };
+    }
+
+    fn deinit(self: *DirLocks) void {
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.map.deinit(self.allocator);
+    }
+
+    fn get(self: *DirLocks, dir: []const u8) !*std.Thread.Mutex {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.map.getPtr(dir)) |ptr| return ptr;
+        const key = try self.allocator.dupe(u8, dir);
+        try self.map.put(self.allocator, key, .{});
+        return self.map.getPtr(key).?;
+    }
+};
+
+fn logProgress(log_state: *LogState, progress: *Progress, path: []const u8) void {
+    const started = progress.started.fetchAdd(1, .seq_cst) + 1;
+    const completed = progress.completed.load(.seq_cst);
+    const elapsed_ms = progress.timer.read() / std.time.ns_per_ms;
+    const eta_ms = estimateEtaMs(elapsed_ms, completed, progress.total);
+
+    var elapsed_buf: [32]u8 = undefined;
+    var eta_buf: [32]u8 = undefined;
+    const elapsed_str = formatDuration(&elapsed_buf, elapsed_ms);
+    const eta_str = formatDuration(&eta_buf, eta_ms);
+    const name = std.fs.path.basename(path);
+
+    log_state.stdout("[{d}/{d}] Running {s} | elapsed {s} | eta {s}\n", .{
+        started,
+        progress.total,
+        name,
+        elapsed_str,
+        eta_str,
+    });
+}
+
+fn estimateEtaMs(elapsed_ms: u64, completed: usize, total: usize) u64 {
+    if (completed == 0 or total <= completed) return 0;
+    const avg_ms = elapsed_ms / completed;
+    return avg_ms * (total - completed);
+}
+
+fn formatDuration(buf: []u8, total_ms: u64) []const u8 {
+    const total_seconds = total_ms / 1000;
+    const seconds = total_seconds % 60;
+    const minutes = (total_seconds / 60) % 60;
+    const hours = total_seconds / 3600;
+    return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hours, minutes, seconds }) catch "00:00:00";
+}
+
+fn defaultJobs() usize {
+    return std.Thread.getCpuCount() catch 1;
 }
