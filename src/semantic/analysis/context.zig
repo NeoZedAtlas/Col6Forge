@@ -6,22 +6,33 @@ const scope = @import("../scope.zig");
 pub const Context = struct {
     arena: std.mem.Allocator,
     unit: ast.ProgramUnit,
+    current_unit: ?*const ast.ProgramUnit,
     symbols: std.array_list.Managed(symbols.Symbol),
     implicit: std.array_list.Managed(symbols.ImplicitRule),
     refs: std.array_list.Managed(symbols.ResolvedRef),
     scopes: std.array_list.Managed(scope.Scope),
     current_scope: ?scope.ScopeId,
+    current_owner: ?Owner,
+
+    pub const Owner = struct {
+        name: []const u8,
+        kind: ast.ProgramUnitKind,
+    };
 
     pub fn init(arena: std.mem.Allocator, unit: ast.ProgramUnit) Context {
-        return .{
+        var ctx = Context{
             .arena = arena,
             .unit = unit,
+            .current_unit = null,
             .symbols = std.array_list.Managed(symbols.Symbol).init(arena),
             .implicit = std.array_list.Managed(symbols.ImplicitRule).init(arena),
             .refs = std.array_list.Managed(symbols.ResolvedRef).init(arena),
             .scopes = std.array_list.Managed(scope.Scope).init(arena),
             .current_scope = null,
+            .current_owner = null,
         };
+        ctx.current_unit = &ctx.unit;
+        return ctx;
     }
 
     pub fn initScopeTree(self: *Context) !void {
@@ -36,6 +47,7 @@ pub const Context = struct {
             .owner_kind = null,
         });
         self.current_scope = id;
+        self.updateCurrentOwner();
     }
 
     pub fn pushScope(self: *Context, kind: scope.ScopeKind) !scope.ScopeId {
@@ -59,6 +71,7 @@ pub const Context = struct {
             .owner_kind = owner_kind,
         });
         self.current_scope = id;
+        self.updateCurrentOwner();
         return id;
     }
 
@@ -66,5 +79,22 @@ pub const Context = struct {
         if (self.current_scope == null) return;
         const current = self.scopes.items[self.current_scope.?.index];
         self.current_scope = current.parent;
+        self.updateCurrentOwner();
+    }
+
+    fn updateCurrentOwner(self: *Context) void {
+        var scope_id = self.current_scope;
+        while (scope_id) |id| {
+            const scope_info = self.scopes.items[id.index];
+            if (scope_info.owner_name != null and scope_info.owner_kind != null) {
+                self.current_owner = .{
+                    .name = scope_info.owner_name.?,
+                    .kind = scope_info.owner_kind.?,
+                };
+                return;
+            }
+            scope_id = scope_info.parent;
+        }
+        self.current_owner = null;
     }
 };
