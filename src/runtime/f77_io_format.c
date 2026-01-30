@@ -7,7 +7,7 @@
 static unsigned int fmt_index;
 static char fmt_buffers[8][64];
 
-static void f77_pad_exp3(char *buf, size_t buf_len) {
+static void f77_pad_exp(char *buf, size_t buf_len, size_t exp_digits) {
     if (!buf || buf_len == 0) return;
     char *exp = strchr(buf, 'E');
     if (!exp) exp = strchr(buf, 'e');
@@ -20,8 +20,8 @@ static void f77_pad_exp3(char *buf, size_t buf_len) {
     while (sign[digits] && sign[digits] >= '0' && sign[digits] <= '9') {
         digits++;
     }
-    if (digits >= 3) return;
-    size_t needed = 3 - digits;
+    if (digits >= exp_digits) return;
+    size_t needed = exp_digits - digits;
     size_t tail_len = strlen(sign + digits);
     size_t cur_len = strlen(buf);
     if (cur_len + needed + 1 >= buf_len) return;
@@ -60,11 +60,13 @@ const char *f77_fmt_i(int width, int min_digits, int sign_plus, int value) {
     return buf;
 }
 
-const char *f77_fmt_list_g(int precision, double value) {
+const char *f77_fmt_list_g(int precision, int exp_width, double value) {
     char *buf = fmt_buffers[fmt_index++ % 8];
     if (precision <= 0) precision = 1;
     (void)snprintf(buf, 64, "%#.*G", precision, value);
-    f77_pad_exp3(buf, 64);
+    if (exp_width > 0) {
+        f77_pad_exp(buf, 64, (size_t)exp_width);
+    }
     return buf;
 }
 

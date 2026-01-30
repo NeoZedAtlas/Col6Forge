@@ -52,19 +52,21 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
             .f32, .f64 => {
                 const fmt_tmp = try ctx.nextTemp();
                 const prec_text = if (value.ty == .f64) "17" else "9";
+                const exp_text = if (value.ty == .f64) "3" else "2";
                 const coerced = try expr.coerce(ctx, builder, value, .f64);
                 const call_args = try std.fmt.allocPrint(
                     ctx.allocator,
-                    "i32 {s}, double {s}",
-                    .{ prec_text, coerced.name },
+                    "i32 {s}, i32 {s}, double {s}",
+                    .{ prec_text, exp_text, coerced.name },
                 );
-                const fmt_name = try ctx.ensureDeclRaw("f77_fmt_list_g", .ptr, "i32, double", false);
+                const fmt_name = try ctx.ensureDeclRaw("f77_fmt_list_g", .ptr, "i32, i32, double", false);
                 try builder.call(fmt_tmp, .ptr, fmt_name, call_args);
                 try fmt_buf.appendSlice("%s");
                 try args.append(.{ .ty = .ptr, .name = fmt_tmp });
             },
             .complex_f32, .complex_f64 => {
                 const real_prec = if (value.ty == .complex_f64) "17" else "9";
+                const exp_text = if (value.ty == .complex_f64) "3" else "2";
                 const real = try complex.extractComplex(ctx, builder, value, 0);
                 const imag = try complex.extractComplex(ctx, builder, value, 1);
                 const real_f64 = try expr.coerce(ctx, builder, real, .f64);
@@ -73,15 +75,15 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
                 const imag_tmp = try ctx.nextTemp();
                 const real_args = try std.fmt.allocPrint(
                     ctx.allocator,
-                    "i32 {s}, double {s}",
-                    .{ real_prec, real_f64.name },
+                    "i32 {s}, i32 {s}, double {s}",
+                    .{ real_prec, exp_text, real_f64.name },
                 );
                 const imag_args = try std.fmt.allocPrint(
                     ctx.allocator,
-                    "i32 {s}, double {s}",
-                    .{ real_prec, imag_f64.name },
+                    "i32 {s}, i32 {s}, double {s}",
+                    .{ real_prec, exp_text, imag_f64.name },
                 );
-                const fmt_name = try ctx.ensureDeclRaw("f77_fmt_list_g", .ptr, "i32, double", false);
+                const fmt_name = try ctx.ensureDeclRaw("f77_fmt_list_g", .ptr, "i32, i32, double", false);
                 try builder.call(real_tmp, .ptr, fmt_name, real_args);
                 try builder.call(imag_tmp, .ptr, fmt_name, imag_args);
                 try fmt_buf.appendSlice("(%s,%s)");
