@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
-const sema = @import("../../../sema/mod.zig");
+const sema = @import("../../../semantic/mod.zig");
 const evaluator = @import("../../../semantic/evaluator.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");

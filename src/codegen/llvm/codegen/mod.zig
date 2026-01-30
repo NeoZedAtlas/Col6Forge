@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
-const sema = @import("../../../sema/mod.zig");
+const sema = @import("../../../semantic/mod.zig");
 const context = @import("context.zig");
 const builder_mod = @import("builder.zig");
 const common = @import("common.zig");

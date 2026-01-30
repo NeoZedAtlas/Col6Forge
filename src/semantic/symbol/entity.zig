@@ -1,4 +1,4 @@
-const ast = @import("../ast/nodes.zig");
+const ast = @import("../../ast/nodes.zig");
 
 pub const SymbolKind = enum {
     variable,
@@ -68,4 +68,3 @@ pub const SemanticUnit = struct {
 pub const SemanticProgram = struct {
     units: []SemanticUnit,
 };
-

@@ -1,9 +1,5 @@
 const std = @import("std");
-
-pub const SourceSpan = struct {
-    start_line: usize,
-    end_line: usize,
-};
+const source = @import("../common/source.zig");
 
 pub const Segment = struct {
     line: usize,
@@ -14,13 +10,8 @@ pub const Segment = struct {
 pub const LogicalLine = struct {
     label: ?[]const u8,
     text: []const u8,
-    span: SourceSpan,
+    span: source.SourceSpan,
     segments: []Segment,
-};
-
-pub const SourcePos = struct {
-    line: usize,
-    column: usize,
 };
 
 pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![]LogicalLine {
@@ -124,7 +115,7 @@ pub fn freeLogicalLines(allocator: std.mem.Allocator, lines: []LogicalLine) void
     allocator.free(lines);
 }
 
-pub fn mapIndexToPos(line: LogicalLine, index: usize) SourcePos {
+pub fn mapIndexToPos(line: LogicalLine, index: usize) source.SourcePos {
     var offset: usize = 0;
     for (line.segments) |segment| {
         if (index < offset + segment.length) {
@@ -192,13 +183,13 @@ test "normalizeFixedForm joins continuations and preserves labels" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    const source =
+    const src_text =
         "      A=1\n" ++
         "     +B=2\n" ++
         "C comment\n" ++
         "      \n" ++
         "  10  CONTINUE\n";
-    const lines = try normalizeFixedForm(allocator, source);
+    const lines = try normalizeFixedForm(allocator, src_text);
     defer freeLogicalLines(allocator, lines);
 
     try testing.expectEqual(@as(usize, 2), lines.len);

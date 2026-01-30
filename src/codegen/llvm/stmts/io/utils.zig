@@ -8,7 +8,7 @@ const complex = @import("../../codegen/expression/complex.zig");
 const utils = @import("../../codegen/utils.zig");
 const cfg = @import("../cfg.zig");
 const evaluator = @import("../../../../semantic/evaluator.zig");
-const sema_mod = @import("../../../../sema/mod.zig");
+const sema_mod = @import("../../../../semantic/mod.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;

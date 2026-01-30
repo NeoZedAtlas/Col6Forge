@@ -1,5 +1,5 @@
 const std = @import("std");
-const symbols = @import("../sema/symbol.zig");
+const symbols = @import("symbol/mod.zig");
 
 const SemanticProgram = symbols.SemanticProgram;
 

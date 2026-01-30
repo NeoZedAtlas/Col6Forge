@@ -6,7 +6,7 @@ const common = @import("../codegen/common.zig");
 const expression = @import("../codegen/expression/mod.zig");
 const dispatch = @import("dispatch.zig");
 const execution = @import("execution.zig");
-const sema = @import("../../../sema/mod.zig");
+const sema = @import("../../../semantic/mod.zig");
 const utils = @import("../codegen/utils.zig");
 const builder_mod = @import("../codegen/builder.zig");
 

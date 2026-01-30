@@ -1,10 +1,11 @@
 const std = @import("std");
 const ast = @import("../ast/nodes.zig");
-const symbols = @import("../sema/symbol.zig");
+const symbols = @import("symbol/mod.zig");
 
 pub const analyzer = @import("analysis/mod.zig");
 pub const evaluator = @import("evaluator.zig");
 pub const printer = @import("printer.zig");
+pub const scope = @import("scope.zig");
 
 pub const SymbolKind = symbols.SymbolKind;
 pub const StorageClass = symbols.StorageClass;

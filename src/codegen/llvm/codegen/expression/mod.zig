@@ -31,7 +31,7 @@ pub const emitArgPointer = call_mod.emitArgPointer;
 
 const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
-const sema = @import("../../../../sema/mod.zig");
+const sema = @import("../../../../semantic/mod.zig");
 const ir = @import("../../../ir.zig");
 const context = @import("../context.zig");
 const builder_mod = @import("../builder.zig");

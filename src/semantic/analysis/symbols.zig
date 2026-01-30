@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
-const symbols = @import("../../sema/symbol.zig");
+const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 
 const SymbolKind = symbols.SymbolKind;
@@ -36,6 +36,7 @@ pub fn installUnitSymbol(self: *context.Context) !void {
 }
 
 pub fn installDummyArgs(self: *context.Context) !void {
+    if (self.current_scope == null) return error.MissingScope;
     for (self.unit.args) |arg| {
         const info = implicitInfo(self, arg);
         const symbol = Symbol{
@@ -55,7 +56,7 @@ pub fn installDummyArgs(self: *context.Context) !void {
 }
 
 pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
-    if (self.table.get(name)) |idx| {
+    if (findSymbolIndex(self, name)) |idx| {
         return idx;
     }
     const info = implicitInfo(self, name);
@@ -75,10 +76,23 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
 }
 
 pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
+    if (self.current_scope == null) return error.MissingScope;
     const idx = self.symbols.items.len;
     try self.symbols.append(symbol);
-    try self.table.put(symbol.name, idx);
+    const scope_id = self.current_scope.?;
+    try self.scopes.items[scope_id.index].symbols.put(symbol.name, idx);
     return idx;
+}
+
+pub fn findSymbolIndex(self: *context.Context, name: []const u8) ?usize {
+    var scope_id = self.current_scope;
+    while (scope_id) |id| {
+        if (self.scopes.items[id.index].symbols.get(name)) |idx| {
+            return idx;
+        }
+        scope_id = self.scopes.items[id.index].parent;
+    }
+    return null;
 }
 
 const ImplicitInfo = struct {

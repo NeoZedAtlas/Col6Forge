@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
-const symbols = @import("../../sema/symbol.zig");
+const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const symbols_mod = @import("symbols.zig");
 const constants = @import("constants.zig");

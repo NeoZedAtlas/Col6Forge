@@ -1,7 +1,8 @@
 const ast = @import("../../ast/nodes.zig");
-const symbols = @import("../../sema/symbol.zig");
+const symbols = @import("../symbol/mod.zig");
 const evaluator = @import("../evaluator.zig");
 const context = @import("context.zig");
+const symbols_mod = @import("symbols.zig");
 
 const ConstValue = symbols.ConstValue;
 
@@ -15,7 +16,7 @@ pub fn evalConst(self: *context.Context, expr: *ast.Expr) !?ConstValue {
 
 fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?ConstValue {
     const self: *context.Context = @ptrCast(@alignCast(ctx));
-    if (self.table.get(name)) |idx| {
+    if (symbols_mod.findSymbolIndex(self, name)) |idx| {
         return self.symbols.items[idx].const_value;
     }
     return null;

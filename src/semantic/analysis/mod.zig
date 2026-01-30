@@ -1,10 +1,9 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
-const symbols = @import("../../sema/symbol.zig");
+const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
-const declarations = @import("declarations.zig");
-const statements = @import("statements.zig");
-const symbols_mod = @import("symbols.zig");
+const resolve = @import("../resolve.zig");
+const check = @import("../check.zig");
 
 pub const UnitAnalyzer = struct {
     ctx: context.Context,
@@ -23,18 +22,10 @@ pub const UnitAnalyzer = struct {
 
     pub fn analyze(self: *UnitAnalyzer) !symbols.SemanticUnit {
         var ctx = &self.ctx;
-        try symbols_mod.initImplicitDefaults(ctx);
-        for (self.initial_implicit) |rule| {
-            try ctx.implicit.append(rule);
-        }
-        try symbols_mod.installUnitSymbol(ctx);
-        try symbols_mod.installDummyArgs(ctx);
-        for (ctx.unit.decls) |decl| {
-            try declarations.applyDecl(ctx, decl);
-        }
-        for (ctx.unit.stmts) |stmt| {
-            try statements.resolveStmt(ctx, stmt);
-        }
+        var resolver = resolve.Resolver.init(ctx, self.initial_implicit);
+        try resolver.run();
+        var checker = check.Checker.init(ctx);
+        try checker.run();
         return .{
             .name = ctx.unit.name,
             .kind = ctx.unit.kind,

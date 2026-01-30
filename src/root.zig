@@ -1,8 +1,8 @@
 //! By convention, root.zig is the root source file when making a library.
-pub const diag = @import("diagnostic.zig");
+pub const diag = @import("common/diagnostic.zig");
 pub const ast = @import("ast/mod.zig");
 pub const frontend = @import("frontend/mod.zig");
-pub const sema = @import("sema/mod.zig");
+pub const sema = @import("semantic/mod.zig");
 pub const codegen = @import("codegen/mod.zig");
 pub const pipeline = @import("driver/pipeline.zig");
 

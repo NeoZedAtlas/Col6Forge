@@ -1,7 +1,7 @@
 const std = @import("std");
 const fixed_form = @import("../frontend/fixed_form.zig");
 const parser = @import("../frontend/parser/mod.zig");
-const semantic = @import("../sema/mod.zig");
+const semantic = @import("../semantic/mod.zig");
 const codegen = @import("../codegen/mod.zig");
 
 pub const EmitKind = enum {
