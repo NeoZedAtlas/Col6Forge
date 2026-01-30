@@ -2,8 +2,8 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const context = @import("context.zig");
 const symbols_mod = @import("resolve_symbols.zig");
-const constants = @import("resolve_constants.zig");
-const expressions = @import("resolve_expressions.zig");
+const constants = @import("resolve_const.zig");
+const expressions = @import("resolve_expr.zig");
 const decls = @import("resolve_decls.zig");
 
 pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {

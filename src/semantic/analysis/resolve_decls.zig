@@ -3,7 +3,7 @@ const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const symbols_mod = @import("resolve_symbols.zig");
-const constants = @import("resolve_constants.zig");
+const constants = @import("resolve_const.zig");
 
 const StorageClass = symbols.StorageClass;
 
