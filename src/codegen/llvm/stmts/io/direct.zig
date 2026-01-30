@@ -11,7 +11,7 @@ const EmitError = anyerror;
 
 const io_utils = @import("utils.zig");
 const expansion = @import("expansion.zig");
-const formatted = @import("formatted.zig");
+const formatted = @import("formatted/mod.zig");
 
 const buildDirectWriteSignatureAndPtrs = io_utils.buildDirectWriteSignatureAndPtrs;
 const buildDirectReadSignatureAndPtrs = io_utils.buildDirectReadSignatureAndPtrs;

@@ -8,7 +8,7 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 
-const formatted = @import("io/formatted.zig");
+const formatted = @import("io/formatted/mod.zig");
 const direct = @import("io/direct.zig");
 const list_directed = @import("io/list_directed.zig");
 const unformatted = @import("io/unformatted.zig");
