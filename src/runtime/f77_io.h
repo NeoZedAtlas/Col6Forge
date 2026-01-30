@@ -125,6 +125,7 @@ const char *f77_fmt_f(int width, int precision, int sign_plus, double value);
 const char *f77_fmt_e(int width, int precision, int exp_width, int scale_factor, int sign_plus, double value);
 const char *f77_fmt_d(int width, int precision, int exp_width, int scale_factor, int sign_plus, double value);
 const char *f77_fmt_g(int width, int precision, int exp_width, int scale_factor, int sign_plus, double value);
+const char *f77_fmt_list_g(int precision, double value);
 
 typedef struct {
     float r;

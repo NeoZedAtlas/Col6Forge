@@ -1,6 +1,7 @@
 #include "f77_io.h"
 
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,6 +22,22 @@ static void unformatted_ensure_capacity(UnformattedUnit *unit, size_t needed) {
     }
     unit->records = new_records;
     unit->capacity = new_cap;
+}
+
+static int unformatted_file_has_data(int unit) {
+    char name[32];
+    unit_filename(unit, name, sizeof(name));
+    FILE *file = fopen(name, "rb");
+    if (!file) {
+        return 0;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return 0;
+    }
+    long size = ftell(file);
+    fclose(file);
+    return size > 0;
 }
 
 void f77_write_unformatted(int unit, const char *sig, ...) {
@@ -124,6 +141,24 @@ int f77_read_unformatted(int unit, const char *sig, ...) {
     }
     UnformattedUnit *uu = &unformatted_units[unit];
     uu->used = 1;
+    if (uu->count == 0 && uu->pos == 0 && unformatted_file_has_data(unit)) {
+        size_t record_size = direct_signature_size(sig);
+        unformatted_ensure_capacity(uu, 1);
+        if (uu->records) {
+            unsigned char *record = NULL;
+            if (record_size > 0) {
+                record = (unsigned char *)malloc(record_size);
+                if (record) {
+                    memset(record, 0, record_size);
+                }
+            }
+            uu->records[0].data = record;
+            uu->records[0].len = record_size;
+            uu->records[0].is_endfile = 0;
+            uu->count = 1;
+            uu->pos = 0;
+        }
+    }
     if (uu->pos >= uu->count) {
         return -1;
     }

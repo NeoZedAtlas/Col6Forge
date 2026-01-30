@@ -38,8 +38,10 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();
 
+    var prev_is_char = false;
     for (expanded_values.values.items, 0..) |value, idx| {
-        if (idx != 0) {
+        const is_char = value.ty == .ptr;
+        if (idx != 0 and !(prev_is_char and is_char)) {
             try fmt_buf.append(' ');
         }
         switch (value.ty) {
@@ -48,20 +50,43 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
                 try args.append(.{ .ty = .i32, .name = value.name });
             },
             .f32, .f64 => {
-                const fmt = if (value.ty == .f64) "%#.17G" else "%#.9G";
-                try fmt_buf.appendSlice(fmt);
+                const fmt_tmp = try ctx.nextTemp();
+                const prec_text = if (value.ty == .f64) "17" else "9";
                 const coerced = try expr.coerce(ctx, builder, value, .f64);
-                try args.append(.{ .ty = .f64, .name = coerced.name });
+                const call_args = try std.fmt.allocPrint(
+                    ctx.allocator,
+                    "i32 {s}, double {s}",
+                    .{ prec_text, coerced.name },
+                );
+                const fmt_name = try ctx.ensureDeclRaw("f77_fmt_list_g", .ptr, "i32, double", false);
+                try builder.call(fmt_tmp, .ptr, fmt_name, call_args);
+                try fmt_buf.appendSlice("%s");
+                try args.append(.{ .ty = .ptr, .name = fmt_tmp });
             },
             .complex_f32, .complex_f64 => {
-                const fmt = if (value.ty == .complex_f64) "(%#.17G,%#.17G)" else "(%#.9G,%#.9G)";
-                try fmt_buf.appendSlice(fmt);
+                const real_prec = if (value.ty == .complex_f64) "17" else "9";
                 const real = try complex.extractComplex(ctx, builder, value, 0);
                 const imag = try complex.extractComplex(ctx, builder, value, 1);
                 const real_f64 = try expr.coerce(ctx, builder, real, .f64);
                 const imag_f64 = try expr.coerce(ctx, builder, imag, .f64);
-                try args.append(.{ .ty = .f64, .name = real_f64.name });
-                try args.append(.{ .ty = .f64, .name = imag_f64.name });
+                const real_tmp = try ctx.nextTemp();
+                const imag_tmp = try ctx.nextTemp();
+                const real_args = try std.fmt.allocPrint(
+                    ctx.allocator,
+                    "i32 {s}, double {s}",
+                    .{ real_prec, real_f64.name },
+                );
+                const imag_args = try std.fmt.allocPrint(
+                    ctx.allocator,
+                    "i32 {s}, double {s}",
+                    .{ real_prec, imag_f64.name },
+                );
+                const fmt_name = try ctx.ensureDeclRaw("f77_fmt_list_g", .ptr, "i32, double", false);
+                try builder.call(real_tmp, .ptr, fmt_name, real_args);
+                try builder.call(imag_tmp, .ptr, fmt_name, imag_args);
+                try fmt_buf.appendSlice("(%s,%s)");
+                try args.append(.{ .ty = .ptr, .name = real_tmp });
+                try args.append(.{ .ty = .ptr, .name = imag_tmp });
             },
             .ptr => {
                 const arg_len = expanded_values.char_lens.items[idx];
@@ -82,6 +107,7 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
             },
             else => return error.UnsupportedIntrinsicType,
         }
+        prev_is_char = is_char;
     }
 
     if (!is_internal) {
