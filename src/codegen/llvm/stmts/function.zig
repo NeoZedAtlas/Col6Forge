@@ -260,17 +260,25 @@ fn applyEquivalences(ctx: *Context, builder: anytype, orig_locals: *const std.St
         for (decl.equivalence.groups) |group| {
             if (group.items.len < 2) continue;
             var anchor = group.items[0];
+            var anchor_size: usize = 0;
             for (group.items) |item| {
-                const name = switch (item.*) {
-                    .identifier => |id| id,
-                    .call_or_subscript => |call| call.name,
-                    else => null,
-                } orelse continue;
-                const current = ctx.locals.get(name) orelse continue;
-                if (orig_locals.get(name)) |orig| {
-                    if (!std.mem.eql(u8, current.name, orig.name)) {
-                        anchor = item;
-                        break;
+                const size = equivalenceItemSize(ctx, item) orelse 0;
+                if (size > anchor_size) {
+                    anchor = item;
+                    anchor_size = size;
+                    continue;
+                }
+                if (size == anchor_size) {
+                    const name = switch (item.*) {
+                        .identifier => |id| id,
+                        .call_or_subscript => |call| call.name,
+                        else => null,
+                    } orelse continue;
+                    const current = ctx.locals.get(name) orelse continue;
+                    if (orig_locals.get(name)) |orig| {
+                        if (!std.mem.eql(u8, current.name, orig.name)) {
+                            anchor = item;
+                        }
                     }
                 }
             }
@@ -280,6 +288,50 @@ fn applyEquivalences(ctx: *Context, builder: anytype, orig_locals: *const std.St
             }
         }
     }
+}
+
+fn equivalenceItemSize(ctx: *Context, item: *ast.Expr) ?usize {
+    switch (item.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return null;
+            return symbolTotalSize(ctx, sym);
+        },
+        .call_or_subscript => |call| {
+            const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.dims.len == 0) return symbolTotalSize(ctx, sym);
+    return symbolElemSize(sym);
+        },
+        .substring => |sub| {
+            const len = substringLen(ctx, sub) orelse return null;
+            return len;
+        },
+        else => return null,
+    }
+}
+
+fn symbolElemSize(sym: sema.Symbol) ?usize {
+    if (sym.type_kind == .character) {
+        return sym.char_len orelse 1;
+    }
+    const ty = llvm_types.typeFromKind(sym.type_kind);
+    return sizeAlignForType(ty).size;
+}
+
+fn symbolTotalSize(ctx: *Context, sym: sema.Symbol) ?usize {
+    const elem_count: usize = if (sym.dims.len > 0) common.arrayElementCount(ctx.sem, sym.dims) catch return null else 1;
+    const elem_size = symbolElemSize(sym) orelse return null;
+    return elem_count * elem_size;
+}
+
+fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
+    const sym = ctx.findSymbol(sub.name) orelse return null;
+    if (sym.type_kind != .character) return null;
+    const base_len: i64 = @intCast(sym.char_len orelse 1);
+    const start_val = if (sub.start) |start_expr| constIndexValue(start_expr) orelse return null else 1;
+    const end_val = if (sub.end) |end_expr| constIndexValue(end_expr) orelse return null else base_len;
+    const length = end_val - start_val + 1;
+    if (length <= 0) return null;
+    return @intCast(length);
 }
 
 fn applyEquivalencePair(ctx: *Context, builder: anytype, anchor: *ast.Expr, other: *ast.Expr) EmitError!void {

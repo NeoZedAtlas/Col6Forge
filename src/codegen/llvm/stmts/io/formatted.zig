@@ -32,6 +32,21 @@ const applyComplexFixups = expansion.applyComplexFixups;
 const emitListDirectedRead = list_directed.emitListDirectedRead;
 const emitListDirectedReadStatus = list_directed.emitListDirectedReadStatus;
 
+fn appendTabMarker(fmt_buf: *std.array_list.Managed(u8), tab: ast.TabFormat) !void {
+    try fmt_buf.append(0x01);
+    const kind: u8 = switch (tab.kind) {
+        .absolute => 'T',
+        .relative_right => 'R',
+        .relative_left => 'L',
+    };
+    try fmt_buf.append(kind);
+    var tmp = std.array_list.Managed(u8).init(fmt_buf.allocator);
+    defer tmp.deinit();
+    try tmp.writer().print("{d}", .{tab.count});
+    try fmt_buf.appendSlice(tmp.items);
+    try fmt_buf.append(0x02);
+}
+
 pub fn emitWriteFormatted(
     ctx: *Context,
     builder: anytype,
@@ -75,26 +90,45 @@ pub fn emitWriteFormatted(
                 .tab => |tab| {
                     switch (tab.kind) {
                         .absolute => {
-                            if (tab.count > column) {
-                                const delta = tab.count - column;
-                                pending_spaces += delta;
+                            if (is_internal) {
+                                try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                                try appendTabMarker(&fmt_buf, tab);
                                 column = tab.count;
-                            } else if (tab.count < column) {
-                                const move_left = column - tab.count;
+                            } else {
+                                if (tab.count > column) {
+                                    const delta = tab.count - column;
+                                    pending_spaces += delta;
+                                    column = tab.count;
+                                } else if (tab.count < column) {
+                                    const move_left = column - tab.count;
+                                    const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
+                                    pending_spaces -= reduce;
+                                    column -= reduce;
+                                }
+                            }
+                        },
+                        .relative_right => {
+                            if (is_internal) {
+                                try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                                try appendTabMarker(&fmt_buf, tab);
+                                column += tab.count;
+                            } else {
+                                pending_spaces += tab.count;
+                                column += tab.count;
+                            }
+                        },
+                        .relative_left => {
+                            if (is_internal) {
+                                try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                                try appendTabMarker(&fmt_buf, tab);
+                                const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
+                                column -= move_left;
+                            } else {
+                                const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
                                 const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
                                 pending_spaces -= reduce;
                                 column -= reduce;
                             }
-                        },
-                        .relative_right => {
-                            pending_spaces += tab.count;
-                            column += tab.count;
-                        },
-                        .relative_left => {
-                            const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
-                            const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
-                            pending_spaces -= reduce;
-                            column -= reduce;
                         },
                     }
                 },
@@ -127,26 +161,45 @@ pub fn emitWriteFormatted(
                 .tab => |tab| {
                     switch (tab.kind) {
                         .absolute => {
-                            if (tab.count > column) {
-                                const delta = tab.count - column;
-                                pending_spaces += delta;
+                            if (is_internal) {
+                                try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                                try appendTabMarker(&fmt_buf, tab);
                                 column = tab.count;
-                            } else if (tab.count < column) {
-                                const move_left = column - tab.count;
+                            } else {
+                                if (tab.count > column) {
+                                    const delta = tab.count - column;
+                                    pending_spaces += delta;
+                                    column = tab.count;
+                                } else if (tab.count < column) {
+                                    const move_left = column - tab.count;
+                                    const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
+                                    pending_spaces -= reduce;
+                                    column -= reduce;
+                                }
+                            }
+                        },
+                        .relative_right => {
+                            if (is_internal) {
+                                try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                                try appendTabMarker(&fmt_buf, tab);
+                                column += tab.count;
+                            } else {
+                                pending_spaces += tab.count;
+                                column += tab.count;
+                            }
+                        },
+                        .relative_left => {
+                            if (is_internal) {
+                                try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                                try appendTabMarker(&fmt_buf, tab);
+                                const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
+                                column -= move_left;
+                            } else {
+                                const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
                                 const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
                                 pending_spaces -= reduce;
                                 column -= reduce;
                             }
-                        },
-                        .relative_right => {
-                            pending_spaces += tab.count;
-                            column += tab.count;
-                        },
-                        .relative_left => {
-                            const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
-                            const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
-                            pending_spaces -= reduce;
-                            column -= reduce;
                         },
                     }
                 },
@@ -197,26 +250,45 @@ pub fn emitWriteFormatted(
                     .tab => |tab| {
                         switch (tab.kind) {
                             .absolute => {
-                                if (tab.count > column) {
-                                    const delta = tab.count - column;
-                                    pending_spaces += delta;
+                                if (is_internal) {
+                                    try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                                    try appendTabMarker(&fmt_buf, tab);
                                     column = tab.count;
-                                } else if (tab.count < column) {
-                                    const move_left = column - tab.count;
+                                } else {
+                                    if (tab.count > column) {
+                                        const delta = tab.count - column;
+                                        pending_spaces += delta;
+                                        column = tab.count;
+                                    } else if (tab.count < column) {
+                                        const move_left = column - tab.count;
+                                        const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
+                                        pending_spaces -= reduce;
+                                        column -= reduce;
+                                    }
+                                }
+                            },
+                            .relative_right => {
+                                if (is_internal) {
+                                    try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                                    try appendTabMarker(&fmt_buf, tab);
+                                    column += tab.count;
+                                } else {
+                                    pending_spaces += tab.count;
+                                    column += tab.count;
+                                }
+                            },
+                            .relative_left => {
+                                if (is_internal) {
+                                    try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                                    try appendTabMarker(&fmt_buf, tab);
+                                    const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
+                                    column -= move_left;
+                                } else {
+                                    const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
                                     const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
                                     pending_spaces -= reduce;
                                     column -= reduce;
                                 }
-                            },
-                            .relative_right => {
-                                pending_spaces += tab.count;
-                                column += tab.count;
-                            },
-                            .relative_left => {
-                                const move_left = if (column > 1) @min(tab.count, column - 1) else 0;
-                                const reduce = if (pending_spaces > move_left) move_left else pending_spaces;
-                                pending_spaces -= reduce;
-                                column -= reduce;
                             },
                         }
                     },
@@ -293,7 +365,11 @@ pub fn emitWriteFormatted(
                                 "i32 {s}, i32 {s}, i32 {s}, i32 {s}, i32 {s}, double {s}",
                                 .{ width_text, prec_text, exp_text, scale_text, if (sign_plus) "1" else "0", coerced.name },
                             );
-                            const fmt_name = try ctx.ensureDeclRaw("f77_fmt_e", .ptr, "i32, i32, i32, i32, i32, double", false);
+                            const fmt_name = switch (spec.kind) {
+                                .d => try ctx.ensureDeclRaw("f77_fmt_d", .ptr, "i32, i32, i32, i32, i32, double", false),
+                                .g => try ctx.ensureDeclRaw("f77_fmt_g", .ptr, "i32, i32, i32, i32, i32, double", false),
+                                .e => try ctx.ensureDeclRaw("f77_fmt_e", .ptr, "i32, i32, i32, i32, i32, double", false),
+                            };
                             try builder.call(fmt_tmp, .ptr, fmt_name, call_args);
                             try fmt_buf.appendSlice("%s");
                             try args.append(.{ .ty = .ptr, .name = fmt_tmp });
@@ -443,10 +519,12 @@ pub fn emitWriteFormatted(
 
     var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_buf.deinit();
+    var internal_multi = false;
     if (is_internal) {
         const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
         if (unit_record_count) |count| {
             if (count > 1) {
+                internal_multi = true;
                 const count_text = utils.formatInt(ctx.allocator, @intCast(count));
                 try arg_buf.writer().print("ptr {s}, i32 {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, count_text, fmt_ptr });
             } else {
@@ -463,8 +541,13 @@ pub fn emitWriteFormatted(
     }
 
     if (is_internal) {
-        const write_name = try ctx.ensureDeclRaw("f77_write_internal", .void, "ptr, i32, ptr", true);
-        try builder.call(null, .void, write_name, arg_buf.items);
+        if (internal_multi) {
+            const write_name = try ctx.ensureDeclRaw("f77_write_internal_n", .void, "ptr, i32, i32, ptr", true);
+            try builder.call(null, .void, write_name, arg_buf.items);
+        } else {
+            const write_name = try ctx.ensureDeclRaw("f77_write_internal", .void, "ptr, i32, ptr", true);
+            try builder.call(null, .void, write_name, arg_buf.items);
+        }
     } else {
         const write_name = try ctx.ensureDeclRaw("f77_write", .void, "i32, ptr", true);
         try builder.call(null, .void, write_name, arg_buf.items);

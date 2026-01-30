@@ -93,6 +93,12 @@ const char *f77_fmt_e(int width, int precision, int exp_width, int scale_factor,
     char *buf = fmt_buffers[fmt_index++ % 8];
     if (precision < 0) precision = 0;
 
+    if (exp_width <= 0) {
+        exp_width = 2;
+    }
+    char exp_fmt[16];
+    (void)snprintf(exp_fmt, sizeof(exp_fmt), "E%%+0%dd", exp_width + 1);
+
     double abs_val = fabs(value);
     int exp_val = 0;
     if (abs_val != 0.0) {
@@ -117,11 +123,6 @@ const char *f77_fmt_e(int width, int precision, int exp_width, int scale_factor,
         (void)snprintf(tmp, sizeof(tmp), "%.*f", eff_prec, mantissa);
     }
 
-    if (exp_width <= 0) {
-        exp_width = 2;
-    }
-    char exp_fmt[16];
-    (void)snprintf(exp_fmt, sizeof(exp_fmt), "E%%+0%dd", exp_width + 1);
     (void)snprintf(exp_buf, sizeof(exp_buf), exp_fmt, exp_out);
 
     size_t tmp_len = strlen(tmp);
@@ -163,5 +164,108 @@ const char *f77_fmt_e(int width, int precision, int exp_width, int scale_factor,
     memcpy(buf, tmp, tmp_len);
     memcpy(buf + tmp_len, exp_buf, exp_len);
     buf[total_len] = '\0';
+    return buf;
+}
+
+const char *f77_fmt_d(int width, int precision, int exp_width, int scale_factor, int sign_plus, double value) {
+    char *buf = (char *)f77_fmt_e(width, precision, exp_width, scale_factor, sign_plus, value);
+    if (!buf) return buf;
+    char *exp_ptr = strchr(buf, 'E');
+    if (!exp_ptr) exp_ptr = strchr(buf, 'e');
+    if (exp_ptr) {
+        *exp_ptr = 'D';
+    }
+    return buf;
+}
+
+const char *f77_fmt_g(int width, int precision, int exp_width, int scale_factor, int sign_plus, double value) {
+    if (precision <= 0) precision = 1;
+
+    double abs_val = fabs(value);
+    int exp_val = 0;
+    if (abs_val != 0.0) {
+        exp_val = (int)floor(log10(abs_val));
+    }
+    if (abs_val != 0.0 && (exp_val < -precision || exp_val >= precision)) {
+        return f77_fmt_e(width, precision, exp_width, scale_factor, sign_plus, value);
+    }
+
+    int digits_before = exp_val + 1;
+    if (digits_before < 0) digits_before = 0;
+    int frac = precision - digits_before;
+    if (frac < 0) frac = 0;
+
+    double scaled = value;
+    if (scale_factor != 0) {
+        double scale = pow(10.0, (double)scale_factor);
+        scaled = value * scale;
+    }
+
+    int width_f = width;
+    int exp_pad = (exp_width > 0) ? (exp_width + 2) : 4;
+    if (width > exp_pad) {
+        width_f = width - exp_pad;
+    }
+
+    char tmp[128];
+    if (width_f <= 0) {
+        if (sign_plus) {
+            (void)snprintf(tmp, sizeof(tmp), "%+.*f", frac, scaled);
+        } else {
+            (void)snprintf(tmp, sizeof(tmp), "%.*f", frac, scaled);
+        }
+    } else {
+        if (sign_plus) {
+            (void)snprintf(tmp, sizeof(tmp), "%+.*f", frac, scaled);
+        } else {
+            (void)snprintf(tmp, sizeof(tmp), "%.*f", frac, scaled);
+        }
+        if (frac == 0 && strchr(tmp, '.') == NULL) {
+            size_t tmp_len = strlen(tmp);
+            if (tmp_len + 1 < sizeof(tmp)) {
+                tmp[tmp_len] = '.';
+                tmp[tmp_len + 1] = '\0';
+            }
+        }
+    }
+
+    size_t len = strlen(tmp);
+    if (width_f > 0 && (int)len > width_f) {
+        size_t star_len = (size_t)width_f;
+        if (star_len >= sizeof(tmp)) star_len = sizeof(tmp) - 1;
+        memset(tmp, '*', star_len);
+        tmp[star_len] = '\0';
+        len = star_len;
+    }
+
+    char *buf = fmt_buffers[fmt_index++ % 8];
+    if (width <= 0) {
+        if (len >= 64) len = 63;
+        memcpy(buf, tmp, len);
+        buf[len] = '\0';
+        return buf;
+    }
+
+    if ((size_t)width >= 64) {
+        width = 63;
+    }
+    if (width_f <= 0) {
+        width_f = width;
+    }
+
+    size_t pad = 0;
+    if ((int)len < width_f) {
+        pad = (size_t)width_f - len;
+    }
+    if (pad > 63) pad = 63;
+    memset(buf, ' ', pad);
+    size_t copy_len = len;
+    if (copy_len > 63 - pad) copy_len = 63 - pad;
+    memcpy(buf + pad, tmp, copy_len);
+    size_t out_len = pad + copy_len;
+    for (size_t i = out_len; i < (size_t)width; i++) {
+        buf[i] = ' ';
+    }
+    buf[width] = '\0';
     return buf;
 }

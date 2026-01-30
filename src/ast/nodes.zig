@@ -283,6 +283,13 @@ pub const RealFormat = struct {
     width: usize,
     precision: usize,
     exp_width: usize,
+    kind: RealFormatKind = .e,
+};
+
+pub const RealFormatKind = enum {
+    e,
+    d,
+    g,
 };
 
 pub const CharFormat = struct {

@@ -292,14 +292,14 @@ fn parseFormatSequence(
             }
             if (index.* < text.len and (text[index.*] == 'E' or text[index.*] == 'e')) {
                 index.* += 1;
-                const spec = try parseRealFormat(text, index);
+                const spec = try parseRealFormat(text, index, .e);
                 try appendRepeatedItem(&items, .{ .real = spec }, count);
                 has_descriptor = true;
                 continue;
             }
             if (index.* < text.len and (text[index.*] == 'G' or text[index.*] == 'g')) {
                 index.* += 1;
-                const spec = try parseRealFormat(text, index);
+                const spec = try parseRealFormat(text, index, .g);
                 // Treat G editing as real editing for now. This is sufficient
                 // for NIST format parsing and avoids MissingFormatLabel.
                 try appendRepeatedItem(&items, .{ .real = spec }, count);
@@ -308,14 +308,14 @@ fn parseFormatSequence(
             }
             if (index.* < text.len and (text[index.*] == 'D' or text[index.*] == 'd')) {
                 index.* += 1;
-                const spec = try parseRealFormat(text, index);
+                const spec = try parseRealFormat(text, index, .d);
                 try appendRepeatedItem(&items, .{ .real = spec }, count);
                 has_descriptor = true;
                 continue;
             }
             if (index.* < text.len and (text[index.*] == 'F' or text[index.*] == 'f')) {
                 index.* += 1;
-                const spec = try parseRealFormat(text, index);
+                const spec = try parseRealFormat(text, index, .e);
                 try appendRepeatedItem(&items, .{ .real_fixed = spec }, count);
                 has_descriptor = true;
                 continue;
@@ -347,14 +347,14 @@ fn parseFormatSequence(
         }
         if (ch == 'E' or ch == 'e') {
             index.* += 1;
-            const spec = try parseRealFormat(text, index);
+            const spec = try parseRealFormat(text, index, .e);
             try items.append(.{ .real = spec });
             has_descriptor = true;
             continue;
         }
         if (ch == 'G' or ch == 'g') {
             index.* += 1;
-            const spec = try parseRealFormat(text, index);
+            const spec = try parseRealFormat(text, index, .g);
             // Treat G editing as real editing for now.
             try items.append(.{ .real = spec });
             has_descriptor = true;
@@ -362,14 +362,14 @@ fn parseFormatSequence(
         }
         if (ch == 'D' or ch == 'd') {
             index.* += 1;
-            const spec = try parseRealFormat(text, index);
+            const spec = try parseRealFormat(text, index, .d);
             try items.append(.{ .real = spec });
             has_descriptor = true;
             continue;
         }
         if (ch == 'F' or ch == 'f') {
             index.* += 1;
-            const spec = try parseRealFormat(text, index);
+            const spec = try parseRealFormat(text, index, .e);
             try items.append(.{ .real_fixed = spec });
             has_descriptor = true;
             continue;
@@ -426,7 +426,7 @@ fn parseIntFormat(text: []const u8, index: *usize) !IntFormat {
     return .{ .width = width, .min_digits = min_digits };
 }
 
-fn parseRealFormat(text: []const u8, index: *usize) !RealFormat {
+fn parseRealFormat(text: []const u8, index: *usize, kind: ast.RealFormatKind) !RealFormat {
     const width = parseUnsigned(text, index) orelse return error.UnexpectedToken;
     var precision: usize = 0;
     var exp_width: usize = 0;
@@ -438,7 +438,7 @@ fn parseRealFormat(text: []const u8, index: *usize) !RealFormat {
         index.* += 1;
         exp_width = parseUnsigned(text, index) orelse return error.UnexpectedToken;
     }
-    return .{ .width = width, .precision = precision, .exp_width = exp_width };
+    return .{ .width = width, .precision = precision, .exp_width = exp_width, .kind = kind };
 }
 
 fn parseCharFormat(text: []const u8, index: *usize) CharFormat {
