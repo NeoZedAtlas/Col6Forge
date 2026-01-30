@@ -1,7 +1,8 @@
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
-const declarations = @import("resolve_declarations.zig");
+const decls = @import("resolve_decls.zig");
+const specs = @import("resolve_specs.zig");
 const symbols_mod = @import("resolve_symbols.zig");
 const scope = @import("../scope.zig");
 
@@ -27,7 +28,10 @@ pub const Resolver = struct {
         try symbols_mod.installUnitSymbol(ctx);
         try symbols_mod.installDummyArgs(ctx);
         for (ctx.unit.decls) |decl| {
-            try declarations.applyDecl(ctx, decl);
+            switch (decl) {
+                .type_decl => |type_decl| try decls.applyTypeDecl(ctx, type_decl),
+                else => try specs.applySpec(ctx, decl),
+            }
         }
         for (ctx.unit.stmts) |stmt| {
             try resolveStmtScope(ctx, stmt);
