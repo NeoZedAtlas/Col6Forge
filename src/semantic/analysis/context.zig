@@ -82,6 +82,29 @@ pub const Context = struct {
         self.updateCurrentOwner();
     }
 
+    pub fn setCurrentScope(self: *Context, id: scope.ScopeId) void {
+        self.current_scope = id;
+        self.updateCurrentOwner();
+    }
+
+    pub fn findScopeByOwner(self: *Context, name: []const u8, kind: ast.ProgramUnitKind) ?scope.ScopeId {
+        for (self.scopes.items) |scope_info| {
+            if (scope_info.owner_name == null or scope_info.owner_kind == null) continue;
+            if (!std.mem.eql(u8, scope_info.owner_name.?, name)) continue;
+            if (scope_info.owner_kind.? != kind) continue;
+            return scope_info.id;
+        }
+        return null;
+    }
+
+    pub fn enterUnitScope(self: *Context) bool {
+        if (self.findScopeByOwner(self.unit.name, self.unit.kind)) |id| {
+            self.setCurrentScope(id);
+            return true;
+        }
+        return false;
+    }
+
     fn updateCurrentOwner(self: *Context) void {
         var scope_id = self.current_scope;
         while (scope_id) |id| {
