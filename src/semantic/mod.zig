@@ -6,6 +6,8 @@ pub const analyzer = @import("analysis/mod.zig");
 pub const evaluator = @import("evaluator.zig");
 pub const printer = @import("printer.zig");
 pub const scope = @import("scope.zig");
+pub const context = @import("context.zig");
+pub const diagnostic = @import("diagnostic.zig");
 
 pub const SymbolKind = symbols.SymbolKind;
 pub const StorageClass = symbols.StorageClass;
@@ -16,6 +18,8 @@ pub const ResolvedRefKind = symbols.ResolvedRefKind;
 pub const ResolvedRef = symbols.ResolvedRef;
 pub const SemanticUnit = symbols.SemanticUnit;
 pub const SemanticProgram = symbols.SemanticProgram;
+pub const Context = context.Context;
+pub const SemanticDiagnostic = diagnostic.SemanticDiagnostic;
 
 pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticProgram {
     var units = std.array_list.Managed(SemanticUnit).init(arena);
