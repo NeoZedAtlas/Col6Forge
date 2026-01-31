@@ -30,7 +30,7 @@ pub const emitIndirectCall = call_mod.emitIndirectCall;
 pub const emitArgPointer = call_mod.emitArgPointer;
 
 const std = @import("std");
-const ast = @import("../../../../ast/nodes.zig");
+const ast = @import("../../../input.zig");
 const sema = @import("../../../../semantic/mod.zig");
 const ir = @import("../../../ir.zig");
 const context = @import("../context.zig");

@@ -1,4 +1,4 @@
-const ast = @import("../../../../ast/nodes.zig");
+const ast = @import("../../../input.zig");
 const ir = @import("../../../ir.zig");
 const llvm_types = @import("../../types.zig");
 const context = @import("../context.zig");

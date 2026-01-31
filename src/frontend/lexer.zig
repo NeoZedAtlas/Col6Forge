@@ -1,6 +1,6 @@
 const std = @import("std");
 const fixed_form = @import("fixed_form.zig");
-const source = @import("../common/source.zig");
+const source_mod = @import("../common/source.zig");
 
 pub const TokenKind = enum {
     identifier,
@@ -27,7 +27,7 @@ pub const Token = struct {
     end: usize,
     line: usize,
     column: usize,
-    range: source.SourceRange,
+    range: source_mod.SourceRange,
 };
 
 pub fn tokenKindName(kind: TokenKind) []const u8 {

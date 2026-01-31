@@ -1,5 +1,5 @@
 const std = @import("std");
-const ast = @import("../../../../ast/nodes.zig");
+const ast = @import("../../../input.zig");
 const ir = @import("../../../ir.zig");
 const context = @import("../context.zig");
 const memory = @import("memory.zig");

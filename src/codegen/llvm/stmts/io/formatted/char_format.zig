@@ -1,5 +1,5 @@
 const std = @import("std");
-const ast = @import("../../../../../ast/nodes.zig");
+const ast = @import("../../../../input.zig");
 const common = @import("../../../codegen/common.zig");
 const context = @import("../../../codegen/context.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
