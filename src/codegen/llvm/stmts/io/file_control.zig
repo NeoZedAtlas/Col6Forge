@@ -93,85 +93,92 @@ pub fn emitRewind(ctx: *Context, builder: anytype, rewind: ast.RewindStmt) EmitE
     const rewind_name = try ctx.ensureDeclRaw("f77_rewind", .void, "i32", false);
     try builder.call(null, .void, rewind_name, arg_buf.items);
 }
-pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) EmitError!void {
-    if (inquire.controls.len == 0) return;
-    var unit_expr: ?*ast.Expr = null;
-    var file_expr: ?*ast.Expr = null;
-    var iostat_expr: ?*ast.Expr = null;
-    var exist_expr: ?*ast.Expr = null;
-    var opened_expr: ?*ast.Expr = null;
-    var number_expr: ?*ast.Expr = null;
-    var access_expr: ?*ast.Expr = null;
-    var sequential_expr: ?*ast.Expr = null;
-    var direct_expr: ?*ast.Expr = null;
-    var form_expr: ?*ast.Expr = null;
-    var formatted_expr: ?*ast.Expr = null;
-    var unformatted_expr: ?*ast.Expr = null;
-    var blank_expr: ?*ast.Expr = null;
-    var recl_expr: ?*ast.Expr = null;
-    var nextrec_expr: ?*ast.Expr = null;
+const InquireSpec = struct {
+    unit_expr: ?*ast.Expr = null,
+    file_expr: ?*ast.Expr = null,
+    iostat_expr: ?*ast.Expr = null,
+    exist_expr: ?*ast.Expr = null,
+    opened_expr: ?*ast.Expr = null,
+    number_expr: ?*ast.Expr = null,
+    access_expr: ?*ast.Expr = null,
+    sequential_expr: ?*ast.Expr = null,
+    direct_expr: ?*ast.Expr = null,
+    form_expr: ?*ast.Expr = null,
+    formatted_expr: ?*ast.Expr = null,
+    unformatted_expr: ?*ast.Expr = null,
+    blank_expr: ?*ast.Expr = null,
+    recl_expr: ?*ast.Expr = null,
+    nextrec_expr: ?*ast.Expr = null,
+};
 
+fn analyzeInquireStmt(inquire: ast.InquireStmt) InquireSpec {
+    var spec = InquireSpec{};
     for (inquire.controls) |control| {
         if (control.name) |name| {
             if (std.ascii.eqlIgnoreCase(name, "UNIT")) {
-                unit_expr = control.value;
+                spec.unit_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "FILE")) {
-                file_expr = control.value;
+                spec.file_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "IOSTAT")) {
-                iostat_expr = control.value;
+                spec.iostat_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "EXIST")) {
-                exist_expr = control.value;
+                spec.exist_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "OPENED")) {
-                opened_expr = control.value;
+                spec.opened_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "NUMBER")) {
-                number_expr = control.value;
+                spec.number_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "ACCESS")) {
-                access_expr = control.value;
+                spec.access_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "SEQUENTIAL")) {
-                sequential_expr = control.value;
+                spec.sequential_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "DIRECT")) {
-                direct_expr = control.value;
+                spec.direct_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "FORM")) {
-                form_expr = control.value;
+                spec.form_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "FORMATTED")) {
-                formatted_expr = control.value;
+                spec.formatted_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "UNFORMATTED")) {
-                unformatted_expr = control.value;
+                spec.unformatted_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "BLANK")) {
-                blank_expr = control.value;
+                spec.blank_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "RECL")) {
-                recl_expr = control.value;
+                spec.recl_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "NEXTREC")) {
-                nextrec_expr = control.value;
+                spec.nextrec_expr = control.value;
             }
         }
     }
+    return spec;
+}
+pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) EmitError!void {
+    if (inquire.controls.len == 0) return;
+    const spec = analyzeInquireStmt(inquire);
 
     var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_buf.deinit();
 
-    const iostat_ptr = if (iostat_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const exist_ptr = if (exist_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const opened_ptr = if (opened_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const number_ptr = if (number_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const access_ptr = if (access_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const access_len = if (access_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
-    const sequential_ptr = if (sequential_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const sequential_len = if (sequential_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
-    const direct_ptr = if (direct_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const direct_len = if (direct_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
-    const form_ptr = if (form_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const form_len = if (form_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
-    const formatted_ptr = if (formatted_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const formatted_len = if (formatted_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
-    const unformatted_ptr = if (unformatted_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const unformatted_len = if (unformatted_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
-    const blank_ptr = if (blank_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const blank_len = if (blank_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
-    const recl_ptr = if (recl_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    const nextrec_ptr = if (nextrec_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const iostat_ptr = if (spec.iostat_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const exist_ptr = if (spec.exist_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const opened_ptr = if (spec.opened_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const number_ptr = if (spec.number_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const access_ptr = if (spec.access_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const access_len = if (spec.access_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const sequential_ptr = if (spec.sequential_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const sequential_len = if (spec.sequential_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const direct_ptr = if (spec.direct_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const direct_len = if (spec.direct_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const form_ptr = if (spec.form_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const form_len = if (spec.form_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const formatted_ptr = if (spec.formatted_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const formatted_len = if (spec.formatted_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const unformatted_ptr = if (spec.unformatted_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const unformatted_len = if (spec.unformatted_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const blank_ptr = if (spec.blank_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const blank_len = if (spec.blank_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const recl_ptr = if (spec.recl_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const nextrec_ptr = if (spec.nextrec_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
 
-    if (file_expr) |file_node| {
+    if (spec.file_expr) |file_node| {
         const file_val = try expr.emitExpr(ctx, builder, file_node);
         const file_len = charLenForExpr(ctx, file_node) orelse 0;
         const len_text = utils.formatInt(ctx.allocator, @intCast(file_len));
@@ -207,7 +214,7 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
         return;
     }
 
-    const unit_node = unit_expr orelse inquire.controls[0].value;
+    const unit_node = spec.unit_expr orelse inquire.controls[0].value;
     const unit_value = try expr.emitExpr(ctx, builder, unit_node);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
     try arg_buf.writer().print(
