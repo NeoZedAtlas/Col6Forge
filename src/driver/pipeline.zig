@@ -1,5 +1,6 @@
 const std = @import("std");
 const fixed_form = @import("../frontend/fixed_form.zig");
+const source_form = @import("../frontend/source_form.zig");
 const parser = @import("../frontend/parser/mod.zig");
 const semantic = @import("../semantic/mod.zig");
 const codegen = @import("../codegen/mod.zig");
@@ -18,8 +19,8 @@ pub fn runPipeline(allocator: std.mem.Allocator, input_path: []const u8, emit: E
     const contents = try std.fs.cwd().readFileAlloc(allocator, input_path, max_size);
     defer allocator.free(contents);
 
-    const logical_lines = try fixed_form.normalizeFixedForm(allocator, contents);
-    defer fixed_form.freeLogicalLines(allocator, logical_lines);
+    const logical_lines = try source_form.normalize(.fixed, allocator, contents);
+    defer source_form.freeLogicalLines(.fixed, allocator, logical_lines);
 
     const output = try emitLlvmModule(allocator, input_path, logical_lines);
     return .{ .output = output };
@@ -31,8 +32,8 @@ pub fn runPipelineToWriter(allocator: std.mem.Allocator, input_path: []const u8,
     const contents = try std.fs.cwd().readFileAlloc(allocator, input_path, max_size);
     defer allocator.free(contents);
 
-    const logical_lines = try fixed_form.normalizeFixedForm(allocator, contents);
-    defer fixed_form.freeLogicalLines(allocator, logical_lines);
+    const logical_lines = try source_form.normalize(.fixed, allocator, contents);
+    defer source_form.freeLogicalLines(.fixed, allocator, logical_lines);
 
     try emitLlvmModuleToWriter(allocator, input_path, logical_lines, writer);
 }

@@ -1,5 +1,6 @@
 const std = @import("std");
 const fixed_form = @import("fixed_form.zig");
+const source = @import("../common/source.zig");
 
 pub const TokenKind = enum {
     identifier,
@@ -26,6 +27,7 @@ pub const Token = struct {
     end: usize,
     line: usize,
     column: usize,
+    range: source.SourceRange,
 };
 
 pub fn tokenKindName(kind: TokenKind) []const u8 {
@@ -75,8 +77,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
                 i += 1;
             }
             const end = i;
-            const pos = fixed_form.mapIndexToPos(line, start);
-            try tokens.append(.{ .kind = .string, .start = start, .end = end, .line = pos.line, .column = pos.column });
+            try tokens.append(makeToken(line, .string, start, end));
             continue;
         }
 
@@ -86,8 +87,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
             while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
             i = scanExponent(text, i);
             const end = i;
-            const pos = fixed_form.mapIndexToPos(line, start);
-            try tokens.append(.{ .kind = .real, .start = start, .end = end, .line = pos.line, .column = pos.column });
+            try tokens.append(makeToken(line, .real, start, end));
             continue;
         }
 
@@ -101,8 +101,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
                 i += 1;
                 if (i + count > text.len) return error.InvalidHollerith;
                 const end = i + count;
-                const pos = fixed_form.mapIndexToPos(line, start);
-                try tokens.append(.{ .kind = .hollerith, .start = start, .end = end, .line = pos.line, .column = pos.column });
+                try tokens.append(makeToken(line, .hollerith, start, end));
                 i = end;
                 continue;
             }
@@ -119,8 +118,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
                 i = exp_i;
             }
             const end = i;
-            const pos = fixed_form.mapIndexToPos(line, start);
-            try tokens.append(.{ .kind = if (is_real) .real else .integer, .start = start, .end = end, .line = pos.line, .column = pos.column });
+            try tokens.append(makeToken(line, if (is_real) .real else .integer, start, end));
             continue;
         }
 
@@ -129,8 +127,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
             i += 1;
             while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) : (i += 1) {}
             const end = i;
-            const pos = fixed_form.mapIndexToPos(line, start);
-            try tokens.append(.{ .kind = .identifier, .start = start, .end = end, .line = pos.line, .column = pos.column });
+            try tokens.append(makeToken(line, .identifier, start, end));
             continue;
         }
 
@@ -144,60 +141,71 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
             if (k > j and m < text.len and text[m] == '.') {
                 const start = i;
                 const end = m + 1;
-                const pos = fixed_form.mapIndexToPos(line, start);
-                try tokens.append(.{ .kind = .dot_op, .start = start, .end = end, .line = pos.line, .column = pos.column });
+                try tokens.append(makeToken(line, .dot_op, start, end));
                 i = end;
                 continue;
             }
         }
 
-        const pos = fixed_form.mapIndexToPos(line, i);
         switch (ch) {
             '(' => {
-                try tokens.append(.{ .kind = .l_paren, .start = i, .end = i + 1, .line = pos.line, .column = pos.column });
+                try tokens.append(makeToken(line, .l_paren, i, i + 1));
                 i += 1;
             },
             ')' => {
-                try tokens.append(.{ .kind = .r_paren, .start = i, .end = i + 1, .line = pos.line, .column = pos.column });
+                try tokens.append(makeToken(line, .r_paren, i, i + 1));
                 i += 1;
             },
             ',' => {
-                try tokens.append(.{ .kind = .comma, .start = i, .end = i + 1, .line = pos.line, .column = pos.column });
+                try tokens.append(makeToken(line, .comma, i, i + 1));
                 i += 1;
             },
             ':' => {
-                try tokens.append(.{ .kind = .colon, .start = i, .end = i + 1, .line = pos.line, .column = pos.column });
+                try tokens.append(makeToken(line, .colon, i, i + 1));
                 i += 1;
             },
             '=' => {
-                try tokens.append(.{ .kind = .equals, .start = i, .end = i + 1, .line = pos.line, .column = pos.column });
+                try tokens.append(makeToken(line, .equals, i, i + 1));
                 i += 1;
             },
             '+' => {
-                try tokens.append(.{ .kind = .plus, .start = i, .end = i + 1, .line = pos.line, .column = pos.column });
+                try tokens.append(makeToken(line, .plus, i, i + 1));
                 i += 1;
             },
             '-' => {
-                try tokens.append(.{ .kind = .minus, .start = i, .end = i + 1, .line = pos.line, .column = pos.column });
+                try tokens.append(makeToken(line, .minus, i, i + 1));
                 i += 1;
             },
             '*' => {
                 if (i + 1 < text.len and text[i + 1] == '*') {
-                    try tokens.append(.{ .kind = .power, .start = i, .end = i + 2, .line = pos.line, .column = pos.column });
+                    try tokens.append(makeToken(line, .power, i, i + 2));
                     i += 2;
                 } else {
-                    try tokens.append(.{ .kind = .star, .start = i, .end = i + 1, .line = pos.line, .column = pos.column });
+                    try tokens.append(makeToken(line, .star, i, i + 1));
                     i += 1;
                 }
             },
             '/' => {
-                try tokens.append(.{ .kind = .slash, .start = i, .end = i + 1, .line = pos.line, .column = pos.column });
+                try tokens.append(makeToken(line, .slash, i, i + 1));
                 i += 1;
             },
             else => return error.UnexpectedCharacter,
         }
     }
     return tokens.toOwnedSlice();
+}
+
+fn makeToken(line: fixed_form.LogicalLine, kind: TokenKind, start: usize, end: usize) Token {
+    const start_pos = fixed_form.mapIndexToPos(line, start);
+    const end_pos = fixed_form.mapIndexToPosExclusive(line, end);
+    return .{
+        .kind = kind,
+        .start = start,
+        .end = end,
+        .line = start_pos.line,
+        .column = start_pos.column,
+        .range = .{ .start = start_pos, .end = end_pos },
+    };
 }
 
 fn scanExponent(text: []const u8, index: usize) usize {
