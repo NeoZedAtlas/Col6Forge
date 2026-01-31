@@ -1,6 +1,5 @@
 const std = @import("std");
-const ast = @import("../../../ast/nodes.zig");
-const sema = @import("../../../semantic/mod.zig");
+const input = @import("../../input.zig");
 const evaluator = @import("../../../semantic/evaluator.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
@@ -27,7 +26,7 @@ pub const CommonBlockInfo = struct {
     items: []const CommonItem,
 };
 
-pub fn buildUnitCommonLayouts(allocator: std.mem.Allocator, unit: ast.ProgramUnit, sem: *const sema.SemanticUnit) ![]CommonBlockLayout {
+pub fn buildUnitCommonLayouts(allocator: std.mem.Allocator, unit: input.ProgramUnit, sem: *const input.sema.SemanticUnit) ![]CommonBlockLayout {
     var blocks = std.StringHashMap(std.array_list.Managed([]const u8)).init(allocator);
     var order = std.array_list.Managed([]const u8).init(allocator);
 
@@ -128,14 +127,14 @@ fn blockKey(allocator: std.mem.Allocator, name: ?[]const u8) ![]const u8 {
     return buffer.toOwnedSlice();
 }
 
-fn findSymbol(sem: *const sema.SemanticUnit, name: []const u8) ?sema.Symbol {
+fn findSymbol(sem: *const input.sema.SemanticUnit, name: []const u8) ?input.sema.Symbol {
     for (sem.symbols) |sym| {
         if (std.mem.eql(u8, sym.name, name)) return sym;
     }
     return null;
 }
 
-pub fn arrayElementCount(sem: *const sema.SemanticUnit, dims: []*ast.Expr) !usize {
+pub fn arrayElementCount(sem: *const input.sema.SemanticUnit, dims: []*input.Expr) !usize {
     if (dims.len == 0) return 1;
     var total: usize = 1;
     for (dims) |dim| {
@@ -149,7 +148,7 @@ pub fn arrayElementCount(sem: *const sema.SemanticUnit, dims: []*ast.Expr) !usiz
     return total;
 }
 
-fn dimSizeValue(sem: *const sema.SemanticUnit, dim: *ast.Expr) !?i64 {
+fn dimSizeValue(sem: *const input.sema.SemanticUnit, dim: *input.Expr) !?i64 {
     switch (dim.*) {
         .literal => |lit| {
             if (lit.kind == .assumed_size) return error.AssumedSizeDimUnsupported;
@@ -170,7 +169,7 @@ fn dimSizeValue(sem: *const sema.SemanticUnit, dim: *ast.Expr) !?i64 {
     }
 }
 
-fn evalConstInt(sem: *const sema.SemanticUnit, expr: *ast.Expr) !?i64 {
+fn evalConstInt(sem: *const input.sema.SemanticUnit, expr: *input.Expr) !?i64 {
     const resolver = evaluator.ConstResolver{
         .ctx = @ptrCast(@constCast(sem)),
         .resolveFn = resolveConstValue,
@@ -184,8 +183,8 @@ fn evalConstInt(sem: *const sema.SemanticUnit, expr: *ast.Expr) !?i64 {
     };
 }
 
-fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?sema.ConstValue {
-    const sem: *const sema.SemanticUnit = @ptrCast(@alignCast(ctx));
+fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?input.sema.ConstValue {
+    const sem: *const input.sema.SemanticUnit = @ptrCast(@alignCast(ctx));
     for (sem.symbols) |sym| {
         if (std.mem.eql(u8, sym.name, name)) return sym.const_value;
     }
@@ -200,24 +199,24 @@ test "buildUnitCommonLayouts computes offsets and alignment" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const empty_exprs = try a.alloc(*ast.Expr, 0);
-    const decl_items = try a.alloc(ast.Declarator, 2);
+    const empty_exprs = try a.alloc(*input.Expr, 0);
+    const decl_items = try a.alloc(input.Declarator, 2);
     decl_items[0] = .{ .name = "A", .dims = empty_exprs, .char_len = null };
     decl_items[1] = .{ .name = "B", .dims = empty_exprs, .char_len = null };
-    const blocks = try a.alloc(ast.CommonBlock, 1);
+    const blocks = try a.alloc(input.CommonBlock, 1);
     blocks[0] = .{ .name = "BLK", .items = decl_items };
-    const decls = try a.alloc(ast.Decl, 1);
+    const decls = try a.alloc(input.Decl, 1);
     decls[0] = .{ .common = .{ .blocks = blocks } };
 
-    const unit = ast.ProgramUnit{
+    const unit = input.ProgramUnit{
         .kind = .subroutine,
         .name = "UNIT",
         .args = &[_][]const u8{},
         .decls = decls,
-        .stmts = try a.alloc(ast.Stmt, 0),
+        .stmts = try a.alloc(input.Stmt, 0),
     };
 
-    const symbols = try a.alloc(sema.Symbol, 2);
+    const symbols = try a.alloc(input.sema.Symbol, 2);
     symbols[0] = .{
         .name = "A",
         .type_kind = .integer,
@@ -242,12 +241,12 @@ test "buildUnitCommonLayouts computes offsets and alignment" {
         .const_value = null,
         .type_explicit = true,
     };
-    const sem_unit = sema.SemanticUnit{
+    const sem_unit = input.sema.SemanticUnit{
         .name = "UNIT",
         .kind = .subroutine,
         .symbols = symbols,
-        .implicit_rules = try a.alloc(sema.ImplicitRule, 0),
-        .resolved_refs = try a.alloc(sema.ResolvedRef, 0),
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
     };
 
     const layouts = try buildUnitCommonLayouts(a, unit, &sem_unit);

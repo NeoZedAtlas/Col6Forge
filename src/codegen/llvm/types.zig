@@ -1,10 +1,10 @@
 const std = @import("std");
-const ast = @import("../../ast/nodes.zig");
+const input = @import("../input.zig");
 const ir = @import("../ir.zig");
 
 pub const IRType = ir.IRType;
 
-pub fn typeFromKind(kind: ast.TypeKind) IRType {
+pub fn typeFromKind(kind: input.TypeKind) IRType {
     return switch (kind) {
         .double_precision => .f64,
         .integer => .i32,

@@ -1,13 +1,12 @@
 const std = @import("std");
-const ast = @import("../../../ast/nodes.zig");
-const sema = @import("../../../semantic/mod.zig");
+const input = @import("../../input.zig");
 const context = @import("context.zig");
 const builder_mod = @import("builder.zig");
 const common = @import("common.zig");
 const stmts = @import("../stmts/mod.zig");
 const utils = @import("utils.zig");
 
-const Program = ast.Program;
+const Program = input.Program;
 const FormatInfo = context.FormatInfo;
 
 const FormatMaps = struct {
@@ -27,7 +26,7 @@ fn commonLayoutsCompatible(a: []const common.CommonItem, b: []const common.Commo
     return true;
 }
 
-pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: sema.SemanticProgram, source_name: []const u8) ![]const u8 {
+pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: input.sema.SemanticProgram, source_name: []const u8) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
     errdefer buffer.deinit();
     var writer = buffer.writer();
@@ -35,7 +34,7 @@ pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: sema.Sema
     return buffer.toOwnedSlice();
 }
 
-pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program: Program, sem: sema.SemanticProgram, source_name: []const u8) !void {
+pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program: Program, sem: input.sema.SemanticProgram, source_name: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const scratch = arena.allocator();
@@ -48,7 +47,7 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
     var defined = std.StringHashMap(void).init(scratch);
     defer defined.deinit();
 
-    var sem_map = std.StringHashMap(*const sema.SemanticUnit).init(scratch);
+    var sem_map = std.StringHashMap(*const input.sema.SemanticUnit).init(scratch);
     defer sem_map.deinit();
     for (sem.units) |*unit| {
         try sem_map.put(unit.name, unit);
@@ -176,7 +175,7 @@ fn emitIabsWrapper(builder: anytype, name: []const u8) !void {
     try builder.functionEnd();
 }
 
-fn buildFormatMaps(allocator: std.mem.Allocator, builder: anytype, unit: ast.ProgramUnit) !FormatMaps {
+fn buildFormatMaps(allocator: std.mem.Allocator, builder: anytype, unit: input.ProgramUnit) !FormatMaps {
     var label_map = std.StringHashMap(FormatInfo).init(allocator);
     var inline_map = std.AutoHashMap(usize, FormatInfo).init(allocator);
     const unit_mangled = try utils.mangleName(allocator, unit.name);
@@ -249,7 +248,7 @@ fn buildFormatMaps(allocator: std.mem.Allocator, builder: anytype, unit: ast.Pro
     return .{ .labels = label_map, .inline_items = inline_map };
 }
 
-fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const ast.FormatItem) ![]const u8 {
+fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const input.FormatItem) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
     errdefer buffer.deinit();
     var last_non_space: ?usize = null;
@@ -324,27 +323,27 @@ test "emitModuleToWriter emits module header and empty function" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const unit = ast.ProgramUnit{
+    const unit = input.ProgramUnit{
         .kind = .subroutine,
         .name = "UNIT",
         .args = &[_][]const u8{},
-        .decls = try a.alloc(ast.Decl, 0),
-        .stmts = try a.alloc(ast.Stmt, 0),
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = try a.alloc(input.Stmt, 0),
     };
-    const units = try a.alloc(ast.ProgramUnit, 1);
+    const units = try a.alloc(input.ProgramUnit, 1);
     units[0] = unit;
-    const program = ast.Program{ .units = units };
+    const program = input.Program{ .units = units };
 
-    const sem_unit = sema.SemanticUnit{
+    const sem_unit = input.sema.SemanticUnit{
         .name = "UNIT",
         .kind = .subroutine,
-        .symbols = try a.alloc(sema.Symbol, 0),
-        .implicit_rules = try a.alloc(sema.ImplicitRule, 0),
-        .resolved_refs = try a.alloc(sema.ResolvedRef, 0),
+        .symbols = try a.alloc(input.sema.Symbol, 0),
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
     };
-    const sem_units = try a.alloc(sema.SemanticUnit, 1);
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
     sem_units[0] = sem_unit;
-    const sem_prog = sema.SemanticProgram{ .units = sem_units };
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
 
     var buffer = std.array_list.Managed(u8).init(allocator);
     defer buffer.deinit();

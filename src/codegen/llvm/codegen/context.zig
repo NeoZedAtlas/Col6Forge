@@ -1,13 +1,12 @@
 const std = @import("std");
-const ast = @import("../../../ast/nodes.zig");
-const sema = @import("../../../semantic/mod.zig");
+const input = @import("../../input.zig");
 const ir = @import("../../ir.zig");
 const utils = @import("utils.zig");
 
-const ProgramUnit = ast.ProgramUnit;
-const TypeKind = ast.TypeKind;
+const ProgramUnit = input.ProgramUnit;
+const TypeKind = input.TypeKind;
 const IRType = ir.IRType;
-const FormatItem = ast.FormatItem;
+const FormatItem = input.FormatItem;
 
 pub const IRDecl = struct {
     ret_type: IRType,
@@ -25,12 +24,12 @@ pub const ValueRef = utils.ValueRef;
 
 pub const StatementFunction = struct {
     params: []const []const u8,
-    expr: *ast.Expr,
+    expr: *input.Expr,
 };
 
 pub const StatementFunctionSubst = struct {
     params: []const []const u8,
-    actuals: []*ast.Expr,
+    actuals: []*input.Expr,
 };
 
 pub const IntrinsicWrapperKind = enum {
@@ -81,14 +80,14 @@ pub const StringPool = struct {
 pub const Context = struct {
     allocator: std.mem.Allocator,
     unit: ProgramUnit,
-    sem: *const sema.SemanticUnit,
+    sem: *const input.SemanticUnit,
     decls: *std.StringHashMap(IRDecl),
     defined: *std.StringHashMap(void),
     formats: *const std.StringHashMap(FormatInfo),
     inline_formats: *const std.AutoHashMap(usize, FormatInfo),
     temp_index: usize,
     locals: std.StringHashMap(ValueRef),
-    ref_kinds: std.AutoHashMap(usize, sema.ResolvedRefKind),
+    ref_kinds: std.AutoHashMap(usize, input.sema.ResolvedRefKind),
     direct_recl: std.AutoHashMap(i32, usize),
     direct_recl_by_name: std.StringHashMap(usize),
     label_map: std.StringHashMap([]const u8),
@@ -104,7 +103,7 @@ pub const Context = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         unit: ProgramUnit,
-        sem: *const sema.SemanticUnit,
+        sem: *const input.SemanticUnit,
         decls: *std.StringHashMap(IRDecl),
         defined: *std.StringHashMap(void),
         formats: *const std.StringHashMap(FormatInfo),
@@ -122,7 +121,7 @@ pub const Context = struct {
             .inline_formats = inline_formats,
             .temp_index = 0,
             .locals = std.StringHashMap(ValueRef).init(allocator),
-            .ref_kinds = std.AutoHashMap(usize, sema.ResolvedRefKind).init(allocator),
+            .ref_kinds = std.AutoHashMap(usize, input.sema.ResolvedRefKind).init(allocator),
             .direct_recl = std.AutoHashMap(i32, usize).init(allocator),
             .direct_recl_by_name = std.StringHashMap(usize).init(allocator),
             .label_map = std.StringHashMap([]const u8).init(allocator),
@@ -201,14 +200,14 @@ pub const Context = struct {
         return error.UnknownSymbol;
     }
 
-    pub fn findSymbol(self: *Context, name: []const u8) ?sema.Symbol {
+    pub fn findSymbol(self: *Context, name: []const u8) ?input.sema.Symbol {
         for (self.sem.symbols) |sym| {
             if (std.mem.eql(u8, sym.name, name)) return sym;
         }
         return null;
     }
 
-    pub fn addStatementFunction(self: *Context, name: []const u8, params: []const []const u8, expr: *ast.Expr) !void {
+    pub fn addStatementFunction(self: *Context, name: []const u8, params: []const []const u8, expr: *input.Expr) !void {
         try self.statement_functions.put(name, .{ .params = params, .expr = expr });
     }
 
