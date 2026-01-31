@@ -1,9 +1,10 @@
 pub const fixed_form = @import("fixed_form.zig");
+pub const logical_line = @import("logical_line.zig");
 pub const lexer = @import("lexer.zig");
 pub const parser = @import("parser/mod.zig");
 pub const source_form = @import("source_form.zig");
 
-pub const LogicalLine = fixed_form.LogicalLine;
+pub const LogicalLine = logical_line.LogicalLine;
 pub const Token = lexer.Token;
 pub const TokenKind = lexer.TokenKind;
 pub const normalizeFixedForm = fixed_form.normalizeFixedForm;

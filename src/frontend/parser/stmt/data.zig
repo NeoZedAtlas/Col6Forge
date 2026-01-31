@@ -1,20 +1,20 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
-const fixed_form = @import("../../fixed_form.zig");
+const logical_line = @import("../../logical_line.zig");
 const lexer = @import("../../lexer.zig");
 const context = @import("../context.zig");
 const expr = @import("../expr.zig");
 const array_info = @import("../array_info.zig");
 
 const LineParser = context.LineParser;
-const Segment = fixed_form.Segment;
+const Segment = logical_line.Segment;
 const Expr = ast.Expr;
 
 const ParseStmtError = anyerror;
 
 pub fn parseDataStatement(
     arena: std.mem.Allocator,
-    line: fixed_form.LogicalLine,
+    line: logical_line.LogicalLine,
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
@@ -77,10 +77,10 @@ pub fn parseDataStatement(
     return .{ .data = .{ .inits = try inits.toOwnedSlice() } };
 }
 
-fn parseDataVarList(arena: std.mem.Allocator, line: fixed_form.LogicalLine, text: []const u8) ParseStmtError![]*Expr {
+fn parseDataVarList(arena: std.mem.Allocator, line: logical_line.LogicalLine, text: []const u8) ParseStmtError![]*Expr {
     const segs = try arena.alloc(Segment, 1);
     segs[0] = .{ .line = line.span.start_line, .column = 7, .length = text.len };
-    const tmp_line = fixed_form.LogicalLine{
+    const tmp_line = logical_line.LogicalLine{
         .label = null,
         .text = text,
         .span = line.span,
@@ -137,7 +137,7 @@ fn parseDataValueExpr(arena: std.mem.Allocator, text: []const u8) ParseStmtError
     if (trimmed.len == 0) return error.UnexpectedToken;
     const segs = try arena.alloc(Segment, 1);
     segs[0] = .{ .line = 1, .column = 7, .length = trimmed.len };
-    const tmp_line = fixed_form.LogicalLine{
+    const tmp_line = logical_line.LogicalLine{
         .label = null,
         .text = trimmed,
         .span = .{ .start_line = 1, .end_line = 1 },

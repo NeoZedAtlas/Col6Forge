@@ -1,18 +1,10 @@
 const std = @import("std");
-const source = @import("../common/source.zig");
+const logical_line = @import("logical_line.zig");
 
-pub const Segment = struct {
-    line: usize,
-    column: usize,
-    length: usize,
-};
-
-pub const LogicalLine = struct {
-    label: ?[]const u8,
-    text: []const u8,
-    span: source.SourceSpan,
-    segments: []Segment,
-};
+pub const Segment = logical_line.Segment;
+pub const LogicalLine = logical_line.LogicalLine;
+pub const mapIndexToPos = logical_line.mapIndexToPos;
+pub const mapIndexToPosExclusive = logical_line.mapIndexToPosExclusive;
 
 pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![]LogicalLine {
     var list = std.array_list.Managed(LogicalLine).init(allocator);
@@ -113,31 +105,6 @@ pub fn freeLogicalLines(allocator: std.mem.Allocator, lines: []LogicalLine) void
         if (line.label) |label| allocator.free(label);
     }
     allocator.free(lines);
-}
-
-pub fn mapIndexToPos(line: LogicalLine, index: usize) source.SourcePos {
-    var offset: usize = 0;
-    for (line.segments) |segment| {
-        if (index < offset + segment.length) {
-            const col = segment.column + (index - offset);
-            return .{ .line = segment.line, .column = col };
-        }
-        offset += segment.length;
-    }
-    return .{ .line = line.span.start_line, .column = 1 };
-}
-
-pub fn mapIndexToPosExclusive(line: LogicalLine, index: usize) source.SourcePos {
-    var offset: usize = 0;
-    for (line.segments) |segment| {
-        const end = offset + segment.length;
-        if (index <= end) {
-            const col = segment.column + (index - offset);
-            return .{ .line = segment.line, .column = col };
-        }
-        offset += segment.length;
-    }
-    return .{ .line = line.span.end_line, .column = 1 };
 }
 
 fn isCommentLine(line: []const u8) bool {

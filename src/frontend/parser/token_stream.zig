@@ -1,13 +1,13 @@
 const std = @import("std");
-const fixed_form = @import("../fixed_form.zig");
+const logical_line = @import("../logical_line.zig");
 const lexer = @import("../lexer.zig");
 
 pub const TokenStream = struct {
-    line: fixed_form.LogicalLine,
+    line: logical_line.LogicalLine,
     tokens: []lexer.Token,
     index: usize,
 
-    pub fn init(line: fixed_form.LogicalLine, tokens: []lexer.Token) TokenStream {
+    pub fn init(line: logical_line.LogicalLine, tokens: []lexer.Token) TokenStream {
         return .{ .line = line, .tokens = tokens, .index = 0 };
     }
 

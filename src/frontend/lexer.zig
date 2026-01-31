@@ -1,4 +1,5 @@
 const std = @import("std");
+const logical_line = @import("logical_line.zig");
 const fixed_form = @import("fixed_form.zig");
 const source_mod = @import("../common/source.zig");
 
@@ -51,7 +52,7 @@ pub fn tokenKindName(kind: TokenKind) []const u8 {
     };
 }
 
-pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine) ![]Token {
+pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLine) ![]Token {
     var tokens = std.array_list.Managed(Token).init(allocator);
     const text = line.text;
     var i: usize = 0;
@@ -195,9 +196,9 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: fixed_form.LogicalLine
     return tokens.toOwnedSlice();
 }
 
-fn makeToken(line: fixed_form.LogicalLine, kind: TokenKind, start: usize, end: usize) Token {
-    const start_pos = fixed_form.mapIndexToPos(line, start);
-    const end_pos = fixed_form.mapIndexToPosExclusive(line, end);
+fn makeToken(line: logical_line.LogicalLine, kind: TokenKind, start: usize, end: usize) Token {
+    const start_pos = logical_line.mapIndexToPos(line, start);
+    const end_pos = logical_line.mapIndexToPosExclusive(line, end);
     return .{
         .kind = kind,
         .start = start,

@@ -1,12 +1,12 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
-const fixed_form = @import("../../fixed_form.zig");
+const logical_line = @import("../../logical_line.zig");
 const lexer = @import("../../lexer.zig");
 const context = @import("../context.zig");
 const expr = @import("../expr.zig");
 
 pub const LineParser = context.LineParser;
-const Segment = fixed_form.Segment;
+const Segment = logical_line.Segment;
 const StmtNode = ast.StmtNode;
 const Expr = ast.Expr;
 
@@ -90,7 +90,7 @@ pub fn labelFollowedByEquals(lp: LineParser) bool {
     return second.kind == .equals;
 }
 
-pub fn tryParseBlankInsensitiveAssignment(arena: std.mem.Allocator, line: fixed_form.LogicalLine, lp: LineParser) ?StmtNode {
+pub fn tryParseBlankInsensitiveAssignment(arena: std.mem.Allocator, line: logical_line.LogicalLine, lp: LineParser) ?StmtNode {
     var eq_idx: ?usize = null;
     var i: usize = lp.index;
     while (i < lp.tokens.len) : (i += 1) {
@@ -119,7 +119,7 @@ pub fn tryParseBlankInsensitiveAssignment(arena: std.mem.Allocator, line: fixed_
 
     const segs = arena.alloc(Segment, 1) catch return null;
     segs[0] = .{ .line = line.span.start_line, .column = 7, .length = rhs_text.len };
-    const tmp_line = fixed_form.LogicalLine{
+    const tmp_line = logical_line.LogicalLine{
         .label = null,
         .text = rhs_text,
         .span = line.span,

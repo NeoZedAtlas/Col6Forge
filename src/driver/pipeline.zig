@@ -1,6 +1,6 @@
 const std = @import("std");
-const fixed_form = @import("../frontend/fixed_form.zig");
 const source_form = @import("../frontend/source_form.zig");
+const logical_line = @import("../frontend/logical_line.zig");
 const parser = @import("../frontend/parser/mod.zig");
 const semantic = @import("../semantic/mod.zig");
 const codegen = @import("../codegen/mod.zig");
@@ -38,7 +38,7 @@ pub fn runPipelineToWriter(allocator: std.mem.Allocator, input_path: []const u8,
     try emitLlvmModuleToWriter(allocator, input_path, logical_lines, writer);
 }
 
-fn emitLlvmModule(allocator: std.mem.Allocator, input_path: []const u8, logical_lines: []fixed_form.LogicalLine) ![]const u8 {
+fn emitLlvmModule(allocator: std.mem.Allocator, input_path: []const u8, logical_lines: []logical_line.LogicalLine) ![]const u8 {
     if (logical_lines.len == 0) {
         return codegen.emitModule(allocator, .{ .units = &.{} }, .{ .units = &.{} }, input_path);
     }
@@ -61,7 +61,7 @@ fn emitLlvmModule(allocator: std.mem.Allocator, input_path: []const u8, logical_
 fn emitLlvmModuleToWriter(
     allocator: std.mem.Allocator,
     input_path: []const u8,
-    logical_lines: []fixed_form.LogicalLine,
+    logical_lines: []logical_line.LogicalLine,
     writer: anytype,
 ) !void {
     if (logical_lines.len == 0) {

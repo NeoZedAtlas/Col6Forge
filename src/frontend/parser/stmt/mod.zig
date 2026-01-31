@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const fixed_form = @import("../../fixed_form.zig");
+const logical_line = @import("../../logical_line.zig");
 const lexer = @import("../../lexer.zig");
 const context = @import("../context.zig");
 const decl = @import("../decl.zig");
@@ -24,7 +25,7 @@ pub const DoContext = control_flow.DoContext;
 
 pub fn parseStatement(
     arena: std.mem.Allocator,
-    lines: []fixed_form.LogicalLine,
+    lines: []logical_line.LogicalLine,
     index: *usize,
     do_ctx: *DoContext,
     param_ints: *const std.StringHashMap(i64),
@@ -236,7 +237,7 @@ pub fn parseStatement(
 
 fn parseIfStatement(
     arena: std.mem.Allocator,
-    lines: []fixed_form.LogicalLine,
+    lines: []logical_line.LogicalLine,
     index: *usize,
     label: ?[]const u8,
     lp: *LineParser,
@@ -345,7 +346,7 @@ const ElseIfBlock = struct {
 
 fn parseElseIfBlock(
     arena: std.mem.Allocator,
-    lines: []fixed_form.LogicalLine,
+    lines: []logical_line.LogicalLine,
     index: *usize,
     do_ctx: *DoContext,
     param_ints: *const std.StringHashMap(i64),
@@ -374,7 +375,7 @@ fn parseElseIfBlock(
 
 pub fn parseIfBlock(
     arena: std.mem.Allocator,
-    lines: []fixed_form.LogicalLine,
+    lines: []logical_line.LogicalLine,
     index: *usize,
     do_ctx: *DoContext,
     param_ints: *const std.StringHashMap(i64),

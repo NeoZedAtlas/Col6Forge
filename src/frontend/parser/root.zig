@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const fixed_form = @import("../fixed_form.zig");
+const logical_line = @import("../logical_line.zig");
 const lexer = @import("../lexer.zig");
 const context = @import("context.zig");
 const decl = @import("decl.zig");
@@ -16,7 +17,7 @@ const Stmt = ast.Stmt;
 
 const LineParser = context.LineParser;
 
-pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []fixed_form.LogicalLine) !Program {
+pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.LogicalLine) !Program {
     var parser = Parser{
         .arena = arena_allocator,
         .lines = lines,
@@ -29,7 +30,7 @@ pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []fixed_form.Logi
 
 const Parser = struct {
     arena: std.mem.Allocator,
-    lines: []fixed_form.LogicalLine,
+    lines: []logical_line.LogicalLine,
     index: usize,
     block_data_counter: usize,
 
@@ -180,7 +181,7 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
     };
 }
 
-fn isDuplicateProgramUnitLine(arena: std.mem.Allocator, line: fixed_form.LogicalLine, header: ProgramUnitHeader) bool {
+fn isDuplicateProgramUnitLine(arena: std.mem.Allocator, line: logical_line.LogicalLine, header: ProgramUnitHeader) bool {
     const tokens = lexer.lexLogicalLine(arena, line) catch return false;
     defer arena.free(tokens);
     var lp = LineParser.init(line, tokens);
