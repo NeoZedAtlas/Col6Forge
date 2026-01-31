@@ -16,36 +16,17 @@ const ValueRef = context.ValueRef;
 pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) !ValueRef {
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
     if (sym.dims.len == 0) return error.ArraysUnsupported;
-    if (sym.dims.len == 0) return error.ArraysUnsupported;
+    if (call.args.len == 0) return error.InvalidSubscript;
+    if (call.args.len != sym.dims.len) return error.InvalidSubscript;
     const base_ptr = try ctx.getPointer(call.name);
     const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
 
-    if (call.args.len == 0) return error.InvalidSubscript;
-    if (call.args.len != sym.dims.len) return error.InvalidSubscript;
-    const idx1 = try emitIndex(ctx, builder, call.args[0]);
-    const lb1 = try emitDimLower(ctx, builder, sym.dims[0]);
-    const idx1_adj = try binary.emitSub(ctx, builder, idx1, lb1);
-    var offset = idx1_adj;
-    if (sym.dims.len >= 2) {
-        var stride = try emitDimValue(ctx, builder, sym.dims[0]);
-        var dim_idx: usize = 1;
-        while (dim_idx < sym.dims.len) : (dim_idx += 1) {
-            const idx_val = try emitIndex(ctx, builder, call.args[dim_idx]);
-            const lb = try emitDimLower(ctx, builder, sym.dims[dim_idx]);
-            const idx_adj = try binary.emitSub(ctx, builder, idx_val, lb);
-            const term = try binary.emitMul(ctx, builder, idx_adj, stride);
-            offset = try binary.emitAdd(ctx, builder, offset, term);
-            if (dim_idx + 1 < sym.dims.len) {
-                const dim_val = try emitDimValue(ctx, builder, sym.dims[dim_idx]);
-                stride = try binary.emitMul(ctx, builder, stride, dim_val);
-            }
-        }
-    }
+    var offset = try emitRowMajorOffset(ctx, builder, sym, call.args);
 
     if (sym.type_kind == .character) {
         const char_len: i64 = @intCast(sym.char_len orelse 1);
         if (char_len != 1) {
-            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, char_len), .ty = .i32, .is_ptr = false };
+            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, char_len), .ty = offset.ty, .is_ptr = false };
             offset = try binary.emitMul(ctx, builder, offset, scale);
         }
     }
@@ -53,6 +34,28 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     const gep = try ctx.nextTemp();
     try builder.gep(gep, elem_ty, base_ptr, offset);
     return .{ .name = gep, .ty = .ptr, .is_ptr = true };
+}
+
+/// 计算多维数组寻址的元素偏移量（Row-Major）。
+/// 复杂度: O(n) 生成 IR 指令，n 为维度数量（通常 < 10）。
+/// 前置条件: sym.dims.len > 0 且 args.len == sym.dims.len。
+fn emitRowMajorOffset(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, args: []*Expr) !ValueRef {
+    var offset = utils.zeroValue(.i32);
+    var stride = utils.oneValue();
+    var dim_idx = sym.dims.len;
+    while (dim_idx > 0) : (dim_idx -= 1) {
+        const idx = dim_idx - 1;
+        const idx_val = try emitIndex(ctx, builder, args[idx]);
+        const lb = try emitDimLower(ctx, builder, sym.dims[idx]);
+        const idx_adj = try binary.emitSub(ctx, builder, idx_val, lb);
+        const term = try binary.emitMul(ctx, builder, idx_adj, stride);
+        offset = try binary.emitAdd(ctx, builder, offset, term);
+        if (idx > 0) {
+            const dim_val = try emitDimValue(ctx, builder, sym.dims[idx]);
+            stride = try binary.emitMul(ctx, builder, stride, dim_val);
+        }
+    }
+    return offset;
 }
 
 pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) !ValueRef {
@@ -67,7 +70,7 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
     if (sym.type_kind == .character) {
         const char_len: i64 = @intCast(sym.char_len orelse 1);
         if (char_len != 1) {
-            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, char_len), .ty = .i32, .is_ptr = false };
+            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, char_len), .ty = idx1_adj.ty, .is_ptr = false };
             idx1_adj = try binary.emitMul(ctx, builder, idx1_adj, scale);
         }
     }
