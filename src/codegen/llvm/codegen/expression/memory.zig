@@ -21,7 +21,7 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     const base_ptr = try ctx.getPointer(call.name);
     const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
 
-    var offset = try emitRowMajorOffset(ctx, builder, sym, call.args);
+    var offset = try emitColumnMajorOffset(ctx, builder, sym, call.args);
 
     if (sym.type_kind == .character) {
         const char_len: i64 = @intCast(sym.char_len orelse 1);
@@ -36,25 +36,26 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     return .{ .name = gep, .ty = .ptr, .is_ptr = true };
 }
 
-/// 计算多维数组寻址的元素偏移量（Row-Major）。
-/// 复杂度: O(n) 生成 IR 指令，n 为维度数量（通常 < 10）。
-/// 前置条件: sym.dims.len > 0 且 args.len == sym.dims.len。
-fn emitRowMajorOffset(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, args: []*Expr) !ValueRef {
+// Compute the linear element offset for Fortran arrays (column-major order).
+// Preconditions: sym.dims.len > 0 and args.len == sym.dims.len.
+fn emitColumnMajorOffset(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, args: []*Expr) !ValueRef {
     var offset = utils.zeroValue(.i32);
     var stride = utils.oneValue();
-    var dim_idx = sym.dims.len;
-    while (dim_idx > 0) : (dim_idx -= 1) {
-        const idx = dim_idx - 1;
+
+    var idx: usize = 0;
+    while (idx < sym.dims.len) : (idx += 1) {
         const idx_val = try emitIndex(ctx, builder, args[idx]);
         const lb = try emitDimLower(ctx, builder, sym.dims[idx]);
         const idx_adj = try binary.emitSub(ctx, builder, idx_val, lb);
         const term = try binary.emitMul(ctx, builder, idx_adj, stride);
         offset = try binary.emitAdd(ctx, builder, offset, term);
-        if (idx > 0) {
+
+        if (idx + 1 < sym.dims.len) {
             const dim_val = try emitDimValue(ctx, builder, sym.dims[idx]);
             stride = try binary.emitMul(ctx, builder, stride, dim_val);
         }
     }
+
     return offset;
 }
 
