@@ -30,6 +30,12 @@ pub fn parseWriteStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtE
         // Positional UNIT expression when the control list does not start with
         // keyword assignments.
         if (unit_expr == null and !(tok.kind == .identifier and helpers.nextTokenIs(lp.*, .equals))) {
+            if (tok.kind == .star) {
+                _ = lp.next();
+                // WRITE(*,...) means default output unit.
+                unit_expr = try makeIntegerLiteral(arena, 6);
+                continue;
+            }
             unit_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }
@@ -153,6 +159,12 @@ pub fn parseReadStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
         first = false;
         const tok = lp.peek() orelse return error.UnexpectedToken;
         if (unit_expr == null and !(tok.kind == .identifier and helpers.nextTokenIs(lp.*, .equals))) {
+            if (tok.kind == .star) {
+                _ = lp.next();
+                // READ(*,...) means default input unit.
+                unit_expr = try makeIntegerLiteral(arena, 5);
+                continue;
+            }
             unit_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }

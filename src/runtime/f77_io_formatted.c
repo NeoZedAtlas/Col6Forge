@@ -29,9 +29,53 @@ static void f77_write_trimmed(FILE *file, const char *fmt, va_list ap) {
     free(buf);
 }
 
+static int f77_parse_list_char(const char *record, size_t record_len, size_t *idx, char *out, int out_cap) {
+    if (!record || !idx || !out || out_cap <= 0) {
+        return 0;
+    }
+
+    size_t i = *idx;
+    while (i < record_len && (isspace((unsigned char)record[i]) || record[i] == ',')) {
+        i++;
+    }
+
+    int used = 0;
+    if (i < record_len && (record[i] == '\'' || record[i] == '"')) {
+        const char quote = record[i++];
+        while (i < record_len) {
+            const char ch = record[i++];
+            if (ch == quote) {
+                if (i < record_len && record[i] == quote) {
+                    if (used < out_cap - 1) {
+                        out[used++] = quote;
+                    }
+                    i++;
+                    continue;
+                }
+                break;
+            }
+            if (used < out_cap - 1) {
+                out[used++] = ch;
+            }
+        }
+    } else {
+        while (i < record_len && !isspace((unsigned char)record[i]) && record[i] != ',') {
+            if (used < out_cap - 1) {
+                out[used++] = record[i];
+            }
+            i++;
+        }
+    }
+
+    out[used] = '\0';
+    *idx = i;
+    return used;
+}
+
 void f77_write(int unit, const char *fmt, ...) {
     va_list ap;
-    if (unit == 6 || unit == 0) {
+    const int unit_opened = (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened);
+    if ((unit == 6 || unit == 0) && !unit_opened) {
         va_start(ap, fmt);
         f77_write_trimmed(stdout, fmt, ap);
         va_end(ap);
@@ -68,7 +112,8 @@ void f77_write(int unit, const char *fmt, ...) {
 
 int f77_write_status(int unit, const char *fmt, ...) {
     va_list ap;
-    if (unit == 6 || unit == 0) {
+    const int unit_opened = (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened);
+    if ((unit == 6 || unit == 0) && !unit_opened) {
         va_start(ap, fmt);
         f77_write_trimmed(stdout, fmt, ap);
         va_end(ap);
@@ -108,7 +153,8 @@ int f77_read(int unit, const char *fmt, ...) {
     va_list ap;
     int assigned = 0;
     FILE *file = NULL;
-    if (unit == 5 || unit == 0) {
+    const int unit_opened = (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened);
+    if ((unit == 5 || unit == 0) && !unit_opened) {
         file = stdin;
     } else {
         if (unit < 0 || unit >= F77_MAX_UNITS) {
@@ -219,20 +265,22 @@ int f77_read(int unit, const char *fmt, ...) {
         }
         char buf[128];
         int used = 0;
-        if (width <= 0) {
-            while (idx < record_len && isspace((unsigned char)record[idx])) {
-                idx++;
-            }
-            while (idx < record_len && !isspace((unsigned char)record[idx]) && used < (int)sizeof(buf) - 1) {
-                buf[used++] = record[idx++];
-            }
-        } else {
-            if (width >= (int)sizeof(buf)) width = (int)sizeof(buf) - 1;
-            for (int i = 0; i < width; i++) {
-                if (idx < record_len) {
+        if (conv != 'S') {
+            if (width <= 0) {
+                while (idx < record_len && (isspace((unsigned char)record[idx]) || record[idx] == ',')) {
+                    idx++;
+                }
+                while (idx < record_len && !isspace((unsigned char)record[idx]) && record[idx] != ',' && used < (int)sizeof(buf) - 1) {
                     buf[used++] = record[idx++];
-                } else {
-                    buf[used++] = ' ';
+                }
+            } else {
+                if (width >= (int)sizeof(buf)) width = (int)sizeof(buf) - 1;
+                for (int i = 0; i < width; i++) {
+                    if (idx < record_len) {
+                        buf[used++] = record[idx++];
+                    } else {
+                        buf[used++] = ' ';
+                    }
                 }
             }
         }
@@ -253,6 +301,21 @@ int f77_read(int unit, const char *fmt, ...) {
             f77_normalize_exponent(buf);
             float *out = va_arg(ap, float *);
             *out = (float)strtod(buf, NULL);
+            assigned++;
+        } else if (conv == 'S') {
+            char *out = va_arg(ap, char *);
+            int parsed = f77_parse_list_char(record, record_len, &idx, buf, (int)sizeof(buf));
+            if (width > 0) {
+                memset(out, ' ', (size_t)width);
+                if (parsed > width) {
+                    parsed = width;
+                }
+                if (parsed > 0) {
+                    memcpy(out, buf, (size_t)parsed);
+                }
+            } else if (parsed > 0) {
+                memcpy(out, buf, (size_t)parsed);
+            }
             assigned++;
         } else if (conv == 'c') {
             char *out = va_arg(ap, char *);
@@ -278,7 +341,8 @@ int f77_read(int unit, const char *fmt, ...) {
 int f77_read_status(int unit, const char *fmt, ...) {
     va_list ap;
     FILE *file = NULL;
-    if (unit == 5 || unit == 0) {
+    const int unit_opened = (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened);
+    if ((unit == 5 || unit == 0) && !unit_opened) {
         file = stdin;
     } else {
         if (unit < 0 || unit >= F77_MAX_UNITS) {
@@ -390,20 +454,22 @@ int f77_read_status(int unit, const char *fmt, ...) {
         }
         char buf[128];
         int used = 0;
-        if (width <= 0) {
-            while (idx < record_len && isspace((unsigned char)record[idx])) {
-                idx++;
-            }
-            while (idx < record_len && !isspace((unsigned char)record[idx]) && used < (int)sizeof(buf) - 1) {
-                buf[used++] = record[idx++];
-            }
-        } else {
-            if (width >= (int)sizeof(buf)) width = (int)sizeof(buf) - 1;
-            for (int i = 0; i < width; i++) {
-                if (idx < record_len) {
+        if (conv != 'S') {
+            if (width <= 0) {
+                while (idx < record_len && (isspace((unsigned char)record[idx]) || record[idx] == ',')) {
+                    idx++;
+                }
+                while (idx < record_len && !isspace((unsigned char)record[idx]) && record[idx] != ',' && used < (int)sizeof(buf) - 1) {
                     buf[used++] = record[idx++];
-                } else {
-                    buf[used++] = ' ';
+                }
+            } else {
+                if (width >= (int)sizeof(buf)) width = (int)sizeof(buf) - 1;
+                for (int i = 0; i < width; i++) {
+                    if (idx < record_len) {
+                        buf[used++] = record[idx++];
+                    } else {
+                        buf[used++] = ' ';
+                    }
                 }
             }
         }
@@ -424,6 +490,21 @@ int f77_read_status(int unit, const char *fmt, ...) {
             f77_normalize_exponent(buf);
             float *out = va_arg(ap, float *);
             *out = (float)strtod(buf, NULL);
+            assigned++;
+        } else if (conv == 'S') {
+            char *out = va_arg(ap, char *);
+            int parsed = f77_parse_list_char(record, record_len, &idx, buf, (int)sizeof(buf));
+            if (width > 0) {
+                memset(out, ' ', (size_t)width);
+                if (parsed > width) {
+                    parsed = width;
+                }
+                if (parsed > 0) {
+                    memcpy(out, buf, (size_t)parsed);
+                }
+            } else if (parsed > 0) {
+                memcpy(out, buf, (size_t)parsed);
+            }
             assigned++;
         } else if (conv == 'c') {
             char *out = va_arg(ap, char *);

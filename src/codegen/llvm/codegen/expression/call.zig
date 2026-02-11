@@ -139,6 +139,10 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     }
     // For non-addressable actual arguments (literals/expressions), pass a temp.
     const value = try dispatch.emitExpr(ctx, builder, expr);
+    if (value.ty == .ptr) {
+        // Character/substring expressions already evaluate to data pointers.
+        return .{ .name = value.name, .ty = .ptr, .is_ptr = true };
+    }
     const tmp = try ctx.nextTemp();
     try builder.alloca(tmp, value.ty);
     const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };

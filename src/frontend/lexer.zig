@@ -108,10 +108,14 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
             }
             var is_real = false;
             if (i < text.len and text[i] == '.') {
-                is_real = true;
-                i += 1;
-                const frac_digits = scanDigitsAllowBlanks(text, i);
-                i = frac_digits.idx;
+                // Do not consume '.' as part of a real literal when it starts
+                // a logical/relational dot operator (e.g. "1.OR.2").
+                if (!isDotOperatorStart(text, i)) {
+                    is_real = true;
+                    i += 1;
+                    const frac_digits = scanDigitsAllowBlanks(text, i);
+                    i = frac_digits.idx;
+                }
             }
             const exp_i = scanExponent(text, i);
             if (exp_i != i) {
@@ -257,6 +261,17 @@ fn scanDigitsAllowBlanks(text: []const u8, index: usize) struct { idx: usize, ha
         break;
     }
     return .{ .idx = i, .had_digit = had_digit };
+}
+
+fn isDotOperatorStart(text: []const u8, dot_index: usize) bool {
+    if (dot_index >= text.len or text[dot_index] != '.') return false;
+    var j = dot_index + 1;
+    while (j < text.len and std.ascii.isWhitespace(text[j])) : (j += 1) {}
+    var k = j;
+    while (k < text.len and std.ascii.isAlphabetic(text[k])) : (k += 1) {}
+    var m = k;
+    while (m < text.len and std.ascii.isWhitespace(text[m])) : (m += 1) {}
+    return k > j and m < text.len and text[m] == '.';
 }
 
 test "lexLogicalLine tokenizes basic expression" {

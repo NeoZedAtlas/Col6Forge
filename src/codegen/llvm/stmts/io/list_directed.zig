@@ -199,7 +199,7 @@ pub fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt)
             .ptr => {
                 const len = expanded.char_lens.items[idx];
                 const width = if (len > 0) len else 1;
-                try fmt_buf.writer().print("%{d}c", .{width});
+                try fmt_buf.writer().print("%{d}S", .{width});
             },
             else => return error.UnsupportedIntrinsicType,
         }
@@ -274,7 +274,7 @@ pub fn emitListDirectedReadStatus(ctx: *Context, builder: anytype, read: ast.Rea
             .ptr => {
                 const len = expanded.char_lens.items[idx];
                 const width = if (len > 0) len else 1;
-                try fmt_buf.writer().print("%{d}c", .{width});
+                try fmt_buf.writer().print("%{d}S", .{width});
             },
             else => return error.UnsupportedIntrinsicType,
         }

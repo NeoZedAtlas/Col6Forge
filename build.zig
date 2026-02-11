@@ -107,6 +107,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const blas_runner = b.addExecutable(.{
+        .name = "blas_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/blas_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "Col6Forge", .module = mod },
+            },
+        }),
+    });
+
     const test_harness = b.addExecutable(.{
         .name = "test_harness",
         .root_module = b.createModule(.{
@@ -123,6 +135,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
     b.installArtifact(golden_runner);
     b.installArtifact(verify_runner);
+    b.installArtifact(blas_runner);
     b.installArtifact(test_harness);
 
     // This creates a top level step. Top level steps have a name and can be
@@ -202,6 +215,14 @@ pub fn build(b: *std.Build) void {
     }
     if (b.args) |args| {
         run_verify.addArgs(args);
+    }
+
+    const blas_verify_step = b.step("blas-verify", "Run BLAS 3.12.0 verification tests");
+    const run_blas_verify = b.addRunArtifact(blas_runner);
+    blas_verify_step.dependOn(&run_blas_verify.step);
+    run_blas_verify.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_blas_verify.addArgs(args);
     }
 
     const test_all_step = b.step("test-all", "Run unified test harness");

@@ -194,6 +194,18 @@ fn emitIntrinsicIchar(ctx: *Context, builder: anytype, args: []*Expr) EmitError!
     return .{ .name = tmp_int, .ty = .i32, .is_ptr = false };
 }
 
+fn emitIntrinsicEpsilon(ctx: *Context, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    const target_ty: IRType = switch (arg_ty) {
+        .f64, .complex_f64 => .f64,
+        .f32, .complex_f32 => .f32,
+        .i32, .i1 => .f32,
+        else => return error.UnsupportedIntrinsicType,
+    };
+    return constFloat(ctx, target_ty, if (target_ty == .f64) std.math.floatEps(f64) else std.math.floatEps(f32));
+}
+
 fn lenForExpr(ctx: *Context, expr: *Expr) ?usize {
     switch (expr.*) {
         .identifier => |name| {
@@ -828,6 +840,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
     if (std.ascii.eqlIgnoreCase(name, "ANINT")) return emitIntrinsicAnint(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "NINT")) return emitIntrinsicNint(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "ICHAR")) return emitIntrinsicIchar(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "EPSILON")) return emitIntrinsicEpsilon(ctx, args);
     if (std.ascii.eqlIgnoreCase(name, "LEN")) {
         if (args.len != 1) return error.InvalidIntrinsicCall;
         const len = lenForExpr(ctx, args[0]) orelse return error.UnsupportedIntrinsicType;

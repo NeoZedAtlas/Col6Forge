@@ -1,0 +1,1014 @@
+const std = @import("std");
+const builtin = @import("builtin");
+const Col6Forge = @import("Col6Forge");
+
+const ALLBLAS = [_][]const u8{
+    "lsame.f",
+    "xerbla.f",
+    "xerbla_array.f",
+};
+
+// Keep low-level helper routines on the reference compiler side for now.
+// BLAS-verify focuses translated coverage on the computational kernels.
+const FORTRAN_FALLBACK = [_][]const u8{
+    "lsame.f",
+    "xerbla.f",
+    "xerbla_array.f",
+};
+
+const SBLAS3 = [_][]const u8{
+    "sgemm.f",
+    "ssymm.f",
+    "ssyrk.f",
+    "ssyr2k.f",
+    "strmm.f",
+    "strsm.f",
+};
+
+const DBLAS3 = [_][]const u8{
+    "dgemm.f",
+    "dsymm.f",
+    "dsyrk.f",
+    "dsyr2k.f",
+    "dtrmm.f",
+    "dtrsm.f",
+};
+
+const CBLAS3 = [_][]const u8{
+    "cgemm.f",
+    "csymm.f",
+    "csyrk.f",
+    "csyr2k.f",
+    "ctrmm.f",
+    "ctrsm.f",
+    "chemm.f",
+    "cherk.f",
+    "cher2k.f",
+};
+
+const ZBLAS3 = [_][]const u8{
+    "zgemm.f",
+    "zsymm.f",
+    "zsyrk.f",
+    "zsyr2k.f",
+    "ztrmm.f",
+    "ztrsm.f",
+    "zhemm.f",
+    "zherk.f",
+    "zher2k.f",
+};
+
+const XBLAT3S_SOURCES = ALLBLAS ++ SBLAS3;
+const XBLAT3D_SOURCES = ALLBLAS ++ DBLAS3;
+const XBLAT3C_SOURCES = ALLBLAS ++ CBLAS3;
+const XBLAT3Z_SOURCES = ALLBLAS ++ ZBLAS3;
+
+const BlasCase = struct {
+    name: []const u8,
+    driver: []const u8,
+    input: []const u8,
+    sources: []const []const u8,
+};
+
+const ALL_CASES = [_]BlasCase{
+    .{ .name = "xblat3s", .driver = "sblat3.f", .input = "sblat3.in", .sources = XBLAT3S_SOURCES[0..] },
+    .{ .name = "xblat3d", .driver = "dblat3.f", .input = "dblat3.in", .sources = XBLAT3D_SOURCES[0..] },
+    .{ .name = "xblat3c", .driver = "cblat3.f", .input = "cblat3.in", .sources = XBLAT3C_SOURCES[0..] },
+    .{ .name = "xblat3z", .driver = "zblat3.f", .input = "zblat3.in", .sources = XBLAT3Z_SOURCES[0..] },
+};
+
+const Options = struct {
+    blas_dir: []const u8,
+    testing_dir: ?[]const u8,
+    filter: ?[]const u8,
+    gfortran_path: []const u8,
+    timeout_ms: u64,
+    keep_workdir: bool,
+    show_help: bool,
+    emit: Col6Forge.EmitKind,
+};
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    var thread_safe = std.heap.ThreadSafeAllocator{ .child_allocator = gpa.allocator() };
+    const allocator = thread_safe.allocator();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    const options = parseArgs(args) catch |err| {
+        try printUsage(std.fs.File.stderr());
+        return err;
+    };
+    if (options.show_help) {
+        try printUsage(std.fs.File.stdout());
+        return;
+    }
+
+    const testing_dir = options.testing_dir orelse try std.fs.path.join(arena_allocator, &.{ options.blas_dir, "TESTING" });
+
+    const root_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(root_path);
+
+    var gfortran_cmd = options.gfortran_path;
+    if (std.mem.eql(u8, gfortran_cmd, defaultGfortran())) {
+        if (std.process.getEnvVarOwned(allocator, "GFORTRAN") catch null) |value| {
+            defer allocator.free(value);
+            gfortran_cmd = try arena_allocator.dupe(u8, value);
+        } else if (std.process.getEnvVarOwned(allocator, "FC") catch null) |value| {
+            defer allocator.free(value);
+            gfortran_cmd = try arena_allocator.dupe(u8, value);
+        }
+    }
+
+    const cases = try collectCases(arena_allocator, options.filter);
+    if (cases.len == 0) {
+        std.debug.print("no BLAS cases selected\n", .{});
+        return;
+    }
+
+    var failures: usize = 0;
+    for (cases, 0..) |case, idx| {
+        std.debug.print("[{d}/{d}] Running {s}\n", .{ idx + 1, cases.len, case.name });
+        const ok = processCase(allocator, root_path, options.blas_dir, testing_dir, gfortran_cmd, case, options) catch |err| {
+            std.debug.print("internal error: {s} ({s})\n", .{ case.name, @errorName(err) });
+            failures += 1;
+            continue;
+        };
+        if (!ok) failures += 1;
+    }
+
+    if (failures > 0) {
+        std.debug.print("BLAS verification failed: {d}\n", .{failures});
+        return error.BlasVerificationFailed;
+    }
+
+    std.debug.print("BLAS verification passed\n", .{});
+}
+
+fn parseArgs(args: []const []const u8) !Options {
+    var blas_dir: []const u8 = "tests/BLAS-3.12.0";
+    var testing_dir: ?[]const u8 = null;
+    var filter: ?[]const u8 = null;
+    var gfortran_path: []const u8 = defaultGfortran();
+    var timeout_ms: u64 = 120_000;
+    var keep_workdir = false;
+    var show_help = false;
+    var emit: Col6Forge.EmitKind = .llvm;
+
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            show_help = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--blas-dir")) {
+            if (i + 1 >= args.len) return error.MissingBlasDir;
+            i += 1;
+            blas_dir = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--testing-dir")) {
+            if (i + 1 >= args.len) return error.MissingTestingDir;
+            i += 1;
+            testing_dir = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--filter")) {
+            if (i + 1 >= args.len) return error.MissingFilter;
+            i += 1;
+            filter = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--gfortran")) {
+            if (i + 1 >= args.len) return error.MissingGfortranPath;
+            i += 1;
+            gfortran_path = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--timeout")) {
+            if (i + 1 >= args.len) return error.MissingTimeout;
+            i += 1;
+            timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--keep-workdir")) {
+            keep_workdir = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-emit-llvm")) {
+            emit = .llvm;
+            continue;
+        }
+        return error.UnknownFlag;
+    }
+
+    return .{
+        .blas_dir = blas_dir,
+        .testing_dir = testing_dir,
+        .filter = filter,
+        .gfortran_path = gfortran_path,
+        .timeout_ms = timeout_ms,
+        .keep_workdir = keep_workdir,
+        .show_help = show_help,
+        .emit = emit,
+    };
+}
+
+fn printUsage(file: std.fs.File) !void {
+    try file.writeAll(
+        \\Usage: blas_runner [--blas-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--gfortran <path>] [--timeout <ms>] [--keep-workdir]
+        \\Options:
+        \\  --blas-dir <dir>     BLAS root directory (default: tests/BLAS-3.12.0)
+        \\  --testing-dir <dir>  BLAS testing directory (default: <blas-dir>/TESTING)
+        \\  --filter <text>      Run only case names containing text (e.g. xblat3d)
+        \\  --gfortran <path>    Path to gfortran executable
+        \\  --timeout <ms>       Per-command timeout in milliseconds (default: 120000)
+        \\  --keep-workdir       Keep zig-cache/blas-verify/<case> even on success
+        \\  -emit-llvm           Emit LLVM IR (default)
+        \\  -h, --help           Show this help
+        \\Examples:
+        \\  zig build blas-verify -- --filter xblat3d
+        \\  zig build blas-verify -- --filter xblat3 --keep-workdir
+        \\  zig build blas-verify -- --blas-dir tests/BLAS-3.12.0
+        \\
+    );
+}
+
+fn defaultGfortran() []const u8 {
+    return if (builtin.os.tag == .windows) "gfortran.exe" else "gfortran";
+}
+
+fn collectCases(allocator: std.mem.Allocator, filter: ?[]const u8) ![]BlasCase {
+    var list: std.ArrayList(BlasCase) = .empty;
+    for (ALL_CASES) |case| {
+        if (filter) |needle| {
+            if (!std.mem.containsAtLeast(u8, case.name, 1, needle)) continue;
+        }
+        try list.append(allocator, case);
+    }
+    return list.toOwnedSlice(allocator);
+}
+
+fn processCase(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    blas_dir: []const u8,
+    testing_dir: []const u8,
+    gfortran_cmd: []const u8,
+    case: BlasCase,
+    options: Options,
+) !bool {
+    const work_dir_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "blas-verify", case.name });
+    defer allocator.free(work_dir_rel);
+
+    cleanupWorkDir(work_dir_rel);
+    try std.fs.cwd().makePath(work_dir_rel);
+
+    const work_dir = try std.fs.path.join(allocator, &.{ root_path, work_dir_rel });
+    defer allocator.free(work_dir);
+
+    const ref_dir = try std.fs.path.join(allocator, &.{ work_dir, "ref" });
+    defer allocator.free(ref_dir);
+    const test_dir = try std.fs.path.join(allocator, &.{ work_dir, "test" });
+    defer allocator.free(test_dir);
+    const ll_dir = try std.fs.path.join(allocator, &.{ work_dir, "translated" });
+    defer allocator.free(ll_dir);
+
+    try std.fs.cwd().makePath(ref_dir);
+    try std.fs.cwd().makePath(test_dir);
+    try std.fs.cwd().makePath(ll_dir);
+
+    const input_path = try std.fs.path.join(allocator, &.{ testing_dir, case.input });
+    defer allocator.free(input_path);
+    const input_data = try std.fs.cwd().readFileAlloc(allocator, input_path, 16 * 1024 * 1024);
+    defer allocator.free(input_data);
+
+    const summary_name = parseSummaryOutputName(allocator, input_data) catch null;
+    defer if (summary_name) |name| allocator.free(name);
+
+    const source_paths = try buildSourcePaths(allocator, root_path, blas_dir, testing_dir, case);
+    defer {
+        for (source_paths) |path| allocator.free(path);
+        allocator.free(source_paths);
+    }
+
+    const ref_exe = try buildExePath(allocator, ref_dir, "ref");
+    defer allocator.free(ref_exe);
+    const ref_ok = try compileReference(allocator, gfortran_cmd, ref_exe, source_paths, options.timeout_ms, ref_dir);
+    if (!ref_ok) {
+        std.debug.print("reference compile failed: {s}\n", .{case.name});
+        return false;
+    }
+
+    const trans_sources = try selectTranslatedSources(allocator, source_paths);
+    defer allocator.free(trans_sources);
+
+    const ll_paths = try translateSources(allocator, ll_dir, trans_sources, options.emit);
+    defer {
+        for (ll_paths) |path| allocator.free(path);
+        allocator.free(ll_paths);
+    }
+
+    const test_exe = try buildExePath(allocator, test_dir, "test");
+    defer allocator.free(test_exe);
+    const test_compile_ok = try compileTranslated(
+        allocator,
+        root_path,
+        gfortran_cmd,
+        test_exe,
+        source_paths,
+        trans_sources,
+        ll_paths,
+        options.timeout_ms,
+        test_dir,
+    );
+    if (!test_compile_ok) {
+        std.debug.print("translated compile failed: {s}\n", .{case.name});
+        return false;
+    }
+
+    const ref_run = try runProcessCaptureWithInput(allocator, &.{ref_exe}, ref_dir, input_data, options.timeout_ms);
+    defer ref_run.deinit(allocator);
+    if (ref_run.timed_out) {
+        std.debug.print("timeout: reference run {s}\n", .{case.name});
+        return false;
+    }
+
+    const test_run = try runProcessCaptureWithInput(allocator, &.{test_exe}, test_dir, input_data, options.timeout_ms);
+    defer test_run.deinit(allocator);
+    if (test_run.timed_out) {
+        std.debug.print("timeout: translated run {s}\n", .{case.name});
+        return false;
+    }
+
+    const output_cmp = try Comparator.compare(allocator, ref_run.term, test_run.term, ref_run.stdout, test_run.stdout);
+    defer if (output_cmp.diff) |d| allocator.free(d);
+    if (!output_cmp.ok) {
+        std.debug.print("stdout mismatch: {s}\n{s}\n", .{ case.name, output_cmp.diff.? });
+        return false;
+    }
+
+    if (summary_name) |name| {
+        const ref_summary = try readOptionalFile(allocator, ref_dir, name);
+        defer if (ref_summary) |buf| allocator.free(buf);
+        const test_summary = try readOptionalFile(allocator, test_dir, name);
+        defer if (test_summary) |buf| allocator.free(buf);
+
+        if (ref_summary == null and test_summary == null) {
+            // no summary output on either side
+        } else if (ref_summary == null or test_summary == null) {
+            std.debug.print("summary file presence mismatch: {s} ({s})\n", .{ case.name, name });
+            return false;
+        } else {
+            const summary_cmp = try Comparator.compareText(allocator, ref_summary.?, test_summary.?);
+            defer if (summary_cmp.diff) |d| allocator.free(d);
+            if (!summary_cmp.ok) {
+                std.debug.print("summary mismatch: {s} ({s})\n{s}\n", .{ case.name, name, summary_cmp.diff.? });
+                return false;
+            }
+        }
+    }
+
+    if (!options.keep_workdir) {
+        cleanupWorkDir(work_dir_rel);
+    }
+
+    return true;
+}
+
+fn buildSourcePaths(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    blas_dir: []const u8,
+    testing_dir: []const u8,
+    case: BlasCase,
+) ![]const []const u8 {
+    var paths = try allocator.alloc([]const u8, 1 + case.sources.len);
+    const driver_rel = try std.fs.path.join(allocator, &.{ testing_dir, case.driver });
+    defer allocator.free(driver_rel);
+    paths[0] = try absolutizePath(allocator, root_path, driver_rel);
+    for (case.sources, 0..) |src, idx| {
+        const src_rel = try std.fs.path.join(allocator, &.{ blas_dir, src });
+        defer allocator.free(src_rel);
+        paths[idx + 1] = try absolutizePath(allocator, root_path, src_rel);
+    }
+    return paths;
+}
+
+fn absolutizePath(allocator: std.mem.Allocator, root_path: []const u8, path: []const u8) ![]const u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        return allocator.dupe(u8, path);
+    }
+    return std.fs.path.join(allocator, &.{ root_path, path });
+}
+
+fn isFortranFallbackSource(path: []const u8) bool {
+    const base = std.fs.path.basename(path);
+    for (FORTRAN_FALLBACK) |name| {
+        if (std.ascii.eqlIgnoreCase(base, name)) return true;
+    }
+    return false;
+}
+
+fn shouldSkipFallbackForDriver(path: []const u8) bool {
+    // BLAS test drivers already define XERBLA for error-path checking.
+    return std.ascii.eqlIgnoreCase(std.fs.path.basename(path), "xerbla.f");
+}
+
+fn isTranslatedKernelSource(path: []const u8) bool {
+    const base = std.fs.path.basename(path);
+    if (isFortranFallbackSource(path)) return false;
+    if (base.len == 0) return false;
+    const first = std.ascii.toLower(base[0]);
+    // Current translation coverage target: real BLAS-3 kernels (S/D families).
+    return first == 's' or first == 'd';
+}
+
+fn sourceInList(list: []const []const u8, path: []const u8) bool {
+    for (list) |item| {
+        if (std.mem.eql(u8, item, path)) return true;
+    }
+    return false;
+}
+
+fn selectTranslatedSources(allocator: std.mem.Allocator, source_paths: []const []const u8) ![]const []const u8 {
+    var selected: std.ArrayList([]const u8) = .empty;
+    // source_paths[0] is the test driver (always kept on gfortran side).
+    var i: usize = 1;
+    while (i < source_paths.len) : (i += 1) {
+        const src = source_paths[i];
+        if (!isTranslatedKernelSource(src)) continue;
+        try selected.append(allocator, src);
+    }
+    return selected.toOwnedSlice(allocator);
+}
+
+fn translateSources(
+    allocator: std.mem.Allocator,
+    ll_dir: []const u8,
+    source_paths: []const []const u8,
+    emit: Col6Forge.EmitKind,
+) ![]const []const u8 {
+    var ll_paths = try allocator.alloc([]const u8, source_paths.len);
+    var produced: usize = 0;
+    errdefer {
+        for (ll_paths[0..produced]) |path| allocator.free(path);
+        allocator.free(ll_paths);
+    }
+
+    for (source_paths, 0..) |src_path, idx| {
+        const base = std.fs.path.basename(src_path);
+        const dot = std.mem.lastIndexOfScalar(u8, base, '.') orelse base.len;
+        const stem = base[0..dot];
+        const ll_name = try std.fmt.allocPrint(allocator, "{d}_{s}.ll", .{ idx, stem });
+        defer allocator.free(ll_name);
+        const ll_path = try std.fs.path.join(allocator, &.{ ll_dir, ll_name });
+
+        const ir = Col6Forge.runPipeline(allocator, src_path, emit) catch |err| {
+            std.debug.print("pipeline error: {s} ({s})\n", .{ src_path, @errorName(err) });
+            allocator.free(ll_path);
+            return err;
+        };
+        defer allocator.free(ir.output);
+
+        try writeFile(ll_path, ir.output);
+        ll_paths[idx] = ll_path;
+        produced += 1;
+    }
+    return ll_paths;
+}
+
+fn compileReference(
+    allocator: std.mem.Allocator,
+    gfortran_cmd: []const u8,
+    out_exe: []const u8,
+    source_paths: []const []const u8,
+    timeout_ms: u64,
+    cwd: []const u8,
+) !bool {
+    if (source_paths.len == 0) return false;
+
+    const obj_dir = try std.fs.path.join(allocator, &.{ cwd, "obj-ref" });
+    defer allocator.free(obj_dir);
+    try std.fs.cwd().makePath(obj_dir);
+
+    const driver_obj = try std.fs.path.join(allocator, &.{ obj_dir, "driver.o" });
+    defer allocator.free(driver_obj);
+    const ref_lib = try std.fs.path.join(allocator, &.{ cwd, "blas_ref.a" });
+    defer allocator.free(ref_lib);
+
+    // Compile test driver.
+    {
+        const compile_driver = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", driver_obj, source_paths[0] };
+        const result = runProcessCaptureWithInput(allocator, &compile_driver, cwd, null, timeout_ms) catch |err| {
+            if (err == error.FileNotFound) {
+                std.debug.print("gfortran not found (use --gfortran or set GFORTRAN/FC)\n", .{});
+            }
+            std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+            return false;
+        };
+        defer result.deinit(allocator);
+        if (result.timed_out) {
+            std.debug.print("timeout: gfortran compile driver\n", .{});
+            return false;
+        }
+        if (!isZeroExit(result.term)) {
+            std.debug.print("=== GFORTRAN DRIVER STDERR ===\n{s}\n", .{result.stderr});
+            return false;
+        }
+    }
+
+    // Compile BLAS routines and archive them.
+    var blas_objs: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (blas_objs.items) |obj| allocator.free(obj);
+        blas_objs.deinit(allocator);
+    }
+
+    var i: usize = 1;
+    while (i < source_paths.len) : (i += 1) {
+        const obj_name = try std.fmt.allocPrint(allocator, "blas_{d}.o", .{i});
+        defer allocator.free(obj_name);
+        const obj_path = try std.fs.path.join(allocator, &.{ obj_dir, obj_name });
+        try blas_objs.append(allocator, obj_path);
+
+        const compile_blas = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", obj_path, source_paths[i] };
+        const result = runProcessCaptureWithInput(allocator, &compile_blas, cwd, null, timeout_ms) catch |err| {
+            std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+            return false;
+        };
+        defer result.deinit(allocator);
+        if (result.timed_out) {
+            std.debug.print("timeout: gfortran compile BLAS object {d}\n", .{i});
+            return false;
+        }
+        if (!isZeroExit(result.term)) {
+            std.debug.print("=== GFORTRAN BLAS STDERR ({s}) ===\n{s}\n", .{ source_paths[i], result.stderr });
+            return false;
+        }
+    }
+
+    {
+        var ar_args: std.ArrayList([]const u8) = .empty;
+        defer ar_args.deinit(allocator);
+        try ar_args.appendSlice(allocator, &.{ "zig", "ar", "rcs", ref_lib });
+        try ar_args.appendSlice(allocator, blas_objs.items);
+
+        const ar_result = runProcessCaptureWithInput(allocator, ar_args.items, cwd, null, timeout_ms) catch |err| {
+            std.debug.print("archive invoke error: {s}\n", .{@errorName(err)});
+            return false;
+        };
+        defer ar_result.deinit(allocator);
+        if (ar_result.timed_out) {
+            std.debug.print("timeout: archive BLAS library\n", .{});
+            return false;
+        }
+        if (!isZeroExit(ar_result.term)) {
+            std.debug.print("=== ARCHIVE STDERR ===\n{s}\n", .{ar_result.stderr});
+            return false;
+        }
+    }
+
+    // Link driver with BLAS archive.
+    {
+        const link_args = [_][]const u8{ gfortran_cmd, "-O0", "-o", out_exe, driver_obj, ref_lib };
+        const result = runProcessCaptureWithInput(allocator, &link_args, cwd, null, timeout_ms) catch |err| {
+            std.debug.print("gfortran link invoke error: {s}\n", .{@errorName(err)});
+            return false;
+        };
+        defer result.deinit(allocator);
+        if (result.timed_out) {
+            std.debug.print("timeout: gfortran link\n", .{});
+            return false;
+        }
+        if (!isZeroExit(result.term)) {
+            std.debug.print("=== GFORTRAN LINK STDERR ===\n{s}\n", .{result.stderr});
+            return false;
+        }
+    }
+
+    return true;
+}
+
+fn compileTranslated(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    gfortran_cmd: []const u8,
+    out_exe: []const u8,
+    source_paths: []const []const u8,
+    translated_sources: []const []const u8,
+    ll_paths: []const []const u8,
+    timeout_ms: u64,
+    cwd: []const u8,
+) !bool {
+    if (source_paths.len == 0) return false;
+
+    const obj_dir = try std.fs.path.join(allocator, &.{ cwd, "obj-test" });
+    defer allocator.free(obj_dir);
+    try std.fs.cwd().makePath(obj_dir);
+
+    const driver_obj = try std.fs.path.join(allocator, &.{ obj_dir, "driver.o" });
+    defer allocator.free(driver_obj);
+
+    const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
+    defer allocator.free(runtime_dir);
+
+    const runtime_sources = [_][]const u8{
+        "f77_io_core.c",
+        "f77_io_formatted.c",
+        "f77_io_internal.c",
+        "f77_io_control.c",
+        "f77_io_direct.c",
+        "f77_io_unformatted.c",
+        "f77_io_format.c",
+        "f77_complex.c",
+    };
+
+    var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);
+    defer {
+        for (runtime_paths) |path| allocator.free(path);
+        allocator.free(runtime_paths);
+    }
+
+    for (runtime_sources, 0..) |name, idx| {
+        runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
+    }
+
+    // Compile test driver with gfortran to keep BLAS harness behavior aligned.
+    {
+        const compile_driver = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", driver_obj, source_paths[0] };
+        const result = runProcessCaptureWithInput(allocator, &compile_driver, cwd, null, timeout_ms) catch |err| {
+            std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+            return false;
+        };
+        defer result.deinit(allocator);
+        if (result.timed_out) {
+            std.debug.print("timeout: gfortran compile test driver\n", .{});
+            return false;
+        }
+        if (!isZeroExit(result.term)) {
+            std.debug.print("=== GFORTRAN DRIVER STDERR ===\n{s}\n", .{result.stderr});
+            return false;
+        }
+    }
+
+    // Compile non-translated Fortran sources with gfortran.
+    var fallback_objs: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (fallback_objs.items) |obj| allocator.free(obj);
+        fallback_objs.deinit(allocator);
+    }
+
+    var i: usize = 1;
+    while (i < source_paths.len) : (i += 1) {
+        if (sourceInList(translated_sources, source_paths[i])) continue;
+        if (shouldSkipFallbackForDriver(source_paths[i])) continue;
+
+        const obj_name = try std.fmt.allocPrint(allocator, "fallback_{d}.o", .{i});
+        defer allocator.free(obj_name);
+        const obj_path = try std.fs.path.join(allocator, &.{ obj_dir, obj_name });
+        try fallback_objs.append(allocator, obj_path);
+
+        const compile_fallback = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", obj_path, source_paths[i] };
+        const result = runProcessCaptureWithInput(allocator, &compile_fallback, cwd, null, timeout_ms) catch |err| {
+            std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+            return false;
+        };
+        defer result.deinit(allocator);
+        if (result.timed_out) {
+            std.debug.print("timeout: gfortran compile helper object {d}\n", .{i});
+            return false;
+        }
+        if (!isZeroExit(result.term)) {
+            std.debug.print("=== GFORTRAN HELPER STDERR ({s}) ===\n{s}\n", .{ source_paths[i], result.stderr });
+            return false;
+        }
+    }
+
+    // Compile translated BLAS kernels.
+    var trans_objs: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (trans_objs.items) |obj| allocator.free(obj);
+        trans_objs.deinit(allocator);
+    }
+
+    for (ll_paths, 0..) |ll_path, idx| {
+        const obj_name = try std.fmt.allocPrint(allocator, "translated_{d}.o", .{idx});
+        defer allocator.free(obj_name);
+        const obj_path = try std.fs.path.join(allocator, &.{ obj_dir, obj_name });
+        try trans_objs.append(allocator, obj_path);
+
+        const compile_translated = [_][]const u8{ "zig", "cc", "-O0", "-c", "-o", obj_path, ll_path };
+        const result = runProcessCaptureWithInput(allocator, &compile_translated, cwd, null, timeout_ms) catch |err| {
+            std.debug.print("zig cc invoke error: {s}\n", .{@errorName(err)});
+            return false;
+        };
+        defer result.deinit(allocator);
+        if (result.timed_out) {
+            std.debug.print("timeout: zig cc compile translated BLAS object {d}\n", .{idx});
+            return false;
+        }
+        if (!isZeroExit(result.term)) {
+            std.debug.print("=== ZIG CC BLAS STDERR ({s}) ===\n{s}\n", .{ ll_path, result.stderr });
+            return false;
+        }
+    }
+
+    // Link gfortran driver + helpers + translated kernels + runtime C.
+    var link_args: std.ArrayList([]const u8) = .empty;
+    defer link_args.deinit(allocator);
+    try link_args.appendSlice(allocator, &.{ gfortran_cmd, "-O0", "-o", out_exe, driver_obj });
+    try link_args.appendSlice(allocator, fallback_objs.items);
+    try link_args.appendSlice(allocator, trans_objs.items);
+    try link_args.appendSlice(allocator, runtime_paths);
+
+    const link_result = runProcessCaptureWithInput(allocator, link_args.items, cwd, null, timeout_ms) catch |err| {
+        std.debug.print("gfortran link invoke error: {s}\n", .{@errorName(err)});
+        return false;
+    };
+    defer link_result.deinit(allocator);
+
+    if (link_result.timed_out) {
+        std.debug.print("timeout: gfortran link\n", .{});
+        return false;
+    }
+    if (!isZeroExit(link_result.term)) {
+        std.debug.print("=== GFORTRAN LINK STDERR ===\n{s}\n", .{link_result.stderr});
+        return false;
+    }
+
+    return true;
+}
+
+fn parseSummaryOutputName(allocator: std.mem.Allocator, input_text: []const u8) !?[]const u8 {
+    var it = std.mem.splitScalar(u8, input_text, '\n');
+    while (it.next()) |line_raw| {
+        const line = std.mem.trim(u8, trimCr(line_raw), " \t");
+        if (line.len < 3) continue;
+        if (line[0] != '\'' and line[0] != '"') continue;
+
+        const quote = line[0];
+        const end = std.mem.indexOfScalarPos(u8, line, 1, quote) orelse continue;
+        if (end <= 1) continue;
+
+        const candidate = line[1..end];
+        if (std.ascii.endsWithIgnoreCase(candidate, ".out")) {
+            return try allocator.dupe(u8, candidate);
+        }
+    }
+    return null;
+}
+
+fn readOptionalFile(allocator: std.mem.Allocator, dir: []const u8, name: []const u8) !?[]const u8 {
+    const path = try std.fs.path.join(allocator, &.{ dir, name });
+    defer allocator.free(path);
+    return std.fs.cwd().readFileAlloc(allocator, path, 64 * 1024 * 1024) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+}
+
+fn writeFile(path: []const u8, contents: []const u8) !void {
+    var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(contents);
+}
+
+fn cleanupWorkDir(path: []const u8) void {
+    std.fs.cwd().deleteTree(path) catch {};
+}
+
+fn buildExePath(
+    allocator: std.mem.Allocator,
+    dir: []const u8,
+    base: []const u8,
+) ![]const u8 {
+    const ext = if (builtin.os.tag == .windows) ".exe" else "";
+    const file_name = try std.fmt.allocPrint(allocator, "{s}{s}", .{ base, ext });
+    defer allocator.free(file_name);
+    return std.fs.path.join(allocator, &.{ dir, file_name });
+}
+
+const ProcessResult = struct {
+    stdout: []const u8,
+    stderr: []const u8,
+    term: std.process.Child.Term,
+    timed_out: bool,
+
+    fn deinit(self: ProcessResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.stdout);
+        allocator.free(self.stderr);
+    }
+};
+
+fn runProcessCaptureWithInput(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    cwd: ?[]const u8,
+    input: ?[]const u8,
+    timeout_ms: u64,
+) !ProcessResult {
+    var child = std.process.Child.init(argv, allocator);
+    child.cwd = cwd;
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    try child.spawn();
+
+    var done = std.atomic.Value(bool).init(false);
+    var timed_out = std.atomic.Value(bool).init(false);
+    var monitor: ?std.Thread = null;
+    if (timeout_ms > 0) {
+        monitor = try std.Thread.spawn(.{}, timeoutMonitor, .{ &child, &done, &timed_out, timeout_ms });
+    }
+
+    if (child.stdin) |*stdin_file| {
+        if (input) |bytes| {
+            try stdin_file.writeAll(bytes);
+        }
+        stdin_file.close();
+        child.stdin = null;
+    }
+
+    var stdout_buf: std.ArrayList(u8) = .empty;
+    var stderr_buf: std.ArrayList(u8) = .empty;
+    errdefer stdout_buf.deinit(allocator);
+    errdefer stderr_buf.deinit(allocator);
+
+    try child.collectOutput(allocator, &stdout_buf, &stderr_buf, 64 * 1024 * 1024);
+
+    done.store(true, .seq_cst);
+    if (monitor) |thread| thread.join();
+
+    return .{
+        .stdout = try stdout_buf.toOwnedSlice(allocator),
+        .stderr = try stderr_buf.toOwnedSlice(allocator),
+        .term = try child.wait(),
+        .timed_out = timed_out.load(.seq_cst),
+    };
+}
+
+fn timeoutMonitor(
+    child: *std.process.Child,
+    done: *std.atomic.Value(bool),
+    timed_out: *std.atomic.Value(bool),
+    timeout_ms: u64,
+) void {
+    const deadline = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
+    while (true) {
+        if (done.load(.seq_cst)) return;
+        const now = std.time.milliTimestamp();
+        if (now >= deadline) break;
+        const remaining_ms = @as(u64, @intCast(deadline - now));
+        const sleep_ms = if (remaining_ms > 50) 50 else remaining_ms;
+        std.Thread.sleep(sleep_ms * std.time.ns_per_ms);
+    }
+    if (done.load(.seq_cst)) return;
+    timed_out.store(true, .seq_cst);
+    _ = child.kill() catch {};
+}
+
+fn isZeroExit(term: std.process.Child.Term) bool {
+    return switch (term) {
+        .Exited => |code| code == 0,
+        else => false,
+    };
+}
+
+const Comparator = struct {
+    const CompareResult = struct {
+        ok: bool,
+        diff: ?[]const u8,
+    };
+
+    fn compare(
+        allocator: std.mem.Allocator,
+        ref_term: std.process.Child.Term,
+        test_term: std.process.Child.Term,
+        ref_stdout: []const u8,
+        test_stdout: []const u8,
+    ) !CompareResult {
+        const ref_code = exitCode(ref_term);
+        const test_code = exitCode(test_term);
+        if (ref_code != test_code) {
+            const diff = try std.fmt.allocPrint(
+                allocator,
+                "exit code mismatch\nreference: {d}\ntranslated: {d}\n",
+                .{ ref_code, test_code },
+            );
+            return .{ .ok = false, .diff = diff };
+        }
+        return compareText(allocator, ref_stdout, test_stdout);
+    }
+
+    fn compareText(allocator: std.mem.Allocator, expected: []const u8, actual: []const u8) !CompareResult {
+        if (std.mem.eql(u8, expected, actual)) {
+            return .{ .ok = true, .diff = null };
+        }
+
+        var exp_it = std.mem.splitScalar(u8, expected, '\n');
+        var act_it = std.mem.splitScalar(u8, actual, '\n');
+        var line_no: usize = 1;
+        var exp_opt = exp_it.next();
+        var act_opt = act_it.next();
+
+        while (true) : (line_no += 1) {
+            while (exp_opt) |line| {
+                if (!isBlankLine(trimCr(line))) break;
+                exp_opt = exp_it.next();
+            }
+            while (act_opt) |line| {
+                if (!isBlankLine(trimCr(line))) break;
+                act_opt = act_it.next();
+            }
+
+            if (exp_opt == null and act_opt == null) {
+                break;
+            }
+            if (exp_opt == null and act_opt != null) {
+                const diff = try std.fmt.allocPrint(
+                    allocator,
+                    "translated has extra content at line {d}\nactual: {s}\n",
+                    .{ line_no, trimCr(act_opt.?) },
+                );
+                return .{ .ok = false, .diff = diff };
+            }
+            if (act_opt == null and exp_opt != null) {
+                const diff = try std.fmt.allocPrint(
+                    allocator,
+                    "reference has extra content at line {d}\nexpected: {s}\n",
+                    .{ line_no, trimCr(exp_opt.?) },
+                );
+                return .{ .ok = false, .diff = diff };
+            }
+
+            const exp_line = trimCr(exp_opt.?);
+            const act_line = trimCr(act_opt.?);
+            if (!std.mem.eql(u8, exp_line, act_line)) {
+                if (linesEquivalentIgnoringWhitespace(exp_line, act_line)) {
+                    exp_opt = exp_it.next();
+                    act_opt = act_it.next();
+                    continue;
+                }
+                const diff = try std.fmt.allocPrint(
+                    allocator,
+                    "line {d} mismatch\nreference:  {s}\ntranslated: {s}\n",
+                    .{ line_no, exp_line, act_line },
+                );
+                return .{ .ok = false, .diff = diff };
+            }
+            exp_opt = exp_it.next();
+            act_opt = act_it.next();
+        }
+
+        return .{ .ok = true, .diff = null };
+    }
+};
+
+fn trimCr(line: []const u8) []const u8 {
+    return std.mem.trimRight(u8, line, "\r");
+}
+
+fn exitCode(term: std.process.Child.Term) u32 {
+    return switch (term) {
+        .Exited => |code| code,
+        .Signal => |signal| 128 + signal,
+        else => 255,
+    };
+}
+
+fn linesEquivalentIgnoringWhitespace(a: []const u8, b: []const u8) bool {
+    var i: usize = 0;
+    var j: usize = 0;
+    while (true) {
+        while (i < a.len and std.ascii.isWhitespace(a[i])) : (i += 1) {}
+        while (j < b.len and std.ascii.isWhitespace(b[j])) : (j += 1) {}
+        if (i >= a.len or j >= b.len) break;
+        while (i < a.len and j < b.len and !std.ascii.isWhitespace(a[i]) and !std.ascii.isWhitespace(b[j])) : ({
+            i += 1;
+            j += 1;
+        }) {
+            if (a[i] != b[j]) return false;
+        }
+        if (i < a.len and !std.ascii.isWhitespace(a[i])) return false;
+        if (j < b.len and !std.ascii.isWhitespace(b[j])) return false;
+    }
+    while (i < a.len and std.ascii.isWhitespace(a[i])) : (i += 1) {}
+    while (j < b.len and std.ascii.isWhitespace(b[j])) : (j += 1) {}
+    return i == a.len and j == b.len;
+}
+
+fn isBlankLine(line: []const u8) bool {
+    for (line) |ch| {
+        if (!std.ascii.isWhitespace(ch)) return false;
+    }
+    return true;
+}

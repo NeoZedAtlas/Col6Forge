@@ -128,6 +128,79 @@ pub fn emitIfSingle(
             }
             return true;
         },
+        .read => |read| {
+            const then_label = try ctx.nextLabel("if_read");
+            try builder.brCond(cond, then_label, next_block);
+            try builder.label(then_label);
+            const terminated = try io.emitRead(ctx, builder, read, next_block, local_label_map);
+            if (!terminated) {
+                try builder.br(next_block);
+            }
+            return true;
+        },
+        .open => |open_stmt| {
+            const then_label = try ctx.nextLabel("if_open");
+            try builder.brCond(cond, then_label, next_block);
+            try builder.label(then_label);
+            try io.emitOpen(ctx, builder, open_stmt);
+            try builder.br(next_block);
+            return true;
+        },
+        .inquire => |inquire| {
+            const then_label = try ctx.nextLabel("if_inquire");
+            try builder.brCond(cond, then_label, next_block);
+            try builder.label(then_label);
+            try io.emitInquire(ctx, builder, inquire);
+            try builder.br(next_block);
+            return true;
+        },
+        .close => |close_stmt| {
+            const then_label = try ctx.nextLabel("if_close");
+            try builder.brCond(cond, then_label, next_block);
+            try builder.label(then_label);
+            try io.emitClose(ctx, builder, close_stmt);
+            try builder.br(next_block);
+            return true;
+        },
+        .rewind => |rewind| {
+            const then_label = try ctx.nextLabel("if_rewind");
+            try builder.brCond(cond, then_label, next_block);
+            try builder.label(then_label);
+            try io.emitRewind(ctx, builder, rewind);
+            try builder.br(next_block);
+            return true;
+        },
+        .backspace => |backspace| {
+            const then_label = try ctx.nextLabel("if_backspace");
+            try builder.brCond(cond, then_label, next_block);
+            try builder.label(then_label);
+            try io.emitBackspace(ctx, builder, backspace);
+            try builder.br(next_block);
+            return true;
+        },
+        .endfile => |endfile| {
+            const then_label = try ctx.nextLabel("if_endfile");
+            try builder.brCond(cond, then_label, next_block);
+            try builder.label(then_label);
+            try io.emitEndfile(ctx, builder, endfile);
+            try builder.br(next_block);
+            return true;
+        },
+        .data => |data| {
+            const then_label = try ctx.nextLabel("if_data");
+            try builder.brCond(cond, then_label, next_block);
+            try builder.label(then_label);
+            try execution.emitData(ctx, builder, data);
+            try builder.br(next_block);
+            return true;
+        },
+        .format => {
+            const then_label = try ctx.nextLabel("if_format");
+            try builder.brCond(cond, then_label, next_block);
+            try builder.label(then_label);
+            try builder.br(next_block);
+            return true;
+        },
         .arith_if => |arith| {
             const then_label = try ctx.nextLabel("if_arith");
             try builder.brCond(cond, then_label, next_block);

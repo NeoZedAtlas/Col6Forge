@@ -149,8 +149,10 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
 
     const type_kind = try parseTypeKind(lp);
     var default_char_len: ?*ast.Expr = null;
-    if (type_kind == .character and lp.consume(.star)) {
-        default_char_len = try parseCharacterLen(lp, arena);
+    if (type_kind == .character) {
+        if (lp.consume(.star) or lp.peekIs(.l_paren)) {
+            default_char_len = try parseCharacterLen(lp, arena);
+        }
     }
     const items = try parseDeclarators(lp, arena, default_char_len);
     return .{ .type_decl = .{ .type_kind = type_kind, .items = items } };
@@ -165,7 +167,7 @@ fn parseImplicitTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ImplicitTyp
     if (lp.isKeywordSplit("CHARACTER")) {
         _ = lp.consumeKeyword("CHARACTER");
         var char_len: ?*ast.Expr = null;
-        if (lp.consume(.star)) {
+        if (lp.consume(.star) or lp.peekIs(.l_paren)) {
             char_len = try parseCharacterLen(lp, arena);
         }
         return .{ .type_kind = .character, .char_len = char_len };
@@ -411,6 +413,37 @@ test "parseDecl handles assumed character length" {
             try testing.expect(td.items[0].char_len != null);
             switch (td.items[0].char_len.?.*) {
                 .literal => |lit| try testing.expectEqual(ast.LiteralKind.assumed_size, lit.kind),
+                else => return error.UnexpectedToken,
+            }
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles character length in parentheses" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CHARACTER(1) SRNAME_ARRAY(SRNAME_LEN)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.character, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("SRNAME_ARRAY", td.items[0].name);
+            try testing.expect(td.items[0].char_len != null);
+            try testing.expectEqual(@as(usize, 1), td.items[0].dims.len);
+            switch (td.items[0].char_len.?.*) {
+                .literal => |lit| try testing.expectEqualStrings("1", lit.text),
                 else => return error.UnexpectedToken,
             }
         },
