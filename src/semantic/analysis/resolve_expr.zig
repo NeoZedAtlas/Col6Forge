@@ -86,7 +86,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             if (bin.op == .power) {
                 const left_kind = try exprType(self, bin.left);
                 const right_kind = try exprType(self, bin.right);
-                if (left_kind == .complex and right_kind == .integer) {
+                if ((left_kind == .complex or left_kind == .complex_double) and right_kind == .integer) {
                     return;
                 }
                 if (!isPowerOperandSupported(left_kind) or !isPowerOperandSupported(right_kind)) {
@@ -122,7 +122,14 @@ pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKi
                 .assumed_size => .integer,
             };
         },
-        .complex_literal => return .complex,
+        .complex_literal => |lit| {
+            const real_kind = try exprType(self, lit.real);
+            const imag_kind = try exprType(self, lit.imag);
+            if (real_kind == .double_precision or imag_kind == .double_precision or real_kind == .complex_double or imag_kind == .complex_double) {
+                return .complex_double;
+            }
+            return .complex;
+        },
         .unary => |un| {
             return switch (un.op) {
                 .not => .logical,
@@ -144,7 +151,11 @@ pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKi
 }
 
 pub fn promoteNumericType(left: ast.TypeKind, right: ast.TypeKind) ast.TypeKind {
-    if (left == .complex or right == .complex) return .complex;
+    if (left == .complex_double or right == .complex_double) return .complex_double;
+    if (left == .complex or right == .complex) {
+        if (left == .double_precision or right == .double_precision) return .complex_double;
+        return .complex;
+    }
     if (left == .double_precision or right == .double_precision) return .double_precision;
     if (left == .real or right == .real) return .real;
     if (left == .character or right == .character) return .character;
@@ -154,13 +165,19 @@ pub fn promoteNumericType(left: ast.TypeKind, right: ast.TypeKind) ast.TypeKind 
 
 pub fn isPowerOperandSupported(kind: ast.TypeKind) bool {
     return switch (kind) {
-        .integer, .real, .double_precision => true,
+        .integer, .real, .double_precision, .complex, .complex_double => true,
         else => false,
     };
 }
 
 fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
     if (std.ascii.eqlIgnoreCase(name, "CMPLX")) return .complex;
+    if (std.ascii.eqlIgnoreCase(name, "DCMPLX")) return .complex_double;
+    if (std.ascii.eqlIgnoreCase(name, "CONJG")) return .complex;
+    if (std.ascii.eqlIgnoreCase(name, "DCONJG")) return .complex_double;
+    if (std.ascii.eqlIgnoreCase(name, "AIMAG")) return .real;
+    if (std.ascii.eqlIgnoreCase(name, "DIMAG")) return .double_precision;
+    if (std.ascii.eqlIgnoreCase(name, "DBLE")) return .double_precision;
     if (std.ascii.eqlIgnoreCase(name, "IDINT")) return .integer;
     return current;
 }

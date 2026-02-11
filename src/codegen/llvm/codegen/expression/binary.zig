@@ -30,7 +30,31 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
         }
     }
     if (op == .eq or op == .ne or op == .lt or op == .le or op == .gt or op == .ge) {
-        if (complex.isComplexType(lhs.ty) or complex.isComplexType(rhs.ty)) return error.UnsupportedComplexComparison;
+        if (complex.isComplexType(lhs.ty) or complex.isComplexType(rhs.ty)) {
+            if (op != .eq and op != .ne) return error.UnsupportedComplexComparison;
+
+            const complex_ty = complex.complexCommonType(lhs.ty, rhs.ty) orelse return error.UnsupportedComplexType;
+            const left = try complex.coerceToComplex(ctx, builder, lhs, complex_ty);
+            const right = try complex.coerceToComplex(ctx, builder, rhs, complex_ty);
+            const elem_ty = complex.complexElemType(complex_ty) orelse return error.UnsupportedComplexType;
+
+            const left_real = try complex.extractComplex(ctx, builder, left, 0);
+            const left_imag = try complex.extractComplex(ctx, builder, left, 1);
+            const right_real = try complex.extractComplex(ctx, builder, right, 0);
+            const right_imag = try complex.extractComplex(ctx, builder, right, 1);
+
+            const cmp_real = try ctx.nextTemp();
+            const cmp_imag = try ctx.nextTemp();
+            const pred = if (op == .eq) "oeq" else "one";
+            try builder.compare(cmp_real, "fcmp", pred, elem_ty, left_real, right_real);
+            try builder.compare(cmp_imag, "fcmp", pred, elem_ty, left_imag, right_imag);
+
+            const tmp = try ctx.nextTemp();
+            const real_ref = ValueRef{ .name = cmp_real, .ty = .i1, .is_ptr = false };
+            const imag_ref = ValueRef{ .name = cmp_imag, .ty = .i1, .is_ptr = false };
+            try builder.binary(tmp, if (op == .eq) "and" else "or", .i1, real_ref, imag_ref);
+            return .{ .name = tmp, .ty = .i1, .is_ptr = false };
+        }
     }
     const common_ty = ir.commonType(lhs.ty, rhs.ty);
     var left = lhs;

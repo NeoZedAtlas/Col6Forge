@@ -10,6 +10,7 @@ pub fn typeFromKind(kind: input.TypeKind) IRType {
         .integer => .i32,
         .real => .f32,
         .complex => .complex_f32,
+        .complex_double => .complex_f64,
         .logical => .i1,
         .character => .ptr,
     };

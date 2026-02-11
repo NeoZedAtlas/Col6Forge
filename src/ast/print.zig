@@ -153,6 +153,7 @@ fn typeKindName(kind: ast.TypeKind) []const u8 {
         .real => "REAL",
         .double_precision => "DOUBLE PRECISION",
         .complex => "COMPLEX",
+        .complex_double => "COMPLEX*16",
         .logical => "LOGICAL",
         .character => "CHARACTER",
     };

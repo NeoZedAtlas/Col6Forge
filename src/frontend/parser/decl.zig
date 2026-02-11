@@ -186,7 +186,7 @@ fn parseTypeKind(lp: *LineParser) !TypeKind {
     }
     if (lp.isKeywordSplit("COMPLEX")) {
         _ = lp.consumeKeyword("COMPLEX");
-        return .complex;
+        return parseComplexKindSuffix(lp);
     }
     if (lp.isKeywordSplit("LOGICAL")) {
         _ = lp.consumeKeyword("LOGICAL");
@@ -203,6 +203,17 @@ fn parseTypeKind(lp: *LineParser) !TypeKind {
         return .double_precision;
     }
     return error.UnknownType;
+}
+
+fn parseComplexKindSuffix(lp: *LineParser) !TypeKind {
+    if (!lp.consume(.star)) return .complex;
+    const tok = lp.peek() orelse return error.UnexpectedToken;
+    if (tok.kind != .integer) return error.UnsupportedComplexKind;
+    _ = lp.next();
+    const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return error.UnsupportedComplexKind;
+    if (kind_val == 16) return .complex_double;
+    if (kind_val == 8) return .complex;
+    return error.UnsupportedComplexKind;
 }
 
 fn parseDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_char_len: ?*ast.Expr) ![]Declarator {
@@ -446,6 +457,32 @@ test "parseDecl handles character length in parentheses" {
                 .literal => |lit| try testing.expectEqualStrings("1", lit.text),
                 else => return error.UnexpectedToken,
             }
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles COMPLEX*16 declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      COMPLEX*16 ALPHA,BETA\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.complex_double, td.type_kind);
+            try testing.expectEqual(@as(usize, 2), td.items.len);
+            try testing.expectEqualStrings("ALPHA", td.items[0].name);
+            try testing.expectEqualStrings("BETA", td.items[1].name);
         },
         else => return error.UnexpectedToken,
     }

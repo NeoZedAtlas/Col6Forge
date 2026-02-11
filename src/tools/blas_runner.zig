@@ -427,8 +427,8 @@ fn isTranslatedKernelSource(path: []const u8) bool {
     if (isFortranFallbackSource(path)) return false;
     if (base.len == 0) return false;
     const first = std.ascii.toLower(base[0]);
-    // Current translation coverage target: real BLAS-3 kernels (S/D families).
-    return first == 's' or first == 'd';
+    // Translation coverage target: BLAS-3 kernels across S/D/C/Z families.
+    return first == 's' or first == 'd' or first == 'c' or first == 'z';
 }
 
 fn sourceInList(list: []const []const u8, path: []const u8) bool {

@@ -22,6 +22,7 @@ pub const TypeKind = enum {
     real,
     double_precision,
     complex,
+    complex_double,
     logical,
     character,
 };

@@ -203,7 +203,7 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
     }
     if (lp.isKeywordSplit("COMPLEX")) {
         _ = lp.consumeKeyword("COMPLEX");
-        return .{ .type_kind = .complex, .char_len = null };
+        return .{ .type_kind = try parseComplexTypePrefixKind(lp), .char_len = null };
     }
     if (lp.isKeywordSplit("LOGICAL")) {
         _ = lp.consumeKeyword("LOGICAL");
@@ -224,6 +224,17 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
         return .{ .type_kind = .double_precision, .char_len = null };
     }
     return null;
+}
+
+fn parseComplexTypePrefixKind(lp: *LineParser) !ast.TypeKind {
+    if (!lp.consume(.star)) return .complex;
+    const tok = lp.peek() orelse return error.UnexpectedToken;
+    if (tok.kind != .integer) return error.UnsupportedComplexKind;
+    _ = lp.next();
+    const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return error.UnsupportedComplexKind;
+    if (kind_val == 16) return .complex_double;
+    if (kind_val == 8) return .complex;
+    return error.UnsupportedComplexKind;
 }
 
 fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {

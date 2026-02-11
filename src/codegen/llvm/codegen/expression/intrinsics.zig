@@ -146,6 +146,13 @@ pub fn emitIntrinsicConjg(ctx: *Context, builder: anytype, args: []*Expr) EmitEr
     return complex.emitComplexConjg(ctx, builder, value);
 }
 
+fn emitIntrinsicDconjg(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    value = try complex.coerceToComplex(ctx, builder, value, .complex_f64);
+    return complex.emitComplexConjg(ctx, builder, value);
+}
+
 fn emitIntrinsicCmplx(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
     var real = try dispatch.emitExpr(ctx, builder, args[0]);
@@ -169,6 +176,27 @@ fn emitIntrinsicCmplx(ctx: *Context, builder: anytype, args: []*Expr) EmitError!
     if (imag_val.ty != elem_ty) imag_val = try casting.coerce(ctx, builder, imag_val, elem_ty);
 
     return complex.buildComplex(ctx, builder, real, imag_val, target_ty);
+}
+
+fn emitIntrinsicDcmplx(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
+    var real = try dispatch.emitExpr(ctx, builder, args[0]);
+    if (complex.isComplexType(real.ty)) {
+        if (args.len != 1) return error.UnsupportedIntrinsicType;
+        return complex.coerceToComplex(ctx, builder, real, .complex_f64);
+    }
+
+    var imag: ?ValueRef = null;
+    if (args.len == 2) {
+        imag = try dispatch.emitExpr(ctx, builder, args[1]);
+        if (complex.isComplexType(imag.?.ty)) return error.UnsupportedIntrinsicType;
+    }
+
+    real = try casting.coerce(ctx, builder, real, .f64);
+    var imag_val = imag orelse utils.zeroValue(.f64);
+    if (imag_val.ty != .f64) imag_val = try casting.coerce(ctx, builder, imag_val, .f64);
+
+    return complex.buildComplex(ctx, builder, real, imag_val, .complex_f64);
 }
 
 pub fn emitIntrinsicFloat(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
@@ -620,6 +648,13 @@ fn emitIntrinsicAimag(ctx: *Context, builder: anytype, args: []*Expr) EmitError!
     return complex.extractComplex(ctx, builder, value, 1);
 }
 
+fn emitIntrinsicDimag(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    value = try complex.coerceToComplex(ctx, builder, value, .complex_f64);
+    return complex.extractComplex(ctx, builder, value, 1);
+}
+
 fn emitIntrinsicCabs(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     var value = try dispatch.emitExpr(ctx, builder, args[0]);
@@ -830,12 +865,15 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
     }
     if (std.ascii.eqlIgnoreCase(name, "DPROD")) return emitIntrinsicDprod(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "CONJG")) return emitIntrinsicConjg(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "DCONJG")) return emitIntrinsicDconjg(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "CMPLX")) return emitIntrinsicCmplx(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "DCMPLX")) return emitIntrinsicDcmplx(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "FLOAT")) return emitIntrinsicFloat(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "REAL")) return emitIntrinsicFloat(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "DBLE")) return emitIntrinsicDble(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "SNGL")) return emitIntrinsicSngl(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "AIMAG")) return emitIntrinsicAimag(ctx, builder, args);
+    if (std.ascii.eqlIgnoreCase(name, "DIMAG")) return emitIntrinsicDimag(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "CABS")) return emitIntrinsicCabs(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "ANINT")) return emitIntrinsicAnint(ctx, builder, args);
     if (std.ascii.eqlIgnoreCase(name, "NINT")) return emitIntrinsicNint(ctx, builder, args);
