@@ -91,7 +91,8 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             sym.kind == .function and
             std.mem.eql(u8, sym.name, ctx.unit.name);
         if (sym.is_external) continue;
-        if (sym.kind == .parameter or sym.kind == .subroutine or (sym.kind == .function and !is_return_symbol)) continue;
+        if (sym.kind == .parameter or sym.kind == .subroutine) continue;
+        if (sym.kind == .function and !is_return_symbol and ctx.unit.kind != .function) continue;
         if (is_return_symbol and (is_character_function or is_complex_sret_function)) continue;
         if (ctx.locals.contains(sym.name)) continue;
         if (isSaved(&save_info, sym.name)) continue;

@@ -59,18 +59,22 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
     if (findSymbolIndex(self, name)) |idx| {
         return idx;
     }
-    const info = implicitInfo(self, name);
+    const known_fn_type = self.known_function_types.get(name);
+    const info = if (known_fn_type) |known_ty|
+        ImplicitInfo{ .type_kind = known_ty, .char_len = null }
+    else
+        implicitInfo(self, name);
     const symbol = Symbol{
         .name = name,
         .type_kind = info.type_kind,
         .dims = &.{},
         .char_len = info.char_len,
-        .kind = .variable,
+        .kind = if (known_fn_type != null) .function else .variable,
         .storage = .local,
         .is_external = false,
         .is_intrinsic = false,
         .const_value = null,
-        .type_explicit = false,
+        .type_explicit = known_fn_type != null,
     };
     return internSymbol(self, symbol);
 }

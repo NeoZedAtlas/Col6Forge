@@ -13,9 +13,10 @@ pub const UnitAnalyzer = struct {
         arena: std.mem.Allocator,
         unit: ast.ProgramUnit,
         initial_implicit: []const symbols.ImplicitRule,
+        known_function_types: *const std.StringHashMap(ast.TypeKind),
     ) UnitAnalyzer {
         return .{
-            .ctx = context.Context.init(arena, unit),
+            .ctx = context.Context.init(arena, unit, known_function_types),
             .initial_implicit = initial_implicit,
         };
     }

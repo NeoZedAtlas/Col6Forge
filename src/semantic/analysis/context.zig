@@ -13,13 +13,18 @@ pub const Context = struct {
     scopes: std.array_list.Managed(scope.Scope),
     current_scope: ?scope.ScopeId,
     current_owner: ?Owner,
+    known_function_types: *const std.StringHashMap(ast.TypeKind),
 
     pub const Owner = struct {
         name: []const u8,
         kind: ast.ProgramUnitKind,
     };
 
-    pub fn init(arena: std.mem.Allocator, unit: ast.ProgramUnit) Context {
+    pub fn init(
+        arena: std.mem.Allocator,
+        unit: ast.ProgramUnit,
+        known_function_types: *const std.StringHashMap(ast.TypeKind),
+    ) Context {
         var ctx = Context{
             .arena = arena,
             .unit = unit,
@@ -30,6 +35,7 @@ pub const Context = struct {
             .scopes = std.array_list.Managed(scope.Scope).init(arena),
             .current_scope = null,
             .current_owner = null,
+            .known_function_types = known_function_types,
         };
         ctx.current_unit = &ctx.unit;
         return ctx;
