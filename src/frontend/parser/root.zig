@@ -37,6 +37,10 @@ const Parser = struct {
     fn parseProgram(self: *Parser) !Program {
         var units = std.array_list.Managed(ProgramUnit).init(self.arena);
         while (self.index < self.lines.len) {
+            if (isStandaloneEndLine(self.arena, self.lines[self.index])) {
+                self.index += 1;
+                continue;
+            }
             const unit = try self.parseProgramUnit();
             try units.append(unit);
         }
@@ -75,6 +79,10 @@ const Parser = struct {
                     self.index += 1;
                     continue;
                 }
+            }
+            if (stmt_lp.isKeywordSplit("CONTAINS")) {
+                self.index += 1;
+                break;
             }
             if (stmt_lp.isKeywordSplit("END") and !isEndDoLine(stmt_lp) and !isEndIfLine(stmt_lp)) {
                 self.index += 1;
@@ -224,6 +232,14 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
         return .{ .type_kind = .double_precision, .char_len = null };
     }
     return null;
+}
+
+fn isStandaloneEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
+    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
+    defer arena.free(tokens);
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("END")) return false;
+    return lp.peek() == null;
 }
 
 fn parseComplexTypePrefixKind(lp: *LineParser) !ast.TypeKind {
@@ -480,4 +496,32 @@ test "parseProgram accepts alternate return dummies in subroutine header" {
     try testing.expectEqualStrings("FOO", unit.name);
     try testing.expectEqual(@as(usize, 1), unit.args.len);
     try testing.expectEqualStrings("A", unit.args[0]);
+}
+
+test "parseProgram handles CONTAINS internal function blocks" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE OUTER(X)\n" ++
+        "      REAL X\n" ++
+        "      X = SXVALS(X)\n" ++
+        "      RETURN\n" ++
+        "      CONTAINS\n" ++
+        "      REAL FUNCTION SXVALS(XX)\n" ++
+        "      REAL XX\n" ++
+        "      SXVALS = XX\n" ++
+        "      RETURN\n" ++
+        "      END\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+    try testing.expectEqualStrings("OUTER", program.units[0].name);
+    try testing.expectEqualStrings("SXVALS", program.units[1].name);
 }

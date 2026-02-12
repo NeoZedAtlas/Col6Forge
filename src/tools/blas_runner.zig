@@ -313,7 +313,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var gfortran_path: []const u8 = defaultGfortran();
     var timeout_ms: u64 = 120_000;
     var keep_workdir = false;
-    var translate_f90 = false;
+    var translate_f90 = true;
     var show_help = false;
     var emit: Col6Forge.EmitKind = .llvm;
 
@@ -362,6 +362,10 @@ fn parseArgs(args: []const []const u8) !Options {
             translate_f90 = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--no-translate-f90")) {
+            translate_f90 = false;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
             continue;
@@ -384,7 +388,7 @@ fn parseArgs(args: []const []const u8) !Options {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: blas_runner [--blas-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--gfortran <path>] [--timeout <ms>] [--keep-workdir] [--translate-f90]
+        \\Usage: blas_runner [--blas-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--gfortran <path>] [--timeout <ms>] [--keep-workdir] [--translate-f90] [--no-translate-f90]
         \\Options:
         \\  --blas-dir <dir>     BLAS root directory (default: tests/BLAS-3.12.0)
         \\  --testing-dir <dir>  BLAS testing directory (default: <blas-dir>/TESTING)
@@ -392,7 +396,8 @@ fn printUsage(file: std.fs.File) !void {
         \\  --gfortran <path>    Path to gfortran executable
         \\  --timeout <ms>       Per-command timeout in milliseconds (default: 120000)
         \\  --keep-workdir       Keep zig-cache/blas-verify/<case> even on success
-        \\  --translate-f90      Attempt translating BLAS .f90 sources (experimental)
+        \\  --translate-f90      Translate BLAS .f90 sources (default)
+        \\  --no-translate-f90   Keep BLAS .f90 sources on gfortran fallback side
         \\  -emit-llvm           Emit LLVM IR (default)
         \\  -h, --help           Show this help
         \\Examples:
@@ -476,7 +481,7 @@ fn processCase(
         return false;
     }
 
-    const trans_sources = try selectTranslatedSources(allocator, source_paths, options.translate_f90);
+    const trans_sources = try selectTranslatedSources(allocator, source_paths, options.translate_f90, false);
     defer allocator.free(trans_sources);
 
     const ll_paths = try translateSources(allocator, ll_dir, trans_sources, options.emit);
@@ -589,25 +594,25 @@ fn maybePatchDriverForDeterministicRandom(
     const original = try std.fs.cwd().readFileAlloc(allocator, driver_path, 8 * 1024 * 1024);
     defer allocator.free(original);
 
-    // BLAS xblat1 drivers use an intentionally undefined SXVALS helper
-    // (`Z = YY`) to synthesize non-finite values. Patch this to deterministic
-    // behavior so reference/translated runs receive identical vectors.
+    // BLAS xblat1 drivers use intentional undefined/random behavior in helper
+    // routines. Patch this to deterministic behavior so reference/translated
+    // runs receive identical vectors.
     var patched_text = try replaceAllLiteral(allocator, original, "      Z = YY", "      Z = Y");
     defer allocator.free(patched_text);
 
-    if (std.mem.indexOf(u8, patched_text, "CALL RANDOM_INIT(.TRUE., .FALSE.)") == null) {
-        const marker = "*     Generate (N-1) values in (-1,1).";
-        if (std.mem.indexOf(u8, patched_text, marker)) |marker_idx| {
-            const with_seed = try insertSliceAt(
-                allocator,
-                patched_text,
-                marker_idx,
-                "      CALL RANDOM_INIT(.TRUE., .FALSE.)\n",
-            );
-            allocator.free(patched_text);
-            patched_text = with_seed;
-        }
-    }
+    const base = std.fs.path.basename(driver_path);
+    const random_expr = if (std.ascii.eqlIgnoreCase(base, "dblat1.f") or std.ascii.eqlIgnoreCase(base, "zblat1.f"))
+        "         WORK(I) = DMOD(DBLE(I*127+13),1024D0)/1024D0"
+    else
+        "         WORK(I) = MOD(REAL(I*127+13),1024.0)/1024.0";
+    const with_det_random = try replaceAllLiteral(
+        allocator,
+        patched_text,
+        "         CALL RANDOM_NUMBER(WORK(I))",
+        random_expr,
+    );
+    allocator.free(patched_text);
+    patched_text = with_det_random;
 
     const seeded_name = try std.fmt.allocPrint(allocator, "seeded_{s}", .{std.fs.path.basename(driver_path)});
     defer allocator.free(seeded_name);
@@ -708,9 +713,12 @@ fn selectTranslatedSources(
     allocator: std.mem.Allocator,
     source_paths: []const []const u8,
     translate_f90: bool,
+    translate_driver: bool,
 ) ![]const []const u8 {
     var selected: std.ArrayList([]const u8) = .empty;
-    // source_paths[0] is the test driver (always kept on gfortran side).
+    if (translate_driver and isTranslatedKernelSource(source_paths[0], translate_f90)) {
+        try selected.append(allocator, source_paths[0]);
+    }
     var i: usize = 1;
     while (i < source_paths.len) : (i += 1) {
         const src = source_paths[i];
@@ -719,6 +727,13 @@ fn selectTranslatedSources(
         try selected.append(allocator, src);
     }
     return selected.toOwnedSlice(allocator);
+}
+
+fn indexOfSourcePath(list: []const []const u8, path: []const u8) ?usize {
+    for (list, 0..) |item, idx| {
+        if (std.mem.eql(u8, item, path)) return idx;
+    }
+    return null;
 }
 
 fn translateSources(
@@ -912,8 +927,26 @@ fn compileTranslated(
         runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
     }
 
-    // Compile test driver with gfortran to keep BLAS harness behavior aligned.
-    {
+    const translated_driver_idx = indexOfSourcePath(translated_sources, source_paths[0]);
+
+    if (translated_driver_idx) |driver_idx| {
+        const driver_ll = ll_paths[driver_idx];
+        const compile_driver = [_][]const u8{ "zig", "cc", "-O0", "-c", "-o", driver_obj, driver_ll };
+        const result = runProcessCaptureWithInput(allocator, &compile_driver, cwd, null, timeout_ms) catch |err| {
+            std.debug.print("zig cc invoke error: {s}\n", .{@errorName(err)});
+            return false;
+        };
+        defer result.deinit(allocator);
+        if (result.timed_out) {
+            std.debug.print("timeout: zig cc compile translated test driver\n", .{});
+            return false;
+        }
+        if (!isZeroExit(result.term)) {
+            std.debug.print("=== ZIG CC DRIVER STDERR ({s}) ===\n{s}\n", .{ driver_ll, result.stderr });
+            return false;
+        }
+    } else {
+        // Compile test driver with gfortran to keep BLAS harness behavior aligned.
         const compile_driver = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", driver_obj, source_paths[0] };
         const result = runProcessCaptureWithInput(allocator, &compile_driver, cwd, null, timeout_ms) catch |err| {
             std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
@@ -971,6 +1004,7 @@ fn compileTranslated(
     }
 
     for (ll_paths, 0..) |ll_path, idx| {
+        if (translated_driver_idx != null and idx == translated_driver_idx.?) continue;
         const obj_name = try std.fmt.allocPrint(allocator, "translated_{d}.o", .{idx});
         defer allocator.free(obj_name);
         const obj_path = try std.fs.path.join(allocator, &.{ obj_dir, obj_name });
@@ -995,7 +1029,14 @@ fn compileTranslated(
     // Link gfortran driver + helpers + translated kernels + runtime C.
     var link_args: std.ArrayList([]const u8) = .empty;
     defer link_args.deinit(allocator);
-    try link_args.appendSlice(allocator, &.{ gfortran_cmd, "-O0", "-o", out_exe, driver_obj });
+    try link_args.appendSlice(allocator, &.{ gfortran_cmd, "-O0" });
+    if (translated_driver_idx != null and builtin.os.tag == .windows) {
+        // Translated BLAS test drivers currently keep large local arrays as
+        // automatic storage; increase stack reserve to avoid Windows SEH
+        // stack-overflow traps during deep test routines.
+        try link_args.append(allocator, "-Wl,--stack,33554432");
+    }
+    try link_args.appendSlice(allocator, &.{ "-o", out_exe, driver_obj });
     try link_args.appendSlice(allocator, fallback_objs.items);
     try link_args.appendSlice(allocator, trans_objs.items);
     try link_args.appendSlice(allocator, runtime_paths);

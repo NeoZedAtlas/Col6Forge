@@ -32,7 +32,10 @@ pub fn isDeclarationStart(lp: LineParser) bool {
 pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     if (lp.isKeywordSplit("IMPLICIT")) {
         _ = lp.consumeKeyword("IMPLICIT");
-        if (lp.isKeywordSplit("NONE")) return error.ImplicitNoneUnsupported;
+        if (lp.isKeywordSplit("NONE")) {
+            _ = lp.consumeKeyword("NONE");
+            return .{ .implicit = .{ .rules = try arena.alloc(ImplicitRule, 0) } };
+        }
         var rules = std.array_list.Managed(ImplicitRule).init(arena);
         while (lp.peek()) |_| {
             const type_spec = try parseImplicitTypeKind(lp, arena);
@@ -483,6 +486,29 @@ test "parseDecl handles COMPLEX*16 declaration" {
             try testing.expectEqual(@as(usize, 2), td.items.len);
             try testing.expectEqualStrings("ALPHA", td.items[0].name);
             try testing.expectEqualStrings("BETA", td.items[1].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl accepts IMPLICIT NONE" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      IMPLICIT NONE\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .implicit => |imp| {
+            try testing.expectEqual(@as(usize, 0), imp.rules.len);
         },
         else => return error.UnexpectedToken,
     }

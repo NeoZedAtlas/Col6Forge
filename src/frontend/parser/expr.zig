@@ -246,10 +246,19 @@ const BinOpInfo = struct {
 fn peekBinaryOp(lp: LineParser) ?BinOpInfo {
     const tok = lp.peek() orelse return null;
     switch (tok.kind) {
+        .equals => {
+            if (lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .equals) {
+                return .{ .op = .eq, .prec = 3, .right_assoc = false, .token_count = 2 };
+            }
+            return null;
+        },
         .plus => return .{ .op = .add, .prec = 4, .right_assoc = false, .token_count = 1 },
         .minus => return .{ .op = .sub, .prec = 4, .right_assoc = false, .token_count = 1 },
         .star => return .{ .op = .mul, .prec = 5, .right_assoc = false, .token_count = 1 },
         .slash => {
+            if (lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .equals) {
+                return .{ .op = .ne, .prec = 3, .right_assoc = false, .token_count = 2 };
+            }
             if (lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .slash) {
                 return .{ .op = .concat, .prec = 4, .right_assoc = false, .token_count = 2 };
             }
@@ -321,6 +330,56 @@ test "parseExpr handles EQV with lowest logical precedence" {
             try testing.expectEqual(BinaryOp.eqv, bin.op);
             try testing.expect(bin.left.* == .binary);
             try testing.expectEqual(BinaryOp.or_, bin.left.binary.op);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles double-equals relational operator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A==B\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .binary => |bin| {
+            try testing.expectEqual(BinaryOp.eq, bin.op);
+            try testing.expect(bin.left.* == .identifier);
+            try testing.expect(bin.right.* == .identifier);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles slash-equals relational operator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A/=B\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .binary => |bin| {
+            try testing.expectEqual(BinaryOp.ne, bin.op);
+            try testing.expect(bin.left.* == .identifier);
+            try testing.expect(bin.right.* == .identifier);
         },
         else => return error.UnexpectedToken,
     }
