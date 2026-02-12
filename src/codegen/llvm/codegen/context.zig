@@ -196,13 +196,19 @@ pub const Context = struct {
 
     pub fn getPointer(self: *Context, name: []const u8) !ValueRef {
         if (self.locals.get(name)) |val| return val;
+        var it = self.locals.iterator();
+        while (it.next()) |entry| {
+            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
+                return entry.value_ptr.*;
+            }
+        }
         std.debug.print("unknown symbol: {s}\n", .{name});
         return error.UnknownSymbol;
     }
 
     pub fn findSymbol(self: *Context, name: []const u8) ?input.sema.Symbol {
         for (self.sem.symbols) |sym| {
-            if (std.mem.eql(u8, sym.name, name)) return sym;
+            if (std.ascii.eqlIgnoreCase(sym.name, name)) return sym;
         }
         return null;
     }

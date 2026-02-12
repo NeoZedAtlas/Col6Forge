@@ -49,7 +49,7 @@ fn inferFunctionType(unit: ast.ProgramUnit) ast.TypeKind {
         switch (decl) {
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
-                    if (std.mem.eql(u8, item.name, unit.name)) return type_decl.type_kind;
+                    if (std.ascii.eqlIgnoreCase(item.name, unit.name)) return type_decl.type_kind;
                 }
             },
             else => {},

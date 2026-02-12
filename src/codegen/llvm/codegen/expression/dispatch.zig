@@ -166,14 +166,15 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                     const fn_ptr = try ctx.getPointer(call_or_sub.name);
                     return call.emitIndirectCharacterCall(ctx, builder, fn_ptr, result_len, call_or_sub.args);
                 }
-                const fn_name = try ctx.ensureDecl(call_or_sub.name, .void);
+                const fn_name = try ensureExternalDeclForCall(ctx, call_or_sub.name, .void, call_or_sub.args.len + 1);
                 return call.emitCharacterCall(ctx, builder, fn_name, result_len, call_or_sub.args);
             }
             if (sym.storage == .dummy) {
                 const fn_ptr = try ctx.getPointer(call_or_sub.name);
                 return call.emitIndirectCall(ctx, builder, fn_ptr, ret_ty, call_or_sub.args, false);
             }
-            const fn_name = try ctx.ensureDecl(call_or_sub.name, ret_ty);
+            const abi_arg_count = call_or_sub.args.len + @as(usize, if (ret_ty == .complex_f64) 1 else 0);
+            const fn_name = try ensureExternalDeclForCall(ctx, call_or_sub.name, ret_ty, abi_arg_count);
             return call.emitCall(ctx, builder, fn_name, ret_ty, call_or_sub.args, false);
         },
         .substring => |sub| {
@@ -183,6 +184,47 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
         .dim_range => return error.InvalidExpression,
         .implied_do => return error.UnsupportedImpliedDo,
     }
+}
+
+fn ensureExternalDeclForCall(ctx: *Context, name: []const u8, ret_ty: ir.IRType, arg_count: usize) ![]const u8 {
+    const mangled = try utils.mangleName(ctx.allocator, name);
+    if (ctx.defined.contains(mangled)) return mangled;
+
+    if (ctx.decls.get(mangled)) |existing| {
+        if (!existing.varargs) return mangled;
+
+        const sig = try buildPointerSig(ctx, arg_count);
+        try ctx.decls.put(mangled, .{
+            .ret_type = context.fortranAbiReturnType(ret_ty),
+            .sig = sig,
+            .varargs = false,
+        });
+        return mangled;
+    }
+
+    const sig = try buildPointerSig(ctx, arg_count);
+    return ctx.ensureDeclRaw(
+        mangled,
+        context.fortranAbiReturnType(ret_ty),
+        sig,
+        false,
+    );
+}
+
+fn buildPointerSig(ctx: *Context, arg_count: usize) ![]const u8 {
+    if (arg_count == 0) {
+        return ctx.allocator.dupe(u8, "");
+    }
+
+    var text = std.array_list.Managed(u8).init(ctx.allocator);
+    defer text.deinit();
+
+    var i: usize = 0;
+    while (i < arg_count) : (i += 1) {
+        if (i != 0) try text.appendSlice(", ");
+        try text.appendSlice("ptr");
+    }
+    return text.toOwnedSlice();
 }
 
 fn emitStatementFunctionCall(

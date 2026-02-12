@@ -5,7 +5,8 @@
 #include <string.h>
 
 static unsigned int fmt_index;
-static char fmt_buffers[8][64];
+enum { F77_FMT_BUFFER_COUNT = 64 };
+static char fmt_buffers[F77_FMT_BUFFER_COUNT][64];
 
 static void f77_pad_exp(char *buf, size_t buf_len, size_t exp_digits) {
     if (!buf || buf_len == 0) return;
@@ -34,7 +35,7 @@ static void f77_pad_exp(char *buf, size_t buf_len, size_t exp_digits) {
 const char *f77_fmt_i(int width, int min_digits, int sign_plus, int value) {
     char tmp[128];
     char digits[128];
-    char *buf = fmt_buffers[fmt_index++ % 8];
+    char *buf = fmt_buffers[fmt_index++ % F77_FMT_BUFFER_COUNT];
     unsigned int v = (value < 0) ? (unsigned int)(-value) : (unsigned int)value;
     if (min_digits <= 0) {
         (void)snprintf(digits, sizeof(digits), "%u", v);
@@ -61,7 +62,7 @@ const char *f77_fmt_i(int width, int min_digits, int sign_plus, int value) {
 }
 
 const char *f77_fmt_list_g(int precision, int exp_width, double value) {
-    char *buf = fmt_buffers[fmt_index++ % 8];
+    char *buf = fmt_buffers[fmt_index++ % F77_FMT_BUFFER_COUNT];
     if (precision <= 0) precision = 1;
     (void)snprintf(buf, 64, "%#.*G", precision, value);
     if (exp_width > 0) {
@@ -72,7 +73,7 @@ const char *f77_fmt_list_g(int precision, int exp_width, double value) {
 
 const char *f77_fmt_f(int width, int precision, int sign_plus, double value) {
     char tmp[128];
-    char *buf = fmt_buffers[fmt_index++ % 8];
+    char *buf = fmt_buffers[fmt_index++ % F77_FMT_BUFFER_COUNT];
     if (precision < 0) precision = 0;
 
     if (width <= 0) {
@@ -124,7 +125,7 @@ const char *f77_fmt_e(int width, int precision, int exp_width, int scale_factor,
     char tmp[128];
     char tmp2[128];
     char exp_buf[16];
-    char *buf = fmt_buffers[fmt_index++ % 8];
+    char *buf = fmt_buffers[fmt_index++ % F77_FMT_BUFFER_COUNT];
     if (precision < 0) precision = 0;
 
     if (exp_width <= 0) {
@@ -272,7 +273,7 @@ const char *f77_fmt_g(int width, int precision, int exp_width, int scale_factor,
         len = star_len;
     }
 
-    char *buf = fmt_buffers[fmt_index++ % 8];
+    char *buf = fmt_buffers[fmt_index++ % F77_FMT_BUFFER_COUNT];
     if (width <= 0) {
         if (len >= 64) len = 63;
         memcpy(buf, tmp, len);

@@ -267,10 +267,19 @@ int f77_read(int unit, const char *fmt, ...) {
         int used = 0;
         if (conv != 'S') {
             if (width <= 0) {
-                while (idx < record_len && (isspace((unsigned char)record[idx]) || record[idx] == ',')) {
+                while (idx < record_len &&
+                       (isspace((unsigned char)record[idx]) ||
+                        record[idx] == ',' ||
+                        record[idx] == '(' ||
+                        record[idx] == ')')) {
                     idx++;
                 }
-                while (idx < record_len && !isspace((unsigned char)record[idx]) && record[idx] != ',' && used < (int)sizeof(buf) - 1) {
+                while (idx < record_len &&
+                       !isspace((unsigned char)record[idx]) &&
+                       record[idx] != ',' &&
+                       record[idx] != '(' &&
+                       record[idx] != ')' &&
+                       used < (int)sizeof(buf) - 1) {
                     buf[used++] = record[idx++];
                 }
             } else {
@@ -456,10 +465,19 @@ int f77_read_status(int unit, const char *fmt, ...) {
         int used = 0;
         if (conv != 'S') {
             if (width <= 0) {
-                while (idx < record_len && (isspace((unsigned char)record[idx]) || record[idx] == ',')) {
+                while (idx < record_len &&
+                       (isspace((unsigned char)record[idx]) ||
+                        record[idx] == ',' ||
+                        record[idx] == '(' ||
+                        record[idx] == ')')) {
                     idx++;
                 }
-                while (idx < record_len && !isspace((unsigned char)record[idx]) && record[idx] != ',' && used < (int)sizeof(buf) - 1) {
+                while (idx < record_len &&
+                       !isspace((unsigned char)record[idx]) &&
+                       record[idx] != ',' &&
+                       record[idx] != '(' &&
+                       record[idx] != ')' &&
+                       used < (int)sizeof(buf) - 1) {
                     buf[used++] = record[idx++];
                 }
             } else {

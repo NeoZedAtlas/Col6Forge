@@ -59,7 +59,7 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
     if (findSymbolIndex(self, name)) |idx| {
         return idx;
     }
-    const known_fn_type = self.known_function_types.get(name);
+    const known_fn_type = findKnownFunctionType(self, name);
     const info = if (known_fn_type) |known_ty|
         ImplicitInfo{ .type_kind = known_ty, .char_len = null }
     else
@@ -91,10 +91,23 @@ pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
 pub fn findSymbolIndex(self: *context.Context, name: []const u8) ?usize {
     var scope_id = self.current_scope;
     while (scope_id) |id| {
-        if (self.scopes.items[id.index].symbols.get(name)) |idx| {
-            return idx;
+        var it = self.scopes.items[id.index].symbols.iterator();
+        while (it.next()) |entry| {
+            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
+                return entry.value_ptr.*;
+            }
         }
         scope_id = self.scopes.items[id.index].parent;
+    }
+    return null;
+}
+
+fn findKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
+    var it = self.known_function_types.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
+            return entry.value_ptr.*;
+        }
     }
     return null;
 }

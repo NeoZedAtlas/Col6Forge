@@ -129,7 +129,7 @@ fn blockKey(allocator: std.mem.Allocator, name: ?[]const u8) ![]const u8 {
 
 fn findSymbol(sem: *const input.sema.SemanticUnit, name: []const u8) ?input.sema.Symbol {
     for (sem.symbols) |sym| {
-        if (std.mem.eql(u8, sym.name, name)) return sym;
+        if (std.ascii.eqlIgnoreCase(sym.name, name)) return sym;
     }
     return null;
 }
@@ -186,7 +186,7 @@ fn evalConstInt(sem: *const input.sema.SemanticUnit, expr: *input.Expr) !?i64 {
 fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?input.sema.ConstValue {
     const sem: *const input.sema.SemanticUnit = @ptrCast(@alignCast(ctx));
     for (sem.symbols) |sym| {
-        if (std.mem.eql(u8, sym.name, name)) return sym.const_value;
+        if (std.ascii.eqlIgnoreCase(sym.name, name)) return sym.const_value;
     }
     return null;
 }

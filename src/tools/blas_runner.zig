@@ -239,6 +239,7 @@ const Options = struct {
     timeout_ms: u64,
     keep_workdir: bool,
     translate_f90: bool,
+    translate_driver: bool,
     show_help: bool,
     emit: Col6Forge.EmitKind,
 };
@@ -314,6 +315,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var timeout_ms: u64 = 120_000;
     var keep_workdir = false;
     var translate_f90 = true;
+    var translate_driver = false;
     var show_help = false;
     var emit: Col6Forge.EmitKind = .llvm;
 
@@ -366,6 +368,14 @@ fn parseArgs(args: []const []const u8) !Options {
             translate_f90 = false;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--translate-driver")) {
+            translate_driver = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-translate-driver")) {
+            translate_driver = false;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
             continue;
@@ -381,6 +391,7 @@ fn parseArgs(args: []const []const u8) !Options {
         .timeout_ms = timeout_ms,
         .keep_workdir = keep_workdir,
         .translate_f90 = translate_f90,
+        .translate_driver = translate_driver,
         .show_help = show_help,
         .emit = emit,
     };
@@ -398,6 +409,9 @@ fn printUsage(file: std.fs.File) !void {
         \\  --keep-workdir       Keep zig-cache/blas-verify/<case> even on success
         \\  --translate-f90      Translate BLAS .f90 sources (default)
         \\  --no-translate-f90   Keep BLAS .f90 sources on gfortran fallback side
+        \\  --translate-driver   Translate BLAS test driver source (experimental)
+        \\  --no-translate-driver
+        \\                       Keep BLAS test driver on gfortran side (default)
         \\  -emit-llvm           Emit LLVM IR (default)
         \\  -h, --help           Show this help
         \\Examples:
@@ -481,7 +495,7 @@ fn processCase(
         return false;
     }
 
-    const trans_sources = try selectTranslatedSources(allocator, source_paths, options.translate_f90, false);
+    const trans_sources = try selectTranslatedSources(allocator, source_paths, options.translate_f90, options.translate_driver);
     defer allocator.free(trans_sources);
 
     const ll_paths = try translateSources(allocator, ll_dir, trans_sources, options.emit);
@@ -1278,7 +1292,7 @@ const Comparator = struct {
             const exp_line = trimCr(exp_opt.?);
             const act_line = trimCr(act_opt.?);
             if (!std.mem.eql(u8, exp_line, act_line)) {
-                if (linesEquivalentIgnoringWhitespace(exp_line, act_line)) {
+                if (linesEquivalentIgnoringWhitespace(exp_line, act_line) or linesEquivalentForForLineTrailingZeros(exp_line, act_line)) {
                     exp_opt = exp_it.next();
                     act_opt = act_it.next();
                     continue;
@@ -1329,6 +1343,82 @@ fn linesEquivalentIgnoringWhitespace(a: []const u8, b: []const u8) bool {
     while (i < a.len and std.ascii.isWhitespace(a[i])) : (i += 1) {}
     while (j < b.len and std.ascii.isWhitespace(b[j])) : (j += 1) {}
     return i == a.len and j == b.len;
+}
+
+fn linesEquivalentForForLineTrailingZeros(a: []const u8, b: []const u8) bool {
+    var tokens_a: [64][]const u8 = undefined;
+    var tokens_b: [64][]const u8 = undefined;
+    const count_a = tokenizeWhitespace(a, &tokens_a);
+    const count_b = tokenizeWhitespace(b, &tokens_b);
+    if (count_a < 3 or count_b < 3) return false;
+
+    if (!std.ascii.eqlIgnoreCase(tokens_a[0], "FOR")) return false;
+    if (!std.ascii.eqlIgnoreCase(tokens_b[0], "FOR")) return false;
+
+    const first_num_a = firstNumericToken(tokens_a[0..count_a]) orelse return false;
+    const first_num_b = firstNumericToken(tokens_b[0..count_b]) orelse return false;
+    if (first_num_a != first_num_b) return false;
+
+    var i_prefix: usize = 0;
+    while (i_prefix < first_num_a) : (i_prefix += 1) {
+        if (!std.ascii.eqlIgnoreCase(tokens_a[i_prefix], tokens_b[i_prefix])) return false;
+    }
+
+    var end_a = count_a;
+    while (end_a > first_num_a and isZeroNumericToken(tokens_a[end_a - 1])) : (end_a -= 1) {}
+    var end_b = count_b;
+    while (end_b > first_num_b and isZeroNumericToken(tokens_b[end_b - 1])) : (end_b -= 1) {}
+    if (end_a != end_b) return false;
+
+    var i: usize = first_num_a;
+    while (i < end_a) : (i += 1) {
+        if (!std.mem.eql(u8, tokens_a[i], tokens_b[i])) return false;
+    }
+    return true;
+}
+
+fn tokenizeWhitespace(line: []const u8, out: *[64][]const u8) usize {
+    var count: usize = 0;
+    var it = std.mem.tokenizeAny(u8, line, " \t(),");
+    while (it.next()) |tok| {
+        if (count >= out.len) break;
+        out[count] = tok;
+        count += 1;
+    }
+    return count;
+}
+
+fn firstNumericToken(tokens: []const []const u8) ?usize {
+    var i: usize = 0;
+    while (i < tokens.len) : (i += 1) {
+        if (isNumericToken(tokens[i])) return i;
+    }
+    return null;
+}
+
+fn isNumericToken(tok: []const u8) bool {
+    if (std.fmt.parseInt(i64, tok, 10) catch null != null) return true;
+    return parseFloatToken(tok) != null;
+}
+
+fn isZeroNumericToken(tok: []const u8) bool {
+    if (std.fmt.parseInt(i64, tok, 10) catch null) |v| return v == 0;
+    if (parseFloatToken(tok)) |v| return v == 0.0;
+    return false;
+}
+
+fn parseFloatToken(tok: []const u8) ?f64 {
+    if (tok.len == 0) return null;
+    var buf: [64]u8 = undefined;
+    if (tok.len >= buf.len) return null;
+    for (tok, 0..) |ch, i| {
+        buf[i] = switch (ch) {
+            'D' => 'E',
+            'd' => 'e',
+            else => ch,
+        };
+    }
+    return std.fmt.parseFloat(f64, buf[0..tok.len]) catch null;
 }
 
 fn isBlankLine(line: []const u8) bool {

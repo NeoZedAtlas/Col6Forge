@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../input.zig");
 const ir = @import("../../../ir.zig");
 const context = @import("../context.zig");
+const common = @import("../common.zig");
 const memory = @import("memory.zig");
 const dispatch = @import("dispatch.zig");
 const llvm_types = @import("../../types.zig");
@@ -178,6 +179,11 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
             if (kind == .subscript) {
                 return memory.emitSubscriptPtr(ctx, builder, call);
             }
+            if (kind == .call) {
+                if (try emitIntrinsicArrayConversionArg(ctx, builder, call)) |ptr| {
+                    return ptr;
+                }
+            }
             // Non-subscript call expressions are not addressable.
         },
         .substring => {
@@ -196,6 +202,89 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
     try builder.store(value, ptr);
     return ptr;
+}
+
+fn emitIntrinsicArrayConversionArg(ctx: *Context, builder: anytype, call: ast.CallOrSubscript) !?ValueRef {
+    if (call.args.len != 1) return null;
+
+    const target_ty = intrinsicArrayConversionTarget(call.name) orelse return null;
+
+    const src_name = switch (call.args[0].*) {
+        .identifier => |name| name,
+        else => return null,
+    };
+    const src_sym = ctx.findSymbol(src_name) orelse return null;
+    if (src_sym.dims.len == 0) return null;
+
+    const src_ptr = try ctx.getPointer(src_name);
+    const src_elem_ty = llvm_types.typeFromKind(src_sym.type_kind);
+    const elem_count = common.arrayElementCount(ctx.sem, src_sym.dims) catch return null;
+    if (elem_count == 0) return null;
+
+    const dst_name = try ctx.nextTemp();
+    try builder.allocaArray(dst_name, target_ty, elem_count);
+    const dst_ptr = ValueRef{ .name = dst_name, .ty = .ptr, .is_ptr = true };
+
+    const idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(idx_ptr_name, .i32);
+    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(.{ .name = "0", .ty = .i32, .is_ptr = false }, idx_ptr);
+
+    const label_cond = try ctx.nextLabel("arg_conv_cond");
+    const label_body = try ctx.nextLabel("arg_conv_body");
+    const label_inc = try ctx.nextLabel("arg_conv_inc");
+    const label_done = try ctx.nextLabel("arg_conv_done");
+
+    try builder.br(label_cond);
+    try builder.label(label_cond);
+    const idx_val_name = try ctx.nextTemp();
+    try builder.load(idx_val_name, .i32, idx_ptr);
+    const idx_val = ValueRef{ .name = idx_val_name, .ty = .i32, .is_ptr = false };
+    const cmp_name = try ctx.nextTemp();
+    try builder.compare(
+        cmp_name,
+        "icmp",
+        "slt",
+        .i32,
+        idx_val,
+        .{ .name = try std.fmt.allocPrint(ctx.allocator, "{d}", .{elem_count}), .ty = .i32, .is_ptr = false },
+    );
+    try builder.brCond(.{ .name = cmp_name, .ty = .i1, .is_ptr = false }, label_body, label_done);
+
+    try builder.label(label_body);
+    const src_elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(src_elem_ptr_name, src_elem_ty, src_ptr, idx_val);
+    const src_elem_ptr = ValueRef{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true };
+    const src_elem_name = try ctx.nextTemp();
+    try builder.load(src_elem_name, src_elem_ty, src_elem_ptr);
+    var converted = ValueRef{ .name = src_elem_name, .ty = src_elem_ty, .is_ptr = false };
+    if (converted.ty != target_ty) {
+        converted = try casting.coerce(ctx, builder, converted, target_ty);
+    }
+    const dst_elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(dst_elem_ptr_name, target_ty, dst_ptr, idx_val);
+    try builder.store(converted, .{ .name = dst_elem_ptr_name, .ty = .ptr, .is_ptr = true });
+    try builder.br(label_inc);
+
+    try builder.label(label_inc);
+    const idx_next_name = try ctx.nextTemp();
+    try builder.binary(idx_next_name, "add", .i32, idx_val, .{ .name = "1", .ty = .i32, .is_ptr = false });
+    try builder.store(.{ .name = idx_next_name, .ty = .i32, .is_ptr = false }, idx_ptr);
+    try builder.br(label_cond);
+
+    try builder.label(label_done);
+    return dst_ptr;
+}
+
+fn intrinsicArrayConversionTarget(name: []const u8) ?IRType {
+    if (std.ascii.eqlIgnoreCase(name, "REAL")) return .f32;
+    if (std.ascii.eqlIgnoreCase(name, "FLOAT")) return .f32;
+    if (std.ascii.eqlIgnoreCase(name, "SNGL")) return .f32;
+    if (std.ascii.eqlIgnoreCase(name, "DBLE")) return .f64;
+    if (std.ascii.eqlIgnoreCase(name, "INT")) return .i32;
+    if (std.ascii.eqlIgnoreCase(name, "IFIX")) return .i32;
+    if (std.ascii.eqlIgnoreCase(name, "IDINT")) return .i32;
+    return null;
 }
 
 fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
