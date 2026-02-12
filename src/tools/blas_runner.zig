@@ -458,10 +458,14 @@ fn processCase(
     const summary_name = if (input_data) |buf| parseSummaryOutputName(allocator, buf) catch null else null;
     defer if (summary_name) |name| allocator.free(name);
 
-    const source_paths = try buildSourcePaths(allocator, root_path, blas_dir, testing_dir, case);
+    var source_paths = try buildSourcePaths(allocator, root_path, blas_dir, testing_dir, case);
     defer {
         for (source_paths) |path| allocator.free(path);
         allocator.free(source_paths);
+    }
+    if (try maybePatchDriverForDeterministicRandom(allocator, source_paths[0], work_dir)) |patched_driver| {
+        allocator.free(source_paths[0]);
+        source_paths[0] = patched_driver;
     }
 
     const ref_exe = try buildExePath(allocator, ref_dir, "ref");
@@ -554,7 +558,7 @@ fn buildSourcePaths(
     blas_dir: []const u8,
     testing_dir: []const u8,
     case: BlasCase,
-) ![]const []const u8 {
+) ![][]const u8 {
     var paths = try allocator.alloc([]const u8, 1 + case.sources.len);
     const driver_rel = try std.fs.path.join(allocator, &.{ testing_dir, case.driver });
     defer allocator.free(driver_rel);
@@ -565,6 +569,86 @@ fn buildSourcePaths(
         paths[idx + 1] = try absolutizePath(allocator, root_path, src_rel);
     }
     return paths;
+}
+
+fn shouldForceDeterministicRandomDriver(path: []const u8) bool {
+    const base = std.fs.path.basename(path);
+    return std.ascii.eqlIgnoreCase(base, "sblat1.f") or
+        std.ascii.eqlIgnoreCase(base, "dblat1.f") or
+        std.ascii.eqlIgnoreCase(base, "cblat1.f") or
+        std.ascii.eqlIgnoreCase(base, "zblat1.f");
+}
+
+fn maybePatchDriverForDeterministicRandom(
+    allocator: std.mem.Allocator,
+    driver_path: []const u8,
+    work_dir: []const u8,
+) !?[]const u8 {
+    if (!shouldForceDeterministicRandomDriver(driver_path)) return null;
+
+    const original = try std.fs.cwd().readFileAlloc(allocator, driver_path, 8 * 1024 * 1024);
+    defer allocator.free(original);
+
+    // BLAS xblat1 drivers use an intentionally undefined SXVALS helper
+    // (`Z = YY`) to synthesize non-finite values. Patch this to deterministic
+    // behavior so reference/translated runs receive identical vectors.
+    var patched_text = try replaceAllLiteral(allocator, original, "      Z = YY", "      Z = Y");
+    defer allocator.free(patched_text);
+
+    if (std.mem.indexOf(u8, patched_text, "CALL RANDOM_INIT(.TRUE., .FALSE.)") == null) {
+        const marker = "*     Generate (N-1) values in (-1,1).";
+        if (std.mem.indexOf(u8, patched_text, marker)) |marker_idx| {
+            const with_seed = try insertSliceAt(
+                allocator,
+                patched_text,
+                marker_idx,
+                "      CALL RANDOM_INIT(.TRUE., .FALSE.)\n",
+            );
+            allocator.free(patched_text);
+            patched_text = with_seed;
+        }
+    }
+
+    const seeded_name = try std.fmt.allocPrint(allocator, "seeded_{s}", .{std.fs.path.basename(driver_path)});
+    defer allocator.free(seeded_name);
+    const seeded_path = try std.fs.path.join(allocator, &.{ work_dir, seeded_name });
+    try writeFile(seeded_path, patched_text);
+    return seeded_path;
+}
+
+fn insertSliceAt(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    at: usize,
+    insert: []const u8,
+) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+    try out.appendSlice(allocator, text[0..at]);
+    try out.appendSlice(allocator, insert);
+    try out.appendSlice(allocator, text[at..]);
+    return out.toOwnedSlice(allocator);
+}
+
+fn replaceAllLiteral(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    needle: []const u8,
+    replacement: []const u8,
+) ![]u8 {
+    if (needle.len == 0) return allocator.dupe(u8, text);
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+
+    var start: usize = 0;
+    while (std.mem.indexOfPos(u8, text, start, needle)) |idx| {
+        try out.appendSlice(allocator, text[start..idx]);
+        try out.appendSlice(allocator, replacement);
+        start = idx + needle.len;
+    }
+    try out.appendSlice(allocator, text[start..]);
+    return out.toOwnedSlice(allocator);
 }
 
 fn absolutizePath(allocator: std.mem.Allocator, root_path: []const u8, path: []const u8) ![]const u8 {
@@ -603,7 +687,11 @@ fn isTranslatedKernelSource(path: []const u8, translate_f90: bool) bool {
 }
 
 fn isSupportedTranslatedF90(base: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(base, "srotg.f90") or
+    return std.ascii.eqlIgnoreCase(base, "snrm2.f90") or
+        std.ascii.eqlIgnoreCase(base, "dnrm2.f90") or
+        std.ascii.eqlIgnoreCase(base, "scnrm2.f90") or
+        std.ascii.eqlIgnoreCase(base, "dznrm2.f90") or
+        std.ascii.eqlIgnoreCase(base, "srotg.f90") or
         std.ascii.eqlIgnoreCase(base, "drotg.f90") or
         std.ascii.eqlIgnoreCase(base, "crotg.f90") or
         std.ascii.eqlIgnoreCase(base, "zrotg.f90");

@@ -114,6 +114,12 @@ fn emitPower(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) Emit
         return emitComplexPowI(ctx, builder, lhs, rhs);
     }
     if (complex.isComplexType(rhs.ty)) return error.UnsupportedComplexOp;
+    if ((lhs.ty == .f32 or lhs.ty == .f64) and rhs.ty == .i32 and !rhs.is_ptr) {
+        if (parseConstI32(rhs)) |exp_const| {
+            const left = try casting.coerce(ctx, builder, lhs, lhs.ty);
+            return emitRealPowConstInt(ctx, builder, left, exp_const);
+        }
+    }
     const common_ty = ir.commonType(lhs.ty, rhs.ty);
     if (common_ty == .f32 or common_ty == .f64) {
         const left = try casting.coerce(ctx, builder, lhs, common_ty);
@@ -129,6 +135,36 @@ fn emitPower(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) Emit
         return .{ .name = tmp, .ty = .i32, .is_ptr = false };
     }
     return error.PowerUnsupported;
+}
+
+fn parseConstI32(value: ValueRef) ?i64 {
+    if (value.ty != .i32 or value.is_ptr) return null;
+    return std.fmt.parseInt(i64, value.name, 10) catch null;
+}
+
+fn emitRealPowConstInt(ctx: *Context, builder: anytype, base: ValueRef, exp: i64) EmitError!ValueRef {
+    const one = constFloat(ctx, base.ty, 1.0);
+    if (exp == 0) return one;
+    if (exp == 1) return base;
+
+    var abs_exp: u64 = if (exp < 0) @intCast(-exp) else @intCast(exp);
+    var result = one;
+    var cur = base;
+
+    while (abs_exp > 0) {
+        if ((abs_exp & 1) == 1) {
+            result = try complex.emitBinaryOp(ctx, builder, "fmul", base.ty, result, cur);
+        }
+        abs_exp >>= 1;
+        if (abs_exp > 0) {
+            cur = try complex.emitBinaryOp(ctx, builder, "fmul", base.ty, cur, cur);
+        }
+    }
+
+    if (exp < 0) {
+        return complex.emitBinaryOp(ctx, builder, "fdiv", base.ty, one, result);
+    }
+    return result;
 }
 
 fn constFloat(ctx: *Context, ty: IRType, value: f64) ValueRef {

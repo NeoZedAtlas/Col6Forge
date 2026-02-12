@@ -233,6 +233,26 @@ test "emitBinary floating ne uses unordered comparison" {
     try testing.expect(std.mem.indexOf(u8, buffer.items, "fcmp une float") != null);
 }
 
+test "emitBinary real power with integer constant uses multiplication path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lhs = ValueRef{ .name = "2.0", .ty = .f32, .is_ptr = false };
+    const rhs = ValueRef{ .name = "2", .ty = .i32, .is_ptr = false };
+    const pow = try emitBinary(&harness.ctx, &builder, .power, lhs, rhs);
+    try testing.expectEqual(IRType.f32, pow.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "fmul float") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "llvm.pow.f32") == null);
+}
+
 test "emitCall and emitArgPointer build call args" {
     const testing = std.testing;
     const allocator = testing.allocator;

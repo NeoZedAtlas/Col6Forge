@@ -205,9 +205,10 @@ pub fn emitIntrinsicFloat(ctx: *Context, builder: anytype, args: []*Expr) EmitEr
     if (complex.isComplexType(value.ty)) {
         const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
         value = try complex.coerceToComplex(ctx, builder, value, target_ty);
-        const real_part = try complex.extractComplex(ctx, builder, value, 0);
-        return casting.coerce(ctx, builder, real_part, .f32);
+        // REAL(complex) returns the real component with the complex element kind.
+        return complex.extractComplex(ctx, builder, value, 0);
     }
+    // REAL(non-complex) converts to default real kind.
     return casting.coerce(ctx, builder, value, .f32);
 }
 
