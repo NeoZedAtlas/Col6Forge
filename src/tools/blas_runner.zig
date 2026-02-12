@@ -8,12 +8,8 @@ const ALLBLAS = [_][]const u8{
     "xerbla_array.f",
 };
 
-// Keep low-level helper routines on the reference compiler side for now.
-// BLAS-verify focuses translated coverage on the computational kernels.
 const FORTRAN_FALLBACK = [_][]const u8{
-    "lsame.f",
-    "xerbla.f",
-    "xerbla_array.f",
+    // Empty by default: translate all .f BLAS sources when possible.
 };
 
 const SBLAS3 = [_][]const u8{
@@ -589,9 +585,8 @@ fn isTranslatedKernelSource(path: []const u8) bool {
     if (base.len == 0) return false;
     const ext = std.fs.path.extension(base);
     if (!std.ascii.eqlIgnoreCase(ext, ".f")) return false;
-    const first = std.ascii.toLower(base[0]);
-    // Translation coverage target: BLAS-3 kernels across S/D/C/Z families.
-    return first == 's' or first == 'd' or first == 'c' or first == 'z';
+    // Translate all fixed-form Fortran BLAS sources (.f). .f90 files stay on fallback side.
+    return true;
 }
 
 fn sourceInList(list: []const []const u8, path: []const u8) bool {
@@ -608,6 +603,7 @@ fn selectTranslatedSources(allocator: std.mem.Allocator, source_paths: []const [
     while (i < source_paths.len) : (i += 1) {
         const src = source_paths[i];
         if (!isTranslatedKernelSource(src)) continue;
+        if (shouldSkipFallbackForDriver(src)) continue;
         try selected.append(allocator, src);
     }
     return selected.toOwnedSlice(allocator);

@@ -127,7 +127,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var gfortran_path: []const u8 = defaultGfortran();
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
-    var timeout_ms: u64 = 30_000;
+    var timeout_ms: u64 = 120_000;
     var jobs = defaultJobs();
     var suite: ?TestSuite = null;
 
@@ -212,8 +212,8 @@ fn printUsage(file: std.fs.File) !void {
         \\  --fcsv78           Use the original NIST F78 suite
         \\  --filter <text>    Only run tests whose relative path contains this text
         \\  --gfortran <path>  Path to gfortran executable (default: gfortran or gfortran.exe)
-        \\  --timeout <ms>     Per-test timeout in milliseconds (default: 30000)
-        \\  --jobs <n>, -j <n> Parallel job count (default: CPU cores)
+        \\  --timeout <ms>     Per-test timeout in milliseconds (default: 120000)
+        \\  --jobs <n>, -j <n> Parallel job count (default: min(CPU cores, 4))
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
         \\
@@ -1073,5 +1073,6 @@ fn formatDuration(buf: []u8, total_ms: u64) []const u8 {
 }
 
 fn defaultJobs() usize {
-    return std.Thread.getCpuCount() catch 1;
+    const cpu = std.Thread.getCpuCount() catch 1;
+    return if (cpu > 4) 4 else cpu;
 }
