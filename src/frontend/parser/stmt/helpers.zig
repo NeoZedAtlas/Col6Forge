@@ -41,6 +41,7 @@ pub fn parseLabelToken(lp: *LineParser) ParseStmtError![]const u8 {
 }
 
 pub fn isEndDo(lp: LineParser) bool {
+    if (lp.isKeywordSplit("ENDDO")) return true;
     const end_span = lp.keywordSpan("END") orelse return false;
     const next_idx = lp.index + end_span;
     if (next_idx >= lp.tokens.len) return false;

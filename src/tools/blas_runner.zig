@@ -204,7 +204,6 @@ const XBLAT1S_SOURCES = SBLAS1;
 const XBLAT1D_SOURCES = DBLAS1;
 const XBLAT1C_SOURCES = CBLAS1;
 const XBLAT1Z_SOURCES = ZBLAS1;
-const BLAS1_FALLBACK = SBLAS1 ++ DBLAS1 ++ CBLAS1 ++ ZBLAS1;
 const XBLAT2S_SOURCES = ALLBLAS ++ SBLAS2;
 const XBLAT2D_SOURCES = ALLBLAS ++ DBLAS2;
 const XBLAT2C_SOURCES = ALLBLAS ++ CBLAS2;
@@ -584,18 +583,18 @@ fn shouldSkipFallbackForDriver(path: []const u8) bool {
     return std.ascii.eqlIgnoreCase(std.fs.path.basename(path), "xerbla.f");
 }
 
-fn isBlas1FallbackSource(path: []const u8) bool {
+fn isAbiFallbackSource(path: []const u8) bool {
     const base = std.fs.path.basename(path);
-    for (BLAS1_FALLBACK) |name| {
-        if (std.ascii.eqlIgnoreCase(base, name)) return true;
-    }
-    return false;
+    return std.ascii.eqlIgnoreCase(base, "cdotc.f") or
+        std.ascii.eqlIgnoreCase(base, "cdotu.f") or
+        std.ascii.eqlIgnoreCase(base, "zdotc.f") or
+        std.ascii.eqlIgnoreCase(base, "zdotu.f");
 }
 
 fn isTranslatedKernelSource(path: []const u8) bool {
     const base = std.fs.path.basename(path);
     if (isFortranFallbackSource(path)) return false;
-    if (isBlas1FallbackSource(path)) return false;
+    if (isAbiFallbackSource(path)) return false;
     if (base.len == 0) return false;
     const ext = std.fs.path.extension(base);
     if (!std.ascii.eqlIgnoreCase(ext, ".f")) return false;

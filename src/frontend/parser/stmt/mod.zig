@@ -42,8 +42,10 @@ pub fn parseStatement(
     const label = line.label;
 
     if (helpers.isEndDo(lp)) {
-        _ = lp.next();
-        _ = lp.next();
+        if (!lp.consumeKeyword("ENDDO")) {
+            _ = lp.consumeKeyword("END");
+            _ = lp.consumeKeyword("DO");
+        }
         const end_label = do_ctx.pop() orelse return error.EndDoWithoutDo;
         index.* += 1;
         return .{ .label = end_label, .node = .{ .cont = {} } };
@@ -610,6 +612,39 @@ test "parseStatement handles block DO with END DO" {
 
     const do_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expect(do_stmt.node == .do_loop);
+    try testing.expectEqual(@as(usize, 1), idx);
+
+    const body_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(body_stmt.node == .assignment);
+    try testing.expectEqual(@as(usize, 2), idx);
+
+    const end_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(end_stmt.node == .cont);
+    try testing.expect(end_stmt.label != null);
+    try testing.expectEqual(@as(usize, 3), idx);
+}
+
+test "parseStatement handles DO WHILE with ENDDO" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      DO WHILE (I .LT. 3)\n" ++
+        "      I = I + 1\n" ++
+        "      ENDDO\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const do_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(do_stmt.node == .do_while);
     try testing.expectEqual(@as(usize, 1), idx);
 
     const body_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);

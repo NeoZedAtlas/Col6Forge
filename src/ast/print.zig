@@ -128,6 +128,9 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
             const step_text = if (loop.step) |_| "yes" else "no";
             try writer.print(";   stmt label={s} do end={s} var={s} step={s}\n", .{ label_text, loop.end_label, loop.var_name, step_text });
         },
+        .do_while => |loop| {
+            try writer.print(";   stmt label={s} do-while end={s}\n", .{ label_text, loop.end_label });
+        },
         .ret => |ret| {
             const mode = if (ret.value == null) "plain" else "value";
             try writer.print(";   stmt label={s} return {s}\n", .{ label_text, mode });

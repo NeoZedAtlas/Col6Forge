@@ -112,6 +112,7 @@ pub fn emitStmt(
             return true;
         },
         .do_loop => return error.UnexpectedToken,
+        .do_while => return error.UnexpectedToken,
         .ret => |ret| {
             try execution.emitReturnStmt(ctx, builder, ret);
             return true;
@@ -142,6 +143,15 @@ pub fn emitSequence(ctx: *Context, builder: anytype, block_names: [][]const u8, 
                 if (end_label_idx > end_idx) return error.InvalidDoLabel;
                 const after_loop = if (end_label_idx + 1 < ctx.unit.stmts.len) block_names[end_label_idx + 1] else "exit";
                 try control.emitDo(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd);
+                i = end_label_idx + 1;
+                continue;
+            },
+            .do_while => |loop| {
+                const end_label_idx = ctx.label_index.get(loop.end_label) orelse return error.MissingLabel;
+                if (end_label_idx <= i) return error.InvalidDoLabel;
+                if (end_label_idx > end_idx) return error.InvalidDoLabel;
+                const after_loop = if (end_label_idx + 1 < ctx.unit.stmts.len) block_names[end_label_idx + 1] else "exit";
+                try control.emitDoWhile(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd);
                 i = end_label_idx + 1;
                 continue;
             },
@@ -176,6 +186,15 @@ pub fn emitSequenceWithEnd(
                 i = end_label_idx + 1;
                 continue;
             },
+            .do_while => |loop| {
+                const end_label_idx = ctx.label_index.get(loop.end_label) orelse return error.MissingLabel;
+                if (end_label_idx <= i) return error.InvalidDoLabel;
+                if (end_label_idx > end_idx) return error.InvalidDoLabel;
+                const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
+                try control.emitDoWhile(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd);
+                i = end_label_idx + 1;
+                continue;
+            },
             else => {},
         }
         const next_block = if (i == end_idx) end_next else block_names[i + 1];
@@ -206,6 +225,15 @@ pub fn emitStmtListRange(
                 if (end_label_idx > end_idx) return error.InvalidDoLabel;
                 const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
                 try control.emitDoList(ctx, builder, stmts, block_names, label_map, i, end_label_idx, after_loop, emitStmtListRange);
+                i = end_label_idx + 1;
+                continue;
+            },
+            .do_while => |loop| {
+                const end_label_idx = cfg.findLabelIndex(stmts, loop.end_label) orelse return error.MissingLabel;
+                if (end_label_idx <= i) return error.InvalidDoLabel;
+                if (end_label_idx > end_idx) return error.InvalidDoLabel;
+                const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
+                try control.emitDoWhileList(ctx, builder, stmts, block_names, label_map, i, end_label_idx, after_loop, emitStmtListRange);
                 i = end_label_idx + 1;
                 continue;
             },

@@ -56,12 +56,36 @@ pub const DoContext = struct {
 };
 
 pub fn parseDoStatement(arena: std.mem.Allocator, lp: *LineParser, do_ctx: *DoContext) ParseStmtError!StmtNode {
+    if (lp.isKeywordSplit("WHILE")) {
+        _ = lp.consumeKeyword("WHILE");
+        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        const condition = try expr.parseExpr(lp, arena, 0);
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        const end_label = try do_ctx.nextLabel(arena);
+        try do_ctx.push(end_label);
+        return .{ .do_while = .{
+            .end_label = end_label,
+            .condition = condition,
+        } };
+    }
+
     const next_tok = lp.peek() orelse return error.UnexpectedToken;
     var end_label: []const u8 = undefined;
     var var_name: []const u8 = undefined;
+
     if (next_tok.kind == .integer) {
         end_label = try helpers.parseLabelToken(lp);
         _ = lp.consume(.comma);
+        if (lp.isKeywordSplit("WHILE")) {
+            _ = lp.consumeKeyword("WHILE");
+            _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+            const condition = try expr.parseExpr(lp, arena, 0);
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            return .{ .do_while = .{
+                .end_label = end_label,
+                .condition = condition,
+            } };
+        }
         var_name = lp.readName(arena) orelse return error.MissingName;
     } else if (next_tok.kind == .identifier and helpers.nextTokenIs(lp.*, .equals)) {
         end_label = try do_ctx.nextLabel(arena);
@@ -70,8 +94,19 @@ pub fn parseDoStatement(arena: std.mem.Allocator, lp: *LineParser, do_ctx: *DoCo
     } else {
         end_label = try helpers.parseLabelToken(lp);
         _ = lp.consume(.comma);
+        if (lp.isKeywordSplit("WHILE")) {
+            _ = lp.consumeKeyword("WHILE");
+            _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+            const condition = try expr.parseExpr(lp, arena, 0);
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            return .{ .do_while = .{
+                .end_label = end_label,
+                .condition = condition,
+            } };
+        }
         var_name = lp.readName(arena) orelse return error.MissingName;
     }
+
     _ = lp.expect(.equals) orelse return error.UnexpectedToken;
     const start_expr = try expr.parseExpr(lp, arena, 0);
     _ = lp.expect(.comma) orelse return error.UnexpectedToken;

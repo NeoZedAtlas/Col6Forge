@@ -85,6 +85,9 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
             try expressions.resolveExpr(self, loop.end);
             if (loop.step) |step| try expressions.resolveExpr(self, step);
         },
+        .do_while => |loop| {
+            try expressions.resolveExpr(self, loop.condition);
+        },
         .goto => {},
         .computed_goto => |gt| {
             try expressions.resolveExpr(self, gt.selector);
@@ -187,6 +190,9 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             try expressions.resolveExpr(self, loop.start);
             try expressions.resolveExpr(self, loop.end);
             if (loop.step) |step| try expressions.resolveExpr(self, step);
+        },
+        .do_while => |loop| {
+            try expressions.resolveExpr(self, loop.condition);
         },
         .goto => {},
         .computed_goto => |gt| {

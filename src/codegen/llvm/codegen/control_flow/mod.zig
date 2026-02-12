@@ -5,6 +5,8 @@ const logic = @import("logic.zig");
 
 pub const emitDo = loops.emitDo;
 pub const emitDoList = loops.emitDoList;
+pub const emitDoWhile = loops.emitDoWhile;
+pub const emitDoWhileList = loops.emitDoWhileList;
 
 pub const emitComputedGoto = branch.emitComputedGoto;
 pub const emitAssignedGoto = branch.emitAssignedGoto;

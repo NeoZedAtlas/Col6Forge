@@ -98,6 +98,33 @@ pub fn emitDo(
     try builder.br(test_label);
 }
 
+pub fn emitDoWhile(
+    ctx: *Context,
+    builder: anytype,
+    block_names: [][]const u8,
+    do_idx: usize,
+    end_idx: usize,
+    after_loop: []const u8,
+    comptime emit_sequence_with_end: anytype,
+) EmitError!void {
+    const stmt = ctx.unit.stmts[do_idx];
+    const loop = stmt.node.do_while;
+
+    const test_label = try ctx.nextLabel("do_while_test");
+    const inc_label = try ctx.nextLabel("do_while_inc");
+    try builder.br(test_label);
+
+    try builder.label(test_label);
+    const cond_raw = try expr.emitExpr(ctx, builder, loop.condition);
+    if (cond_raw.ty != .i1) return error.UnsupportedLogicalOp;
+    try builder.brCond(cond_raw, block_names[do_idx + 1], after_loop);
+
+    try emit_sequence_with_end(ctx, builder, block_names, do_idx + 1, end_idx, inc_label);
+
+    try builder.label(inc_label);
+    try builder.br(test_label);
+}
+
 pub fn emitDoList(
     ctx: *Context,
     builder: anytype,
@@ -185,5 +212,34 @@ pub fn emitDoList(
     const sum = try expr.emitBinary(ctx, builder, .add, var_loaded2, step_loaded2);
     const sum_coerced = try expr.coerce(ctx, builder, sum, config.var_type);
     try builder.store(sum_coerced, var_ptr);
+    try builder.br(test_label);
+}
+
+pub fn emitDoWhileList(
+    ctx: *Context,
+    builder: anytype,
+    stmts: []ast.Stmt,
+    block_names: [][]const u8,
+    label_map: *const std.StringHashMap([]const u8),
+    do_idx: usize,
+    end_idx: usize,
+    after_loop: []const u8,
+    comptime emit_stmt_list_range: anytype,
+) EmitError!void {
+    const stmt = stmts[do_idx];
+    const loop = stmt.node.do_while;
+
+    const test_label = try ctx.nextLabel("do_while_test");
+    const inc_label = try ctx.nextLabel("do_while_inc");
+    try builder.br(test_label);
+
+    try builder.label(test_label);
+    const cond_raw = try expr.emitExpr(ctx, builder, loop.condition);
+    if (cond_raw.ty != .i1) return error.UnsupportedLogicalOp;
+    try builder.brCond(cond_raw, block_names[do_idx + 1], after_loop);
+
+    try emit_stmt_list_range(ctx, builder, stmts, block_names, label_map, do_idx + 1, end_idx, inc_label);
+
+    try builder.label(inc_label);
     try builder.br(test_label);
 }

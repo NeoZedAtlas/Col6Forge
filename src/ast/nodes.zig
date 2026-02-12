@@ -130,6 +130,7 @@ pub const StmtNode = union(enum) {
     pause: void,
     stop: void,
     do_loop: DoLoopStmt,
+    do_while: DoWhileStmt,
     ret: ReturnStmt,
     cont: void,
     entry: EntryStmt,
@@ -339,6 +340,11 @@ pub const DoLoopStmt = struct {
     start: *Expr,
     end: *Expr,
     step: ?*Expr,
+};
+
+pub const DoWhileStmt = struct {
+    end_label: []const u8,
+    condition: *Expr,
 };
 
 pub const ImpliedDo = struct {
