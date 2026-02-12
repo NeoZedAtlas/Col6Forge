@@ -214,6 +214,25 @@ test "emitBinary and emitAdd/Sub/Mul emit arithmetic ops" {
     try testing.expectEqual(IRType.i32, prod.ty);
 }
 
+test "emitBinary floating ne uses unordered comparison" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lhs = ValueRef{ .name = "1.0", .ty = .f32, .is_ptr = false };
+    const rhs = ValueRef{ .name = "2.0", .ty = .f32, .is_ptr = false };
+    const cmp = try emitBinary(&harness.ctx, &builder, .ne, lhs, rhs);
+    try testing.expectEqual(IRType.i1, cmp.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "fcmp une float") != null);
+}
+
 test "emitCall and emitArgPointer build call args" {
     const testing = std.testing;
     const allocator = testing.allocator;

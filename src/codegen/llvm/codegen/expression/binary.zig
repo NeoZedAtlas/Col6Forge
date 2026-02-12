@@ -45,7 +45,7 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
 
             const cmp_real = try ctx.nextTemp();
             const cmp_imag = try ctx.nextTemp();
-            const pred = if (op == .eq) "oeq" else "one";
+            const pred = if (op == .eq) "oeq" else "une";
             try builder.compare(cmp_real, "fcmp", pred, elem_ty, left_real, right_real);
             try builder.compare(cmp_imag, "fcmp", pred, elem_ty, left_imag, right_imag);
 
@@ -81,7 +81,7 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
             const is_int = common_ty == .i32;
             const pred = switch (op) {
                 .eq => if (is_int) "eq" else "oeq",
-                .ne => if (is_int) "ne" else "one",
+                .ne => if (is_int) "ne" else "une",
                 .lt => if (is_int) "slt" else "olt",
                 .le => if (is_int) "sle" else "ole",
                 .gt => if (is_int) "sgt" else "ogt",

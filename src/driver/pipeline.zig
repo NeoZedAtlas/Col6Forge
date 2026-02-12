@@ -19,8 +19,9 @@ pub fn runPipeline(allocator: std.mem.Allocator, input_path: []const u8, emit: E
     const contents = try std.fs.cwd().readFileAlloc(allocator, input_path, max_size);
     defer allocator.free(contents);
 
-    const logical_lines = try source_form.normalize(.fixed, allocator, contents);
-    defer source_form.freeLogicalLines(.fixed, allocator, logical_lines);
+    const form = detectSourceForm(input_path);
+    const logical_lines = try source_form.normalize(form, allocator, contents);
+    defer source_form.freeLogicalLines(form, allocator, logical_lines);
 
     const output = try emitLlvmModule(allocator, input_path, logical_lines);
     return .{ .output = output };
@@ -32,10 +33,23 @@ pub fn runPipelineToWriter(allocator: std.mem.Allocator, input_path: []const u8,
     const contents = try std.fs.cwd().readFileAlloc(allocator, input_path, max_size);
     defer allocator.free(contents);
 
-    const logical_lines = try source_form.normalize(.fixed, allocator, contents);
-    defer source_form.freeLogicalLines(.fixed, allocator, logical_lines);
+    const form = detectSourceForm(input_path);
+    const logical_lines = try source_form.normalize(form, allocator, contents);
+    defer source_form.freeLogicalLines(form, allocator, logical_lines);
 
     try emitLlvmModuleToWriter(allocator, input_path, logical_lines, writer);
+}
+
+fn detectSourceForm(input_path: []const u8) source_form.SourceForm {
+    const ext = std.fs.path.extension(input_path);
+    if (std.ascii.eqlIgnoreCase(ext, ".f90") or
+        std.ascii.eqlIgnoreCase(ext, ".f95") or
+        std.ascii.eqlIgnoreCase(ext, ".f03") or
+        std.ascii.eqlIgnoreCase(ext, ".f08"))
+    {
+        return .free;
+    }
+    return .fixed;
 }
 
 fn emitLlvmModule(allocator: std.mem.Allocator, input_path: []const u8, logical_lines: []logical_line.LogicalLine) ![]const u8 {

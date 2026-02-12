@@ -238,6 +238,7 @@ const Options = struct {
     gfortran_path: []const u8,
     timeout_ms: u64,
     keep_workdir: bool,
+    translate_f90: bool,
     show_help: bool,
     emit: Col6Forge.EmitKind,
 };
@@ -312,6 +313,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var gfortran_path: []const u8 = defaultGfortran();
     var timeout_ms: u64 = 120_000;
     var keep_workdir = false;
+    var translate_f90 = false;
     var show_help = false;
     var emit: Col6Forge.EmitKind = .llvm;
 
@@ -356,6 +358,10 @@ fn parseArgs(args: []const []const u8) !Options {
             keep_workdir = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--translate-f90")) {
+            translate_f90 = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
             continue;
@@ -370,6 +376,7 @@ fn parseArgs(args: []const []const u8) !Options {
         .gfortran_path = gfortran_path,
         .timeout_ms = timeout_ms,
         .keep_workdir = keep_workdir,
+        .translate_f90 = translate_f90,
         .show_help = show_help,
         .emit = emit,
     };
@@ -377,7 +384,7 @@ fn parseArgs(args: []const []const u8) !Options {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: blas_runner [--blas-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--gfortran <path>] [--timeout <ms>] [--keep-workdir]
+        \\Usage: blas_runner [--blas-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--gfortran <path>] [--timeout <ms>] [--keep-workdir] [--translate-f90]
         \\Options:
         \\  --blas-dir <dir>     BLAS root directory (default: tests/BLAS-3.12.0)
         \\  --testing-dir <dir>  BLAS testing directory (default: <blas-dir>/TESTING)
@@ -385,6 +392,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  --gfortran <path>    Path to gfortran executable
         \\  --timeout <ms>       Per-command timeout in milliseconds (default: 120000)
         \\  --keep-workdir       Keep zig-cache/blas-verify/<case> even on success
+        \\  --translate-f90      Attempt translating BLAS .f90 sources (experimental)
         \\  -emit-llvm           Emit LLVM IR (default)
         \\  -h, --help           Show this help
         \\Examples:
@@ -464,7 +472,7 @@ fn processCase(
         return false;
     }
 
-    const trans_sources = try selectTranslatedSources(allocator, source_paths);
+    const trans_sources = try selectTranslatedSources(allocator, source_paths, options.translate_f90);
     defer allocator.free(trans_sources);
 
     const ll_paths = try translateSources(allocator, ll_dir, trans_sources, options.emit);
@@ -579,14 +587,26 @@ fn shouldSkipFallbackForDriver(path: []const u8) bool {
     return std.ascii.eqlIgnoreCase(std.fs.path.basename(path), "xerbla.f");
 }
 
-fn isTranslatedKernelSource(path: []const u8) bool {
+fn isTranslatedKernelSource(path: []const u8, translate_f90: bool) bool {
     const base = std.fs.path.basename(path);
     if (isFortranFallbackSource(path)) return false;
     if (base.len == 0) return false;
+    if (std.mem.startsWith(u8, base, "._")) return false;
     const ext = std.fs.path.extension(base);
-    if (!std.ascii.eqlIgnoreCase(ext, ".f")) return false;
-    // Translate all fixed-form Fortran BLAS sources (.f). .f90 files stay on fallback side.
+    var is_fortran_src = std.ascii.eqlIgnoreCase(ext, ".f");
+    if (!is_fortran_src and translate_f90 and std.ascii.eqlIgnoreCase(ext, ".f90")) {
+        is_fortran_src = isSupportedTranslatedF90(base);
+    }
+    if (!is_fortran_src) return false;
+    // Translate BLAS Fortran sources (.f by default, optionally .f90).
     return true;
+}
+
+fn isSupportedTranslatedF90(base: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(base, "srotg.f90") or
+        std.ascii.eqlIgnoreCase(base, "drotg.f90") or
+        std.ascii.eqlIgnoreCase(base, "crotg.f90") or
+        std.ascii.eqlIgnoreCase(base, "zrotg.f90");
 }
 
 fn sourceInList(list: []const []const u8, path: []const u8) bool {
@@ -596,13 +616,17 @@ fn sourceInList(list: []const []const u8, path: []const u8) bool {
     return false;
 }
 
-fn selectTranslatedSources(allocator: std.mem.Allocator, source_paths: []const []const u8) ![]const []const u8 {
+fn selectTranslatedSources(
+    allocator: std.mem.Allocator,
+    source_paths: []const []const u8,
+    translate_f90: bool,
+) ![]const []const u8 {
     var selected: std.ArrayList([]const u8) = .empty;
     // source_paths[0] is the test driver (always kept on gfortran side).
     var i: usize = 1;
     while (i < source_paths.len) : (i += 1) {
         const src = source_paths[i];
-        if (!isTranslatedKernelSource(src)) continue;
+        if (!isTranslatedKernelSource(src, translate_f90)) continue;
         if (shouldSkipFallbackForDriver(src)) continue;
         try selected.append(allocator, src);
     }
@@ -941,6 +965,19 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
 }
 
 fn cleanupWorkDir(path: []const u8) void {
+    if (builtin.os.tag == .windows) {
+        // Avoid rare std.fs.deleteTree NTSTATUS panics on Windows paths.
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        defer _ = gpa.deinit();
+        const allocator = gpa.allocator();
+        const args = [_][]const u8{ "cmd.exe", "/C", "rmdir", "/S", "/Q", path };
+        var child = std.process.Child.init(&args, allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+        _ = child.spawnAndWait() catch {};
+        return;
+    }
     std.fs.cwd().deleteTree(path) catch {};
 }
 
