@@ -30,11 +30,14 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     const has_alt_return = ctx.unit.kind == .subroutine and execution.unitHasAltReturn(ctx.unit);
     var return_ty: ?llvm_types.IRType = null;
     var is_character_function = false;
+    var is_complex_sret_function = false;
     if (ctx.unit.kind == .function) {
         const sym = ctx.findSymbol(ctx.unit.name) orelse return error.UnknownSymbol;
         is_character_function = sym.type_kind == .character;
+        is_complex_sret_function = sym.type_kind == .complex_double;
         if (!is_character_function) {
-            return_ty = llvm_types.typeFromKind(sym.type_kind);
+            const nominal_ret_ty = llvm_types.typeFromKind(sym.type_kind);
+            return_ty = context.fortranAbiReturnType(nominal_ret_ty);
         }
     } else if (has_alt_return) {
         return_ty = .i32;
@@ -50,13 +53,14 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     var arg_names = std.array_list.Managed([]const u8).init(ctx.allocator);
     defer arg_names.deinit();
 
-    if (is_character_function) {
+    const has_hidden_result_arg = is_character_function or is_complex_sret_function;
+    if (has_hidden_result_arg) {
         const result_arg_name = try utils.formatTempName(ctx.allocator, "arg", 0);
         try builder.defineArgPtr(result_arg_name, true);
         try arg_names.append(result_arg_name);
     }
 
-    const arg_offset: usize = if (is_character_function) 1 else 0;
+    const arg_offset: usize = if (has_hidden_result_arg) 1 else 0;
     for (ctx.unit.args, 0..) |_, idx| {
         const arg_index = idx + arg_offset;
         const arg_name = try utils.formatTempName(ctx.allocator, "arg", arg_index);
@@ -66,7 +70,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try builder.defineEnd();
     try builder.entryLabel();
 
-    if (is_character_function) {
+    if (has_hidden_result_arg) {
         const result_ptr_name = arg_names.items[0];
         try ctx.locals.put(ctx.unit.name, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
     }
@@ -88,7 +92,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             std.mem.eql(u8, sym.name, ctx.unit.name);
         if (sym.is_external) continue;
         if (sym.kind == .parameter or sym.kind == .subroutine or (sym.kind == .function and !is_return_symbol)) continue;
-        if (is_character_function and is_return_symbol) continue;
+        if (is_return_symbol and (is_character_function or is_complex_sret_function)) continue;
         if (ctx.locals.contains(sym.name)) continue;
         if (isSaved(&save_info, sym.name)) continue;
         if (sym.type_kind == .character) {

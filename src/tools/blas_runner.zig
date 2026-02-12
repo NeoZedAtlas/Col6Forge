@@ -583,18 +583,9 @@ fn shouldSkipFallbackForDriver(path: []const u8) bool {
     return std.ascii.eqlIgnoreCase(std.fs.path.basename(path), "xerbla.f");
 }
 
-fn isAbiFallbackSource(path: []const u8) bool {
-    const base = std.fs.path.basename(path);
-    return std.ascii.eqlIgnoreCase(base, "cdotc.f") or
-        std.ascii.eqlIgnoreCase(base, "cdotu.f") or
-        std.ascii.eqlIgnoreCase(base, "zdotc.f") or
-        std.ascii.eqlIgnoreCase(base, "zdotu.f");
-}
-
 fn isTranslatedKernelSource(path: []const u8) bool {
     const base = std.fs.path.basename(path);
     if (isFortranFallbackSource(path)) return false;
-    if (isAbiFallbackSource(path)) return false;
     if (base.len == 0) return false;
     const ext = std.fs.path.extension(base);
     if (!std.ascii.eqlIgnoreCase(ext, ".f")) return false;

@@ -267,7 +267,23 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
         }
         const ret_ty = llvm_types.typeFromKind(sym.type_kind);
         const ret_ptr = ctx.locals.get(ctx.unit.name) orelse return error.UnknownSymbol;
+        if (ret_ty == .complex_f64) {
+            // For COMPLEX*16 on x86_64 GNU ABI, the hidden first arg is the return pointer.
+            try builder.retValue(.ptr, ret_ptr.name);
+            return;
+        }
         const ret_val = try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
+        if (ret_ty == .complex_f32) {
+            // For COMPLEX*8 on x86_64 GNU ABI, return value is packed in i64.
+            const pack_slot = try ctx.nextTemp();
+            try builder.alloca(pack_slot, .complex_f32);
+            const pack_ptr = ValueRef{ .name = pack_slot, .ty = .ptr, .is_ptr = true };
+            try builder.store(ret_val, pack_ptr);
+            const packed_tmp = try ctx.nextTemp();
+            try builder.load(packed_tmp, .i64, pack_ptr);
+            try builder.retValue(.i64, packed_tmp);
+            return;
+        }
         try builder.retValue(ret_ty, ret_val.name);
         return;
     }

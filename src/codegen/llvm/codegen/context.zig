@@ -219,7 +219,7 @@ pub const Context = struct {
         const mangled = try utils.mangleName(self.allocator, name);
         if (self.defined.contains(mangled)) return mangled;
         if (self.decls.contains(mangled)) return mangled;
-        const decl = IRDecl{ .ret_type = ret_ty, .sig = "", .varargs = true };
+        const decl = IRDecl{ .ret_type = fortranAbiReturnType(ret_ty), .sig = "", .varargs = true };
         try self.decls.put(mangled, decl);
         return mangled;
     }
@@ -263,3 +263,11 @@ pub const Context = struct {
         return name;
     }
 };
+
+pub fn fortranAbiReturnType(ret_ty: IRType) IRType {
+    return switch (ret_ty) {
+        .complex_f32 => .i64,
+        .complex_f64 => .ptr,
+        else => ret_ty,
+    };
+}

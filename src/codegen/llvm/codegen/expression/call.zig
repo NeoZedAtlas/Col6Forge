@@ -13,44 +13,92 @@ const Context = context.Context;
 const ValueRef = context.ValueRef;
 
 pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
+    const abi_ret_ty = context.fortranAbiReturnType(ret_ty);
+    var complex_result_ptr: ?ValueRef = null;
+
+    if (ret_ty == .complex_f64) {
+        const result_tmp = try ctx.nextTemp();
+        try builder.alloca(result_tmp, .complex_f64);
+        complex_result_ptr = .{ .name = result_tmp, .ty = .ptr, .is_ptr = true };
+    }
+
     var arg_text = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_text.deinit();
     var first = true;
+    if (complex_result_ptr) |result_ptr| {
+        try appendPtrArg(&arg_text, &first, result_ptr.name);
+    }
     for (args) |arg| {
         const ptr = try emitArgPointer(ctx, builder, arg);
-        if (!first) try arg_text.appendSlice(", ");
-        first = false;
-        try arg_text.appendSlice("ptr ");
-        try arg_text.appendSlice(ptr.name);
+        try appendPtrArg(&arg_text, &first, ptr.name);
     }
 
     if (discard or ret_ty == .void) {
-        try builder.call(null, ret_ty, fn_name, arg_text.items);
+        try builder.call(null, abi_ret_ty, fn_name, arg_text.items);
         return .{ .name = "", .ty = ret_ty, .is_ptr = false };
     }
+
+    if (ret_ty == .complex_f32) {
+        const packed_tmp = try ctx.nextTemp();
+        try builder.call(packed_tmp, .i64, fn_name, arg_text.items);
+        return unpackComplexF32Return(ctx, builder, packed_tmp);
+    }
+    if (ret_ty == .complex_f64) {
+        const sret_ptr = complex_result_ptr orelse return error.InvalidAbiState;
+        const call_tmp = try ctx.nextTemp();
+        try builder.call(call_tmp, .ptr, fn_name, arg_text.items);
+        const value_tmp = try ctx.nextTemp();
+        try builder.load(value_tmp, .complex_f64, sret_ptr);
+        return .{ .name = value_tmp, .ty = .complex_f64, .is_ptr = false };
+    }
+
     const tmp = try ctx.nextTemp();
-    try builder.call(tmp, ret_ty, fn_name, arg_text.items);
+    try builder.call(tmp, abi_ret_ty, fn_name, arg_text.items);
     return .{ .name = tmp, .ty = ret_ty, .is_ptr = false };
 }
 
 pub fn emitIndirectCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
+    const abi_ret_ty = context.fortranAbiReturnType(ret_ty);
+    var complex_result_ptr: ?ValueRef = null;
+
+    if (ret_ty == .complex_f64) {
+        const result_tmp = try ctx.nextTemp();
+        try builder.alloca(result_tmp, .complex_f64);
+        complex_result_ptr = .{ .name = result_tmp, .ty = .ptr, .is_ptr = true };
+    }
+
     var arg_text = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_text.deinit();
     var first = true;
+    if (complex_result_ptr) |result_ptr| {
+        try appendPtrArg(&arg_text, &first, result_ptr.name);
+    }
     for (args) |arg| {
         const ptr = try emitArgPointer(ctx, builder, arg);
-        if (!first) try arg_text.appendSlice(", ");
-        first = false;
-        try arg_text.appendSlice("ptr ");
-        try arg_text.appendSlice(ptr.name);
+        try appendPtrArg(&arg_text, &first, ptr.name);
     }
 
     if (discard or ret_ty == .void) {
-        try builder.callIndirect(null, ret_ty, fn_ptr.name, arg_text.items);
+        try builder.callIndirect(null, abi_ret_ty, fn_ptr.name, arg_text.items);
         return .{ .name = "", .ty = ret_ty, .is_ptr = false };
     }
+
+    if (ret_ty == .complex_f32) {
+        const packed_tmp = try ctx.nextTemp();
+        try builder.callIndirect(packed_tmp, .i64, fn_ptr.name, arg_text.items);
+        return unpackComplexF32Return(ctx, builder, packed_tmp);
+    }
+    if (ret_ty == .complex_f64) {
+        const sret_ptr = complex_result_ptr orelse return error.InvalidAbiState;
+        const call_tmp = try ctx.nextTemp();
+        try builder.callIndirect(call_tmp, .ptr, fn_ptr.name, arg_text.items);
+        const value_tmp = try ctx.nextTemp();
+        try builder.load(value_tmp, .complex_f64, sret_ptr);
+        return .{ .name = value_tmp, .ty = .complex_f64, .is_ptr = false };
+    }
+
     const tmp = try ctx.nextTemp();
-    try builder.callIndirect(tmp, ret_ty, fn_ptr.name, arg_text.items);
+    try builder.callIndirect(tmp, abi_ret_ty, fn_ptr.name, arg_text.items);
     return .{ .name = tmp, .ty = ret_ty, .is_ptr = false };
 }
 
@@ -158,4 +206,22 @@ fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
         try builder.allocaArray(ptr_name, .i8, len);
     }
     return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+}
+
+fn appendPtrArg(arg_text: *std.array_list.Managed(u8), first: *bool, ptr_name: []const u8) !void {
+    if (!first.*) try arg_text.appendSlice(", ");
+    first.* = false;
+    try arg_text.appendSlice("ptr ");
+    try arg_text.appendSlice(ptr_name);
+}
+
+fn unpackComplexF32Return(ctx: *Context, builder: anytype, packed_name: []const u8) !ValueRef {
+    const slot_tmp = try ctx.nextTemp();
+    try builder.alloca(slot_tmp, .i64);
+    const slot_ptr = ValueRef{ .name = slot_tmp, .ty = .ptr, .is_ptr = true };
+    const packed_val = ValueRef{ .name = packed_name, .ty = .i64, .is_ptr = false };
+    try builder.store(packed_val, slot_ptr);
+    const value_tmp = try ctx.nextTemp();
+    try builder.load(value_tmp, .complex_f32, slot_ptr);
+    return .{ .name = value_tmp, .ty = .complex_f32, .is_ptr = false };
 }
