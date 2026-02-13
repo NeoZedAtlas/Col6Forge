@@ -29,49 +29,63 @@ const FORTRAN_FALLBACK = [_][]const u8{
     "zlarhs.f",
 };
 
-const DSLINTST_SOURCES = [_][]const u8{
-    "dchkab.f",
-    "ddrvab.f",
-    "derrab.f",
-    "dget08.f",
-    "alaerh.f",
-    "alahd.f",
-    "aladhd.f",
-    "alareq.f",
-    "chkxer.f",
-    "dlarhs.f",
-    "dlatb4.f",
-    "xerbla.f",
-    "dget02.f",
-};
+const XLINTSTS_VARS = [_][]const u8{ "ALINTST", "SCLNTST", "SLINTST" };
+const XLINTSTC_VARS = [_][]const u8{ "ALINTST", "SCLNTST", "CLINTST" };
+const XLINTSTD_VARS = [_][]const u8{ "ALINTST", "DZLNTST", "DLINTST" };
+const XLINTSTZ_VARS = [_][]const u8{ "ALINTST", "DZLNTST", "ZLINTST" };
+const XLINTSTDS_VARS = [_][]const u8{ "DSLINTST" };
+const XLINTSTZC_VARS = [_][]const u8{ "ZCLINTST" };
+const XEIGTSTS_VARS = [_][]const u8{ "SEIGTST", "SCIGTST", "AEIGTST" };
+const XEIGTSTC_VARS = [_][]const u8{ "CEIGTST", "SCIGTST", "AEIGTST" };
+const XEIGTSTD_VARS = [_][]const u8{ "DEIGTST", "DZIGTST", "AEIGTST" };
+const XEIGTSTZ_VARS = [_][]const u8{ "ZEIGTST", "DZIGTST", "AEIGTST" };
 
-const ZCLINTST_SOURCES = [_][]const u8{
-    "zchkab.f",
-    "zdrvab.f",
-    "zerrab.f",
-    "zget08.f",
-    "alaerh.f",
-    "alahd.f",
-    "aladhd.f",
-    "alareq.f",
-    "chkxer.f",
-    "zget02.f",
-    "zlarhs.f",
-    "zlatb4.f",
-    "zsbmv.f",
-    "xerbla.f",
+const ST_INPUTS = [_][]const u8{ "stest.in" };
+const CT_INPUTS = [_][]const u8{ "ctest.in" };
+const DT_INPUTS = [_][]const u8{ "dtest.in" };
+const ZT_INPUTS = [_][]const u8{ "ztest.in" };
+const DST_INPUTS = [_][]const u8{ "dstest.in" };
+const ZCT_INPUTS = [_][]const u8{ "zctest.in" };
+const EIG_INPUTS = [_][]const u8{
+    "nep.in",
+    "sep.in",
+    "svd.in",
+    "sec.in",
+    "sed.in",
+    "sgg.in",
+    "sgd.in",
+    "ssb.in",
+    "ssg.in",
+    "sbal.in",
+    "sbak.in",
+    "sgbal.in",
+    "sgbak.in",
+    "sbb.in",
+    "glm.in",
+    "gqr.in",
+    "gsv.in",
+    "lse.in",
 };
 
 const LapackCase = struct {
     name: []const u8,
     suite_dir: []const u8,
-    input: []const u8,
-    sources: []const []const u8,
+    inputs: []const []const u8,
+    make_vars: []const []const u8,
+    allow_translation: bool,
 };
 
 const ALL_CASES = [_]LapackCase{
-    .{ .name = "xlintstds", .suite_dir = "LIN", .input = "dstest.in", .sources = DSLINTST_SOURCES[0..] },
-    .{ .name = "xlintstzc", .suite_dir = "LIN", .input = "zctest.in", .sources = ZCLINTST_SOURCES[0..] },
+    .{ .name = "xlintsts", .suite_dir = "LIN", .inputs = ST_INPUTS[0..], .make_vars = XLINTSTS_VARS[0..], .allow_translation = false },
+    .{ .name = "xlintstc", .suite_dir = "LIN", .inputs = CT_INPUTS[0..], .make_vars = XLINTSTC_VARS[0..], .allow_translation = false },
+    .{ .name = "xlintstd", .suite_dir = "LIN", .inputs = DT_INPUTS[0..], .make_vars = XLINTSTD_VARS[0..], .allow_translation = false },
+    .{ .name = "xlintstz", .suite_dir = "LIN", .inputs = ZT_INPUTS[0..], .make_vars = XLINTSTZ_VARS[0..], .allow_translation = false },
+    .{ .name = "xlintstds", .suite_dir = "LIN", .inputs = DST_INPUTS[0..], .make_vars = XLINTSTDS_VARS[0..], .allow_translation = true },
+    .{ .name = "xlintstzc", .suite_dir = "LIN", .inputs = ZCT_INPUTS[0..], .make_vars = XLINTSTZC_VARS[0..], .allow_translation = true },
+    .{ .name = "xeigtsts", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTS_VARS[0..], .allow_translation = false },
+    .{ .name = "xeigtstc", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTC_VARS[0..], .allow_translation = false },
+    .{ .name = "xeigtstd", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTD_VARS[0..], .allow_translation = false },
+    .{ .name = "xeigtstz", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTZ_VARS[0..], .allow_translation = false },
 };
 
 const Options = struct {
@@ -328,16 +342,18 @@ fn processCase(
 
     const case_dir = try std.fs.path.join(allocator, &.{ testing_dir, case.suite_dir });
     defer allocator.free(case_dir);
-    const source_paths = try buildSourcePaths(allocator, root_path, case_dir, case.sources);
+
+    const source_names = try resolveCaseSourcesFromMakefile(allocator, case_dir, case.make_vars);
+    defer {
+        for (source_names) |name| allocator.free(name);
+        allocator.free(source_names);
+    }
+
+    const source_paths = try buildSourcePaths(allocator, root_path, case_dir, source_names);
     defer {
         for (source_paths) |p| allocator.free(p);
         allocator.free(source_paths);
     }
-
-    const input_path = try std.fs.path.join(allocator, &.{ testing_dir, case.input });
-    defer allocator.free(input_path);
-    const input_data = try std.fs.cwd().readFileAlloc(allocator, input_path, 64 * 1024 * 1024);
-    defer allocator.free(input_data);
 
     const ref_exe = try buildExePath(allocator, ref_dir, "ref");
     defer allocator.free(ref_exe);
@@ -345,7 +361,8 @@ fn processCase(
         return false;
     }
 
-    const translated_sources = try selectTranslatedSources(allocator, source_paths, options.translate_sources);
+    const enable_translation = options.translate_sources and case.allow_translation;
+    const translated_sources = try selectTranslatedSources(allocator, source_paths, enable_translation);
     defer allocator.free(translated_sources);
     const ll_paths = try translateSources(allocator, ll_dir, translated_sources, options.emit);
     defer {
@@ -359,28 +376,38 @@ fn processCase(
         return false;
     }
 
-    const ref_run = try runProcessCaptureWithInput(allocator, &.{ref_exe}, ref_dir, input_data, options.timeout_ms);
-    defer ref_run.deinit(allocator);
-    if (ref_run.timed_out) {
-        std.debug.print("timeout: reference run {s}\n", .{case.name});
-        return false;
-    }
-    const test_run = try runProcessCaptureWithInput(allocator, &.{test_exe}, test_dir, input_data, options.timeout_ms);
-    defer test_run.deinit(allocator);
-    if (test_run.timed_out) {
-        std.debug.print("timeout: translated run {s}\n", .{case.name});
-        return false;
-    }
+    for (case.inputs, 0..) |input_name, input_idx| {
+        if (case.inputs.len > 1) {
+            std.debug.print("  input [{d}/{d}] {s}\n", .{ input_idx + 1, case.inputs.len, input_name });
+        }
+        const input_rel = try std.fs.path.join(allocator, &.{ testing_dir, input_name });
+        defer allocator.free(input_rel);
+        const input_path = try absolutizePath(allocator, root_path, input_rel);
+        defer allocator.free(input_path);
 
-    const ref_code = exitCode(ref_run.term);
-    const test_code = exitCode(test_run.term);
-    if (ref_code != test_code) {
-        std.debug.print("exit code mismatch: {s} ref={d} test={d}\n", .{ case.name, ref_code, test_code });
-        return false;
-    }
-    if (!outputsEquivalent(ref_run.stdout, test_run.stdout)) {
-        std.debug.print("stdout mismatch: {s}\n", .{case.name});
-        return false;
+        const ref_run = try runProcessCaptureWithInputPath(allocator, ref_exe, ref_dir, input_path, options.timeout_ms);
+        defer ref_run.deinit(allocator);
+        if (ref_run.timed_out) {
+            std.debug.print("timeout: reference run {s} ({s})\n", .{ case.name, input_name });
+            return false;
+        }
+        const test_run = try runProcessCaptureWithInputPath(allocator, test_exe, test_dir, input_path, options.timeout_ms);
+        defer test_run.deinit(allocator);
+        if (test_run.timed_out) {
+            std.debug.print("timeout: translated run {s} ({s})\n", .{ case.name, input_name });
+            return false;
+        }
+
+        const ref_code = exitCode(ref_run.term);
+        const test_code = exitCode(test_run.term);
+        if (ref_code != test_code) {
+            std.debug.print("exit code mismatch: {s} ({s}) ref={d} test={d}\n", .{ case.name, input_name, ref_code, test_code });
+            return false;
+        }
+        if (!outputsEquivalent(ref_run.stdout, test_run.stdout)) {
+            std.debug.print("stdout mismatch: {s} ({s})\n", .{ case.name, input_name });
+            return false;
+        }
     }
 
     if (!options.keep_workdir) cleanupWorkDir(work_rel);
@@ -529,6 +556,105 @@ fn buildSourcePaths(
         out[i] = try absolutizePath(allocator, root_path, rel);
     }
     return out;
+}
+
+fn resolveCaseSourcesFromMakefile(
+    allocator: std.mem.Allocator,
+    suite_dir: []const u8,
+    vars: []const []const u8,
+) ![]const []const u8 {
+    const makefile_path = try std.fs.path.join(allocator, &.{ suite_dir, "Makefile" });
+    defer allocator.free(makefile_path);
+    const makefile_text = try std.fs.cwd().readFileAlloc(allocator, makefile_path, 8 * 1024 * 1024);
+    defer allocator.free(makefile_text);
+
+    var out: std.ArrayList([]const u8) = .empty;
+    var seen: std.StringHashMap(void) = .init(allocator);
+    defer seen.deinit();
+
+    for (vars) |var_name| {
+        const var_sources = try extractMakeVarSources(allocator, makefile_text, var_name);
+        defer allocator.free(var_sources);
+
+        for (var_sources) |src| {
+            if (seen.contains(src)) {
+                allocator.free(src);
+                continue;
+            }
+            try seen.put(src, {});
+            try out.append(allocator, src);
+        }
+    }
+
+    if (out.items.len == 0) return error.NoSourcesResolved;
+    return out.toOwnedSlice(allocator);
+}
+
+fn extractMakeVarSources(
+    allocator: std.mem.Allocator,
+    makefile_text: []const u8,
+    var_name: []const u8,
+) ![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (out.items) |s| allocator.free(s);
+        out.deinit(allocator);
+    }
+
+    var found = false;
+    var in_var = false;
+
+    var lines = std.mem.splitScalar(u8, makefile_text, '\n');
+    while (lines.next()) |line_raw| {
+        const line_no_cr = trimCr(line_raw);
+        const line = std.mem.trim(u8, line_no_cr, " \t");
+        if (line.len == 0) continue;
+
+        if (!in_var) {
+            const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+            const lhs = std.mem.trim(u8, line[0..eq_idx], " \t");
+            if (!std.mem.eql(u8, lhs, var_name)) continue;
+
+            found = true;
+            const rhs = line[eq_idx + 1 ..];
+            const cont = try appendObjectTokensFromLine(allocator, &out, rhs);
+            in_var = cont;
+        } else {
+            const cont = try appendObjectTokensFromLine(allocator, &out, line);
+            in_var = cont;
+            if (!in_var) break;
+        }
+    }
+
+    if (!found) return error.MakeVariableNotFound;
+    return out.toOwnedSlice(allocator);
+}
+
+fn appendObjectTokensFromLine(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList([]const u8),
+    line_raw: []const u8,
+) !bool {
+    var line = std.mem.trim(u8, line_raw, " \t");
+    var continued = false;
+    if (line.len > 0 and line[line.len - 1] == '\\') {
+        line = std.mem.trimRight(u8, line[0 .. line.len - 1], " \t");
+        continued = true;
+    }
+
+    var tok_it = std.mem.tokenizeAny(u8, line, " \t");
+    while (tok_it.next()) |tok| {
+        if (tok.len > 0 and tok[0] == '#') break;
+        if (!std.ascii.endsWithIgnoreCase(tok, ".o")) continue;
+        const src = try objectTokenToFortranSource(allocator, tok);
+        try out.append(allocator, src);
+    }
+    return continued;
+}
+
+fn objectTokenToFortranSource(allocator: std.mem.Allocator, obj_token: []const u8) ![]const u8 {
+    const stem = obj_token[0 .. obj_token.len - 2];
+    return std.fmt.allocPrint(allocator, "{s}.f", .{stem});
 }
 
 fn collectFortranSources(
@@ -842,6 +968,21 @@ const ProcessResult = struct {
     }
 };
 
+fn runProcessCaptureWithInputPath(
+    allocator: std.mem.Allocator,
+    exe_path: []const u8,
+    cwd: ?[]const u8,
+    input_path: []const u8,
+    timeout_ms: u64,
+) !ProcessResult {
+    const cmd = try std.fmt.allocPrint(allocator, "\"{s}\" < \"{s}\"", .{ exe_path, input_path });
+    defer allocator.free(cmd);
+    if (builtin.os.tag == .windows) {
+        return runProcessCaptureWithInput(allocator, &.{ "cmd.exe", "/D", "/C", cmd }, cwd, null, timeout_ms);
+    }
+    return runProcessCaptureWithInput(allocator, &.{ "sh", "-c", cmd }, cwd, null, timeout_ms);
+}
+
 fn runProcessCaptureWithInput(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
@@ -851,7 +992,7 @@ fn runProcessCaptureWithInput(
 ) !ProcessResult {
     var child = std.process.Child.init(argv, allocator);
     child.cwd = cwd;
-    child.stdin_behavior = .Pipe;
+    child.stdin_behavior = if (input == null) .Ignore else .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     try child.spawn();
@@ -863,8 +1004,18 @@ fn runProcessCaptureWithInput(
         monitor = try std.Thread.spawn(.{}, timeoutMonitor, .{ &child, &done, &timed_out, timeout_ms });
     }
 
-    if (child.stdin) |*stdin_file| {
-        if (input) |bytes| try stdin_file.writeAll(bytes);
+    if (input != null) {
+        if (child.stdin) |*stdin_file| {
+            const bytes = input.?;
+            stdin_file.writeAll(bytes) catch |err| switch (err) {
+                error.BrokenPipe, error.Unexpected => {},
+                else => return err,
+            };
+            stdin_file.close();
+            child.stdin = null;
+        }
+    } else if (child.stdin) |*stdin_file| {
+        // Defensive close in case stdlib behavior changes and still creates pipe.
         stdin_file.close();
         child.stdin = null;
     }
