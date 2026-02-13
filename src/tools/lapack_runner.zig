@@ -359,7 +359,9 @@ const RuntimeArtifacts = struct {
 fn prepareRuntimeArtifacts(
     allocator: std.mem.Allocator,
     root_path: []const u8,
+    cwd: []const u8,
     backend: RuntimeBackend,
+    timeout_ms: u64,
 ) !RuntimeArtifacts {
     return switch (backend) {
         .c => blk: {
@@ -381,8 +383,22 @@ fn prepareRuntimeArtifacts(
             }
             break :blk .{ .c_sources = runtime_paths };
         },
-        .zig => {
-            return error.RuntimeBackendUnsupportedForGfortranLink;
+        .zig => blk: {
+            const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime_zig", "f77_runtime.zig" });
+            defer allocator.free(runtime_src);
+            const runtime_obj = try std.fs.path.join(allocator, &.{ cwd, "f77_runtime_zig.o" });
+            errdefer allocator.free(runtime_obj);
+            const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{runtime_obj});
+            defer allocator.free(emit_arg);
+            const cmd = [_][]const u8{ "zig", "build-obj", "-ODebug", emit_arg, runtime_src };
+            const build = try runProcessCaptureWithInput(allocator, &cmd, cwd, null, timeout_ms);
+            defer build.deinit(allocator);
+            if (build.timed_out) return error.RuntimeBackendBuildTimeout;
+            if (!isZeroExit(build.term)) {
+                std.debug.print("zig runtime backend build failed\n{s}\n", .{build.stderr});
+                return error.RuntimeBackendBuildFailed;
+            }
+            break :blk .{ .zig_object = runtime_obj };
         },
     };
 }
@@ -1023,7 +1039,7 @@ fn compileTranslatedCase(
         try trans_objs.append(allocator, obj_path);
     }
 
-    var runtime_artifacts = prepareRuntimeArtifacts(allocator, root_path, runtime_backend) catch |err| {
+    var runtime_artifacts = prepareRuntimeArtifacts(allocator, root_path, cwd, runtime_backend, timeout_ms) catch |err| {
         std.debug.print("runtime backend prepare failed: {s}\n", .{@errorName(err)});
         return false;
     };
@@ -1040,6 +1056,9 @@ fn compileTranslatedCase(
     try link_args.appendSlice(allocator, trans_objs.items);
     try link_args.appendSlice(allocator, &.{ libs.tmg_lib, libs.lapack_lib, libs.blas_lib });
     try runtime_artifacts.appendToArgs(allocator, &link_args);
+    if (runtime_backend == .zig and builtin.os.tag == .windows) {
+        try link_args.append(allocator, "-lntdll");
+    }
 
     const link_res = runProcessCaptureWithInput(allocator, link_args.items, cwd, null, timeout_ms) catch |err| {
         std.debug.print("gfortran link invoke error: {s}\n", .{@errorName(err)});
