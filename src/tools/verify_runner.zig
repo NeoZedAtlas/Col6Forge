@@ -8,6 +8,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Col6Forge = @import("Col6Forge");
 
+const RuntimeBackend = enum {
+    c,
+    zig,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -114,6 +119,7 @@ const Options = struct {
     tests_dir: []const u8,
     filter: ?[]const u8,
     gfortran_path: []const u8,
+    runtime_backend: RuntimeBackend,
     emit: Col6Forge.EmitKind,
     show_help: bool,
     timeout_ms: u64,
@@ -125,6 +131,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var tests_dir_set = false;
     var filter: ?[]const u8 = null;
     var gfortran_path: []const u8 = defaultGfortran();
+    var runtime_backend: RuntimeBackend = .c;
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
     var timeout_ms: u64 = 120_000;
@@ -167,6 +174,12 @@ fn parseArgs(args: []const []const u8) !Options {
             gfortran_path = args[i];
             continue;
         }
+        if (std.mem.eql(u8, arg, "--runtime-backend")) {
+            if (i + 1 >= args.len) return error.MissingRuntimeBackend;
+            i += 1;
+            runtime_backend = try parseRuntimeBackend(args[i]);
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--timeout")) {
             if (i + 1 >= args.len) return error.MissingTimeout;
             i += 1;
@@ -196,6 +209,7 @@ fn parseArgs(args: []const []const u8) !Options {
         .tests_dir = tests_dir,
         .filter = filter,
         .gfortran_path = gfortran_path,
+        .runtime_backend = runtime_backend,
         .emit = emit,
         .show_help = show_help,
         .timeout_ms = timeout_ms,
@@ -205,13 +219,14 @@ fn parseArgs(args: []const []const u8) !Options {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--timeout <ms>] [--jobs <n>] [-emit-llvm]
+        \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--runtime-backend <c|zig>] [--timeout <ms>] [--jobs <n>] [-emit-llvm]
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
         \\  --fcvs21_f95       Use the Fortran 95 adapted NIST F78 suite
         \\  --fcsv78           Use the original NIST F78 suite
         \\  --filter <text>    Only run tests whose relative path contains this text
         \\  --gfortran <path>  Path to gfortran executable (default: gfortran or gfortran.exe)
+        \\  --runtime-backend  Runtime backend: c (default) or zig (experimental)
         \\  --timeout <ms>     Per-test timeout in milliseconds (default: 120000)
         \\  --jobs <n>, -j <n> Parallel job count (default: min(CPU cores, 4))
         \\  -emit-llvm         Emit LLVM IR (default)
@@ -740,26 +755,11 @@ fn processCase(
     defer allocator.free(ref_exe);
     const test_exe = try prepareExePath(allocator, work_dir, "test");
     defer allocator.free(test_exe);
-    const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
-    defer allocator.free(runtime_dir);
-    const runtime_sources = [_][]const u8{
-        "f77_io_core.c",
-        "f77_io_formatted.c",
-        "f77_io_internal.c",
-        "f77_io_control.c",
-        "f77_io_direct.c",
-        "f77_io_unformatted.c",
-        "f77_io_format.c",
-        "f77_complex.c",
+    var runtime_artifacts = prepareRuntimeArtifacts(allocator, root_path, work_dir, options.runtime_backend, options.timeout_ms) catch |err| {
+        log_state.stderr("runtime backend prepare failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+        return false;
     };
-    var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);
-    defer {
-        for (runtime_paths) |path| allocator.free(path);
-        allocator.free(runtime_paths);
-    }
-    for (runtime_sources, 0..) |name, idx| {
-        runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
-    }
+    defer runtime_artifacts.deinit(allocator);
 
     const ir = Col6Forge.runPipeline(allocator, abs_input_path, options.emit) catch |err| {
         try reportPipelineError(log_state, abs_input_path, err);
@@ -830,7 +830,7 @@ fn processCase(
     var compile_args: std.ArrayList([]const u8) = .empty;
     defer compile_args.deinit(allocator);
     try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path });
-    try compile_args.appendSlice(allocator, runtime_paths);
+    try runtime_artifacts.appendToArgs(allocator, &compile_args);
     const our_compile = runProcessCapture(
         allocator,
         compile_args.items,
@@ -1048,6 +1048,89 @@ fn formatDuration(buf: []u8, total_ms: u64) []const u8 {
     const minutes = (total_seconds / 60) % 60;
     const hours = total_seconds / 3600;
     return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hours, minutes, seconds }) catch "00:00:00";
+}
+
+fn parseRuntimeBackend(text: []const u8) !RuntimeBackend {
+    if (std.ascii.eqlIgnoreCase(text, "c")) return .c;
+    if (std.ascii.eqlIgnoreCase(text, "zig")) return .zig;
+    return error.InvalidRuntimeBackend;
+}
+
+const RuntimeArtifacts = struct {
+    c_sources: ?[][]const u8 = null,
+    zig_object: ?[]const u8 = null,
+
+    fn deinit(self: *RuntimeArtifacts, allocator: std.mem.Allocator) void {
+        if (self.c_sources) |paths| {
+            for (paths) |path| allocator.free(path);
+            allocator.free(paths);
+            self.c_sources = null;
+        }
+        if (self.zig_object) |obj| {
+            allocator.free(obj);
+            self.zig_object = null;
+        }
+    }
+
+    fn appendToArgs(self: *const RuntimeArtifacts, allocator: std.mem.Allocator, args: *std.ArrayList([]const u8)) !void {
+        if (self.c_sources) |paths| {
+            try args.appendSlice(allocator, paths);
+        }
+        if (self.zig_object) |obj| {
+            try args.append(allocator, obj);
+        }
+    }
+};
+
+fn prepareRuntimeArtifacts(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    work_dir: []const u8,
+    backend: RuntimeBackend,
+    timeout_ms: u64,
+) !RuntimeArtifacts {
+    return switch (backend) {
+        .c => blk: {
+            const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
+            defer allocator.free(runtime_dir);
+            const runtime_sources = [_][]const u8{
+                "f77_io_core.c",
+                "f77_io_formatted.c",
+                "f77_io_internal.c",
+                "f77_io_control.c",
+                "f77_io_direct.c",
+                "f77_io_unformatted.c",
+                "f77_io_format.c",
+                "f77_complex.c",
+            };
+            var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);
+            for (runtime_sources, 0..) |name, idx| {
+                runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
+            }
+            break :blk .{ .c_sources = runtime_paths };
+        },
+        .zig => blk: {
+            const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime_zig", "f77_runtime.zig" });
+            defer allocator.free(runtime_src);
+            const runtime_obj = try std.fs.path.join(allocator, &.{ work_dir, "f77_runtime_zig.o" });
+            errdefer allocator.free(runtime_obj);
+            const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{runtime_obj});
+            defer allocator.free(emit_arg);
+            const build = try runProcessCapture(
+                allocator,
+                &.{ "zig", "build-obj", "-ODebug", emit_arg, runtime_src },
+                work_dir,
+                timeout_ms,
+            );
+            defer build.deinit(allocator);
+            if (build.timed_out) return error.RuntimeBackendBuildTimeout;
+            if (!isZeroExit(build.term)) {
+                std.debug.print("zig runtime backend build failed\n{s}\n", .{build.stderr});
+                return error.RuntimeBackendBuildFailed;
+            }
+            break :blk .{ .zig_object = runtime_obj };
+        },
+    };
 }
 
 fn defaultJobs() usize {

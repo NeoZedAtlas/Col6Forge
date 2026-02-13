@@ -2,6 +2,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Col6Forge = @import("Col6Forge");
 
+const RuntimeBackend = enum {
+    c,
+    zig,
+};
+
 const INSTALL_EXTRAS = [_][]const u8{
     "lsame.f",
     "slamch.f",
@@ -93,6 +98,7 @@ const Options = struct {
     testing_dir: ?[]const u8,
     filter: ?[]const u8,
     gfortran_path: []const u8,
+    runtime_backend: RuntimeBackend,
     timeout_ms: u64,
     keep_workdir: bool,
     translate_sources: bool,
@@ -202,6 +208,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var testing_dir: ?[]const u8 = null;
     var filter: ?[]const u8 = null;
     var gfortran_path: []const u8 = defaultGfortran();
+    var runtime_backend: RuntimeBackend = .c;
     var timeout_ms: u64 = 300_000;
     var keep_workdir = false;
     var translate_sources = true;
@@ -240,6 +247,12 @@ fn parseArgs(args: []const []const u8) !Options {
             gfortran_path = args[i];
             continue;
         }
+        if (std.mem.eql(u8, arg, "--runtime-backend")) {
+            if (i + 1 >= args.len) return error.MissingRuntimeBackend;
+            i += 1;
+            runtime_backend = try parseRuntimeBackend(args[i]);
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--timeout")) {
             if (i + 1 >= args.len) return error.MissingTimeout;
             i += 1;
@@ -274,6 +287,7 @@ fn parseArgs(args: []const []const u8) !Options {
         .testing_dir = testing_dir,
         .filter = filter,
         .gfortran_path = gfortran_path,
+        .runtime_backend = runtime_backend,
         .timeout_ms = timeout_ms,
         .keep_workdir = keep_workdir,
         .translate_sources = translate_sources,
@@ -285,12 +299,13 @@ fn parseArgs(args: []const []const u8) !Options {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: lapack_runner [--lapack-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--gfortran <path>] [--timeout <ms>] [--keep-workdir]
+        \\Usage: lapack_runner [--lapack-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--gfortran <path>] [--runtime-backend <c|zig>] [--timeout <ms>] [--keep-workdir]
         \\Options:
         \\  --lapack-dir <dir>      LAPACK-lite root directory (default: tests/LAPACK-lite-3.1.1)
         \\  --testing-dir <dir>     Testing directory (default: <lapack-dir>/TESTING)
         \\  --filter <text>         Run only case names containing text (e.g. xlintstds)
         \\  --gfortran <path>       Path to gfortran executable
+        \\  --runtime-backend       Runtime backend: c (default) or zig (experimental)
         \\  --timeout <ms>          Per-command timeout milliseconds (default: 300000)
         \\  --keep-workdir          Keep zig-cache/lapack-verify/<case> and /common
         \\  --translate-sources     Translate eligible case sources (default)
@@ -307,6 +322,69 @@ fn printUsage(file: std.fs.File) !void {
 
 fn defaultGfortran() []const u8 {
     return if (builtin.os.tag == .windows) "gfortran.exe" else "gfortran";
+}
+
+fn parseRuntimeBackend(text: []const u8) !RuntimeBackend {
+    if (std.ascii.eqlIgnoreCase(text, "c")) return .c;
+    if (std.ascii.eqlIgnoreCase(text, "zig")) return .zig;
+    return error.InvalidRuntimeBackend;
+}
+
+const RuntimeArtifacts = struct {
+    c_sources: ?[][]const u8 = null,
+    zig_object: ?[]const u8 = null,
+
+    fn deinit(self: *RuntimeArtifacts, allocator: std.mem.Allocator) void {
+        if (self.c_sources) |paths| {
+            for (paths) |path| allocator.free(path);
+            allocator.free(paths);
+            self.c_sources = null;
+        }
+        if (self.zig_object) |obj| {
+            allocator.free(obj);
+            self.zig_object = null;
+        }
+    }
+
+    fn appendToArgs(self: *const RuntimeArtifacts, allocator: std.mem.Allocator, args: *std.ArrayList([]const u8)) !void {
+        if (self.c_sources) |paths| {
+            try args.appendSlice(allocator, paths);
+        }
+        if (self.zig_object) |obj| {
+            try args.append(allocator, obj);
+        }
+    }
+};
+
+fn prepareRuntimeArtifacts(
+    allocator: std.mem.Allocator,
+    root_path: []const u8,
+    backend: RuntimeBackend,
+) !RuntimeArtifacts {
+    return switch (backend) {
+        .c => blk: {
+            const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
+            defer allocator.free(runtime_dir);
+            const runtime_sources = [_][]const u8{
+                "f77_io_core.c",
+                "f77_io_formatted.c",
+                "f77_io_internal.c",
+                "f77_io_control.c",
+                "f77_io_direct.c",
+                "f77_io_unformatted.c",
+                "f77_io_format.c",
+                "f77_complex.c",
+            };
+            var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);
+            for (runtime_sources, 0..) |name, idx| {
+                runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
+            }
+            break :blk .{ .c_sources = runtime_paths };
+        },
+        .zig => {
+            return error.RuntimeBackendUnsupportedForGfortranLink;
+        },
+    };
 }
 
 fn collectCases(allocator: std.mem.Allocator, filter: ?[]const u8) ![]LapackCase {
@@ -393,6 +471,7 @@ fn processCase(
         translated.sources,
         translated.ll_paths,
         libs,
+        options.runtime_backend,
         options.timeout_ms,
         test_dir,
         options.strict_translate,
@@ -862,6 +941,7 @@ fn compileTranslatedCase(
     translated_sources: []const []const u8,
     ll_paths: []const []const u8,
     libs: SupportLibs,
+    runtime_backend: RuntimeBackend,
     timeout_ms: u64,
     cwd: []const u8,
     strict_translate: bool,
@@ -943,26 +1023,11 @@ fn compileTranslatedCase(
         try trans_objs.append(allocator, obj_path);
     }
 
-    const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
-    defer allocator.free(runtime_dir);
-    const runtime_names = [_][]const u8{
-        "f77_io_core.c",
-        "f77_io_formatted.c",
-        "f77_io_internal.c",
-        "f77_io_control.c",
-        "f77_io_direct.c",
-        "f77_io_unformatted.c",
-        "f77_io_format.c",
-        "f77_complex.c",
+    var runtime_artifacts = prepareRuntimeArtifacts(allocator, root_path, runtime_backend) catch |err| {
+        std.debug.print("runtime backend prepare failed: {s}\n", .{@errorName(err)});
+        return false;
     };
-    var runtime_paths = try allocator.alloc([]const u8, runtime_names.len);
-    defer {
-        for (runtime_paths) |p| allocator.free(p);
-        allocator.free(runtime_paths);
-    }
-    for (runtime_names, 0..) |name, i| {
-        runtime_paths[i] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
-    }
+    defer runtime_artifacts.deinit(allocator);
 
     var link_args: std.ArrayList([]const u8) = .empty;
     defer link_args.deinit(allocator);
@@ -974,7 +1039,7 @@ fn compileTranslatedCase(
     try link_args.appendSlice(allocator, fallback_objs.items);
     try link_args.appendSlice(allocator, trans_objs.items);
     try link_args.appendSlice(allocator, &.{ libs.tmg_lib, libs.lapack_lib, libs.blas_lib });
-    try link_args.appendSlice(allocator, runtime_paths);
+    try runtime_artifacts.appendToArgs(allocator, &link_args);
 
     const link_res = runProcessCaptureWithInput(allocator, link_args.items, cwd, null, timeout_ms) catch |err| {
         std.debug.print("gfortran link invoke error: {s}\n", .{@errorName(err)});
