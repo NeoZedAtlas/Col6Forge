@@ -501,6 +501,20 @@ fn prepareRuntimeArtifacts(
             break :blk .{ .c_sources = runtime_paths };
         },
         .zig => blk: {
+            const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
+            defer allocator.free(runtime_dir);
+            const runtime_sources = [_][]const u8{
+                "f77_io_formatted.c",
+                "f77_io_internal.c",
+                "f77_io_control.c",
+                "f77_io_direct.c",
+                "f77_io_unformatted.c",
+            };
+            var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);
+            for (runtime_sources, 0..) |name, idx| {
+                runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
+            }
+
             const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime_zig", "f77_runtime.zig" });
             defer allocator.free(runtime_src);
             const runtime_obj = try std.fs.path.join(allocator, &.{ cwd, "f77_runtime_zig.o" });
@@ -515,7 +529,10 @@ fn prepareRuntimeArtifacts(
                 std.debug.print("zig runtime backend build failed\n{s}\n", .{build.stderr});
                 return error.RuntimeBackendBuildFailed;
             }
-            break :blk .{ .zig_object = runtime_obj };
+            break :blk .{
+                .c_sources = runtime_paths,
+                .zig_object = runtime_obj,
+            };
         },
     };
 }
