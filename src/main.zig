@@ -1,7 +1,18 @@
 const std = @import("std");
 const Col6Forge = @import("Col6Forge");
 
-pub fn main() !void {
+pub fn main() void {
+    runMain() catch |err| {
+        var stderr = std.fs.File.stderr();
+        var buffer: [512]u8 = undefined;
+        var writer = stderr.writer(&buffer);
+        writer.interface.print("internal error: {s}\n", .{@errorName(err)}) catch {};
+        writer.interface.flush() catch {};
+        std.process.exit(1);
+    };
+}
+
+fn runMain() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -10,8 +21,7 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     const parsed = parseArgs(allocator, args) catch |err| {
-        try printUsage(std.fs.File.stderr());
-        return err;
+        failWithUsage(err);
     };
     if (parsed.show_help) {
         try printUsage(std.fs.File.stdout());
@@ -25,8 +35,7 @@ pub fn main() !void {
         if (use_null_output) {
             var null_writer = std.Io.null_writer;
             Col6Forge.runPipelineToWriter(allocator, parsed.input_path, parsed.emit, &null_writer) catch |err| {
-                try reportPipelineError(parsed.input_path, err);
-                return err;
+                failPipeline(parsed.input_path, err);
             };
             return;
         }
@@ -38,8 +47,7 @@ pub fn main() !void {
             const CountingWriter = std.Io.GenericWriter(*u128, error{}, countWrite);
             var count_writer = CountingWriter{ .context = &count };
             Col6Forge.runPipelineToWriter(allocator, parsed.input_path, parsed.emit, &count_writer) catch |err| {
-                try reportPipelineError(parsed.input_path, err);
-                return err;
+                failPipeline(parsed.input_path, err);
             };
             var msg_buf: [64]u8 = undefined;
             const msg = try std.fmt.bufPrint(&msg_buf, "emitted {d} bytes\n", .{count});
@@ -50,13 +58,11 @@ pub fn main() !void {
         defer output_file.close();
         var file_writer = FileOutputWriter{ .file = &output_file, .allocator = allocator };
         Col6Forge.runPipelineToWriter(allocator, parsed.input_path, parsed.emit, &file_writer) catch |err| {
-            try reportPipelineError(parsed.input_path, err);
-            return err;
+            failPipeline(parsed.input_path, err);
         };
     } else {
         const result = Col6Forge.runPipeline(allocator, parsed.input_path, parsed.emit) catch |err| {
-            try reportPipelineError(parsed.input_path, err);
-            return err;
+            failPipeline(parsed.input_path, err);
         };
         defer allocator.free(result.output);
         try std.fs.File.stdout().writeAll(result.output);
@@ -154,6 +160,27 @@ fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
     var writer = stderr.writer(&buffer);
     try Col6Forge.writePipelineErrorDiagnostic(&writer.interface, input_path, err);
     try writer.interface.flush();
+}
+
+fn failPipeline(input_path: []const u8, err: anyerror) noreturn {
+    reportPipelineError(input_path, err) catch {
+        var stderr = std.fs.File.stderr();
+        var buffer: [512]u8 = undefined;
+        var writer = stderr.writer(&buffer);
+        writer.interface.print("pipeline error: {s} ({s})\n", .{ input_path, @errorName(err) }) catch {};
+        writer.interface.flush() catch {};
+    };
+    std.process.exit(1);
+}
+
+fn failWithUsage(err: anyerror) noreturn {
+    printUsage(std.fs.File.stderr()) catch {};
+    var stderr = std.fs.File.stderr();
+    var buffer: [256]u8 = undefined;
+    var writer = stderr.writer(&buffer);
+    writer.interface.print("error: {s}\n", .{@errorName(err)}) catch {};
+    writer.interface.flush() catch {};
+    std.process.exit(2);
 }
 
 fn printUsage(file: std.fs.File) !void {

@@ -17,6 +17,9 @@ pub fn writeDiagnostic(writer: *std.Io.Writer, diag: Diagnostic) !void {
         diag.code,
         diag.message,
     });
+    if (diag.code.len > 0) {
+        try writer.print("help: see docs/errors.md#{s}\n", .{diag.code});
+    }
     if (diag.line_text.len == 0) return;
     try writer.print("{s}\n", .{diag.line_text});
     const caret_col = if (diag.column == 0) 1 else diag.column;
