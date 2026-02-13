@@ -772,7 +772,7 @@ fn translateSources(
         const ll_path = try std.fs.path.join(allocator, &.{ ll_dir, ll_name });
 
         const ir = Col6Forge.runPipeline(allocator, src_path, emit) catch |err| {
-            std.debug.print("pipeline error: {s} ({s})\n", .{ src_path, @errorName(err) });
+            printPipelineError(src_path, err);
             allocator.free(ll_path);
             return err;
         };
@@ -1105,6 +1105,17 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
     var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(contents);
+}
+
+fn printPipelineError(path: []const u8, err: anyerror) void {
+    var stderr = std.fs.File.stderr();
+    var buffer: [4096]u8 = undefined;
+    var writer = stderr.writer(&buffer);
+    Col6Forge.writePipelineErrorDiagnostic(&writer.interface, path, err) catch |write_err| {
+        std.debug.print("pipeline error: {s} ({s}, {s})\n", .{ path, @errorName(err), @errorName(write_err) });
+        return;
+    };
+    writer.interface.flush() catch {};
 }
 
 fn cleanupWorkDir(path: []const u8) void {

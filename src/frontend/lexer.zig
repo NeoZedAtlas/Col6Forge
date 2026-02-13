@@ -31,6 +31,28 @@ pub const Token = struct {
     range: source_mod.SourceRange,
 };
 
+pub const LexDiagnostic = struct {
+    line: usize,
+    column: usize,
+    code: []const u8,
+    message: []const u8,
+    line_text: []const u8,
+};
+
+const DiagStorage = struct {
+    line: usize = 1,
+    column: usize = 1,
+    code_buf: [16]u8 = [_]u8{0} ** 16,
+    code_len: usize = 0,
+    message_buf: [256]u8 = [_]u8{0} ** 256,
+    message_len: usize = 0,
+    line_buf: [512]u8 = [_]u8{0} ** 512,
+    line_len: usize = 0,
+};
+
+threadlocal var diag_storage: DiagStorage = .{};
+threadlocal var has_diag: bool = false;
+
 pub fn tokenKindName(kind: TokenKind) []const u8 {
     return switch (kind) {
         .identifier => "identifier",
@@ -53,6 +75,7 @@ pub fn tokenKindName(kind: TokenKind) []const u8 {
 }
 
 pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLine) ![]Token {
+    has_diag = false;
     var tokens = std.array_list.Managed(Token).init(allocator);
     const text = line.text;
     var i: usize = 0;
@@ -100,7 +123,10 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
             if (i < text.len and (text[i] == 'H' or text[i] == 'h')) {
                 const count = parseDecimal(text[start..digit_end]);
                 i += 1;
-                if (i + count > text.len) return error.InvalidHollerith;
+                if (i + count > text.len) {
+                    setLexDiagnostic(line, start, "CF1002", "invalid Hollerith literal");
+                    return error.InvalidHollerith;
+                }
                 const end = i + count;
                 try tokens.append(makeToken(line, .hollerith, start, end));
                 i = end;
@@ -194,10 +220,25 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
                 try tokens.append(makeToken(line, .slash, i, i + 1));
                 i += 1;
             },
-            else => return error.UnexpectedCharacter,
+            else => {
+                setLexDiagnostic(line, i, "CF1001", "unexpected character");
+                return error.UnexpectedCharacter;
+            },
         }
     }
     return tokens.toOwnedSlice();
+}
+
+pub fn takeDiagnostic() ?LexDiagnostic {
+    if (!has_diag) return null;
+    has_diag = false;
+    return .{
+        .line = diag_storage.line,
+        .column = diag_storage.column,
+        .code = diag_storage.code_buf[0..diag_storage.code_len],
+        .message = diag_storage.message_buf[0..diag_storage.message_len],
+        .line_text = diag_storage.line_buf[0..diag_storage.line_len],
+    };
 }
 
 fn makeToken(line: logical_line.LogicalLine, kind: TokenKind, start: usize, end: usize) Token {
@@ -276,6 +317,25 @@ fn isDotOperatorStart(text: []const u8, dot_index: usize) bool {
     return k > j and m < text.len and text[m] == '.';
 }
 
+fn setLexDiagnostic(line: logical_line.LogicalLine, index: usize, code: []const u8, message: []const u8) void {
+    const pos = logical_line.mapIndexToPos(line, index);
+    var next: DiagStorage = .{
+        .line = if (pos.line == 0) 1 else pos.line,
+        .column = if (pos.column == 0) 1 else pos.column,
+    };
+    next.code_len = copyTrunc(&next.code_buf, code);
+    next.message_len = copyTrunc(&next.message_buf, message);
+    next.line_len = copyTrunc(&next.line_buf, line.text);
+    diag_storage = next;
+    has_diag = true;
+}
+
+fn copyTrunc(buf: []u8, text: []const u8) usize {
+    const n = @min(buf.len, text.len);
+    @memcpy(buf[0..n], text[0..n]);
+    return n;
+}
+
 test "lexLogicalLine tokenizes basic expression" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -335,4 +395,3 @@ test "lexLogicalLine keeps COMPLEX*16 declarator name as identifier" {
         try testing.expectEqual(expected[idx], tok.kind);
     }
 }
-

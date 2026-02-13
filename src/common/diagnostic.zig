@@ -4,15 +4,17 @@ pub const Diagnostic = struct {
     file_path: []const u8,
     line: usize,
     column: usize,
+    code: []const u8,
     message: []const u8,
     line_text: []const u8,
 };
 
 pub fn writeDiagnostic(writer: *std.Io.Writer, diag: Diagnostic) !void {
-    try writer.print("{s}:{d}:{d}: error: {s}\n", .{
+    try writer.print("{s}:{d}:{d}: error[{s}]: {s}\n", .{
         diag.file_path,
         diag.line,
         diag.column,
+        diag.code,
         diag.message,
     });
     if (diag.line_text.len == 0) return;

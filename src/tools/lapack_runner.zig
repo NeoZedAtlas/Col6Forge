@@ -33,19 +33,19 @@ const XLINTSTS_VARS = [_][]const u8{ "ALINTST", "SCLNTST", "SLINTST" };
 const XLINTSTC_VARS = [_][]const u8{ "ALINTST", "SCLNTST", "CLINTST" };
 const XLINTSTD_VARS = [_][]const u8{ "ALINTST", "DZLNTST", "DLINTST" };
 const XLINTSTZ_VARS = [_][]const u8{ "ALINTST", "DZLNTST", "ZLINTST" };
-const XLINTSTDS_VARS = [_][]const u8{ "DSLINTST" };
-const XLINTSTZC_VARS = [_][]const u8{ "ZCLINTST" };
+const XLINTSTDS_VARS = [_][]const u8{"DSLINTST"};
+const XLINTSTZC_VARS = [_][]const u8{"ZCLINTST"};
 const XEIGTSTS_VARS = [_][]const u8{ "SEIGTST", "SCIGTST", "AEIGTST" };
 const XEIGTSTC_VARS = [_][]const u8{ "CEIGTST", "SCIGTST", "AEIGTST" };
 const XEIGTSTD_VARS = [_][]const u8{ "DEIGTST", "DZIGTST", "AEIGTST" };
 const XEIGTSTZ_VARS = [_][]const u8{ "ZEIGTST", "DZIGTST", "AEIGTST" };
 
-const ST_INPUTS = [_][]const u8{ "stest.in" };
-const CT_INPUTS = [_][]const u8{ "ctest.in" };
-const DT_INPUTS = [_][]const u8{ "dtest.in" };
-const ZT_INPUTS = [_][]const u8{ "ztest.in" };
-const DST_INPUTS = [_][]const u8{ "dstest.in" };
-const ZCT_INPUTS = [_][]const u8{ "zctest.in" };
+const ST_INPUTS = [_][]const u8{"stest.in"};
+const CT_INPUTS = [_][]const u8{"ctest.in"};
+const DT_INPUTS = [_][]const u8{"dtest.in"};
+const ZT_INPUTS = [_][]const u8{"ztest.in"};
+const DST_INPUTS = [_][]const u8{"dstest.in"};
+const ZCT_INPUTS = [_][]const u8{"zctest.in"};
 const EIG_INPUTS = [_][]const u8{
     "nep.in",
     "sep.in",
@@ -827,10 +827,11 @@ fn translateSources(
         const ir = Col6Forge.runPipeline(allocator, src_path, emit) catch |err| {
             allocator.free(ll_path);
             if (strict_translate) {
-                std.debug.print("pipeline error: {s} ({s})\n", .{ src_path, @errorName(err) });
+                printPipelineError(src_path, err);
                 return err;
             }
-            std.debug.print("pipeline fallback: {s} ({s})\n", .{ src_path, @errorName(err) });
+            std.debug.print("pipeline fallback: {s}\n", .{src_path});
+            printPipelineError(src_path, err);
             continue;
         };
         defer allocator.free(ir.output);
@@ -1003,6 +1004,17 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
     var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(contents);
+}
+
+fn printPipelineError(path: []const u8, err: anyerror) void {
+    var stderr = std.fs.File.stderr();
+    var buffer: [4096]u8 = undefined;
+    var writer = stderr.writer(&buffer);
+    Col6Forge.writePipelineErrorDiagnostic(&writer.interface, path, err) catch |write_err| {
+        std.debug.print("pipeline error: {s} ({s}, {s})\n", .{ path, @errorName(err), @errorName(write_err) });
+        return;
+    };
+    writer.interface.flush() catch {};
 }
 
 fn cleanupWorkDir(path: []const u8) void {

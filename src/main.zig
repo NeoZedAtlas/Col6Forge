@@ -91,7 +91,6 @@ const FileOutputWriter = struct {
     }
 };
 
-
 const ParsedArgs = struct {
     input_path: []const u8,
     output_path: ?[]const u8,
@@ -153,29 +152,7 @@ fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
-    switch (err) {
-        error.FileNotFound => {
-            try Col6Forge.writeDiagnostic(&writer.interface, .{
-                .file_path = input_path,
-                .line = 1,
-                .column = 1,
-                .message = "input file not found",
-                .line_text = "",
-            });
-        },
-        else => {
-            const err_name = @errorName(err);
-            const message = try std.fmt.allocPrint(std.heap.page_allocator, "pipeline error: {s}", .{err_name});
-            defer std.heap.page_allocator.free(message);
-            try Col6Forge.writeDiagnostic(&writer.interface, .{
-                .file_path = input_path,
-                .line = 1,
-                .column = 1,
-                .message = message,
-                .line_text = "",
-            });
-        },
-    }
+    try Col6Forge.writePipelineErrorDiagnostic(&writer.interface, input_path, err);
     try writer.interface.flush();
 }
 
@@ -195,17 +172,17 @@ test "args parsing" {
     const allocator = testing.allocator;
 
     try testing.expectError(error.MissingInputFile, parseArgs(allocator, &[_][]const u8{"col6forge"}));
-    try testing.expectError(error.MissingOutputPath, parseArgs(allocator, &[_][]const u8{"col6forge", "-o"}));
-    try testing.expectError(error.UnknownFlag, parseArgs(allocator, &[_][]const u8{"col6forge", "-bogus", "file.f"}));
-    try testing.expectError(error.TooManyInputs, parseArgs(allocator, &[_][]const u8{"col6forge", "a.f", "b.f"}));
+    try testing.expectError(error.MissingOutputPath, parseArgs(allocator, &[_][]const u8{ "col6forge", "-o" }));
+    try testing.expectError(error.UnknownFlag, parseArgs(allocator, &[_][]const u8{ "col6forge", "-bogus", "file.f" }));
+    try testing.expectError(error.TooManyInputs, parseArgs(allocator, &[_][]const u8{ "col6forge", "a.f", "b.f" }));
 
-    const help = try parseArgs(allocator, &[_][]const u8{"col6forge", "-h", "-o", "out.ll"});
+    const help = try parseArgs(allocator, &[_][]const u8{ "col6forge", "-h", "-o", "out.ll" });
     try testing.expect(help.show_help);
     try testing.expectEqualStrings("", help.input_path);
     try testing.expectEqualStrings("out.ll", help.output_path.?);
     try testing.expectEqual(Col6Forge.EmitKind.llvm, help.emit);
 
-    const parsed = try parseArgs(allocator, &[_][]const u8{"col6forge", "-emit-llvm", "input.f"});
+    const parsed = try parseArgs(allocator, &[_][]const u8{ "col6forge", "-emit-llvm", "input.f" });
     try testing.expect(!parsed.show_help);
     try testing.expectEqualStrings("input.f", parsed.input_path);
     try testing.expect(parsed.output_path == null);

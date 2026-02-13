@@ -4,6 +4,7 @@ const fixed_form = @import("../fixed_form.zig");
 const logical_line = @import("../logical_line.zig");
 const lexer = @import("../lexer.zig");
 const context = @import("context.zig");
+const parse_diag = @import("diagnostic.zig");
 const decl = @import("decl.zig");
 const expr = @import("expr.zig");
 const stmt = @import("stmt/mod.zig");
@@ -18,6 +19,7 @@ const Stmt = ast.Stmt;
 const LineParser = context.LineParser;
 
 pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.LogicalLine) !Program {
+    parse_diag.clear();
     var parser = Parser{
         .arena = arena_allocator,
         .lines = lines,
@@ -49,15 +51,17 @@ const Parser = struct {
 
     fn parseProgramUnit(self: *Parser) !ProgramUnit {
         if (self.index >= self.lines.len) return error.UnexpectedEOF;
-        errdefer {
-            const line = self.lines[self.index];
-            std.debug.print("parse error near line {d}: {s}\n", .{ line.span.start_line, line.text });
-        }
         const header_line = self.lines[self.index];
-        const header_tokens = try lexer.lexLogicalLine(self.arena, header_line);
+        const header_tokens = lexer.lexLogicalLine(self.arena, header_line) catch |err| {
+            setLexerOrLineDiagnostic(header_line, err);
+            return err;
+        };
         defer self.arena.free(header_tokens);
         var lp = LineParser.init(header_line, header_tokens);
-        const header = try parseProgramUnitHeader(self.arena, &lp, &self.block_data_counter);
+        const header = parseProgramUnitHeader(self.arena, &lp, &self.block_data_counter) catch |err| {
+            setParseDiagnosticFromStream(header_line, lp, err);
+            return err;
+        };
         self.index += 1;
 
         var decls = std.array_list.Managed(Decl).init(self.arena);
@@ -71,7 +75,10 @@ const Parser = struct {
         }
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
-            const tokens = try lexer.lexLogicalLine(self.arena, line);
+            const tokens = lexer.lexLogicalLine(self.arena, line) catch |err| {
+                setLexerOrLineDiagnostic(line, err);
+                return err;
+            };
             defer self.arena.free(tokens);
             var stmt_lp = LineParser.init(line, tokens);
             if (decls.items.len == 0 and stmts.items.len == 0) {
@@ -89,7 +96,10 @@ const Parser = struct {
                 break;
             }
             if (decl.isDeclarationStart(stmt_lp)) {
-                const decl_node = try decl.parseDecl(&stmt_lp, self.arena);
+                const decl_node = decl.parseDecl(&stmt_lp, self.arena) catch |err| {
+                    setParseDiagnosticFromStream(line, stmt_lp, err);
+                    return err;
+                };
                 if (decl_node == .parameter) {
                     try recordParamInts(&param_ints, decl_node.parameter.assigns);
                     try recordParamStrings(&param_strings, decl_node.parameter.assigns);
@@ -99,7 +109,12 @@ const Parser = struct {
                 self.index += 1;
                 continue;
             }
-            const stmt_node = try stmt.parseStatement(self.arena, self.lines, &self.index, &do_ctx, &param_ints, &param_strings, &array_names);
+            const stmt_node = stmt.parseStatement(self.arena, self.lines, &self.index, &do_ctx, &param_ints, &param_strings, &array_names) catch |err| {
+                const err_line = lineAtIndexOrLast(self.lines, self.index, line);
+                const err_col = if (err_line.segments.len > 0) err_line.segments[0].column else 1;
+                setParseDiagnosticForLine(err_line, err_col, err);
+                return err;
+            };
             try stmts.append(stmt_node);
         }
 
@@ -232,6 +247,51 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
         return .{ .type_kind = .double_precision, .char_len = null };
     }
     return null;
+}
+
+fn lineAtIndexOrLast(lines: []logical_line.LogicalLine, idx: usize, fallback: logical_line.LogicalLine) logical_line.LogicalLine {
+    if (lines.len == 0) return fallback;
+    if (idx < lines.len) return lines[idx];
+    return lines[lines.len - 1];
+}
+
+fn setLexerOrLineDiagnostic(line: logical_line.LogicalLine, err: anyerror) void {
+    if (lexer.takeDiagnostic()) |lex_diag| {
+        parse_diag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
+        return;
+    }
+    setParseDiagnosticForLine(line, 1, err);
+}
+
+fn setParseDiagnosticFromStream(line: logical_line.LogicalLine, lp: LineParser, err: anyerror) void {
+    var column: usize = 1;
+    if (lp.index < lp.tokens.len) {
+        column = lp.tokens[lp.index].column;
+    } else if (lp.tokens.len > 0) {
+        column = lp.tokens[lp.tokens.len - 1].range.end.column;
+    }
+    setParseDiagnosticForLine(line, column, err);
+}
+
+fn setParseDiagnosticForLine(line: logical_line.LogicalLine, column: usize, err: anyerror) void {
+    const info = parseErrorInfo(err);
+    parse_diag.set(line.span.start_line, column, info.code, info.message, line.text);
+}
+
+fn parseErrorInfo(err: anyerror) struct { code: []const u8, message: []const u8 } {
+    return switch (err) {
+        error.UnexpectedToken => .{ .code = "CF2001", .message = "unexpected token in statement" },
+        error.UnexpectedEOF => .{ .code = "CF2002", .message = "unexpected end of file" },
+        error.ExpectedProgramUnit => .{ .code = "CF2003", .message = "expected PROGRAM/SUBROUTINE/FUNCTION/BLOCK DATA" },
+        error.MissingName => .{ .code = "CF2004", .message = "missing required identifier" },
+        error.ExpectedPrecision => .{ .code = "CF2005", .message = "expected PRECISION after DOUBLE" },
+        error.UnsupportedComplexKind => .{ .code = "CF2006", .message = "unsupported COMPLEX kind; use COMPLEX*8 or COMPLEX*16" },
+        error.UnknownType => .{ .code = "CF2007", .message = "unknown type in declaration" },
+        error.ExpectedEndIf => .{ .code = "CF2008", .message = "IF block is missing END IF/ENDIF" },
+        error.DeclarationInIfBlock => .{ .code = "CF2009", .message = "declaration is not allowed inside IF executable block" },
+        error.EndDoWithoutDo => .{ .code = "CF2010", .message = "END DO/ENDDO found without matching DO" },
+        else => .{ .code = "CF2099", .message = "parser failed to understand source" },
+    };
 }
 
 fn isStandaloneEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {

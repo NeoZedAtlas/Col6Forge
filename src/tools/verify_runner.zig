@@ -475,29 +475,7 @@ fn reportPipelineError(log_state: *LogState, input_path: []const u8, err: anyerr
     var writer = stderr.writer(&buffer);
     log_state.lock();
     defer log_state.unlock();
-    switch (err) {
-        error.FileNotFound => {
-            try Col6Forge.writeDiagnostic(&writer.interface, .{
-                .file_path = input_path,
-                .line = 1,
-                .column = 1,
-                .message = "input file not found",
-                .line_text = "",
-            });
-        },
-        else => {
-            const err_name = @errorName(err);
-            const message = try std.fmt.allocPrint(std.heap.page_allocator, "pipeline error: {s}", .{err_name});
-            defer std.heap.page_allocator.free(message);
-            try Col6Forge.writeDiagnostic(&writer.interface, .{
-                .file_path = input_path,
-                .line = 1,
-                .column = 1,
-                .message = message,
-                .line_text = "",
-            });
-        },
-    }
+    try Col6Forge.writePipelineErrorDiagnostic(&writer.interface, input_path, err);
     try writer.interface.flush();
 }
 
@@ -887,7 +865,7 @@ fn processCase(
     try cleanupFortranScratchFiles(abs_case_dir);
     const ref_run = runProcessCapture(
         allocator,
-        &.{ ref_exe },
+        &.{ref_exe},
         abs_case_dir,
         ref_run_timeout,
     ) catch |err| {
@@ -911,7 +889,7 @@ fn processCase(
     try cleanupFortranScratchFiles(abs_case_dir);
     const test_run = runProcessCapture(
         allocator,
-        &.{ test_exe },
+        &.{test_exe},
         abs_case_dir,
         test_run_timeout,
     ) catch |err| {
