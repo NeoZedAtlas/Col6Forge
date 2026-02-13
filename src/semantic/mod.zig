@@ -96,3 +96,71 @@ test "semantic declaration error reports declaration source line" {
     try testing.expect(std.mem.eql(u8, diag.code, "CF3103"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "CHARACTER*0 A"));
 }
+
+test "semantic declaration error reports IMPLICIT declaration source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      IMPLICIT CHARACTER*0 (A-Z)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidCharLen, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expectEqual(@as(usize, 7), diag.column);
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3103"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "IMPLICIT CHARACTER*0 (A-Z)"));
+}
+
+test "semantic declaration error reports header declaration source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      CHARACTER*0 FUNCTION F()\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidCharLen, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 1), diag.line);
+    try testing.expectEqual(@as(usize, 7), diag.column);
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3103"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "CHARACTER*0 FUNCTION F()"));
+}
+
+test "semantic declaration number-too-long uses declaration source and specific code" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*9223372036854775808 A\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.NumberTooLong, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expectEqual(@as(usize, 7), diag.column);
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3106"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "CHARACTER*9223372036854775808 A"));
+}

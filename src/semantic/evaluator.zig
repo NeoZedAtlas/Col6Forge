@@ -69,8 +69,13 @@ fn parseInt(text: []const u8) !i64 {
         out += 1;
     }
     return std.fmt.parseInt(i64, buffer[0..out], 10) catch |err| {
-        std.debug.print("invalid integer literal: {s}\n", .{text});
-        return err;
+        switch (err) {
+            error.Overflow => return error.NumberTooLong,
+            else => {
+                std.debug.print("invalid integer literal: {s}\n", .{text});
+                return err;
+            },
+        }
     };
 }
 
