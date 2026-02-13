@@ -76,16 +76,16 @@ const LapackCase = struct {
 };
 
 const ALL_CASES = [_]LapackCase{
-    .{ .name = "xlintsts", .suite_dir = "LIN", .inputs = ST_INPUTS[0..], .make_vars = XLINTSTS_VARS[0..], .allow_translation = false },
-    .{ .name = "xlintstc", .suite_dir = "LIN", .inputs = CT_INPUTS[0..], .make_vars = XLINTSTC_VARS[0..], .allow_translation = false },
-    .{ .name = "xlintstd", .suite_dir = "LIN", .inputs = DT_INPUTS[0..], .make_vars = XLINTSTD_VARS[0..], .allow_translation = false },
-    .{ .name = "xlintstz", .suite_dir = "LIN", .inputs = ZT_INPUTS[0..], .make_vars = XLINTSTZ_VARS[0..], .allow_translation = false },
+    .{ .name = "xlintsts", .suite_dir = "LIN", .inputs = ST_INPUTS[0..], .make_vars = XLINTSTS_VARS[0..], .allow_translation = true },
+    .{ .name = "xlintstc", .suite_dir = "LIN", .inputs = CT_INPUTS[0..], .make_vars = XLINTSTC_VARS[0..], .allow_translation = true },
+    .{ .name = "xlintstd", .suite_dir = "LIN", .inputs = DT_INPUTS[0..], .make_vars = XLINTSTD_VARS[0..], .allow_translation = true },
+    .{ .name = "xlintstz", .suite_dir = "LIN", .inputs = ZT_INPUTS[0..], .make_vars = XLINTSTZ_VARS[0..], .allow_translation = true },
     .{ .name = "xlintstds", .suite_dir = "LIN", .inputs = DST_INPUTS[0..], .make_vars = XLINTSTDS_VARS[0..], .allow_translation = true },
     .{ .name = "xlintstzc", .suite_dir = "LIN", .inputs = ZCT_INPUTS[0..], .make_vars = XLINTSTZC_VARS[0..], .allow_translation = true },
-    .{ .name = "xeigtsts", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTS_VARS[0..], .allow_translation = false },
-    .{ .name = "xeigtstc", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTC_VARS[0..], .allow_translation = false },
-    .{ .name = "xeigtstd", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTD_VARS[0..], .allow_translation = false },
-    .{ .name = "xeigtstz", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTZ_VARS[0..], .allow_translation = false },
+    .{ .name = "xeigtsts", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTS_VARS[0..], .allow_translation = true },
+    .{ .name = "xeigtstc", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTC_VARS[0..], .allow_translation = true },
+    .{ .name = "xeigtstd", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTD_VARS[0..], .allow_translation = true },
+    .{ .name = "xeigtstz", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTZ_VARS[0..], .allow_translation = true },
 };
 
 const Options = struct {
@@ -96,6 +96,7 @@ const Options = struct {
     timeout_ms: u64,
     keep_workdir: bool,
     translate_sources: bool,
+    strict_translate: bool,
     emit: Col6Forge.EmitKind,
     show_help: bool,
 };
@@ -204,6 +205,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var timeout_ms: u64 = 300_000;
     var keep_workdir = false;
     var translate_sources = true;
+    var strict_translate = false;
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
 
@@ -256,6 +258,10 @@ fn parseArgs(args: []const []const u8) !Options {
             translate_sources = false;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--strict-translate")) {
+            strict_translate = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
             continue;
@@ -271,6 +277,7 @@ fn parseArgs(args: []const []const u8) !Options {
         .timeout_ms = timeout_ms,
         .keep_workdir = keep_workdir,
         .translate_sources = translate_sources,
+        .strict_translate = strict_translate,
         .emit = emit,
         .show_help = show_help,
     };
@@ -286,8 +293,9 @@ fn printUsage(file: std.fs.File) !void {
         \\  --gfortran <path>       Path to gfortran executable
         \\  --timeout <ms>          Per-command timeout milliseconds (default: 300000)
         \\  --keep-workdir          Keep zig-cache/lapack-verify/<case> and /common
-        \\  --translate-sources     Translate LIN proto case sources (default)
-        \\  --no-translate-sources  Keep LIN proto case sources on gfortran side
+        \\  --translate-sources     Translate eligible case sources (default)
+        \\  --no-translate-sources  Keep case sources on gfortran side
+        \\  --strict-translate      Fail when any source translation fails (default: best-effort fallback)
         \\  -emit-llvm              Emit LLVM IR (default)
         \\  -h, --help              Show this help
         \\Examples:
@@ -362,17 +370,33 @@ fn processCase(
     }
 
     const enable_translation = options.translate_sources and case.allow_translation;
-    const translated_sources = try selectTranslatedSources(allocator, source_paths, enable_translation);
-    defer allocator.free(translated_sources);
-    const ll_paths = try translateSources(allocator, ll_dir, translated_sources, options.emit);
+    const candidate_sources = try selectTranslatedSources(allocator, source_paths, enable_translation);
+    defer allocator.free(candidate_sources);
+    const translated = try translateSources(allocator, ll_dir, candidate_sources, options.emit, options.strict_translate);
     defer {
-        for (ll_paths) |p| allocator.free(p);
-        allocator.free(ll_paths);
+        allocator.free(translated.sources);
+        for (translated.ll_paths) |p| allocator.free(p);
+        allocator.free(translated.ll_paths);
+    }
+    if (enable_translation) {
+        std.debug.print("  translated {d}/{d} source files\n", .{ translated.sources.len, candidate_sources.len });
     }
 
     const test_exe = try buildExePath(allocator, test_dir, "test");
     defer allocator.free(test_exe);
-    if (!try compileTranslatedCase(allocator, root_path, gfortran_cmd, test_exe, source_paths, translated_sources, ll_paths, libs, options.timeout_ms, test_dir)) {
+    if (!try compileTranslatedCase(
+        allocator,
+        root_path,
+        gfortran_cmd,
+        test_exe,
+        source_paths,
+        translated.sources,
+        translated.ll_paths,
+        libs,
+        options.timeout_ms,
+        test_dir,
+        options.strict_translate,
+    )) {
         return false;
     }
 
@@ -772,18 +796,25 @@ fn shouldTranslate(path: []const u8) bool {
     return std.ascii.eqlIgnoreCase(ext, ".f") or std.ascii.eqlIgnoreCase(ext, ".f90");
 }
 
+const TranslateResult = struct {
+    sources: []const []const u8,
+    ll_paths: []const []const u8,
+};
+
 fn translateSources(
     allocator: std.mem.Allocator,
     ll_dir: []const u8,
     source_paths: []const []const u8,
     emit: Col6Forge.EmitKind,
-) ![]const []const u8 {
-    var ll_paths = try allocator.alloc([]const u8, source_paths.len);
-    var produced: usize = 0;
+    strict_translate: bool,
+) !TranslateResult {
+    var ll_buf: std.ArrayList([]const u8) = .empty;
     errdefer {
-        for (ll_paths[0..produced]) |path| allocator.free(path);
-        allocator.free(ll_paths);
+        for (ll_buf.items) |p| allocator.free(p);
+        ll_buf.deinit(allocator);
     }
+    var src_buf: std.ArrayList([]const u8) = .empty;
+    errdefer src_buf.deinit(allocator);
 
     for (source_paths, 0..) |src_path, idx| {
         const base = std.fs.path.basename(src_path);
@@ -794,17 +825,24 @@ fn translateSources(
         const ll_path = try std.fs.path.join(allocator, &.{ ll_dir, ll_name });
 
         const ir = Col6Forge.runPipeline(allocator, src_path, emit) catch |err| {
-            std.debug.print("pipeline error: {s} ({s})\n", .{ src_path, @errorName(err) });
             allocator.free(ll_path);
-            return err;
+            if (strict_translate) {
+                std.debug.print("pipeline error: {s} ({s})\n", .{ src_path, @errorName(err) });
+                return err;
+            }
+            std.debug.print("pipeline fallback: {s} ({s})\n", .{ src_path, @errorName(err) });
+            continue;
         };
         defer allocator.free(ir.output);
 
         try writeFile(ll_path, ir.output);
-        ll_paths[idx] = ll_path;
-        produced += 1;
+        try src_buf.append(allocator, src_path);
+        try ll_buf.append(allocator, ll_path);
     }
-    return ll_paths;
+    return .{
+        .sources = try src_buf.toOwnedSlice(allocator),
+        .ll_paths = try ll_buf.toOwnedSlice(allocator),
+    };
 }
 
 fn sourceInList(list: []const []const u8, path: []const u8) bool {
@@ -825,6 +863,7 @@ fn compileTranslatedCase(
     libs: SupportLibs,
     timeout_ms: u64,
     cwd: []const u8,
+    strict_translate: bool,
 ) !bool {
     const obj_dir = try std.fs.path.join(allocator, &.{ cwd, "obj-test-case" });
     defer allocator.free(obj_dir);
@@ -863,7 +902,6 @@ fn compileTranslatedCase(
         const obj_name = try std.fmt.allocPrint(allocator, "t_{d}.o", .{idx});
         defer allocator.free(obj_name);
         const obj_path = try std.fs.path.join(allocator, &.{ obj_dir, obj_name });
-        try trans_objs.append(allocator, obj_path);
 
         const cmd = [_][]const u8{ "zig", "cc", "-O0", "-c", "-o", obj_path, ll_path };
         const res = runProcessCaptureWithInput(allocator, &cmd, cwd, null, timeout_ms) catch |err| {
@@ -872,9 +910,36 @@ fn compileTranslatedCase(
         };
         defer res.deinit(allocator);
         if (res.timed_out or !isZeroExit(res.term)) {
-            std.debug.print("translated compile failed ({s})\n{s}\n", .{ ll_path, res.stderr });
-            return false;
+            if (strict_translate) {
+                std.debug.print("translated compile failed ({s})\n{s}\n", .{ ll_path, res.stderr });
+                allocator.free(obj_path);
+                return false;
+            }
+            const src_path = translated_sources[idx];
+            std.debug.print("translated compile fallback: {s}\n", .{src_path});
+
+            const fb_name = try std.fmt.allocPrint(allocator, "tfb_{d}.o", .{idx});
+            defer allocator.free(fb_name);
+            const fb_obj = try std.fs.path.join(allocator, &.{ obj_dir, fb_name });
+            const fb_cmd = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", fb_obj, src_path };
+            const fb_res = runProcessCaptureWithInput(allocator, &fb_cmd, cwd, null, timeout_ms) catch |err| {
+                std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+                allocator.free(obj_path);
+                allocator.free(fb_obj);
+                return false;
+            };
+            defer fb_res.deinit(allocator);
+            if (fb_res.timed_out or !isZeroExit(fb_res.term)) {
+                std.debug.print("translated fallback compile failed ({s})\n{s}\n", .{ src_path, fb_res.stderr });
+                allocator.free(obj_path);
+                allocator.free(fb_obj);
+                return false;
+            }
+            allocator.free(obj_path);
+            try fallback_objs.append(allocator, fb_obj);
+            continue;
         }
+        try trans_objs.append(allocator, obj_path);
     }
 
     const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
