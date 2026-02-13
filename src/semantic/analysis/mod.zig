@@ -69,6 +69,37 @@ fn semanticErrorInfo(err: anyerror) struct { code: []const u8, message: []const 
         error.PowerUnsupported => .{ .code = "CF3104", .message = "unsupported POWER expression in semantic fold" },
         error.UnsupportedImpliedDo => .{ .code = "CF3105", .message = "unsupported implied DO in semantic analysis" },
         error.NumberTooLong => .{ .code = "CF3106", .message = "numeric literal too long for semantic evaluator" },
+        error.UnexpectedTypeDecl => .{ .code = "CF3107", .message = "unexpected type declaration in specification resolver" },
         else => .{ .code = "CF3199", .message = "semantic analysis failed" },
     };
+}
+
+test "semantic UnexpectedTypeDecl maps to CF3107 with declaration source" {
+    const testing = std.testing;
+
+    var known_function_types = std.StringHashMap(ast.TypeKind).init(testing.allocator);
+    defer known_function_types.deinit();
+
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &.{},
+        .decls = &.{},
+        .decl_sources = &.{},
+        .stmts = &.{},
+    };
+    var ctx = context.Context.init(testing.allocator, unit, &known_function_types);
+    ctx.current_decl_source = .{
+        .line = 3,
+        .column = 7,
+        .text = "INTEGER X",
+    };
+
+    diag.clear();
+    recordSemanticError(&ctx, error.UnexpectedTypeDecl);
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), got.line);
+    try testing.expectEqual(@as(usize, 7), got.column);
+    try testing.expect(std.mem.eql(u8, got.code, "CF3107"));
+    try testing.expect(std.mem.eql(u8, got.line_text, "INTEGER X"));
 }

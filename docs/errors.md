@@ -150,6 +150,12 @@ look up `CF2001` in this file.
 - Meaning: numeric literal too long for compile-time evaluator.
 - Typical fix: reduce literal magnitude/length or avoid const-eval path.
 
+## CF3107
+
+- Stage: semantic analysis
+- Meaning: unexpected type declaration reached specification-declaration resolver path.
+- Typical fix: report as compiler bug with minimal reproducer.
+
 ## CF3199
 
 - Stage: semantic analysis (catch-all)
