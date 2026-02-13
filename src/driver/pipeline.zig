@@ -140,7 +140,7 @@ fn emitLlvmModule(
 ) ![]const u8 {
     if (logical_lines.len == 0) {
         return codegen.emitModule(allocator, .{ .units = &.{} }, .{ .units = &.{} }, input_path) catch |err| {
-            setDefaultDiagnostic(input_path, contents, "CF4001", "code generation failed", err);
+            setCodegenDiagnostic(input_path, contents, err);
             return err;
         };
     }
@@ -151,11 +151,11 @@ fn emitLlvmModule(
         return err;
     };
     const sem = semantic.analyzeProgram(arena.allocator(), program) catch |err| {
-        setDefaultDiagnostic(input_path, contents, "CF3001", "semantic analysis failed", err);
+        setSemanticDiagnostic(input_path, contents, err);
         return err;
     };
     return codegen.emitModule(allocator, program, sem, input_path) catch |err| {
-        setDefaultDiagnostic(input_path, contents, "CF4001", "code generation failed", err);
+        setCodegenDiagnostic(input_path, contents, err);
         return err;
     };
 }
@@ -169,7 +169,7 @@ fn emitLlvmModuleToWriter(
 ) !void {
     if (logical_lines.len == 0) {
         return codegen.emitModuleToWriter(writer, allocator, .{ .units = &.{} }, .{ .units = &.{} }, input_path) catch |err| {
-            setDefaultDiagnostic(input_path, contents, "CF4001", "code generation failed", err);
+            setCodegenDiagnostic(input_path, contents, err);
             return err;
         };
     }
@@ -180,11 +180,11 @@ fn emitLlvmModuleToWriter(
         return err;
     };
     const sem = semantic.analyzeProgram(arena.allocator(), program) catch |err| {
-        setDefaultDiagnostic(input_path, contents, "CF3001", "semantic analysis failed", err);
+        setSemanticDiagnostic(input_path, contents, err);
         return err;
     };
     return codegen.emitModuleToWriter(writer, allocator, program, sem, input_path) catch |err| {
-        setDefaultDiagnostic(input_path, contents, "CF4001", "code generation failed", err);
+        setCodegenDiagnostic(input_path, contents, err);
         return err;
     };
 }
@@ -212,6 +212,41 @@ fn setParseDiagnostic(
     const line_no: usize = if (logical_lines.len > 0) logical_lines[0].span.start_line else 1;
     const line_text = sourceLineAt(contents, line_no);
     setDefaultDiagnosticAt(input_path, line_no, 1, line_text, "CF2000", "failed to parse source", err);
+}
+
+fn setSemanticDiagnostic(input_path: []const u8, contents: []const u8, err: anyerror) void {
+    if (semantic.takeDiagnostic()) |sem_info| {
+        const raw_line = sourceLineAt(contents, sem_info.line);
+        const line_text = if (raw_line.len > 0) raw_line else sem_info.line_text;
+        setLastDiagnostic(
+            input_path,
+            sem_info.line,
+            sem_info.column,
+            sem_info.code,
+            sem_info.message,
+            line_text,
+        );
+        return;
+    }
+    setDefaultDiagnostic(input_path, contents, "CF3199", "semantic analysis failed", err);
+}
+
+fn setCodegenDiagnostic(input_path: []const u8, contents: []const u8, err: anyerror) void {
+    if (codegen.takeDiagnostic()) |cg_info| {
+        const raw_line = sourceLineAt(contents, cg_info.line);
+        const line_text = if (raw_line.len > 0) raw_line else cg_info.line_text;
+        setLastDiagnostic(
+            input_path,
+            cg_info.line,
+            cg_info.column,
+            cg_info.code,
+            cg_info.message,
+            line_text,
+        );
+        return;
+    }
+    const info = codegen.diagnostic.codegenErrorInfo(err);
+    setDefaultDiagnostic(input_path, contents, info.code, info.message, err);
 }
 
 fn setDefaultDiagnostic(input_path: []const u8, contents: []const u8, code: []const u8, base_message: []const u8, err: anyerror) void {

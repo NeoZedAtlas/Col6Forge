@@ -6,6 +6,10 @@ const symbols_mod = @import("resolve_symbols.zig");
 const ResolveError = expressions.ResolveError;
 
 pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
+    const prev_stmt = self.current_stmt;
+    self.setCurrentStmt(stmt);
+    defer self.current_stmt = prev_stmt;
+
     switch (stmt.node) {
         .assignment => |assign| {
             try expressions.resolveExpr(self, assign.target);

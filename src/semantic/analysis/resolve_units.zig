@@ -27,11 +27,17 @@ pub const Resolver = struct {
         }
         try symbols_mod.installUnitSymbol(ctx);
         try symbols_mod.installDummyArgs(ctx);
-        for (ctx.unit.decls) |decl| {
+        for (ctx.unit.decls, 0..) |decl, decl_idx| {
+            if (decl_idx < ctx.unit.decl_sources.len) {
+                ctx.current_decl_source = ctx.unit.decl_sources[decl_idx];
+            } else {
+                ctx.current_decl_source = null;
+            }
             switch (decl) {
                 .type_decl => |type_decl| try decls.applyTypeDecl(ctx, type_decl),
                 else => try specs.applySpec(ctx, decl),
             }
+            ctx.current_decl_source = null;
         }
         for (ctx.unit.stmts) |stmt| {
             try resolveStmtScope(ctx, stmt);

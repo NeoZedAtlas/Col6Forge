@@ -14,6 +14,7 @@ const Program = ast.Program;
 const ProgramUnitKind = ast.ProgramUnitKind;
 const ProgramUnit = ast.ProgramUnit;
 const Decl = ast.Decl;
+const DeclSource = ast.DeclSource;
 const Stmt = ast.Stmt;
 
 const LineParser = context.LineParser;
@@ -65,6 +66,7 @@ const Parser = struct {
         self.index += 1;
 
         var decls = std.array_list.Managed(Decl).init(self.arena);
+        var decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
         var stmts = std.array_list.Managed(Stmt).init(self.arena);
         var do_ctx = stmt.DoContext.init(self.arena);
         var param_ints = std.StringHashMap(i64).init(self.arena);
@@ -72,6 +74,7 @@ const Parser = struct {
         var array_names = std.StringHashMap(array_info.ArrayInfo).init(self.arena);
         if (header.type_decl) |type_decl| {
             try decls.append(type_decl);
+            try decl_sources.append(sourceFromLine(header_line));
         }
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
@@ -106,15 +109,17 @@ const Parser = struct {
                 }
                 try recordArrayNames(&array_names, decl_node, &param_ints);
                 try decls.append(decl_node);
+                try decl_sources.append(sourceFromLine(line));
                 self.index += 1;
                 continue;
             }
-            const stmt_node = stmt.parseStatement(self.arena, self.lines, &self.index, &do_ctx, &param_ints, &param_strings, &array_names) catch |err| {
+            var stmt_node = stmt.parseStatement(self.arena, self.lines, &self.index, &do_ctx, &param_ints, &param_strings, &array_names) catch |err| {
                 const err_line = lineAtIndexOrLast(self.lines, self.index, line);
                 const err_col = if (err_line.segments.len > 0) err_line.segments[0].column else 1;
                 setParseDiagnosticForLine(err_line, err_col, err);
                 return err;
             };
+            stampStmtSource(&stmt_node, line);
             try stmts.append(stmt_node);
         }
 
@@ -123,6 +128,7 @@ const Parser = struct {
             .name = header.name,
             .args = header.args,
             .decls = try decls.toOwnedSlice(),
+            .decl_sources = try decl_sources.toOwnedSlice(),
             .stmts = try stmts.toOwnedSlice(),
         };
     }
@@ -255,6 +261,14 @@ fn lineAtIndexOrLast(lines: []logical_line.LogicalLine, idx: usize, fallback: lo
     return lines[lines.len - 1];
 }
 
+fn sourceFromLine(line: logical_line.LogicalLine) DeclSource {
+    return .{
+        .line = line.span.start_line,
+        .column = if (line.segments.len > 0) line.segments[0].column else 1,
+        .text = line.text,
+    };
+}
+
 fn setLexerOrLineDiagnostic(line: logical_line.LogicalLine, err: anyerror) void {
     if (lexer.takeDiagnostic()) |lex_diag| {
         parse_diag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
@@ -276,6 +290,18 @@ fn setParseDiagnosticFromStream(line: logical_line.LogicalLine, lp: LineParser, 
 fn setParseDiagnosticForLine(line: logical_line.LogicalLine, column: usize, err: anyerror) void {
     const info = parseErrorInfo(err);
     parse_diag.set(line.span.start_line, column, info.code, info.message, line.text);
+}
+
+fn stampStmtSource(stmt_node: *ast.Stmt, line: logical_line.LogicalLine) void {
+    if (stmt_node.source_line == 0) {
+        stmt_node.source_line = line.span.start_line;
+    }
+    if (stmt_node.source_column == 0) {
+        stmt_node.source_column = if (line.segments.len > 0) line.segments[0].column else 1;
+    }
+    if (stmt_node.source_text.len == 0) {
+        stmt_node.source_text = line.text;
+    }
 }
 
 fn parseErrorInfo(err: anyerror) struct { code: []const u8, message: []const u8 } {
@@ -464,6 +490,7 @@ fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {
                 .name = entry.name,
                 .args = entry.args,
                 .decls = unit.decls,
+                .decl_sources = unit.decl_sources,
                 .stmts = unit.stmts[idx..],
             };
             try units.append(entry_unit);

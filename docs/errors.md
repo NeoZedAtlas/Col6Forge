@@ -114,14 +114,248 @@ look up `CF2001` in this file.
 - Meaning: parser failed on unsupported or malformed construct.
 - Typical fix: simplify statement or check unsupported syntax against project scope.
 
-## CF3001
+## CF3101
 
 - Stage: semantic analysis
-- Meaning: semantic checking failed.
-- Typical fix: inspect symbols/types/usages around the reported statement and resolve mismatches.
+- Meaning: semantic pass cannot enter the program unit scope.
+- Typical fix: report as compiler bug with minimal reproducer.
 
-## CF4001
+## CF3102
+
+- Stage: semantic analysis
+- Meaning: semantic pass lost active scope state.
+- Typical fix: report as compiler bug with minimal reproducer.
+
+## CF3103
+
+- Stage: semantic analysis
+- Meaning: invalid `CHARACTER` length expression.
+- Typical fix: use positive constant or supported parameter expression for character length.
+
+## CF3104
+
+- Stage: semantic analysis
+- Meaning: unsupported `**` operand combination during semantic processing.
+- Typical fix: simplify POWER operands to supported numeric types.
+
+## CF3105
+
+- Stage: semantic analysis
+- Meaning: implied DO construct unsupported in this semantic path.
+- Typical fix: rewrite construct or use simpler equivalent form.
+
+## CF3106
+
+- Stage: semantic analysis
+- Meaning: numeric literal too long for compile-time evaluator.
+- Typical fix: reduce literal magnitude/length or avoid const-eval path.
+
+## CF3199
+
+- Stage: semantic analysis (catch-all)
+- Meaning: semantic phase failed.
+- Typical fix: inspect the failing statement and reduce to a minimal reproducer.
+
+## CF4101
 
 - Stage: code generation
-- Meaning: LLVM/codegen emission failed.
-- Typical fix: isolate the minimal reproducer and inspect unsupported expression/statement patterns.
+- Meaning: multiple `PROGRAM` units in one emitted module.
+- Typical fix: compile units separately or keep a single main `PROGRAM`.
+
+## CF4102
+
+- Stage: code generation
+- Meaning: semantic unit missing while lowering a program unit.
+- Typical fix: report as compiler bug with reproducer.
+
+## CF4103
+
+- Stage: code generation
+- Meaning: incompatible `COMMON` layout detected between units.
+- Typical fix: make `COMMON` declarations consistent across all units.
+
+## CF4104
+
+- Stage: code generation
+- Meaning: format label missing for `FORMAT`/formatted I/O use.
+- Typical fix: add valid numeric label and ensure reference matches.
+
+## CF4105
+
+- Stage: code generation
+- Meaning: duplicate `FORMAT` label in same unit.
+- Typical fix: make labels unique.
+
+## CF4106
+
+- Stage: code generation
+- Meaning: missing target statement label.
+- Typical fix: ensure every referenced label exists.
+
+## CF4107
+
+- Stage: code generation
+- Meaning: invalid DO end-label structure.
+- Typical fix: fix loop end labels and nesting order.
+
+## CF4108
+
+- Stage: code generation
+- Meaning: symbol not found while lowering statement/expression.
+- Typical fix: verify declaration/implicit typing and symbol spelling.
+
+## CF4109
+
+- Stage: code generation
+- Meaning: unsupported intrinsic argument/return type.
+- Typical fix: adjust intrinsic arguments to supported scalar types.
+
+## CF4110
+
+- Stage: code generation
+- Meaning: invalid intrinsic call shape (arity/signature).
+- Typical fix: call intrinsic with correct argument count/types.
+
+## CF4111
+
+- Stage: code generation
+- Meaning: unsupported cast/conversion.
+- Typical fix: insert explicit supported conversion sequence.
+
+## CF4112
+
+- Stage: code generation
+- Meaning: literal form unsupported by current lowering path.
+- Typical fix: simplify literal form.
+
+## CF4113
+
+- Stage: code generation
+- Meaning: unsupported logical operation for operand types.
+- Typical fix: use logical operands/types expected by operation.
+
+## CF4114
+
+- Stage: code generation
+- Meaning: unsupported POWER lowering.
+- Typical fix: simplify exponentiation expression.
+
+## CF4115
+
+- Stage: code generation
+- Meaning: unsupported `COMPLEX` type usage.
+- Typical fix: reduce expression to supported complex operations.
+
+## CF4116
+
+- Stage: code generation
+- Meaning: unsupported `COMPLEX` comparison.
+- Typical fix: compare supported components explicitly.
+
+## CF4117
+
+- Stage: code generation
+- Meaning: unsupported `COMPLEX` arithmetic operation.
+- Typical fix: rewrite expression using supported forms.
+
+## CF4118
+
+- Stage: code generation
+- Meaning: invalid assignment target.
+- Typical fix: ensure left side is a valid lvalue variable/subscript.
+
+## CF4119
+
+- Stage: code generation
+- Meaning: invalid subscript usage.
+- Typical fix: provide correct subscript count/index expressions.
+
+## CF4120
+
+- Stage: code generation
+- Meaning: array operation unsupported in this lowering path.
+- Typical fix: simplify or avoid unsupported array form.
+
+## CF4121
+
+- Stage: code generation
+- Meaning: assumed-size dimension unsupported here.
+- Typical fix: use explicit constant bounds where required.
+
+## CF4122
+
+- Stage: code generation
+- Meaning: invalid/non-constant array dimension or overflowed array size.
+- Typical fix: use valid constant positive bounds with safe size.
+
+## CF4123
+
+- Stage: code generation
+- Meaning: implied DO expansion unsupported.
+- Typical fix: unroll or rewrite as explicit loops/statements.
+
+## CF4124
+
+- Stage: code generation
+- Meaning: unsupported character substring/concatenation path.
+- Typical fix: simplify character expression form.
+
+## CF4125
+
+- Stage: code generation
+- Meaning: invalid statement function definition/call.
+- Typical fix: match argument list and valid statement function form.
+
+## CF4126
+
+- Stage: code generation
+- Meaning: ambiguous call vs subscript usage.
+- Typical fix: disambiguate symbol declaration (array vs function).
+
+## CF4127
+
+- Stage: code generation
+- Meaning: unsupported program unit kind.
+- Typical fix: restrict to supported unit forms in current compiler scope.
+
+## CF4128
+
+- Stage: code generation
+- Meaning: invalid ABI lowering state.
+- Typical fix: report as compiler bug with minimal reproducer.
+
+## CF4129
+
+- Stage: code generation
+- Meaning: unsupported control-flow lowering pattern.
+- Typical fix: simplify control flow (labels/IF/GOTO form).
+
+## CF4130
+
+- Stage: code generation
+- Meaning: unknown intrinsic for lowering.
+- Typical fix: avoid unsupported intrinsic or add fallback implementation.
+
+## CF4131
+
+- Stage: code generation
+- Meaning: internal IR emission limit exceeded.
+- Typical fix: split source or report as compiler bug.
+
+## CF4132
+
+- Stage: code generation
+- Meaning: unexpected statement kind reached in lowering path.
+- Typical fix: report as compiler bug with reproducer.
+
+## CF4133
+
+- Stage: code generation
+- Meaning: direct-access I/O missing `REC=` record number.
+- Typical fix: add `REC=...` control specifier.
+
+## CF4199
+
+- Stage: code generation (catch-all)
+- Meaning: generic code generation failure.
+- Typical fix: inspect statement and reduce to minimal reproducer.

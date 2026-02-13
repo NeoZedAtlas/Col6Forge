@@ -398,7 +398,12 @@ pub fn parseIfBlock(
             break;
         }
         if (decl.isDeclarationStart(lp)) return error.DeclarationInIfBlock;
-        const node = try parseStatement(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
+        var node = try parseStatement(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
+        if (node.source_line == 0) {
+            node.source_line = line.span.start_line;
+            node.source_column = if (line.segments.len > 0) line.segments[0].column else 1;
+            node.source_text = line.text;
+        }
         try stmts.append(node);
     }
     return stmts.toOwnedSlice();

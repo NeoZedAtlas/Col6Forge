@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../input.zig");
 const context = @import("../codegen/context.zig");
+const codegen_diag = @import("../../diagnostic.zig");
 const cfg = @import("cfg.zig");
 const control = @import("../codegen/control_flow/mod.zig");
 const execution = @import("execution.zig");
@@ -12,6 +13,22 @@ const Context = context.Context;
 const EmitError = anyerror;
 
 pub fn emitStmt(
+    ctx: *Context,
+    builder: anytype,
+    stmt: Stmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!bool {
+    ctx.setCurrentStmt(stmt);
+    defer ctx.clearCurrentStmt();
+
+    return emitStmtInner(ctx, builder, stmt, next_block, local_label_map) catch |err| {
+        codegen_diag.setFromStmt(stmt, err);
+        return err;
+    };
+}
+
+fn emitStmtInner(
     ctx: *Context,
     builder: anytype,
     stmt: Stmt,

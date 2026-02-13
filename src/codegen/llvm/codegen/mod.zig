@@ -3,6 +3,7 @@ const input = @import("../../input.zig");
 const context = @import("context.zig");
 const builder_mod = @import("builder.zig");
 const common = @import("common.zig");
+const codegen_diag = @import("../../diagnostic.zig");
 const stmts = @import("../stmts/mod.zig");
 const utils = @import("utils.zig");
 
@@ -60,7 +61,10 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
         try defined.put(mangled, {});
         switch (unit.kind) {
             .program => {
-                if (program_mangled != null) return error.MultipleProgramUnits;
+                if (program_mangled != null) {
+                    codegen_diag.setAt(1, 1, "", error.MultipleProgramUnits);
+                    return error.MultipleProgramUnits;
+                }
                 program_mangled = mangled;
             },
             .block_data => {
@@ -73,11 +77,17 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
     var common_blocks = std.StringHashMap(common.CommonBlockInfo).init(scratch);
     defer common_blocks.deinit();
     for (program.units) |unit| {
-        const sem_unit = sem_map.get(unit.name) orelse return error.MissingSemanticUnit;
+        const sem_unit = sem_map.get(unit.name) orelse {
+            setCodegenDiagForUnit(unit, error.MissingSemanticUnit);
+            return error.MissingSemanticUnit;
+        };
         const layouts = try common.buildUnitCommonLayouts(scratch, unit, sem_unit);
         for (layouts) |layout| {
             if (common_blocks.getPtr(layout.key)) |info| {
-                if (!commonLayoutsCompatible(info.items, layout.items)) return error.CommonBlockMismatch;
+                if (!commonLayoutsCompatible(info.items, layout.items)) {
+                    setCodegenDiagForUnit(unit, error.CommonBlockMismatch);
+                    return error.CommonBlockMismatch;
+                }
                 if (layout.items.len > info.items.len) info.items = layout.items;
                 if (layout.size > info.size) info.size = layout.size;
                 if (layout.alignment > info.alignment) info.alignment = layout.alignment;
@@ -103,8 +113,14 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
     defer intrinsic_wrappers.deinit();
 
     for (program.units) |unit| {
-        const sem_unit = sem_map.get(unit.name) orelse return error.MissingSemanticUnit;
-        var format_maps = try buildFormatMaps(scratch, &builder, unit);
+        const sem_unit = sem_map.get(unit.name) orelse {
+            setCodegenDiagForUnit(unit, error.MissingSemanticUnit);
+            return error.MissingSemanticUnit;
+        };
+        var format_maps = buildFormatMaps(scratch, &builder, unit) catch |err| {
+            setCodegenDiagForUnit(unit, err);
+            return err;
+        };
         var ctx = context.Context.init(
             scratch,
             unit,
@@ -117,7 +133,14 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
             &intrinsic_wrappers,
         );
         defer ctx.deinit();
-        try stmts.emitFunction(&ctx, &builder);
+        stmts.emitFunction(&ctx, &builder) catch |err| {
+            if (ctx.current_stmt) |stmt| {
+                codegen_diag.setFromStmt(stmt, err);
+            } else {
+                setCodegenDiagForUnit(unit, err);
+            }
+            return err;
+        };
     }
 
     try emitIntrinsicWrappers(&builder, &intrinsic_wrappers);
@@ -194,7 +217,10 @@ fn collectFormatLabelsFromStmts(
     label_map: *std.StringHashMap(FormatInfo),
 ) anyerror!void {
     for (stmt_list) |stmt_item| {
-        try collectFormatLabelsFromNode(allocator, builder, unit_mangled, stmt_item.node, stmt_item.label, label_map);
+        collectFormatLabelsFromNode(allocator, builder, unit_mangled, stmt_item.node, stmt_item.label, label_map) catch |err| {
+            codegen_diag.setFromStmt(stmt_item, err);
+            return err;
+        };
     }
 }
 
@@ -235,7 +261,10 @@ fn collectAssignedFormatsFromStmts(
     label_map: *std.StringHashMap(FormatInfo),
 ) anyerror!void {
     for (stmt_list) |stmt_item| {
-        try collectAssignedFormatsFromNode(stmt_item.node, label_map);
+        collectAssignedFormatsFromNode(stmt_item.node, label_map) catch |err| {
+            codegen_diag.setFromStmt(stmt_item, err);
+            return err;
+        };
     }
 }
 
@@ -273,8 +302,19 @@ fn collectInlineFormatsFromStmts(
     inline_index: *usize,
 ) anyerror!void {
     for (stmt_list) |stmt_item| {
-        try collectInlineFormatsFromNode(allocator, builder, unit_mangled, stmt_item.node, inline_map, inline_index);
+        collectInlineFormatsFromNode(allocator, builder, unit_mangled, stmt_item.node, inline_map, inline_index) catch |err| {
+            codegen_diag.setFromStmt(stmt_item, err);
+            return err;
+        };
     }
+}
+
+fn setCodegenDiagForUnit(unit: input.ProgramUnit, err: anyerror) void {
+    if (unit.stmts.len > 0) {
+        codegen_diag.setFromStmt(unit.stmts[0], err);
+        return;
+    }
+    codegen_diag.setAt(1, 1, "", err);
 }
 
 fn collectInlineFormatsFromNode(

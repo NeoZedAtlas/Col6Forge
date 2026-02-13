@@ -99,6 +99,7 @@ pub const Context = struct {
     intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
     char_values: std.StringHashMap([]const u8),
     char_array_values: std.StringHashMap([]const u8),
+    current_stmt: ?input.Stmt,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -133,6 +134,7 @@ pub const Context = struct {
             .intrinsic_wrappers = intrinsic_wrappers,
             .char_values = std.StringHashMap([]const u8).init(allocator),
             .char_array_values = std.StringHashMap([]const u8).init(allocator),
+            .current_stmt = null,
         };
     }
 
@@ -267,6 +269,14 @@ pub const Context = struct {
     pub fn nextStringName(self: *Context) ![]const u8 {
         const name = try std.fmt.allocPrint(self.allocator, "str{d}", .{self.string_pool.counter});
         return name;
+    }
+
+    pub fn setCurrentStmt(self: *Context, stmt: input.Stmt) void {
+        self.current_stmt = stmt;
+    }
+
+    pub fn clearCurrentStmt(self: *Context) void {
+        self.current_stmt = null;
     }
 };
 

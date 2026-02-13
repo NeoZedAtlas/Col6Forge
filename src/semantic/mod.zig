@@ -1,5 +1,7 @@
 const std = @import("std");
 const ast = @import("../ast/nodes.zig");
+const fixed_form = @import("../frontend/fixed_form.zig");
+const parser = @import("../frontend/parser/mod.zig");
 const symbols = @import("symbol/mod.zig");
 
 pub const analyzer = @import("analysis/mod.zig");
@@ -22,6 +24,7 @@ pub const Context = context.Context;
 pub const SemanticDiagnostic = diagnostic.SemanticDiagnostic;
 
 pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticProgram {
+    diagnostic.clear();
     var known_function_types = std.StringHashMap(ast.TypeKind).init(arena);
     for (program.units) |unit| {
         if (unit.kind != .function) continue;
@@ -62,3 +65,34 @@ fn inferFunctionType(unit: ast.ProgramUnit) ast.TypeKind {
 }
 
 pub const printSemantic = printer.printSemantic;
+
+pub fn takeDiagnostic() ?diagnostic.SemanticDiagnostic {
+    return diagnostic.take();
+}
+
+pub fn clearDiagnostic() void {
+    diagnostic.clear();
+}
+
+test "semantic declaration error reports declaration source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*0 A\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidCharLen, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expectEqual(@as(usize, 7), diag.column);
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3103"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "CHARACTER*0 A"));
+}

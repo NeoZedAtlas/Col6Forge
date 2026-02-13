@@ -13,6 +13,8 @@ pub const Context = struct {
     scopes: std.array_list.Managed(scope.Scope),
     current_scope: ?scope.ScopeId,
     current_owner: ?Owner,
+    current_decl_source: ?ast.DeclSource,
+    current_stmt: ?ast.Stmt,
     known_function_types: *const std.StringHashMap(ast.TypeKind),
 
     pub const Owner = struct {
@@ -35,6 +37,8 @@ pub const Context = struct {
             .scopes = std.array_list.Managed(scope.Scope).init(arena),
             .current_scope = null,
             .current_owner = null,
+            .current_decl_source = null,
+            .current_stmt = null,
             .known_function_types = known_function_types,
         };
         ctx.current_unit = &ctx.unit;
@@ -125,5 +129,13 @@ pub const Context = struct {
             scope_id = scope_info.parent;
         }
         self.current_owner = null;
+    }
+
+    pub fn setCurrentStmt(self: *Context, stmt: ast.Stmt) void {
+        self.current_stmt = stmt;
+    }
+
+    pub fn clearCurrentStmt(self: *Context) void {
+        self.current_stmt = null;
     }
 };

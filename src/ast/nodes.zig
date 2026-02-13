@@ -14,7 +14,14 @@ pub const ProgramUnit = struct {
     name: []const u8,
     args: []const []const u8,
     decls: []Decl,
+    decl_sources: []DeclSource = &.{},
     stmts: []Stmt,
+};
+
+pub const DeclSource = struct {
+    line: usize = 0,
+    column: usize = 0,
+    text: []const u8 = "",
 };
 
 pub const TypeKind = enum {
@@ -108,6 +115,9 @@ pub const Declarator = struct {
 pub const Stmt = struct {
     label: ?[]const u8,
     node: StmtNode,
+    source_line: usize = 0,
+    source_column: usize = 0,
+    source_text: []const u8 = "",
 };
 
 pub const StmtNode = union(enum) {
