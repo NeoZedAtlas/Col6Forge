@@ -119,6 +119,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const lapack_runner = b.addExecutable(.{
+        .name = "lapack_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/lapack_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "Col6Forge", .module = mod },
+            },
+        }),
+    });
+
     const test_harness = b.addExecutable(.{
         .name = "test_harness",
         .root_module = b.createModule(.{
@@ -136,6 +148,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(golden_runner);
     b.installArtifact(verify_runner);
     b.installArtifact(blas_runner);
+    b.installArtifact(lapack_runner);
     b.installArtifact(test_harness);
 
     // This creates a top level step. Top level steps have a name and can be
@@ -223,6 +236,14 @@ pub fn build(b: *std.Build) void {
     run_blas_verify.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_blas_verify.addArgs(args);
+    }
+
+    const lapack_verify_step = b.step("lapack-verify", "Run LAPACK-lite 3.1.1 verification tests");
+    const run_lapack_verify = b.addRunArtifact(lapack_runner);
+    lapack_verify_step.dependOn(&run_lapack_verify.step);
+    run_lapack_verify.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_lapack_verify.addArgs(args);
     }
 
     const test_all_step = b.step("test-all", "Run unified test harness");
