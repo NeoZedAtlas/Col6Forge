@@ -201,9 +201,7 @@ fn resolveFormatItemsForDirect(ctx: *Context, format: ast.FormatSpec) EmitError!
             return null;
         },
         .inline_items => |items| {
-            const key = @as(usize, @intFromPtr(items.ptr));
-            const fmt_info = ctx.inline_formats.get(key) orelse return null;
-            return fmt_info.items;
+            return items;
         },
         .expr => return null,
         .none => return null,

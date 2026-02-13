@@ -51,12 +51,32 @@ fn emitStringLiteral(ctx: *Context, builder: anytype, bytes: []const u8) !ValueR
 pub fn emitConstTyped(ctx: *Context, builder: anytype, value: sema.ConstValue, type_kind: TypeKind) ValueRef {
     const ty = llvm_types.typeFromKind(type_kind);
     return switch (value) {
-        .integer => |v| .{
-            .name = if (ty == .f32 or ty == .f64) utils.formatFloatValue(ctx.allocator, @as(f64, @floatFromInt(v)), ty) else utils.formatInt(ctx.allocator, v),
-            .ty = ty,
-            .is_ptr = false,
+        .integer => |v| blk: {
+            if (complex.isComplexType(ty)) {
+                const elem_ty: IRType = if (ty == .complex_f64) .f64 else .f32;
+                const real_ref = ValueRef{
+                    .name = utils.formatFloatValue(ctx.allocator, @as(f64, @floatFromInt(v)), elem_ty),
+                    .ty = elem_ty,
+                    .is_ptr = false,
+                };
+                const imag_ref = utils.zeroValue(elem_ty);
+                break :blk complex.buildComplex(ctx, builder, real_ref, imag_ref, ty) catch .{ .name = "undef", .ty = ty, .is_ptr = false };
+            }
+            break :blk .{
+                .name = if (ty == .f32 or ty == .f64) utils.formatFloatValue(ctx.allocator, @as(f64, @floatFromInt(v)), ty) else utils.formatInt(ctx.allocator, v),
+                .ty = ty,
+                .is_ptr = false,
+            };
         },
-        .real => |v| .{ .name = utils.formatFloatValue(ctx.allocator, v, ty), .ty = ty, .is_ptr = false },
+        .real => |v| blk: {
+            if (complex.isComplexType(ty)) {
+                const elem_ty: IRType = if (ty == .complex_f64) .f64 else .f32;
+                const real_ref = ValueRef{ .name = utils.formatFloatValue(ctx.allocator, v, elem_ty), .ty = elem_ty, .is_ptr = false };
+                const imag_ref = utils.zeroValue(elem_ty);
+                break :blk complex.buildComplex(ctx, builder, real_ref, imag_ref, ty) catch .{ .name = "undef", .ty = ty, .is_ptr = false };
+            }
+            break :blk .{ .name = utils.formatFloatValue(ctx.allocator, v, ty), .ty = ty, .is_ptr = false };
+        },
         .complex => |v| blk: {
             if (!complex.isComplexType(ty)) {
                 break :blk .{ .name = utils.formatFloatValue(ctx.allocator, v.real, ty), .ty = ty, .is_ptr = false };

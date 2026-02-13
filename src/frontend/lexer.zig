@@ -86,7 +86,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
             const start = i;
             i += 1;
             while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
-            i = scanExponent(text, i);
+            i = scanExponent(text, i, true);
             const end = i;
             try tokens.append(makeToken(line, .real, start, end));
             continue;
@@ -117,7 +117,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
                     i = frac_digits.idx;
                 }
             }
-            const exp_i = scanExponent(text, i);
+            const exp_i = scanExponent(text, i, is_real);
             if (exp_i != i) {
                 is_real = true;
                 i = exp_i;
@@ -213,10 +213,12 @@ fn makeToken(line: logical_line.LogicalLine, kind: TokenKind, start: usize, end:
     };
 }
 
-fn scanExponent(text: []const u8, index: usize) usize {
+fn scanExponent(text: []const u8, index: usize, allow_leading_space: bool) usize {
     if (index >= text.len) return index;
     var i = index;
-    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
+    if (allow_leading_space) {
+        while (i < text.len and (text[i] == ' ' or text[i] == '\t')) : (i += 1) {}
+    }
     if (i >= text.len) return index;
     const ch = text[i];
     if (ch != 'E' and ch != 'e' and ch != 'D' and ch != 'd') return index;
@@ -304,6 +306,30 @@ test "lexLogicalLine merges blank-separated exponents" {
     defer allocator.free(tokens);
 
     const expected = [_]TokenKind{ .identifier, .equals, .real };
+    try testing.expectEqual(expected.len, tokens.len);
+    for (tokens, 0..) |tok, idx| {
+        try testing.expectEqual(expected[idx], tok.kind);
+    }
+}
+
+test "lexLogicalLine keeps COMPLEX*16 declarator name as identifier" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      COMPLEX*16         D11, D12\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+
+    const expected = [_]TokenKind{
+        .identifier, // COMPLEX
+        .star,
+        .integer, // 16
+        .identifier, // D11
+        .comma,
+        .identifier, // D12
+    };
     try testing.expectEqual(expected.len, tokens.len);
     for (tokens, 0..) |tok, idx| {
         try testing.expectEqual(expected[idx], tok.kind);

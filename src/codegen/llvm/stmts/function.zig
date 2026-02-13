@@ -95,7 +95,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         if (sym.kind == .function and !is_return_symbol and ctx.unit.kind != .function) continue;
         if (is_return_symbol and (is_character_function or is_complex_sret_function)) continue;
         if (ctx.locals.contains(sym.name)) continue;
-        if (isSaved(&save_info, sym.name)) continue;
+        if (isSaved(&save_info, sym.name) and !is_return_symbol) continue;
         if (sym.type_kind == .character) {
             const char_len = sym.char_len orelse 1;
             const elem_count = if (sym.dims.len > 0) try common.arrayElementCount(ctx.sem, sym.dims) else 1;

@@ -179,73 +179,152 @@ fn buildFormatMaps(allocator: std.mem.Allocator, builder: anytype, unit: input.P
     var label_map = std.StringHashMap(FormatInfo).init(allocator);
     var inline_map = std.AutoHashMap(usize, FormatInfo).init(allocator);
     const unit_mangled = try utils.mangleName(allocator, unit.name);
-    for (unit.stmts) |stmt_item| {
-        if (stmt_item.node != .format) continue;
-        const label = stmt_item.label orelse return error.FormatMissingLabel;
-        if (label_map.contains(label)) return error.DuplicateFormatLabel;
-        const format_bytes = try buildPrintfFormat(allocator, stmt_item.node.format.items);
-        const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}{s}", .{ unit_mangled, label });
-        try builder.globalString(global_name, format_bytes);
-        try label_map.put(label, .{
-            .items = stmt_item.node.format.items,
-            .global_name = global_name,
-            .string_len = format_bytes.len + 1,
-        });
-    }
-    for (unit.stmts) |stmt_item| {
-        if (stmt_item.node != .assignment) continue;
-        const assign = stmt_item.node.assignment;
-        if (assign.target.* != .identifier) continue;
-        if (assign.value.* != .literal) continue;
-        const lit = assign.value.literal;
-        if (lit.kind != .integer) continue;
-        const fmt_info = label_map.get(lit.text) orelse continue;
-        if (label_map.contains(assign.target.identifier)) continue;
-        try label_map.put(assign.target.identifier, fmt_info);
-    }
+    try collectFormatLabelsFromStmts(allocator, builder, unit_mangled, unit.stmts, &label_map);
+    try collectAssignedFormatsFromStmts(unit.stmts, &label_map);
     var inline_index: usize = 0;
-    for (unit.stmts) |stmt_item| {
-        switch (stmt_item.node) {
-            .write => |write| {
-                switch (write.format) {
-                    .inline_items => |items| {
-                        const key = @as(usize, @intFromPtr(items.ptr));
-                        if (inline_map.contains(key)) break;
-                        const format_bytes = try buildPrintfFormat(allocator, items);
-                        const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}inline{d}", .{ unit_mangled, inline_index });
-                        inline_index += 1;
-                        try builder.globalString(global_name, format_bytes);
-                        try inline_map.put(key, .{
-                            .items = items,
-                            .global_name = global_name,
-                            .string_len = format_bytes.len + 1,
-                        });
-                    },
-                    else => {},
-                }
-            },
-            .read => |read| {
-                switch (read.format) {
-                    .inline_items => |items| {
-                        const key = @as(usize, @intFromPtr(items.ptr));
-                        if (inline_map.contains(key)) break;
-                        const format_bytes = try buildPrintfFormat(allocator, items);
-                        const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}inline{d}", .{ unit_mangled, inline_index });
-                        inline_index += 1;
-                        try builder.globalString(global_name, format_bytes);
-                        try inline_map.put(key, .{
-                            .items = items,
-                            .global_name = global_name,
-                            .string_len = format_bytes.len + 1,
-                        });
-                    },
-                    else => {},
-                }
-            },
-            else => {},
-        }
-    }
+    try collectInlineFormatsFromStmts(allocator, builder, unit_mangled, unit.stmts, &inline_map, &inline_index);
     return .{ .labels = label_map, .inline_items = inline_map };
+}
+
+fn collectFormatLabelsFromStmts(
+    allocator: std.mem.Allocator,
+    builder: anytype,
+    unit_mangled: []const u8,
+    stmt_list: []const input.Stmt,
+    label_map: *std.StringHashMap(FormatInfo),
+) anyerror!void {
+    for (stmt_list) |stmt_item| {
+        try collectFormatLabelsFromNode(allocator, builder, unit_mangled, stmt_item.node, stmt_item.label, label_map);
+    }
+}
+
+fn collectFormatLabelsFromNode(
+    allocator: std.mem.Allocator,
+    builder: anytype,
+    unit_mangled: []const u8,
+    node: input.StmtNode,
+    label: ?[]const u8,
+    label_map: *std.StringHashMap(FormatInfo),
+) anyerror!void {
+    switch (node) {
+        .format => |fmt| {
+            const format_label = label orelse return error.FormatMissingLabel;
+            if (label_map.contains(format_label)) return error.DuplicateFormatLabel;
+            const format_bytes = try buildPrintfFormat(allocator, fmt.items);
+            const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}{s}", .{ unit_mangled, format_label });
+            try builder.globalString(global_name, format_bytes);
+            try label_map.put(format_label, .{
+                .items = fmt.items,
+                .global_name = global_name,
+                .string_len = format_bytes.len + 1,
+            });
+        },
+        .if_block => |ifb| {
+            try collectFormatLabelsFromStmts(allocator, builder, unit_mangled, ifb.then_stmts, label_map);
+            try collectFormatLabelsFromStmts(allocator, builder, unit_mangled, ifb.else_stmts, label_map);
+        },
+        .if_single => |ifs| {
+            try collectFormatLabelsFromNode(allocator, builder, unit_mangled, ifs.stmt.*, null, label_map);
+        },
+        else => {},
+    }
+}
+
+fn collectAssignedFormatsFromStmts(
+    stmt_list: []const input.Stmt,
+    label_map: *std.StringHashMap(FormatInfo),
+) anyerror!void {
+    for (stmt_list) |stmt_item| {
+        try collectAssignedFormatsFromNode(stmt_item.node, label_map);
+    }
+}
+
+fn collectAssignedFormatsFromNode(
+    node: input.StmtNode,
+    label_map: *std.StringHashMap(FormatInfo),
+) anyerror!void {
+    switch (node) {
+        .assignment => |assign| {
+            if (assign.target.* != .identifier) return;
+            if (assign.value.* != .literal) return;
+            const lit = assign.value.literal;
+            if (lit.kind != .integer) return;
+            const fmt_info = label_map.get(lit.text) orelse return;
+            if (label_map.contains(assign.target.identifier)) return;
+            try label_map.put(assign.target.identifier, fmt_info);
+        },
+        .if_block => |ifb| {
+            try collectAssignedFormatsFromStmts(ifb.then_stmts, label_map);
+            try collectAssignedFormatsFromStmts(ifb.else_stmts, label_map);
+        },
+        .if_single => |ifs| {
+            try collectAssignedFormatsFromNode(ifs.stmt.*, label_map);
+        },
+        else => {},
+    }
+}
+
+fn collectInlineFormatsFromStmts(
+    allocator: std.mem.Allocator,
+    builder: anytype,
+    unit_mangled: []const u8,
+    stmt_list: []const input.Stmt,
+    inline_map: *std.AutoHashMap(usize, FormatInfo),
+    inline_index: *usize,
+) anyerror!void {
+    for (stmt_list) |stmt_item| {
+        try collectInlineFormatsFromNode(allocator, builder, unit_mangled, stmt_item.node, inline_map, inline_index);
+    }
+}
+
+fn collectInlineFormatsFromNode(
+    allocator: std.mem.Allocator,
+    builder: anytype,
+    unit_mangled: []const u8,
+    node: input.StmtNode,
+    inline_map: *std.AutoHashMap(usize, FormatInfo),
+    inline_index: *usize,
+) anyerror!void {
+    switch (node) {
+        .write => |write| {
+            if (write.format != .inline_items) return;
+            const items = write.format.inline_items;
+            const key = @as(usize, @intFromPtr(items.ptr));
+            if (inline_map.contains(key)) return;
+            const format_bytes = try buildPrintfFormat(allocator, items);
+            const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}inline{d}", .{ unit_mangled, inline_index.* });
+            inline_index.* += 1;
+            try builder.globalString(global_name, format_bytes);
+            try inline_map.put(key, .{
+                .items = items,
+                .global_name = global_name,
+                .string_len = format_bytes.len + 1,
+            });
+        },
+        .read => |read| {
+            if (read.format != .inline_items) return;
+            const items = read.format.inline_items;
+            const key = @as(usize, @intFromPtr(items.ptr));
+            if (inline_map.contains(key)) return;
+            const format_bytes = try buildPrintfFormat(allocator, items);
+            const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}inline{d}", .{ unit_mangled, inline_index.* });
+            inline_index.* += 1;
+            try builder.globalString(global_name, format_bytes);
+            try inline_map.put(key, .{
+                .items = items,
+                .global_name = global_name,
+                .string_len = format_bytes.len + 1,
+            });
+        },
+        .if_block => |ifb| {
+            try collectInlineFormatsFromStmts(allocator, builder, unit_mangled, ifb.then_stmts, inline_map, inline_index);
+            try collectInlineFormatsFromStmts(allocator, builder, unit_mangled, ifb.else_stmts, inline_map, inline_index);
+        },
+        .if_single => |ifs| {
+            try collectInlineFormatsFromNode(allocator, builder, unit_mangled, ifs.stmt.*, inline_map, inline_index);
+        },
+        else => {},
+    }
 }
 
 fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const input.FormatItem) ![]const u8 {

@@ -72,6 +72,261 @@ static int f77_parse_list_char(const char *record, size_t record_len, size_t *id
     return used;
 }
 
+static FILE *f77_open_list_input(int unit, int *is_stdin) {
+    *is_stdin = 0;
+    const int unit_opened = (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened);
+    if ((unit == 5 || unit == 0) && !unit_opened) {
+        *is_stdin = 1;
+        return stdin;
+    }
+    if (unit < 0 || unit >= F77_MAX_UNITS) {
+        return NULL;
+    }
+    char name[32];
+    unit_filename(unit, name, sizeof(name));
+    FILE *file = fopen(name, "r");
+    if (!file) {
+        return NULL;
+    }
+    if (unit_pos[unit] != 0) {
+        (void)fseek(file, unit_pos[unit], SEEK_SET);
+    }
+    return file;
+}
+
+static void f77_close_list_input(int unit, int is_stdin, FILE *file) {
+    if (!file || is_stdin) {
+        return;
+    }
+    unit_pos[unit] = ftell(file);
+    fclose(file);
+}
+
+static int f77_read_list_token_stream(FILE *file, char *out, size_t out_cap) {
+    if (!file || !out || out_cap == 0) {
+        return 0;
+    }
+
+    int ch = 0;
+    while (1) {
+        ch = fgetc(file);
+        if (ch == EOF) {
+            out[0] = '\0';
+            return 0;
+        }
+        if (!isspace((unsigned char)ch) && ch != ',' && ch != '(' && ch != ')') {
+            break;
+        }
+    }
+
+    size_t used = 0;
+    if (ch == '\'' || ch == '"') {
+        const int quote = ch;
+        while ((ch = fgetc(file)) != EOF) {
+            if (ch == quote) {
+                const int next = fgetc(file);
+                if (next == quote) {
+                    if (used + 1 < out_cap) {
+                        out[used++] = (char)quote;
+                    }
+                    continue;
+                }
+                if (next != EOF) {
+                    ungetc(next, file);
+                }
+                break;
+            }
+            if (used + 1 < out_cap) {
+                out[used++] = (char)ch;
+            }
+        }
+    } else {
+        do {
+            if (used + 1 < out_cap) {
+                out[used++] = (char)ch;
+            }
+            ch = fgetc(file);
+        } while (ch != EOF && !isspace((unsigned char)ch) && ch != ',' && ch != '(' && ch != ')');
+        if (ch != EOF) {
+            ungetc(ch, file);
+        }
+    }
+
+    out[used] = '\0';
+    return 1;
+}
+
+static void f77_discard_to_record_end(FILE *file) {
+    if (!file) {
+        return;
+    }
+    int ch = 0;
+    while ((ch = fgetc(file)) != EOF) {
+        if (ch == '\n') {
+            break;
+        }
+    }
+}
+
+int f77_read_list_i32_n(int unit, int count, int stride, int *base) {
+    if (!base || count <= 0 || stride <= 0) {
+        return 0;
+    }
+
+    int is_stdin = 0;
+    FILE *file = f77_open_list_input(unit, &is_stdin);
+    if (!file) {
+        return -1;
+    }
+
+    char token[256];
+    for (int i = 0; i < count; i++) {
+        if (!f77_read_list_token_stream(file, token, sizeof(token))) {
+            f77_close_list_input(unit, is_stdin, file);
+            return -1;
+        }
+        base[(size_t)i * (size_t)stride] = (int)strtol(token, NULL, 10);
+    }
+
+    f77_discard_to_record_end(file);
+    f77_close_list_input(unit, is_stdin, file);
+    return 0;
+}
+
+int f77_read_list_f32_n(int unit, int count, int stride, float *base) {
+    if (!base || count <= 0 || stride <= 0) {
+        return 0;
+    }
+
+    int is_stdin = 0;
+    FILE *file = f77_open_list_input(unit, &is_stdin);
+    if (!file) {
+        return -1;
+    }
+
+    char token[256];
+    for (int i = 0; i < count; i++) {
+        if (!f77_read_list_token_stream(file, token, sizeof(token))) {
+            f77_close_list_input(unit, is_stdin, file);
+            return -1;
+        }
+        f77_normalize_exponent(token);
+        base[(size_t)i * (size_t)stride] = (float)strtod(token, NULL);
+    }
+
+    f77_discard_to_record_end(file);
+    f77_close_list_input(unit, is_stdin, file);
+    return 0;
+}
+
+int f77_read_list_f64_n(int unit, int count, int stride, double *base) {
+    if (!base || count <= 0 || stride <= 0) {
+        return 0;
+    }
+
+    int is_stdin = 0;
+    FILE *file = f77_open_list_input(unit, &is_stdin);
+    if (!file) {
+        return -1;
+    }
+
+    char token[256];
+    for (int i = 0; i < count; i++) {
+        if (!f77_read_list_token_stream(file, token, sizeof(token))) {
+            f77_close_list_input(unit, is_stdin, file);
+            return -1;
+        }
+        f77_normalize_exponent(token);
+        base[(size_t)i * (size_t)stride] = strtod(token, NULL);
+    }
+
+    f77_discard_to_record_end(file);
+    f77_close_list_input(unit, is_stdin, file);
+    return 0;
+}
+
+int f77_read_list_c32_n(int unit, int count, int stride, float *base) {
+    if (!base || count <= 0 || stride <= 0) {
+        return 0;
+    }
+
+    int is_stdin = 0;
+    FILE *file = f77_open_list_input(unit, &is_stdin);
+    if (!file) {
+        return -1;
+    }
+
+    char token[256];
+    for (int i = 0; i < count; i++) {
+        if (!f77_read_list_token_stream(file, token, sizeof(token))) {
+            f77_close_list_input(unit, is_stdin, file);
+            return -1;
+        }
+        f77_normalize_exponent(token);
+        float *slot = base + ((size_t)i * (size_t)stride * 2u);
+        slot[0] = (float)strtod(token, NULL);
+        slot[1] = 0.0f;
+    }
+
+    f77_discard_to_record_end(file);
+    f77_close_list_input(unit, is_stdin, file);
+    return 0;
+}
+
+int f77_read_list_c64_n(int unit, int count, int stride, double *base) {
+    if (!base || count <= 0 || stride <= 0) {
+        return 0;
+    }
+
+    int is_stdin = 0;
+    FILE *file = f77_open_list_input(unit, &is_stdin);
+    if (!file) {
+        return -1;
+    }
+
+    char token[256];
+    for (int i = 0; i < count; i++) {
+        if (!f77_read_list_token_stream(file, token, sizeof(token))) {
+            f77_close_list_input(unit, is_stdin, file);
+            return -1;
+        }
+        f77_normalize_exponent(token);
+        double *slot = base + ((size_t)i * (size_t)stride * 2u);
+        slot[0] = strtod(token, NULL);
+        slot[1] = 0.0;
+    }
+
+    f77_discard_to_record_end(file);
+    f77_close_list_input(unit, is_stdin, file);
+    return 0;
+}
+
+int f77_read_list_l_n(int unit, int count, int stride, unsigned char *base) {
+    if (!base || count <= 0 || stride <= 0) {
+        return 0;
+    }
+
+    int is_stdin = 0;
+    FILE *file = f77_open_list_input(unit, &is_stdin);
+    if (!file) {
+        return -1;
+    }
+
+    char token[256];
+    for (int i = 0; i < count; i++) {
+        if (!f77_read_list_token_stream(file, token, sizeof(token))) {
+            f77_close_list_input(unit, is_stdin, file);
+            return -1;
+        }
+        const int len = (int)strlen(token);
+        base[(size_t)i * (size_t)stride] = (unsigned char)f77_parse_logical_field(token, len);
+    }
+
+    f77_discard_to_record_end(file);
+    f77_close_list_input(unit, is_stdin, file);
+    return 0;
+}
+
 void f77_write(int unit, const char *fmt, ...) {
     va_list ap;
     const int unit_opened = (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened);

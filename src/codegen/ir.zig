@@ -14,6 +14,7 @@ pub const IRType = enum {
 };
 
 pub fn commonType(a: IRType, b: IRType) IRType {
+    if (a == .ptr and b == .ptr) return .ptr;
     if (a == .complex_f64 or b == .complex_f64) return .complex_f64;
     if (a == .complex_f32 or b == .complex_f32) return .complex_f32;
     if (a == .f64 or b == .f64) return .f64;

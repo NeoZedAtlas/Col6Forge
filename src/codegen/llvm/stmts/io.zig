@@ -104,9 +104,7 @@ pub fn emitWrite(
             return error.MissingFormatLabel;
         },
         .inline_items => |items| {
-            const key = @as(usize, @intFromPtr(items.ptr));
-            const fmt_info = ctx.inline_formats.get(key) orelse return error.MissingFormatLabel;
-            try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded_values);
+            try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, &expanded_values);
             return false;
         },
         .expr => |fmt_expr| {
@@ -192,13 +190,12 @@ pub fn emitRead(
             return error.MissingFormatLabel;
         },
         .inline_items => |items| {
-            const key = @as(usize, @intFromPtr(items.ptr));
-            const fmt_info = ctx.inline_formats.get(key) orelse return error.MissingFormatLabel;
+            const fmt_items = items;
             if (needs_status) {
-                const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded);
+                const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_items, &expanded);
                 return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
             }
-            try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded);
+            try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_items, &expanded);
             return false;
         },
         .expr => |fmt_expr| {

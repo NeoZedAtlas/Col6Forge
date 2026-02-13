@@ -59,8 +59,12 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
     const common_ty = ir.commonType(lhs.ty, rhs.ty);
     var left = lhs;
     var right = rhs;
-    if (left.ty == .ptr or right.ty == .ptr) {
-        std.debug.print("binary op {s} on ptrs lhs={s} rhs={s}\n", .{ @tagName(op), left.name, right.name });
+    if (common_ty == .ptr) {
+        if (op != .eq and op != .ne) return error.UnsupportedLogicalOp;
+        const tmp = try ctx.nextTemp();
+        const pred = if (op == .eq) "eq" else "ne";
+        try builder.compare(tmp, "icmp", pred, .ptr, left, right);
+        return .{ .name = tmp, .ty = .i1, .is_ptr = false };
     }
     left = try casting.coerce(ctx, builder, left, common_ty);
     right = try casting.coerce(ctx, builder, right, common_ty);
