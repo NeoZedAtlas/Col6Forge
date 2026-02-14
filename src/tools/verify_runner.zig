@@ -1115,7 +1115,7 @@ fn prepareRuntimeArtifacts(
             const runtime_sources = [_][]const u8{
                 "f77_io_formatted.c",
                 "f77_io_internal.c",
-                "f77_io_direct.c",
+                "f77_io_direct_variadic.c",
                 "f77_io_unformatted.c",
             };
             var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);

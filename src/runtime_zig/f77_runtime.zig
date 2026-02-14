@@ -574,6 +574,103 @@ pub export fn f77_endfile(unit: c_int) callconv(.c) void {
     uu.pos = uu.count;
 }
 
+fn directEnsureCapacity(unit: c_int, needed: usize) void {
+    const idx: usize = @intCast(unit);
+    const du = &direct_units[idx];
+    if (du.size >= needed) return;
+
+    const prev: ?*anyopaque = if (du.data) |data| @ptrCast(data) else null;
+    const new_data_raw = realloc(prev, needed);
+    if (new_data_raw == null) return;
+    const new_data: [*]u8 = @ptrCast(new_data_raw.?);
+    if (needed > du.size) {
+        var i = du.size;
+        while (i < needed) : (i += 1) {
+            new_data[i] = 0;
+        }
+    }
+    du.data = new_data;
+    du.size = needed;
+}
+
+pub export fn f77_open_direct(unit: c_int, recl: c_int) callconv(.c) void {
+    if (unit < 0 or unit >= F77_MAX_UNITS) return;
+    if (recl <= 0) return;
+    const idx: usize = @intCast(unit);
+    direct_units[idx].recl = recl;
+    direct_units[idx].nextrec = 1;
+}
+
+pub export fn f77_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) callconv(.c) ?[*]u8 {
+    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return null;
+    const idx: usize = @intCast(unit);
+    const du = &direct_units[idx];
+    const recl_local: c_int = if (du.recl > 0) du.recl else recl;
+    if (recl_local <= 0) return null;
+    du.recl = recl_local;
+
+    const recl_size: usize = @intCast(recl_local);
+    const offset: usize = @as(usize, @intCast(rec - 1)) * recl_size;
+    directEnsureCapacity(unit, offset + recl_size);
+    if (du.data == null or du.size < offset + recl_size) return null;
+
+    const record = du.data.? + offset;
+    var i: usize = 0;
+    while (i < recl_size) : (i += 1) {
+        record[i] = ' ';
+    }
+    return record;
+}
+
+pub export fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int) callconv(.c) ?[*]u8 {
+    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return null;
+    const idx: usize = @intCast(unit);
+    const du = &direct_units[idx];
+    if (du.recl <= 0 or du.data == null) return null;
+
+    const recl_size: usize = @intCast(du.recl);
+    const offset: usize = @as(usize, @intCast(rec - 1)) * recl_size;
+    if (du.size < offset + recl_size) return null;
+    return du.data.? + offset;
+}
+
+pub export fn f77_direct_record_commit(unit: c_int, rec: c_int) callconv(.c) void {
+    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return;
+    const idx: usize = @intCast(unit);
+    const du = &direct_units[idx];
+    const next = rec + 1;
+    if (next > du.nextrec) {
+        du.nextrec = next;
+    }
+}
+
+pub export fn f77_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_int) callconv(.c) void {
+    if (recl == null or nextrec == null) return;
+    const recl_ptr = recl.?;
+    const nextrec_ptr = nextrec.?;
+    if (unit < 0 or unit >= F77_MAX_UNITS) {
+        recl_ptr.* = 0;
+        nextrec_ptr.* = 1;
+        return;
+    }
+    const idx: usize = @intCast(unit);
+    const du = &direct_units[idx];
+    const r = du.recl;
+    recl_ptr.* = r;
+    if (du.nextrec > 0) {
+        nextrec_ptr.* = du.nextrec;
+        return;
+    }
+    if (r > 0) {
+        const records = du.size / @as(usize, @intCast(r));
+        nextrec_ptr.* = @intCast(records + 1);
+        du.nextrec = nextrec_ptr.*;
+        return;
+    }
+    nextrec_ptr.* = 1;
+    du.nextrec = 1;
+}
+
 fn f77PadExp(buf: *[F77_FMT_BUFFER_LEN]u8, exp_digits: usize) void {
     var exp_idx_opt = findByte(buf[0..], 'E');
     if (exp_idx_opt == null) {
