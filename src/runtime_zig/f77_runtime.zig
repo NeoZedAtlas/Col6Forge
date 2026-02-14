@@ -557,6 +557,175 @@ pub export fn f77_read_list_l_n(unit: c_int, count: c_int, stride: c_int, base: 
     return 0;
 }
 
+fn loadInternalRecord(record: *[4096]u8, src: [*]const u8, record_len: usize) void {
+    var i: usize = 0;
+    while (i < record_len) : (i += 1) {
+        record[i] = ' ';
+    }
+    i = 0;
+    while (i < record_len) : (i += 1) {
+        record[i] = src[i];
+    }
+    record[record_len] = 0;
+}
+
+pub export fn f77_read_internal_core(
+    buf: ?[*]const u8,
+    len: c_int,
+    count: c_int,
+    fmt: ?[*:0]const u8,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_count: c_int,
+) callconv(.c) c_int {
+    if (buf == null or len <= 0 or count <= 0 or fmt == null) return 0;
+
+    const src = buf.?;
+    const fmt_c = fmt.?;
+    const rec_len: usize = @min(@as(usize, @intCast(len)), 4095);
+    const rec_stride: usize = @intCast(len);
+    const args = arg_ptrs;
+    const kinds = arg_kinds;
+    const total_args: usize = @intCast(@max(arg_count, 0));
+
+    var record: [4096]u8 = [_]u8{0} ** 4096;
+    var rec_index: usize = 0;
+    loadInternalRecord(&record, src, rec_len);
+
+    var fmt_i: usize = 0;
+    var idx: usize = 0;
+    var assigned: c_int = 0;
+    var blank_mode: c_int = 0;
+    var arg_index: usize = 0;
+    while (fmt_c[fmt_i] != 0) {
+        if (fmt_c[fmt_i] != '%') {
+            if (fmt_c[fmt_i] == '\n') {
+                rec_index += 1;
+                if (rec_index >= @as(usize, @intCast(count))) break;
+                const rec_ptr = src + (rec_index * rec_stride);
+                loadInternalRecord(&record, rec_ptr, rec_len);
+                idx = 0;
+                fmt_i += 1;
+                continue;
+            }
+            if (idx < rec_len) idx += 1;
+            fmt_i += 1;
+            continue;
+        }
+
+        fmt_i += 1;
+        var width: c_int = 0;
+        while (fmt_c[fmt_i] >= '0' and fmt_c[fmt_i] <= '9') : (fmt_i += 1) {
+            width = (width * 10) + @as(c_int, @intCast(fmt_c[fmt_i] - '0'));
+        }
+        var is_long = false;
+        if (fmt_c[fmt_i] == 'l') {
+            is_long = true;
+            fmt_i += 1;
+        }
+        const conv = fmt_c[fmt_i];
+        if (conv == 0) break;
+        fmt_i += 1;
+
+        if (conv == 'N') {
+            blank_mode = 0;
+            continue;
+        }
+        if (conv == 'Z') {
+            blank_mode = 1;
+            continue;
+        }
+        if (conv == 'T') {
+            if (width > 0) idx = @intCast(width - 1);
+            continue;
+        }
+        if (conv == 'R') {
+            if (width > 0) idx += @intCast(width);
+            continue;
+        }
+        if (conv == 'U') {
+            if (width > 0) {
+                const w: usize = @intCast(width);
+                if (idx >= w) {
+                    idx -= w;
+                } else {
+                    idx = 0;
+                }
+            }
+            continue;
+        }
+
+        var field: [128]u8 = [_]u8{0} ** 128;
+        var used: c_int = 0;
+        if (width <= 0) {
+            while (idx < rec_len and isSpace(record[idx])) : (idx += 1) {}
+            while (idx < rec_len and !isSpace(record[idx]) and used < @as(c_int, @intCast(field.len - 1))) {
+                field[@intCast(used)] = record[idx];
+                used += 1;
+                idx += 1;
+            }
+        } else {
+            if (width >= @as(c_int, @intCast(field.len))) width = @as(c_int, @intCast(field.len - 1));
+            var i: c_int = 0;
+            while (i < width) : (i += 1) {
+                if (idx < rec_len) {
+                    field[@intCast(used)] = record[idx];
+                    idx += 1;
+                } else {
+                    field[@intCast(used)] = ' ';
+                }
+                used += 1;
+            }
+        }
+        field[@intCast(used)] = 0;
+
+        const consumes_arg = conv == 'd' or conv == 'f' or conv == 'c' or conv == 'L';
+        if (!consumes_arg) continue;
+        if (arg_index >= total_args or args == null) break;
+
+        const arg_any = args.?[arg_index] orelse {
+            arg_index += 1;
+            continue;
+        };
+        const kind: u8 = if (kinds != null) kinds.?[arg_index] else 0;
+        arg_index += 1;
+
+        if (conv == 'd' and kind == 'd') {
+            f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
+            const out: *c_int = @ptrCast(@alignCast(arg_any));
+            out.* = @intCast(strtol(asConstCStr(&field), null, 10));
+            assigned += 1;
+        } else if (conv == 'f' and is_long and kind == 'D') {
+            f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
+            f77_normalize_exponent(asCStr(&field));
+            const out: *f64 = @ptrCast(@alignCast(arg_any));
+            out.* = strtod(asConstCStr(&field), null);
+            assigned += 1;
+        } else if (conv == 'f' and !is_long and kind == 'f') {
+            f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
+            f77_normalize_exponent(asCStr(&field));
+            const out: *f32 = @ptrCast(@alignCast(arg_any));
+            out.* = @floatCast(strtod(asConstCStr(&field), null));
+            assigned += 1;
+        } else if (conv == 'c' and kind == 'c') {
+            const out: [*]u8 = @ptrCast(arg_any);
+            if (used > 0) {
+                const n: usize = @intCast(used);
+                var i: usize = 0;
+                while (i < n) : (i += 1) {
+                    out[i] = field[i];
+                }
+            }
+            assigned += 1;
+        } else if (conv == 'L' and kind == 'L') {
+            const out: *u8 = @ptrCast(@alignCast(arg_any));
+            out.* = @intCast(f77_parse_logical_field(asConstCStr(&field), used));
+            assigned += 1;
+        }
+    }
+    return assigned;
+}
+
 pub export fn f77_open(unit: c_int, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int, status: c_int) callconv(.c) void {
     _ = status;
     if (unit < 0 or unit >= F77_MAX_UNITS) return;

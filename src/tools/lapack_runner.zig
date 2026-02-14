@@ -388,7 +388,7 @@ fn prepareRuntimeArtifacts(
             defer allocator.free(runtime_dir);
             const runtime_sources = [_][]const u8{
                 "f77_io_formatted_variadic.c",
-                "f77_io_internal.c",
+                "f77_io_internal_variadic.c",
                 "f77_io_direct_variadic.c",
                 "f77_io_unformatted_variadic.c",
             };
