@@ -671,6 +671,110 @@ pub export fn f77_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_int) c
     du.nextrec = 1;
 }
 
+fn unformattedFileHasData(unit: c_int) bool {
+    var name: [32]u8 = [_]u8{0} ** 32;
+    unit_filename(unit, &name, name.len);
+    const file = fopen(asConstCStr(&name), "rb") orelse return false;
+    defer _ = fclose(file);
+    if (fseek(file, 0, 2) != 0) return false;
+    const size = ftell(file);
+    return size > 0;
+}
+
+pub export fn f77_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
+    if (unit < 0 or unit >= F77_MAX_UNITS or sig == null) return 0;
+    const sig_c = sig.?;
+    const idx: usize = @intCast(unit);
+    const uu = &unformatted_units[idx];
+    uu.used = 1;
+
+    const record_size = direct_signature_size(sig_c);
+    var record: ?[*]u8 = null;
+    if (record_size > 0) {
+        const record_raw = realloc(null, record_size) orelse return 0;
+        record = @ptrCast(record_raw);
+        var i: usize = 0;
+        while (i < record_size) : (i += 1) {
+            record.?[i] = 0;
+        }
+    }
+
+    if (uu.pos < uu.count) {
+        if (uu.records == null) {
+            if (record) |ptr| free(@ptrCast(ptr));
+            return 0;
+        }
+        const records = uu.records.?;
+        if (records[uu.pos].data) |data| free(@ptrCast(data));
+        records[uu.pos].data = record;
+        records[uu.pos].len = record_size;
+        records[uu.pos].is_endfile = 0;
+        uu.pos += 1;
+        unformatted_truncate(uu, uu.pos);
+        if (out_record) |p| p.* = records[uu.pos - 1].data;
+        if (out_len) |p| p.* = record_size;
+        return 1;
+    }
+
+    unformattedEnsureCapacityLocal(uu, uu.count + 1);
+    if (uu.records == null) {
+        if (record) |ptr| free(@ptrCast(ptr));
+        return 0;
+    }
+    const records = uu.records.?;
+    records[uu.count].data = record;
+    records[uu.count].len = record_size;
+    records[uu.count].is_endfile = 0;
+    uu.count += 1;
+    uu.pos = uu.count;
+    if (out_record) |p| p.* = records[uu.count - 1].data;
+    if (out_len) |p| p.* = record_size;
+    return 1;
+}
+
+pub export fn f77_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
+    if (unit < 0 or unit >= F77_MAX_UNITS or sig == null) return 1;
+    const sig_c = sig.?;
+    const idx: usize = @intCast(unit);
+    const uu = &unformatted_units[idx];
+    uu.used = 1;
+
+    if (uu.count == 0 and uu.pos == 0 and unformattedFileHasData(unit)) {
+        const record_size = direct_signature_size(sig_c);
+        unformattedEnsureCapacityLocal(uu, 1);
+        if (uu.records) |records| {
+            var record: ?[*]u8 = null;
+            if (record_size > 0) {
+                if (realloc(null, record_size)) |record_raw| {
+                    record = @ptrCast(record_raw);
+                    var i: usize = 0;
+                    while (i < record_size) : (i += 1) {
+                        record.?[i] = 0;
+                    }
+                }
+            }
+            records[0].data = record;
+            records[0].len = record_size;
+            records[0].is_endfile = 0;
+            uu.count = 1;
+            uu.pos = 0;
+        }
+    }
+
+    if (uu.pos >= uu.count) return -1;
+    if (uu.records == null) return -1;
+    const records = uu.records.?;
+    const rec = &records[uu.pos];
+    if (rec.is_endfile != 0) {
+        uu.pos += 1;
+        return -1;
+    }
+    uu.pos += 1;
+    if (out_record) |p| p.* = rec.data;
+    if (out_len) |p| p.* = rec.len;
+    return 0;
+}
+
 fn f77PadExp(buf: *[F77_FMT_BUFFER_LEN]u8, exp_digits: usize) void {
     var exp_idx_opt = findByte(buf[0..], 'E');
     if (exp_idx_opt == null) {
