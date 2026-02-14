@@ -726,6 +726,105 @@ pub export fn f77_read_internal_core(
     return assigned;
 }
 
+fn writeInternalMarkedSlice(dst: [*]u8, len: usize, src: []const u8) void {
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        dst[i] = ' ';
+    }
+
+    var col: usize = 0;
+    i = 0;
+    while (i < src.len) {
+        const ch = src[i];
+        if (ch == 0x01) {
+            i += 1;
+            if (i >= src.len) break;
+            const kind = src[i];
+            i += 1;
+
+            var value: usize = 0;
+            while (i < src.len and src[i] != 0x02) : (i += 1) {
+                if (src[i] >= '0' and src[i] <= '9') {
+                    value = (value * 10) + @as(usize, src[i] - '0');
+                }
+            }
+            if (i < src.len and src[i] == 0x02) {
+                i += 1;
+            }
+
+            switch (kind) {
+                'T' => col = if (value > 0) value - 1 else 0,
+                'R' => col += value,
+                'L' => {
+                    if (col > value) {
+                        col -= value;
+                    } else {
+                        col = 0;
+                    }
+                },
+                else => {},
+            }
+            continue;
+        }
+
+        if (col < len) {
+            if (ch != ' ' or dst[col] == ' ') {
+                dst[col] = ch;
+            }
+        }
+        col += 1;
+        i += 1;
+    }
+}
+
+pub export fn f77_write_internal_core(buf: ?[*]u8, len: c_int, src: ?[*:0]const u8) callconv(.c) void {
+    if (buf == null or src == null or len <= 0) return;
+
+    const dst = buf.?;
+    const in = src.?;
+    const width: usize = @intCast(len);
+
+    var line_len: usize = 0;
+    while (in[line_len] != 0 and in[line_len] != '\n') : (line_len += 1) {}
+    writeInternalMarkedSlice(dst, width, in[0..line_len]);
+}
+
+pub export fn f77_write_internal_n_core(buf: ?[*]u8, len: c_int, count: c_int, src: ?[*:0]const u8) callconv(.c) void {
+    if (buf == null or src == null or len <= 0 or count <= 0) return;
+
+    const dst = buf.?;
+    const in = src.?;
+    const width: usize = @intCast(len);
+    const record_count: usize = @intCast(count);
+
+    var cursor: usize = 0;
+    var rec: usize = 0;
+    while (rec < record_count) {
+        var line_len: usize = 0;
+        while (in[cursor + line_len] != 0 and in[cursor + line_len] != '\n') : (line_len += 1) {}
+
+        const out = dst + (rec * width);
+        writeInternalMarkedSlice(out, width, in[cursor .. cursor + line_len]);
+
+        if (in[cursor + line_len] == 0) {
+            break;
+        }
+
+        cursor += line_len + 1;
+        rec += 1;
+        if (in[cursor] == 0) {
+            if (rec < record_count) {
+                const blank = dst + (rec * width);
+                var i: usize = 0;
+                while (i < width) : (i += 1) {
+                    blank[i] = ' ';
+                }
+            }
+            break;
+        }
+    }
+}
+
 pub export fn f77_open(unit: c_int, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int, status: c_int) callconv(.c) void {
     _ = status;
     if (unit < 0 or unit >= F77_MAX_UNITS) return;

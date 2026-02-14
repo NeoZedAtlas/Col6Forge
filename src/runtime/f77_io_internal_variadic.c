@@ -15,6 +15,8 @@ int f77_read_internal_core(
     const unsigned char *arg_kinds,
     int arg_count
 );
+void f77_write_internal_core(char *buf, int len, const char *src);
+void f77_write_internal_n_core(char *buf, int len, int count, const char *src);
 
 static int f77_debug_internal_enabled(void) {
     static int cached = -1;
@@ -141,55 +143,6 @@ static int f77_read_internal_dispatch(const char *buf, int len, int count, const
     return assigned;
 }
 
-static void f77_write_internal_marked(char *buf, int len, const char *src) {
-    if (!buf || len <= 0 || !src) return;
-    memset(buf, ' ', (size_t)len);
-    size_t col = 0;
-    const char *p = src;
-    while (*p != '\0' && *p != '\n') {
-        if ((unsigned char)*p == 0x01) {
-            p++;
-            char kind = *p++;
-            int value = 0;
-            while (*p != '\0' && (unsigned char)*p != 0x02) {
-                if (*p >= '0' && *p <= '9') {
-                    value = value * 10 + (*p - '0');
-                }
-                p++;
-            }
-            if ((unsigned char)*p == 0x02) {
-                p++;
-            }
-            if (value < 0) value = 0;
-            switch (kind) {
-                case 'T':
-                    col = value > 0 ? (size_t)(value - 1) : 0;
-                    break;
-                case 'R':
-                    col += (size_t)value;
-                    break;
-                case 'L':
-                    if (col > (size_t)value) {
-                        col -= (size_t)value;
-                    } else {
-                        col = 0;
-                    }
-                    break;
-                default:
-                    break;
-            }
-            continue;
-        }
-        if (col < (size_t)len) {
-            if (*p != ' ' || buf[col] == ' ') {
-                buf[col] = *p;
-            }
-        }
-        col += 1;
-        p += 1;
-    }
-}
-
 int f77_read_internal(const char *buf, int len, const char *fmt, ...) {
     if (!buf || len <= 0) {
         return 0;
@@ -238,16 +191,7 @@ void f77_write_internal(char *buf, int len, const char *fmt, ...) {
     }
     vsnprintf(tmp, (size_t)needed + 1, fmt, ap);
     va_end(ap);
-    if (strchr(tmp, 0x01) != NULL) {
-        f77_write_internal_marked(buf, len, tmp);
-        free(tmp);
-        return;
-    }
-    char *newline = strchr(tmp, '\n');
-    size_t copy_len = (newline != NULL) ? (size_t)(newline - tmp) : (size_t)needed;
-    if (copy_len > (size_t)len) copy_len = (size_t)len;
-    memset(buf, ' ', (size_t)len);
-    memcpy(buf, tmp, copy_len);
+    f77_write_internal_core(buf, len, tmp);
     free(tmp);
 }
 
@@ -273,41 +217,6 @@ void f77_write_internal_n(char *buf, int len, int count, const char *fmt, ...) {
     }
     vsnprintf(tmp, (size_t)needed + 1, fmt, ap);
     va_end(ap);
-
-    const char *cursor = tmp;
-    int rec = 0;
-    while (rec < count) {
-        const char *newline = strchr(cursor, '\n');
-        size_t line_len = newline ? (size_t)(newline - cursor) : strlen(cursor);
-        char *dst = buf + ((size_t)rec * (size_t)len);
-        if (memchr(cursor, 0x01, line_len) != NULL) {
-            char saved = 0;
-            if (newline) {
-                saved = *newline;
-                *(char *)newline = '\0';
-            }
-            f77_write_internal_marked(dst, len, cursor);
-            if (newline) {
-                *(char *)newline = saved;
-            }
-        } else {
-            if (line_len > (size_t)len) line_len = (size_t)len;
-            memset(dst, ' ', (size_t)len);
-            memcpy(dst, cursor, line_len);
-        }
-
-        if (!newline) {
-            break;
-        }
-        cursor = newline + 1;
-        rec += 1;
-        if (*cursor == '\0') {
-            if (rec < count) {
-                char *blank = buf + ((size_t)rec * (size_t)len);
-                memset(blank, ' ', (size_t)len);
-            }
-            break;
-        }
-    }
+    f77_write_internal_n_core(buf, len, count, tmp);
     free(tmp);
 }
