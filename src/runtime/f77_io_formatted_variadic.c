@@ -4,547 +4,193 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 FILE *f77_runtime_stdin(void) {
     return stdin;
 }
 
-static void f77_write_trimmed(FILE *file, const char *fmt, va_list ap) {
+FILE *f77_runtime_stdout(void) {
+    return stdout;
+}
+
+int f77_write_rendered_line(int unit, const char *text, int strict_status);
+int f77_formatted_read_core(
+    int unit,
+    const char *fmt,
+    void *const *arg_ptrs,
+    const unsigned char *arg_kinds,
+    int arg_count,
+    int status_mode
+);
+
+static int f77_write_dispatch(int unit, const char *fmt, va_list ap, int strict_status) {
+    if (!fmt) {
+        return strict_status ? 1 : 0;
+    }
     va_list ap_len;
     va_copy(ap_len, ap);
     int needed = vsnprintf(NULL, 0, fmt, ap_len);
     va_end(ap_len);
     if (needed < 0) {
-        return;
+        return strict_status ? 1 : 0;
     }
+
     char *buf = (char *)malloc((size_t)needed + 1);
     if (!buf) {
-        return;
+        return strict_status ? 1 : 0;
     }
+
     va_list ap_fmt;
     va_copy(ap_fmt, ap);
     vsnprintf(buf, (size_t)needed + 1, fmt, ap_fmt);
     va_end(ap_fmt);
-    (void)fwrite(buf, 1, (size_t)needed, file);
-    if (needed == 0 || buf[needed - 1] != '\n') {
-        (void)fwrite("\n", 1, 1, file);
-    }
+
+    const int rc = f77_write_rendered_line(unit, buf, strict_status);
     free(buf);
+    return strict_status ? rc : 0;
 }
 
-static int f77_parse_list_char(const char *record, size_t record_len, size_t *idx, char *out, int out_cap) {
-    if (!record || !idx || !out || out_cap <= 0) {
+static int f77_count_read_args(const char *fmt) {
+    if (!fmt) {
         return 0;
     }
-
-    size_t i = *idx;
-    while (i < record_len && (isspace((unsigned char)record[i]) || record[i] == ',')) {
-        i++;
-    }
-
-    int used = 0;
-    if (i < record_len && (record[i] == '\'' || record[i] == '"')) {
-        const char quote = record[i++];
-        while (i < record_len) {
-            const char ch = record[i++];
-            if (ch == quote) {
-                if (i < record_len && record[i] == quote) {
-                    if (used < out_cap - 1) {
-                        out[used++] = quote;
-                    }
-                    i++;
-                    continue;
-                }
-                break;
-            }
-            if (used < out_cap - 1) {
-                out[used++] = ch;
-            }
+    int arg_count = 0;
+    const char *p = fmt;
+    while (*p != '\0') {
+        if (*p != '%') {
+            p++;
+            continue;
         }
-    } else {
-        while (i < record_len && !isspace((unsigned char)record[i]) && record[i] != ',') {
-            if (used < out_cap - 1) {
-                out[used++] = record[i];
-            }
-            i++;
+        p++;
+        while (isdigit((unsigned char)*p)) {
+            p++;
+        }
+        if (*p == 'l') {
+            p++;
+        }
+        const char conv = *p;
+        if (conv == '\0') {
+            break;
+        }
+        p++;
+        if (conv == 'd' || conv == 'f' || conv == 'c' || conv == 'L' || conv == 'S') {
+            arg_count++;
         }
     }
+    return arg_count;
+}
 
-    out[used] = '\0';
-    *idx = i;
-    return used;
+static void f77_collect_read_args(const char *fmt, va_list ap, void **arg_ptrs, unsigned char *arg_kinds) {
+    if (!fmt || !arg_ptrs || !arg_kinds) {
+        return;
+    }
+    int arg_index = 0;
+    const char *p = fmt;
+    while (*p != '\0') {
+        if (*p != '%') {
+            p++;
+            continue;
+        }
+        p++;
+        while (isdigit((unsigned char)*p)) {
+            p++;
+        }
+        int is_long = 0;
+        if (*p == 'l') {
+            is_long = 1;
+            p++;
+        }
+        const char conv = *p;
+        if (conv == '\0') {
+            break;
+        }
+        p++;
+
+        if (conv == 'd') {
+            arg_ptrs[arg_index] = va_arg(ap, int *);
+            arg_kinds[arg_index] = 'd';
+            arg_index++;
+        } else if (conv == 'f' && is_long) {
+            arg_ptrs[arg_index] = va_arg(ap, double *);
+            arg_kinds[arg_index] = 'D';
+            arg_index++;
+        } else if (conv == 'f') {
+            arg_ptrs[arg_index] = va_arg(ap, float *);
+            arg_kinds[arg_index] = 'f';
+            arg_index++;
+        } else if (conv == 'c') {
+            arg_ptrs[arg_index] = va_arg(ap, char *);
+            arg_kinds[arg_index] = 'c';
+            arg_index++;
+        } else if (conv == 'L') {
+            arg_ptrs[arg_index] = va_arg(ap, unsigned char *);
+            arg_kinds[arg_index] = 'L';
+            arg_index++;
+        } else if (conv == 'S') {
+            arg_ptrs[arg_index] = va_arg(ap, char *);
+            arg_kinds[arg_index] = 'S';
+            arg_index++;
+        }
+    }
+}
+
+static int f77_read_dispatch(int unit, const char *fmt, va_list ap, int status_mode) {
+    const int arg_count = f77_count_read_args(fmt);
+    void **arg_ptrs = NULL;
+    unsigned char *arg_kinds = NULL;
+    if (arg_count > 0) {
+        arg_ptrs = (void **)malloc((size_t)arg_count * sizeof(void *));
+        if (!arg_ptrs) {
+            return status_mode ? 1 : -1;
+        }
+        arg_kinds = (unsigned char *)malloc((size_t)arg_count);
+        if (!arg_kinds) {
+            free(arg_ptrs);
+            return status_mode ? 1 : -1;
+        }
+        f77_collect_read_args(fmt, ap, arg_ptrs, arg_kinds);
+    }
+
+    const int rc = f77_formatted_read_core(
+        unit,
+        fmt,
+        (void *const *)arg_ptrs,
+        arg_kinds,
+        arg_count,
+        status_mode
+    );
+    free(arg_kinds);
+    free(arg_ptrs);
+    return rc;
 }
 
 void f77_write(int unit, const char *fmt, ...) {
     va_list ap;
-    const int unit_opened = (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened);
-    if ((unit == 6 || unit == 0) && !unit_opened) {
-        va_start(ap, fmt);
-        f77_write_trimmed(stdout, fmt, ap);
-        va_end(ap);
-        fflush(stdout);
-        return;
-    }
-    if (unit < 0 || unit >= F77_MAX_UNITS) {
-        return;
-    }
-    char name[32];
-    unit_filename(unit, name, sizeof(name));
-
-    FILE *file = NULL;
-    if (unit_pos[unit] == 0) {
-        file = fopen(name, "w");
-    } else {
-        file = fopen(name, "r+");
-        if (!file) {
-            file = fopen(name, "w");
-        }
-    }
-    if (!file) {
-        return;
-    }
-    if (unit_pos[unit] != 0) {
-        (void)fseek(file, unit_pos[unit], SEEK_SET);
-    }
     va_start(ap, fmt);
-    f77_write_trimmed(file, fmt, ap);
+    (void)f77_write_dispatch(unit, fmt, ap, 0);
     va_end(ap);
-    unit_pos[unit] = ftell(file);
-    fclose(file);
 }
 
 int f77_write_status(int unit, const char *fmt, ...) {
     va_list ap;
-    const int unit_opened = (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened);
-    if ((unit == 6 || unit == 0) && !unit_opened) {
-        va_start(ap, fmt);
-        f77_write_trimmed(stdout, fmt, ap);
-        va_end(ap);
-        fflush(stdout);
-        return 0;
-    }
-    if (unit < 0 || unit >= F77_MAX_UNITS) {
-        return 1;
-    }
-    char name[32];
-    unit_filename(unit, name, sizeof(name));
-
-    FILE *file = NULL;
-    if (unit_pos[unit] == 0) {
-        file = fopen(name, "w");
-    } else {
-        file = fopen(name, "r+");
-        if (!file) {
-            file = fopen(name, "w");
-        }
-    }
-    if (!file) {
-        return 1;
-    }
-    if (unit_pos[unit] != 0) {
-        (void)fseek(file, unit_pos[unit], SEEK_SET);
-    }
     va_start(ap, fmt);
-    f77_write_trimmed(file, fmt, ap);
+    const int rc = f77_write_dispatch(unit, fmt, ap, 1);
     va_end(ap);
-    unit_pos[unit] = ftell(file);
-    fclose(file);
-    return 0;
+    return rc;
 }
 
 int f77_read(int unit, const char *fmt, ...) {
     va_list ap;
-    int assigned = 0;
-    FILE *file = NULL;
-    const int unit_opened = (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened);
-    if ((unit == 5 || unit == 0) && !unit_opened) {
-        file = stdin;
-    } else {
-        if (unit < 0 || unit >= F77_MAX_UNITS) {
-            return -1;
-        }
-        char name[32];
-        unit_filename(unit, name, sizeof(name));
-        file = fopen(name, "r");
-        if (!file) {
-            exit(2);
-        }
-        if (unit_pos[unit] != 0) {
-            (void)fseek(file, unit_pos[unit], SEEK_SET);
-        }
-    }
-
-    char record[4096];
-    if (!fgets(record, (int)sizeof(record), file)) {
-        if (file != stdin) fclose(file);
-        exit(2);
-    }
-    size_t record_len = strlen(record);
-    if (record_len > 0 && record[record_len - 1] == '\n') {
-        record[record_len - 1] = '\0';
-        record_len -= 1;
-    }
-    if (record_len > 0 && record[record_len - 1] == '\r') {
-        record[record_len - 1] = '\0';
-        record_len -= 1;
-    }
-
     va_start(ap, fmt);
-    int blank_mode = 0;
-    if (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened) {
-        if (open_units[unit].blank == 2) {
-            blank_mode = 1;
-        }
-    }
-    const char *p = fmt;
-    size_t idx = 0;
-    while (*p != '\0') {
-        if (*p != '%') {
-            if (*p == '\n') {
-                if (!fgets(record, (int)sizeof(record), file)) {
-                    break;
-                }
-                record_len = strlen(record);
-                if (record_len > 0 && record[record_len - 1] == '\n') {
-                    record[record_len - 1] = '\0';
-                    record_len -= 1;
-                }
-                if (record_len > 0 && record[record_len - 1] == '\r') {
-                    record[record_len - 1] = '\0';
-                    record_len -= 1;
-                }
-                idx = 0;
-                p++;
-                continue;
-            }
-            if (idx < record_len) {
-                idx += 1;
-            }
-            p++;
-            continue;
-        }
-        p++;
-        int width = 0;
-        while (isdigit((unsigned char)*p)) {
-            width = width * 10 + (*p - '0');
-            p++;
-        }
-        int is_long = 0;
-        if (*p == 'l') {
-            is_long = 1;
-            p++;
-        }
-        char conv = *p++;
-        if (conv == '\0') break;
-        if (conv == 'N') {
-            blank_mode = 0;
-            continue;
-        }
-        if (conv == 'Z') {
-            blank_mode = 1;
-            continue;
-        }
-        if (conv == 'T') {
-            if (width > 0) {
-                idx = (size_t)(width - 1);
-            }
-            continue;
-        }
-        if (conv == 'R') {
-            if (width > 0) {
-                idx += (size_t)width;
-            }
-            continue;
-        }
-        if (conv == 'U') {
-            if (width > 0) {
-                if (idx >= (size_t)width) {
-                    idx -= (size_t)width;
-                } else {
-                    idx = 0;
-                }
-            }
-            continue;
-        }
-        char buf[128];
-        int used = 0;
-        if (conv != 'S') {
-            if (width <= 0) {
-                while (idx < record_len &&
-                       (isspace((unsigned char)record[idx]) ||
-                        record[idx] == ',' ||
-                        record[idx] == '(' ||
-                        record[idx] == ')')) {
-                    idx++;
-                }
-                while (idx < record_len &&
-                       !isspace((unsigned char)record[idx]) &&
-                       record[idx] != ',' &&
-                       record[idx] != '(' &&
-                       record[idx] != ')' &&
-                       used < (int)sizeof(buf) - 1) {
-                    buf[used++] = record[idx++];
-                }
-            } else {
-                if (width >= (int)sizeof(buf)) width = (int)sizeof(buf) - 1;
-                for (int i = 0; i < width; i++) {
-                    if (idx < record_len) {
-                        buf[used++] = record[idx++];
-                    } else {
-                        buf[used++] = ' ';
-                    }
-                }
-            }
-        }
-        buf[used] = '\0';
-        if (conv == 'd') {
-            f77_apply_blank_mode(buf, &used, blank_mode);
-            int *out = va_arg(ap, int *);
-            *out = (int)strtol(buf, NULL, 10);
-            assigned++;
-        } else if (conv == 'f' && is_long) {
-            f77_apply_blank_mode(buf, &used, blank_mode);
-            f77_normalize_exponent(buf);
-            double *out = va_arg(ap, double *);
-            *out = strtod(buf, NULL);
-            assigned++;
-        } else if (conv == 'f') {
-            f77_apply_blank_mode(buf, &used, blank_mode);
-            f77_normalize_exponent(buf);
-            float *out = va_arg(ap, float *);
-            *out = (float)strtod(buf, NULL);
-            assigned++;
-        } else if (conv == 'S') {
-            char *out = va_arg(ap, char *);
-            int parsed = f77_parse_list_char(record, record_len, &idx, buf, (int)sizeof(buf));
-            if (width > 0) {
-                memset(out, ' ', (size_t)width);
-                if (parsed > width) {
-                    parsed = width;
-                }
-                if (parsed > 0) {
-                    memcpy(out, buf, (size_t)parsed);
-                }
-            } else if (parsed > 0) {
-                memcpy(out, buf, (size_t)parsed);
-            }
-            assigned++;
-        } else if (conv == 'c') {
-            char *out = va_arg(ap, char *);
-            if (used > 0) {
-                memcpy(out, buf, (size_t)used);
-            }
-            assigned++;
-        } else if (conv == 'L') {
-            unsigned char *out = va_arg(ap, unsigned char *);
-            *out = (unsigned char)f77_parse_logical_field(buf, used);
-            assigned++;
-        }
-    }
+    const int rc = f77_read_dispatch(unit, fmt, ap, 0);
     va_end(ap);
-
-    if (file != stdin) {
-        unit_pos[unit] = ftell(file);
-        fclose(file);
-    }
-    return assigned;
+    return rc;
 }
 
 int f77_read_status(int unit, const char *fmt, ...) {
     va_list ap;
-    FILE *file = NULL;
-    const int unit_opened = (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened);
-    if ((unit == 5 || unit == 0) && !unit_opened) {
-        file = stdin;
-    } else {
-        if (unit < 0 || unit >= F77_MAX_UNITS) {
-            return 1;
-        }
-        char name[32];
-        unit_filename(unit, name, sizeof(name));
-        file = fopen(name, "r");
-        if (!file) {
-            return 1;
-        }
-        if (unit_pos[unit] != 0) {
-            (void)fseek(file, unit_pos[unit], SEEK_SET);
-        }
-    }
-
-    char record[4096];
-    if (!fgets(record, (int)sizeof(record), file)) {
-        if (file != stdin) fclose(file);
-        return -1;
-    }
-    size_t record_len = strlen(record);
-    if (record_len > 0 && record[record_len - 1] == '\n') {
-        record[record_len - 1] = '\0';
-        record_len -= 1;
-    }
-    if (record_len > 0 && record[record_len - 1] == '\r') {
-        record[record_len - 1] = '\0';
-        record_len -= 1;
-    }
-
     va_start(ap, fmt);
-    int blank_mode = 0;
-    if (unit >= 0 && unit < F77_MAX_UNITS && open_units[unit].opened) {
-        if (open_units[unit].blank == 2) {
-            blank_mode = 1;
-        }
-    }
-    const char *p = fmt;
-    size_t idx = 0;
-    int assigned = 0;
-    while (*p != '\0') {
-        if (*p != '%') {
-            if (*p == '\n') {
-                if (!fgets(record, (int)sizeof(record), file)) {
-                    break;
-                }
-                record_len = strlen(record);
-                if (record_len > 0 && record[record_len - 1] == '\n') {
-                    record[record_len - 1] = '\0';
-                    record_len -= 1;
-                }
-                if (record_len > 0 && record[record_len - 1] == '\r') {
-                    record[record_len - 1] = '\0';
-                    record_len -= 1;
-                }
-                idx = 0;
-                p++;
-                continue;
-            }
-            if (idx < record_len) {
-                idx += 1;
-            }
-            p++;
-            continue;
-        }
-        p++;
-        int width = 0;
-        while (isdigit((unsigned char)*p)) {
-            width = width * 10 + (*p - '0');
-            p++;
-        }
-        int is_long = 0;
-        if (*p == 'l') {
-            is_long = 1;
-            p++;
-        }
-        char conv = *p++;
-        if (conv == '\0') break;
-        if (conv == 'N') {
-            blank_mode = 0;
-            continue;
-        }
-        if (conv == 'Z') {
-            blank_mode = 1;
-            continue;
-        }
-        if (conv == 'T') {
-            if (width > 0) {
-                idx = (size_t)(width - 1);
-            }
-            continue;
-        }
-        if (conv == 'R') {
-            if (width > 0) {
-                idx += (size_t)width;
-            }
-            continue;
-        }
-        if (conv == 'U') {
-            if (width > 0) {
-                if (idx >= (size_t)width) {
-                    idx -= (size_t)width;
-                } else {
-                    idx = 0;
-                }
-            }
-            continue;
-        }
-        char buf[128];
-        int used = 0;
-        if (conv != 'S') {
-            if (width <= 0) {
-                while (idx < record_len &&
-                       (isspace((unsigned char)record[idx]) ||
-                        record[idx] == ',' ||
-                        record[idx] == '(' ||
-                        record[idx] == ')')) {
-                    idx++;
-                }
-                while (idx < record_len &&
-                       !isspace((unsigned char)record[idx]) &&
-                       record[idx] != ',' &&
-                       record[idx] != '(' &&
-                       record[idx] != ')' &&
-                       used < (int)sizeof(buf) - 1) {
-                    buf[used++] = record[idx++];
-                }
-            } else {
-                if (width >= (int)sizeof(buf)) width = (int)sizeof(buf) - 1;
-                for (int i = 0; i < width; i++) {
-                    if (idx < record_len) {
-                        buf[used++] = record[idx++];
-                    } else {
-                        buf[used++] = ' ';
-                    }
-                }
-            }
-        }
-        buf[used] = '\0';
-        if (conv == 'd') {
-            f77_apply_blank_mode(buf, &used, blank_mode);
-            int *out = va_arg(ap, int *);
-            *out = (int)strtol(buf, NULL, 10);
-            assigned++;
-        } else if (conv == 'f' && is_long) {
-            f77_apply_blank_mode(buf, &used, blank_mode);
-            f77_normalize_exponent(buf);
-            double *out = va_arg(ap, double *);
-            *out = strtod(buf, NULL);
-            assigned++;
-        } else if (conv == 'f') {
-            f77_apply_blank_mode(buf, &used, blank_mode);
-            f77_normalize_exponent(buf);
-            float *out = va_arg(ap, float *);
-            *out = (float)strtod(buf, NULL);
-            assigned++;
-        } else if (conv == 'S') {
-            char *out = va_arg(ap, char *);
-            int parsed = f77_parse_list_char(record, record_len, &idx, buf, (int)sizeof(buf));
-            if (width > 0) {
-                memset(out, ' ', (size_t)width);
-                if (parsed > width) {
-                    parsed = width;
-                }
-                if (parsed > 0) {
-                    memcpy(out, buf, (size_t)parsed);
-                }
-            } else if (parsed > 0) {
-                memcpy(out, buf, (size_t)parsed);
-            }
-            assigned++;
-        } else if (conv == 'c') {
-            char *out = va_arg(ap, char *);
-            if (used > 0) {
-                memcpy(out, buf, (size_t)used);
-            }
-            assigned++;
-        } else if (conv == 'L') {
-            unsigned char *out = va_arg(ap, unsigned char *);
-            *out = (unsigned char)f77_parse_logical_field(buf, used);
-            assigned++;
-        }
-    }
+    const int rc = f77_read_dispatch(unit, fmt, ap, 1);
     va_end(ap);
-
-    if (file != stdin) {
-        unit_pos[unit] = ftell(file);
-        fclose(file);
-    }
-    return 0;
+    return rc;
 }
