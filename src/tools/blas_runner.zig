@@ -506,13 +506,19 @@ fn prepareRuntimeArtifacts(
             const runtime_sources = [_][]const u8{
                 "f77_io_formatted.c",
                 "f77_io_internal.c",
-                "f77_io_control.c",
                 "f77_io_direct.c",
                 "f77_io_unformatted.c",
             };
             var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);
+            var filled: usize = 0;
+            errdefer {
+                var i: usize = 0;
+                while (i < filled) : (i += 1) allocator.free(runtime_paths[i]);
+                allocator.free(runtime_paths);
+            }
             for (runtime_sources, 0..) |name, idx| {
                 runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
+                filled += 1;
             }
 
             const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime_zig", "f77_runtime.zig" });
