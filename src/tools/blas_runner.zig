@@ -481,26 +481,7 @@ fn prepareRuntimeArtifacts(
     timeout_ms: u64,
 ) !RuntimeArtifacts {
     return switch (backend) {
-        .c => blk: {
-            const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
-            defer allocator.free(runtime_dir);
-            const runtime_sources = [_][]const u8{
-                "f77_io_core.c",
-                "f77_io_formatted.c",
-                "f77_io_internal.c",
-                "f77_io_control.c",
-                "f77_io_direct.c",
-                "f77_io_unformatted.c",
-                "f77_io_format.c",
-                "f77_complex.c",
-            };
-            var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);
-            for (runtime_sources, 0..) |name, idx| {
-                runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
-            }
-            break :blk .{ .c_sources = runtime_paths };
-        },
-        .zig => blk: {
+        .c, .zig => blk: {
             const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
             defer allocator.free(runtime_dir);
             const runtime_sources = [_][]const u8{
@@ -521,7 +502,7 @@ fn prepareRuntimeArtifacts(
                 filled += 1;
             }
 
-            const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime_zig", "f77_runtime.zig" });
+            const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "f77_runtime.zig" });
             defer allocator.free(runtime_src);
             const runtime_obj = try std.fs.path.join(allocator, &.{ cwd, "f77_runtime_zig.o" });
             errdefer allocator.free(runtime_obj);
@@ -1155,7 +1136,7 @@ fn compileTranslated(
     try link_args.appendSlice(allocator, fallback_objs.items);
     try link_args.appendSlice(allocator, trans_objs.items);
     try runtime_artifacts.appendToArgs(allocator, &link_args);
-    if (runtime_backend == .zig and builtin.os.tag == .windows) {
+    if (runtime_artifacts.zig_object != null and builtin.os.tag == .windows) {
         // Objects produced by zig build-obj on Windows may reference ntdll exports.
         try link_args.append(allocator, "-lntdll");
     }
