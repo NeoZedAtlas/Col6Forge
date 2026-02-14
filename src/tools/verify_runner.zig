@@ -1057,15 +1057,9 @@ fn parseRuntimeBackend(text: []const u8) !RuntimeBackend {
 }
 
 const RuntimeArtifacts = struct {
-    c_sources: ?[][]const u8 = null,
     zig_object: ?[]const u8 = null,
 
     fn deinit(self: *RuntimeArtifacts, allocator: std.mem.Allocator) void {
-        if (self.c_sources) |paths| {
-            for (paths) |path| allocator.free(path);
-            allocator.free(paths);
-            self.c_sources = null;
-        }
         if (self.zig_object) |obj| {
             allocator.free(obj);
             self.zig_object = null;
@@ -1073,9 +1067,6 @@ const RuntimeArtifacts = struct {
     }
 
     fn appendToArgs(self: *const RuntimeArtifacts, allocator: std.mem.Allocator, args: *std.ArrayList([]const u8)) !void {
-        if (self.c_sources) |paths| {
-            try args.appendSlice(allocator, paths);
-        }
         if (self.zig_object) |obj| {
             try args.append(allocator, obj);
         }
@@ -1091,26 +1082,6 @@ fn prepareRuntimeArtifacts(
 ) !RuntimeArtifacts {
     return switch (backend) {
         .c, .zig => blk: {
-            const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
-            defer allocator.free(runtime_dir);
-            const runtime_sources = [_][]const u8{
-                "f77_io_formatted_variadic.c",
-                "f77_io_internal_variadic.c",
-                "f77_io_direct_variadic.c",
-                "f77_io_unformatted_variadic.c",
-            };
-            var runtime_paths = try allocator.alloc([]const u8, runtime_sources.len);
-            var filled: usize = 0;
-            errdefer {
-                var i: usize = 0;
-                while (i < filled) : (i += 1) allocator.free(runtime_paths[i]);
-                allocator.free(runtime_paths);
-            }
-            for (runtime_sources, 0..) |name, idx| {
-                runtime_paths[idx] = try std.fs.path.join(allocator, &.{ runtime_dir, name });
-                filled += 1;
-            }
-
             const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "f77_runtime.zig" });
             defer allocator.free(runtime_src);
             const runtime_obj = try std.fs.path.join(allocator, &.{ work_dir, "f77_runtime_zig.o" });
@@ -1130,7 +1101,6 @@ fn prepareRuntimeArtifacts(
                 return error.RuntimeBackendBuildFailed;
             }
             break :blk .{
-                .c_sources = runtime_paths,
                 .zig_object = runtime_obj,
             };
         },

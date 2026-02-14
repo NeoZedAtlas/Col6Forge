@@ -16,6 +16,8 @@ const countFormatDescriptors = io_utils.countFormatDescriptors;
 const appendScanfLiteral = io_utils.appendScanfLiteral;
 const appendSpaces = io_utils.appendSpaces;
 const findReversionStart = io_utils.findReversionStart;
+const emitPointerArrayFromNames = io_utils.emitPointerArrayFromNames;
+const emitKindArray = io_utils.emitKindArray;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
 
@@ -37,6 +39,8 @@ pub fn emitReadFormatted(
 
     var arg_ptrs = std.array_list.Managed([]const u8).init(ctx.allocator);
     defer arg_ptrs.deinit();
+    var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_kinds.deinit();
     const CharFixup = struct {
         target_ptr: ValueRef,
         target_len: usize,
@@ -119,6 +123,7 @@ pub fn emitReadFormatted(
                             try fmt_buf.appendSlice("%d");
                         }
                         try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                        try arg_kinds.append('d');
                         arg_index += 1;
                     },
                     .real, .real_fixed => |spec| {
@@ -136,6 +141,7 @@ pub fn emitReadFormatted(
                             try builder.alloca(tmp_name, ty);
                             const tmp_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
                             try arg_ptrs.append(tmp_name);
+                            try arg_kinds.append(if (ty == .f64) 'D' else 'f');
                             try scale_fixups.append(.{
                                 .target_ptr = expanded.ptrs.items[arg_index],
                                 .temp_ptr = tmp_ptr,
@@ -144,6 +150,7 @@ pub fn emitReadFormatted(
                             });
                         } else {
                             try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                            try arg_kinds.append(if (ty == .f64) 'D' else 'f');
                         }
                         arg_index += 1;
                     },
@@ -158,6 +165,7 @@ pub fn emitReadFormatted(
                             try builder.allocaArray(tmp_name, .i8, width);
                             const tmp_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
                             try arg_ptrs.append(tmp_name);
+                            try arg_kinds.append('c');
                             try char_fixups.append(.{
                                 .target_ptr = target_ptr,
                                 .target_len = target_len,
@@ -166,6 +174,7 @@ pub fn emitReadFormatted(
                             });
                         } else {
                             try arg_ptrs.append(target_ptr.name);
+                            try arg_kinds.append('c');
                             if (target_len > 0 and width < target_len) {
                                 try char_fixups.append(.{
                                     .target_ptr = target_ptr,
@@ -186,6 +195,7 @@ pub fn emitReadFormatted(
                             try fmt_buf.appendSlice("%L");
                         }
                         try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                        try arg_kinds.append('L');
                         arg_index += 1;
                     },
                     .scale => |value| {
@@ -206,43 +216,28 @@ pub fn emitReadFormatted(
     const fmt_global = try ctx.string_pool.intern(fmt_buf.items);
     const fmt_ptr = try ctx.nextTemp();
     try builder.gepConstString(fmt_ptr, fmt_global, fmt_buf.items.len + 1);
+    const ptr_array = try emitPointerArrayFromNames(ctx, builder, arg_ptrs.items);
+    const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
+    const arg_count_text = utils.formatInt(ctx.allocator, @intCast(arg_ptrs.items.len));
 
     var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_buf.deinit();
     if (is_internal) {
         const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
-        if (unit_record_count) |count| {
-            if (count > 1) {
-                const count_text = utils.formatInt(ctx.allocator, @intCast(count));
-                try arg_buf.writer().print("ptr {s}, i32 {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, count_text, fmt_ptr });
-            } else {
-                try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
-            }
-        } else {
-            try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
-        }
+        const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
+        const count_text = utils.formatInt(ctx.allocator, @intCast(count_val));
+        try arg_buf.writer().print(
+            "ptr {s}, i32 {s}, i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}",
+            .{ unit_value.name, len_text, count_text, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
+        );
+        const read_name = try ctx.ensureDeclRaw("f77_read_internal_core", .i32, "ptr, i32, i32, ptr, ptr, ptr, i32", false);
+        try builder.call(null, .i32, read_name, arg_buf.items);
     } else {
-        try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, fmt_ptr });
-    }
-    for (arg_ptrs.items) |ptr_name| {
-        try arg_buf.writer().print(", ptr {s}", .{ptr_name});
-    }
-
-    if (is_internal) {
-        if (unit_record_count) |count| {
-            if (count > 1) {
-                const read_name = try ctx.ensureDeclRaw("f77_read_internal_n", .i32, "ptr, i32, i32, ptr", true);
-                try builder.call(null, .i32, read_name, arg_buf.items);
-            } else {
-                const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
-                try builder.call(null, .i32, read_name, arg_buf.items);
-            }
-        } else {
-            const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
-            try builder.call(null, .i32, read_name, arg_buf.items);
-        }
-    } else {
-        const read_name = try ctx.ensureDeclRaw("f77_read", .i32, "i32, ptr", true);
+        try arg_buf.writer().print(
+            "i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}, i32 0",
+            .{ unit_i32.name, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
+        );
+        const read_name = try ctx.ensureDeclRaw("f77_formatted_read_core", .i32, "i32, ptr, ptr, ptr, i32, i32", false);
         try builder.call(null, .i32, read_name, arg_buf.items);
     }
 
@@ -304,6 +299,8 @@ pub fn emitReadFormattedStatus(
 
     var arg_ptrs = std.array_list.Managed([]const u8).init(ctx.allocator);
     defer arg_ptrs.deinit();
+    var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_kinds.deinit();
     const CharFixup = struct {
         target_ptr: ValueRef,
         target_len: usize,
@@ -386,6 +383,7 @@ pub fn emitReadFormattedStatus(
                             try fmt_buf.appendSlice("%d");
                         }
                         try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                        try arg_kinds.append('d');
                         arg_index += 1;
                     },
                     .real, .real_fixed => |spec| {
@@ -403,6 +401,7 @@ pub fn emitReadFormattedStatus(
                             try builder.alloca(tmp_name, ty);
                             const tmp_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
                             try arg_ptrs.append(tmp_name);
+                            try arg_kinds.append(if (ty == .f64) 'D' else 'f');
                             try scale_fixups.append(.{
                                 .target_ptr = expanded.ptrs.items[arg_index],
                                 .temp_ptr = tmp_ptr,
@@ -411,6 +410,7 @@ pub fn emitReadFormattedStatus(
                             });
                         } else {
                             try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                            try arg_kinds.append(if (ty == .f64) 'D' else 'f');
                         }
                         arg_index += 1;
                     },
@@ -427,8 +427,10 @@ pub fn emitReadFormattedStatus(
                             try builder.alloca(tmp_name, .i8);
                             temp_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
                             try arg_ptrs.append(tmp_name);
+                            try arg_kinds.append('c');
                         } else {
                             try arg_ptrs.append(target_ptr.name);
+                            try arg_kinds.append('c');
                         }
                         try char_fixups.append(.{
                             .target_ptr = target_ptr,
@@ -442,6 +444,7 @@ pub fn emitReadFormattedStatus(
                         if (arg_index >= expanded.ptrs.items.len) break;
                         try fmt_buf.appendSlice("%L");
                         try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                        try arg_kinds.append('L');
                         arg_index += 1;
                     },
                     .scale => |factor| {
@@ -462,44 +465,29 @@ pub fn emitReadFormattedStatus(
     const fmt_global = try ctx.string_pool.intern(fmt_buf.items);
     const fmt_ptr = try ctx.nextTemp();
     try builder.gepConstString(fmt_ptr, fmt_global, fmt_buf.items.len + 1);
+    const ptr_array = try emitPointerArrayFromNames(ctx, builder, arg_ptrs.items);
+    const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
+    const arg_count_text = utils.formatInt(ctx.allocator, @intCast(arg_ptrs.items.len));
 
     var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_buf.deinit();
-    if (is_internal) {
-        const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
-        if (unit_record_count) |count| {
-            if (count > 1) {
-                const count_text = utils.formatInt(ctx.allocator, @intCast(count));
-                try arg_buf.writer().print("ptr {s}, i32 {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, count_text, fmt_ptr });
-            } else {
-                try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
-            }
-        } else {
-            try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
-        }
-    } else {
-        try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, fmt_ptr });
-    }
-    for (arg_ptrs.items) |ptr_name| {
-        try arg_buf.writer().print(", ptr {s}", .{ptr_name});
-    }
-
     var status_val: ValueRef = .{ .name = "0", .ty = .i32, .is_ptr = false };
     if (is_internal) {
-        if (unit_record_count) |count| {
-            if (count > 1) {
-                const read_name = try ctx.ensureDeclRaw("f77_read_internal_n", .i32, "ptr, i32, i32, ptr", true);
-                try builder.call(null, .i32, read_name, arg_buf.items);
-            } else {
-                const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
-                try builder.call(null, .i32, read_name, arg_buf.items);
-            }
-        } else {
-            const read_name = try ctx.ensureDeclRaw("f77_read_internal", .i32, "ptr, i32, ptr", true);
-            try builder.call(null, .i32, read_name, arg_buf.items);
-        }
+        const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
+        const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
+        const count_text = utils.formatInt(ctx.allocator, @intCast(count_val));
+        try arg_buf.writer().print(
+            "ptr {s}, i32 {s}, i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}",
+            .{ unit_value.name, len_text, count_text, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
+        );
+        const read_name = try ctx.ensureDeclRaw("f77_read_internal_core", .i32, "ptr, i32, i32, ptr, ptr, ptr, i32", false);
+        try builder.call(null, .i32, read_name, arg_buf.items);
     } else {
-        const read_name = try ctx.ensureDeclRaw("f77_read_status", .i32, "i32, ptr", true);
+        try arg_buf.writer().print(
+            "i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}, i32 1",
+            .{ unit_i32.name, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
+        );
+        const read_name = try ctx.ensureDeclRaw("f77_formatted_read_core", .i32, "i32, ptr, ptr, ptr, i32, i32", false);
         const tmp = try ctx.nextTemp();
         try builder.call(tmp, .i32, read_name, arg_buf.items);
         status_val = .{ .name = tmp, .ty = .i32, .is_ptr = false };

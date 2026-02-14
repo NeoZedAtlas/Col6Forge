@@ -16,6 +16,7 @@ const formatted = @import("formatted/mod.zig");
 const buildDirectWriteSignatureAndPtrs = io_utils.buildDirectWriteSignatureAndPtrs;
 const buildDirectReadSignatureAndPtrs = io_utils.buildDirectReadSignatureAndPtrs;
 const applyComplexFixupsList = io_utils.applyComplexFixupsList;
+const emitPointerArrayFromValues = io_utils.emitPointerArrayFromValues;
 const findReversionStart = io_utils.findReversionStart;
 const countNewlinesLiteral = io_utils.countNewlinesLiteral;
 const evalConstIntSem = io_utils.evalConstIntSem;
@@ -148,14 +149,15 @@ pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitE
     const sig_ptr = try ctx.nextTemp();
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
-    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_buf.deinit();
-    try arg_buf.writer().print("i32 {s}, i32 {s}, ptr {s}", .{ unit_i32.name, rec_i32.name, sig_ptr });
-    for (sig_ptrs.ptrs.items) |ptr| {
-        try arg_buf.writer().print(", ptr {s}", .{ptr.name});
-    }
-    const read_name = try ctx.ensureDeclRaw("f77_read_direct", .i32, "i32, i32, ptr", true);
-    try builder.call(null, .i32, read_name, arg_buf.items);
+    const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
+    const count_text = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len));
+    const arg_buf = try std.fmt.allocPrint(
+        ctx.allocator,
+        "i32 {s}, i32 {s}, ptr {s}, ptr {s}, i32 {s}",
+        .{ unit_i32.name, rec_i32.name, sig_ptr, ptr_array.name, count_text },
+    );
+    const read_name = try ctx.ensureDeclRaw("f77_read_direct_v", .i32, "i32, i32, ptr, ptr, i32", false);
+    try builder.call(null, .i32, read_name, arg_buf);
 
     try applyComplexFixupsList(ctx, builder, sig_ptrs.complex_fixups.items);
 }
@@ -180,14 +182,15 @@ fn emitDirectWriteCall(
     const sig_ptr = try ctx.nextTemp();
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
-    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_buf.deinit();
-    try arg_buf.writer().print("i32 {s}, i32 {s}, ptr {s}", .{ unit_i32.name, rec_i32.name, sig_ptr });
-    for (sig_ptrs.ptrs.items) |ptr| {
-        try arg_buf.writer().print(", ptr {s}", .{ptr.name});
-    }
-    const write_name = try ctx.ensureDeclRaw("f77_write_direct", .void, "i32, i32, ptr", true);
-    try builder.call(null, .void, write_name, arg_buf.items);
+    const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
+    const count_text = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len));
+    const arg_buf = try std.fmt.allocPrint(
+        ctx.allocator,
+        "i32 {s}, i32 {s}, ptr {s}, ptr {s}, i32 {s}",
+        .{ unit_i32.name, rec_i32.name, sig_ptr, ptr_array.name, count_text },
+    );
+    const write_name = try ctx.ensureDeclRaw("f77_write_direct_v", .void, "i32, i32, ptr, ptr, i32", false);
+    try builder.call(null, .void, write_name, arg_buf);
 }
 fn resolveFormatItemsForDirect(ctx: *Context, format: ast.FormatSpec) EmitError!?[]const ast.FormatItem {
     switch (format) {

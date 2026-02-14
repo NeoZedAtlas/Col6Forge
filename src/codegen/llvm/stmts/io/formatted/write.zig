@@ -1,6 +1,5 @@
 const std = @import("std");
 const ast = @import("../../../../input.zig");
-const builtin = @import("builtin");
 const llvm_types = @import("../../../types.zig");
 const context = @import("../../../codegen/context.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
@@ -19,6 +18,8 @@ const isAllNewlines = io_utils.isAllNewlines;
 const flushPendingSpaces = io_utils.flushPendingSpaces;
 const findReversionStart = io_utils.findReversionStart;
 const appendIntFormat = io_utils.appendIntFormat;
+const emitPointerArrayFromValues = io_utils.emitPointerArrayFromValues;
+const emitKindArray = io_utils.emitKindArray;
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 
 fn appendTabMarker(fmt_buf: *std.array_list.Managed(u8), tab: ast.TabFormat) !void {
@@ -488,57 +489,59 @@ pub fn emitWriteFormatted(
     const fmt_global = try ctx.string_pool.intern(fmt_buf.items);
     const fmt_ptr = try ctx.nextTemp();
     try builder.gepConstString(fmt_ptr, fmt_global, fmt_buf.items.len + 1);
-
-    var adjusted_args = std.array_list.Managed(Arg).init(ctx.allocator);
-    defer adjusted_args.deinit();
-    if (builtin.os.tag == .windows) {
-        for (args.items) |arg| {
-            if (arg.ty == .f64) {
+    var ptr_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer ptr_args.deinit();
+    var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_kinds.deinit();
+    for (args.items) |arg| {
+        switch (arg.ty) {
+            .ptr => {
+                try ptr_args.append(.{ .name = arg.name, .ty = .ptr, .is_ptr = true });
+                try arg_kinds.append('s');
+            },
+            .i32 => {
+                const val = ValueRef{ .name = arg.name, .ty = .i32, .is_ptr = false };
                 const tmp = try ctx.nextTemp();
+                try builder.alloca(tmp, .i32);
+                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                try builder.store(val, ptr);
+                try ptr_args.append(ptr);
+                try arg_kinds.append('i');
+            },
+            .f64 => {
                 const val = ValueRef{ .name = arg.name, .ty = .f64, .is_ptr = false };
-                try builder.cast(tmp, "bitcast", .f64, val, .i64);
-                try adjusted_args.append(.{ .ty = .i64, .name = tmp });
-                continue;
-            }
-            try adjusted_args.append(arg);
+                const tmp = try ctx.nextTemp();
+                try builder.alloca(tmp, .f64);
+                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                try builder.store(val, ptr);
+                try ptr_args.append(ptr);
+                try arg_kinds.append('f');
+            },
+            else => return error.UnsupportedIntrinsicType,
         }
-    } else {
-        try adjusted_args.appendSlice(args.items);
     }
+    const ptr_array = try emitPointerArrayFromValues(ctx, builder, ptr_args.items);
+    const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
+    const arg_count_text = utils.formatInt(ctx.allocator, @intCast(ptr_args.items.len));
 
     var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_buf.deinit();
-    var internal_multi = false;
     if (is_internal) {
         const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
-        if (unit_record_count) |count| {
-            if (count > 1) {
-                internal_multi = true;
-                const count_text = utils.formatInt(ctx.allocator, @intCast(count));
-                try arg_buf.writer().print("ptr {s}, i32 {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, count_text, fmt_ptr });
-            } else {
-                try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
-            }
-        } else {
-            try arg_buf.writer().print("ptr {s}, i32 {s}, ptr {s}", .{ unit_value.name, len_text, fmt_ptr });
-        }
-    } else {
-        try arg_buf.writer().print("i32 {s}, ptr {s}", .{ unit_i32.name, fmt_ptr });
-    }
-    for (adjusted_args.items) |arg| {
-        try arg_buf.writer().print(", {s} {s}", .{ llvm_types.irTypeText(arg.ty), arg.name });
-    }
-
-    if (is_internal) {
-        if (internal_multi) {
-            const write_name = try ctx.ensureDeclRaw("f77_write_internal_n", .void, "ptr, i32, i32, ptr", true);
-            try builder.call(null, .void, write_name, arg_buf.items);
-        } else {
-            const write_name = try ctx.ensureDeclRaw("f77_write_internal", .void, "ptr, i32, ptr", true);
-            try builder.call(null, .void, write_name, arg_buf.items);
-        }
-    } else {
-        const write_name = try ctx.ensureDeclRaw("f77_write", .void, "i32, ptr", true);
+        const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
+        const count_text = utils.formatInt(ctx.allocator, @intCast(count_val));
+        try arg_buf.writer().print(
+            "ptr {s}, i32 {s}, i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}",
+            .{ unit_value.name, len_text, count_text, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
+        );
+        const write_name = try ctx.ensureDeclRaw("f77_write_internal_v", .void, "ptr, i32, i32, ptr, ptr, ptr, i32", false);
         try builder.call(null, .void, write_name, arg_buf.items);
+    } else {
+        try arg_buf.writer().print(
+            "i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}, i32 0",
+            .{ unit_i32.name, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
+        );
+        const write_name = try ctx.ensureDeclRaw("f77_write_v", .i32, "i32, ptr, ptr, ptr, i32, i32", false);
+        try builder.call(null, .i32, write_name, arg_buf.items);
     }
 }
