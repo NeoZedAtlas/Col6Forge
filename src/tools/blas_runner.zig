@@ -504,7 +504,7 @@ fn prepareRuntimeArtifacts(
             const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
             defer allocator.free(runtime_dir);
             const runtime_sources = [_][]const u8{
-                "f77_io_formatted.c",
+                "f77_io_formatted_variadic.c",
                 "f77_io_internal.c",
                 "f77_io_direct_variadic.c",
                 "f77_io_unformatted_variadic.c",
