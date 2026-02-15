@@ -44,6 +44,29 @@ fn cstrlenRaw(text: []const u8) usize {
     return i;
 }
 
+fn checkedMul(lhs: usize, rhs: usize) ?usize {
+    var out: usize = undefined;
+    if (@mulWithOverflow(lhs, rhs, &out) != 0) return null;
+    return out;
+}
+
+fn checkedAdd(lhs: usize, rhs: usize) ?usize {
+    var out: usize = undefined;
+    if (@addWithOverflow(lhs, rhs, &out) != 0) return null;
+    return out;
+}
+
+fn offsetIndex(i: c_int, stride: c_int) ?usize {
+    const iu: usize = @intCast(i);
+    const su: usize = @intCast(stride);
+    return checkedMul(iu, su);
+}
+
+fn complexOffsetIndex(i: c_int, stride: c_int) ?usize {
+    const idx = offsetIndex(i, stride) orelse return null;
+    return checkedMul(idx, 2);
+}
+
 fn listDelim(ch: c_int) bool {
     if (ch < 0 or ch > 255) return false;
     const b: u8 = @intCast(ch);
@@ -156,7 +179,7 @@ pub export fn f77_read_list_i32_n(unit: c_int, count: c_int, stride: c_int, base
     var i: c_int = 0;
     while (i < count) : (i += 1) {
         if (!f77ReadListTokenStream(file, &token)) return -1;
-        const idx = @as(usize, @intCast(i)) * @as(usize, @intCast(stride));
+        const idx = offsetIndex(i, stride) orelse return -1;
         out[idx] = @intCast(strtol(asConstCStr(&token), null, 10));
     }
     f77DiscardToRecordEnd(file);
@@ -176,7 +199,7 @@ pub export fn f77_read_list_f32_n(unit: c_int, count: c_int, stride: c_int, base
     while (i < count) : (i += 1) {
         if (!f77ReadListTokenStream(file, &token)) return -1;
         f77_normalize_exponent(asCStr(&token));
-        const idx = @as(usize, @intCast(i)) * @as(usize, @intCast(stride));
+        const idx = offsetIndex(i, stride) orelse return -1;
         out[idx] = @floatCast(strtod(asConstCStr(&token), null));
     }
     f77DiscardToRecordEnd(file);
@@ -196,7 +219,7 @@ pub export fn f77_read_list_f64_n(unit: c_int, count: c_int, stride: c_int, base
     while (i < count) : (i += 1) {
         if (!f77ReadListTokenStream(file, &token)) return -1;
         f77_normalize_exponent(asCStr(&token));
-        const idx = @as(usize, @intCast(i)) * @as(usize, @intCast(stride));
+        const idx = offsetIndex(i, stride) orelse return -1;
         out[idx] = strtod(asConstCStr(&token), null);
     }
     f77DiscardToRecordEnd(file);
@@ -216,9 +239,10 @@ pub export fn f77_read_list_c32_n(unit: c_int, count: c_int, stride: c_int, base
     while (i < count) : (i += 1) {
         if (!f77ReadListTokenStream(file, &token)) return -1;
         f77_normalize_exponent(asCStr(&token));
-        const elem_idx = @as(usize, @intCast(i)) * @as(usize, @intCast(stride)) * 2;
+        const elem_idx = complexOffsetIndex(i, stride) orelse return -1;
+        const imag_idx = checkedAdd(elem_idx, 1) orelse return -1;
         out[elem_idx] = @floatCast(strtod(asConstCStr(&token), null));
-        out[elem_idx + 1] = 0.0;
+        out[imag_idx] = 0.0;
     }
     f77DiscardToRecordEnd(file);
     return 0;
@@ -237,9 +261,10 @@ pub export fn f77_read_list_c64_n(unit: c_int, count: c_int, stride: c_int, base
     while (i < count) : (i += 1) {
         if (!f77ReadListTokenStream(file, &token)) return -1;
         f77_normalize_exponent(asCStr(&token));
-        const elem_idx = @as(usize, @intCast(i)) * @as(usize, @intCast(stride)) * 2;
+        const elem_idx = complexOffsetIndex(i, stride) orelse return -1;
+        const imag_idx = checkedAdd(elem_idx, 1) orelse return -1;
         out[elem_idx] = strtod(asConstCStr(&token), null);
-        out[elem_idx + 1] = 0.0;
+        out[imag_idx] = 0.0;
     }
     f77DiscardToRecordEnd(file);
     return 0;
@@ -258,7 +283,7 @@ pub export fn f77_read_list_l_n(unit: c_int, count: c_int, stride: c_int, base: 
     while (i < count) : (i += 1) {
         if (!f77ReadListTokenStream(file, &token)) return -1;
         const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
-        const idx = @as(usize, @intCast(i)) * @as(usize, @intCast(stride));
+        const idx = offsetIndex(i, stride) orelse return -1;
         out[idx] = @intCast(f77_parse_logical_field(asConstCStr(&token), token_len));
     }
     f77DiscardToRecordEnd(file);

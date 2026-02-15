@@ -25,7 +25,10 @@ fn f77_zmul(a: f77_complex64, b: f77_complex64) f77_complex64 {
 
 fn f77_cinv(a: f77_complex32) f77_complex32 {
     const denom = (a.r * a.r) + (a.i * a.i);
-    if (denom == 0.0) return .{ .r = 0.0, .i = 0.0 };
+    if (denom == 0.0) {
+        const nan = std.math.nan(f32);
+        return .{ .r = nan, .i = nan };
+    }
     return .{
         .r = a.r / denom,
         .i = -a.i / denom,
@@ -34,7 +37,10 @@ fn f77_cinv(a: f77_complex32) f77_complex32 {
 
 fn f77_zinv(a: f77_complex64) f77_complex64 {
     const denom = (a.r * a.r) + (a.i * a.i);
-    if (denom == 0.0) return .{ .r = 0.0, .i = 0.0 };
+    if (denom == 0.0) {
+        const nan = std.math.nan(f64);
+        return .{ .r = nan, .i = nan };
+    }
     return .{
         .r = a.r / denom,
         .i = -a.i / denom,
@@ -178,4 +184,3 @@ pub export fn f77_zpowi(z: f77_complex64, n: c_int) callconv(.c) f77_complex64 {
     }
     return result;
 }
-

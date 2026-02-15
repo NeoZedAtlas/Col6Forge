@@ -10,6 +10,18 @@ fn asConstCStr(buf: anytype) [*:0]const u8 {
     return @ptrCast(buf);
 }
 
+fn checkedMul(lhs: usize, rhs: usize) ?usize {
+    var out: usize = undefined;
+    if (@mulWithOverflow(lhs, rhs, &out) != 0) return null;
+    return out;
+}
+
+fn checkedAdd(lhs: usize, rhs: usize) ?usize {
+    var out: usize = undefined;
+    if (@addWithOverflow(lhs, rhs, &out) != 0) return null;
+    return out;
+}
+
 extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
 extern fn strtod(nptr: [*:0]const u8, endptr: ?*?[*:0]u8) f64;
 extern fn f77_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
@@ -61,7 +73,8 @@ pub export fn f77_read_internal_core(
             if (fmt_c[fmt_i] == '\n') {
                 rec_index += 1;
                 if (rec_index >= @as(usize, @intCast(count))) break;
-                const rec_ptr = src + (rec_index * rec_stride);
+                const rec_offset = checkedMul(rec_index, rec_stride) orelse break;
+                const rec_ptr = src + rec_offset;
                 loadInternalRecord(&record, rec_ptr, rec_len);
                 idx = 0;
                 fmt_i += 1;
@@ -204,7 +217,18 @@ fn writeInternalMarkedSlice(dst: [*]u8, len: usize, src: []const u8) void {
             var value: usize = 0;
             while (i < src.len and src[i] != 0x02) : (i += 1) {
                 if (src[i] >= '0' and src[i] <= '9') {
-                    value = (value * 10) + @as(usize, src[i] - '0');
+                    var mul_value: usize = undefined;
+                    if (@mulWithOverflow(value, 10, &mul_value) != 0) {
+                        value = ~@as(usize, 0);
+                    } else {
+                        const digit = @as(usize, src[i] - '0');
+                        var next_value: usize = undefined;
+                        if (@addWithOverflow(mul_value, digit, &next_value) != 0) {
+                            value = ~@as(usize, 0);
+                        } else {
+                            value = next_value;
+                        }
+                    }
                 }
             }
             if (i < src.len and src[i] == 0x02) {
@@ -213,7 +237,7 @@ fn writeInternalMarkedSlice(dst: [*]u8, len: usize, src: []const u8) void {
 
             switch (kind) {
                 'T' => col = if (value > 0) value - 1 else 0,
-                'R' => col += value,
+                'R' => col = checkedAdd(col, value) orelse len,
                 'L' => {
                     if (col > value) {
                         col -= value;
@@ -260,20 +284,27 @@ pub export fn f77_write_internal_n_core(buf: ?[*]u8, len: c_int, count: c_int, s
     var rec: usize = 0;
     while (rec < record_count) {
         var line_len: usize = 0;
-        while (in[cursor + line_len] != 0 and in[cursor + line_len] != '\n') : (line_len += 1) {}
+        while (true) : (line_len += 1) {
+            const scan_idx = checkedAdd(cursor, line_len) orelse return;
+            const ch = in[scan_idx];
+            if (ch == 0 or ch == '\n') break;
+        }
 
-        const out = dst + (rec * width);
-        writeInternalMarkedSlice(out, width, in[cursor .. cursor + line_len]);
+        const out_offset = checkedMul(rec, width) orelse return;
+        const out = dst + out_offset;
+        const line_end = checkedAdd(cursor, line_len) orelse return;
+        writeInternalMarkedSlice(out, width, in[cursor..line_end]);
 
-        if (in[cursor + line_len] == 0) {
+        if (in[line_end] == 0) {
             break;
         }
 
-        cursor += line_len + 1;
+        cursor = checkedAdd(line_end, 1) orelse return;
         rec += 1;
         if (in[cursor] == 0) {
             if (rec < record_count) {
-                const blank = dst + (rec * width);
+                const blank_offset = checkedMul(rec, width) orelse return;
+                const blank = dst + blank_offset;
                 var i: usize = 0;
                 while (i < width) : (i += 1) {
                     blank[i] = ' ';

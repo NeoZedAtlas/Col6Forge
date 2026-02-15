@@ -39,6 +39,21 @@ fn asConstCStr(buf: anytype) [*:0]const u8 {
     return @ptrCast(buf);
 }
 
+const RecordRange = struct {
+    offset: usize,
+    end: usize,
+};
+
+fn directRecordRange(rec: c_int, recl_size: usize) ?RecordRange {
+    if (rec <= 0) return null;
+    const rec_index: usize = @intCast(rec - 1);
+    var offset: usize = undefined;
+    if (@mulWithOverflow(rec_index, recl_size, &offset) != 0) return null;
+    var end: usize = undefined;
+    if (@addWithOverflow(offset, recl_size, &end) != 0) return null;
+    return .{ .offset = offset, .end = end };
+}
+
 pub export fn unformatted_truncate(unit: ?*UnformattedUnit, new_count: usize) callconv(.c) void {
     if (unit == null) return;
     const u = unit.?;
@@ -152,11 +167,11 @@ pub export fn f77_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) callco
     du.recl = recl_local;
 
     const recl_size: usize = @intCast(recl_local);
-    const offset: usize = @as(usize, @intCast(rec - 1)) * recl_size;
-    directEnsureCapacity(unit, offset + recl_size);
-    if (du.data == null or du.size < offset + recl_size) return null;
+    const range = directRecordRange(rec, recl_size) orelse return null;
+    directEnsureCapacity(unit, range.end);
+    if (du.data == null or du.size < range.end) return null;
 
-    const record = du.data.? + offset;
+    const record = du.data.? + range.offset;
     var i: usize = 0;
     while (i < recl_size) : (i += 1) {
         record[i] = ' ';
@@ -171,9 +186,9 @@ pub export fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int) callconv(.c) ?[*
     if (du.recl <= 0 or du.data == null) return null;
 
     const recl_size: usize = @intCast(du.recl);
-    const offset: usize = @as(usize, @intCast(rec - 1)) * recl_size;
-    if (du.size < offset + recl_size) return null;
-    return du.data.? + offset;
+    const range = directRecordRange(rec, recl_size) orelse return null;
+    if (du.size < range.end) return null;
+    return du.data.? + range.offset;
 }
 
 pub export fn f77_direct_record_commit(unit: c_int, rec: c_int) callconv(.c) void {

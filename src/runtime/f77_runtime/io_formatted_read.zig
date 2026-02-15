@@ -35,6 +35,18 @@ fn asConstCStr(buf: anytype) [*:0]const u8 {
     return @ptrCast(buf);
 }
 
+const RuntimeArgSlot = struct {
+    available: bool,
+    ptr: ?*anyopaque,
+};
+
+fn runtimeArgPtrAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) RuntimeArgSlot {
+    if (idx >= total or arg_ptrs == null) {
+        return .{ .available = false, .ptr = null };
+    }
+    return .{ .available = true, .ptr = arg_ptrs.?[idx] };
+}
+
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
 }
@@ -252,8 +264,9 @@ pub export fn f77_formatted_read_core(
 
         const takes_arg = conv == 'd' or conv == 'f' or conv == 'S' or conv == 'c' or conv == 'L';
         if (!takes_arg) continue;
-        if (arg_ptrs == null or arg_index >= total_args) break;
-        const arg_any = arg_ptrs.?[arg_index] orelse {
+        const arg_slot = runtimeArgPtrAt(arg_ptrs, arg_index, total_args);
+        if (!arg_slot.available) break;
+        const arg = arg_slot.ptr orelse {
             arg_index += 1;
             continue;
         };
@@ -262,23 +275,23 @@ pub export fn f77_formatted_read_core(
 
         if (conv == 'd' and kind == 'd') {
             f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
-            const out: *c_int = @ptrCast(@alignCast(arg_any));
+            const out: *c_int = @ptrCast(@alignCast(arg));
             out.* = @intCast(strtol(asConstCStr(&field), null, 10));
             assigned += 1;
         } else if (conv == 'f' and is_long and kind == 'D') {
             f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
             f77_normalize_exponent(asCStr(&field));
-            const out: *f64 = @ptrCast(@alignCast(arg_any));
+            const out: *f64 = @ptrCast(@alignCast(arg));
             out.* = strtod(asConstCStr(&field), null);
             assigned += 1;
         } else if (conv == 'f' and !is_long and kind == 'f') {
             f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
             f77_normalize_exponent(asCStr(&field));
-            const out: *f32 = @ptrCast(@alignCast(arg_any));
+            const out: *f32 = @ptrCast(@alignCast(arg));
             out.* = @floatCast(strtod(asConstCStr(&field), null));
             assigned += 1;
         } else if (conv == 'S' and kind == 'S') {
-            const out: [*]u8 = @ptrCast(arg_any);
+            const out: [*]u8 = @ptrCast(arg);
             var parsed = parseListCharRecord(record[0..record_len], &idx, &field);
             if (width > 0) {
                 var i: c_int = 0;
@@ -302,7 +315,7 @@ pub export fn f77_formatted_read_core(
             }
             assigned += 1;
         } else if (conv == 'c' and kind == 'c') {
-            const out: [*]u8 = @ptrCast(arg_any);
+            const out: [*]u8 = @ptrCast(arg);
             if (used > 0) {
                 const n: usize = @intCast(used);
                 var i: usize = 0;
@@ -312,7 +325,7 @@ pub export fn f77_formatted_read_core(
             }
             assigned += 1;
         } else if (conv == 'L' and kind == 'L') {
-            const out: *u8 = @ptrCast(@alignCast(arg_any));
+            const out: *u8 = @ptrCast(@alignCast(arg));
             out.* = @intCast(f77_parse_logical_field(asConstCStr(&field), used));
             assigned += 1;
         }
