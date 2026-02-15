@@ -74,12 +74,16 @@ pub fn Builder(comptime WriterType: type) type {
             try self.writer.print("define {s} @{s}(", .{ llvm_types.irTypeText(ret_type), name });
         }
 
-        pub fn defineArgPtr(self: *@This(), name: []const u8, is_first: bool) !void {
+        pub fn defineArg(self: *@This(), ty: IRType, name: []const u8, is_first: bool) !void {
             try self.bump();
             if (!is_first) {
                 try self.writer.writeAll(", ");
             }
-            try self.writer.print("ptr {s}", .{name});
+            try self.writer.print("{s} {s}", .{ llvm_types.irTypeText(ty), name });
+        }
+
+        pub fn defineArgPtr(self: *@This(), name: []const u8, is_first: bool) !void {
+            try self.defineArg(.ptr, name, is_first);
         }
 
         pub fn defineEnd(self: *@This()) !void {
@@ -222,6 +226,22 @@ pub fn Builder(comptime WriterType: type) type {
             }
         }
 
+        pub fn callIndirectTyped(self: *@This(), tmp: ?[]const u8, ret_ty: IRType, fn_ptr: []const u8, args: []const ValueRef) !void {
+            try self.bump();
+            if (tmp) |name| {
+                try self.writer.print("  {s} = call {s} {s}(", .{ name, llvm_types.irTypeText(ret_ty), fn_ptr });
+            } else {
+                try self.writer.print("  call {s} {s}(", .{ llvm_types.irTypeText(ret_ty), fn_ptr });
+            }
+
+            for (args, 0..) |arg, idx| {
+                if (idx != 0) try self.writer.writeAll(", ");
+                try self.writer.print("{s} {s}", .{ llvm_types.irTypeText(arg.ty), arg.name });
+            }
+
+            try self.writer.writeAll(")\n");
+        }
+
         pub fn extractValue(self: *@This(), tmp: []const u8, agg_ty: IRType, agg_val: ValueRef, index: usize) !void {
             try self.bump();
             try self.writer.print("  {s} = extractvalue {s} {s}, {d}\n", .{ tmp, llvm_types.irTypeText(agg_ty), agg_val.name, index });
@@ -279,4 +299,20 @@ test "callTyped serializes typed arguments" {
     try builder.callTyped("%t0", .i32, "foo", &args);
 
     try testing.expectEqualStrings("  %t0 = call i32 @foo(i32 %x, ptr %p)\n", buf.items);
+}
+
+test "callIndirectTyped serializes typed arguments" {
+    const testing = std.testing;
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
+    defer buf.deinit();
+
+    const writer = buf.writer();
+    var builder = Builder(@TypeOf(writer)).init(writer);
+    const args = [_]ValueRef{
+        .{ .name = "%x", .ty = .i32, .is_ptr = false },
+        .{ .name = "%len", .ty = .i32, .is_ptr = false },
+    };
+    try builder.callIndirectTyped(null, .void, "%fp", &args);
+
+    try testing.expectEqualStrings("  call void %fp(i32 %x, i32 %len)\n", buf.items);
 }

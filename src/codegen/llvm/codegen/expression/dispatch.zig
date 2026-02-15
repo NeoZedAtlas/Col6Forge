@@ -166,15 +166,14 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                     const fn_ptr = try ctx.getPointer(call_or_sub.name);
                     return call.emitIndirectCharacterCall(ctx, builder, fn_ptr, result_len, call_or_sub.args);
                 }
-                const fn_name = try ensureExternalDeclForCall(ctx, call_or_sub.name, .void, call_or_sub.args.len + 1);
+                const fn_name = try ensureExternalDeclForCall(ctx, call_or_sub.name, .void, call_or_sub.args, true);
                 return call.emitCharacterCall(ctx, builder, fn_name, result_len, call_or_sub.args);
             }
             if (sym.storage == .dummy) {
                 const fn_ptr = try ctx.getPointer(call_or_sub.name);
                 return call.emitIndirectCall(ctx, builder, fn_ptr, ret_ty, call_or_sub.args, false);
             }
-            const abi_arg_count = call_or_sub.args.len + @as(usize, if (ret_ty == .complex_f64) 1 else 0);
-            const fn_name = try ensureExternalDeclForCall(ctx, call_or_sub.name, ret_ty, abi_arg_count);
+            const fn_name = try ensureExternalDeclForCall(ctx, call_or_sub.name, ret_ty, call_or_sub.args, false);
             return call.emitCall(ctx, builder, fn_name, ret_ty, call_or_sub.args, false);
         },
         .substring => |sub| {
@@ -186,43 +185,69 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
     }
 }
 
-fn ensureExternalDeclForCall(ctx: *Context, name: []const u8, ret_ty: ir.IRType, arg_count: usize) ![]const u8 {
+fn ensureExternalDeclForCall(
+    ctx: *Context,
+    name: []const u8,
+    ret_ty: ir.IRType,
+    args: []*Expr,
+    has_character_result: bool,
+) ![]const u8 {
     const mangled = try utils.mangleName(ctx.allocator, name);
     if (ctx.defined.contains(mangled)) return mangled;
+    const param_types = try buildAbiParamTypes(ctx, ret_ty, args, has_character_result);
 
     if (ctx.decls.get(mangled)) |existing| {
         if (!existing.varargs) return mangled;
 
-        const sig = try buildPointerSig(ctx, arg_count);
         try ctx.decls.put(mangled, .{
             .ret_type = context.fortranAbiReturnType(ret_ty),
-            .sig = sig,
+            .sig = try formatParamSig(ctx, param_types),
             .varargs = false,
         });
         return mangled;
     }
 
-    const sig = try buildPointerSig(ctx, arg_count);
     return ctx.ensureDeclRaw(
         mangled,
         context.fortranAbiReturnType(ret_ty),
-        sig,
+        param_types,
         false,
     );
 }
 
-fn buildPointerSig(ctx: *Context, arg_count: usize) ![]const u8 {
-    if (arg_count == 0) {
-        return ctx.allocator.dupe(u8, "");
+fn buildAbiParamTypes(
+    ctx: *Context,
+    ret_ty: ir.IRType,
+    args: []*Expr,
+    has_character_result: bool,
+) ![]const llvm_types.IRType {
+    var tys = std.array_list.Managed(llvm_types.IRType).init(ctx.allocator);
+    defer tys.deinit();
+
+    const has_hidden_result_ptr = has_character_result or ret_ty == .complex_f64;
+    if (has_hidden_result_ptr) {
+        try tys.append(.ptr);
     }
+    for (args) |_| try tys.append(.ptr);
+    if (has_character_result) {
+        try tys.append(.i32);
+    }
+    for (args) |arg| {
+        if (call.isCharacterActualArg(ctx, arg)) {
+            try tys.append(.i32);
+        }
+    }
+    return tys.toOwnedSlice();
+}
+
+fn formatParamSig(ctx: *Context, param_types: []const llvm_types.IRType) ![]const u8 {
+    if (param_types.len == 0) return "";
 
     var text = std.array_list.Managed(u8).init(ctx.allocator);
     defer text.deinit();
-
-    var i: usize = 0;
-    while (i < arg_count) : (i += 1) {
-        if (i != 0) try text.appendSlice(", ");
-        try text.appendSlice("ptr");
+    for (param_types, 0..) |param_ty, idx| {
+        if (idx != 0) try text.appendSlice(", ");
+        try text.appendSlice(llvm_types.irTypeText(param_ty));
     }
     return text.toOwnedSlice();
 }

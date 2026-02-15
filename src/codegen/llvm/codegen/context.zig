@@ -100,6 +100,7 @@ pub const Context = struct {
     intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
     char_values: std.StringHashMap([]const u8),
     char_array_values: std.StringHashMap([]const u8),
+    char_arg_lens: std.StringHashMap(ValueRef),
     current_stmt: ?input.Stmt,
 
     pub fn init(
@@ -135,6 +136,7 @@ pub const Context = struct {
             .intrinsic_wrappers = intrinsic_wrappers,
             .char_values = std.StringHashMap([]const u8).init(allocator),
             .char_array_values = std.StringHashMap([]const u8).init(allocator),
+            .char_arg_lens = std.StringHashMap(ValueRef).init(allocator),
             .current_stmt = null,
         };
     }
@@ -160,6 +162,7 @@ pub const Context = struct {
             self.allocator.free(entry.value_ptr.*);
         }
         self.char_array_values.deinit();
+        self.char_arg_lens.deinit();
     }
 
     pub fn buildBlockNames(self: *Context) ![][]const u8 {

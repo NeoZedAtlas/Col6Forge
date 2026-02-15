@@ -50,33 +50,68 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     } else {
         try builder.defineStart(func_name);
     }
-    var arg_names = std.array_list.Managed([]const u8).init(ctx.allocator);
-    defer arg_names.deinit();
+    var ptr_arg_names = std.array_list.Managed([]const u8).init(ctx.allocator);
+    defer ptr_arg_names.deinit();
+    var char_dummy_names = std.array_list.Managed([]const u8).init(ctx.allocator);
+    defer char_dummy_names.deinit();
+    var char_dummy_len_args = std.array_list.Managed([]const u8).init(ctx.allocator);
+    defer char_dummy_len_args.deinit();
+    var result_len_arg_name: ?[]const u8 = null;
 
     const has_hidden_result_arg = is_character_function or is_complex_sret_function;
+    var next_arg_index: usize = 0;
     if (has_hidden_result_arg) {
-        const result_arg_name = try utils.formatTempName(ctx.allocator, "arg", 0);
-        try builder.defineArgPtr(result_arg_name, true);
-        try arg_names.append(result_arg_name);
+        const result_arg_name = try utils.formatTempName(ctx.allocator, "arg", next_arg_index);
+        try builder.defineArgPtr(result_arg_name, next_arg_index == 0);
+        try ptr_arg_names.append(result_arg_name);
+        next_arg_index += 1;
     }
 
-    const arg_offset: usize = if (has_hidden_result_arg) 1 else 0;
     for (ctx.unit.args, 0..) |_, idx| {
-        const arg_index = idx + arg_offset;
-        const arg_name = try utils.formatTempName(ctx.allocator, "arg", arg_index);
-        try builder.defineArgPtr(arg_name, arg_index == 0);
-        try arg_names.append(arg_name);
+        const arg_name = try utils.formatTempName(ctx.allocator, "arg", next_arg_index);
+        try builder.defineArgPtr(arg_name, next_arg_index == 0);
+        try ptr_arg_names.append(arg_name);
+        const formal_name = ctx.unit.args[idx];
+        if (ctx.findSymbol(formal_name)) |sym| {
+            if (sym.storage == .dummy and sym.type_kind == .character) {
+                try char_dummy_names.append(formal_name);
+            }
+        }
+        next_arg_index += 1;
+    }
+
+    if (is_character_function) {
+        const arg_name = try utils.formatTempName(ctx.allocator, "arg", next_arg_index);
+        try builder.defineArg(.i32, arg_name, next_arg_index == 0);
+        result_len_arg_name = arg_name;
+        next_arg_index += 1;
+    }
+
+    for (char_dummy_names.items) |_| {
+        const arg_name = try utils.formatTempName(ctx.allocator, "arg", next_arg_index);
+        try builder.defineArg(.i32, arg_name, next_arg_index == 0);
+        try char_dummy_len_args.append(arg_name);
+        next_arg_index += 1;
     }
     try builder.defineEnd();
     try builder.entryLabel();
 
     if (has_hidden_result_arg) {
-        const result_ptr_name = arg_names.items[0];
+        const result_ptr_name = ptr_arg_names.items[0];
         try ctx.locals.put(ctx.unit.name, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
     }
 
+    if (result_len_arg_name) |len_name| {
+        try ctx.char_arg_lens.put(ctx.unit.name, .{ .name = len_name, .ty = .i32, .is_ptr = false });
+    }
+    for (char_dummy_names.items, 0..) |formal_name, idx| {
+        const len_name = char_dummy_len_args.items[idx];
+        try ctx.char_arg_lens.put(formal_name, .{ .name = len_name, .ty = .i32, .is_ptr = false });
+    }
+
+    const ptr_arg_offset: usize = if (has_hidden_result_arg) 1 else 0;
     for (ctx.unit.args, 0..) |arg, idx| {
-        const arg_name = arg_names.items[idx + arg_offset];
+        const arg_name = ptr_arg_names.items[idx + ptr_arg_offset];
         const val = ValueRef{
             .name = arg_name,
             .ty = .ptr,
@@ -303,8 +338,8 @@ fn equivalenceItemSize(ctx: *Context, item: *ast.Expr) ?usize {
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return null;
-    if (sym.dims.len == 0) return symbolTotalSize(ctx, sym);
-    return symbolElemSize(sym);
+            if (sym.dims.len == 0) return symbolTotalSize(ctx, sym);
+            return symbolElemSize(sym);
         },
         .substring => |sub| {
             const len = substringLen(ctx, sub) orelse return null;

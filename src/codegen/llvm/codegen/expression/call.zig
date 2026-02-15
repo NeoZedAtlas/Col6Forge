@@ -2,9 +2,9 @@ const std = @import("std");
 const ast = @import("../../../input.zig");
 const ir = @import("../../../ir.zig");
 const context = @import("../context.zig");
-const common = @import("../common.zig");
 const memory = @import("memory.zig");
 const dispatch = @import("dispatch.zig");
+const utils = @import("../utils.zig");
 const llvm_types = @import("../../types.zig");
 const casting = @import("casting.zig");
 
@@ -23,38 +23,34 @@ pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IR
         complex_result_ptr = .{ .name = result_tmp, .ty = .ptr, .is_ptr = true };
     }
 
-    var arg_text = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_text.deinit();
-    var first = true;
+    var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer abi_args.deinit();
     if (complex_result_ptr) |result_ptr| {
-        try appendPtrArg(&arg_text, &first, result_ptr.name);
+        try abi_args.append(result_ptr);
     }
-    for (args) |arg| {
-        const ptr = try emitArgPointer(ctx, builder, arg);
-        try appendPtrArg(&arg_text, &first, ptr.name);
-    }
+    try appendAbiActualArgs(ctx, builder, &abi_args, args, null);
 
     if (discard or ret_ty == .void) {
-        try builder.call(null, abi_ret_ty, fn_name, arg_text.items);
+        try builder.callTyped(null, abi_ret_ty, fn_name, abi_args.items);
         return .{ .name = "", .ty = ret_ty, .is_ptr = false };
     }
 
     if (ret_ty == .complex_f32) {
         const packed_tmp = try ctx.nextTemp();
-        try builder.call(packed_tmp, .i64, fn_name, arg_text.items);
+        try builder.callTyped(packed_tmp, .i64, fn_name, abi_args.items);
         return unpackComplexF32Return(ctx, builder, packed_tmp);
     }
     if (ret_ty == .complex_f64) {
         const sret_ptr = complex_result_ptr orelse return error.InvalidAbiState;
         const call_tmp = try ctx.nextTemp();
-        try builder.call(call_tmp, .ptr, fn_name, arg_text.items);
+        try builder.callTyped(call_tmp, .ptr, fn_name, abi_args.items);
         const value_tmp = try ctx.nextTemp();
         try builder.load(value_tmp, .complex_f64, sret_ptr);
         return .{ .name = value_tmp, .ty = .complex_f64, .is_ptr = false };
     }
 
     const tmp = try ctx.nextTemp();
-    try builder.call(tmp, abi_ret_ty, fn_name, arg_text.items);
+    try builder.callTyped(tmp, abi_ret_ty, fn_name, abi_args.items);
     return .{ .name = tmp, .ty = ret_ty, .is_ptr = false };
 }
 
@@ -68,76 +64,58 @@ pub fn emitIndirectCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, ret_t
         complex_result_ptr = .{ .name = result_tmp, .ty = .ptr, .is_ptr = true };
     }
 
-    var arg_text = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_text.deinit();
-    var first = true;
+    var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer abi_args.deinit();
     if (complex_result_ptr) |result_ptr| {
-        try appendPtrArg(&arg_text, &first, result_ptr.name);
+        try abi_args.append(result_ptr);
     }
-    for (args) |arg| {
-        const ptr = try emitArgPointer(ctx, builder, arg);
-        try appendPtrArg(&arg_text, &first, ptr.name);
-    }
+    try appendAbiActualArgs(ctx, builder, &abi_args, args, null);
 
     if (discard or ret_ty == .void) {
-        try builder.callIndirect(null, abi_ret_ty, fn_ptr.name, arg_text.items);
+        try builder.callIndirectTyped(null, abi_ret_ty, fn_ptr.name, abi_args.items);
         return .{ .name = "", .ty = ret_ty, .is_ptr = false };
     }
 
     if (ret_ty == .complex_f32) {
         const packed_tmp = try ctx.nextTemp();
-        try builder.callIndirect(packed_tmp, .i64, fn_ptr.name, arg_text.items);
+        try builder.callIndirectTyped(packed_tmp, .i64, fn_ptr.name, abi_args.items);
         return unpackComplexF32Return(ctx, builder, packed_tmp);
     }
     if (ret_ty == .complex_f64) {
         const sret_ptr = complex_result_ptr orelse return error.InvalidAbiState;
         const call_tmp = try ctx.nextTemp();
-        try builder.callIndirect(call_tmp, .ptr, fn_ptr.name, arg_text.items);
+        try builder.callIndirectTyped(call_tmp, .ptr, fn_ptr.name, abi_args.items);
         const value_tmp = try ctx.nextTemp();
         try builder.load(value_tmp, .complex_f64, sret_ptr);
         return .{ .name = value_tmp, .ty = .complex_f64, .is_ptr = false };
     }
 
     const tmp = try ctx.nextTemp();
-    try builder.callIndirect(tmp, abi_ret_ty, fn_ptr.name, arg_text.items);
+    try builder.callIndirectTyped(tmp, abi_ret_ty, fn_ptr.name, abi_args.items);
     return .{ .name = tmp, .ty = ret_ty, .is_ptr = false };
 }
 
 pub fn emitCharacterCall(ctx: *Context, builder: anytype, fn_name: []const u8, result_len: usize, args: []*Expr) !ValueRef {
     const result_ptr = try allocaCharBuffer(ctx, builder, result_len);
+    var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer abi_args.deinit();
+    try abi_args.append(result_ptr);
+    const result_len_val = i32Const(ctx, @intCast(result_len));
+    try appendAbiActualArgs(ctx, builder, &abi_args, args, result_len_val);
 
-    var arg_text = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_text.deinit();
-
-    try arg_text.appendSlice("ptr ");
-    try arg_text.appendSlice(result_ptr.name);
-
-    for (args) |arg| {
-        const ptr = try emitArgPointer(ctx, builder, arg);
-        try arg_text.appendSlice(", ptr ");
-        try arg_text.appendSlice(ptr.name);
-    }
-
-    try builder.call(null, .void, fn_name, arg_text.items);
+    try builder.callTyped(null, .void, fn_name, abi_args.items);
     return .{ .name = result_ptr.name, .ty = .ptr, .is_ptr = false };
 }
 
 pub fn emitIndirectCharacterCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, result_len: usize, args: []*Expr) !ValueRef {
     const result_ptr = try allocaCharBuffer(ctx, builder, result_len);
+    var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer abi_args.deinit();
+    try abi_args.append(result_ptr);
+    const result_len_val = i32Const(ctx, @intCast(result_len));
+    try appendAbiActualArgs(ctx, builder, &abi_args, args, result_len_val);
 
-    var arg_text = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_text.deinit();
-
-    try arg_text.appendSlice("ptr ");
-    try arg_text.appendSlice(result_ptr.name);
-
-    for (args) |arg| {
-        const ptr = try emitArgPointer(ctx, builder, arg);
-        try arg_text.appendSlice(", ptr ");
-        try arg_text.appendSlice(ptr.name);
-    }
-
-    try builder.callIndirect(null, .void, fn_ptr.name, arg_text.items);
+    try builder.callIndirectTyped(null, .void, fn_ptr.name, abi_args.items);
     return .{ .name = result_ptr.name, .ty = .ptr, .is_ptr = false };
 }
 
@@ -179,10 +157,8 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
             if (kind == .subscript) {
                 return memory.emitSubscriptPtr(ctx, builder, call);
             }
-            if (kind == .call) {
-                if (try emitIntrinsicArrayConversionArg(ctx, builder, call)) |ptr| {
-                    return ptr;
-                }
+            if (kind == .call and isIntrinsicArrayConversionArg(ctx, call)) {
+                return error.UnsupportedIntrinsicType;
             }
             // Non-subscript call expressions are not addressable.
         },
@@ -204,87 +180,80 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     return ptr;
 }
 
-fn emitIntrinsicArrayConversionArg(ctx: *Context, builder: anytype, call: ast.CallOrSubscript) !?ValueRef {
-    if (call.args.len != 1) return null;
-
-    const target_ty = intrinsicArrayConversionTarget(call.name) orelse return null;
-
-    const src_name = switch (call.args[0].*) {
-        .identifier => |name| name,
-        else => return null,
-    };
-    const src_sym = ctx.findSymbol(src_name) orelse return null;
-    if (src_sym.dims.len == 0) return null;
-
-    const src_ptr = try ctx.getPointer(src_name);
-    const src_elem_ty = llvm_types.typeFromKind(src_sym.type_kind);
-    const elem_count = common.arrayElementCount(ctx.sem, src_sym.dims) catch return null;
-    if (elem_count == 0) return null;
-
-    const dst_name = try ctx.nextTemp();
-    try builder.allocaArray(dst_name, target_ty, elem_count);
-    const dst_ptr = ValueRef{ .name = dst_name, .ty = .ptr, .is_ptr = true };
-
-    const idx_ptr_name = try ctx.nextTemp();
-    try builder.alloca(idx_ptr_name, .i32);
-    const idx_ptr = ValueRef{ .name = idx_ptr_name, .ty = .ptr, .is_ptr = true };
-    try builder.store(.{ .name = "0", .ty = .i32, .is_ptr = false }, idx_ptr);
-
-    const label_cond = try ctx.nextLabel("arg_conv_cond");
-    const label_body = try ctx.nextLabel("arg_conv_body");
-    const label_inc = try ctx.nextLabel("arg_conv_inc");
-    const label_done = try ctx.nextLabel("arg_conv_done");
-
-    try builder.br(label_cond);
-    try builder.label(label_cond);
-    const idx_val_name = try ctx.nextTemp();
-    try builder.load(idx_val_name, .i32, idx_ptr);
-    const idx_val = ValueRef{ .name = idx_val_name, .ty = .i32, .is_ptr = false };
-    const cmp_name = try ctx.nextTemp();
-    try builder.compare(
-        cmp_name,
-        "icmp",
-        "slt",
-        .i32,
-        idx_val,
-        .{ .name = try std.fmt.allocPrint(ctx.allocator, "{d}", .{elem_count}), .ty = .i32, .is_ptr = false },
-    );
-    try builder.brCond(.{ .name = cmp_name, .ty = .i1, .is_ptr = false }, label_body, label_done);
-
-    try builder.label(label_body);
-    const src_elem_ptr_name = try ctx.nextTemp();
-    try builder.gep(src_elem_ptr_name, src_elem_ty, src_ptr, idx_val);
-    const src_elem_ptr = ValueRef{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true };
-    const src_elem_name = try ctx.nextTemp();
-    try builder.load(src_elem_name, src_elem_ty, src_elem_ptr);
-    var converted = ValueRef{ .name = src_elem_name, .ty = src_elem_ty, .is_ptr = false };
-    if (converted.ty != target_ty) {
-        converted = try casting.coerce(ctx, builder, converted, target_ty);
+fn appendAbiActualArgs(
+    ctx: *Context,
+    builder: anytype,
+    abi_args: *std.array_list.Managed(ValueRef),
+    args: []*Expr,
+    result_len: ?ValueRef,
+) !void {
+    for (args) |arg| {
+        const ptr = try emitArgPointer(ctx, builder, arg);
+        try abi_args.append(ptr);
     }
-    const dst_elem_ptr_name = try ctx.nextTemp();
-    try builder.gep(dst_elem_ptr_name, target_ty, dst_ptr, idx_val);
-    try builder.store(converted, .{ .name = dst_elem_ptr_name, .ty = .ptr, .is_ptr = true });
-    try builder.br(label_inc);
-
-    try builder.label(label_inc);
-    const idx_next_name = try ctx.nextTemp();
-    try builder.binary(idx_next_name, "add", .i32, idx_val, .{ .name = "1", .ty = .i32, .is_ptr = false });
-    try builder.store(.{ .name = idx_next_name, .ty = .i32, .is_ptr = false }, idx_ptr);
-    try builder.br(label_cond);
-
-    try builder.label(label_done);
-    return dst_ptr;
+    if (result_len) |len_val| {
+        try abi_args.append(len_val);
+    }
+    for (args) |arg| {
+        if (try emitCharacterLengthArg(ctx, builder, arg)) |len_val| {
+            try abi_args.append(len_val);
+        }
+    }
 }
 
-fn intrinsicArrayConversionTarget(name: []const u8) ?IRType {
-    if (std.ascii.eqlIgnoreCase(name, "REAL")) return .f32;
-    if (std.ascii.eqlIgnoreCase(name, "FLOAT")) return .f32;
-    if (std.ascii.eqlIgnoreCase(name, "SNGL")) return .f32;
-    if (std.ascii.eqlIgnoreCase(name, "DBLE")) return .f64;
-    if (std.ascii.eqlIgnoreCase(name, "INT")) return .i32;
-    if (std.ascii.eqlIgnoreCase(name, "IFIX")) return .i32;
-    if (std.ascii.eqlIgnoreCase(name, "IDINT")) return .i32;
-    return null;
+pub fn isCharacterActualArg(ctx: *Context, expr: *Expr) bool {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse break :blk false;
+            break :blk sym.type_kind == .character;
+        },
+        .call_or_subscript => |call| blk: {
+            const sym = ctx.findSymbol(call.name) orelse break :blk false;
+            break :blk sym.type_kind == .character;
+        },
+        .substring => true,
+        .literal => |lit| lit.kind == .string or lit.kind == .hollerith,
+        .binary => |bin| bin.op == .concat,
+        else => false,
+    };
+}
+
+fn emitCharacterLengthArg(ctx: *Context, builder: anytype, expr: *Expr) !?ValueRef {
+    if (!isCharacterActualArg(ctx, expr)) return null;
+
+    switch (expr.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
+            return charSymbolLengthValue(ctx, name, sym);
+        },
+        .call_or_subscript => |call| {
+            const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
+            return charSymbolLengthValue(ctx, call.name, sym);
+        },
+        .substring => |sub| {
+            return emitSubstringLengthValue(ctx, builder, sub);
+        },
+        .literal => |lit| {
+            const len: i64 = switch (lit.kind) {
+                .string => @intCast(utils.decodedStringLen(lit.text)),
+                .hollerith => blk: {
+                    const bytes = utils.hollerithBytes(lit.text) orelse return error.UnsupportedLiteral;
+                    break :blk @intCast(bytes.len);
+                },
+                else => return error.UnsupportedLiteral,
+            };
+            return i32Const(ctx, len);
+        },
+        .binary => |bin| {
+            if (bin.op != .concat) return error.UnsupportedCharacterArgumentLength;
+            const left_len = (try emitCharacterLengthArg(ctx, builder, bin.left)) orelse return error.UnsupportedCharacterArgumentLength;
+            const right_len = (try emitCharacterLengthArg(ctx, builder, bin.right)) orelse return error.UnsupportedCharacterArgumentLength;
+            const tmp = try ctx.nextTemp();
+            try builder.binary(tmp, "add", .i32, left_len, right_len);
+            return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+        },
+        else => return error.UnsupportedCharacterArgumentLength,
+    }
 }
 
 fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
@@ -297,11 +266,67 @@ fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
     return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
 }
 
-fn appendPtrArg(arg_text: *std.array_list.Managed(u8), first: *bool, ptr_name: []const u8) !void {
-    if (!first.*) try arg_text.appendSlice(", ");
-    first.* = false;
-    try arg_text.appendSlice("ptr ");
-    try arg_text.appendSlice(ptr_name);
+fn emitSubstringLengthValue(ctx: *Context, builder: anytype, sub: ast.SubstringExpr) !ValueRef {
+    const sym = ctx.findSymbol(sub.name) orelse return error.UnknownSymbol;
+    var end_val = charSymbolLengthValue(ctx, sub.name, sym);
+    if (sub.end) |end_expr| {
+        end_val = try dispatch.emitExpr(ctx, builder, end_expr);
+        if (end_val.ty != .i32) {
+            end_val = try casting.coerce(ctx, builder, end_val, .i32);
+        }
+    }
+
+    var start_val = i32Const(ctx, 1);
+    if (sub.start) |start_expr| {
+        start_val = try dispatch.emitExpr(ctx, builder, start_expr);
+        if (start_val.ty != .i32) {
+            start_val = try casting.coerce(ctx, builder, start_val, .i32);
+        }
+    }
+
+    const diff_tmp = try ctx.nextTemp();
+    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
+    const len_tmp = try ctx.nextTemp();
+    try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, i32Const(ctx, 1));
+    return .{ .name = len_tmp, .ty = .i32, .is_ptr = false };
+}
+
+fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) ValueRef {
+    if (sym.char_len) |char_len| {
+        return i32Const(ctx, @intCast(char_len));
+    }
+    var it = ctx.char_arg_lens.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
+            return entry.value_ptr.*;
+        }
+    }
+    return i32Const(ctx, 1);
+}
+
+fn i32Const(ctx: *Context, value: i64) ValueRef {
+    return .{ .name = utils.formatInt(ctx.allocator, value), .ty = .i32, .is_ptr = false };
+}
+
+fn isIntrinsicArrayConversionArg(ctx: *Context, call: ast.CallOrSubscript) bool {
+    if (call.args.len != 1) return false;
+    if (!isIntrinsicArrayConversionName(call.name)) return false;
+    const src_name = switch (call.args[0].*) {
+        .identifier => |name| name,
+        else => return false,
+    };
+    const src_sym = ctx.findSymbol(src_name) orelse return false;
+    return src_sym.dims.len > 0;
+}
+
+fn isIntrinsicArrayConversionName(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "REAL") or
+        std.ascii.eqlIgnoreCase(name, "FLOAT") or
+        std.ascii.eqlIgnoreCase(name, "SNGL") or
+        std.ascii.eqlIgnoreCase(name, "DBLE") or
+        std.ascii.eqlIgnoreCase(name, "INT") or
+        std.ascii.eqlIgnoreCase(name, "IFIX") or
+        std.ascii.eqlIgnoreCase(name, "IDINT");
 }
 
 fn unpackComplexF32Return(ctx: *Context, builder: anytype, packed_name: []const u8) !ValueRef {
