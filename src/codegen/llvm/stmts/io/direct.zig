@@ -27,127 +27,44 @@ const emitWriteFormatted = formatted.emitWriteFormatted;
 const emitReadFormatted = formatted.emitReadFormatted;
 const formatFromCharArrayData = formatted.formatFromCharArrayData;
 
+const PreparedDirectArgs = struct {
+    unit_i32: ValueRef,
+    rec_i32: ValueRef,
+    expanded_args: []*ast.Expr,
+    fmt_items: ?[]const ast.FormatItem,
+    recl: ?usize,
+
+    pub fn deinit(self: PreparedDirectArgs, allocator: std.mem.Allocator) void {
+        allocator.free(self.expanded_args);
+    }
+};
+
 pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
-    const rec_expr = write.rec orelse return error.MissingRecordNumber;
-    const unit_value = try expr.emitExpr(ctx, builder, write.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
-    const rec_value = try expr.emitExpr(ctx, builder, rec_expr);
-    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
-    const expanded_args = try expandIoArgs(ctx, write.args);
-    defer ctx.allocator.free(expanded_args);
+    const prepared = try prepareDirectArgs(ctx, builder, write);
+    defer prepared.deinit(ctx.allocator);
 
-    // If we can resolve the format at compile time, honor record advances
-    // caused by '/' by splitting a single direct write into per-record writes.
-    if (try resolveFormatItemsForDirect(ctx, write.format)) |fmt_items| {
-        const recl_const = try lookupDirectRecl(ctx, write.unit);
-
-        // Prefer formatted direct I/O when we know the record length.
-        if (recl_const) |recl_len| {
-            const plans = try planDirectFormattedRecords(ctx.allocator, fmt_items, expanded_args.len);
-            defer ctx.allocator.free(plans);
-
-            const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr", .ptr, &[_]utils.IRType{ .i32, .i32, .i32 }, false);
-            const commit_name = try ctx.ensureDeclRaw("f77_direct_record_commit", .void, &[_]utils.IRType{ .i32, .i32 }, false);
-            const recl_val = ValueRef{
-                .name = utils.formatInt(ctx.allocator, @intCast(recl_len)),
-                .ty = .i32,
-                .is_ptr = false,
-            };
-
-            for (plans) |plan| {
-                var rec_for_plan = rec_i32;
-                if (plan.rec_offset != 0) {
-                    const offset_val = ValueRef{
-                        .name = utils.formatInt(ctx.allocator, @intCast(plan.rec_offset)),
-                        .ty = .i32,
-                        .is_ptr = false,
-                    };
-                    const rec_tmp = try ctx.nextTemp();
-                    try builder.binary(rec_tmp, "add", .i32, rec_i32, offset_val);
-                    rec_for_plan = .{ .name = rec_tmp, .ty = .i32, .is_ptr = false };
-                }
-
-                const record_ptr_tmp = try ctx.nextTemp();
-                try builder.callTyped(record_ptr_tmp, .ptr, record_ptr_name, &.{ unit_i32, rec_for_plan, recl_val });
-                const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
-
-                var expanded_values = try expandWriteArgs(ctx, builder, expanded_args[plan.start_arg..plan.end_arg]);
-                defer expanded_values.deinit();
-
-                const fmt_slice = fmt_items[plan.fmt_start..plan.fmt_end];
-                try emitWriteFormatted(ctx, builder, write, record_ptr, recl_len, null, true, unit_i32, fmt_slice, &expanded_values);
-
-                try builder.callTyped(null, .void, commit_name, &.{ unit_i32, rec_for_plan });
-            }
-            return;
-        }
+    if (prepared.fmt_items != null and prepared.recl != null) {
+        const plans = try planDirectFormattedRecords(ctx.allocator, prepared.fmt_items.?, prepared.expanded_args.len);
+        defer ctx.allocator.free(plans);
+        try emitDirectWritePlans(ctx, builder, write, prepared, plans);
+        return;
     }
 
-    // Fallback: no format information available, keep the previous behavior.
-    try emitDirectWriteCall(ctx, builder, unit_i32, rec_i32, expanded_args);
+    try emitDirectWriteCall(ctx, builder, prepared.unit_i32, prepared.rec_i32, prepared.expanded_args);
 }
+
 pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
-    const rec_expr = read.rec orelse return error.MissingRecordNumber;
-    const unit_value = try expr.emitExpr(ctx, builder, read.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
-    const rec_value = try expr.emitExpr(ctx, builder, rec_expr);
-    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
-    const expanded_args = try expandIoArgs(ctx, read.args);
-    defer ctx.allocator.free(expanded_args);
+    const prepared = try prepareDirectArgs(ctx, builder, read);
+    defer prepared.deinit(ctx.allocator);
 
-    if (try resolveFormatItemsForDirect(ctx, read.format)) |fmt_items| {
-        const recl_const = try lookupDirectRecl(ctx, read.unit);
-
-        if (recl_const) |recl_len| {
-            const plans = try planDirectFormattedRecords(ctx.allocator, fmt_items, expanded_args.len);
-            defer ctx.allocator.free(plans);
-
-            const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr_ro", .ptr, &[_]utils.IRType{ .i32, .i32 }, false);
-
-            for (plans) |plan| {
-                var rec_for_plan = rec_i32;
-                if (plan.rec_offset != 0) {
-                    const offset_val = ValueRef{
-                        .name = utils.formatInt(ctx.allocator, @intCast(plan.rec_offset)),
-                        .ty = .i32,
-                        .is_ptr = false,
-                    };
-                    const rec_tmp = try ctx.nextTemp();
-                    try builder.binary(rec_tmp, "add", .i32, rec_i32, offset_val);
-                    rec_for_plan = .{ .name = rec_tmp, .ty = .i32, .is_ptr = false };
-                }
-
-                const record_ptr_tmp = try ctx.nextTemp();
-                try builder.callTyped(record_ptr_tmp, .ptr, record_ptr_name, &.{ unit_i32, rec_for_plan });
-                const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
-
-                var expanded = try expandReadTargets(ctx, builder, expanded_args[plan.start_arg..plan.end_arg]);
-                defer expanded.deinit();
-
-                const fmt_slice = fmt_items[plan.fmt_start..plan.fmt_end];
-                try emitReadFormatted(ctx, builder, read, record_ptr, recl_len, null, true, unit_i32, fmt_slice, &expanded);
-            }
-            return;
-        }
+    if (prepared.fmt_items != null and prepared.recl != null) {
+        const plans = try planDirectFormattedRecords(ctx.allocator, prepared.fmt_items.?, prepared.expanded_args.len);
+        defer ctx.allocator.free(plans);
+        try emitDirectReadPlans(ctx, builder, read, prepared, plans);
+        return;
     }
 
-    const sig_ptrs = try buildDirectReadSignatureAndPtrs(ctx, builder, expanded_args);
-    const sig = sig_ptrs.sig;
-    const sig_global = try ctx.string_pool.intern(sig);
-    const sig_ptr = try ctx.nextTemp();
-    try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
-
-    const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
-    const count_text = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len));
-    const arg_buf = try std.fmt.allocPrint(
-        ctx.allocator,
-        "i32 {s}, i32 {s}, ptr {s}, ptr {s}, i32 {s}",
-        .{ unit_i32.name, rec_i32.name, sig_ptr, ptr_array.name, count_text },
-    );
-    const read_name = try ctx.ensureDeclRaw("f77_read_direct_v", .i32, "i32, i32, ptr, ptr, i32", false);
-    try builder.call(null, .i32, read_name, arg_buf);
-
-    try applyComplexFixupsList(ctx, builder, sig_ptrs.complex_fixups.items);
+    try emitDirectReadCall(ctx, builder, prepared.unit_i32, prepared.rec_i32, prepared.expanded_args);
 }
 const DirectRecordPlan = struct {
     start_arg: usize,
@@ -275,13 +192,17 @@ const RecordSplitter = struct {
                 .tail => {
                     while (self.tail_cursor < self.fmt_items.len) {
                         const item = self.fmt_items[self.tail_cursor];
-                        if (item == .literal) {
-                            const newline_count = countNewlinesLiteral(item.literal);
-                            if (newline_count != 0) {
-                                const fmt_end = self.tail_cursor;
-                                self.tail_cursor += 1;
-                                return self.splitAtNewline(fmt_end, newline_count);
-                            }
+                        switch (item) {
+                            .literal => |text| {
+                                const newline_count = countNewlinesLiteral(text);
+                                if (newline_count != 0) {
+                                    const fmt_end = self.tail_cursor;
+                                    self.tail_cursor += 1;
+                                    return self.splitAtNewline(fmt_end, newline_count);
+                                }
+                            },
+                            .int, .real, .real_fixed, .char, .logical => {},
+                            .spaces, .tab, .colon, .scale, .blank_control, .sign_control, .reversion_anchor => {},
                         }
                         self.tail_cursor += 1;
                     }
@@ -303,6 +224,103 @@ const RecordSplitter = struct {
         }
     }
 };
+
+fn prepareDirectArgs(ctx: *Context, builder: anytype, stmt: anytype) EmitError!PreparedDirectArgs {
+    const rec_expr = stmt.rec orelse return error.MissingRecordNumber;
+    const unit_value = try expr.emitExpr(ctx, builder, stmt.unit);
+    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const rec_value = try expr.emitExpr(ctx, builder, rec_expr);
+    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const expanded_args = try expandIoArgs(ctx, stmt.args);
+    const fmt_items = try resolveFormatItemsForDirect(ctx, stmt.format);
+    const recl = if (fmt_items != null) try lookupDirectRecl(ctx, stmt.unit) else null;
+
+    return .{
+        .unit_i32 = unit_i32,
+        .rec_i32 = rec_i32,
+        .expanded_args = expanded_args,
+        .fmt_items = fmt_items,
+        .recl = recl,
+    };
+}
+
+fn recordNumberForPlan(
+    ctx: *Context,
+    builder: anytype,
+    base_rec: ValueRef,
+    rec_offset: usize,
+) EmitError!ValueRef {
+    if (rec_offset == 0) return base_rec;
+
+    const offset_val = ValueRef{
+        .name = utils.formatInt(ctx.allocator, @intCast(rec_offset)),
+        .ty = .i32,
+        .is_ptr = false,
+    };
+    const rec_tmp = try ctx.nextTemp();
+    try builder.binary(rec_tmp, "add", .i32, base_rec, offset_val);
+    return .{ .name = rec_tmp, .ty = .i32, .is_ptr = false };
+}
+
+fn emitDirectWritePlans(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    prepared: PreparedDirectArgs,
+    plans: []const DirectRecordPlan,
+) EmitError!void {
+    const fmt_items = prepared.fmt_items orelse return error.InternalInvariantViolation;
+    const recl_len = prepared.recl orelse return error.InternalInvariantViolation;
+
+    const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr", .ptr, &[_]utils.IRType{ .i32, .i32, .i32 }, false);
+    const commit_name = try ctx.ensureDeclRaw("f77_direct_record_commit", .void, &[_]utils.IRType{ .i32, .i32 }, false);
+    const recl_val = ValueRef{
+        .name = utils.formatInt(ctx.allocator, @intCast(recl_len)),
+        .ty = .i32,
+        .is_ptr = false,
+    };
+
+    for (plans) |plan| {
+        const rec_for_plan = try recordNumberForPlan(ctx, builder, prepared.rec_i32, plan.rec_offset);
+        const record_ptr_tmp = try ctx.nextTemp();
+        try builder.callTyped(record_ptr_tmp, .ptr, record_ptr_name, &.{ prepared.unit_i32, rec_for_plan, recl_val });
+        const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
+
+        var expanded_values = try expandWriteArgs(ctx, builder, prepared.expanded_args[plan.start_arg..plan.end_arg]);
+        defer expanded_values.deinit();
+
+        const fmt_slice = fmt_items[plan.fmt_start..plan.fmt_end];
+        try emitWriteFormatted(ctx, builder, write, record_ptr, recl_len, null, true, prepared.unit_i32, fmt_slice, &expanded_values);
+        try builder.callTyped(null, .void, commit_name, &.{ prepared.unit_i32, rec_for_plan });
+    }
+}
+
+fn emitDirectReadPlans(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    prepared: PreparedDirectArgs,
+    plans: []const DirectRecordPlan,
+) EmitError!void {
+    const fmt_items = prepared.fmt_items orelse return error.InternalInvariantViolation;
+    const recl_len = prepared.recl orelse return error.InternalInvariantViolation;
+
+    const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr_ro", .ptr, &[_]utils.IRType{ .i32, .i32 }, false);
+
+    for (plans) |plan| {
+        const rec_for_plan = try recordNumberForPlan(ctx, builder, prepared.rec_i32, plan.rec_offset);
+        const record_ptr_tmp = try ctx.nextTemp();
+        try builder.callTyped(record_ptr_tmp, .ptr, record_ptr_name, &.{ prepared.unit_i32, rec_for_plan });
+        const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
+
+        var expanded = try expandReadTargets(ctx, builder, prepared.expanded_args[plan.start_arg..plan.end_arg]);
+        defer expanded.deinit();
+
+        const fmt_slice = fmt_items[plan.fmt_start..plan.fmt_end];
+        try emitReadFormatted(ctx, builder, read, record_ptr, recl_len, null, true, prepared.unit_i32, fmt_slice, &expanded);
+    }
+}
+
 fn emitDirectWriteCall(
     ctx: *Context,
     builder: anytype,
@@ -327,6 +345,33 @@ fn emitDirectWriteCall(
     const write_name = try ctx.ensureDeclRaw("f77_write_direct_v", .void, "i32, i32, ptr, ptr, i32", false);
     try builder.call(null, .void, write_name, arg_buf);
 }
+
+fn emitDirectReadCall(
+    ctx: *Context,
+    builder: anytype,
+    unit_i32: ValueRef,
+    rec_i32: ValueRef,
+    args: []*ast.Expr,
+) EmitError!void {
+    const sig_ptrs = try buildDirectReadSignatureAndPtrs(ctx, builder, args);
+    const sig = sig_ptrs.sig;
+    const sig_global = try ctx.string_pool.intern(sig);
+    const sig_ptr = try ctx.nextTemp();
+    try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
+
+    const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
+    const count_text = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len));
+    const arg_buf = try std.fmt.allocPrint(
+        ctx.allocator,
+        "i32 {s}, i32 {s}, ptr {s}, ptr {s}, i32 {s}",
+        .{ unit_i32.name, rec_i32.name, sig_ptr, ptr_array.name, count_text },
+    );
+    const read_name = try ctx.ensureDeclRaw("f77_read_direct_v", .i32, "i32, i32, ptr, ptr, i32", false);
+    try builder.call(null, .i32, read_name, arg_buf);
+
+    try applyComplexFixupsList(ctx, builder, sig_ptrs.complex_fixups.items);
+}
+
 fn resolveFormatItemsForDirect(ctx: *Context, format: ast.FormatSpec) EmitError!?[]const ast.FormatItem {
     switch (format) {
         .label => |label| {
