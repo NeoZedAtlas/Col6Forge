@@ -42,6 +42,12 @@ look up `CF2001` in this file.
 - Meaning: invalid Hollerith literal (declared length exceeds remaining characters).
 - Typical fix: correct Hollerith length prefix or literal content length.
 
+## CF1003
+
+- Stage: lexer
+- Meaning: Hollerith length prefix overflows internal integer range.
+- Typical fix: use a realistic Hollerith length and avoid extremely large length prefixes.
+
 ## CF2000
 
 - Stage: parser (generic fallback)
@@ -107,6 +113,12 @@ look up `CF2001` in this file.
 - Stage: parser
 - Meaning: `END DO`/`ENDDO` without matching `DO`.
 - Typical fix: ensure loop delimiters are balanced.
+
+## CF2011
+
+- Stage: parser
+- Meaning: expression nesting exceeds parser recursion limit.
+- Typical fix: simplify deeply nested expressions or split into intermediate assignments.
 
 ## CF2099
 

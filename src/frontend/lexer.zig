@@ -121,9 +121,12 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
             i = digits.idx;
             const digit_end = i;
             if (i < text.len and (text[i] == 'H' or text[i] == 'h')) {
-                const count = parseDecimal(text[start..digit_end]);
+                const count = parseDecimal(text[start..digit_end]) orelse {
+                    setLexDiagnostic(line, start, "CF1003", "Hollerith length overflow");
+                    return error.HollerithLengthOverflow;
+                };
                 i += 1;
-                if (i + count > text.len) {
+                if (count > text.len - i) {
                     setLexDiagnostic(line, start, "CF1002", "invalid Hollerith literal");
                     return error.InvalidHollerith;
                 }
@@ -274,11 +277,14 @@ fn scanExponent(text: []const u8, index: usize, allow_leading_space: bool) usize
     return i;
 }
 
-fn parseDecimal(text: []const u8) usize {
+fn parseDecimal(text: []const u8) ?usize {
     var value: usize = 0;
+    const max = std.math.maxInt(usize);
     for (text) |ch| {
         if (ch == ' ' or ch == '\t') continue;
-        value = value * 10 + @as(usize, ch - '0');
+        const digit = @as(usize, ch - '0');
+        if (value > (max - digit) / 10) return null;
+        value = value * 10 + digit;
     }
     return value;
 }
@@ -394,4 +400,20 @@ test "lexLogicalLine keeps COMPLEX*16 declarator name as identifier" {
     for (tokens, 0..) |tok, idx| {
         try testing.expectEqual(expected[idx], tok.kind);
     }
+}
+
+test "lexLogicalLine rejects overflowing Hollerith length" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A=9999999999999999999999999999999999999999HAB\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    try testing.expectError(error.HollerithLengthOverflow, lexLogicalLine(allocator, lines[0]));
+
+    const diag_opt = takeDiagnostic();
+    try testing.expect(diag_opt != null);
+    const diag = diag_opt.?;
+    try testing.expectEqualStrings("CF1003", diag.code);
 }

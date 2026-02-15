@@ -316,6 +316,7 @@ fn parseErrorInfo(err: anyerror) struct { code: []const u8, message: []const u8 
         error.ExpectedEndIf => .{ .code = "CF2008", .message = "IF block is missing END IF/ENDIF" },
         error.DeclarationInIfBlock => .{ .code = "CF2009", .message = "declaration is not allowed inside IF executable block" },
         error.EndDoWithoutDo => .{ .code = "CF2010", .message = "END DO/ENDDO found without matching DO" },
+        error.ExpressionDepthExceeded => .{ .code = "CF2011", .message = "expression nesting exceeds parser limit" },
         else => .{ .code = "CF2099", .message = "parser failed to understand source" },
     };
 }

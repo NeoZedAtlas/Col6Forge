@@ -8,10 +8,16 @@ const LineParser = context.LineParser;
 const Expr = ast.Expr;
 const BinaryOp = ast.BinaryOp;
 
-const ParseExprError = error{UnexpectedEOF, UnexpectedToken} || std.mem.Allocator.Error;
+const ParseExprError = error{ UnexpectedEOF, UnexpectedToken, ExpressionDepthExceeded } || std.mem.Allocator.Error;
+const max_expression_depth: usize = 512;
 
 pub fn parseExpr(lp: *LineParser, arena: std.mem.Allocator, min_prec: u8) ParseExprError!*Expr {
-    var left = try parsePrimary(lp, arena);
+    return parseExprDepth(lp, arena, min_prec, 0);
+}
+
+fn parseExprDepth(lp: *LineParser, arena: std.mem.Allocator, min_prec: u8, depth: usize) ParseExprError!*Expr {
+    if (depth >= max_expression_depth) return error.ExpressionDepthExceeded;
+    var left = try parsePrimary(lp, arena, depth + 1);
     while (true) {
         const op_info = peekBinaryOp(lp.*) orelse break;
         if (op_info.prec < min_prec) break;
@@ -20,7 +26,7 @@ pub fn parseExpr(lp: *LineParser, arena: std.mem.Allocator, min_prec: u8) ParseE
             _ = lp.next();
         }
         const next_min = if (op_info.right_assoc) op_info.prec else op_info.prec + 1;
-        const right = try parseExpr(lp, arena, next_min);
+        const right = try parseExprDepth(lp, arena, next_min, depth + 1);
         const node = try arena.create(Expr);
         node.* = .{ .binary = .{ .op = op_info.op, .left = left, .right = right } };
         left = node;
@@ -29,6 +35,11 @@ pub fn parseExpr(lp: *LineParser, arena: std.mem.Allocator, min_prec: u8) ParseE
 }
 
 pub fn parseDimExpr(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr {
+    return parseDimExprDepth(lp, arena, 0);
+}
+
+fn parseDimExprDepth(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseExprError!*Expr {
+    if (depth >= max_expression_depth) return error.ExpressionDepthExceeded;
     if (lp.peekIs(.star)) {
         const tok = lp.next();
         const node = try arena.create(Expr);
@@ -37,7 +48,7 @@ pub fn parseDimExpr(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*E
     }
     var lower: ?*Expr = null;
     if (!lp.peekIs(.colon)) {
-        lower = try parseExpr(lp, arena, 0);
+        lower = try parseExprDepth(lp, arena, 0, depth + 1);
     }
     if (lp.consume(.colon)) {
         var upper: *Expr = undefined;
@@ -47,7 +58,7 @@ pub fn parseDimExpr(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*E
             assumed.* = .{ .literal = .{ .kind = .assumed_size, .text = lp.tokenText(tok) } };
             upper = assumed;
         } else {
-            upper = try parseExpr(lp, arena, 0);
+            upper = try parseExprDepth(lp, arena, 0, depth + 1);
         }
         const node = try arena.create(Expr);
         node.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
@@ -56,7 +67,7 @@ pub fn parseDimExpr(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*E
     return lower orelse error.UnexpectedToken;
 }
 
-fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr {
+fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseExprError!*Expr {
     const tok = lp.peek() orelse return error.UnexpectedEOF;
     switch (tok.kind) {
         .identifier => {
@@ -66,12 +77,12 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
                     const args = try arena.alloc(*Expr, 0);
                     var start_expr: ?*Expr = null;
                     if (!lp.peekIs(.colon)) {
-                        start_expr = try parseExpr(lp, arena, 0);
+                        start_expr = try parseExprDepth(lp, arena, 0, depth + 1);
                     }
                     _ = lp.expect(.colon) orelse return error.UnexpectedToken;
                     var end_expr: ?*Expr = null;
                     if (!lp.peekIs(.r_paren)) {
-                        end_expr = try parseExpr(lp, arena, 0);
+                        end_expr = try parseExprDepth(lp, arena, 0, depth + 1);
                     }
                     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
                     const node = try arena.create(Expr);
@@ -80,7 +91,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
                 } else {
                     var args = std.array_list.Managed(*Expr).init(arena);
                     while (!lp.peekIs(.r_paren)) {
-                        const expr = try parseExpr(lp, arena, 0);
+                        const expr = try parseExprDepth(lp, arena, 0, depth + 1);
                         try args.append(expr);
                         _ = lp.consume(.comma);
                     }
@@ -97,12 +108,12 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
                         _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
                         var start_expr: ?*Expr = null;
                         if (!lp.peekIs(.colon)) {
-                            start_expr = try parseExpr(lp, arena, 0);
+                            start_expr = try parseExprDepth(lp, arena, 0, depth + 1);
                         }
                         _ = lp.expect(.colon) orelse return error.UnexpectedToken;
                         var end_expr: ?*Expr = null;
                         if (!lp.peekIs(.r_paren)) {
-                            end_expr = try parseExpr(lp, arena, 0);
+                            end_expr = try parseExprDepth(lp, arena, 0, depth + 1);
                         }
                         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
                         const node = try arena.create(Expr);
@@ -144,9 +155,9 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
         },
         .l_paren => {
             _ = lp.next();
-            const real = try parseExpr(lp, arena, 0);
+            const real = try parseExprDepth(lp, arena, 0, depth + 1);
             if (lp.consume(.comma)) {
-                const imag = try parseExpr(lp, arena, 0);
+                const imag = try parseExprDepth(lp, arena, 0, depth + 1);
                 _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
                 const node = try arena.create(Expr);
                 node.* = .{ .complex_literal = .{ .real = real, .imag = imag } };
@@ -157,14 +168,14 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
         },
         .plus => {
             _ = lp.next();
-            const expr = try parseExpr(lp, arena, 6);
+            const expr = try parseExprDepth(lp, arena, 6, depth + 1);
             const node = try arena.create(Expr);
             node.* = .{ .unary = .{ .op = .plus, .expr = expr } };
             return node;
         },
         .minus => {
             _ = lp.next();
-            const expr = try parseExpr(lp, arena, 6);
+            const expr = try parseExprDepth(lp, arena, 6, depth + 1);
             const node = try arena.create(Expr);
             node.* = .{ .unary = .{ .op = .minus, .expr = expr } };
             return node;
@@ -184,7 +195,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*Expr 
             }
             if (dotOpIs(lp.*, "NOT")) {
                 _ = lp.next();
-                const expr = try parseExpr(lp, arena, 3);
+                const expr = try parseExprDepth(lp, arena, 3, depth + 1);
                 const node = try arena.create(Expr);
                 node.* = .{ .unary = .{ .op = .not, .expr = expr } };
                 return node;
@@ -407,4 +418,54 @@ test "parseDimExpr handles assumed size" {
         },
         else => return error.UnexpectedToken,
     }
+}
+
+test "parseExpr enforces recursion depth limit" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const nesting = max_expression_depth + 32;
+    var source_buf = std.array_list.Managed(u8).init(allocator);
+    defer source_buf.deinit();
+
+    try source_buf.appendSlice("      ");
+    for (0..nesting) |_| try source_buf.append('(');
+    try source_buf.append('1');
+    for (0..nesting) |_| try source_buf.append(')');
+    try source_buf.append('\n');
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source_buf.items);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    try testing.expectError(error.ExpressionDepthExceeded, parseExpr(&lp, arena.allocator(), 0));
+}
+
+test "parseDimExpr enforces recursion depth limit" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const nesting = max_expression_depth + 32;
+    var source_buf = std.array_list.Managed(u8).init(allocator);
+    defer source_buf.deinit();
+
+    try source_buf.appendSlice("      ");
+    for (0..nesting) |_| try source_buf.append('(');
+    try source_buf.append('1');
+    for (0..nesting) |_| try source_buf.append(')');
+    try source_buf.append('\n');
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source_buf.items);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    try testing.expectError(error.ExpressionDepthExceeded, parseDimExpr(&lp, arena.allocator()));
 }

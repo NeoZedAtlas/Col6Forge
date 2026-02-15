@@ -38,7 +38,7 @@ pub const DoContext = struct {
         if (self.stack.items.len == 0) return null;
         const idx = self.stack.items.len - 1;
         const label = self.stack.items[idx];
-        self.stack.items.len = idx;
+        self.stack.shrinkRetainingCapacity(idx);
         return label;
     }
 
@@ -50,7 +50,7 @@ pub const DoContext = struct {
         if (self.pending.items.len == 0) return null;
         const idx = self.pending.items.len - 1;
         const stmt = self.pending.items[idx];
-        self.pending.items.len = idx;
+        self.pending.shrinkRetainingCapacity(idx);
         return stmt;
     }
 };
