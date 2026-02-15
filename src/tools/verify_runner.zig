@@ -13,6 +13,8 @@ const RuntimeBackend = enum {
     zig,
 };
 
+const CACHE_SCHEMA_VERSION: u32 = 1;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -39,6 +41,17 @@ pub fn main() !void {
 
     const root_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(root_path);
+
+    const cache_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "verify", "cache" });
+    defer allocator.free(cache_rel);
+    if (options.clean_cache) {
+        cleanupWorkDir(cache_rel);
+    }
+    try std.fs.cwd().makePath(cache_rel);
+    const cache_dir = try std.fs.path.join(allocator, &.{ root_path, cache_rel });
+    defer allocator.free(cache_dir);
+    const runtime_cache_key = try computeRuntimeCacheKey(allocator, root_path);
+    defer allocator.free(runtime_cache_key);
 
     var gfortran_cmd = options.gfortran_path;
     if (std.mem.eql(u8, gfortran_cmd, defaultGfortran())) {
@@ -67,7 +80,17 @@ pub fn main() !void {
         var failures: usize = 0;
         for (cases) |case| {
             logProgress(&log_state, &progress, case.input_path);
-            const ok = processCase(allocator, root_path, gfortran_cmd, case, options, &log_state, &dir_locks) catch {
+            const ok = processCase(
+                allocator,
+                root_path,
+                cache_dir,
+                runtime_cache_key,
+                gfortran_cmd,
+                case,
+                options,
+                &log_state,
+                &dir_locks,
+            ) catch {
                 failures += 1;
                 _ = progress.completed.fetchAdd(1, .seq_cst);
                 continue;
@@ -96,6 +119,8 @@ pub fn main() !void {
         pool.spawnWg(&wait_group, runCaseParallel, .{
             allocator,
             root_path,
+            cache_dir,
+            runtime_cache_key,
             gfortran_cmd,
             case,
             options,
@@ -124,6 +149,8 @@ const Options = struct {
     show_help: bool,
     timeout_ms: u64,
     jobs: usize,
+    incremental: bool,
+    clean_cache: bool,
 };
 
 fn parseArgs(args: []const []const u8) !Options {
@@ -136,6 +163,8 @@ fn parseArgs(args: []const []const u8) !Options {
     var show_help = false;
     var timeout_ms: u64 = 120_000;
     var jobs = defaultJobs();
+    var incremental = true;
+    var clean_cache = false;
     var suite: ?TestSuite = null;
 
     var i: usize = 1;
@@ -193,6 +222,18 @@ fn parseArgs(args: []const []const u8) !Options {
             if (jobs == 0) return error.InvalidJobs;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--incremental")) {
+            incremental = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-incremental")) {
+            incremental = false;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--clean-cache")) {
+            clean_cache = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
             continue;
@@ -214,12 +255,14 @@ fn parseArgs(args: []const []const u8) !Options {
         .show_help = show_help,
         .timeout_ms = timeout_ms,
         .jobs = jobs,
+        .incremental = incremental,
+        .clean_cache = clean_cache,
     };
 }
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--runtime-backend <c|zig>] [--timeout <ms>] [--jobs <n>] [-emit-llvm]
+        \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--runtime-backend <c|zig>] [--timeout <ms>] [--jobs <n>] [--incremental|--no-incremental] [--clean-cache] [-emit-llvm]
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
         \\  --fcvs21_f95       Use the Fortran 95 adapted NIST F78 suite
@@ -229,6 +272,9 @@ fn printUsage(file: std.fs.File) !void {
         \\  --runtime-backend  Runtime backend: c (default) or zig (experimental)
         \\  --timeout <ms>     Per-test timeout in milliseconds (default: 120000)
         \\  --jobs <n>, -j <n> Parallel job count (default: min(CPU cores, 4))
+        \\  --incremental      Enable translation/object/runtime cache (default)
+        \\  --no-incremental   Disable incremental cache and rebuild everything
+        \\  --clean-cache      Delete zig-cache/verify/cache before running
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
         \\
@@ -330,6 +376,109 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
     var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(contents);
+}
+
+fn emitCacheTag(_: Col6Forge.EmitKind) []const u8 {
+    return "llvm";
+}
+
+fn runtimeBackendTag(backend: RuntimeBackend) []const u8 {
+    return switch (backend) {
+        .c => "c",
+        .zig => "zig",
+    };
+}
+
+fn hashFileXx64(path: []const u8) !u64 {
+    var file = try std.fs.openFileAbsolute(path, .{});
+    defer file.close();
+    var hasher = std.hash.XxHash64.init(0);
+    var buf: [64 * 1024]u8 = undefined;
+    while (true) {
+        const n = try file.read(&buf);
+        if (n == 0) break;
+        hasher.update(buf[0..n]);
+    }
+    return hasher.final();
+}
+
+fn fileExistsAbsolute(path: []const u8) bool {
+    std.fs.accessAbsolute(path, .{}) catch return false;
+    return true;
+}
+
+fn copyFileAbsolute(src_path: []const u8, dst_path: []const u8) !void {
+    var src = try std.fs.openFileAbsolute(src_path, .{});
+    defer src.close();
+    var dst = try std.fs.createFileAbsolute(dst_path, .{ .truncate = true });
+    defer dst.close();
+    var buf: [64 * 1024]u8 = undefined;
+    while (true) {
+        const n = try src.read(&buf);
+        if (n == 0) break;
+        try dst.writeAll(buf[0..n]);
+    }
+}
+
+fn buildVerifyCachePath(
+    allocator: std.mem.Allocator,
+    cache_dir: []const u8,
+    source_hash: u64,
+    emit: Col6Forge.EmitKind,
+    ext: []const u8,
+) ![]const u8 {
+    const name = try std.fmt.allocPrint(
+        allocator,
+        "v{d}_{s}_{x:0>16}{s}",
+        .{ CACHE_SCHEMA_VERSION, emitCacheTag(emit), source_hash, ext },
+    );
+    defer allocator.free(name);
+    return std.fs.path.join(allocator, &.{ cache_dir, name });
+}
+
+fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
+    const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
+    defer allocator.free(runtime_dir);
+
+    var dir = try std.fs.openDirAbsolute(runtime_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var files: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (files.items) |p| allocator.free(p);
+        files.deinit(allocator);
+    }
+
+    while (try walker.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.ascii.endsWithIgnoreCase(entry.path, ".zig")) continue;
+        if (!(std.mem.eql(u8, entry.path, "f77_runtime.zig") or
+            std.mem.startsWith(u8, entry.path, "f77_runtime/") or
+            std.mem.startsWith(u8, entry.path, "f77_runtime\\")))
+        {
+            continue;
+        }
+        try files.append(allocator, try allocator.dupe(u8, entry.path));
+    }
+    std.sort.heap([]const u8, files.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lessThan);
+
+    var hasher = std.hash.XxHash64.init(0);
+    for (files.items) |rel_path| {
+        hasher.update(rel_path);
+        const abs_path = try std.fs.path.join(allocator, &.{ runtime_dir, rel_path });
+        defer allocator.free(abs_path);
+        var digest = try hashFileXx64(abs_path);
+        hasher.update(std.mem.asBytes(&digest));
+    }
+    const final = hasher.final();
+    return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
 }
 
 const RefSource = struct {
@@ -729,6 +878,8 @@ fn linesEquivalentIgnoringWhitespace(a: []const u8, b: []const u8) bool {
 fn processCase(
     allocator: std.mem.Allocator,
     root_path: []const u8,
+    cache_dir: []const u8,
+    runtime_cache_key: []const u8,
     gfortran_cmd: []const u8,
     case: TestCase,
     options: Options,
@@ -751,22 +902,26 @@ fn processCase(
 
     const ll_path = try std.fs.path.join(allocator, &.{ work_dir, "translated.ll" });
     defer allocator.free(ll_path);
+    const translated_obj_path = try std.fs.path.join(allocator, &.{ work_dir, "translated.o" });
+    defer allocator.free(translated_obj_path);
     const ref_exe = try prepareExePath(allocator, work_dir, "ref");
     defer allocator.free(ref_exe);
     const test_exe = try prepareExePath(allocator, work_dir, "test");
     defer allocator.free(test_exe);
-    var runtime_artifacts = prepareRuntimeArtifacts(allocator, root_path, work_dir, options.runtime_backend, options.timeout_ms) catch |err| {
+    const runtime_output_dir = if (options.incremental) cache_dir else work_dir;
+    var runtime_artifacts = prepareRuntimeArtifacts(
+        allocator,
+        root_path,
+        runtime_output_dir,
+        options.runtime_backend,
+        options.timeout_ms,
+        runtime_cache_key,
+        options.incremental,
+    ) catch |err| {
         log_state.stderr("runtime backend prepare failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
         return false;
     };
     defer runtime_artifacts.deinit(allocator);
-
-    const ir = Col6Forge.runPipeline(allocator, abs_input_path, options.emit) catch |err| {
-        try reportPipelineError(log_state, abs_input_path, err);
-        return false;
-    };
-    defer allocator.free(ir.output);
-    try writeFile(ll_path, ir.output);
 
     if (isTimedOut(options.timeout_ms, &timer)) {
         log_state.stderr("timeout: {s}\n", .{abs_input_path});
@@ -827,17 +982,89 @@ fn processCase(
         return false;
     }
 
+    const source_hash = if (options.incremental) try hashFileXx64(abs_input_path) else 0;
+    const ll_cache_path = if (options.incremental)
+        try buildVerifyCachePath(allocator, cache_dir, source_hash, options.emit, ".ll")
+    else
+        null;
+    defer if (ll_cache_path) |p| allocator.free(p);
+    const obj_cache_path = if (options.incremental)
+        try buildVerifyCachePath(allocator, cache_dir, source_hash, options.emit, ".o")
+    else
+        null;
+    defer if (obj_cache_path) |p| allocator.free(p);
+
+    if (options.incremental and fileExistsAbsolute(obj_cache_path.?)) {
+        copyFileAbsolute(obj_cache_path.?, translated_obj_path) catch |err| {
+            log_state.stderr("failed to copy cached object: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+            return false;
+        };
+    } else {
+        if (options.incremental and fileExistsAbsolute(ll_cache_path.?)) {
+            copyFileAbsolute(ll_cache_path.?, ll_path) catch |err| {
+                log_state.stderr("failed to copy cached ll: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+                return false;
+            };
+        } else {
+            const ir = Col6Forge.runPipeline(allocator, abs_input_path, options.emit) catch |err| {
+                try reportPipelineError(log_state, abs_input_path, err);
+                return false;
+            };
+            defer allocator.free(ir.output);
+            try writeFile(ll_path, ir.output);
+            if (options.incremental) {
+                try writeFile(ll_cache_path.?, ir.output);
+            }
+        }
+
+        const object_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+        if (object_timeout != null and object_timeout.? == 0) {
+            log_state.stderr("timeout: {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            return false;
+        }
+        const object_compile = runProcessCapture(
+            allocator,
+            &.{ "zig", "cc", "-O0", "-c", "-o", translated_obj_path, ll_path },
+            work_dir,
+            object_timeout,
+        ) catch |err| {
+            log_state.stderr("zig cc failed: {s} ({s})\n", .{ ll_path, @errorName(err) });
+            return false;
+        };
+        defer object_compile.deinit(allocator);
+        if (object_compile.timed_out) {
+            log_state.stderr("timeout: zig cc {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            return false;
+        }
+        if (!isZeroExit(object_compile.term)) {
+            log_state.stderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, object_compile.stderr });
+            return false;
+        }
+        if (options.incremental) {
+            copyFileAbsolute(translated_obj_path, obj_cache_path.?) catch {};
+        }
+    }
+
+    const link_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+    if (link_timeout != null and link_timeout.? == 0) {
+        log_state.stderr("timeout: {s}\n", .{abs_input_path});
+        cleanupWorkDir(work_dir_rel);
+        return false;
+    }
+
     var compile_args: std.ArrayList([]const u8) = .empty;
     defer compile_args.deinit(allocator);
-    try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path });
+    try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, translated_obj_path });
     try runtime_artifacts.appendToArgs(allocator, &compile_args);
     const our_compile = runProcessCapture(
         allocator,
         compile_args.items,
         work_dir,
-        compile_timeout,
+        link_timeout,
     ) catch |err| {
-        log_state.stderr("zig cc failed: {s} ({s})\n", .{ ll_path, @errorName(err) });
+        log_state.stderr("zig cc link failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
         return false;
     };
     defer our_compile.deinit(allocator);
@@ -919,6 +1146,8 @@ fn processCase(
 fn runCaseParallel(
     allocator: std.mem.Allocator,
     root_path: []const u8,
+    cache_dir: []const u8,
+    runtime_cache_key: []const u8,
     gfortran_cmd: []const u8,
     case: TestCase,
     options: Options,
@@ -928,7 +1157,17 @@ fn runCaseParallel(
     failures: *std.atomic.Value(usize),
 ) void {
     logProgress(log_state, progress, case.input_path);
-    const ok = processCase(allocator, root_path, gfortran_cmd, case, options, log_state, dir_locks) catch |err| {
+    const ok = processCase(
+        allocator,
+        root_path,
+        cache_dir,
+        runtime_cache_key,
+        gfortran_cmd,
+        case,
+        options,
+        log_state,
+        dir_locks,
+    ) catch |err| {
         log_state.stderr("internal error: {s}\n", .{@errorName(err)});
         _ = failures.fetchAdd(1, .seq_cst);
         _ = progress.completed.fetchAdd(1, .seq_cst);
@@ -1076,22 +1315,36 @@ const RuntimeArtifacts = struct {
 fn prepareRuntimeArtifacts(
     allocator: std.mem.Allocator,
     root_path: []const u8,
-    work_dir: []const u8,
+    output_dir: []const u8,
     backend: RuntimeBackend,
     timeout_ms: u64,
+    runtime_cache_key: []const u8,
+    incremental: bool,
 ) !RuntimeArtifacts {
     return switch (backend) {
         .c, .zig => blk: {
             const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "f77_runtime.zig" });
             defer allocator.free(runtime_src);
-            const runtime_obj = try std.fs.path.join(allocator, &.{ work_dir, "f77_runtime.o" });
+            const runtime_obj_name = if (incremental)
+                try std.fmt.allocPrint(
+                    allocator,
+                    "f77_runtime_v{d}_{s}_{s}.o",
+                    .{ CACHE_SCHEMA_VERSION, runtimeBackendTag(backend), runtime_cache_key },
+                )
+            else
+                try allocator.dupe(u8, "f77_runtime.o");
+            defer allocator.free(runtime_obj_name);
+            const runtime_obj = try std.fs.path.join(allocator, &.{ output_dir, runtime_obj_name });
             errdefer allocator.free(runtime_obj);
+            if (incremental and fileExistsAbsolute(runtime_obj)) {
+                break :blk .{ .zig_object = runtime_obj };
+            }
             const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{runtime_obj});
             defer allocator.free(emit_arg);
             const build = try runProcessCapture(
                 allocator,
                 &.{ "zig", "build-obj", "-ODebug", emit_arg, runtime_src },
-                work_dir,
+                output_dir,
                 timeout_ms,
             );
             defer build.deinit(allocator);

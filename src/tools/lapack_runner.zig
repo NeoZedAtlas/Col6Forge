@@ -7,6 +7,8 @@ const RuntimeBackend = enum {
     zig,
 };
 
+const CACHE_SCHEMA_VERSION: u32 = 1;
+
 const INSTALL_EXTRAS = [_][]const u8{
     "lsame.f",
     "slamch.f",
@@ -105,6 +107,8 @@ const Options = struct {
     strict_translate: bool,
     emit: Col6Forge.EmitKind,
     show_help: bool,
+    incremental: bool,
+    clean_cache: bool,
 };
 
 const SupportLibs = struct {
@@ -137,6 +141,15 @@ pub fn main() !void {
 
     const root_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(root_path);
+
+    const cache_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "lapack-verify", "cache" });
+    defer allocator.free(cache_rel);
+    if (options.clean_cache) cleanupWorkDir(cache_rel);
+    try std.fs.cwd().makePath(cache_rel);
+    const cache_dir = try std.fs.path.join(allocator, &.{ root_path, cache_rel });
+    defer allocator.free(cache_dir);
+    const runtime_cache_key = try computeRuntimeCacheKey(allocator, root_path);
+    defer allocator.free(runtime_cache_key);
 
     const testing_dir = options.testing_dir orelse try std.fs.path.join(arena_allocator, &.{ options.lapack_dir, "TESTING" });
     const lin_dir = try std.fs.path.join(arena_allocator, &.{ testing_dir, "LIN" });
@@ -188,7 +201,18 @@ pub fn main() !void {
     var failures: usize = 0;
     for (cases, 0..) |case, i| {
         std.debug.print("[{d}/{d}] Running {s}\n", .{ i + 1, cases.len, case.name });
-        const ok = processCase(allocator, root_path, testing_dir, lin_dir, gfortran_cmd, case, libs, options) catch |err| {
+        const ok = processCase(
+            allocator,
+            root_path,
+            cache_dir,
+            runtime_cache_key,
+            testing_dir,
+            lin_dir,
+            gfortran_cmd,
+            case,
+            libs,
+            options,
+        ) catch |err| {
             std.debug.print("internal error: {s} ({s})\n", .{ case.name, @errorName(err) });
             failures += 1;
             continue;
@@ -215,6 +239,8 @@ fn parseArgs(args: []const []const u8) !Options {
     var strict_translate = false;
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
+    var incremental = true;
+    var clean_cache = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -275,6 +301,18 @@ fn parseArgs(args: []const []const u8) !Options {
             strict_translate = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--incremental")) {
+            incremental = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-incremental")) {
+            incremental = false;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--clean-cache")) {
+            clean_cache = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
             continue;
@@ -294,12 +332,14 @@ fn parseArgs(args: []const []const u8) !Options {
         .strict_translate = strict_translate,
         .emit = emit,
         .show_help = show_help,
+        .incremental = incremental,
+        .clean_cache = clean_cache,
     };
 }
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: lapack_runner [--lapack-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--gfortran <path>] [--runtime-backend <c|zig>] [--timeout <ms>] [--keep-workdir]
+        \\Usage: lapack_runner [--lapack-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--gfortran <path>] [--runtime-backend <c|zig>] [--timeout <ms>] [--keep-workdir] [--incremental|--no-incremental] [--clean-cache]
         \\Options:
         \\  --lapack-dir <dir>      LAPACK-lite root directory (default: tests/LAPACK-lite-3.1.1)
         \\  --testing-dir <dir>     Testing directory (default: <lapack-dir>/TESTING)
@@ -311,6 +351,9 @@ fn printUsage(file: std.fs.File) !void {
         \\  --translate-sources     Translate eligible case sources (default)
         \\  --no-translate-sources  Keep case sources on gfortran side
         \\  --strict-translate      Fail when any source translation fails (default: best-effort fallback)
+        \\  --incremental           Enable translation/object/runtime cache (default)
+        \\  --no-incremental        Disable incremental cache and rebuild everything
+        \\  --clean-cache           Delete zig-cache/lapack-verify/cache before running
         \\  -emit-llvm              Emit LLVM IR (default)
         \\  -h, --help              Show this help
         \\Examples:
@@ -350,20 +393,34 @@ const RuntimeArtifacts = struct {
 fn prepareRuntimeArtifacts(
     allocator: std.mem.Allocator,
     root_path: []const u8,
-    cwd: []const u8,
+    output_dir: []const u8,
     backend: RuntimeBackend,
     timeout_ms: u64,
+    runtime_cache_key: []const u8,
+    incremental: bool,
 ) !RuntimeArtifacts {
     return switch (backend) {
         .c, .zig => blk: {
             const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "f77_runtime.zig" });
             defer allocator.free(runtime_src);
-            const runtime_obj = try std.fs.path.join(allocator, &.{ cwd, "f77_runtime.o" });
+            const runtime_obj_name = if (incremental)
+                try std.fmt.allocPrint(
+                    allocator,
+                    "f77_runtime_v{d}_{s}_{s}.o",
+                    .{ CACHE_SCHEMA_VERSION, runtimeBackendTag(backend), runtime_cache_key },
+                )
+            else
+                try allocator.dupe(u8, "f77_runtime.o");
+            defer allocator.free(runtime_obj_name);
+            const runtime_obj = try std.fs.path.join(allocator, &.{ output_dir, runtime_obj_name });
             errdefer allocator.free(runtime_obj);
+            if (incremental and fileExistsAbsolute(runtime_obj)) {
+                break :blk .{ .zig_object = runtime_obj };
+            }
             const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{runtime_obj});
             defer allocator.free(emit_arg);
             const cmd = [_][]const u8{ "zig", "build-obj", "-ODebug", emit_arg, runtime_src };
-            const build = try runProcessCaptureWithInput(allocator, &cmd, cwd, null, timeout_ms);
+            const build = try runProcessCaptureWithInput(allocator, &cmd, output_dir, null, timeout_ms);
             defer build.deinit(allocator);
             if (build.timed_out) return error.RuntimeBackendBuildTimeout;
             if (!isZeroExit(build.term)) {
@@ -391,6 +448,8 @@ fn collectCases(allocator: std.mem.Allocator, filter: ?[]const u8) ![]LapackCase
 fn processCase(
     allocator: std.mem.Allocator,
     root_path: []const u8,
+    cache_dir: []const u8,
+    runtime_cache_key: []const u8,
     testing_dir: []const u8,
     lin_dir: []const u8,
     gfortran_cmd: []const u8,
@@ -440,7 +499,15 @@ fn processCase(
     const enable_translation = options.translate_sources and case.allow_translation;
     const candidate_sources = try selectTranslatedSources(allocator, source_paths, enable_translation);
     defer allocator.free(candidate_sources);
-    const translated = try translateSources(allocator, ll_dir, candidate_sources, options.emit, options.strict_translate);
+    const translated = try translateSources(
+        allocator,
+        ll_dir,
+        cache_dir,
+        candidate_sources,
+        options.emit,
+        options.strict_translate,
+        options.incremental,
+    );
     defer {
         allocator.free(translated.sources);
         for (translated.ll_paths) |p| allocator.free(p);
@@ -460,11 +527,14 @@ fn processCase(
         source_paths,
         translated.sources,
         translated.ll_paths,
+        cache_dir,
+        runtime_cache_key,
         libs,
         options.runtime_backend,
         options.timeout_ms,
         test_dir,
         options.strict_translate,
+        options.incremental,
     )) {
         return false;
     }
@@ -873,9 +943,11 @@ const TranslateResult = struct {
 fn translateSources(
     allocator: std.mem.Allocator,
     ll_dir: []const u8,
+    cache_dir: []const u8,
     source_paths: []const []const u8,
     emit: Col6Forge.EmitKind,
     strict_translate: bool,
+    incremental: bool,
 ) !TranslateResult {
     var ll_buf: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -893,19 +965,42 @@ fn translateSources(
         defer allocator.free(ll_name);
         const ll_path = try std.fs.path.join(allocator, &.{ ll_dir, ll_name });
 
-        const ir = Col6Forge.runPipeline(allocator, src_path, emit) catch |err| {
-            allocator.free(ll_path);
-            if (strict_translate) {
-                printPipelineError(src_path, err);
-                return err;
+        if (incremental) {
+            const source_hash = try hashFileXx64(src_path);
+            const ll_cache_path = try buildSourceLlCachePath(allocator, cache_dir, source_hash, emit);
+            defer allocator.free(ll_cache_path);
+            if (fileExistsAbsolute(ll_cache_path)) {
+                try copyFileAbsolute(ll_cache_path, ll_path);
+            } else {
+                const ir = Col6Forge.runPipeline(allocator, src_path, emit) catch |err| {
+                    allocator.free(ll_path);
+                    if (strict_translate) {
+                        printPipelineError(src_path, err);
+                        return err;
+                    }
+                    std.debug.print("pipeline fallback: {s}\n", .{src_path});
+                    printPipelineError(src_path, err);
+                    continue;
+                };
+                defer allocator.free(ir.output);
+                try writeFile(ll_path, ir.output);
+                try writeFile(ll_cache_path, ir.output);
             }
-            std.debug.print("pipeline fallback: {s}\n", .{src_path});
-            printPipelineError(src_path, err);
-            continue;
-        };
-        defer allocator.free(ir.output);
+        } else {
+            const ir = Col6Forge.runPipeline(allocator, src_path, emit) catch |err| {
+                allocator.free(ll_path);
+                if (strict_translate) {
+                    printPipelineError(src_path, err);
+                    return err;
+                }
+                std.debug.print("pipeline fallback: {s}\n", .{src_path});
+                printPipelineError(src_path, err);
+                continue;
+            };
+            defer allocator.free(ir.output);
+            try writeFile(ll_path, ir.output);
+        }
 
-        try writeFile(ll_path, ir.output);
         try src_buf.append(allocator, src_path);
         try ll_buf.append(allocator, ll_path);
     }
@@ -930,11 +1025,14 @@ fn compileTranslatedCase(
     source_paths: []const []const u8,
     translated_sources: []const []const u8,
     ll_paths: []const []const u8,
+    cache_dir: []const u8,
+    runtime_cache_key: []const u8,
     libs: SupportLibs,
     runtime_backend: RuntimeBackend,
     timeout_ms: u64,
     cwd: []const u8,
     strict_translate: bool,
+    incremental: bool,
 ) !bool {
     const obj_dir = try std.fs.path.join(allocator, &.{ cwd, "obj-test-case" });
     defer allocator.free(obj_dir);
@@ -970,13 +1068,43 @@ fn compileTranslatedCase(
         trans_objs.deinit(allocator);
     }
     for (ll_paths, 0..) |ll_path, idx| {
+        if (incremental) {
+            const cached = getOrBuildTranslatedObject(allocator, ll_path, cache_dir, cwd, timeout_ms) catch |err| {
+                if (strict_translate) {
+                    std.debug.print("translated object cache failed ({s}): {s}\n", .{ ll_path, @errorName(err) });
+                    return false;
+                }
+                const src_path = translated_sources[idx];
+                std.debug.print("translated object fallback: {s}\n", .{src_path});
+                const fb_name = try std.fmt.allocPrint(allocator, "tfb_{d}.o", .{idx});
+                defer allocator.free(fb_name);
+                const fb_obj = try std.fs.path.join(allocator, &.{ obj_dir, fb_name });
+                const fb_cmd = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", fb_obj, src_path };
+                const fb_res = runProcessCaptureWithInput(allocator, &fb_cmd, cwd, null, timeout_ms) catch |fb_err| {
+                    std.debug.print("gfortran invoke error: {s}\n", .{@errorName(fb_err)});
+                    allocator.free(fb_obj);
+                    return false;
+                };
+                defer fb_res.deinit(allocator);
+                if (fb_res.timed_out or !isZeroExit(fb_res.term)) {
+                    std.debug.print("translated fallback compile failed ({s})\n{s}\n", .{ src_path, fb_res.stderr });
+                    allocator.free(fb_obj);
+                    return false;
+                }
+                try fallback_objs.append(allocator, fb_obj);
+                continue;
+            };
+            try trans_objs.append(allocator, cached);
+            continue;
+        }
+
         const obj_name = try std.fmt.allocPrint(allocator, "t_{d}.o", .{idx});
         defer allocator.free(obj_name);
         const obj_path = try std.fs.path.join(allocator, &.{ obj_dir, obj_name });
-
         const cmd = [_][]const u8{ "zig", "cc", "-O0", "-c", "-o", obj_path, ll_path };
         const res = runProcessCaptureWithInput(allocator, &cmd, cwd, null, timeout_ms) catch |err| {
             std.debug.print("zig cc invoke error: {s}\n", .{@errorName(err)});
+            allocator.free(obj_path);
             return false;
         };
         defer res.deinit(allocator);
@@ -988,7 +1116,6 @@ fn compileTranslatedCase(
             }
             const src_path = translated_sources[idx];
             std.debug.print("translated compile fallback: {s}\n", .{src_path});
-
             const fb_name = try std.fmt.allocPrint(allocator, "tfb_{d}.o", .{idx});
             defer allocator.free(fb_name);
             const fb_obj = try std.fs.path.join(allocator, &.{ obj_dir, fb_name });
@@ -1013,7 +1140,16 @@ fn compileTranslatedCase(
         try trans_objs.append(allocator, obj_path);
     }
 
-    var runtime_artifacts = prepareRuntimeArtifacts(allocator, root_path, cwd, runtime_backend, timeout_ms) catch |err| {
+    const runtime_output_dir = if (incremental) cache_dir else cwd;
+    var runtime_artifacts = prepareRuntimeArtifacts(
+        allocator,
+        root_path,
+        runtime_output_dir,
+        runtime_backend,
+        timeout_ms,
+        runtime_cache_key,
+        incremental,
+    ) catch |err| {
         std.debug.print("runtime backend prepare failed: {s}\n", .{@errorName(err)});
         return false;
     };
@@ -1062,6 +1198,140 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
     var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(contents);
+}
+
+fn emitCacheTag(_: Col6Forge.EmitKind) []const u8 {
+    return "llvm";
+}
+
+fn runtimeBackendTag(backend: RuntimeBackend) []const u8 {
+    return switch (backend) {
+        .c => "c",
+        .zig => "zig",
+    };
+}
+
+fn fileExistsAbsolute(path: []const u8) bool {
+    std.fs.accessAbsolute(path, .{}) catch return false;
+    return true;
+}
+
+fn hashFileXx64(path: []const u8) !u64 {
+    var file = try std.fs.openFileAbsolute(path, .{});
+    defer file.close();
+    var hasher = std.hash.XxHash64.init(0);
+    var buf: [64 * 1024]u8 = undefined;
+    while (true) {
+        const n = try file.read(&buf);
+        if (n == 0) break;
+        hasher.update(buf[0..n]);
+    }
+    return hasher.final();
+}
+
+fn copyFileAbsolute(src_path: []const u8, dst_path: []const u8) !void {
+    var src = try std.fs.openFileAbsolute(src_path, .{});
+    defer src.close();
+    var dst = try std.fs.createFileAbsolute(dst_path, .{ .truncate = true });
+    defer dst.close();
+    var buf: [64 * 1024]u8 = undefined;
+    while (true) {
+        const n = try src.read(&buf);
+        if (n == 0) break;
+        try dst.writeAll(buf[0..n]);
+    }
+}
+
+fn buildSourceLlCachePath(
+    allocator: std.mem.Allocator,
+    cache_dir: []const u8,
+    source_hash: u64,
+    emit: Col6Forge.EmitKind,
+) ![]const u8 {
+    const name = try std.fmt.allocPrint(
+        allocator,
+        "ll_v{d}_{s}_{x:0>16}.ll",
+        .{ CACHE_SCHEMA_VERSION, emitCacheTag(emit), source_hash },
+    );
+    defer allocator.free(name);
+    return std.fs.path.join(allocator, &.{ cache_dir, name });
+}
+
+fn buildTranslatedObjCachePath(allocator: std.mem.Allocator, cache_dir: []const u8, ll_hash: u64) ![]const u8 {
+    const name = try std.fmt.allocPrint(allocator, "obj_v{d}_{x:0>16}.o", .{ CACHE_SCHEMA_VERSION, ll_hash });
+    defer allocator.free(name);
+    return std.fs.path.join(allocator, &.{ cache_dir, name });
+}
+
+fn getOrBuildTranslatedObject(
+    allocator: std.mem.Allocator,
+    ll_path: []const u8,
+    cache_dir: []const u8,
+    cwd: []const u8,
+    timeout_ms: u64,
+) ![]const u8 {
+    const ll_hash = try hashFileXx64(ll_path);
+    const obj_cache_path = try buildTranslatedObjCachePath(allocator, cache_dir, ll_hash);
+    errdefer allocator.free(obj_cache_path);
+    if (fileExistsAbsolute(obj_cache_path)) return obj_cache_path;
+
+    const cmd = [_][]const u8{ "zig", "cc", "-O0", "-c", "-o", obj_cache_path, ll_path };
+    const res = runProcessCaptureWithInput(allocator, &cmd, cwd, null, timeout_ms) catch |err| {
+        std.debug.print("zig cc invoke error: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    defer res.deinit(allocator);
+    if (res.timed_out) return error.TranslatedObjectCompileTimeout;
+    if (!isZeroExit(res.term)) {
+        std.debug.print("translated compile failed ({s})\n{s}\n", .{ ll_path, res.stderr });
+        return error.TranslatedObjectCompileFailed;
+    }
+    return obj_cache_path;
+}
+
+fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
+    const runtime_dir = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime" });
+    defer allocator.free(runtime_dir);
+
+    var dir = try std.fs.openDirAbsolute(runtime_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var files: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (files.items) |p| allocator.free(p);
+        files.deinit(allocator);
+    }
+
+    while (try walker.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.ascii.endsWithIgnoreCase(entry.path, ".zig")) continue;
+        if (!(std.mem.eql(u8, entry.path, "f77_runtime.zig") or
+            std.mem.startsWith(u8, entry.path, "f77_runtime/") or
+            std.mem.startsWith(u8, entry.path, "f77_runtime\\")))
+        {
+            continue;
+        }
+        try files.append(allocator, try allocator.dupe(u8, entry.path));
+    }
+    std.sort.heap([]const u8, files.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lessThan);
+
+    var hasher = std.hash.XxHash64.init(0);
+    for (files.items) |rel_path| {
+        hasher.update(rel_path);
+        const abs_path = try std.fs.path.join(allocator, &.{ runtime_dir, rel_path });
+        defer allocator.free(abs_path);
+        var digest = try hashFileXx64(abs_path);
+        hasher.update(std.mem.asBytes(&digest));
+    }
+    const final = hasher.final();
+    return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
 }
 
 fn printPipelineError(path: []const u8, err: anyerror) void {
