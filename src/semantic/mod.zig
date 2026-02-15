@@ -25,9 +25,10 @@ pub const SemanticDiagnostic = diagnostic.SemanticDiagnostic;
 
 pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticProgram {
     diagnostic.clear();
+    const mutable_program = program;
     var known_function_types = std.StringHashMap(ast.TypeKind).init(arena);
     var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena);
-    for (program.units) |unit| {
+    for (mutable_program.units) |unit| {
         if (unit.kind == .function) {
             try known_function_types.put(unit.name, inferFunctionType(unit));
         }
@@ -38,7 +39,7 @@ pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticP
 
     var units = std.array_list.Managed(SemanticUnit).init(arena);
     var inherited_implicit: []const symbols.ImplicitRule = &.{};
-    for (program.units) |unit| {
+    for (mutable_program.units) |*unit| {
         var unit_analyzer = analyzer.UnitAnalyzer.init(
             arena,
             unit,
@@ -50,7 +51,7 @@ pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticP
         try units.append(sem_unit);
         inherited_implicit = sem_unit.implicit_rules;
     }
-    try validateCommonBlocks(arena, program, units.items);
+    try validateCommonBlocks(arena, mutable_program, units.items);
     return .{ .units = try units.toOwnedSlice() };
 }
 
@@ -747,4 +748,36 @@ test "semantic rejects CHARACTER*(*) for non-dummy declaration" {
     try testing.expectError(error.InvalidCharLen, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.eql(u8, diag.code, "CF3103"));
+}
+
+test "semantic lowers intrinsic array conversion actual argument into temporary loop copy" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(3)\n" ++
+        "      CALL T(REAL(A))\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+
+    const stmts = program.units[0].stmts;
+    try testing.expect(stmts.len >= 4);
+    try testing.expect(stmts[0].node == .do_loop);
+    try testing.expect(stmts[1].node == .assignment);
+    try testing.expect(stmts[2].node == .cont);
+    try testing.expect(stmts[3].node == .call);
+
+    const call_stmt = stmts[3].node.call;
+    try testing.expectEqual(@as(usize, 1), call_stmt.args.len);
+    try testing.expect(call_stmt.args[0] == .expr);
+    try testing.expect(call_stmt.args[0].expr.* == .identifier);
+    try testing.expect(std.mem.startsWith(u8, call_stmt.args[0].expr.identifier, "__cf_conv_arr_"));
 }

@@ -11,6 +11,7 @@ pub const Context = struct {
 
     arena: std.mem.Allocator,
     unit: ast.ProgramUnit,
+    unit_backing: ?*ast.ProgramUnit,
     current_unit: ?*const ast.ProgramUnit,
     symbols: std.array_list.Managed(symbols.Symbol),
     implicit: std.array_list.Managed(symbols.ImplicitRule),
@@ -40,6 +41,7 @@ pub const Context = struct {
         var ctx = Context{
             .arena = arena,
             .unit = unit,
+            .unit_backing = null,
             .current_unit = null,
             .symbols = std.array_list.Managed(symbols.Symbol).init(arena),
             .implicit = std.array_list.Managed(symbols.ImplicitRule).init(arena),
@@ -57,6 +59,18 @@ pub const Context = struct {
         };
         ctx.current_unit = &ctx.unit;
         return ctx;
+    }
+
+    pub fn bindUnitBacking(self: *Context, unit_ptr: *ast.ProgramUnit) void {
+        self.unit_backing = unit_ptr;
+        self.current_unit = unit_ptr;
+    }
+
+    pub fn replaceUnitStmts(self: *Context, stmts: []ast.Stmt) void {
+        self.unit.stmts = stmts;
+        if (self.unit_backing) |unit_ptr| {
+            unit_ptr.stmts = stmts;
+        }
     }
 
     pub fn initScopeTree(self: *Context) !void {

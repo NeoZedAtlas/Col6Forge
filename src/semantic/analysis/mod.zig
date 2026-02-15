@@ -12,13 +12,15 @@ pub const UnitAnalyzer = struct {
 
     pub fn init(
         arena: std.mem.Allocator,
-        unit: ast.ProgramUnit,
+        unit: *ast.ProgramUnit,
         initial_implicit: []const symbols.ImplicitRule,
         known_function_types: *const std.StringHashMap(ast.TypeKind),
         known_procedure_sigs: *const std.StringHashMap(context.Context.ProcedureSig),
     ) UnitAnalyzer {
+        var ctx = context.Context.init(arena, unit.*, known_function_types, known_procedure_sigs);
+        ctx.bindUnitBacking(unit);
         return .{
-            .ctx = context.Context.init(arena, unit, known_function_types, known_procedure_sigs),
+            .ctx = ctx,
             .initial_implicit = initial_implicit,
         };
     }
