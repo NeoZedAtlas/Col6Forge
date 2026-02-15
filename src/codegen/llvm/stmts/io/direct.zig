@@ -156,6 +156,153 @@ const DirectRecordPlan = struct {
     fmt_start: usize,
     fmt_end: usize,
 };
+
+const RecordSplitter = struct {
+    const Stage = enum {
+        main,
+        tail,
+        final,
+        done,
+    };
+
+    fmt_items: []const ast.FormatItem,
+    reversion_start: usize,
+    arg_count: usize,
+
+    arg_index: usize = 0,
+    fmt_cursor: usize = 0,
+    format_start: usize = 0,
+    record_offset: usize = 0,
+    record_start_arg: usize = 0,
+    record_fmt_start: usize = 0,
+    tail_cursor: usize = 0,
+    in_pass: bool = false,
+    saw_descriptor: bool = false,
+    advanced_record: bool = false,
+    pending_empty_count: usize = 0,
+    pending_empty_fmt: usize = 0,
+    stage: Stage = .main,
+
+    pub fn init(fmt_items: []const ast.FormatItem, arg_count: usize) RecordSplitter {
+        return .{
+            .fmt_items = fmt_items,
+            .reversion_start = findReversionStart(fmt_items),
+            .arg_count = arg_count,
+        };
+    }
+
+    fn makePendingEmptyPlan(self: *RecordSplitter) DirectRecordPlan {
+        self.pending_empty_count -= 1;
+        const plan = DirectRecordPlan{
+            .start_arg = self.record_start_arg,
+            .end_arg = self.record_start_arg,
+            .rec_offset = self.record_offset,
+            .fmt_start = self.pending_empty_fmt,
+            .fmt_end = self.pending_empty_fmt,
+        };
+        self.record_offset += 1;
+        return plan;
+    }
+
+    fn splitAtNewline(self: *RecordSplitter, fmt_end: usize, newline_count: usize) DirectRecordPlan {
+        const plan = DirectRecordPlan{
+            .start_arg = self.record_start_arg,
+            .end_arg = self.arg_index,
+            .rec_offset = self.record_offset,
+            .fmt_start = self.record_fmt_start,
+            .fmt_end = fmt_end,
+        };
+        self.record_offset += 1;
+        self.record_start_arg = self.arg_index;
+        self.record_fmt_start = fmt_end + 1;
+        if (newline_count > 1) {
+            self.pending_empty_count = newline_count - 1;
+            self.pending_empty_fmt = self.record_fmt_start;
+        }
+        return plan;
+    }
+
+    pub fn next(self: *RecordSplitter) ?DirectRecordPlan {
+        while (true) {
+            if (self.pending_empty_count > 0) {
+                return self.makePendingEmptyPlan();
+            }
+
+            switch (self.stage) {
+                .main => {
+                    if (!self.in_pass) {
+                        self.fmt_cursor = self.format_start;
+                        self.saw_descriptor = false;
+                        self.advanced_record = false;
+                        self.in_pass = true;
+                    }
+
+                    while (self.fmt_cursor < self.fmt_items.len and self.arg_index < self.arg_count) {
+                        const item = self.fmt_items[self.fmt_cursor];
+                        switch (item) {
+                            .int, .real, .real_fixed, .char, .logical => {
+                                self.arg_index += 1;
+                                self.saw_descriptor = true;
+                            },
+                            .literal => |text| {
+                                const newline_count = countNewlinesLiteral(text);
+                                if (newline_count != 0) {
+                                    const fmt_end = self.fmt_cursor;
+                                    self.fmt_cursor += 1;
+                                    self.advanced_record = true;
+                                    return self.splitAtNewline(fmt_end, newline_count);
+                                }
+                            },
+                            .spaces, .tab, .colon, .scale, .blank_control, .sign_control, .reversion_anchor => {},
+                        }
+                        self.fmt_cursor += 1;
+                    }
+
+                    self.in_pass = false;
+                    if (self.arg_index >= self.arg_count) {
+                        self.stage = .tail;
+                        self.tail_cursor = self.record_fmt_start;
+                        continue;
+                    }
+                    if (!self.saw_descriptor and !self.advanced_record) {
+                        self.stage = .tail;
+                        self.tail_cursor = self.record_fmt_start;
+                        continue;
+                    }
+                    self.format_start = self.reversion_start;
+                    continue;
+                },
+                .tail => {
+                    while (self.tail_cursor < self.fmt_items.len) {
+                        const item = self.fmt_items[self.tail_cursor];
+                        if (item == .literal) {
+                            const newline_count = countNewlinesLiteral(item.literal);
+                            if (newline_count != 0) {
+                                const fmt_end = self.tail_cursor;
+                                self.tail_cursor += 1;
+                                return self.splitAtNewline(fmt_end, newline_count);
+                            }
+                        }
+                        self.tail_cursor += 1;
+                    }
+                    self.stage = .final;
+                    continue;
+                },
+                .final => {
+                    self.stage = .done;
+                    return .{
+                        .start_arg = self.record_start_arg,
+                        .end_arg = self.arg_index,
+                        .rec_offset = self.record_offset,
+                        .fmt_start = self.record_fmt_start,
+                        .fmt_end = self.fmt_items.len,
+                    };
+                },
+                .done => return null,
+            }
+        }
+    }
+};
 fn emitDirectWriteCall(
     ctx: *Context,
     builder: anytype,
@@ -207,107 +354,10 @@ fn planDirectFormattedRecords(
     var plans = std.array_list.Managed(DirectRecordPlan).init(allocator);
     errdefer plans.deinit();
 
-    const reversion_start = findReversionStart(fmt_items);
-
-    var record_offset: usize = 0;
-    var record_start_arg: usize = 0;
-    var record_fmt_start: usize = 0;
-    var arg_index: usize = 0;
-    var format_start: usize = 0;
-
-    while (arg_index < arg_count) {
-        var i = format_start;
-        var saw_descriptor = false;
-        var advanced_record = false;
-
-        while (i < fmt_items.len and arg_index < arg_count) : (i += 1) {
-            const item = fmt_items[i];
-            switch (item) {
-                .int, .real, .real_fixed, .char, .logical => {
-                    arg_index += 1;
-                    saw_descriptor = true;
-                },
-                .literal => |text| {
-                    const newline_count = countNewlinesLiteral(text);
-                    if (newline_count != 0) {
-                        try plans.append(.{
-                            .start_arg = record_start_arg,
-                            .end_arg = arg_index,
-                            .rec_offset = record_offset,
-                            .fmt_start = record_fmt_start,
-                            .fmt_end = i,
-                        });
-                        record_offset += 1;
-                        record_start_arg = arg_index;
-                        record_fmt_start = i + 1;
-                        var extra: usize = 1;
-                        while (extra < newline_count) : (extra += 1) {
-                            try plans.append(.{
-                                .start_arg = record_start_arg,
-                                .end_arg = record_start_arg,
-                                .rec_offset = record_offset,
-                                .fmt_start = record_fmt_start,
-                                .fmt_end = record_fmt_start,
-                            });
-                            record_offset += 1;
-                        }
-                        advanced_record = true;
-                    }
-                },
-                .spaces, .tab, .colon, .scale, .blank_control, .sign_control, .reversion_anchor => {},
-            }
-        }
-
-        if (arg_index >= arg_count) break;
-        if (!saw_descriptor and !advanced_record) break;
-        format_start = reversion_start;
+    var splitter = RecordSplitter.init(fmt_items, arg_count);
+    while (splitter.next()) |plan| {
+        try plans.append(plan);
     }
-
-    // Even after all data items are consumed, trailing record advances ('/')
-    // and literal-only tail sections must still be materialized.
-    var tail_i = record_fmt_start;
-    while (tail_i < fmt_items.len) : (tail_i += 1) {
-        const item = fmt_items[tail_i];
-        switch (item) {
-            .literal => |text| {
-                const newline_count = countNewlinesLiteral(text);
-                if (newline_count != 0) {
-                    try plans.append(.{
-                        .start_arg = record_start_arg,
-                        .end_arg = arg_index,
-                        .rec_offset = record_offset,
-                        .fmt_start = record_fmt_start,
-                        .fmt_end = tail_i,
-                    });
-                    record_offset += 1;
-                    record_start_arg = arg_index;
-                    record_fmt_start = tail_i + 1;
-                    var extra: usize = 1;
-                    while (extra < newline_count) : (extra += 1) {
-                        try plans.append(.{
-                            .start_arg = record_start_arg,
-                            .end_arg = record_start_arg,
-                            .rec_offset = record_offset,
-                            .fmt_start = record_fmt_start,
-                            .fmt_end = record_fmt_start,
-                        });
-                        record_offset += 1;
-                    }
-                }
-            },
-            else => {},
-        }
-    }
-
-    // Emit the final record, even if it has zero descriptors, so that a
-    // trailing '/' still materializes blank records in the direct file.
-    try plans.append(.{
-        .start_arg = record_start_arg,
-        .end_arg = arg_index,
-        .rec_offset = record_offset,
-        .fmt_start = record_fmt_start,
-        .fmt_end = fmt_items.len,
-    });
 
     return plans.toOwnedSlice();
 }
