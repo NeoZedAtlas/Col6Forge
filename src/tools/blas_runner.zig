@@ -475,7 +475,7 @@ fn prepareRuntimeArtifacts(
         .c, .zig => blk: {
             const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "f77_runtime.zig" });
             defer allocator.free(runtime_src);
-            const runtime_obj = try std.fs.path.join(allocator, &.{ cwd, "f77_runtime_zig.o" });
+            const runtime_obj = try std.fs.path.join(allocator, &.{ cwd, "f77_runtime.o" });
             errdefer allocator.free(runtime_obj);
             const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{runtime_obj});
             defer allocator.free(emit_arg);
