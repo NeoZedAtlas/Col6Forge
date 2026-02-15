@@ -160,7 +160,8 @@ fn checkExpr(self: *context.Context, expr: *ast.Expr) CheckError!void {
 
             const idx = resolve_symbols.findSymbolIndex(self, call.name) orelse return error.MissingScope;
             const sym = self.symbols.items[idx];
-            const kind = resolvedKindFor(self, expr) orelse if (sym.dims.len > 0) .subscript else .call;
+            const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
+                (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
             if (kind == .subscript) {
                 if (sym.dims.len == 0) return error.InvalidSubscript;
                 if (call.args.len != sym.dims.len) return error.InvalidSubscript;
@@ -195,7 +196,8 @@ fn isAssignmentTarget(self: *context.Context, expr: *ast.Expr) bool {
         .call_or_subscript => |call| blk: {
             const idx = resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false;
             const sym = self.symbols.items[idx];
-            const kind = resolvedKindFor(self, expr) orelse if (sym.dims.len > 0) .subscript else .call;
+            const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
+                (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
             break :blk kind == .subscript or kind == .call;
         },
         else => false,

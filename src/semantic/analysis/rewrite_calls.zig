@@ -25,7 +25,7 @@ const RewriteResult = struct {
     changed: bool,
 };
 
-fn rewriteStmtList(ctx: *context.Context, state: *RewriteState, stmts: []ast.Stmt) !RewriteResult {
+fn rewriteStmtList(ctx: *context.Context, state: *RewriteState, stmts: []ast.Stmt) anyerror!RewriteResult {
     var out = std.array_list.Managed(ast.Stmt).init(ctx.arena);
     errdefer out.deinit();
 

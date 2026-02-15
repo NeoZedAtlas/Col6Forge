@@ -231,7 +231,7 @@ fn emitCharacterLengthArg(ctx: *Context, builder: anytype, expr: *Expr) !?ValueR
             return charSymbolLengthValue(ctx, call.name, sym);
         },
         .substring => |sub| {
-            return emitSubstringLengthValue(ctx, builder, sub);
+            return try emitSubstringLengthValue(ctx, builder, sub);
         },
         .literal => |lit| {
             const len: i64 = switch (lit.kind) {

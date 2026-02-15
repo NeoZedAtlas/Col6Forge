@@ -319,13 +319,13 @@ pub fn main() !void {
 
     const cases = try collectCases(arena_allocator, options.filter);
     if (cases.len == 0) {
-        std.debug.print("no BLAS cases selected\n", .{});
+        std.log.warn("no BLAS cases selected\n", .{});
         return;
     }
 
     var failures: usize = 0;
     for (cases, 0..) |case, idx| {
-        std.debug.print("[{d}/{d}] Running {s}\n", .{ idx + 1, cases.len, case.name });
+        std.log.info("[{d}/{d}] Running {s}\n", .{ idx + 1, cases.len, case.name });
         const ok = processCase(
             allocator,
             root_path,
@@ -337,7 +337,7 @@ pub fn main() !void {
             case,
             options,
         ) catch |err| {
-            std.debug.print("internal error: {s} ({s})\n", .{ case.name, @errorName(err) });
+            std.log.err("internal error: {s} ({s})\n", .{ case.name, @errorName(err) });
             failures += 1;
             continue;
         };
@@ -345,11 +345,11 @@ pub fn main() !void {
     }
 
     if (failures > 0) {
-        std.debug.print("BLAS verification failed: {d}\n", .{failures});
+        std.log.err("BLAS verification failed: {d}\n", .{failures});
         return error.BlasVerificationFailed;
     }
 
-    std.debug.print("BLAS verification passed\n", .{});
+    std.log.info("BLAS verification passed\n", .{});
 }
 
 fn parseArgs(args: []const []const u8) ParseArgsOutcome {
@@ -572,7 +572,7 @@ fn prepareRuntimeArtifacts(
             defer build.deinit(allocator);
             if (build.timed_out) return error.RuntimeBackendBuildTimeout;
             if (!isZeroExit(build.term)) {
-                std.debug.print("zig runtime backend build failed\n{s}\n", .{build.stderr});
+                std.log.err("zig runtime backend build failed\n{s}\n", .{build.stderr});
                 return error.RuntimeBackendBuildFailed;
             }
             break :blk .{
@@ -649,7 +649,7 @@ fn processCase(
     defer allocator.free(ref_exe);
     const ref_ok = try compileReference(allocator, gfortran_cmd, ref_exe, source_paths, options.timeout_ms, ref_dir);
     if (!ref_ok) {
-        std.debug.print("reference compile failed: {s}\n", .{case.name});
+        std.log.err("reference compile failed: {s}\n", .{case.name});
         return false;
     }
 
@@ -680,28 +680,28 @@ fn processCase(
         options.incremental,
     );
     if (!test_compile_ok) {
-        std.debug.print("translated compile failed: {s}\n", .{case.name});
+        std.log.err("translated compile failed: {s}\n", .{case.name});
         return false;
     }
 
     const ref_run = try runProcessCaptureWithInput(allocator, &.{ref_exe}, ref_dir, input_data, options.timeout_ms);
     defer ref_run.deinit(allocator);
     if (ref_run.timed_out) {
-        std.debug.print("timeout: reference run {s}\n", .{case.name});
+        std.log.warn("timeout: reference run {s}\n", .{case.name});
         return false;
     }
 
     const test_run = try runProcessCaptureWithInput(allocator, &.{test_exe}, test_dir, input_data, options.timeout_ms);
     defer test_run.deinit(allocator);
     if (test_run.timed_out) {
-        std.debug.print("timeout: translated run {s}\n", .{case.name});
+        std.log.warn("timeout: translated run {s}\n", .{case.name});
         return false;
     }
 
     const output_cmp = try Comparator.compare(allocator, ref_run.term, test_run.term, ref_run.stdout, test_run.stdout);
     defer if (output_cmp.diff) |d| allocator.free(d);
     if (!output_cmp.ok) {
-        std.debug.print("stdout mismatch: {s}\n{s}\n", .{ case.name, output_cmp.diff.? });
+        std.log.warn("stdout mismatch: {s}\n{s}\n", .{ case.name, output_cmp.diff.? });
         return false;
     }
 
@@ -714,13 +714,13 @@ fn processCase(
         if (ref_summary == null and test_summary == null) {
             // no summary output on either side
         } else if (ref_summary == null or test_summary == null) {
-            std.debug.print("summary file presence mismatch: {s} ({s})\n", .{ case.name, name });
+            std.log.warn("summary file presence mismatch: {s} ({s})\n", .{ case.name, name });
             return false;
         } else {
             const summary_cmp = try Comparator.compareText(allocator, ref_summary.?, test_summary.?);
             defer if (summary_cmp.diff) |d| allocator.free(d);
             if (!summary_cmp.ok) {
-                std.debug.print("summary mismatch: {s} ({s})\n{s}\n", .{ case.name, name, summary_cmp.diff.? });
+                std.log.warn("summary mismatch: {s} ({s})\n{s}\n", .{ case.name, name, summary_cmp.diff.? });
                 return false;
             }
         }
@@ -991,18 +991,18 @@ fn compileReference(
         const compile_driver = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", driver_obj, source_paths[0] };
         const result = runProcessCaptureWithInput(allocator, &compile_driver, cwd, null, timeout_ms) catch |err| {
             if (err == error.FileNotFound) {
-                std.debug.print("gfortran not found (use --gfortran or set GFORTRAN/FC)\n", .{});
+                std.log.err("gfortran not found (use --gfortran or set GFORTRAN/FC)\n", .{});
             }
-            std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+            std.log.err("gfortran invoke error: {s}\n", .{@errorName(err)});
             return false;
         };
         defer result.deinit(allocator);
         if (result.timed_out) {
-            std.debug.print("timeout: gfortran compile driver\n", .{});
+            std.log.warn("timeout: gfortran compile driver\n", .{});
             return false;
         }
         if (!isZeroExit(result.term)) {
-            std.debug.print("=== GFORTRAN DRIVER STDERR ===\n{s}\n", .{result.stderr});
+            std.log.err("=== GFORTRAN DRIVER STDERR ===\n{s}\n", .{result.stderr});
             return false;
         }
     }
@@ -1023,16 +1023,16 @@ fn compileReference(
 
         const compile_blas = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", obj_path, source_paths[i] };
         const result = runProcessCaptureWithInput(allocator, &compile_blas, cwd, null, timeout_ms) catch |err| {
-            std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+            std.log.err("gfortran invoke error: {s}\n", .{@errorName(err)});
             return false;
         };
         defer result.deinit(allocator);
         if (result.timed_out) {
-            std.debug.print("timeout: gfortran compile BLAS object {d}\n", .{i});
+            std.log.warn("timeout: gfortran compile BLAS object {d}\n", .{i});
             return false;
         }
         if (!isZeroExit(result.term)) {
-            std.debug.print("=== GFORTRAN BLAS STDERR ({s}) ===\n{s}\n", .{ source_paths[i], result.stderr });
+            std.log.err("=== GFORTRAN BLAS STDERR ({s}) ===\n{s}\n", .{ source_paths[i], result.stderr });
             return false;
         }
     }
@@ -1044,16 +1044,16 @@ fn compileReference(
         try ar_args.appendSlice(allocator, blas_objs.items);
 
         const ar_result = runProcessCaptureWithInput(allocator, ar_args.items, cwd, null, timeout_ms) catch |err| {
-            std.debug.print("archive invoke error: {s}\n", .{@errorName(err)});
+            std.log.err("archive invoke error: {s}\n", .{@errorName(err)});
             return false;
         };
         defer ar_result.deinit(allocator);
         if (ar_result.timed_out) {
-            std.debug.print("timeout: archive BLAS library\n", .{});
+            std.log.warn("timeout: archive BLAS library\n", .{});
             return false;
         }
         if (!isZeroExit(ar_result.term)) {
-            std.debug.print("=== ARCHIVE STDERR ===\n{s}\n", .{ar_result.stderr});
+            std.log.err("=== ARCHIVE STDERR ===\n{s}\n", .{ar_result.stderr});
             return false;
         }
     }
@@ -1062,16 +1062,16 @@ fn compileReference(
     {
         const link_args = [_][]const u8{ gfortran_cmd, "-O0", "-o", out_exe, driver_obj, ref_lib };
         const result = runProcessCaptureWithInput(allocator, &link_args, cwd, null, timeout_ms) catch |err| {
-            std.debug.print("gfortran link invoke error: {s}\n", .{@errorName(err)});
+            std.log.err("gfortran link invoke error: {s}\n", .{@errorName(err)});
             return false;
         };
         defer result.deinit(allocator);
         if (result.timed_out) {
-            std.debug.print("timeout: gfortran link\n", .{});
+            std.log.warn("timeout: gfortran link\n", .{});
             return false;
         }
         if (!isZeroExit(result.term)) {
-            std.debug.print("=== GFORTRAN LINK STDERR ===\n{s}\n", .{result.stderr});
+            std.log.err("=== GFORTRAN LINK STDERR ===\n{s}\n", .{result.stderr});
             return false;
         }
     }
@@ -1113,7 +1113,7 @@ fn compileTranslated(
         runtime_cache_key,
         incremental,
     ) catch |err| {
-        std.debug.print("runtime backend prepare failed: {s}\n", .{@errorName(err)});
+        std.log.err("runtime backend prepare failed: {s}\n", .{@errorName(err)});
         return false;
     };
     defer runtime_artifacts.deinit(allocator);
@@ -1127,7 +1127,7 @@ fn compileTranslated(
         const driver_ll = ll_paths[driver_idx];
         if (incremental) {
             const cached = getOrBuildTranslatedObject(allocator, driver_ll, cache_dir, cwd, timeout_ms) catch |err| {
-                std.debug.print("translated driver object cache failed ({s}): {s}\n", .{ driver_ll, @errorName(err) });
+                std.log.warn("translated driver object cache failed ({s}): {s}\n", .{ driver_ll, @errorName(err) });
                 return false;
             };
             cached_driver_obj = cached;
@@ -1135,16 +1135,16 @@ fn compileTranslated(
         } else {
             const compile_driver = [_][]const u8{ "zig", "cc", "-O0", "-c", "-o", driver_obj, driver_ll };
             const result = runProcessCaptureWithInput(allocator, &compile_driver, cwd, null, timeout_ms) catch |err| {
-                std.debug.print("zig cc invoke error: {s}\n", .{@errorName(err)});
+                std.log.err("zig cc invoke error: {s}\n", .{@errorName(err)});
                 return false;
             };
             defer result.deinit(allocator);
             if (result.timed_out) {
-                std.debug.print("timeout: zig cc compile translated test driver\n", .{});
+                std.log.warn("timeout: zig cc compile translated test driver\n", .{});
                 return false;
             }
             if (!isZeroExit(result.term)) {
-                std.debug.print("=== ZIG CC DRIVER STDERR ({s}) ===\n{s}\n", .{ driver_ll, result.stderr });
+                std.log.err("=== ZIG CC DRIVER STDERR ({s}) ===\n{s}\n", .{ driver_ll, result.stderr });
                 return false;
             }
         }
@@ -1152,16 +1152,16 @@ fn compileTranslated(
         // Compile test driver with gfortran to keep BLAS harness behavior aligned.
         const compile_driver = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", driver_obj, source_paths[0] };
         const result = runProcessCaptureWithInput(allocator, &compile_driver, cwd, null, timeout_ms) catch |err| {
-            std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+            std.log.err("gfortran invoke error: {s}\n", .{@errorName(err)});
             return false;
         };
         defer result.deinit(allocator);
         if (result.timed_out) {
-            std.debug.print("timeout: gfortran compile test driver\n", .{});
+            std.log.warn("timeout: gfortran compile test driver\n", .{});
             return false;
         }
         if (!isZeroExit(result.term)) {
-            std.debug.print("=== GFORTRAN DRIVER STDERR ===\n{s}\n", .{result.stderr});
+            std.log.err("=== GFORTRAN DRIVER STDERR ===\n{s}\n", .{result.stderr});
             return false;
         }
     }
@@ -1185,16 +1185,16 @@ fn compileTranslated(
 
         const compile_fallback = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", obj_path, source_paths[i] };
         const result = runProcessCaptureWithInput(allocator, &compile_fallback, cwd, null, timeout_ms) catch |err| {
-            std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+            std.log.err("gfortran invoke error: {s}\n", .{@errorName(err)});
             return false;
         };
         defer result.deinit(allocator);
         if (result.timed_out) {
-            std.debug.print("timeout: gfortran compile helper object {d}\n", .{i});
+            std.log.warn("timeout: gfortran compile helper object {d}\n", .{i});
             return false;
         }
         if (!isZeroExit(result.term)) {
-            std.debug.print("=== GFORTRAN HELPER STDERR ({s}) ===\n{s}\n", .{ source_paths[i], result.stderr });
+            std.log.err("=== GFORTRAN HELPER STDERR ({s}) ===\n{s}\n", .{ source_paths[i], result.stderr });
             return false;
         }
     }
@@ -1210,7 +1210,7 @@ fn compileTranslated(
         if (translated_driver_idx != null and idx == translated_driver_idx.?) continue;
         if (incremental) {
             const cached = getOrBuildTranslatedObject(allocator, ll_path, cache_dir, cwd, timeout_ms) catch |err| {
-                std.debug.print("translated object cache failed ({s}): {s}\n", .{ ll_path, @errorName(err) });
+                std.log.warn("translated object cache failed ({s}): {s}\n", .{ ll_path, @errorName(err) });
                 return false;
             };
             try trans_objs.append(allocator, cached);
@@ -1222,16 +1222,16 @@ fn compileTranslated(
 
             const compile_translated = [_][]const u8{ "zig", "cc", "-O0", "-c", "-o", obj_path, ll_path };
             const result = runProcessCaptureWithInput(allocator, &compile_translated, cwd, null, timeout_ms) catch |err| {
-                std.debug.print("zig cc invoke error: {s}\n", .{@errorName(err)});
+                std.log.err("zig cc invoke error: {s}\n", .{@errorName(err)});
                 return false;
             };
             defer result.deinit(allocator);
             if (result.timed_out) {
-                std.debug.print("timeout: zig cc compile translated BLAS object {d}\n", .{idx});
+                std.log.warn("timeout: zig cc compile translated BLAS object {d}\n", .{idx});
                 return false;
             }
             if (!isZeroExit(result.term)) {
-                std.debug.print("=== ZIG CC BLAS STDERR ({s}) ===\n{s}\n", .{ ll_path, result.stderr });
+                std.log.err("=== ZIG CC BLAS STDERR ({s}) ===\n{s}\n", .{ ll_path, result.stderr });
                 return false;
             }
         }
@@ -1257,17 +1257,17 @@ fn compileTranslated(
     }
 
     const link_result = runProcessCaptureWithInput(allocator, link_args.items, cwd, null, timeout_ms) catch |err| {
-        std.debug.print("gfortran link invoke error: {s}\n", .{@errorName(err)});
+        std.log.err("gfortran link invoke error: {s}\n", .{@errorName(err)});
         return false;
     };
     defer link_result.deinit(allocator);
 
     if (link_result.timed_out) {
-        std.debug.print("timeout: gfortran link\n", .{});
+        std.log.warn("timeout: gfortran link\n", .{});
         return false;
     }
     if (!isZeroExit(link_result.term)) {
-        std.debug.print("=== GFORTRAN LINK STDERR ===\n{s}\n", .{link_result.stderr});
+        std.log.err("=== GFORTRAN LINK STDERR ===\n{s}\n", .{link_result.stderr});
         return false;
     }
 
@@ -1385,16 +1385,16 @@ fn getOrBuildTranslatedObject(
 
     const compile_translated = [_][]const u8{ "zig", "cc", "-O0", "-c", "-o", obj_cache_path, ll_path };
     const result = runProcessCaptureWithInput(allocator, &compile_translated, cwd, null, timeout_ms) catch |err| {
-        std.debug.print("zig cc invoke error: {s}\n", .{@errorName(err)});
+        std.log.err("zig cc invoke error: {s}\n", .{@errorName(err)});
         return err;
     };
     defer result.deinit(allocator);
     if (result.timed_out) {
-        std.debug.print("timeout: zig cc compile cached translated object\n", .{});
+        std.log.warn("timeout: zig cc compile cached translated object\n", .{});
         return error.TranslatedObjectCompileTimeout;
     }
     if (!isZeroExit(result.term)) {
-        std.debug.print("=== ZIG CC BLAS STDERR ({s}) ===\n{s}\n", .{ ll_path, result.stderr });
+        std.log.err("=== ZIG CC BLAS STDERR ({s}) ===\n{s}\n", .{ ll_path, result.stderr });
         return error.TranslatedObjectCompileFailed;
     }
     return obj_cache_path;
@@ -1450,7 +1450,7 @@ fn printPipelineError(path: []const u8, err: anyerror) void {
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
     Col6Forge.writePipelineErrorDiagnostic(&writer.interface, path, err) catch |write_err| {
-        std.debug.print("pipeline error: {s} ({s}, {s})\n", .{ path, @errorName(err), @errorName(write_err) });
+        std.log.err("pipeline error: {s} ({s}, {s})\n", .{ path, @errorName(err), @errorName(write_err) });
         return;
     };
     writer.interface.flush() catch {};

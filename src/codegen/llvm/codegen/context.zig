@@ -208,7 +208,6 @@ pub const Context = struct {
                 return entry.value_ptr.*;
             }
         }
-        std.debug.print("unknown symbol: {s}\n", .{name});
         return error.UnknownSymbol;
     }
 

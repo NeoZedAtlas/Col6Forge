@@ -106,9 +106,6 @@ fn formatConstIntForType(ctx: *Context, ty: IRType, value: i64) []const u8 {
 pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) EmitError!ValueRef {
     if (value.ty == target) return value;
     if (value.is_ptr) return error.UnexpectedPointerValue;
-    if (value.ty == .ptr and target != .ptr) {
-        std.debug.print("coerce ptr({s}) -> {s} for unit {s}\n", .{ value.name, @tagName(target), ctx.unit.name });
-    }
     if (complex.isComplexType(target)) return complex.coerceToComplex(ctx, builder, value, target);
     if (complex.isComplexType(value.ty)) {
         const real = try complex.extractComplex(ctx, builder, value, 0);
@@ -162,7 +159,8 @@ pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) 
 }
 
 fn unsupportedCast(from: IRType, to: IRType) EmitError!ValueRef {
-    std.debug.print("unsupported cast from {s} to {s}\n", .{ @tagName(from), @tagName(to) });
+    _ = from;
+    _ = to;
     return error.UnsupportedCast;
 }
 

@@ -133,7 +133,7 @@ fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_unit
         var it = local.iterator();
         while (it.next()) |entry| {
             const key = entry.key_ptr.*;
-            const block = entry.value_ptr.*;
+            const block = entry.value_ptr;
             const items = block.items.items;
             const total_size = totalCommonSize(items) catch {
                 setCommonMismatchDiagnostic(block.source);

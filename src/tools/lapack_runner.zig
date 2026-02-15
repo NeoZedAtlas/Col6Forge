@@ -187,7 +187,7 @@ pub fn main() !void {
 
     const cases = try collectCases(arena_allocator, options.filter);
     if (cases.len == 0) {
-        std.debug.print("no LAPACK-lite cases selected\n", .{});
+        std.log.warn("no LAPACK-lite cases selected\n", .{});
         return;
     }
 
@@ -216,7 +216,7 @@ pub fn main() !void {
 
     var failures: usize = 0;
     for (cases, 0..) |case, i| {
-        std.debug.print("[{d}/{d}] Running {s}\n", .{ i + 1, cases.len, case.name });
+        std.log.info("[{d}/{d}] Running {s}\n", .{ i + 1, cases.len, case.name });
         const ok = processCase(
             allocator,
             root_path,
@@ -229,7 +229,7 @@ pub fn main() !void {
             libs,
             options,
         ) catch |err| {
-            std.debug.print("internal error: {s} ({s})\n", .{ case.name, @errorName(err) });
+            std.log.err("internal error: {s} ({s})\n", .{ case.name, @errorName(err) });
             failures += 1;
             continue;
         };
@@ -237,10 +237,10 @@ pub fn main() !void {
     }
 
     if (failures > 0) {
-        std.debug.print("LAPACK-lite verification failed: {d}\n", .{failures});
+        std.log.err("LAPACK-lite verification failed: {d}\n", .{failures});
         return error.LapackVerificationFailed;
     }
-    std.debug.print("LAPACK-lite verification passed\n", .{});
+    std.log.info("LAPACK-lite verification passed\n", .{});
 }
 
 fn parseArgs(args: []const []const u8) ParseArgsOutcome {
@@ -456,7 +456,7 @@ fn prepareRuntimeArtifacts(
             defer build.deinit(allocator);
             if (build.timed_out) return error.RuntimeBackendBuildTimeout;
             if (!isZeroExit(build.term)) {
-                std.debug.print("zig runtime backend build failed\n{s}\n", .{build.stderr});
+                std.log.err("zig runtime backend build failed\n{s}\n", .{build.stderr});
                 return error.RuntimeBackendBuildFailed;
             }
             break :blk .{
@@ -546,7 +546,7 @@ fn processCase(
         allocator.free(translated.ll_paths);
     }
     if (enable_translation) {
-        std.debug.print("  translated {d}/{d} source files\n", .{ translated.sources.len, candidate_sources.len });
+        std.log.info("  translated {d}/{d} source files\n", .{ translated.sources.len, candidate_sources.len });
     }
 
     const test_exe = try buildExePath(allocator, test_dir, "test");
@@ -573,7 +573,7 @@ fn processCase(
 
     for (case.inputs, 0..) |input_name, input_idx| {
         if (case.inputs.len > 1) {
-            std.debug.print("  input [{d}/{d}] {s}\n", .{ input_idx + 1, case.inputs.len, input_name });
+            std.log.info("  input [{d}/{d}] {s}\n", .{ input_idx + 1, case.inputs.len, input_name });
         }
         const input_rel = try std.fs.path.join(allocator, &.{ testing_dir, input_name });
         defer allocator.free(input_rel);
@@ -583,24 +583,24 @@ fn processCase(
         const ref_run = try runProcessCaptureWithInputPath(allocator, ref_exe, ref_dir, input_path, options.timeout_ms);
         defer ref_run.deinit(allocator);
         if (ref_run.timed_out) {
-            std.debug.print("timeout: reference run {s} ({s})\n", .{ case.name, input_name });
+            std.log.warn("timeout: reference run {s} ({s})\n", .{ case.name, input_name });
             return false;
         }
         const test_run = try runProcessCaptureWithInputPath(allocator, test_exe, test_dir, input_path, options.timeout_ms);
         defer test_run.deinit(allocator);
         if (test_run.timed_out) {
-            std.debug.print("timeout: translated run {s} ({s})\n", .{ case.name, input_name });
+            std.log.warn("timeout: translated run {s} ({s})\n", .{ case.name, input_name });
             return false;
         }
 
         const ref_code = exitCode(ref_run.term);
         const test_code = exitCode(test_run.term);
         if (ref_code != test_code) {
-            std.debug.print("exit code mismatch: {s} ({s}) ref={d} test={d}\n", .{ case.name, input_name, ref_code, test_code });
+            std.log.warn("exit code mismatch: {s} ({s}) ref={d} test={d}\n", .{ case.name, input_name, ref_code, test_code });
             return false;
         }
         if (!outputsEquivalent(ref_run.stdout, test_run.stdout)) {
-            std.debug.print("stdout mismatch: {s} ({s})\n", .{ case.name, input_name });
+            std.log.warn("stdout mismatch: {s} ({s})\n", .{ case.name, input_name });
             return false;
         }
     }
@@ -709,16 +709,16 @@ fn buildStaticLib(
 
         const compile_cmd = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", obj_path, src };
         const c_res = runProcessCaptureWithInput(allocator, &compile_cmd, cwd, null, timeout_ms) catch |err| {
-            std.debug.print("gfortran invoke error ({s}): {s}\n", .{ label, @errorName(err) });
+            std.log.err("gfortran invoke error ({s}): {s}\n", .{ label, @errorName(err) });
             return error.CompileFailed;
         };
         defer c_res.deinit(allocator);
         if (c_res.timed_out) {
-            std.debug.print("timeout: compile {s} object {d}\n", .{ label, idx });
+            std.log.warn("timeout: compile {s} object {d}\n", .{ label, idx });
             return error.CompileFailed;
         }
         if (!isZeroExit(c_res.term)) {
-            std.debug.print("=== GFORTRAN {s} STDERR ({s}) ===\n{s}\n", .{ label, src, c_res.stderr });
+            std.log.err("=== GFORTRAN {s} STDERR ({s}) ===\n{s}\n", .{ label, src, c_res.stderr });
             return error.CompileFailed;
         }
 
@@ -727,12 +727,12 @@ fn buildStaticLib(
         else
             [_][]const u8{ "zig", "ar", "r", lib_path, obj_path };
         const a_res = runProcessCaptureWithInput(allocator, &ar_cmd, cwd, null, timeout_ms) catch |err| {
-            std.debug.print("archive invoke error ({s}): {s}\n", .{ label, @errorName(err) });
+            std.log.err("archive invoke error ({s}): {s}\n", .{ label, @errorName(err) });
             return error.ArchiveFailed;
         };
         defer a_res.deinit(allocator);
         if (a_res.timed_out or !isZeroExit(a_res.term)) {
-            std.debug.print("archive failed ({s})\n{s}\n", .{ label, a_res.stderr });
+            std.log.err("archive failed ({s})\n{s}\n", .{ label, a_res.stderr });
             return error.ArchiveFailed;
         }
     }
@@ -914,12 +914,12 @@ fn compileReferenceCase(
 
         const cmd = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", obj_path, src };
         const res = runProcessCaptureWithInput(allocator, &cmd, cwd, null, timeout_ms) catch |err| {
-            std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+            std.log.err("gfortran invoke error: {s}\n", .{@errorName(err)});
             return false;
         };
         defer res.deinit(allocator);
         if (res.timed_out or !isZeroExit(res.term)) {
-            std.debug.print("reference compile failed ({s})\n{s}\n", .{ src, res.stderr });
+            std.log.err("reference compile failed ({s})\n{s}\n", .{ src, res.stderr });
             return false;
         }
     }
@@ -931,12 +931,12 @@ fn compileReferenceCase(
     try link_args.appendSlice(allocator, &.{ libs.tmg_lib, libs.lapack_lib, libs.blas_lib });
 
     const link_res = runProcessCaptureWithInput(allocator, link_args.items, cwd, null, timeout_ms) catch |err| {
-        std.debug.print("gfortran link invoke error: {s}\n", .{@errorName(err)});
+        std.log.err("gfortran link invoke error: {s}\n", .{@errorName(err)});
         return false;
     };
     defer link_res.deinit(allocator);
     if (link_res.timed_out or !isZeroExit(link_res.term)) {
-        std.debug.print("reference link failed\n{s}\n", .{link_res.stderr});
+        std.log.err("reference link failed\n{s}\n", .{link_res.stderr});
         return false;
     }
     return true;
@@ -1010,7 +1010,7 @@ fn translateSources(
                         printPipelineError(src_path, err);
                         return err;
                     }
-                    std.debug.print("pipeline fallback: {s}\n", .{src_path});
+                    std.log.warn("pipeline fallback: {s}\n", .{src_path});
                     printPipelineError(src_path, err);
                     continue;
                 };
@@ -1025,7 +1025,7 @@ fn translateSources(
                     printPipelineError(src_path, err);
                     return err;
                 }
-                std.debug.print("pipeline fallback: {s}\n", .{src_path});
+                std.log.warn("pipeline fallback: {s}\n", .{src_path});
                 printPipelineError(src_path, err);
                 continue;
             };
@@ -1084,12 +1084,12 @@ fn compileTranslatedCase(
 
         const cmd = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", obj_path, src };
         const res = runProcessCaptureWithInput(allocator, &cmd, cwd, null, timeout_ms) catch |err| {
-            std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+            std.log.err("gfortran invoke error: {s}\n", .{@errorName(err)});
             return false;
         };
         defer res.deinit(allocator);
         if (res.timed_out or !isZeroExit(res.term)) {
-            std.debug.print("fallback compile failed ({s})\n{s}\n", .{ src, res.stderr });
+            std.log.err("fallback compile failed ({s})\n{s}\n", .{ src, res.stderr });
             return false;
         }
     }
@@ -1103,23 +1103,23 @@ fn compileTranslatedCase(
         if (incremental) {
             const cached = getOrBuildTranslatedObject(allocator, ll_path, cache_dir, cwd, timeout_ms) catch |err| {
                 if (strict_translate) {
-                    std.debug.print("translated object cache failed ({s}): {s}\n", .{ ll_path, @errorName(err) });
+                    std.log.warn("translated object cache failed ({s}): {s}\n", .{ ll_path, @errorName(err) });
                     return false;
                 }
                 const src_path = translated_sources[idx];
-                std.debug.print("translated object fallback: {s}\n", .{src_path});
+                std.log.warn("translated object fallback: {s}\n", .{src_path});
                 const fb_name = try std.fmt.allocPrint(allocator, "tfb_{d}.o", .{idx});
                 defer allocator.free(fb_name);
                 const fb_obj = try std.fs.path.join(allocator, &.{ obj_dir, fb_name });
                 const fb_cmd = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", fb_obj, src_path };
                 const fb_res = runProcessCaptureWithInput(allocator, &fb_cmd, cwd, null, timeout_ms) catch |fb_err| {
-                    std.debug.print("gfortran invoke error: {s}\n", .{@errorName(fb_err)});
+                    std.log.err("gfortran invoke error: {s}\n", .{@errorName(fb_err)});
                     allocator.free(fb_obj);
                     return false;
                 };
                 defer fb_res.deinit(allocator);
                 if (fb_res.timed_out or !isZeroExit(fb_res.term)) {
-                    std.debug.print("translated fallback compile failed ({s})\n{s}\n", .{ src_path, fb_res.stderr });
+                    std.log.err("translated fallback compile failed ({s})\n{s}\n", .{ src_path, fb_res.stderr });
                     allocator.free(fb_obj);
                     return false;
                 }
@@ -1135,32 +1135,32 @@ fn compileTranslatedCase(
         const obj_path = try std.fs.path.join(allocator, &.{ obj_dir, obj_name });
         const cmd = [_][]const u8{ "zig", "cc", "-O0", "-c", "-o", obj_path, ll_path };
         const res = runProcessCaptureWithInput(allocator, &cmd, cwd, null, timeout_ms) catch |err| {
-            std.debug.print("zig cc invoke error: {s}\n", .{@errorName(err)});
+            std.log.err("zig cc invoke error: {s}\n", .{@errorName(err)});
             allocator.free(obj_path);
             return false;
         };
         defer res.deinit(allocator);
         if (res.timed_out or !isZeroExit(res.term)) {
             if (strict_translate) {
-                std.debug.print("translated compile failed ({s})\n{s}\n", .{ ll_path, res.stderr });
+                std.log.err("translated compile failed ({s})\n{s}\n", .{ ll_path, res.stderr });
                 allocator.free(obj_path);
                 return false;
             }
             const src_path = translated_sources[idx];
-            std.debug.print("translated compile fallback: {s}\n", .{src_path});
+            std.log.warn("translated compile fallback: {s}\n", .{src_path});
             const fb_name = try std.fmt.allocPrint(allocator, "tfb_{d}.o", .{idx});
             defer allocator.free(fb_name);
             const fb_obj = try std.fs.path.join(allocator, &.{ obj_dir, fb_name });
             const fb_cmd = [_][]const u8{ gfortran_cmd, "-std=legacy", "-O0", "-c", "-o", fb_obj, src_path };
             const fb_res = runProcessCaptureWithInput(allocator, &fb_cmd, cwd, null, timeout_ms) catch |err| {
-                std.debug.print("gfortran invoke error: {s}\n", .{@errorName(err)});
+                std.log.err("gfortran invoke error: {s}\n", .{@errorName(err)});
                 allocator.free(obj_path);
                 allocator.free(fb_obj);
                 return false;
             };
             defer fb_res.deinit(allocator);
             if (fb_res.timed_out or !isZeroExit(fb_res.term)) {
-                std.debug.print("translated fallback compile failed ({s})\n{s}\n", .{ src_path, fb_res.stderr });
+                std.log.err("translated fallback compile failed ({s})\n{s}\n", .{ src_path, fb_res.stderr });
                 allocator.free(obj_path);
                 allocator.free(fb_obj);
                 return false;
@@ -1182,7 +1182,7 @@ fn compileTranslatedCase(
         runtime_cache_key,
         incremental,
     ) catch |err| {
-        std.debug.print("runtime backend prepare failed: {s}\n", .{@errorName(err)});
+        std.log.err("runtime backend prepare failed: {s}\n", .{@errorName(err)});
         return false;
     };
     defer runtime_artifacts.deinit(allocator);
@@ -1203,12 +1203,12 @@ fn compileTranslatedCase(
     }
 
     const link_res = runProcessCaptureWithInput(allocator, link_args.items, cwd, null, timeout_ms) catch |err| {
-        std.debug.print("gfortran link invoke error: {s}\n", .{@errorName(err)});
+        std.log.err("gfortran link invoke error: {s}\n", .{@errorName(err)});
         return false;
     };
     defer link_res.deinit(allocator);
     if (link_res.timed_out or !isZeroExit(link_res.term)) {
-        std.debug.print("translated link failed\n{s}\n", .{link_res.stderr});
+        std.log.err("translated link failed\n{s}\n", .{link_res.stderr});
         return false;
     }
     return true;
@@ -1309,13 +1309,13 @@ fn getOrBuildTranslatedObject(
 
     const cmd = [_][]const u8{ "zig", "cc", "-O0", "-c", "-o", obj_cache_path, ll_path };
     const res = runProcessCaptureWithInput(allocator, &cmd, cwd, null, timeout_ms) catch |err| {
-        std.debug.print("zig cc invoke error: {s}\n", .{@errorName(err)});
+        std.log.err("zig cc invoke error: {s}\n", .{@errorName(err)});
         return err;
     };
     defer res.deinit(allocator);
     if (res.timed_out) return error.TranslatedObjectCompileTimeout;
     if (!isZeroExit(res.term)) {
-        std.debug.print("translated compile failed ({s})\n{s}\n", .{ ll_path, res.stderr });
+        std.log.err("translated compile failed ({s})\n{s}\n", .{ ll_path, res.stderr });
         return error.TranslatedObjectCompileFailed;
     }
     return obj_cache_path;
@@ -1371,7 +1371,7 @@ fn printPipelineError(path: []const u8, err: anyerror) void {
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
     Col6Forge.writePipelineErrorDiagnostic(&writer.interface, path, err) catch |write_err| {
-        std.debug.print("pipeline error: {s} ({s}, {s})\n", .{ path, @errorName(err), @errorName(write_err) });
+        std.log.err("pipeline error: {s} ({s}, {s})\n", .{ path, @errorName(err), @errorName(write_err) });
         return;
     };
     writer.interface.flush() catch {};

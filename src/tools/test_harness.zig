@@ -402,7 +402,7 @@ fn exeName(comptime base: []const u8) []const u8 {
 fn listSuites(available: []const Suite, file: std.fs.File) !void {
     _ = file;
     for (available) |suite| {
-        std.debug.print("{s}: {s}\n", .{ suite.name, suite.description });
+        std.log.info("{s}: {s}\n", .{ suite.name, suite.description });
     }
 }
 

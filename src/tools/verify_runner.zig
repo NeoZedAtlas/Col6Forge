@@ -1427,7 +1427,7 @@ fn prepareRuntimeArtifacts(
             defer build.deinit(allocator);
             if (build.timed_out) return error.RuntimeBackendBuildTimeout;
             if (!isZeroExit(build.term)) {
-                std.debug.print("zig runtime backend build failed\n{s}\n", .{build.stderr});
+                std.log.err("zig runtime backend build failed\n{s}\n", .{build.stderr});
                 return error.RuntimeBackendBuildFailed;
             }
             break :blk .{

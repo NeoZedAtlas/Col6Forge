@@ -182,7 +182,8 @@ fn equivalenceDesignatorName(self: *context.Context, expr_node: *ast.Expr) ![]co
         .call_or_subscript => |call| {
             const idx = symbols_mod.findSymbolIndex(self, call.name) orelse return error.InvalidEquivalence;
             const sym = self.symbols.items[idx];
-            const kind = resolvedKindFor(self, expr_node) orelse if (sym.dims.len > 0) .subscript else .call;
+            const kind: ResolvedRefKind = resolvedKindFor(self, expr_node) orelse
+                (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
             if (kind != .subscript) return error.InvalidEquivalence;
             return call.name;
         },
