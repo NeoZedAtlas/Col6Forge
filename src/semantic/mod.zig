@@ -781,3 +781,54 @@ test "semantic lowers intrinsic array conversion actual argument into temporary 
     try testing.expect(call_stmt.args[0].expr.* == .identifier);
     try testing.expect(std.mem.startsWith(u8, call_stmt.args[0].expr.identifier, "__cf_conv_arr_"));
 }
+
+test "semantic reports CF3123 for nested logical IF" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const outer_cond = try a.create(ast.Expr);
+    outer_cond.* = .{ .identifier = "C" };
+
+    const inner_cond = try a.create(ast.Expr);
+    inner_cond.* = .{ .identifier = "B" };
+
+    const assign_target = try a.create(ast.Expr);
+    assign_target.* = .{ .identifier = "A" };
+    const assign_value = try a.create(ast.Expr);
+    assign_value.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+
+    const assign_node = try a.create(ast.StmtNode);
+    assign_node.* = .{ .assignment = .{ .target = assign_target, .value = assign_value } };
+
+    const inner_node = try a.create(ast.StmtNode);
+    inner_node.* = .{ .if_single = .{ .condition = inner_cond, .stmt = assign_node } };
+
+    const stmts = try a.alloc(ast.Stmt, 1);
+    stmts[0] = .{
+        .label = null,
+        .node = .{ .if_single = .{ .condition = outer_cond, .stmt = inner_node } },
+        .source_line = 2,
+        .source_column = 7,
+        .source_text = "IF (C) IF (B) A=1",
+    };
+
+    const units = try a.alloc(ast.ProgramUnit, 1);
+    units[0] = .{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &.{},
+        .decls = &.{},
+        .decl_sources = &.{},
+        .stmts = stmts,
+    };
+
+    const program = ast.Program{ .units = units };
+
+    try testing.expectError(error.InvalidLogicalIfNesting, analyzeProgram(a, program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3123"));
+}

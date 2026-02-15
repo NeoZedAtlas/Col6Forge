@@ -91,6 +91,9 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
         .assigned_goto => {},
         .if_single => |ifs| {
             try checkExpr(self, ifs.condition);
+            if (ifs.stmt.* == .if_single or ifs.stmt.* == .if_block) {
+                return error.InvalidLogicalIfNesting;
+            }
             try checkStmtNode(self, ifs.stmt.*);
         },
         .if_block => |ifb| {

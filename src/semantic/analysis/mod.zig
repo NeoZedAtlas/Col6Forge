@@ -88,6 +88,7 @@ fn semanticErrorInfo(err: anyerror) struct { code: []const u8, message: []const 
         error.InvalidEntryStatement => .{ .code = "CF3120", .message = "invalid ENTRY statement placement or arguments" },
         error.InvalidFormatStatement => .{ .code = "CF3121", .message = "FORMAT statement requires a statement label" },
         error.UnknownCommonBlock => .{ .code = "CF3122", .message = "SAVE references unknown COMMON block" },
+        error.InvalidLogicalIfNesting => .{ .code = "CF3123", .message = "LOGICAL IF statement cannot contain nested IF" },
         else => .{ .code = "CF3199", .message = "semantic analysis failed" },
     };
 }
