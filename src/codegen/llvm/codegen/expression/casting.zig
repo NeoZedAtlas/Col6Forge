@@ -42,6 +42,8 @@ pub fn emitLiteral(ctx: *Context, builder: anytype, lit: Literal) !ValueRef {
 }
 
 fn emitStringLiteral(ctx: *Context, builder: anytype, bytes: []const u8) !ValueRef {
+    // String globals are stored as C-style bytes with a trailing NUL.
+    // Fortran CHARACTER semantics are preserved by explicit length arguments at call sites.
     const name = try ctx.string_pool.intern(bytes);
     const ptr_name = try ctx.nextTemp();
     try builder.gepConstString(ptr_name, name, bytes.len + 1);
@@ -63,7 +65,7 @@ pub fn emitConstTyped(ctx: *Context, builder: anytype, value: sema.ConstValue, t
                 break :blk complex.buildComplex(ctx, builder, real_ref, imag_ref, ty) catch .{ .name = "undef", .ty = ty, .is_ptr = false };
             }
             break :blk .{
-                .name = if (ty == .f32 or ty == .f64) utils.formatFloatValue(ctx.allocator, @as(f64, @floatFromInt(v)), ty) else utils.formatInt(ctx.allocator, v),
+                .name = formatConstIntForType(ctx, ty, v),
                 .ty = ty,
                 .is_ptr = false,
             };
@@ -92,6 +94,13 @@ pub fn emitConstTyped(ctx: *Context, builder: anytype, value: sema.ConstValue, t
             return emitStringLiteral(ctx, builder, bytes) catch .{ .name = "0", .ty = ty, .is_ptr = false };
         },
     };
+}
+
+fn formatConstIntForType(ctx: *Context, ty: IRType, value: i64) []const u8 {
+    return if (ty == .f32 or ty == .f64)
+        utils.formatFloatValue(ctx.allocator, @as(f64, @floatFromInt(value)), ty)
+    else
+        utils.formatInt(ctx.allocator, value);
 }
 
 pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) EmitError!ValueRef {

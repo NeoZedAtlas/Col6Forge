@@ -91,23 +91,9 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         .binary => |bin| {
             try resolveExpr(self, bin.left);
             try resolveExpr(self, bin.right);
-            if (bin.op == .add or bin.op == .sub or bin.op == .mul or bin.op == .div or bin.op == .power) {
-                const left_kind = try exprType(self, bin.left);
-                const right_kind = try exprType(self, bin.right);
-                if (!isNumericType(left_kind) or !isNumericType(right_kind)) {
-                    return error.InvalidArithmeticOperands;
-                }
-            }
-            if (bin.op == .power) {
-                const left_kind = try exprType(self, bin.left);
-                const right_kind = try exprType(self, bin.right);
-                if ((left_kind == .complex or left_kind == .complex_double) and right_kind == .integer) {
-                    return;
-                }
-                if (!isPowerOperandSupported(left_kind) or !isPowerOperandSupported(right_kind)) {
-                    return error.PowerUnsupported;
-                }
-            }
+            const left_kind = try exprType(self, bin.left);
+            const right_kind = try exprType(self, bin.right);
+            try validateBinaryOperands(bin.op, left_kind, right_kind);
         },
         .literal => {},
     }
@@ -190,6 +176,62 @@ fn isNumericType(kind: ast.TypeKind) bool {
         .integer, .real, .double_precision, .complex, .complex_double => true,
         else => false,
     };
+}
+
+fn isLogicalType(kind: ast.TypeKind) bool {
+    return kind == .logical;
+}
+
+fn isCharacterType(kind: ast.TypeKind) bool {
+    return kind == .character;
+}
+
+fn validateBinaryOperands(op: ast.BinaryOp, left_kind: ast.TypeKind, right_kind: ast.TypeKind) !void {
+    switch (op) {
+        .add, .sub, .mul, .div => {
+            if (!isNumericType(left_kind) or !isNumericType(right_kind)) {
+                return error.InvalidArithmeticOperands;
+            }
+        },
+        .power => {
+            if (!isNumericType(left_kind) or !isNumericType(right_kind)) {
+                return error.InvalidArithmeticOperands;
+            }
+            if ((left_kind == .complex or left_kind == .complex_double) and right_kind == .integer) {
+                return;
+            }
+            if (!isPowerOperandSupported(left_kind) or !isPowerOperandSupported(right_kind)) {
+                return error.PowerUnsupported;
+            }
+        },
+        .and_, .or_, .eqv, .neqv => {
+            if (!isLogicalType(left_kind) or !isLogicalType(right_kind)) {
+                return error.InvalidArithmeticOperands;
+            }
+        },
+        .eq, .ne => {
+            if ((isNumericType(left_kind) and isNumericType(right_kind)) or
+                (isLogicalType(left_kind) and isLogicalType(right_kind)) or
+                (isCharacterType(left_kind) and isCharacterType(right_kind)))
+            {
+                return;
+            }
+            return error.InvalidArithmeticOperands;
+        },
+        .lt, .le, .gt, .ge => {
+            if ((isNumericType(left_kind) and isNumericType(right_kind)) or
+                (isCharacterType(left_kind) and isCharacterType(right_kind)))
+            {
+                return;
+            }
+            return error.InvalidArithmeticOperands;
+        },
+        .concat => {
+            if (!isCharacterType(left_kind) or !isCharacterType(right_kind)) {
+                return error.InvalidArithmeticOperands;
+            }
+        },
+    }
 }
 
 fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {

@@ -93,6 +93,12 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
             return .{ .name = tmp, .ty = common_ty, .is_ptr = false };
         },
         .eq, .ne, .lt, .le, .gt, .ge => {
+            if ((left.ty == .i1 or right.ty == .i1) and left.ty != right.ty) {
+                return error.UnsupportedLogicalOp;
+            }
+            if ((op == .lt or op == .le or op == .gt or op == .ge) and common_ty == .i1) {
+                return error.UnsupportedLogicalOp;
+            }
             const is_int = isIntegerCompareTy(common_ty);
             if (!is_int and !isFloatTy(common_ty)) return error.UnsupportedLogicalOp;
             const pred = switch (op) {

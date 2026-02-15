@@ -84,7 +84,7 @@ fn semanticErrorInfo(err: anyerror) struct { code: []const u8, message: []const 
         error.DuplicateDeclaration => .{ .code = "CF3116", .message = "duplicate declaration for the same symbol" },
         error.DivisionByZero => .{ .code = "CF3117", .message = "division by zero in constant expression" },
         error.NegativeIntegerExponent => .{ .code = "CF3118", .message = "negative integer exponent in constant expression" },
-        error.InvalidArithmeticOperands => .{ .code = "CF3119", .message = "invalid operand type for arithmetic expression" },
+        error.InvalidArithmeticOperands => .{ .code = "CF3119", .message = "invalid operand type for expression operator" },
         error.InvalidEntryStatement => .{ .code = "CF3120", .message = "invalid ENTRY statement placement or arguments" },
         error.InvalidFormatStatement => .{ .code = "CF3121", .message = "FORMAT statement requires a statement label" },
         error.UnknownCommonBlock => .{ .code = "CF3122", .message = "SAVE references unknown COMMON block" },

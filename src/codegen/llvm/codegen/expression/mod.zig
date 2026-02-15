@@ -258,6 +258,23 @@ test "emitBinary i64 arithmetic and comparisons use integer ops" {
     try testing.expect(std.mem.indexOf(u8, buffer.items, "fcmp olt i64") == null);
 }
 
+test "emitBinary rejects mixed logical and numeric comparisons" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const logical = ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
+    const integer = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+    try testing.expectError(error.UnsupportedLogicalOp, emitBinary(&harness.ctx, &builder, .eq, logical, integer));
+}
+
 test "emitBinary real power with integer constant uses multiplication path" {
     const testing = std.testing;
     const allocator = testing.allocator;
