@@ -14,6 +14,11 @@ pub fn Builder(comptime WriterType: type) type {
             label: []const u8,
         };
 
+        pub const SwitchCase = struct {
+            value: i64,
+            label: []const u8,
+        };
+
         writer: WriterType,
         emit_count: usize,
         emit_limit: usize,
@@ -124,6 +129,21 @@ pub fn Builder(comptime WriterType: type) type {
         pub fn brCond(self: *@This(), cond: ValueRef, then_label: []const u8, else_label: []const u8) !void {
             try self.bump();
             try self.writer.print("  br i1 {s}, label %{s}, label %{s}\n", .{ cond.name, then_label, else_label });
+        }
+
+        pub fn switchBr(self: *@This(), selector: ValueRef, default_label: []const u8, cases: []const SwitchCase) !void {
+            try self.bump();
+            try self.writer.print(
+                "  switch {s} {s}, label %{s} [\n",
+                .{ llvm_types.irTypeText(selector.ty), selector.name, default_label },
+            );
+            for (cases) |case_item| {
+                try self.writer.print(
+                    "    {s} {d}, label %{s}\n",
+                    .{ llvm_types.irTypeText(selector.ty), case_item.value, case_item.label },
+                );
+            }
+            try self.writer.writeAll("  ]\n");
         }
 
         pub fn alloca(self: *@This(), name: []const u8, ty: IRType) !void {
@@ -315,4 +335,27 @@ test "callIndirectTyped serializes typed arguments" {
     try builder.callIndirectTyped(null, .void, "%fp", &args);
 
     try testing.expectEqualStrings("  call void %fp(i32 %x, i32 %len)\n", buf.items);
+}
+
+test "switchBr serializes switch terminator" {
+    const testing = std.testing;
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
+    defer buf.deinit();
+
+    const writer = buf.writer();
+    var builder = Builder(@TypeOf(writer)).init(writer);
+    const selector = ValueRef{ .name = "%sel", .ty = .i32, .is_ptr = false };
+    const cases = [_]Builder(@TypeOf(writer)).SwitchCase{
+        .{ .value = 1, .label = "L10" },
+        .{ .value = 2, .label = "L20" },
+    };
+    try builder.switchBr(selector, "next", &cases);
+
+    try testing.expectEqualStrings(
+        "  switch i32 %sel, label %next [\n" ++
+            "    i32 1, label %L10\n" ++
+            "    i32 2, label %L20\n" ++
+            "  ]\n",
+        buf.items,
+    );
 }

@@ -135,3 +135,18 @@ test "resolveGotoTargets errors on missing label" {
 
     try testing.expectError(error.MissingLabel, resolveGotoTargets(testing.allocator, &[_][]const u8{"10"}, null, &map, .computed));
 }
+
+test "resolveGotoTargets assigned mode uses numeric label value" {
+    const testing = std.testing;
+    var map = std.StringHashMap([]const u8).init(testing.allocator);
+    defer map.deinit();
+    try map.put("10", "L10");
+    try map.put("30", "L30");
+
+    const plan = try resolveGotoTargets(testing.allocator, &[_][]const u8{ "10", "30" }, null, &map, .assigned);
+    defer testing.allocator.free(plan);
+
+    try testing.expectEqual(@as(usize, 2), plan.len);
+    try testing.expectEqual(@as(i64, 10), plan[0].index);
+    try testing.expectEqual(@as(i64, 30), plan[1].index);
+}
