@@ -3,11 +3,8 @@ const ast = @import("../../../input.zig");
 const context = @import("../context.zig");
 const expr = @import("../expression/mod.zig");
 const cfg = @import("../../stmts/cfg.zig");
-const execution = @import("../../stmts/execution.zig");
-const io = @import("../../stmts/io.zig");
 const utils = @import("../utils.zig");
 const logic = @import("logic.zig");
-const branch = @import("branch.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -25,7 +22,8 @@ pub fn emitArithIf(
     const pos_label = cfg.resolveLabel(ctx, local_label_map, arith.pos_label) orelse return error.MissingLabel;
 
     const value = try expr.emitExpr(ctx, builder, arith.condition);
-    if (value.is_ptr) return error.UnsupportedArithmeticIf;
+    // Arithmetic IF must branch on a scalar value, never on an address.
+    if (value.is_ptr or value.ty == .ptr) return error.UnsupportedArithmeticIf;
 
     switch (logic.determineArithIfStrategy(value.ty)) {
         .Float => {
@@ -67,185 +65,32 @@ pub fn emitIfSingle(
     ifs: ast.IfSingle,
     next_block: []const u8,
     local_label_map: ?*const std.StringHashMap([]const u8),
-    comptime emit_stmt_list_range: anytype,
+    comptime emit_stmt_fn: anytype,
 ) EmitError!bool {
     const inner = ifs.stmt.*;
-    const cond = try expr.emitCond(ctx, builder, ifs.condition);
     switch (inner) {
-        .goto => {
-            const target = cfg.resolveLabel(ctx, local_label_map, inner.goto.label) orelse return error.MissingLabel;
-            try builder.brCond(cond, target, next_block);
-            return true;
-        },
-        .computed_goto => |gt| {
-            const then_label = try ctx.nextLabel("if_cgoto");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try branch.emitComputedGoto(ctx, builder, gt, next_block, local_label_map);
-            return true;
-        },
-        .assigned_goto => |gt| {
-            const then_label = try ctx.nextLabel("if_agoto");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try branch.emitAssignedGoto(ctx, builder, gt, next_block, local_label_map);
-            return true;
-        },
-        .ret => |ret| {
-            const then_label = try ctx.nextLabel("if_ret");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try execution.emitReturnStmt(ctx, builder, ret);
-            return true;
-        },
-        .assignment => |assign| {
-            const then_label = try ctx.nextLabel("if_assign");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try execution.emitAssignment(ctx, builder, assign);
-            try builder.br(next_block);
-            return true;
-        },
-        .call => |call| {
-            const then_label = try ctx.nextLabel("if_call");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            if (execution.callHasAltReturns(call)) {
-                try execution.emitCallWithAlternateReturns(ctx, builder, call, next_block, local_label_map);
-                return true;
-            }
-            try execution.emitCall(ctx, builder, call);
-            try builder.br(next_block);
-            return true;
-        },
-        .write => |write| {
-            const then_label = try ctx.nextLabel("if_write");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            const terminated = try io.emitWrite(ctx, builder, write, next_block, local_label_map);
-            if (!terminated) {
-                try builder.br(next_block);
-            }
-            return true;
-        },
-        .read => |read| {
-            const then_label = try ctx.nextLabel("if_read");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            const terminated = try io.emitRead(ctx, builder, read, next_block, local_label_map);
-            if (!terminated) {
-                try builder.br(next_block);
-            }
-            return true;
-        },
-        .open => |open_stmt| {
-            const then_label = try ctx.nextLabel("if_open");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try io.emitOpen(ctx, builder, open_stmt);
-            try builder.br(next_block);
-            return true;
-        },
-        .inquire => |inquire| {
-            const then_label = try ctx.nextLabel("if_inquire");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try io.emitInquire(ctx, builder, inquire);
-            try builder.br(next_block);
-            return true;
-        },
-        .close => |close_stmt| {
-            const then_label = try ctx.nextLabel("if_close");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try io.emitClose(ctx, builder, close_stmt);
-            try builder.br(next_block);
-            return true;
-        },
-        .rewind => |rewind| {
-            const then_label = try ctx.nextLabel("if_rewind");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try io.emitRewind(ctx, builder, rewind);
-            try builder.br(next_block);
-            return true;
-        },
-        .backspace => |backspace| {
-            const then_label = try ctx.nextLabel("if_backspace");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try io.emitBackspace(ctx, builder, backspace);
-            try builder.br(next_block);
-            return true;
-        },
-        .endfile => |endfile| {
-            const then_label = try ctx.nextLabel("if_endfile");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try io.emitEndfile(ctx, builder, endfile);
-            try builder.br(next_block);
-            return true;
-        },
-        .data => |data| {
-            const then_label = try ctx.nextLabel("if_data");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try execution.emitData(ctx, builder, data);
-            try builder.br(next_block);
-            return true;
-        },
-        .format => {
-            const then_label = try ctx.nextLabel("if_format");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try builder.br(next_block);
-            return true;
-        },
-        .arith_if => |arith| {
-            const then_label = try ctx.nextLabel("if_arith");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try emitArithIf(ctx, builder, arith, local_label_map);
-            return true;
-        },
-        .pause => {
-            const then_label = try ctx.nextLabel("if_pause");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try execution.emitDefaultReturn(ctx, builder);
-            return true;
-        },
-        .stop => {
-            const then_label = try ctx.nextLabel("if_stop");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            try execution.emitDefaultReturn(ctx, builder);
-            return true;
-        },
-        .cont => {
-            try builder.br(next_block);
-            return true;
-        },
-        .entry => {
-            try builder.br(next_block);
-            return true;
-        },
-        .if_single => |nested| {
-            const then_label = try ctx.nextLabel("if_nested");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            _ = try emitIfSingle(ctx, builder, nested, next_block, local_label_map, emit_stmt_list_range);
-            return true;
-        },
-        .if_block => |ifb| {
-            const then_label = try ctx.nextLabel("if_nested");
-            try builder.brCond(cond, then_label, next_block);
-            try builder.label(then_label);
-            _ = try emitIfBlock(ctx, builder, ifb, next_block, local_label_map, emit_stmt_list_range);
-            return true;
-        },
-        else => return error.ControlFlowUnsupported,
+        // LOGICAL IF (cond) stmt must not nest IF statements.
+        .if_single, .if_block => return error.ControlFlowUnsupported,
+        else => {},
     }
+
+    const cond = try expr.emitCond(ctx, builder, ifs.condition);
+    const then_label = try ctx.nextLabel("if_then");
+    try builder.brCond(cond, then_label, next_block);
+    try builder.label(then_label);
+
+    const src_stmt = ctx.current_stmt orelse ast.Stmt{
+        .label = null,
+        .node = inner,
+    };
+    const inline_stmt = ast.Stmt{
+        .label = null,
+        .node = inner,
+        .source_line = src_stmt.source_line,
+        .source_column = src_stmt.source_column,
+        .source_text = src_stmt.source_text,
+    };
+    return emit_stmt_fn(ctx, builder, inline_stmt, next_block, local_label_map);
 }
 
 pub fn emitIfBlock(
@@ -267,12 +112,10 @@ pub fn emitIfBlock(
     var else_blocks: ?cfg.LocalBlocks = null;
     defer {
         if (then_blocks) |*blocks| {
-            cfg.freeBlockNames(ctx, blocks.names);
-            blocks.label_map.deinit();
+            blocks.deinit(ctx);
         }
         if (else_blocks) |*blocks| {
-            cfg.freeBlockNames(ctx, blocks.names);
-            blocks.label_map.deinit();
+            blocks.deinit(ctx);
         }
     }
     if (ifb.then_stmts.len > 0) {

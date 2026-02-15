@@ -8,6 +8,11 @@ const Context = context.Context;
 pub const LocalBlocks = struct {
     names: [][]const u8,
     label_map: std.StringHashMap([]const u8),
+
+    pub fn deinit(self: *LocalBlocks, ctx: *Context) void {
+        freeBlockNames(ctx, self.names);
+        self.label_map.deinit();
+    }
 };
 
 pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !LocalBlocks {

@@ -137,7 +137,7 @@ fn emitStmtInner(
         .cont => {},
         .entry => {},
         .if_single => |ifs| {
-            return control.emitIfSingle(ctx, builder, ifs, next_block, local_label_map, emitStmtListRange);
+            return control.emitIfSingle(ctx, builder, ifs, next_block, local_label_map, emitStmt);
         },
         .if_block => |ifb| {
             return control.emitIfBlock(ctx, builder, ifb, next_block, local_label_map, emitStmtListRange);
