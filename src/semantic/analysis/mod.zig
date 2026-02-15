@@ -15,9 +15,10 @@ pub const UnitAnalyzer = struct {
         unit: ast.ProgramUnit,
         initial_implicit: []const symbols.ImplicitRule,
         known_function_types: *const std.StringHashMap(ast.TypeKind),
+        known_procedure_sigs: *const std.StringHashMap(context.Context.ProcedureSig),
     ) UnitAnalyzer {
         return .{
-            .ctx = context.Context.init(arena, unit, known_function_types),
+            .ctx = context.Context.init(arena, unit, known_function_types, known_procedure_sigs),
             .initial_implicit = initial_implicit,
         };
     }
@@ -70,6 +71,14 @@ fn semanticErrorInfo(err: anyerror) struct { code: []const u8, message: []const 
         error.UnsupportedImpliedDo => .{ .code = "CF3105", .message = "unsupported implied DO in semantic analysis" },
         error.NumberTooLong => .{ .code = "CF3106", .message = "numeric literal too long for semantic evaluator" },
         error.UnexpectedTypeDecl => .{ .code = "CF3107", .message = "unexpected type declaration in specification resolver" },
+        error.AssignmentTypeMismatch => .{ .code = "CF3108", .message = "assignment type mismatch" },
+        error.InvalidSubscript => .{ .code = "CF3109", .message = "invalid array subscript count or type" },
+        error.InvalidArgumentCount => .{ .code = "CF3110", .message = "procedure call argument count mismatch" },
+        error.ParameterNotConstant => .{ .code = "CF3111", .message = "PARAMETER value is not a constant expression" },
+        error.ParameterTypeMismatch => .{ .code = "CF3112", .message = "PARAMETER value type is incompatible with declaration" },
+        error.InvalidEquivalence => .{ .code = "CF3113", .message = "invalid EQUIVALENCE designator or incompatible types" },
+        error.EquivalenceCycle => .{ .code = "CF3114", .message = "cyclic/redundant EQUIVALENCE relationship detected" },
+        error.CommonBlockMismatch => .{ .code = "CF3115", .message = "COMMON block layout mismatch across program units" },
         else => .{ .code = "CF3199", .message = "semantic analysis failed" },
     };
 }
@@ -79,6 +88,8 @@ test "semantic UnexpectedTypeDecl maps to CF3107 with declaration source" {
 
     var known_function_types = std.StringHashMap(ast.TypeKind).init(testing.allocator);
     defer known_function_types.deinit();
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(testing.allocator);
+    defer known_procedure_sigs.deinit();
 
     const unit = ast.ProgramUnit{
         .kind = .subroutine,
@@ -88,7 +99,7 @@ test "semantic UnexpectedTypeDecl maps to CF3107 with declaration source" {
         .decl_sources = &.{},
         .stmts = &.{},
     };
-    var ctx = context.Context.init(testing.allocator, unit, &known_function_types);
+    var ctx = context.Context.init(testing.allocator, unit, &known_function_types, &known_procedure_sigs);
     ctx.current_decl_source = .{
         .line = 3,
         .column = 7,

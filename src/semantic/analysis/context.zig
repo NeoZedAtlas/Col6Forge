@@ -4,18 +4,27 @@ const symbols = @import("../symbol/mod.zig");
 const scope = @import("../scope.zig");
 
 pub const Context = struct {
+    pub const ProcedureSig = struct {
+        kind: ast.ProgramUnitKind,
+        arg_count: usize,
+    };
+
     arena: std.mem.Allocator,
     unit: ast.ProgramUnit,
     current_unit: ?*const ast.ProgramUnit,
     symbols: std.array_list.Managed(symbols.Symbol),
     implicit: std.array_list.Managed(symbols.ImplicitRule),
     refs: std.array_list.Managed(symbols.ResolvedRef),
+    equivalence_nodes: std.StringHashMap(usize),
+    equivalence_parent: std.array_list.Managed(usize),
+    equivalence_rank: std.array_list.Managed(u8),
     scopes: std.array_list.Managed(scope.Scope),
     current_scope: ?scope.ScopeId,
     current_owner: ?Owner,
     current_decl_source: ?ast.DeclSource,
     current_stmt: ?ast.Stmt,
     known_function_types: *const std.StringHashMap(ast.TypeKind),
+    known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
 
     pub const Owner = struct {
         name: []const u8,
@@ -26,6 +35,7 @@ pub const Context = struct {
         arena: std.mem.Allocator,
         unit: ast.ProgramUnit,
         known_function_types: *const std.StringHashMap(ast.TypeKind),
+        known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
     ) Context {
         var ctx = Context{
             .arena = arena,
@@ -34,12 +44,16 @@ pub const Context = struct {
             .symbols = std.array_list.Managed(symbols.Symbol).init(arena),
             .implicit = std.array_list.Managed(symbols.ImplicitRule).init(arena),
             .refs = std.array_list.Managed(symbols.ResolvedRef).init(arena),
+            .equivalence_nodes = std.StringHashMap(usize).init(arena),
+            .equivalence_parent = std.array_list.Managed(usize).init(arena),
+            .equivalence_rank = std.array_list.Managed(u8).init(arena),
             .scopes = std.array_list.Managed(scope.Scope).init(arena),
             .current_scope = null,
             .current_owner = null,
             .current_decl_source = null,
             .current_stmt = null,
             .known_function_types = known_function_types,
+            .known_procedure_sigs = known_procedure_sigs,
         };
         ctx.current_unit = &ctx.unit;
         return ctx;

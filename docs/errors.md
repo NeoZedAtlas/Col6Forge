@@ -168,6 +168,54 @@ look up `CF2001` in this file.
 - Meaning: unexpected type declaration reached specification-declaration resolver path.
 - Typical fix: report as compiler bug with minimal reproducer.
 
+## CF3108
+
+- Stage: semantic analysis
+- Meaning: assignment target/value types are incompatible.
+- Typical fix: cast/convert value or adjust declaration types so assignment is valid.
+
+## CF3109
+
+- Stage: semantic analysis
+- Meaning: invalid array subscript count or non-integer subscript expression.
+- Typical fix: match declared array rank and use integer index expressions.
+
+## CF3110
+
+- Stage: semantic analysis
+- Meaning: procedure/intrinsic argument count does not match declaration/expected arity.
+- Typical fix: pass the required number of arguments.
+
+## CF3111
+
+- Stage: semantic analysis
+- Meaning: `PARAMETER` initializer is not a constant expression.
+- Typical fix: use literals/constant expressions or previously defined parameters only.
+
+## CF3112
+
+- Stage: semantic analysis
+- Meaning: `PARAMETER` initializer type is incompatible with declared type.
+- Typical fix: make the declared type and initializer type consistent.
+
+## CF3113
+
+- Stage: semantic analysis
+- Meaning: invalid `EQUIVALENCE` designator or incompatible equivalent types.
+- Typical fix: only equivalence valid storage designators with compatible types.
+
+## CF3114
+
+- Stage: semantic analysis
+- Meaning: cyclic/redundant `EQUIVALENCE` relationship detected.
+- Typical fix: remove cyclic/redundant equivalence pairs.
+
+## CF3115
+
+- Stage: semantic analysis
+- Meaning: `COMMON` block layout/type sequence mismatches across program units.
+- Typical fix: keep `COMMON` block item types/order/sizes consistent in all units.
+
 ## CF3199
 
 - Stage: semantic analysis (catch-all)
