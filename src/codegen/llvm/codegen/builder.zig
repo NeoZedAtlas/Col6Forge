@@ -197,6 +197,22 @@ pub fn Builder(comptime WriterType: type) type {
             }
         }
 
+        pub fn callTyped(self: *@This(), tmp: ?[]const u8, ret_ty: IRType, fn_name: []const u8, args: []const ValueRef) !void {
+            try self.bump();
+            if (tmp) |name| {
+                try self.writer.print("  {s} = call {s} @{s}(", .{ name, llvm_types.irTypeText(ret_ty), fn_name });
+            } else {
+                try self.writer.print("  call {s} @{s}(", .{ llvm_types.irTypeText(ret_ty), fn_name });
+            }
+
+            for (args, 0..) |arg, idx| {
+                if (idx != 0) try self.writer.writeAll(", ");
+                try self.writer.print("{s} {s}", .{ llvm_types.irTypeText(arg.ty), arg.name });
+            }
+
+            try self.writer.writeAll(")\n");
+        }
+
         pub fn callIndirect(self: *@This(), tmp: ?[]const u8, ret_ty: IRType, fn_ptr: []const u8, args: []const u8) !void {
             try self.bump();
             if (tmp) |name| {
@@ -247,4 +263,20 @@ fn emitCString(writer: anytype, bytes: []const u8) !void {
             try writer.print("\\{X:0>2}", .{ch});
         }
     }
+}
+
+test "callTyped serializes typed arguments" {
+    const testing = std.testing;
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
+    defer buf.deinit();
+
+    const writer = buf.writer();
+    var builder = Builder(@TypeOf(writer)).init(writer);
+    const args = [_]ValueRef{
+        .{ .name = "%x", .ty = .i32, .is_ptr = false },
+        .{ .name = "%p", .ty = .ptr, .is_ptr = true },
+    };
+    try builder.callTyped("%t0", .i32, "foo", &args);
+
+    try testing.expectEqualStrings("  %t0 = call i32 @foo(i32 %x, ptr %p)\n", buf.items);
 }

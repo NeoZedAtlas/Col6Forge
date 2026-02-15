@@ -46,8 +46,8 @@ pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) Em
             const plans = try planDirectFormattedRecords(ctx.allocator, fmt_items, expanded_args.len);
             defer ctx.allocator.free(plans);
 
-            const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr", .ptr, "i32, i32, i32", false);
-            const commit_name = try ctx.ensureDeclRaw("f77_direct_record_commit", .void, "i32, i32", false);
+            const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr", .ptr, &[_]utils.IRType{ .i32, .i32, .i32 }, false);
+            const commit_name = try ctx.ensureDeclRaw("f77_direct_record_commit", .void, &[_]utils.IRType{ .i32, .i32 }, false);
             const recl_val = ValueRef{
                 .name = utils.formatInt(ctx.allocator, @intCast(recl_len)),
                 .ty = .i32,
@@ -67,14 +67,8 @@ pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) Em
                     rec_for_plan = .{ .name = rec_tmp, .ty = .i32, .is_ptr = false };
                 }
 
-                var ptr_args = std.array_list.Managed(u8).init(ctx.allocator);
-                defer ptr_args.deinit();
-                try ptr_args.writer().print(
-                    "i32 {s}, i32 {s}, i32 {s}",
-                    .{ unit_i32.name, rec_for_plan.name, recl_val.name },
-                );
                 const record_ptr_tmp = try ctx.nextTemp();
-                try builder.call(record_ptr_tmp, .ptr, record_ptr_name, ptr_args.items);
+                try builder.callTyped(record_ptr_tmp, .ptr, record_ptr_name, &.{ unit_i32, rec_for_plan, recl_val });
                 const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
 
                 var expanded_values = try expandWriteArgs(ctx, builder, expanded_args[plan.start_arg..plan.end_arg]);
@@ -83,10 +77,7 @@ pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) Em
                 const fmt_slice = fmt_items[plan.fmt_start..plan.fmt_end];
                 try emitWriteFormatted(ctx, builder, write, record_ptr, recl_len, null, true, unit_i32, fmt_slice, &expanded_values);
 
-                var commit_args = std.array_list.Managed(u8).init(ctx.allocator);
-                defer commit_args.deinit();
-                try commit_args.writer().print("i32 {s}, i32 {s}", .{ unit_i32.name, rec_for_plan.name });
-                try builder.call(null, .void, commit_name, commit_args.items);
+                try builder.callTyped(null, .void, commit_name, &.{ unit_i32, rec_for_plan });
             }
             return;
         }
@@ -111,7 +102,7 @@ pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitE
             const plans = try planDirectFormattedRecords(ctx.allocator, fmt_items, expanded_args.len);
             defer ctx.allocator.free(plans);
 
-            const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr_ro", .ptr, "i32, i32", false);
+            const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr_ro", .ptr, &[_]utils.IRType{ .i32, .i32 }, false);
 
             for (plans) |plan| {
                 var rec_for_plan = rec_i32;
@@ -126,11 +117,8 @@ pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitE
                     rec_for_plan = .{ .name = rec_tmp, .ty = .i32, .is_ptr = false };
                 }
 
-                var ptr_args = std.array_list.Managed(u8).init(ctx.allocator);
-                defer ptr_args.deinit();
-                try ptr_args.writer().print("i32 {s}, i32 {s}", .{ unit_i32.name, rec_for_plan.name });
                 const record_ptr_tmp = try ctx.nextTemp();
-                try builder.call(record_ptr_tmp, .ptr, record_ptr_name, ptr_args.items);
+                try builder.callTyped(record_ptr_tmp, .ptr, record_ptr_name, &.{ unit_i32, rec_for_plan });
                 const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
 
                 var expanded = try expandReadTargets(ctx, builder, expanded_args[plan.start_arg..plan.end_arg]);

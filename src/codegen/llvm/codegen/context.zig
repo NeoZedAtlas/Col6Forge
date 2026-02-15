@@ -1,6 +1,7 @@
 const std = @import("std");
 const input = @import("../../input.zig");
 const ir = @import("../../ir.zig");
+const llvm_types = @import("../types.zig");
 const utils = @import("utils.zig");
 
 const ProgramUnit = input.ProgramUnit;
@@ -232,9 +233,48 @@ pub const Context = struct {
         return mangled;
     }
 
-    pub fn ensureDeclRaw(self: *Context, name: []const u8, ret_ty: IRType, sig: []const u8, varargs: bool) ![]const u8 {
+    fn formatDeclSigFromTypes(self: *Context, param_types: []const IRType) ![]const u8 {
+        if (param_types.len == 0) return "";
+
+        var sig = std.array_list.Managed(u8).init(self.allocator);
+        errdefer sig.deinit();
+        for (param_types, 0..) |param_ty, idx| {
+            if (idx != 0) try sig.appendSlice(", ");
+            try sig.appendSlice(llvm_types.irTypeText(param_ty));
+        }
+        return sig.toOwnedSlice();
+    }
+
+    fn normalizeDeclSig(self: *Context, sig_or_types: anytype) ![]const u8 {
+        const SigT = @TypeOf(sig_or_types);
+
+        if (comptime SigT == []const u8 or SigT == []u8) {
+            return sig_or_types;
+        }
+        if (comptime SigT == []const IRType or SigT == []IRType) {
+            return self.formatDeclSigFromTypes(sig_or_types);
+        }
+
+        if (comptime @typeInfo(SigT) == .pointer) {
+            const ptr_info = @typeInfo(SigT).pointer;
+            if (comptime ptr_info.size == .one and @typeInfo(ptr_info.child) == .array) {
+                const arr_info = @typeInfo(ptr_info.child).array;
+                if (comptime arr_info.child == u8) {
+                    return sig_or_types[0..arr_info.len];
+                }
+                if (comptime arr_info.child == IRType) {
+                    return self.formatDeclSigFromTypes(sig_or_types[0..arr_info.len]);
+                }
+            }
+        }
+
+        @compileError("ensureDeclRaw expects a signature string or []const IRType");
+    }
+
+    pub fn ensureDeclRaw(self: *Context, name: []const u8, ret_ty: IRType, sig_or_types: anytype, varargs: bool) ![]const u8 {
         if (self.defined.contains(name)) return name;
         if (self.decls.contains(name)) return name;
+        const sig = try self.normalizeDeclSig(sig_or_types);
         const decl = IRDecl{ .ret_type = ret_ty, .sig = sig, .varargs = varargs };
         try self.decls.put(name, decl);
         return name;
