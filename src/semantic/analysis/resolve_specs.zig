@@ -22,33 +22,15 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                             // Assumed-length CHARACTER*(*) isn't a constant length; fall back to 1.
                             char_len = 1;
                         } else {
-                            const value = constants.evalConst(self, len_expr) catch |err| {
-                                std.debug.print("implicit char len eval error: {s}\n", .{@errorName(err)});
-                                return err;
-                            } orelse {
-                                std.debug.print("implicit char len not const\n", .{});
-                                return error.InvalidCharLen;
-                            };
+                            const value = (try constants.evalConst(self, len_expr)) orelse return error.InvalidCharLen;
                             switch (value) {
                                 .integer => |int_val| {
-                                    if (int_val <= 0) {
-                                        std.debug.print("implicit char len invalid: {d}\n", .{int_val});
-                                        return error.InvalidCharLen;
-                                    }
+                                    if (int_val <= 0) return error.InvalidCharLen;
                                     char_len = @intCast(int_val);
                                 },
-                                .real => {
-                                    std.debug.print("implicit char len real\n", .{});
-                                    return error.InvalidCharLen;
-                                },
-                                .complex => {
-                                    std.debug.print("implicit char len complex\n", .{});
-                                    return error.InvalidCharLen;
-                                },
-                                .string => {
-                                    std.debug.print("implicit char len string\n", .{});
-                                    return error.InvalidCharLen;
-                                },
+                                .real => return error.InvalidCharLen,
+                                .complex => return error.InvalidCharLen,
+                                .string => return error.InvalidCharLen,
                             }
                         }
                     }
@@ -223,7 +205,17 @@ fn equivalenceExprEqual(a: *ast.Expr, b: *ast.Expr) bool {
             else => false,
         },
         .substring => |sub_a| switch (b.*) {
-            .substring => |sub_b| std.ascii.eqlIgnoreCase(sub_a.name, sub_b.name),
+            .substring => |sub_b| blk: {
+                if (!std.ascii.eqlIgnoreCase(sub_a.name, sub_b.name)) break :blk false;
+                if (sub_a.args.len != sub_b.args.len) break :blk false;
+                var i: usize = 0;
+                while (i < sub_a.args.len) : (i += 1) {
+                    if (!equivalenceExprEqual(sub_a.args[i], sub_b.args[i])) break :blk false;
+                }
+                if (!optionalEquivalenceExprEqual(sub_a.start, sub_b.start)) break :blk false;
+                if (!optionalEquivalenceExprEqual(sub_a.end, sub_b.end)) break :blk false;
+                break :blk true;
+            },
             else => false,
         },
         .call_or_subscript => |call_a| switch (b.*) {
@@ -244,6 +236,12 @@ fn equivalenceExprEqual(a: *ast.Expr, b: *ast.Expr) bool {
         },
         else => false,
     };
+}
+
+fn optionalEquivalenceExprEqual(a: ?*ast.Expr, b: ?*ast.Expr) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return equivalenceExprEqual(a.?, b.?);
 }
 
 fn unionEquivalence(self: *context.Context, a_name: []const u8, b_name: []const u8) !bool {
