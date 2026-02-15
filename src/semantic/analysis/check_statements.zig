@@ -72,7 +72,11 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 try checkExpr(self, init.value);
             }
         },
-        .format => {},
+        .format => {
+            if (self.current_stmt == null or self.current_stmt.?.label == null) {
+                return error.InvalidFormatStatement;
+            }
+        },
         .arith_if => |arith| try checkExpr(self, arith.condition),
         .pause => {},
         .stop => {},
@@ -98,7 +102,20 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             if (ret.value) |value| try checkExpr(self, value);
         },
         .cont => {},
-        .entry => {},
+        .entry => |entry| {
+            if (self.unit.kind != .function and self.unit.kind != .subroutine) {
+                return error.InvalidEntryStatement;
+            }
+            var i: usize = 0;
+            while (i < entry.args.len) : (i += 1) {
+                var j: usize = i + 1;
+                while (j < entry.args.len) : (j += 1) {
+                    if (std.ascii.eqlIgnoreCase(entry.args[i], entry.args[j])) {
+                        return error.InvalidEntryStatement;
+                    }
+                }
+            }
+        },
     }
 }
 

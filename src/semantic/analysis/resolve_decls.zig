@@ -33,45 +33,28 @@ pub fn applyDeclarator(
     if (item.dims.len > 0) {
         self.symbols.items[idx].dims = item.dims;
     }
-    if (self.symbols.items[idx].storage != .common or storage == .common) {
+    if (storage == .common) {
+        self.symbols.items[idx].storage = .common;
+    } else if (self.symbols.items[idx].storage != .dummy and self.symbols.items[idx].storage != .common) {
         self.symbols.items[idx].storage = storage;
     }
     if (type_kind == .character) {
         var length: usize = 1;
         if (item.char_len) |len_expr| {
             if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) {
-                // Represent assumed-length CHARACTER*(*) as null so it can be
-                // resolved later (e.g., from PARAMETER values).
+                if (self.symbols.items[idx].storage != .dummy) return error.InvalidCharLen;
                 self.symbols.items[idx].char_len = null;
                 return;
             }
-            const value = constants.evalConst(self, len_expr) catch |err| {
-                std.debug.print("decl char len eval error: {s}\n", .{@errorName(err)});
-                return err;
-            } orelse {
-                std.debug.print("decl char len not const\n", .{});
-                return error.InvalidCharLen;
-            };
+            const value = (try constants.evalConst(self, len_expr)) orelse return error.InvalidCharLen;
             switch (value) {
                 .integer => |int_val| {
-                    if (int_val <= 0) {
-                        std.debug.print("decl char len invalid: {d}\n", .{int_val});
-                        return error.InvalidCharLen;
-                    }
+                    if (int_val <= 0) return error.InvalidCharLen;
                     length = @intCast(int_val);
                 },
-                .real => {
-                    std.debug.print("decl char len real for {s}\n", .{item.name});
-                    return error.InvalidCharLen;
-                },
-                .complex => {
-                    std.debug.print("decl char len complex for {s}\n", .{item.name});
-                    return error.InvalidCharLen;
-                },
-                .string => {
-                    std.debug.print("decl char len string for {s}\n", .{item.name});
-                    return error.InvalidCharLen;
-                },
+                .real => return error.InvalidCharLen,
+                .complex => return error.InvalidCharLen,
+                .string => return error.InvalidCharLen,
             }
         } else if (!explicit_type) {
             if (symbols_mod.implicitCharLen(self, item.name)) |implicit_len| {

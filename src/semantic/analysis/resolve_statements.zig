@@ -114,7 +114,18 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
             }
         },
         .cont => {},
-        .entry => {},
+        .entry => |entry| {
+            const entry_idx = try symbols_mod.ensureSymbol(self, entry.name);
+            self.symbols.items[entry_idx].kind = switch (self.unit.kind) {
+                .subroutine => .subroutine,
+                .function => .function,
+                else => .subroutine,
+            };
+            for (entry.args) |arg_name| {
+                const arg_idx = try symbols_mod.ensureSymbol(self, arg_name);
+                self.symbols.items[arg_idx].storage = .dummy;
+            }
+        },
     }
 }
 
@@ -220,6 +231,17 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             }
         },
         .cont => {},
-        .entry => {},
+        .entry => |entry| {
+            const entry_idx = try symbols_mod.ensureSymbol(self, entry.name);
+            self.symbols.items[entry_idx].kind = switch (self.unit.kind) {
+                .subroutine => .subroutine,
+                .function => .function,
+                else => .subroutine,
+            };
+            for (entry.args) |arg_name| {
+                const arg_idx = try symbols_mod.ensureSymbol(self, arg_name);
+                self.symbols.items[arg_idx].storage = .dummy;
+            }
+        },
     }
 }

@@ -234,6 +234,30 @@ look up `CF2001` in this file.
 - Meaning: integer power uses a negative exponent in constant evaluation.
 - Typical fix: use non-negative integer exponent or convert expression to real arithmetic.
 
+## CF3119
+
+- Stage: semantic analysis
+- Meaning: arithmetic expression uses non-numeric operands.
+- Typical fix: ensure `+ - * / **` operands are numeric types.
+
+## CF3120
+
+- Stage: semantic analysis
+- Meaning: invalid `ENTRY` statement placement or duplicated argument names.
+- Typical fix: place `ENTRY` only in `FUNCTION`/`SUBROUTINE` and use unique argument names.
+
+## CF3121
+
+- Stage: semantic analysis
+- Meaning: `FORMAT` statement appears without a statement label.
+- Typical fix: attach a numeric label to each `FORMAT` statement.
+
+## CF3122
+
+- Stage: semantic analysis
+- Meaning: `SAVE` references a `COMMON` block name not declared in the unit.
+- Typical fix: declare the `COMMON` block before using `SAVE /name/`.
+
 ## CF3199
 
 - Stage: semantic analysis (catch-all)

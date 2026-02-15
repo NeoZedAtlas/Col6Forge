@@ -127,7 +127,20 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 self.symbols.items[idx].is_intrinsic = true;
             }
         },
-        .save => |_| {},
+        .save => |save_decl| {
+            if (!save_decl.save_all) {
+                for (save_decl.items) |save_item| {
+                    switch (save_item) {
+                        .name => |name| {
+                            _ = try symbols_mod.ensureSymbol(self, name);
+                        },
+                        .common => |block_name| {
+                            if (!hasCommonBlock(self.unit, block_name)) return error.UnknownCommonBlock;
+                        },
+                    }
+                }
+            }
+        },
         .type_decl => return error.UnexpectedTypeDecl,
     }
 }
@@ -303,4 +316,20 @@ fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     const out = try allocator.alloc(u8, text.len);
     for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
     return out;
+}
+
+fn hasCommonBlock(unit: ast.ProgramUnit, target: ?[]const u8) bool {
+    for (unit.decls) |decl| {
+        if (decl != .common) continue;
+        for (decl.common.blocks) |block| {
+            if (optEqNoCase(block.name, target)) return true;
+        }
+    }
+    return false;
+}
+
+fn optEqNoCase(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return std.ascii.eqlIgnoreCase(a.?, b.?);
 }

@@ -53,6 +53,13 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     self.symbols.items[idx] = sym;
                 }
             }
+            if (kind == .subscript) {
+                if (sym.dims.len == 0 or call.args.len != sym.dims.len) return error.InvalidSubscript;
+                for (call.args) |arg| {
+                    const arg_ty = try exprType(self, arg);
+                    if (arg_ty != .integer) return error.InvalidSubscript;
+                }
+            }
             try self.refs.append(.{ .expr = expr, .name = call.name, .kind = kind });
         },
         .substring => |sub| {
@@ -84,6 +91,13 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         .binary => |bin| {
             try resolveExpr(self, bin.left);
             try resolveExpr(self, bin.right);
+            if (bin.op == .add or bin.op == .sub or bin.op == .mul or bin.op == .div or bin.op == .power) {
+                const left_kind = try exprType(self, bin.left);
+                const right_kind = try exprType(self, bin.right);
+                if (!isNumericType(left_kind) or !isNumericType(right_kind)) {
+                    return error.InvalidArithmeticOperands;
+                }
+            }
             if (bin.op == .power) {
                 const left_kind = try exprType(self, bin.left);
                 const right_kind = try exprType(self, bin.right);
@@ -165,6 +179,13 @@ pub fn promoteNumericType(left: ast.TypeKind, right: ast.TypeKind) ast.TypeKind 
 }
 
 pub fn isPowerOperandSupported(kind: ast.TypeKind) bool {
+    return switch (kind) {
+        .integer, .real, .double_precision, .complex, .complex_double => true,
+        else => false,
+    };
+}
+
+fn isNumericType(kind: ast.TypeKind) bool {
     return switch (kind) {
         .integer, .real, .double_precision, .complex, .complex_double => true,
         else => false,

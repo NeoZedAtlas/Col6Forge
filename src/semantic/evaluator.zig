@@ -71,10 +71,7 @@ fn parseInt(text: []const u8) !i64 {
     return std.fmt.parseInt(i64, buffer[0..out], 10) catch |err| {
         switch (err) {
             error.Overflow => return error.NumberTooLong,
-            else => {
-                std.debug.print("invalid integer literal: {s}\n", .{text});
-                return err;
-            },
+            else => return err,
         }
     };
 }
@@ -90,10 +87,7 @@ fn parseReal(text: []const u8) !f64 {
         buffer[out] = if (ch == 'D' or ch == 'd') 'e' else ch;
         out += 1;
     }
-    return std.fmt.parseFloat(f64, buffer[0..out]) catch |err| {
-        std.debug.print("invalid real literal: {s}\n", .{text});
-        return err;
-    };
+    return std.fmt.parseFloat(f64, buffer[0..out]);
 }
 
 fn negateConst(value: ConstValue) ConstValue {
