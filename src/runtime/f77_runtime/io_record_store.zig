@@ -321,3 +321,20 @@ pub export fn f77_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_r
     if (out_len) |p| p.* = rec.len;
     return 0;
 }
+
+test "directRecordRange validates record offsets safely" {
+    const std = @import("std");
+
+    try std.testing.expect(directRecordRange(0, 8) == null);
+
+    const r1 = directRecordRange(1, 8).?;
+    try std.testing.expectEqual(@as(usize, 0), r1.offset);
+    try std.testing.expectEqual(@as(usize, 8), r1.end);
+
+    const r2 = directRecordRange(3, 8).?;
+    try std.testing.expectEqual(@as(usize, 16), r2.offset);
+    try std.testing.expectEqual(@as(usize, 24), r2.end);
+
+    try std.testing.expect(directRecordRange(2, std.math.maxInt(usize)) == null);
+    try std.testing.expect(directRecordRange(std.math.maxInt(c_int), std.math.maxInt(usize)) == null);
+}

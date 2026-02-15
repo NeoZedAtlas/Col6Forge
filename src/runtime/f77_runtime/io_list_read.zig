@@ -289,3 +289,13 @@ pub export fn f77_read_list_l_n(unit: c_int, count: c_int, stride: c_int, base: 
     f77DiscardToRecordEnd(file);
     return 0;
 }
+
+test "list index helpers detect arithmetic overflow" {
+    const std = @import("std");
+
+    try std.testing.expectEqual(@as(usize, 12), offsetIndex(3, 4).?);
+    try std.testing.expectEqual(@as(usize, 24), complexOffsetIndex(3, 4).?);
+
+    try std.testing.expect(checkedMul(std.math.maxInt(usize), 2) == null);
+    try std.testing.expect(checkedAdd(std.math.maxInt(usize), 1) == null);
+}

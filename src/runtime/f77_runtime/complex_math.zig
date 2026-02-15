@@ -184,3 +184,23 @@ pub export fn f77_zpowi(z: f77_complex64, n: c_int) callconv(.c) f77_complex64 {
     }
     return result;
 }
+
+test "complex integer power division by zero returns NaN components" {
+    const zero_c = f77_cpowi(.{ .r = 0.0, .i = 0.0 }, -1);
+    try std.testing.expect(std.math.isNan(zero_c.r));
+    try std.testing.expect(std.math.isNan(zero_c.i));
+
+    const zero_z = f77_zpowi(.{ .r = 0.0, .i = 0.0 }, -1);
+    try std.testing.expect(std.math.isNan(zero_z.r));
+    try std.testing.expect(std.math.isNan(zero_z.i));
+}
+
+test "complex integer power keeps valid inverse for nonzero values" {
+    const inv_c = f77_cpowi(.{ .r = 2.0, .i = 0.0 }, -1);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), inv_c.r, 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), inv_c.i, 1e-6);
+
+    const inv_z = f77_zpowi(.{ .r = 4.0, .i = 0.0 }, -1);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.25), inv_z.r, 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), inv_z.i, 1e-12);
+}

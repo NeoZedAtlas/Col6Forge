@@ -314,3 +314,21 @@ pub export fn f77_write_internal_n_core(buf: ?[*]u8, len: c_int, count: c_int, s
         }
     }
 }
+
+test "internal io helpers detect overflow" {
+    const std = @import("std");
+
+    try std.testing.expectEqual(@as(usize, 42), checkedMul(6, 7).?);
+    try std.testing.expectEqual(@as(usize, 43), checkedAdd(40, 3).?);
+    try std.testing.expect(checkedMul(std.math.maxInt(usize), 2) == null);
+    try std.testing.expect(checkedAdd(std.math.maxInt(usize), 1) == null);
+}
+
+test "writeInternalMarkedSlice ignores oversized relative tab" {
+    const std = @import("std");
+
+    var out: [4]u8 = undefined;
+    const src = "\x01R184467440737095516161844674407370955161\x02X";
+    writeInternalMarkedSlice(&out, out.len, src);
+    try std.testing.expectEqualSlices(u8, "    ", out[0..]);
+}

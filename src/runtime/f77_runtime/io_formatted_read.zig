@@ -334,3 +334,27 @@ pub export fn f77_formatted_read_core(
     if (status_mode != 0) return 0;
     return assigned;
 }
+
+test "runtimeArgPtrAt handles missing and null entries" {
+    const std = @import("std");
+
+    var value: u8 = 1;
+    var ptrs = [_]?*anyopaque{ @ptrCast(&value), null };
+    const raw: [*]?*anyopaque = &ptrs;
+
+    const missing = runtimeArgPtrAt(null, 0, 2);
+    try std.testing.expect(!missing.available);
+    try std.testing.expect(missing.ptr == null);
+
+    const out_of_range = runtimeArgPtrAt(raw, 2, 2);
+    try std.testing.expect(!out_of_range.available);
+    try std.testing.expect(out_of_range.ptr == null);
+
+    const present = runtimeArgPtrAt(raw, 0, 2);
+    try std.testing.expect(present.available);
+    try std.testing.expect(present.ptr != null);
+
+    const null_entry = runtimeArgPtrAt(raw, 1, 2);
+    try std.testing.expect(null_entry.available);
+    try std.testing.expect(null_entry.ptr == null);
+}
