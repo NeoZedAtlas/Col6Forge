@@ -79,6 +79,9 @@ fn semanticErrorInfo(err: anyerror) struct { code: []const u8, message: []const 
         error.InvalidEquivalence => .{ .code = "CF3113", .message = "invalid EQUIVALENCE designator or incompatible types" },
         error.EquivalenceCycle => .{ .code = "CF3114", .message = "cyclic/redundant EQUIVALENCE relationship detected" },
         error.CommonBlockMismatch => .{ .code = "CF3115", .message = "COMMON block layout mismatch across program units" },
+        error.DuplicateDeclaration => .{ .code = "CF3116", .message = "duplicate declaration for the same symbol" },
+        error.DivisionByZero => .{ .code = "CF3117", .message = "division by zero in constant expression" },
+        error.NegativeIntegerExponent => .{ .code = "CF3118", .message = "negative integer exponent in constant expression" },
         else => .{ .code = "CF3199", .message = "semantic analysis failed" },
     };
 }

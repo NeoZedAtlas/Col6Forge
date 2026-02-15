@@ -14,6 +14,10 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             _ = try symbols_mod.ensureSymbol(self, name);
         },
         .call_or_subscript => |call| {
+            for (call.args) |arg| {
+                try resolveExpr(self, arg);
+            }
+
             const idx = try symbols_mod.ensureSymbol(self, call.name);
             var sym = self.symbols.items[idx];
             var kind: ResolvedRefKind = .unknown;
@@ -50,9 +54,6 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                 }
             }
             try self.refs.append(.{ .expr = expr, .name = call.name, .kind = kind });
-            for (call.args) |arg| {
-                try resolveExpr(self, arg);
-            }
         },
         .substring => |sub| {
             _ = try symbols_mod.ensureSymbol(self, sub.name);

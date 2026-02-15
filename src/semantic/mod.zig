@@ -561,3 +561,89 @@ test "semantic reports CF3115 for COMMON mismatch across units" {
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.eql(u8, diag.code, "CF3115"));
 }
+
+test "semantic reports CF3110 for function argument count mismatch" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER X\n" ++
+        "      X=F(1)\n" ++
+        "      END\n" ++
+        "      INTEGER FUNCTION F(A,B)\n" ++
+        "      INTEGER A,B\n" ++
+        "      F=A+B\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
+}
+
+test "semantic reports CF3116 for duplicate declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A\n" ++
+        "      REAL A\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+}
+
+test "semantic reports CF3117 for divide-by-zero in const expression" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*(1/0) A\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.DivisionByZero, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3117"));
+}
+
+test "semantic reports CF3118 for negative integer exponent in const expression" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*(2**(-1)) A\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.NegativeIntegerExponent, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3118"));
+}

@@ -216,6 +216,24 @@ look up `CF2001` in this file.
 - Meaning: `COMMON` block layout/type sequence mismatches across program units.
 - Typical fix: keep `COMMON` block item types/order/sizes consistent in all units.
 
+## CF3116
+
+- Stage: semantic analysis
+- Meaning: symbol is declared more than once in the same scope.
+- Typical fix: keep only one explicit declaration for each symbol.
+
+## CF3117
+
+- Stage: semantic analysis
+- Meaning: constant expression performs division by zero.
+- Typical fix: rewrite constant expression to avoid zero divisor.
+
+## CF3118
+
+- Stage: semantic analysis
+- Meaning: integer power uses a negative exponent in constant evaluation.
+- Typical fix: use non-negative integer exponent or convert expression to real arithmetic.
+
 ## CF3199
 
 - Stage: semantic analysis (catch-all)

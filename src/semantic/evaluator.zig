@@ -40,7 +40,7 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
         .binary => |bin| {
             const left = (try evalConst(bin.left, resolver)) orelse return null;
             const right = (try evalConst(bin.right, resolver)) orelse return null;
-            return evalBinary(bin.op, left, right);
+            return try evalBinary(bin.op, left, right);
         },
         .complex_literal => |lit| {
             const real_val = (try evalConst(lit.real, resolver)) orelse return null;
@@ -105,7 +105,7 @@ fn negateConst(value: ConstValue) ConstValue {
     };
 }
 
-fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue) ?ConstValue {
+fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue) !?ConstValue {
     if (left == .string or right == .string) return null;
 
     if (left == .complex or right == .complex) {
@@ -156,14 +156,18 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue) ?ConstValue
         .add => .{ .integer = l + r },
         .sub => .{ .integer = l - r },
         .mul => .{ .integer = l * r },
-        .div => .{ .integer = if (r == 0) 0 else @divTrunc(l, r) },
-        .power => .{ .integer = intPow(l, r) },
+        .div => blk: {
+            if (r == 0) return error.DivisionByZero;
+            break :blk .{ .integer = @divTrunc(l, r) };
+        },
+        .power => .{ .integer = try intPow(l, r) },
         else => null,
     };
 }
 
-fn intPow(base: i64, exp: i64) i64 {
-    if (exp <= 0) return 1;
+fn intPow(base: i64, exp: i64) !i64 {
+    if (exp < 0) return error.NegativeIntegerExponent;
+    if (exp == 0) return 1;
     var result: i64 = 1;
     var i: i64 = 0;
     while (i < exp) : (i += 1) {

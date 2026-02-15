@@ -21,6 +21,9 @@ pub fn applyDeclarator(
     explicit_type: bool,
 ) !void {
     const idx = try symbols_mod.ensureSymbol(self, item.name);
+    if (explicit_type and self.symbols.items[idx].type_explicit) {
+        return error.DuplicateDeclaration;
+    }
     if (explicit_type) {
         self.symbols.items[idx].type_kind = type_kind;
         self.symbols.items[idx].type_explicit = true;

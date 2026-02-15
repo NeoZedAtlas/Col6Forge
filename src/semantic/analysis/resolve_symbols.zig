@@ -81,9 +81,15 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
 
 pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
     if (self.current_scope == null) return error.MissingScope;
+    const scope_id = self.current_scope.?;
+    var it = self.scopes.items[scope_id.index].symbols.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, symbol.name)) {
+            return error.DuplicateDeclaration;
+        }
+    }
     const idx = self.symbols.items.len;
     try self.symbols.append(symbol);
-    const scope_id = self.current_scope.?;
     try self.scopes.items[scope_id.index].symbols.put(symbol.name, idx);
     return idx;
 }
