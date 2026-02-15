@@ -233,6 +233,31 @@ test "emitBinary floating ne uses unordered comparison" {
     try testing.expect(std.mem.indexOf(u8, buffer.items, "fcmp une float") != null);
 }
 
+test "emitBinary i64 arithmetic and comparisons use integer ops" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lhs = ValueRef{ .name = "7", .ty = .i64, .is_ptr = false };
+    const rhs = ValueRef{ .name = "3", .ty = .i64, .is_ptr = false };
+    const sum = try emitBinary(&harness.ctx, &builder, .add, lhs, rhs);
+    try testing.expectEqual(IRType.i64, sum.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "add i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "fadd i64") == null);
+
+    const cmp = try emitBinary(&harness.ctx, &builder, .lt, lhs, rhs);
+    try testing.expectEqual(IRType.i1, cmp.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "icmp slt i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "fcmp olt i64") == null);
+}
+
 test "emitBinary real power with integer constant uses multiplication path" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -251,6 +276,29 @@ test "emitBinary real power with integer constant uses multiplication path" {
     try testing.expectEqual(IRType.f32, pow.ty);
     try testing.expect(std.mem.indexOf(u8, buffer.items, "fmul float") != null);
     try testing.expect(std.mem.indexOf(u8, buffer.items, "llvm.pow.f32") == null);
+}
+
+test "emitBinary integer power supports i64 and rejects negative constants" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lhs = ValueRef{ .name = "2", .ty = .i64, .is_ptr = false };
+    const rhs = ValueRef{ .name = "5", .ty = .i64, .is_ptr = false };
+    const pow = try emitBinary(&harness.ctx, &builder, .power, lhs, rhs);
+    try testing.expectEqual(IRType.i64, pow.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "mul i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "llvm.pow") == null);
+
+    const neg_rhs = ValueRef{ .name = "-1", .ty = .i64, .is_ptr = false };
+    try testing.expectError(error.PowerUnsupported, emitBinary(&harness.ctx, &builder, .power, lhs, neg_rhs));
 }
 
 test "emitCall and emitArgPointer build call args" {

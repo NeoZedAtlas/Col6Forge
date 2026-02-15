@@ -71,18 +71,30 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
     const tmp = try ctx.nextTemp();
     switch (op) {
         .add, .sub, .mul, .div => {
-            const op_text = switch (op) {
-                .add => if (common_ty == .i32) "add" else "fadd",
-                .sub => if (common_ty == .i32) "sub" else "fsub",
-                .mul => if (common_ty == .i32) "mul" else "fmul",
-                .div => if (common_ty == .i32) "sdiv" else "fdiv",
-                else => unreachable,
-            };
+            const op_text = if (isIntegerTy(common_ty))
+                switch (op) {
+                    .add => "add",
+                    .sub => "sub",
+                    .mul => "mul",
+                    .div => "sdiv",
+                    else => unreachable,
+                }
+            else if (isFloatTy(common_ty))
+                switch (op) {
+                    .add => "fadd",
+                    .sub => "fsub",
+                    .mul => "fmul",
+                    .div => "fdiv",
+                    else => unreachable,
+                }
+            else
+                return error.UnsupportedLogicalOp;
             try builder.binary(tmp, op_text, common_ty, left, right);
             return .{ .name = tmp, .ty = common_ty, .is_ptr = false };
         },
         .eq, .ne, .lt, .le, .gt, .ge => {
-            const is_int = common_ty == .i32;
+            const is_int = isIntegerCompareTy(common_ty);
+            if (!is_int and !isFloatTy(common_ty)) return error.UnsupportedLogicalOp;
             const pred = switch (op) {
                 .eq => if (is_int) "eq" else "oeq",
                 .ne => if (is_int) "ne" else "une",
@@ -118,32 +130,143 @@ fn emitPower(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) Emit
         return emitComplexPowI(ctx, builder, lhs, rhs);
     }
     if (complex.isComplexType(rhs.ty)) return error.UnsupportedComplexOp;
-    if ((lhs.ty == .f32 or lhs.ty == .f64) and rhs.ty == .i32 and !rhs.is_ptr) {
-        if (parseConstI32(rhs)) |exp_const| {
+    if (isFloatTy(lhs.ty) and isIntegerTy(rhs.ty) and !rhs.is_ptr) {
+        if (parseConstInt(rhs)) |exp_const| {
             const left = try casting.coerce(ctx, builder, lhs, lhs.ty);
             return emitRealPowConstInt(ctx, builder, left, exp_const);
         }
     }
     const common_ty = ir.commonType(lhs.ty, rhs.ty);
-    if (common_ty == .f32 or common_ty == .f64) {
+    if (isFloatTy(common_ty)) {
         const left = try casting.coerce(ctx, builder, lhs, common_ty);
         const right = try casting.coerce(ctx, builder, rhs, common_ty);
         return intrinsics.emitIntrinsicBinaryFloatValue(ctx, builder, "pow", left, right);
     }
-    if (common_ty == .i32) {
-        const left = try casting.coerce(ctx, builder, lhs, .f64);
-        const right = try casting.coerce(ctx, builder, rhs, .f64);
-        const pow = try intrinsics.emitIntrinsicBinaryFloatValue(ctx, builder, "pow", left, right);
-        const tmp = try ctx.nextTemp();
-        try builder.cast(tmp, "fptosi", pow.ty, pow, .i32);
-        return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    if (isIntegerTy(common_ty)) {
+        return emitIntegerPow(ctx, builder, lhs, rhs, common_ty);
     }
     return error.PowerUnsupported;
 }
 
-fn parseConstI32(value: ValueRef) ?i64 {
-    if (value.ty != .i32 or value.is_ptr) return null;
+fn parseConstInt(value: ValueRef) ?i64 {
+    if (!isIntegerTy(value.ty) or value.is_ptr) return null;
     return std.fmt.parseInt(i64, value.name, 10) catch null;
+}
+
+fn emitIntegerPow(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef, ty: IRType) EmitError!ValueRef {
+    if (!isIntegerTy(ty)) return error.PowerUnsupported;
+
+    const base = try casting.coerce(ctx, builder, lhs, ty);
+    var exp = try casting.coerce(ctx, builder, rhs, ty);
+
+    if (parseConstInt(exp)) |exp_const| {
+        if (exp_const < 0) return error.PowerUnsupported;
+        return emitIntPowConst(ctx, builder, base, @intCast(exp_const), ty);
+    }
+
+    if (exp.ty != .i64) {
+        exp = try casting.coerce(ctx, builder, exp, .i64);
+    }
+
+    const zero_i64 = constInt(ctx, .i64, 0);
+    const one_i64 = constInt(ctx, .i64, 1);
+    const one_ty = constInt(ctx, ty, 1);
+    const zero_ty = constInt(ctx, ty, 0);
+
+    const neg_cond_name = try ctx.nextTemp();
+    try builder.compare(neg_cond_name, "icmp", "slt", .i64, exp, zero_i64);
+    const neg_cond = ValueRef{ .name = neg_cond_name, .ty = .i1, .is_ptr = false };
+
+    const neg_exp_name = try ctx.nextTemp();
+    try builder.binary(neg_exp_name, "sub", .i64, zero_i64, exp);
+    const neg_exp = ValueRef{ .name = neg_exp_name, .ty = .i64, .is_ptr = false };
+
+    const exp_abs_name = try ctx.nextTemp();
+    try builder.select(exp_abs_name, .i64, neg_cond, neg_exp, exp);
+    const exp_abs = ValueRef{ .name = exp_abs_name, .ty = .i64, .is_ptr = false };
+
+    const exp_ptr_name = try ctx.nextTemp();
+    const base_ptr_name = try ctx.nextTemp();
+    const result_ptr_name = try ctx.nextTemp();
+    try builder.alloca(exp_ptr_name, .i64);
+    try builder.alloca(base_ptr_name, ty);
+    try builder.alloca(result_ptr_name, ty);
+    try builder.store(exp_abs, .{ .name = exp_ptr_name, .ty = .ptr, .is_ptr = true });
+    try builder.store(base, .{ .name = base_ptr_name, .ty = .ptr, .is_ptr = true });
+    try builder.store(one_ty, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
+
+    const label_header = try ctx.nextLabel("ipow_header");
+    const label_body = try ctx.nextLabel("ipow_body");
+    const label_done = try ctx.nextLabel("ipow_done");
+
+    try builder.br(label_header);
+
+    try builder.label(label_header);
+    const exp_val_name = try ctx.nextTemp();
+    try builder.load(exp_val_name, .i64, .{ .name = exp_ptr_name, .ty = .ptr, .is_ptr = true });
+    const exp_val = ValueRef{ .name = exp_val_name, .ty = .i64, .is_ptr = false };
+    const loop_cond_name = try ctx.nextTemp();
+    try builder.compare(loop_cond_name, "icmp", "ne", .i64, exp_val, zero_i64);
+    const loop_cond = ValueRef{ .name = loop_cond_name, .ty = .i1, .is_ptr = false };
+    try builder.brCond(loop_cond, label_body, label_done);
+
+    try builder.label(label_body);
+    const base_val_name = try ctx.nextTemp();
+    try builder.load(base_val_name, ty, .{ .name = base_ptr_name, .ty = .ptr, .is_ptr = true });
+    const base_val = ValueRef{ .name = base_val_name, .ty = ty, .is_ptr = false };
+    const result_val_name = try ctx.nextTemp();
+    try builder.load(result_val_name, ty, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
+    const result_val = ValueRef{ .name = result_val_name, .ty = ty, .is_ptr = false };
+
+    const exp_and_name = try ctx.nextTemp();
+    try builder.binary(exp_and_name, "and", .i64, exp_val, one_i64);
+    const exp_and = ValueRef{ .name = exp_and_name, .ty = .i64, .is_ptr = false };
+    const odd_cond_name = try ctx.nextTemp();
+    try builder.compare(odd_cond_name, "icmp", "ne", .i64, exp_and, zero_i64);
+    const odd_cond = ValueRef{ .name = odd_cond_name, .ty = .i1, .is_ptr = false };
+    const result_mul = try emitIntBinaryOp(ctx, builder, "mul", ty, result_val, base_val);
+    const result_sel_name = try ctx.nextTemp();
+    try builder.select(result_sel_name, ty, odd_cond, result_mul, result_val);
+    const result_sel = ValueRef{ .name = result_sel_name, .ty = ty, .is_ptr = false };
+    try builder.store(result_sel, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
+
+    const base_next = try emitIntBinaryOp(ctx, builder, "mul", ty, base_val, base_val);
+    try builder.store(base_next, .{ .name = base_ptr_name, .ty = .ptr, .is_ptr = true });
+
+    const exp_next_name = try ctx.nextTemp();
+    try builder.binary(exp_next_name, "lshr", .i64, exp_val, one_i64);
+    const exp_next = ValueRef{ .name = exp_next_name, .ty = .i64, .is_ptr = false };
+    try builder.store(exp_next, .{ .name = exp_ptr_name, .ty = .ptr, .is_ptr = true });
+    try builder.br(label_header);
+
+    try builder.label(label_done);
+    const result_out_name = try ctx.nextTemp();
+    try builder.load(result_out_name, ty, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
+    const result_out = ValueRef{ .name = result_out_name, .ty = ty, .is_ptr = false };
+    const final_name = try ctx.nextTemp();
+    try builder.select(final_name, ty, neg_cond, zero_ty, result_out);
+    return .{ .name = final_name, .ty = ty, .is_ptr = false };
+}
+
+fn emitIntPowConst(ctx: *Context, builder: anytype, base: ValueRef, exp: u64, ty: IRType) EmitError!ValueRef {
+    if (!isIntegerTy(ty)) return error.PowerUnsupported;
+    if (exp == 0) return constInt(ctx, ty, 1);
+    if (exp == 1) return base;
+
+    var abs_exp = exp;
+    var result = constInt(ctx, ty, 1);
+    var cur = base;
+
+    while (abs_exp > 0) {
+        if ((abs_exp & 1) == 1) {
+            result = try emitIntBinaryOp(ctx, builder, "mul", ty, result, cur);
+        }
+        abs_exp >>= 1;
+        if (abs_exp > 0) {
+            cur = try emitIntBinaryOp(ctx, builder, "mul", ty, cur, cur);
+        }
+    }
+    return result;
 }
 
 fn emitRealPowConstInt(ctx: *Context, builder: anytype, base: ValueRef, exp: i64) EmitError!ValueRef {
@@ -171,8 +294,18 @@ fn emitRealPowConstInt(ctx: *Context, builder: anytype, base: ValueRef, exp: i64
     return result;
 }
 
+fn emitIntBinaryOp(ctx: *Context, builder: anytype, op_text: []const u8, ty: IRType, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
+    const tmp = try ctx.nextTemp();
+    try builder.binary(tmp, op_text, ty, lhs, rhs);
+    return .{ .name = tmp, .ty = ty, .is_ptr = false };
+}
+
 fn constFloat(ctx: *Context, ty: IRType, value: f64) ValueRef {
     return .{ .name = utils.formatFloatValue(ctx.allocator, value, ty), .ty = ty, .is_ptr = false };
+}
+
+fn constInt(ctx: *Context, ty: IRType, value: i64) ValueRef {
+    return .{ .name = utils.formatInt(ctx.allocator, value), .ty = ty, .is_ptr = false };
 }
 
 fn emitComplexPowI(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
@@ -264,21 +397,15 @@ fn emitComplexPowI(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef
 }
 
 pub fn emitAdd(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
-    const tmp = try ctx.nextTemp();
-    try builder.binary(tmp, "add", .i32, lhs, rhs);
-    return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    return emitBinary(ctx, builder, .add, lhs, rhs);
 }
 
 pub fn emitSub(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
-    const tmp = try ctx.nextTemp();
-    try builder.binary(tmp, "sub", .i32, lhs, rhs);
-    return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    return emitBinary(ctx, builder, .sub, lhs, rhs);
 }
 
 pub fn emitMul(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
-    const tmp = try ctx.nextTemp();
-    try builder.binary(tmp, "mul", .i32, lhs, rhs);
-    return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    return emitBinary(ctx, builder, .mul, lhs, rhs);
 }
 
 pub fn emitCond(ctx: *Context, builder: anytype, expr: *ast.Expr) !ValueRef {
@@ -289,8 +416,8 @@ pub fn emitCond(ctx: *Context, builder: anytype, expr: *ast.Expr) !ValueRef {
     const tmp = try ctx.nextTemp();
     const zero = utils.zeroValue(value.ty);
     switch (value.ty) {
-        .i32 => {
-            try builder.compare(tmp, "icmp", "ne", .i32, value, zero);
+        .i32, .i64 => {
+            try builder.compare(tmp, "icmp", "ne", value.ty, value, zero);
             return .{ .name = tmp, .ty = .i1, .is_ptr = false };
         },
         .i8 => return error.UnsupportedLogicalOp,
@@ -300,4 +427,16 @@ pub fn emitCond(ctx: *Context, builder: anytype, expr: *ast.Expr) !ValueRef {
         },
         else => return error.UnsupportedLogicalOp,
     }
+}
+
+fn isIntegerTy(ty: IRType) bool {
+    return ty == .i32 or ty == .i64;
+}
+
+fn isIntegerCompareTy(ty: IRType) bool {
+    return ty == .i1 or isIntegerTy(ty);
+}
+
+fn isFloatTy(ty: IRType) bool {
+    return ty == .f32 or ty == .f64;
 }
