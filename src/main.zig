@@ -20,8 +20,9 @@ fn runMain() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    const parsed = parseArgs(allocator, args) catch |err| {
-        failWithUsage(err);
+    const parsed = switch (parseArgs(allocator, args)) {
+        .success => |value| value,
+        .failure => |parse_err| failWithUsage(parse_err),
     };
     if (parsed.show_help) {
         try printUsage(std.fs.File.stdout());
@@ -104,7 +105,22 @@ const ParsedArgs = struct {
     show_help: bool,
 };
 
-fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParsedArgs {
+const ParseArgError = union(enum) {
+    missing_output_path,
+    unknown_flag: []const u8,
+    too_many_inputs: struct {
+        first: []const u8,
+        extra: []const u8,
+    },
+    missing_input_file,
+};
+
+const ParseArgsOutcome = union(enum) {
+    success: ParsedArgs,
+    failure: ParseArgError,
+};
+
+fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOutcome {
     _ = allocator;
     var input_path: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
@@ -123,35 +139,42 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParsedArgs
             continue;
         }
         if (std.mem.eql(u8, arg, "-o")) {
-            if (i + 1 >= args.len) return error.MissingOutputPath;
+            if (i + 1 >= args.len) return .{ .failure = .missing_output_path };
             i += 1;
             output_path = args[i];
             continue;
         }
-        if (arg.len > 0 and arg[0] == '-') return error.UnknownFlag;
+        if (arg.len > 0 and arg[0] == '-') return .{ .failure = .{ .unknown_flag = arg } };
         if (input_path == null) {
             input_path = arg;
             continue;
         }
-        return error.TooManyInputs;
+        return .{
+            .failure = .{
+                .too_many_inputs = .{
+                    .first = input_path.?,
+                    .extra = arg,
+                },
+            },
+        };
     }
 
     if (show_help) {
-        return .{
+        return .{ .success = .{
             .input_path = "",
             .output_path = output_path,
             .emit = emit,
             .show_help = true,
-        };
+        } };
     }
-    if (input_path == null) return error.MissingInputFile;
+    if (input_path == null) return .{ .failure = .missing_input_file };
 
-    return .{
+    return .{ .success = .{
         .input_path = input_path.?,
         .output_path = output_path,
         .emit = emit,
         .show_help = false,
-    };
+    } };
 }
 
 fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
@@ -173,12 +196,21 @@ fn failPipeline(input_path: []const u8, err: anyerror) noreturn {
     std.process.exit(1);
 }
 
-fn failWithUsage(err: anyerror) noreturn {
+fn writeParseArgError(writer: *std.Io.Writer, parse_err: ParseArgError) void {
+    switch (parse_err) {
+        .missing_output_path => writer.print("error: missing output path after -o\n", .{}) catch {},
+        .unknown_flag => |flag| writer.print("error: unknown flag: {s}\n", .{flag}) catch {},
+        .too_many_inputs => |inputs| writer.print("error: multiple input files provided: {s} and {s}\n", .{ inputs.first, inputs.extra }) catch {},
+        .missing_input_file => writer.print("error: missing input file\n", .{}) catch {},
+    }
+}
+
+fn failWithUsage(parse_err: ParseArgError) noreturn {
     printUsage(std.fs.File.stderr()) catch {};
     var stderr = std.fs.File.stderr();
     var buffer: [256]u8 = undefined;
     var writer = stderr.writer(&buffer);
-    writer.interface.print("error: {s}\n", .{@errorName(err)}) catch {};
+    writeParseArgError(&writer.interface, parse_err);
     writer.interface.flush() catch {};
     std.process.exit(2);
 }
@@ -198,18 +230,30 @@ test "args parsing" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    try testing.expectError(error.MissingInputFile, parseArgs(allocator, &[_][]const u8{"col6forge"}));
-    try testing.expectError(error.MissingOutputPath, parseArgs(allocator, &[_][]const u8{ "col6forge", "-o" }));
-    try testing.expectError(error.UnknownFlag, parseArgs(allocator, &[_][]const u8{ "col6forge", "-bogus", "file.f" }));
-    try testing.expectError(error.TooManyInputs, parseArgs(allocator, &[_][]const u8{ "col6forge", "a.f", "b.f" }));
+    const missing_input = parseArgs(allocator, &[_][]const u8{"col6forge"});
+    try testing.expect(missing_input == .failure);
+    try testing.expect(missing_input.failure == .missing_input_file);
 
-    const help = try parseArgs(allocator, &[_][]const u8{ "col6forge", "-h", "-o", "out.ll" });
+    const missing_output = parseArgs(allocator, &[_][]const u8{ "col6forge", "-o" });
+    try testing.expect(missing_output == .failure);
+    try testing.expect(missing_output.failure == .missing_output_path);
+
+    const unknown_flag = parseArgs(allocator, &[_][]const u8{ "col6forge", "-bogus", "file.f" });
+    try testing.expect(unknown_flag == .failure);
+    try testing.expectEqualStrings("-bogus", unknown_flag.failure.unknown_flag);
+
+    const too_many = parseArgs(allocator, &[_][]const u8{ "col6forge", "a.f", "b.f" });
+    try testing.expect(too_many == .failure);
+    try testing.expectEqualStrings("a.f", too_many.failure.too_many_inputs.first);
+    try testing.expectEqualStrings("b.f", too_many.failure.too_many_inputs.extra);
+
+    const help = parseArgs(allocator, &[_][]const u8{ "col6forge", "-h", "-o", "out.ll" }).success;
     try testing.expect(help.show_help);
     try testing.expectEqualStrings("", help.input_path);
     try testing.expectEqualStrings("out.ll", help.output_path.?);
     try testing.expectEqual(Col6Forge.EmitKind.llvm, help.emit);
 
-    const parsed = try parseArgs(allocator, &[_][]const u8{ "col6forge", "-emit-llvm", "input.f" });
+    const parsed = parseArgs(allocator, &[_][]const u8{ "col6forge", "-emit-llvm", "input.f" }).success;
     try testing.expect(!parsed.show_help);
     try testing.expectEqualStrings("input.f", parsed.input_path);
     try testing.expect(parsed.output_path == null);

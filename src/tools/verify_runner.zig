@@ -28,9 +28,13 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    const options = parseArgs(args) catch |err| {
-        try printUsage(std.fs.File.stderr());
-        return err;
+    const options = switch (parseArgs(args)) {
+        .success => |value| value,
+        .failure => |parse_err| {
+            try printUsage(std.fs.File.stderr());
+            try printParseArgError(std.fs.File.stderr(), parse_err);
+            return error.InvalidArguments;
+        },
     };
     if (options.show_help) {
         try printUsage(std.fs.File.stdout());
@@ -153,7 +157,28 @@ const Options = struct {
     clean_cache: bool,
 };
 
-fn parseArgs(args: []const []const u8) !Options {
+const ParseArgError = union(enum) {
+    missing_value: []const u8,
+    unknown_flag: []const u8,
+    invalid_runtime_backend: []const u8,
+    invalid_timeout: []const u8,
+    invalid_jobs: []const u8,
+    duplicate_suite_flag: struct {
+        first: []const u8,
+        second: []const u8,
+    },
+    conflicting_suite_selection: struct {
+        tests_dir: []const u8,
+        suite_flag: []const u8,
+    },
+};
+
+const ParseArgsOutcome = union(enum) {
+    success: Options,
+    failure: ParseArgError,
+};
+
+fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var tests_dir: []const u8 = "tests/NIST_F78_test_suite";
     var tests_dir_set = false;
     var filter: ?[]const u8 = null;
@@ -166,6 +191,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var incremental = true;
     var clean_cache = false;
     var suite: ?TestSuite = null;
+    var suite_flag: ?[]const u8 = null;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -175,51 +201,77 @@ fn parseArgs(args: []const []const u8) !Options {
             continue;
         }
         if (std.mem.eql(u8, arg, "--tests-dir")) {
-            if (i + 1 >= args.len) return error.MissingTestsDir;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             tests_dir = args[i];
             tests_dir_set = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--filter")) {
-            if (i + 1 >= args.len) return error.MissingFilter;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             filter = args[i];
             continue;
         }
         if (std.ascii.eqlIgnoreCase(arg, "--fcvs21_f95")) {
-            if (suite != null) return error.DuplicateSuiteFlag;
+            if (suite_flag != null) {
+                return .{
+                    .failure = .{
+                        .duplicate_suite_flag = .{
+                            .first = suite_flag.?,
+                            .second = arg,
+                        },
+                    },
+                };
+            }
             suite = .fcvs21_f95;
+            suite_flag = arg;
             continue;
         }
         if (std.ascii.eqlIgnoreCase(arg, "--fcsv78")) {
-            if (suite != null) return error.DuplicateSuiteFlag;
+            if (suite_flag != null) {
+                return .{
+                    .failure = .{
+                        .duplicate_suite_flag = .{
+                            .first = suite_flag.?,
+                            .second = arg,
+                        },
+                    },
+                };
+            }
             suite = .fcsv78;
+            suite_flag = arg;
             continue;
         }
         if (std.mem.eql(u8, arg, "--gfortran")) {
-            if (i + 1 >= args.len) return error.MissingGfortranPath;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             gfortran_path = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--runtime-backend")) {
-            if (i + 1 >= args.len) return error.MissingRuntimeBackend;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
-            runtime_backend = try parseRuntimeBackend(args[i]);
+            runtime_backend = parseRuntimeBackend(args[i]) catch {
+                return .{ .failure = .{ .invalid_runtime_backend = args[i] } };
+            };
             continue;
         }
         if (std.mem.eql(u8, arg, "--timeout")) {
-            if (i + 1 >= args.len) return error.MissingTimeout;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
-            timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
+            timeout_ms = std.fmt.parseInt(u64, args[i], 10) catch {
+                return .{ .failure = .{ .invalid_timeout = args[i] } };
+            };
             continue;
         }
         if (std.mem.eql(u8, arg, "--jobs") or std.mem.eql(u8, arg, "-j")) {
-            if (i + 1 >= args.len) return error.MissingJobs;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
-            jobs = try std.fmt.parseInt(usize, args[i], 10);
-            if (jobs == 0) return error.InvalidJobs;
+            jobs = std.fmt.parseInt(usize, args[i], 10) catch {
+                return .{ .failure = .{ .invalid_jobs = args[i] } };
+            };
+            if (jobs == 0) return .{ .failure = .{ .invalid_jobs = args[i] } };
             continue;
         }
         if (std.mem.eql(u8, arg, "--incremental")) {
@@ -238,15 +290,25 @@ fn parseArgs(args: []const []const u8) !Options {
             emit = .llvm;
             continue;
         }
-        return error.UnknownFlag;
+        return .{ .failure = .{ .unknown_flag = arg } };
+    }
+
+    if (suite != null and tests_dir_set) {
+        return .{
+            .failure = .{
+                .conflicting_suite_selection = .{
+                    .tests_dir = tests_dir,
+                    .suite_flag = suite_flag.?,
+                },
+            },
+        };
     }
 
     if (suite != null) {
-        if (tests_dir_set) return error.ConflictingSuiteSelection;
         tests_dir = suiteTestsDir(suite.?);
     }
 
-    return .{
+    return .{ .success = .{
         .tests_dir = tests_dir,
         .filter = filter,
         .gfortran_path = gfortran_path,
@@ -257,7 +319,22 @@ fn parseArgs(args: []const []const u8) !Options {
         .jobs = jobs,
         .incremental = incremental,
         .clean_cache = clean_cache,
-    };
+    } };
+}
+
+fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
+    var buffer: [512]u8 = undefined;
+    var writer = file.writer(&buffer);
+    switch (parse_err) {
+        .missing_value => |flag| try writer.interface.print("error: missing value for flag {s}\n", .{flag}),
+        .unknown_flag => |flag| try writer.interface.print("error: unknown flag: {s}\n", .{flag}),
+        .invalid_runtime_backend => |value| try writer.interface.print("error: invalid runtime backend: {s} (expected c or zig)\n", .{value}),
+        .invalid_timeout => |value| try writer.interface.print("error: invalid timeout value: {s}\n", .{value}),
+        .invalid_jobs => |value| try writer.interface.print("error: invalid jobs value: {s} (must be positive integer)\n", .{value}),
+        .duplicate_suite_flag => |flags| try writer.interface.print("error: conflicting suite flags: {s} and {s}\n", .{ flags.first, flags.second }),
+        .conflicting_suite_selection => |conflict| try writer.interface.print("error: cannot combine --tests-dir {s} with suite flag {s}\n", .{ conflict.tests_dir, conflict.suite_flag }),
+    }
+    try writer.interface.flush();
 }
 
 fn printUsage(file: std.fs.File) !void {

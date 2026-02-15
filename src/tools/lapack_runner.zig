@@ -117,6 +117,18 @@ const SupportLibs = struct {
     tmg_lib: []const u8,
 };
 
+const ParseArgError = union(enum) {
+    missing_value: []const u8,
+    unknown_flag: []const u8,
+    invalid_runtime_backend: []const u8,
+    invalid_timeout: []const u8,
+};
+
+const ParseArgsOutcome = union(enum) {
+    success: Options,
+    failure: ParseArgError,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -130,9 +142,13 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    const options = parseArgs(args) catch |err| {
-        try printUsage(std.fs.File.stderr());
-        return err;
+    const options = switch (parseArgs(args)) {
+        .success => |value| value,
+        .failure => |parse_err| {
+            try printUsage(std.fs.File.stderr());
+            try printParseArgError(std.fs.File.stderr(), parse_err);
+            return error.InvalidArguments;
+        },
     };
     if (options.show_help) {
         try printUsage(std.fs.File.stdout());
@@ -227,7 +243,7 @@ pub fn main() !void {
     std.debug.print("LAPACK-lite verification passed\n", .{});
 }
 
-fn parseArgs(args: []const []const u8) !Options {
+fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var lapack_dir: []const u8 = "tests/LAPACK-lite-3.1.1";
     var testing_dir: ?[]const u8 = null;
     var filter: ?[]const u8 = null;
@@ -250,39 +266,43 @@ fn parseArgs(args: []const []const u8) !Options {
             continue;
         }
         if (std.mem.eql(u8, arg, "--lapack-dir")) {
-            if (i + 1 >= args.len) return error.MissingLapackDir;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             lapack_dir = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--testing-dir")) {
-            if (i + 1 >= args.len) return error.MissingTestingDir;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             testing_dir = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--filter")) {
-            if (i + 1 >= args.len) return error.MissingFilter;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             filter = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--gfortran")) {
-            if (i + 1 >= args.len) return error.MissingGfortranPath;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             gfortran_path = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--runtime-backend")) {
-            if (i + 1 >= args.len) return error.MissingRuntimeBackend;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
-            runtime_backend = try parseRuntimeBackend(args[i]);
+            runtime_backend = parseRuntimeBackend(args[i]) catch {
+                return .{ .failure = .{ .invalid_runtime_backend = args[i] } };
+            };
             continue;
         }
         if (std.mem.eql(u8, arg, "--timeout")) {
-            if (i + 1 >= args.len) return error.MissingTimeout;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
-            timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
+            timeout_ms = std.fmt.parseInt(u64, args[i], 10) catch {
+                return .{ .failure = .{ .invalid_timeout = args[i] } };
+            };
             continue;
         }
         if (std.mem.eql(u8, arg, "--keep-workdir")) {
@@ -317,10 +337,10 @@ fn parseArgs(args: []const []const u8) !Options {
             emit = .llvm;
             continue;
         }
-        return error.UnknownFlag;
+        return .{ .failure = .{ .unknown_flag = arg } };
     }
 
-    return .{
+    return .{ .success = .{
         .lapack_dir = lapack_dir,
         .testing_dir = testing_dir,
         .filter = filter,
@@ -334,7 +354,19 @@ fn parseArgs(args: []const []const u8) !Options {
         .show_help = show_help,
         .incremental = incremental,
         .clean_cache = clean_cache,
-    };
+    } };
+}
+
+fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
+    var buffer: [512]u8 = undefined;
+    var writer = file.writer(&buffer);
+    switch (parse_err) {
+        .missing_value => |flag| try writer.interface.print("error: missing value for flag {s}\n", .{flag}),
+        .unknown_flag => |flag| try writer.interface.print("error: unknown flag: {s}\n", .{flag}),
+        .invalid_runtime_backend => |value| try writer.interface.print("error: invalid runtime backend: {s} (expected c or zig)\n", .{value}),
+        .invalid_timeout => |value| try writer.interface.print("error: invalid timeout value: {s}\n", .{value}),
+    }
+    try writer.interface.flush();
 }
 
 fn printUsage(file: std.fs.File) !void {
