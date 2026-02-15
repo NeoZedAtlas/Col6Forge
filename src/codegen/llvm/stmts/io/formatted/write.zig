@@ -291,17 +291,12 @@ pub fn emitWriteFormatted(
                             try appendIntFormat(&fmt_buf, spec.width, sign_plus);
                             try args.append(.{ .ty = .i32, .name = coerced.name });
                         } else {
-                            const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, "i32, i32, i32, i32", false);
+                            const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
                             const tmp = try ctx.nextTemp();
-                            const width_text = utils.formatInt(ctx.allocator, @intCast(spec.width));
-                            const min_text = utils.formatInt(ctx.allocator, @intCast(spec.min_digits));
-                            var call_args = std.array_list.Managed(u8).init(ctx.allocator);
-                            defer call_args.deinit();
-                            try call_args.writer().print(
-                                "i32 {s}, i32 {s}, i32 {s}, i32 {s}",
-                                .{ width_text, min_text, if (sign_plus) "1" else "0", coerced.name },
-                            );
-                            try builder.call(tmp, .ptr, fmt_i_name, call_args.items);
+                            const width_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(spec.width)), .ty = .i32, .is_ptr = false };
+                            const min_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(spec.min_digits)), .ty = .i32, .is_ptr = false };
+                            const sign_val = ValueRef{ .name = if (sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
+                            try builder.callTyped(tmp, .ptr, fmt_i_name, &.{ width_val, min_val, sign_val, coerced });
                             try fmt_buf.appendSlice("%s");
                             try args.append(.{ .ty = .ptr, .name = tmp });
                         }
@@ -325,15 +320,11 @@ pub fn emitWriteFormatted(
                         }
                         if (item == .real_fixed and spec.width > 0) {
                             const fmt_tmp = try ctx.nextTemp();
-                            const width_text = utils.formatInt(ctx.allocator, @intCast(spec.width));
-                            const prec_text = utils.formatInt(ctx.allocator, @intCast(spec.precision));
-                            const call_args = try std.fmt.allocPrint(
-                                ctx.allocator,
-                                "i32 {s}, i32 {s}, i32 {s}, double {s}",
-                                .{ width_text, prec_text, if (sign_plus) "1" else "0", coerced.name },
-                            );
-                            const fmt_name = try ctx.ensureDeclRaw("f77_fmt_f", .ptr, "i32, i32, i32, double", false);
-                            try builder.call(fmt_tmp, .ptr, fmt_name, call_args);
+                            const width_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(spec.width)), .ty = .i32, .is_ptr = false };
+                            const prec_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(spec.precision)), .ty = .i32, .is_ptr = false };
+                            const sign_val = ValueRef{ .name = if (sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
+                            const fmt_name = try ctx.ensureDeclRaw("f77_fmt_f", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .f64 }, false);
+                            try builder.callTyped(fmt_tmp, .ptr, fmt_name, &.{ width_val, prec_val, sign_val, coerced });
                             try fmt_buf.appendSlice("%s");
                             try args.append(.{ .ty = .ptr, .name = fmt_tmp });
                         } else if (item == .real_fixed and spec.precision == 0) {
@@ -346,21 +337,17 @@ pub fn emitWriteFormatted(
                             try args.append(.{ .ty = .f64, .name = coerced.name });
                         } else {
                             const fmt_tmp = try ctx.nextTemp();
-                            const width_text = utils.formatInt(ctx.allocator, @intCast(spec.width));
-                            const prec_text = utils.formatInt(ctx.allocator, @intCast(spec.precision));
-                            const exp_text = utils.formatInt(ctx.allocator, @intCast(spec.exp_width));
-                            const scale_text = utils.formatInt(ctx.allocator, @intCast(scale_factor));
-                            const call_args = try std.fmt.allocPrint(
-                                ctx.allocator,
-                                "i32 {s}, i32 {s}, i32 {s}, i32 {s}, i32 {s}, double {s}",
-                                .{ width_text, prec_text, exp_text, scale_text, if (sign_plus) "1" else "0", coerced.name },
-                            );
+                            const width_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(spec.width)), .ty = .i32, .is_ptr = false };
+                            const prec_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(spec.precision)), .ty = .i32, .is_ptr = false };
+                            const exp_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(spec.exp_width)), .ty = .i32, .is_ptr = false };
+                            const scale_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(scale_factor)), .ty = .i32, .is_ptr = false };
+                            const sign_val = ValueRef{ .name = if (sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
                             const fmt_name = switch (spec.kind) {
-                                .d => try ctx.ensureDeclRaw("f77_fmt_d", .ptr, "i32, i32, i32, i32, i32, double", false),
-                                .g => try ctx.ensureDeclRaw("f77_fmt_g", .ptr, "i32, i32, i32, i32, i32, double", false),
-                                .e => try ctx.ensureDeclRaw("f77_fmt_e", .ptr, "i32, i32, i32, i32, i32, double", false),
+                                .d => try ctx.ensureDeclRaw("f77_fmt_d", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
+                                .g => try ctx.ensureDeclRaw("f77_fmt_g", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
+                                .e => try ctx.ensureDeclRaw("f77_fmt_e", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
                             };
-                            try builder.call(fmt_tmp, .ptr, fmt_name, call_args);
+                            try builder.callTyped(fmt_tmp, .ptr, fmt_name, &.{ width_val, prec_val, exp_val, scale_val, sign_val, coerced });
                             try fmt_buf.appendSlice("%s");
                             try args.append(.{ .ty = .ptr, .name = fmt_tmp });
                         }
@@ -382,12 +369,15 @@ pub fn emitWriteFormatted(
                             const width_text = utils.formatInt(ctx.allocator, @intCast(field_width));
                             switch (value.ty) {
                                 .i32 => {
-                                    const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, "i32, i32, i32, i32", false);
+                                    const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
                                     const tmp = try ctx.nextTemp();
-                                    var call_args = std.array_list.Managed(u8).init(ctx.allocator);
-                                    defer call_args.deinit();
-                                    try call_args.writer().print("i32 {s}, i32 0, i32 0, i32 {s}", .{ width_text, value.name });
-                                    try builder.call(tmp, .ptr, fmt_i_name, call_args.items);
+                                    const width_val = ValueRef{ .name = width_text, .ty = .i32, .is_ptr = false };
+                                    try builder.callTyped(tmp, .ptr, fmt_i_name, &.{
+                                        width_val,
+                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                        value,
+                                    });
                                     try fmt_buf.appendSlice("%s");
                                     try args.append(.{ .ty = .ptr, .name = tmp });
                                 },
@@ -396,23 +386,30 @@ pub fn emitWriteFormatted(
                                     const one_val = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
                                     const zero_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
                                     try builder.select(select_tmp, .i32, value, one_val, zero_val);
-                                    const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, "i32, i32, i32, i32", false);
+                                    const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
                                     const tmp = try ctx.nextTemp();
-                                    var call_args = std.array_list.Managed(u8).init(ctx.allocator);
-                                    defer call_args.deinit();
-                                    try call_args.writer().print("i32 {s}, i32 0, i32 0, i32 {s}", .{ width_text, select_tmp });
-                                    try builder.call(tmp, .ptr, fmt_i_name, call_args.items);
+                                    const width_val = ValueRef{ .name = width_text, .ty = .i32, .is_ptr = false };
+                                    const select_val = ValueRef{ .name = select_tmp, .ty = .i32, .is_ptr = false };
+                                    try builder.callTyped(tmp, .ptr, fmt_i_name, &.{
+                                        width_val,
+                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                        select_val,
+                                    });
                                     try fmt_buf.appendSlice("%s");
                                     try args.append(.{ .ty = .ptr, .name = tmp });
                                 },
                                 .f32, .f64 => {
                                     const coerced = try expr.coerce(ctx, builder, value, .f64);
-                                    const fmt_f_name = try ctx.ensureDeclRaw("f77_fmt_f", .ptr, "i32, i32, i32, double", false);
+                                    const fmt_f_name = try ctx.ensureDeclRaw("f77_fmt_f", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .f64 }, false);
                                     const tmp = try ctx.nextTemp();
-                                    var call_args = std.array_list.Managed(u8).init(ctx.allocator);
-                                    defer call_args.deinit();
-                                    try call_args.writer().print("i32 {s}, i32 0, i32 0, double {s}", .{ width_text, coerced.name });
-                                    try builder.call(tmp, .ptr, fmt_f_name, call_args.items);
+                                    const width_val = ValueRef{ .name = width_text, .ty = .i32, .is_ptr = false };
+                                    try builder.callTyped(tmp, .ptr, fmt_f_name, &.{
+                                        width_val,
+                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                        coerced,
+                                    });
                                     try fmt_buf.appendSlice("%s");
                                     try args.append(.{ .ty = .ptr, .name = tmp });
                                 },
@@ -522,26 +519,16 @@ pub fn emitWriteFormatted(
     }
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, ptr_args.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const arg_count_text = utils.formatInt(ctx.allocator, @intCast(ptr_args.items.len));
-
-    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_buf.deinit();
+    const arg_count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(ptr_args.items.len)), .ty = .i32, .is_ptr = false };
+    const fmt_ptr_val = ValueRef{ .name = fmt_ptr, .ty = .ptr, .is_ptr = true };
     if (is_internal) {
-        const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
+        const len_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?)), .ty = .i32, .is_ptr = false };
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_text = utils.formatInt(ctx.allocator, @intCast(count_val));
-        try arg_buf.writer().print(
-            "ptr {s}, i32 {s}, i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}",
-            .{ unit_value.name, len_text, count_text, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
-        );
-        const write_name = try ctx.ensureDeclRaw("f77_write_internal_v", .void, "ptr, i32, i32, ptr, ptr, ptr, i32", false);
-        try builder.call(null, .void, write_name, arg_buf.items);
+        const count_ref = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(count_val)), .ty = .i32, .is_ptr = false };
+        const write_name = try ctx.ensureDeclRaw("f77_write_internal_v", .void, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
+        try builder.callTyped(null, .void, write_name, &.{ unit_value, len_val, count_ref, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val });
     } else {
-        try arg_buf.writer().print(
-            "i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}, i32 0",
-            .{ unit_i32.name, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
-        );
-        const write_name = try ctx.ensureDeclRaw("f77_write_v", .i32, "i32, ptr, ptr, ptr, i32, i32", false);
-        try builder.call(null, .i32, write_name, arg_buf.items);
+        const write_name = try ctx.ensureDeclRaw("f77_write_v", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
+        try builder.callTyped(null, .i32, write_name, &.{ unit_i32, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
     }
 }

@@ -48,52 +48,39 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
         }
         switch (value.ty) {
             .i32 => {
-                const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, "i32, i32, i32, i32", false);
+                const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, &[_]utils.IRType{ .i32, .i32, .i32, .i32 }, false);
                 const tmp = try ctx.nextTemp();
-                var call_args = std.array_list.Managed(u8).init(ctx.allocator);
-                defer call_args.deinit();
-                try call_args.writer().print("i32 0, i32 0, i32 0, i32 {s}", .{value.name});
-                try builder.call(tmp, .ptr, fmt_i_name, call_args.items);
+                try builder.callTyped(tmp, .ptr, fmt_i_name, &.{
+                    ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                    ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                    ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                    value,
+                });
                 try fmt_buf.appendSlice("%s");
                 try args.append(.{ .value = .{ .name = tmp, .ty = .ptr, .is_ptr = true }, .kind = 's' });
             },
             .f32, .f64 => {
                 const fmt_tmp = try ctx.nextTemp();
-                const prec_text = if (value.ty == .f64) "17" else "9";
-                const exp_text = if (value.ty == .f64) "3" else "2";
+                const prec_val = ValueRef{ .name = if (value.ty == .f64) "17" else "9", .ty = .i32, .is_ptr = false };
+                const exp_val = ValueRef{ .name = if (value.ty == .f64) "3" else "2", .ty = .i32, .is_ptr = false };
                 const coerced = try expr.coerce(ctx, builder, value, .f64);
-                const call_args = try std.fmt.allocPrint(
-                    ctx.allocator,
-                    "i32 {s}, i32 {s}, double {s}",
-                    .{ prec_text, exp_text, coerced.name },
-                );
-                const fmt_name = try ctx.ensureDeclRaw("f77_fmt_list_g", .ptr, "i32, i32, double", false);
-                try builder.call(fmt_tmp, .ptr, fmt_name, call_args);
+                const fmt_name = try ctx.ensureDeclRaw("f77_fmt_list_g", .ptr, &[_]utils.IRType{ .i32, .i32, .f64 }, false);
+                try builder.callTyped(fmt_tmp, .ptr, fmt_name, &.{ prec_val, exp_val, coerced });
                 try fmt_buf.appendSlice("%s");
                 try args.append(.{ .value = .{ .name = fmt_tmp, .ty = .ptr, .is_ptr = true }, .kind = 's' });
             },
             .complex_f32, .complex_f64 => {
-                const real_prec = if (value.ty == .complex_f64) "17" else "9";
-                const exp_text = if (value.ty == .complex_f64) "3" else "2";
+                const real_prec = ValueRef{ .name = if (value.ty == .complex_f64) "17" else "9", .ty = .i32, .is_ptr = false };
+                const exp_val = ValueRef{ .name = if (value.ty == .complex_f64) "3" else "2", .ty = .i32, .is_ptr = false };
                 const real = try complex.extractComplex(ctx, builder, value, 0);
                 const imag = try complex.extractComplex(ctx, builder, value, 1);
                 const real_f64 = try expr.coerce(ctx, builder, real, .f64);
                 const imag_f64 = try expr.coerce(ctx, builder, imag, .f64);
                 const real_tmp = try ctx.nextTemp();
                 const imag_tmp = try ctx.nextTemp();
-                const real_args = try std.fmt.allocPrint(
-                    ctx.allocator,
-                    "i32 {s}, i32 {s}, double {s}",
-                    .{ real_prec, exp_text, real_f64.name },
-                );
-                const imag_args = try std.fmt.allocPrint(
-                    ctx.allocator,
-                    "i32 {s}, i32 {s}, double {s}",
-                    .{ real_prec, exp_text, imag_f64.name },
-                );
-                const fmt_name = try ctx.ensureDeclRaw("f77_fmt_list_g", .ptr, "i32, i32, double", false);
-                try builder.call(real_tmp, .ptr, fmt_name, real_args);
-                try builder.call(imag_tmp, .ptr, fmt_name, imag_args);
+                const fmt_name = try ctx.ensureDeclRaw("f77_fmt_list_g", .ptr, &[_]utils.IRType{ .i32, .i32, .f64 }, false);
+                try builder.callTyped(real_tmp, .ptr, fmt_name, &.{ real_prec, exp_val, real_f64 });
+                try builder.callTyped(imag_tmp, .ptr, fmt_name, &.{ real_prec, exp_val, imag_f64 });
                 try fmt_buf.appendSlice("(%s,%s)");
                 try args.append(.{ .value = .{ .name = real_tmp, .ty = .ptr, .is_ptr = true }, .kind = 's' });
                 try args.append(.{ .value = .{ .name = imag_tmp, .ty = .ptr, .is_ptr = true }, .kind = 's' });
@@ -152,27 +139,17 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
     }
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, ptr_args.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const arg_count_text = utils.formatInt(ctx.allocator, @intCast(ptr_args.items.len));
-
-    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_buf.deinit();
+    const arg_count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(ptr_args.items.len)), .ty = .i32, .is_ptr = false };
+    const fmt_ptr_val = ValueRef{ .name = fmt_ptr, .ty = .ptr, .is_ptr = true };
     if (is_internal) {
-        const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
+        const len_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?)), .ty = .i32, .is_ptr = false };
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_text = utils.formatInt(ctx.allocator, @intCast(count_val));
-        try arg_buf.writer().print(
-            "ptr {s}, i32 {s}, i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}",
-            .{ unit_value.name, len_text, count_text, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
-        );
-        const write_name = try ctx.ensureDeclRaw("f77_write_internal_v", .void, "ptr, i32, i32, ptr, ptr, ptr, i32", false);
-        try builder.call(null, .void, write_name, arg_buf.items);
+        const count_ref = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(count_val)), .ty = .i32, .is_ptr = false };
+        const write_name = try ctx.ensureDeclRaw("f77_write_internal_v", .void, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
+        try builder.callTyped(null, .void, write_name, &.{ unit_value, len_val, count_ref, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val });
     } else {
-        try arg_buf.writer().print(
-            "i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}, i32 0",
-            .{ unit_i32.name, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
-        );
-        const write_name = try ctx.ensureDeclRaw("f77_write_v", .i32, "i32, ptr, ptr, ptr, i32, i32", false);
-        try builder.call(null, .i32, write_name, arg_buf.items);
+        const write_name = try ctx.ensureDeclRaw("f77_write_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
+        try builder.callTyped(null, .i32, write_name, &.{ unit_i32, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
     }
 }
 pub fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
@@ -234,27 +211,17 @@ pub fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt)
     try builder.gepConstString(fmt_ptr, fmt_global, fmt_buf.items.len + 1);
     const ptr_array = try emitPointerArrayFromNames(ctx, builder, arg_ptrs.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const arg_count_text = utils.formatInt(ctx.allocator, @intCast(arg_ptrs.items.len));
-
-    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_buf.deinit();
+    const arg_count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(arg_ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const fmt_ptr_val = ValueRef{ .name = fmt_ptr, .ty = .ptr, .is_ptr = true };
     if (is_internal) {
-        const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
+        const len_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?)), .ty = .i32, .is_ptr = false };
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_text = utils.formatInt(ctx.allocator, @intCast(count_val));
-        try arg_buf.writer().print(
-            "ptr {s}, i32 {s}, i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}",
-            .{ unit_value.name, len_text, count_text, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
-        );
-        const read_name = try ctx.ensureDeclRaw("f77_read_internal_core", .i32, "ptr, i32, i32, ptr, ptr, ptr, i32", false);
-        try builder.call(null, .i32, read_name, arg_buf.items);
+        const count_ref = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(count_val)), .ty = .i32, .is_ptr = false };
+        const read_name = try ctx.ensureDeclRaw("f77_read_internal_core", .i32, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
+        try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val });
     } else {
-        try arg_buf.writer().print(
-            "i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}, i32 0",
-            .{ unit_i32.name, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
-        );
-        const read_name = try ctx.ensureDeclRaw("f77_formatted_read_core", .i32, "i32, ptr, ptr, ptr, i32, i32", false);
-        try builder.call(null, .i32, read_name, arg_buf.items);
+        const read_name = try ctx.ensureDeclRaw("f77_formatted_read_core", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
+        try builder.callTyped(null, .i32, read_name, &.{ unit_i32, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
     }
 
     try applyComplexFixups(ctx, builder, &expanded);
@@ -318,29 +285,19 @@ pub fn emitListDirectedReadStatus(ctx: *Context, builder: anytype, read: ast.Rea
     try builder.gepConstString(fmt_ptr, fmt_global, fmt_buf.items.len + 1);
     const ptr_array = try emitPointerArrayFromNames(ctx, builder, arg_ptrs.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const arg_count_text = utils.formatInt(ctx.allocator, @intCast(arg_ptrs.items.len));
-
-    var arg_buf = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_buf.deinit();
+    const arg_count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(arg_ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const fmt_ptr_val = ValueRef{ .name = fmt_ptr, .ty = .ptr, .is_ptr = true };
     var status_val: ValueRef = .{ .name = "0", .ty = .i32, .is_ptr = false };
     if (is_internal) {
-        const len_text = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?));
+        const len_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?)), .ty = .i32, .is_ptr = false };
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_text = utils.formatInt(ctx.allocator, @intCast(count_val));
-        try arg_buf.writer().print(
-            "ptr {s}, i32 {s}, i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}",
-            .{ unit_value.name, len_text, count_text, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
-        );
-        const read_name = try ctx.ensureDeclRaw("f77_read_internal_core", .i32, "ptr, i32, i32, ptr, ptr, ptr, i32", false);
-        try builder.call(null, .i32, read_name, arg_buf.items);
+        const count_ref = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(count_val)), .ty = .i32, .is_ptr = false };
+        const read_name = try ctx.ensureDeclRaw("f77_read_internal_core", .i32, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
+        try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val });
     } else {
-        try arg_buf.writer().print(
-            "i32 {s}, ptr {s}, ptr {s}, ptr {s}, i32 {s}, i32 1",
-            .{ unit_i32.name, fmt_ptr, ptr_array.name, kinds_ptr.name, arg_count_text },
-        );
-        const read_name = try ctx.ensureDeclRaw("f77_formatted_read_core", .i32, "i32, ptr, ptr, ptr, i32, i32", false);
+        const read_name = try ctx.ensureDeclRaw("f77_formatted_read_core", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
         const tmp = try ctx.nextTemp();
-        try builder.call(tmp, .i32, read_name, arg_buf.items);
+        try builder.callTyped(tmp, .i32, read_name, &.{ unit_i32, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val, ValueRef{ .name = "1", .ty = .i32, .is_ptr = false } });
         status_val = .{ .name = tmp, .ty = .i32, .is_ptr = false };
     }
 
@@ -418,14 +375,9 @@ fn emitDynamicImpliedDoListRead(
     };
     const base_ptr = try expr.emitLValue(ctx, builder, base_expr);
 
-    const call_args = try std.fmt.allocPrint(
-        ctx.allocator,
-        "i32 {s}, i32 {s}, i32 {s}, ptr {s}",
-        .{ unit_i32.name, final_count.name, stride.name, base_ptr.name },
-    );
-    const decl = try ctx.ensureDeclRaw(helper_name, .i32, "i32, i32, i32, ptr", false);
+    const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
     const status_tmp = try ctx.nextTemp();
-    try builder.call(status_tmp, .i32, decl, call_args);
+    try builder.callTyped(status_tmp, .i32, decl, &.{ unit_i32, final_count, stride, base_ptr });
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
 }
 
