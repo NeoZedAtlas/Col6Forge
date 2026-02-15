@@ -91,8 +91,14 @@ fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_unit
     for (program.units, 0..) |unit, unit_idx| {
         if (unit_idx >= sem_units.len) break;
         const sem_unit = &sem_units[unit_idx];
+        if (unit.decl_sources.len != 0) {
+            std.debug.assert(unit.decl_sources.len == unit.decls.len);
+        }
+        var symbol_index = try buildSemanticSymbolIndex(arena, sem_unit);
+        defer symbol_index.deinit();
 
         var local = std.StringHashMap(CommonLocalBlock).init(arena);
+        defer local.deinit();
         for (unit.decls, 0..) |decl, decl_idx| {
             switch (decl) {
                 .common => |com| {
@@ -110,7 +116,7 @@ fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_unit
                         }
                         const sig_ptr = local.getPtr(key) orelse return error.CommonBlockMismatch;
                         for (block.items) |item| {
-                            const sym = findSemanticSymbol(sem_unit, item.name) orelse return error.CommonBlockMismatch;
+                            const sym = lookupSemanticSymbol(sem_unit, &symbol_index, item.name) orelse return error.CommonBlockMismatch;
                             const size = try commonItemSize(sem_unit, sym);
                             try sig_ptr.items.append(.{
                                 .type_kind = sym.type_kind,
@@ -149,11 +155,7 @@ fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_unit
 
 fn normalizedCommonKey(arena: std.mem.Allocator, name: ?[]const u8) ![]const u8 {
     if (name == null) return "";
-    var out = std.array_list.Managed(u8).init(arena);
-    for (name.?) |ch| {
-        try out.append(std.ascii.toLower(ch));
-    }
-    return out.toOwnedSlice();
+    return lowerDup(arena, name.?);
 }
 
 fn commonSigsEqual(a: []const CommonItemSig, b: []const CommonItemSig) bool {
@@ -181,11 +183,35 @@ fn setCommonMismatchDiagnostic(source: ast.DeclSource) void {
     diagnostic.set(line, col, "CF3115", "COMMON block layout mismatch across program units", source.text);
 }
 
-fn findSemanticSymbol(sem_unit: *const SemanticUnit, name: []const u8) ?Symbol {
+fn findSemanticSymbolSlow(sem_unit: *const SemanticUnit, name: []const u8) ?Symbol {
     for (sem_unit.symbols) |sym| {
         if (std.ascii.eqlIgnoreCase(sym.name, name)) return sym;
     }
     return null;
+}
+
+fn buildSemanticSymbolIndex(arena: std.mem.Allocator, sem_unit: *const SemanticUnit) !std.StringHashMap(usize) {
+    var map = std.StringHashMap(usize).init(arena);
+    for (sem_unit.symbols, 0..) |sym, idx| {
+        const key = try lowerDup(arena, sym.name);
+        try map.put(key, idx);
+    }
+    return map;
+}
+
+fn lookupSemanticSymbol(
+    sem_unit: *const SemanticUnit,
+    symbol_index: *const std.StringHashMap(usize),
+    name: []const u8,
+) ?Symbol {
+    var key_buf: [128]u8 = undefined;
+    if (name.len <= key_buf.len) {
+        var i: usize = 0;
+        while (i < name.len) : (i += 1) key_buf[i] = std.ascii.toLower(name[i]);
+        if (symbol_index.get(key_buf[0..name.len])) |idx| return sem_unit.symbols[idx];
+        return null;
+    }
+    return findSemanticSymbolSlow(sem_unit, name);
 }
 
 fn commonItemSize(sem_unit: *const SemanticUnit, sym: Symbol) !usize {
@@ -252,6 +278,12 @@ fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?ConstValue {
         if (std.ascii.eqlIgnoreCase(sym.name, name)) return sym.const_value;
     }
     return null;
+}
+
+fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const out = try allocator.alloc(u8, text.len);
+    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
+    return out;
 }
 
 pub const printSemantic = printer.printSemantic;

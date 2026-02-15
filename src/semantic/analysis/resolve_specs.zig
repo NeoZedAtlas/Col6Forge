@@ -268,16 +268,19 @@ fn ensureEquivalenceNode(self: *context.Context, name: []const u8) !usize {
     const idx = self.equivalence_parent.items.len;
     try self.equivalence_parent.append(idx);
     try self.equivalence_rank.append(0);
-    try self.equivalence_nodes.put(name, idx);
+    const key = try lowerDup(self.arena, name);
+    try self.equivalence_nodes.put(key, idx);
     return idx;
 }
 
 fn findEquivalenceNode(self: *const context.Context, name: []const u8) ?usize {
-    var it = self.equivalence_nodes.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+    var key_buf: [128]u8 = undefined;
+    if (name.len <= key_buf.len) {
+        var i: usize = 0;
+        while (i < name.len) : (i += 1) key_buf[i] = std.ascii.toLower(name[i]);
+        return self.equivalence_nodes.get(key_buf[0..name.len]);
     }
-    return null;
+    return findEquivalenceNodeSlow(self, name);
 }
 
 fn findEquivalenceRoot(self: *context.Context, idx: usize) usize {
@@ -286,4 +289,18 @@ fn findEquivalenceRoot(self: *context.Context, idx: usize) usize {
     const root = findEquivalenceRoot(self, parent);
     self.equivalence_parent.items[idx] = root;
     return root;
+}
+
+fn findEquivalenceNodeSlow(self: *const context.Context, name: []const u8) ?usize {
+    var it = self.equivalence_nodes.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+    }
+    return null;
+}
+
+fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const out = try allocator.alloc(u8, text.len);
+    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
+    return out;
 }
