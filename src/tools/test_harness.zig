@@ -15,9 +15,14 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    const options = parseArgs(allocator, args) catch |err| {
-        try printUsage(std.fs.File.stderr());
-        return err;
+    const parsed = try parseArgs(allocator, args);
+    const options = switch (parsed) {
+        .success => |value| value,
+        .failure => |parse_err| {
+            try printUsage(std.fs.File.stderr());
+            try printParseArgError(std.fs.File.stderr(), parse_err);
+            return error.InvalidArguments;
+        },
     };
 
     if (options.show_help) {
@@ -128,6 +133,19 @@ const Options = struct {
     jobs: usize,
 };
 
+const ParseArgError = union(enum) {
+    missing_value: []const u8,
+    unknown_flag: []const u8,
+    invalid_jobs: []const u8,
+    invalid_timeout: []const u8,
+    invalid_suite_timeout: []const u8,
+};
+
+const ParseArgsOutcome = union(enum) {
+    success: Options,
+    failure: ParseArgError,
+};
+
 const suites = [_]Suite{
     .{
         .name = "golden",
@@ -147,11 +165,13 @@ fn getSuites() []const Suite {
     return suites[0..];
 }
 
-fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !Options {
+fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParseArgsOutcome {
     var tests_dir: ?[]const u8 = null;
     var filter: ?[]const u8 = null;
     var gfortran_path: ?[]const u8 = null;
     var suite_names: std.ArrayList([]const u8) = .empty;
+    var parse_ok = false;
+    defer if (!parse_ok) suite_names.deinit(allocator);
     var emit_llvm = false;
     var keep_going = false;
     var update_golden = false;
@@ -175,32 +195,34 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !Options {
             continue;
         }
         if (std.mem.eql(u8, arg, "--suite")) {
-            if (i + 1 >= args.len) return error.MissingSuite;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             try appendSuites(allocator, &suite_names, args[i]);
             continue;
         }
         if (std.mem.eql(u8, arg, "--tests-dir")) {
-            if (i + 1 >= args.len) return error.MissingTestsDir;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             tests_dir = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--jobs") or std.mem.eql(u8, arg, "-j")) {
-            if (i + 1 >= args.len) return error.MissingJobs;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
-            jobs = try std.fmt.parseInt(usize, args[i], 10);
-            if (jobs == 0) return error.InvalidJobs;
+            jobs = std.fmt.parseInt(usize, args[i], 10) catch {
+                return .{ .failure = .{ .invalid_jobs = args[i] } };
+            };
+            if (jobs == 0) return .{ .failure = .{ .invalid_jobs = args[i] } };
             continue;
         }
         if (std.mem.eql(u8, arg, "--filter")) {
-            if (i + 1 >= args.len) return error.MissingFilter;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             filter = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--gfortran")) {
-            if (i + 1 >= args.len) return error.MissingGfortranPath;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             gfortran_path = args[i];
             continue;
@@ -218,29 +240,35 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !Options {
             continue;
         }
         if (std.mem.eql(u8, arg, "--timeout")) {
-            if (i + 1 >= args.len) return error.MissingTimeout;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
-            test_timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
+            test_timeout_ms = std.fmt.parseInt(u64, args[i], 10) catch {
+                return .{ .failure = .{ .invalid_timeout = args[i] } };
+            };
             continue;
         }
         if (std.mem.eql(u8, arg, "--suite-timeout")) {
-            if (i + 1 >= args.len) return error.MissingSuiteTimeout;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
-            suite_timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
+            suite_timeout_ms = std.fmt.parseInt(u64, args[i], 10) catch {
+                return .{ .failure = .{ .invalid_suite_timeout = args[i] } };
+            };
             continue;
         }
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose = true;
             continue;
         }
-        return error.UnknownFlag;
+        return .{ .failure = .{ .unknown_flag = arg } };
     }
 
-    return .{
+    const owned_suite_names = try suite_names.toOwnedSlice(allocator);
+    parse_ok = true;
+    return .{ .success = .{
         .tests_dir = tests_dir,
         .filter = filter,
         .gfortran_path = gfortran_path,
-        .suite_names = try suite_names.toOwnedSlice(allocator),
+        .suite_names = owned_suite_names,
         .emit_llvm = emit_llvm,
         .keep_going = keep_going,
         .update_golden = update_golden,
@@ -252,7 +280,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !Options {
             .test_timeout_ms = test_timeout_ms,
         },
         .jobs = jobs,
-    };
+    } };
 }
 
 fn appendSuites(allocator: std.mem.Allocator, list: *std.ArrayList([]const u8), value: []const u8) !void {
@@ -397,6 +425,19 @@ fn printUsage(file: std.fs.File) !void {
         \\  -h, --help          Show this help
         \\
     );
+}
+
+fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
+    var buffer: [512]u8 = undefined;
+    var writer = file.writer(&buffer);
+    switch (parse_err) {
+        .missing_value => |flag| try writer.interface.print("error: missing value for flag {s}\n", .{flag}),
+        .unknown_flag => |flag| try writer.interface.print("error: unknown flag: {s}\n", .{flag}),
+        .invalid_jobs => |value| try writer.interface.print("error: invalid jobs value: {s} (must be positive integer)\n", .{value}),
+        .invalid_timeout => |value| try writer.interface.print("error: invalid timeout value: {s}\n", .{value}),
+        .invalid_suite_timeout => |value| try writer.interface.print("error: invalid suite-timeout value: {s}\n", .{value}),
+    }
+    try writer.interface.flush();
 }
 
 const RunResult = struct {

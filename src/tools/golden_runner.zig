@@ -20,9 +20,13 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    const options = parseArgs(args) catch |err| {
-        try printUsage(std.fs.File.stderr());
-        return err;
+    const options = switch (parseArgs(args)) {
+        .success => |value| value,
+        .failure => |parse_err| {
+            try printUsage(std.fs.File.stderr());
+            try printParseArgError(std.fs.File.stderr(), parse_err);
+            return error.InvalidArguments;
+        },
     };
     if (options.show_help) {
         try printUsage(std.fs.File.stdout());
@@ -109,7 +113,19 @@ const Options = struct {
     jobs: usize,
 };
 
-fn parseArgs(args: []const []const u8) !Options {
+const ParseArgError = union(enum) {
+    missing_value: []const u8,
+    unknown_flag: []const u8,
+    invalid_timeout: []const u8,
+    invalid_jobs: []const u8,
+};
+
+const ParseArgsOutcome = union(enum) {
+    success: Options,
+    failure: ParseArgError,
+};
+
+fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var tests_dir: []const u8 = "tests/NIST_F78_test_suite";
     var filter: ?[]const u8 = null;
     var update = false;
@@ -134,34 +150,38 @@ fn parseArgs(args: []const []const u8) !Options {
             continue;
         }
         if (std.mem.eql(u8, arg, "--filter")) {
-            if (i + 1 >= args.len) return error.MissingFilter;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             filter = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--tests-dir")) {
-            if (i + 1 >= args.len) return error.MissingTestsDir;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             tests_dir = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--timeout")) {
-            if (i + 1 >= args.len) return error.MissingTimeout;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
-            timeout_ms = try std.fmt.parseInt(u64, args[i], 10);
+            timeout_ms = std.fmt.parseInt(u64, args[i], 10) catch {
+                return .{ .failure = .{ .invalid_timeout = args[i] } };
+            };
             continue;
         }
         if (std.mem.eql(u8, arg, "--jobs") or std.mem.eql(u8, arg, "-j")) {
-            if (i + 1 >= args.len) return error.MissingJobs;
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
-            jobs = try std.fmt.parseInt(usize, args[i], 10);
-            if (jobs == 0) return error.InvalidJobs;
+            jobs = std.fmt.parseInt(usize, args[i], 10) catch {
+                return .{ .failure = .{ .invalid_jobs = args[i] } };
+            };
+            if (jobs == 0) return .{ .failure = .{ .invalid_jobs = args[i] } };
             continue;
         }
-        return error.UnknownFlag;
+        return .{ .failure = .{ .unknown_flag = arg } };
     }
 
-    return .{
+    return .{ .success = .{
         .tests_dir = tests_dir,
         .filter = filter,
         .update = update,
@@ -169,7 +189,19 @@ fn parseArgs(args: []const []const u8) !Options {
         .show_help = show_help,
         .timeout_ms = timeout_ms,
         .jobs = jobs,
-    };
+    } };
+}
+
+fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
+    var buffer: [512]u8 = undefined;
+    var writer = file.writer(&buffer);
+    switch (parse_err) {
+        .missing_value => |flag| try writer.interface.print("error: missing value for flag {s}\n", .{flag}),
+        .unknown_flag => |flag| try writer.interface.print("error: unknown flag: {s}\n", .{flag}),
+        .invalid_timeout => |value| try writer.interface.print("error: invalid timeout value: {s}\n", .{value}),
+        .invalid_jobs => |value| try writer.interface.print("error: invalid jobs value: {s} (must be positive integer)\n", .{value}),
+    }
+    try writer.interface.flush();
 }
 
 fn printUsage(file: std.fs.File) !void {
