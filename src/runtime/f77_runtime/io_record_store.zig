@@ -47,11 +47,11 @@ const RecordRange = struct {
 fn directRecordRange(rec: c_int, recl_size: usize) ?RecordRange {
     if (rec <= 0) return null;
     const rec_index: usize = @intCast(rec - 1);
-    var offset: usize = undefined;
-    if (@mulWithOverflow(rec_index, recl_size, &offset) != 0) return null;
-    var end: usize = undefined;
-    if (@addWithOverflow(offset, recl_size, &end) != 0) return null;
-    return .{ .offset = offset, .end = end };
+    const offset_res = @mulWithOverflow(rec_index, recl_size);
+    if (offset_res[1] != 0) return null;
+    const end_res = @addWithOverflow(offset_res[0], recl_size);
+    if (end_res[1] != 0) return null;
+    return .{ .offset = offset_res[0], .end = end_res[0] };
 }
 
 pub export fn unformatted_truncate(unit: ?*UnformattedUnit, new_count: usize) callconv(.c) void {

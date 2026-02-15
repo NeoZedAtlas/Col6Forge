@@ -11,15 +11,15 @@ fn asConstCStr(buf: anytype) [*:0]const u8 {
 }
 
 fn checkedMul(lhs: usize, rhs: usize) ?usize {
-    var out: usize = undefined;
-    if (@mulWithOverflow(lhs, rhs, &out) != 0) return null;
-    return out;
+    const out = @mulWithOverflow(lhs, rhs);
+    if (out[1] != 0) return null;
+    return out[0];
 }
 
 fn checkedAdd(lhs: usize, rhs: usize) ?usize {
-    var out: usize = undefined;
-    if (@addWithOverflow(lhs, rhs, &out) != 0) return null;
-    return out;
+    const out = @addWithOverflow(lhs, rhs);
+    if (out[1] != 0) return null;
+    return out[0];
 }
 
 extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
@@ -217,16 +217,16 @@ fn writeInternalMarkedSlice(dst: [*]u8, len: usize, src: []const u8) void {
             var value: usize = 0;
             while (i < src.len and src[i] != 0x02) : (i += 1) {
                 if (src[i] >= '0' and src[i] <= '9') {
-                    var mul_value: usize = undefined;
-                    if (@mulWithOverflow(value, 10, &mul_value) != 0) {
+                    const mul_value = @mulWithOverflow(value, 10);
+                    if (mul_value[1] != 0) {
                         value = ~@as(usize, 0);
                     } else {
                         const digit = @as(usize, src[i] - '0');
-                        var next_value: usize = undefined;
-                        if (@addWithOverflow(mul_value, digit, &next_value) != 0) {
+                        const next_value = @addWithOverflow(mul_value[0], digit);
+                        if (next_value[1] != 0) {
                             value = ~@as(usize, 0);
                         } else {
-                            value = next_value;
+                            value = next_value[0];
                         }
                     }
                 }

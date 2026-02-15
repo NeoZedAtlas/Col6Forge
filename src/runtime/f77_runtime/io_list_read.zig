@@ -45,15 +45,15 @@ fn cstrlenRaw(text: []const u8) usize {
 }
 
 fn checkedMul(lhs: usize, rhs: usize) ?usize {
-    var out: usize = undefined;
-    if (@mulWithOverflow(lhs, rhs, &out) != 0) return null;
-    return out;
+    const out = @mulWithOverflow(lhs, rhs);
+    if (out[1] != 0) return null;
+    return out[0];
 }
 
 fn checkedAdd(lhs: usize, rhs: usize) ?usize {
-    var out: usize = undefined;
-    if (@addWithOverflow(lhs, rhs, &out) != 0) return null;
-    return out;
+    const out = @addWithOverflow(lhs, rhs);
+    if (out[1] != 0) return null;
+    return out[0];
 }
 
 fn offsetIndex(i: c_int, stride: c_int) ?usize {
