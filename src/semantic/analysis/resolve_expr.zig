@@ -235,13 +235,102 @@ fn validateBinaryOperands(op: ast.BinaryOp, left_kind: ast.TypeKind, right_kind:
 }
 
 fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
-    if (std.ascii.eqlIgnoreCase(name, "CMPLX")) return .complex;
-    if (std.ascii.eqlIgnoreCase(name, "DCMPLX")) return .complex_double;
-    if (std.ascii.eqlIgnoreCase(name, "CONJG")) return .complex;
-    if (std.ascii.eqlIgnoreCase(name, "DCONJG")) return .complex_double;
-    if (std.ascii.eqlIgnoreCase(name, "AIMAG")) return .real;
-    if (std.ascii.eqlIgnoreCase(name, "DIMAG")) return .double_precision;
-    if (std.ascii.eqlIgnoreCase(name, "DBLE")) return .double_precision;
-    if (std.ascii.eqlIgnoreCase(name, "IDINT")) return .integer;
+    if (std.ascii.eqlIgnoreCase(name, "CMPLX") or
+        std.ascii.eqlIgnoreCase(name, "CONJG") or
+        std.ascii.eqlIgnoreCase(name, "CSIN") or
+        std.ascii.eqlIgnoreCase(name, "CCOS") or
+        std.ascii.eqlIgnoreCase(name, "CEXP") or
+        std.ascii.eqlIgnoreCase(name, "CLOG") or
+        std.ascii.eqlIgnoreCase(name, "CSQRT"))
+    {
+        return .complex;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "DCMPLX") or std.ascii.eqlIgnoreCase(name, "DCONJG")) return .complex_double;
+
+    if (std.ascii.eqlIgnoreCase(name, "INT") or
+        std.ascii.eqlIgnoreCase(name, "IFIX") or
+        std.ascii.eqlIgnoreCase(name, "IDINT") or
+        std.ascii.eqlIgnoreCase(name, "NINT") or
+        std.ascii.eqlIgnoreCase(name, "IDNINT") or
+        std.ascii.eqlIgnoreCase(name, "IABS") or
+        std.ascii.eqlIgnoreCase(name, "MOD") or
+        std.ascii.eqlIgnoreCase(name, "ISIGN") or
+        std.ascii.eqlIgnoreCase(name, "IDIM") or
+        std.ascii.eqlIgnoreCase(name, "MIN0") or
+        std.ascii.eqlIgnoreCase(name, "MIN1") or
+        std.ascii.eqlIgnoreCase(name, "MAX0") or
+        std.ascii.eqlIgnoreCase(name, "MAX1") or
+        std.ascii.eqlIgnoreCase(name, "ICHAR") or
+        std.ascii.eqlIgnoreCase(name, "LEN"))
+    {
+        return .integer;
+    }
+
+    if (std.ascii.eqlIgnoreCase(name, "DBLE") or
+        std.ascii.eqlIgnoreCase(name, "DINT") or
+        std.ascii.eqlIgnoreCase(name, "DNINT") or
+        std.ascii.eqlIgnoreCase(name, "DMOD") or
+        std.ascii.eqlIgnoreCase(name, "DSIGN") or
+        std.ascii.eqlIgnoreCase(name, "DDIM") or
+        std.ascii.eqlIgnoreCase(name, "DMIN1") or
+        std.ascii.eqlIgnoreCase(name, "DMAX1") or
+        std.ascii.eqlIgnoreCase(name, "DABS") or
+        std.ascii.eqlIgnoreCase(name, "DSQRT") or
+        std.ascii.eqlIgnoreCase(name, "DEXP") or
+        std.ascii.eqlIgnoreCase(name, "DLOG") or
+        std.ascii.eqlIgnoreCase(name, "DLOG10") or
+        std.ascii.eqlIgnoreCase(name, "DSIN") or
+        std.ascii.eqlIgnoreCase(name, "DCOS") or
+        std.ascii.eqlIgnoreCase(name, "DTAN") or
+        std.ascii.eqlIgnoreCase(name, "DASIN") or
+        std.ascii.eqlIgnoreCase(name, "DACOS") or
+        std.ascii.eqlIgnoreCase(name, "DATAN") or
+        std.ascii.eqlIgnoreCase(name, "DATAN2") or
+        std.ascii.eqlIgnoreCase(name, "DSINH") or
+        std.ascii.eqlIgnoreCase(name, "DCOSH") or
+        std.ascii.eqlIgnoreCase(name, "DTANH") or
+        std.ascii.eqlIgnoreCase(name, "DIMAG") or
+        std.ascii.eqlIgnoreCase(name, "DPROD"))
+    {
+        return .double_precision;
+    }
+
+    if (std.ascii.eqlIgnoreCase(name, "FLOAT") or
+        std.ascii.eqlIgnoreCase(name, "REAL") or
+        std.ascii.eqlIgnoreCase(name, "SNGL") or
+        std.ascii.eqlIgnoreCase(name, "AINT") or
+        std.ascii.eqlIgnoreCase(name, "ANINT") or
+        std.ascii.eqlIgnoreCase(name, "AMOD") or
+        std.ascii.eqlIgnoreCase(name, "SIGN") or
+        std.ascii.eqlIgnoreCase(name, "DIM") or
+        std.ascii.eqlIgnoreCase(name, "AMIN0") or
+        std.ascii.eqlIgnoreCase(name, "AMIN1") or
+        std.ascii.eqlIgnoreCase(name, "AMAX0") or
+        std.ascii.eqlIgnoreCase(name, "AMAX1") or
+        std.ascii.eqlIgnoreCase(name, "AIMAG") or
+        std.ascii.eqlIgnoreCase(name, "CABS") or
+        std.ascii.eqlIgnoreCase(name, "EPSILON") or
+        std.ascii.eqlIgnoreCase(name, "HUGE") or
+        std.ascii.eqlIgnoreCase(name, "EXP") or
+        std.ascii.eqlIgnoreCase(name, "ALOG") or
+        std.ascii.eqlIgnoreCase(name, "ALOG10") or
+        std.ascii.eqlIgnoreCase(name, "LOG") or
+        std.ascii.eqlIgnoreCase(name, "LOG10") or
+        std.ascii.eqlIgnoreCase(name, "SIN") or
+        std.ascii.eqlIgnoreCase(name, "COS") or
+        std.ascii.eqlIgnoreCase(name, "TAN") or
+        std.ascii.eqlIgnoreCase(name, "ASIN") or
+        std.ascii.eqlIgnoreCase(name, "ACOS") or
+        std.ascii.eqlIgnoreCase(name, "ATAN") or
+        std.ascii.eqlIgnoreCase(name, "ATAN2") or
+        std.ascii.eqlIgnoreCase(name, "SINH") or
+        std.ascii.eqlIgnoreCase(name, "COSH") or
+        std.ascii.eqlIgnoreCase(name, "TANH") or
+        std.ascii.eqlIgnoreCase(name, "ABS") or
+        std.ascii.eqlIgnoreCase(name, "SQRT"))
+    {
+        return .real;
+    }
+
     return current;
 }

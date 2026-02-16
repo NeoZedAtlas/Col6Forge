@@ -39,12 +39,23 @@ pub const Resolver = struct {
             }
             ctx.current_decl_source = null;
         }
+        try validateAssumedCharacterLengths(ctx);
         for (ctx.unit.stmts) |stmt| {
             try resolveStmtScope(ctx, stmt);
         }
         ctx.popScope();
     }
 };
+
+fn validateAssumedCharacterLengths(ctx: *context.Context) !void {
+    for (ctx.symbols.items) |sym| {
+        if (sym.type_kind != .character or sym.char_len != null) continue;
+        if (sym.storage == .dummy) continue;
+        if (sym.kind == .parameter) continue;
+        if (sym.kind == .function) continue;
+        return error.InvalidCharLen;
+    }
+}
 
 fn unitScopeKind(kind: ast.ProgramUnitKind) scope.ScopeKind {
     return switch (kind) {

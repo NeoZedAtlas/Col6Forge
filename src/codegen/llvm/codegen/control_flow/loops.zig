@@ -240,6 +240,8 @@ fn emitStoreTripCountForSign(
     const pred_ge = if (is_float) "oge" else "sge";
     const pred_ne = if (is_float) "one" else "ne";
     const div_op = if (is_float) "fdiv" else "sdiv";
+    const sub_op = if (is_float) "fsub" else "sub";
+    const add_op = if (is_float) "fadd" else "add";
 
     const range_ok_name = try ctx.nextTemp();
     if (is_non_negative_step) {
@@ -252,7 +254,7 @@ fn emitStoreTripCountForSign(
     var step_abs = step_val;
     if (!is_non_negative_step) {
         const neg_name = try ctx.nextTemp();
-        try builder.binary(neg_name, "sub", var_ty, utils.zeroValue(var_ty), step_val);
+        try builder.binary(neg_name, sub_op, var_ty, utils.zeroValue(var_ty), step_val);
         step_abs = .{ .name = neg_name, .ty = var_ty, .is_ptr = false };
     }
 
@@ -272,9 +274,9 @@ fn emitStoreTripCountForSign(
     try builder.label(calc_label);
     const diff_name = try ctx.nextTemp();
     if (is_non_negative_step) {
-        try builder.binary(diff_name, "sub", var_ty, end_val, start_val);
+        try builder.binary(diff_name, sub_op, var_ty, end_val, start_val);
     } else {
-        try builder.binary(diff_name, "sub", var_ty, start_val, end_val);
+        try builder.binary(diff_name, sub_op, var_ty, start_val, end_val);
     }
     const diff = ValueRef{ .name = diff_name, .ty = var_ty, .is_ptr = false };
 
@@ -283,7 +285,7 @@ fn emitStoreTripCountForSign(
     const quot = ValueRef{ .name = quot_name, .ty = var_ty, .is_ptr = false };
 
     const trip_num_name = try ctx.nextTemp();
-    try builder.binary(trip_num_name, "add", var_ty, quot, oneValueForType(var_ty));
+    try builder.binary(trip_num_name, add_op, var_ty, quot, oneValueForType(var_ty));
     const trip_num = ValueRef{ .name = trip_num_name, .ty = var_ty, .is_ptr = false };
     const trip_i64 = try castToI64(ctx, builder, trip_num);
     try builder.store(trip_i64, trip_addr);

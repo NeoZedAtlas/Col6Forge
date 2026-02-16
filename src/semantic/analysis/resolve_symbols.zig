@@ -74,7 +74,8 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
         .is_external = false,
         .is_intrinsic = false,
         .const_value = null,
-        .type_explicit = known_fn_type != null,
+        // Known function type is a hint from another unit, not a local explicit declaration.
+        .type_explicit = false,
     };
     return internSymbol(self, symbol);
 }

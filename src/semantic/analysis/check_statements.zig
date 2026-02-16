@@ -32,7 +32,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             if (!isAssignmentCompatible(target_ty, value_ty)) return error.AssignmentTypeMismatch;
         },
         .call => |call| {
-            try checkKnownProcedureCallArity(self, call.name, countCallArgs(call.args), true);
+            try checkKnownProcedureCallArity(self, call.name, countCallExprArgs(call.args), true);
             for (call.args) |arg| {
                 switch (arg) {
                     .expr => |expr_node| try checkExpr(self, expr_node),
@@ -221,9 +221,11 @@ fn isIntegerLike(kind: ast.TypeKind) bool {
     return kind == .integer;
 }
 
-fn countCallArgs(args: []ast.CallArg) usize {
+fn countCallExprArgs(args: []ast.CallArg) usize {
     var count: usize = 0;
-    for (args) |_| count += 1;
+    for (args) |arg| {
+        if (arg == .expr) count += 1;
+    }
     return count;
 }
 

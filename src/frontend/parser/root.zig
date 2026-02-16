@@ -107,7 +107,7 @@ const Parser = struct {
                     try recordParamInts(&param_ints, decl_node.parameter.assigns);
                     try recordParamStrings(&param_strings, decl_node.parameter.assigns);
                 }
-                try recordArrayNames(&array_names, decl_node, &param_ints);
+                try recordArrayNames(self.arena, &array_names, decl_node, &param_ints);
                 try decls.append(decl_node);
                 try decl_sources.append(sourceFromLine(line));
                 self.index += 1;
@@ -389,6 +389,7 @@ fn recordParamStrings(param_strings: *std.StringHashMap(ast.Literal), assigns: [
 }
 
 fn recordArrayNames(
+    allocator: std.mem.Allocator,
     array_names: *std.StringHashMap(array_info.ArrayInfo),
     decl_node: Decl,
     param_ints: *const std.StringHashMap(i64),
@@ -397,14 +398,14 @@ fn recordArrayNames(
         .type_decl => |td| {
             for (td.items) |item| {
                 if (item.dims.len > 0) {
-                    try array_names.put(item.name, arrayInfoFromDims(item.dims, param_ints));
+                    try array_names.put(item.name, try arrayInfoFromDims(allocator, item.dims, param_ints));
                 }
             }
         },
         .dimension => |dim| {
             for (dim.items) |item| {
                 if (item.dims.len > 0) {
-                    try array_names.put(item.name, arrayInfoFromDims(item.dims, param_ints));
+                    try array_names.put(item.name, try arrayInfoFromDims(allocator, item.dims, param_ints));
                 }
             }
         },
@@ -412,7 +413,7 @@ fn recordArrayNames(
             for (com.blocks) |block| {
                 for (block.items) |item| {
                     if (item.dims.len > 0) {
-                        try array_names.put(item.name, arrayInfoFromDims(item.dims, param_ints));
+                        try array_names.put(item.name, try arrayInfoFromDims(allocator, item.dims, param_ints));
                     }
                 }
             }
@@ -437,14 +438,51 @@ fn arraySizeFromDims(dims: []*ast.Expr, param_ints: *const std.StringHashMap(i64
     return @intCast(total);
 }
 
-fn arrayInfoFromDims(dims: []*ast.Expr, param_ints: *const std.StringHashMap(i64)) array_info.ArrayInfo {
+fn arrayInfoFromDims(
+    allocator: std.mem.Allocator,
+    dims: []*ast.Expr,
+    param_ints: *const std.StringHashMap(i64),
+) !array_info.ArrayInfo {
     const size = arraySizeFromDims(dims, param_ints);
     const rank = dims.len;
     var lower: ?i64 = null;
     if (rank > 0) {
         lower = evalDimLowerValue(dims[0], param_ints);
     }
-    return .{ .size = size, .lower = lower, .rank = rank };
+
+    var extents_known = true;
+    var lowers_known = true;
+
+    const lowers = try allocator.alloc(i64, rank);
+    const extents = try allocator.alloc(usize, rank);
+    for (dims, 0..) |dim_expr, idx| {
+        if (evalDimLowerValue(dim_expr, param_ints)) |lower_val| {
+            lowers[idx] = lower_val;
+        } else {
+            lowers_known = false;
+            lowers[idx] = 1;
+        }
+
+        if (evalDimValue(dim_expr, param_ints)) |extent_val| {
+            if (extent_val <= 0) {
+                extents_known = false;
+                extents[idx] = 0;
+            } else {
+                extents[idx] = @intCast(extent_val);
+            }
+        } else {
+            extents_known = false;
+            extents[idx] = 0;
+        }
+    }
+
+    return .{
+        .size = size,
+        .rank = rank,
+        .lower = lower,
+        .lower_bounds = if (lowers_known) lowers else null,
+        .extents = if (extents_known) extents else null,
+    };
 }
 
 fn evalDimValue(expr_node: *ast.Expr, param_ints: *const std.StringHashMap(i64)) ?i64 {
@@ -481,20 +519,53 @@ fn evalDimLowerValue(expr_node: *ast.Expr, param_ints: *const std.StringHashMap(
 fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {
     var units = std.array_list.Managed(ProgramUnit).init(arena);
     for (program.units) |unit| {
-        try units.append(unit);
-        if (unit.kind != .subroutine and unit.kind != .function) continue;
+        if (unit.kind != .subroutine and unit.kind != .function) {
+            try units.append(unit);
+            continue;
+        }
+
+        var first_entry_idx: ?usize = null;
+        for (unit.stmts, 0..) |stmt_item, idx| {
+            if (stmt_item.node == .entry) {
+                first_entry_idx = idx;
+                break;
+            }
+        }
+
+        if (first_entry_idx) |idx| {
+            try units.append(.{
+                .kind = unit.kind,
+                .name = unit.name,
+                .args = unit.args,
+                .decls = unit.decls,
+                .decl_sources = unit.decl_sources,
+                .stmts = unit.stmts[0..idx],
+            });
+        } else {
+            try units.append(unit);
+        }
+
         for (unit.stmts, 0..) |stmt_item, idx| {
             if (stmt_item.node != .entry) continue;
             const entry = stmt_item.node.entry;
-            const entry_unit = ProgramUnit{
+
+            var end_idx = unit.stmts.len;
+            var scan = idx + 1;
+            while (scan < unit.stmts.len) : (scan += 1) {
+                if (unit.stmts[scan].node == .entry) {
+                    end_idx = scan;
+                    break;
+                }
+            }
+
+            try units.append(.{
                 .kind = unit.kind,
                 .name = entry.name,
                 .args = entry.args,
                 .decls = unit.decls,
                 .decl_sources = unit.decl_sources,
-                .stmts = unit.stmts[idx..],
-            };
-            try units.append(entry_unit);
+                .stmts = unit.stmts[idx..end_idx],
+            });
         }
     }
     return .{ .units = try units.toOwnedSlice() };

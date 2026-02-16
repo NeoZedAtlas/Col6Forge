@@ -139,10 +139,28 @@ fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_unit
                 setCommonMismatchDiagnostic(block.source);
                 return error.CommonBlockMismatch;
             };
-            if (global.get(key)) |prev| {
-                if (!commonSigsEqual(prev.items, items) or prev.total_size != total_size) {
+            if (key.len == 0) {
+                if (global.getPtr(key)) |prev| {
+                    if (total_size > prev.total_size) {
+                        prev.items = try block.items.toOwnedSlice();
+                        prev.total_size = total_size;
+                    }
+                } else {
+                    try global.put(key, .{
+                        .items = try block.items.toOwnedSlice(),
+                        .total_size = total_size,
+                    });
+                }
+                continue;
+            }
+            if (global.getPtr(key)) |prev| {
+                if (!commonSigsCompatible(prev.items, items)) {
                     setCommonMismatchDiagnostic(block.source);
                     return error.CommonBlockMismatch;
+                }
+                if (total_size > prev.total_size) {
+                    prev.items = try block.items.toOwnedSlice();
+                    prev.total_size = total_size;
                 }
             } else {
                 try global.put(key, .{
@@ -159,11 +177,31 @@ fn normalizedCommonKey(arena: std.mem.Allocator, name: ?[]const u8) ![]const u8 
     return lowerDup(arena, name.?);
 }
 
-fn commonSigsEqual(a: []const CommonItemSig, b: []const CommonItemSig) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |lhs, rhs| {
-        if (lhs.type_kind != rhs.type_kind) return false;
-        if (lhs.size != rhs.size) return false;
+fn commonSigsCompatible(a: []const CommonItemSig, b: []const CommonItemSig) bool {
+    if (a.len == 0 or b.len == 0) return true;
+
+    var idx_a: usize = 0;
+    var idx_b: usize = 0;
+    var rem_a: usize = a[0].size;
+    var rem_b: usize = b[0].size;
+
+    while (idx_a < a.len and idx_b < b.len) {
+        const seg_a = a[idx_a];
+        const seg_b = b[idx_b];
+        if (seg_a.type_kind != seg_b.type_kind) return false;
+
+        const consume = @min(rem_a, rem_b);
+        rem_a -= consume;
+        rem_b -= consume;
+
+        if (rem_a == 0) {
+            idx_a += 1;
+            if (idx_a < a.len) rem_a = a[idx_a].size;
+        }
+        if (rem_b == 0) {
+            idx_b += 1;
+            if (idx_b < b.len) rem_b = b[idx_b].size;
+        }
     }
     return true;
 }

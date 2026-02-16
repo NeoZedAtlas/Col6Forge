@@ -53,16 +53,9 @@ pub fn parseDataStatement(
                     const name = var_expr.identifier;
                     const take = if (info.size) |size| size else remaining_vals - (remaining_vars - 1);
                     if (v_idx + take > values.len) return error.DataValueCountMismatch;
-                    const base: i64 = if (info.rank == 1) info.lower orelse 1 else 1;
                     var local_idx: usize = 0;
                     while (local_idx < take) : (local_idx += 1) {
-                        const idx_value: i64 = base + @as(i64, @intCast(local_idx));
-                        const idx_expr = try arena.create(Expr);
-                        idx_expr.* = .{ .literal = .{ .kind = .integer, .text = try std.fmt.allocPrint(arena, "{d}", .{idx_value}) } };
-                        const args = try arena.alloc(*Expr, 1);
-                        args[0] = idx_expr;
-                        const target = try arena.create(Expr);
-                        target.* = .{ .call_or_subscript = .{ .name = name, .args = args } };
+                        const target = try buildArrayDataTarget(arena, name, info, local_idx);
                         try inits.append(.{ .target = target, .value = values[v_idx] });
                         v_idx += 1;
                     }
@@ -75,6 +68,55 @@ pub fn parseDataStatement(
     }
 
     return .{ .data = .{ .inits = try inits.toOwnedSlice() } };
+}
+
+fn buildArrayDataTarget(
+    arena: std.mem.Allocator,
+    name: []const u8,
+    info: array_info.ArrayInfo,
+    linear_idx: usize,
+) ParseStmtError!*Expr {
+    const rank = if (info.rank == 0) @as(usize, 1) else info.rank;
+    const args = try arena.alloc(*Expr, rank);
+
+    if (info.extents) |extents| {
+        if (info.lower_bounds) |lowers| {
+            if (extents.len == rank and lowers.len == rank) {
+                var rem = linear_idx;
+                var dim: usize = 0;
+                while (dim < rank) : (dim += 1) {
+                    const extent = extents[dim];
+                    if (extent == 0) return error.DataValueCountMismatch;
+                    const offset = rem % extent;
+                    rem /= extent;
+                    const subscript = lowers[dim] + @as(i64, @intCast(offset));
+                    args[dim] = try makeIntegerLiteral(arena, subscript);
+                }
+                if (rem != 0) return error.DataValueCountMismatch;
+
+                const target = try arena.create(Expr);
+                target.* = .{ .call_or_subscript = .{ .name = name, .args = args } };
+                return target;
+            }
+        }
+    }
+
+    // Fallback when full shape is not compile-time known: keep rank-correct subscripts.
+    const first_base = info.lower orelse 1;
+    var dim: usize = 0;
+    while (dim < rank) : (dim += 1) {
+        const subscript: i64 = if (dim == 0)
+            first_base + @as(i64, @intCast(linear_idx))
+        else if (info.lower_bounds) |lowers|
+            if (dim < lowers.len) lowers[dim] else 1
+        else
+            1;
+        args[dim] = try makeIntegerLiteral(arena, subscript);
+    }
+
+    const target = try arena.create(Expr);
+    target.* = .{ .call_or_subscript = .{ .name = name, .args = args } };
+    return target;
 }
 
 fn parseDataVarList(arena: std.mem.Allocator, line: logical_line.LogicalLine, text: []const u8) ParseStmtError![]*Expr {

@@ -42,7 +42,6 @@ pub fn applyDeclarator(
         var length: usize = 1;
         if (item.char_len) |len_expr| {
             if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) {
-                if (self.symbols.items[idx].storage != .dummy) return error.InvalidCharLen;
                 self.symbols.items[idx].char_len = null;
                 return;
             }

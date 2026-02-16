@@ -59,14 +59,15 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 try check_const.checkParameterType(sym.type_kind, const_val);
                 sym.const_value = const_val;
 
-                if (sym.type_kind == .character and sym.char_len == null and assign.value.* == .literal) {
-                    const lit = assign.value.literal;
-                    const lit_len = switch (lit.kind) {
-                        .string => decodedStringLen(lit.text),
-                        .hollerith => hollerithLen(lit.text) orelse 1,
-                        else => 1,
+                if (sym.type_kind == .character and sym.char_len == null) {
+                    sym.char_len = switch (const_val) {
+                        .string => |lit| switch (lit.kind) {
+                            .string => decodedStringLen(lit.text),
+                            .hollerith => hollerithLen(lit.text) orelse 1,
+                            else => 1,
+                        },
+                        else => null,
                     };
-                    sym.char_len = lit_len;
                 }
             }
         },
