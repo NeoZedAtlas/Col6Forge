@@ -92,17 +92,56 @@ fn evalCharExprRaw(ctx: *Context, value: *ast.Expr) !?[]const u8 {
 fn trackCharAssignment(ctx: *Context, target: *ast.Expr, value: ?[]const u8) void {
     switch (target.*) {
         .identifier => |name| {
+            const sym = ctx.findSymbol(name);
+            if (sym) |s| {
+                if (s.type_kind == .character and s.dims.len > 0) {
+                    invalidateCharArrayEntries(ctx, name);
+                    return;
+                }
+            }
             updateCharMap(&ctx.char_values, ctx, name, value);
         },
         .call_or_subscript => |call| {
-            if (call.args.len != 1) return;
-            const idx_val = intLiteralValue(call.args[0]) orelse return;
+            if (call.args.len != 1) {
+                invalidateCharArrayEntries(ctx, call.name);
+                return;
+            }
+            const idx_val = intLiteralValue(call.args[0]) orelse {
+                invalidateCharArrayEntries(ctx, call.name);
+                return;
+            };
             const key = std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ call.name, idx_val }) catch return;
             defer ctx.allocator.free(key);
             updateCharMap(&ctx.char_array_values, ctx, key, value);
         },
         else => {},
     }
+}
+
+fn invalidateCharArrayEntries(ctx: *Context, name: []const u8) void {
+    var keys = std.array_list.Managed([]const u8).init(ctx.allocator);
+    defer keys.deinit();
+
+    var it = ctx.char_array_values.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        if (isCharArrayEntryKeyForName(key, name)) {
+            keys.append(key) catch return;
+        }
+    }
+
+    for (keys.items) |key| {
+        if (ctx.char_array_values.fetchRemove(key)) |kv| {
+            ctx.allocator.free(kv.key);
+            ctx.allocator.free(kv.value);
+        }
+    }
+}
+
+fn isCharArrayEntryKeyForName(key: []const u8, name: []const u8) bool {
+    if (key.len <= name.len + 1) return false;
+    if (!std.mem.eql(u8, key[0..name.len], name)) return false;
+    return key[name.len] == '[';
 }
 
 fn updateCharMap(map: *std.StringHashMap([]const u8), ctx: *Context, key: []const u8, value: ?[]const u8) void {

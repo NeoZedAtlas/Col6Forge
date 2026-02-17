@@ -155,6 +155,43 @@ const CharFormatEntry = struct {
     index: i32,
     items: []const ast.FormatItem,
 };
+
+fn emitDynamicCharArrayDispatch(
+    ctx: *Context,
+    builder: anytype,
+    entries: []const CharFormatEntry,
+    idx_i32: ValueRef,
+    dispatch: anytype,
+) EmitError!void {
+    const done_label = try ctx.nextLabel("fmt_done");
+    var check_label = try ctx.nextLabel("fmt_check");
+    try builder.br(check_label);
+
+    for (entries, 0..) |entry, idx| {
+        try builder.label(check_label);
+        const cmp_tmp = try ctx.nextTemp();
+        const const_text = utils.formatInt(ctx.allocator, entry.index);
+        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
+        try builder.compare(cmp_tmp, "icmp", "eq", .i32, idx_i32, const_val);
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        const use_label = try ctx.nextLabel("fmt_use");
+        const next_label = if (idx + 1 < entries.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
+        try builder.brCond(cond, use_label, next_label);
+
+        try builder.label(use_label);
+        try dispatch.emit(ctx, builder, entry.items);
+        try builder.br(done_label);
+
+        check_label = next_label;
+    }
+
+    try builder.label(check_label);
+    // Fallback: use the first statically known format.
+    try dispatch.emit(ctx, builder, entries[0].items);
+    try builder.br(done_label);
+    try builder.label(done_label);
+}
+
 fn buildCharArrayFormatEntries(ctx: *Context, name: []const u8) EmitError![]CharFormatEntry {
     const sym = ctx.findSymbol(name) orelse return &.{};
     if (sym.type_kind != .character or sym.dims.len == 0) return &.{};
@@ -165,10 +202,10 @@ fn buildCharArrayFormatEntries(ctx: *Context, name: []const u8) EmitError![]Char
     while (idx <= elem_count) : (idx += 1) {
         const key = try std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ name, idx });
         defer ctx.allocator.free(key);
-        const value = ctx.char_array_values.get(key) orelse continue;
+        const value = ctx.char_array_values.get(key) orelse return &.{};
         const trimmed = trimRightSpaces(value);
-        if (trimmed.len == 0) continue;
-        const items = format_parser.parseFormatItems(ctx.allocator, trimmed) catch continue;
+        if (trimmed.len == 0) return &.{};
+        const items = format_parser.parseFormatItems(ctx.allocator, trimmed) catch return &.{};
         try entries.append(.{ .index = @intCast(idx), .items = items });
     }
     return entries.toOwnedSlice();
@@ -191,32 +228,39 @@ pub fn emitWriteDynamicCharArrayFormat(
     const idx_val = try expr.emitExpr(ctx, builder, index_expr);
     const idx_i32 = try expr.coerce(ctx, builder, idx_val, .i32);
 
-    const done_label = try ctx.nextLabel("fmt_done");
-    var check_label = try ctx.nextLabel("fmt_check");
-    try builder.br(check_label);
+    const Dispatch = struct {
+        write: ast.WriteStmt,
+        unit_value: ValueRef,
+        unit_char_len: ?usize,
+        unit_record_count: ?usize,
+        is_internal: bool,
+        unit_i32: ValueRef,
+        expanded_values: *ExpandedWriteValues,
 
-    for (entries, 0..) |entry, idx| {
-        try builder.label(check_label);
-        const cmp_tmp = try ctx.nextTemp();
-        const const_text = utils.formatInt(ctx.allocator, entry.index);
-        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
-        try builder.compare(cmp_tmp, "icmp", "eq", .i32, idx_i32, const_val);
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        const use_label = try ctx.nextLabel("fmt_use");
-        const next_label = if (idx + 1 < entries.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
-        try builder.brCond(cond, use_label, next_label);
-
-        try builder.label(use_label);
-        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entry.items, expanded_values);
-        try builder.br(done_label);
-
-        check_label = next_label;
-    }
-
-    try builder.label(check_label);
-    try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entries[0].items, expanded_values);
-    try builder.br(done_label);
-    try builder.label(done_label);
+        fn emit(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+            try emitWriteFormatted(
+                ctx_inner,
+                builder_inner,
+                self.write,
+                self.unit_value,
+                self.unit_char_len,
+                self.unit_record_count,
+                self.is_internal,
+                self.unit_i32,
+                items,
+                self.expanded_values,
+            );
+        }
+    };
+    try emitDynamicCharArrayDispatch(ctx, builder, entries, idx_i32, Dispatch{
+        .write = write,
+        .unit_value = unit_value,
+        .unit_char_len = unit_char_len,
+        .unit_record_count = unit_record_count,
+        .is_internal = is_internal,
+        .unit_i32 = unit_i32,
+        .expanded_values = expanded_values,
+    });
     return true;
 }
 pub fn emitReadDynamicCharArrayFormat(
@@ -237,32 +281,39 @@ pub fn emitReadDynamicCharArrayFormat(
     const idx_val = try expr.emitExpr(ctx, builder, index_expr);
     const idx_i32 = try expr.coerce(ctx, builder, idx_val, .i32);
 
-    const done_label = try ctx.nextLabel("fmt_done");
-    var check_label = try ctx.nextLabel("fmt_check");
-    try builder.br(check_label);
+    const Dispatch = struct {
+        read: ast.ReadStmt,
+        unit_value: ValueRef,
+        unit_char_len: ?usize,
+        unit_record_count: ?usize,
+        is_internal: bool,
+        unit_i32: ValueRef,
+        expanded: *ExpandedReadTargets,
 
-    for (entries, 0..) |entry, idx| {
-        try builder.label(check_label);
-        const cmp_tmp = try ctx.nextTemp();
-        const const_text = utils.formatInt(ctx.allocator, entry.index);
-        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
-        try builder.compare(cmp_tmp, "icmp", "eq", .i32, idx_i32, const_val);
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        const use_label = try ctx.nextLabel("fmt_use");
-        const next_label = if (idx + 1 < entries.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
-        try builder.brCond(cond, use_label, next_label);
-
-        try builder.label(use_label);
-        try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entry.items, expanded);
-        try builder.br(done_label);
-
-        check_label = next_label;
-    }
-
-    try builder.label(check_label);
-    try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entries[0].items, expanded);
-    try builder.br(done_label);
-    try builder.label(done_label);
+        fn emit(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+            try emitReadFormatted(
+                ctx_inner,
+                builder_inner,
+                self.read,
+                self.unit_value,
+                self.unit_char_len,
+                self.unit_record_count,
+                self.is_internal,
+                self.unit_i32,
+                items,
+                self.expanded,
+            );
+        }
+    };
+    try emitDynamicCharArrayDispatch(ctx, builder, entries, idx_i32, Dispatch{
+        .read = read,
+        .unit_value = unit_value,
+        .unit_char_len = unit_char_len,
+        .unit_record_count = unit_record_count,
+        .is_internal = is_internal,
+        .unit_i32 = unit_i32,
+        .expanded = expanded,
+    });
     return true;
 }
 pub fn emitReadDynamicCharArrayFormatStatus(
@@ -287,34 +338,42 @@ pub fn emitReadDynamicCharArrayFormatStatus(
     try builder.alloca(status_ptr_tmp, .i32);
     const status_ptr = ValueRef{ .name = status_ptr_tmp, .ty = .ptr, .is_ptr = true };
 
-    const done_label = try ctx.nextLabel("fmt_done");
-    var check_label = try ctx.nextLabel("fmt_check");
-    try builder.br(check_label);
+    const Dispatch = struct {
+        read: ast.ReadStmt,
+        unit_value: ValueRef,
+        unit_char_len: ?usize,
+        unit_record_count: ?usize,
+        is_internal: bool,
+        unit_i32: ValueRef,
+        expanded: *ExpandedReadTargets,
+        status_ptr: ValueRef,
 
-    for (entries, 0..) |entry, idx| {
-        try builder.label(check_label);
-        const cmp_tmp = try ctx.nextTemp();
-        const const_text = utils.formatInt(ctx.allocator, entry.index);
-        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
-        try builder.compare(cmp_tmp, "icmp", "eq", .i32, idx_i32, const_val);
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        const use_label = try ctx.nextLabel("fmt_use");
-        const next_label = if (idx + 1 < entries.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
-        try builder.brCond(cond, use_label, next_label);
-
-        try builder.label(use_label);
-        const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entry.items, expanded);
-        try builder.store(status_val, status_ptr);
-        try builder.br(done_label);
-
-        check_label = next_label;
-    }
-
-    try builder.label(check_label);
-    const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, entries[0].items, expanded);
-    try builder.store(status_val, status_ptr);
-    try builder.br(done_label);
-    try builder.label(done_label);
+        fn emit(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+            const status_val = try emitReadFormattedStatus(
+                ctx_inner,
+                builder_inner,
+                self.read,
+                self.unit_value,
+                self.unit_char_len,
+                self.unit_record_count,
+                self.is_internal,
+                self.unit_i32,
+                items,
+                self.expanded,
+            );
+            try builder_inner.store(status_val, self.status_ptr);
+        }
+    };
+    try emitDynamicCharArrayDispatch(ctx, builder, entries, idx_i32, Dispatch{
+        .read = read,
+        .unit_value = unit_value,
+        .unit_char_len = unit_char_len,
+        .unit_record_count = unit_record_count,
+        .is_internal = is_internal,
+        .unit_i32 = unit_i32,
+        .expanded = expanded,
+        .status_ptr = status_ptr,
+    });
     const status_load = try ctx.nextTemp();
     try builder.load(status_load, .i32, status_ptr);
     return .{ .name = status_load, .ty = .i32, .is_ptr = false };
