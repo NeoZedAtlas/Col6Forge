@@ -2380,7 +2380,7 @@ bb127:
 bb128:
   %t1268 = load i32, ptr %t56
   %t1269 = load i32, ptr %t59
-  %t1270 = call ptr @f77_direct_record_ptr_ro(i32 %t1268, i32 %t1269)
+  %t1270 = call ptr @f77_direct_record_ptr_ro(i32 %t1268, i32 %t1269, i32 120)
   %t1271 = getelementptr [29 x i8], ptr @str29, i32 0, i32 0
   %t1272 = alloca ptr, i32 7
   %t1273 = getelementptr ptr, ptr %t1272, i32 0
@@ -2446,7 +2446,7 @@ bb135:
 bb136:
   %t1296 = load i32, ptr %t56
   %t1297 = load i32, ptr %t59
-  %t1298 = call ptr @f77_direct_record_ptr_ro(i32 %t1296, i32 %t1297)
+  %t1298 = call ptr @f77_direct_record_ptr_ro(i32 %t1296, i32 %t1297, i32 120)
   %t1299 = alloca i8, i32 25
   %t1300 = getelementptr [28 x i8], ptr @str31, i32 0, i32 0
   %t1301 = alloca ptr, i32 7
@@ -2515,7 +2515,7 @@ bb143:
 bb144:
   %t1326 = load i32, ptr %t56
   %t1327 = load i32, ptr %t59
-  %t1328 = call ptr @f77_direct_record_ptr_ro(i32 %t1326, i32 %t1327)
+  %t1328 = call ptr @f77_direct_record_ptr_ro(i32 %t1326, i32 %t1327, i32 120)
   %t1329 = getelementptr [29 x i8], ptr @str29, i32 0, i32 0
   %t1330 = alloca ptr, i32 7
   %t1331 = getelementptr ptr, ptr %t1330, i32 0
@@ -2579,7 +2579,7 @@ bb150:
 bb151:
   %t1354 = load i32, ptr %t56
   %t1355 = load i32, ptr %t59
-  %t1356 = call ptr @f77_direct_record_ptr_ro(i32 %t1354, i32 %t1355)
+  %t1356 = call ptr @f77_direct_record_ptr_ro(i32 %t1354, i32 %t1355, i32 120)
   %t1357 = getelementptr [29 x i8], ptr @str33, i32 0, i32 0
   %t1358 = alloca ptr, i32 7
   %t1359 = getelementptr ptr, ptr %t1358, i32 0
@@ -2648,7 +2648,7 @@ bb159:
 bb160:
   %t1382 = load i32, ptr %t56
   %t1383 = load i32, ptr %t59
-  %t1384 = call ptr @f77_direct_record_ptr_ro(i32 %t1382, i32 %t1383)
+  %t1384 = call ptr @f77_direct_record_ptr_ro(i32 %t1382, i32 %t1383, i32 120)
   %t1385 = alloca i8, i32 25
   %t1386 = getelementptr [28 x i8], ptr @str35, i32 0, i32 0
   %t1387 = alloca ptr, i32 7
@@ -3182,7 +3182,7 @@ bb197:
 bb198:
   %t1708 = load i32, ptr %t56
   %t1709 = load i32, ptr %t59
-  %t1710 = call ptr @f77_direct_record_ptr_ro(i32 %t1708, i32 %t1709)
+  %t1710 = call ptr @f77_direct_record_ptr_ro(i32 %t1708, i32 %t1709, i32 120)
   %t1711 = getelementptr [29 x i8], ptr @str33, i32 0, i32 0
   %t1712 = alloca ptr, i32 7
   %t1713 = getelementptr ptr, ptr %t1712, i32 0
@@ -3246,7 +3246,7 @@ bb204:
 bb205:
   %t1736 = load i32, ptr %t56
   %t1737 = load i32, ptr %t59
-  %t1738 = call ptr @f77_direct_record_ptr_ro(i32 %t1736, i32 %t1737)
+  %t1738 = call ptr @f77_direct_record_ptr_ro(i32 %t1736, i32 %t1737, i32 120)
   %t1739 = getelementptr [29 x i8], ptr @str41, i32 0, i32 0
   %t1740 = alloca ptr, i32 7
   %t1741 = getelementptr ptr, ptr %t1740, i32 0
@@ -4256,7 +4256,7 @@ bb221:
 bb222:
   %t2672 = load i32, ptr %t56
   %t2673 = load i32, ptr %t59
-  %t2674 = call ptr @f77_direct_record_ptr_ro(i32 %t2672, i32 %t2673)
+  %t2674 = call ptr @f77_direct_record_ptr_ro(i32 %t2672, i32 %t2673, i32 120)
   %t2675 = alloca i8, i32 25
   %t2676 = getelementptr [28 x i8], ptr @str31, i32 0, i32 0
   %t2677 = alloca ptr, i32 7
@@ -4322,7 +4322,7 @@ bb228:
   br label %bb229
 bb229:
   %t2702 = load i32, ptr %t56
-  %t2703 = call ptr @f77_direct_record_ptr_ro(i32 %t2702, i32 3)
+  %t2703 = call ptr @f77_direct_record_ptr_ro(i32 %t2702, i32 3, i32 120)
   %t2704 = getelementptr [29 x i8], ptr @str44, i32 0, i32 0
   %t2705 = alloca ptr, i32 7
   %t2706 = getelementptr ptr, ptr %t2705, i32 0
@@ -5332,7 +5332,7 @@ bb245:
 bb246:
   %t3637 = load i32, ptr %t56
   %t3638 = load i32, ptr %t59
-  %t3639 = call ptr @f77_direct_record_ptr_ro(i32 %t3637, i32 %t3638)
+  %t3639 = call ptr @f77_direct_record_ptr_ro(i32 %t3637, i32 %t3638, i32 120)
   %t3640 = getelementptr [29 x i8], ptr @str29, i32 0, i32 0
   %t3641 = alloca ptr, i32 7
   %t3642 = getelementptr ptr, ptr %t3641, i32 0
@@ -5642,7 +5642,7 @@ bb272:
   %t3819 = getelementptr [1 x i8], ptr @str51, i32 0, i32 0
   call void @f77_write_internal_v(ptr %t3818, i32 120, i32 1, ptr %t3819, ptr null, ptr null, i32 0)
   call void @f77_direct_record_commit(i32 %t3792, i32 %t3817)
-  %t3820 = add i32 1, 2
+  %t3820 = add i32 %t3817, 1
   %t3821 = call ptr @f77_direct_record_ptr(i32 %t3792, i32 %t3820, i32 120)
   %t3822 = getelementptr [45 x i8], ptr @str52, i32 0, i32 0
   call void @f77_write_internal_v(ptr %t3821, i32 120, i32 1, ptr %t3822, ptr null, ptr null, i32 0)
@@ -5816,7 +5816,7 @@ bb293:
 bb294:
   %t3903 = load i32, ptr %t56
   %t3904 = load i32, ptr %t59
-  %t3905 = call ptr @f77_direct_record_ptr_ro(i32 %t3903, i32 %t3904)
+  %t3905 = call ptr @f77_direct_record_ptr_ro(i32 %t3903, i32 %t3904, i32 120)
   %t3906 = getelementptr [23 x i8], ptr @str55, i32 0, i32 0
   %t3907 = alloca ptr, i32 6
   %t3908 = getelementptr ptr, ptr %t3907, i32 0
@@ -6246,7 +6246,7 @@ bb306:
 bb307:
   %t4276 = load i32, ptr %t56
   %t4277 = load i32, ptr %t59
-  %t4278 = call ptr @f77_direct_record_ptr_ro(i32 %t4276, i32 %t4277)
+  %t4278 = call ptr @f77_direct_record_ptr_ro(i32 %t4276, i32 %t4277, i32 120)
   %t4279 = getelementptr [24 x i8], ptr @str60, i32 0, i32 0
   %t4280 = alloca ptr, i32 6
   %t4281 = getelementptr ptr, ptr %t4280, i32 0
@@ -6763,7 +6763,7 @@ bb319:
 bb320:
   %t4617 = load i32, ptr %t56
   %t4618 = load i32, ptr %t59
-  %t4619 = call ptr @f77_direct_record_ptr_ro(i32 %t4617, i32 %t4618)
+  %t4619 = call ptr @f77_direct_record_ptr_ro(i32 %t4617, i32 %t4618, i32 120)
   %t4620 = getelementptr [6 x i8], ptr @str64, i32 0, i32 0
   %t4621 = alloca ptr, i32 1
   %t4622 = getelementptr ptr, ptr %t4621, i32 0
@@ -8274,7 +8274,7 @@ bb330:
 bb331:
   %t6084 = load i32, ptr %t56
   %t6085 = load i32, ptr %t59
-  %t6086 = call ptr @f77_direct_record_ptr_ro(i32 %t6084, i32 %t6085)
+  %t6086 = call ptr @f77_direct_record_ptr_ro(i32 %t6084, i32 %t6085, i32 120)
   %t6087 = sext i32 1 to i64
   %t6088 = sext i32 1 to i64
   %t6089 = sub i64 %t6087, %t6088
@@ -8660,7 +8660,7 @@ bb343:
 bb344:
   %t6414 = load i32, ptr %t56
   %t6415 = load i32, ptr %t59
-  %t6416 = call ptr @f77_direct_record_ptr_ro(i32 %t6414, i32 %t6415)
+  %t6416 = call ptr @f77_direct_record_ptr_ro(i32 %t6414, i32 %t6415, i32 120)
   %t6417 = getelementptr [6 x i8], ptr @str64, i32 0, i32 0
   %t6418 = alloca ptr, i32 1
   %t6419 = getelementptr ptr, ptr %t6418, i32 0
@@ -15999,7 +15999,7 @@ declare i32 @f77_write_v(i32, ptr, ptr, ptr, i32, i32)
 declare void @f77_inquire_unit(i32, ptr, ptr, ptr, ptr, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, i32, ptr, ptr, ...)
 declare ptr @f77_fmt_d(i32, i32, i32, i32, i32, double)
 declare void @f77_open(i32, ptr, i32, i32, i32, i32, i32, ...)
-declare ptr @f77_direct_record_ptr_ro(i32, i32)
+declare ptr @f77_direct_record_ptr_ro(i32, i32, i32)
 declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
 declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)
 declare ptr @f77_fmt_g(i32, i32, i32, i32, i32, double)

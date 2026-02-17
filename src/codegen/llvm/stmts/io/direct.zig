@@ -251,12 +251,13 @@ fn recordNumberForPlan(
     rec_offset: usize,
 ) EmitError!ValueRef {
     if (rec_offset == 0) return base_rec;
+    if (rec_offset == 1) {
+        const rec_tmp_one = try ctx.nextTemp();
+        try builder.binary(rec_tmp_one, "add", .i32, base_rec, .{ .name = "1", .ty = .i32, .is_ptr = false });
+        return .{ .name = rec_tmp_one, .ty = .i32, .is_ptr = false };
+    }
 
-    const offset_val = ValueRef{
-        .name = utils.formatInt(ctx.allocator, @intCast(rec_offset)),
-        .ty = .i32,
-        .is_ptr = false,
-    };
+    const offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(rec_offset)), .ty = .i32, .is_ptr = false };
     const rec_tmp = try ctx.nextTemp();
     try builder.binary(rec_tmp, "add", .i32, base_rec, offset_val);
     return .{ .name = rec_tmp, .ty = .i32, .is_ptr = false };
@@ -274,14 +275,19 @@ fn emitDirectWritePlans(
 
     const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr", .ptr, &[_]utils.IRType{ .i32, .i32, .i32 }, false);
     const commit_name = try ctx.ensureDeclRaw("f77_direct_record_commit", .void, &[_]utils.IRType{ .i32, .i32 }, false);
-    const recl_val = ValueRef{
-        .name = utils.formatInt(ctx.allocator, @intCast(recl_len)),
-        .ty = .i32,
-        .is_ptr = false,
-    };
+    const recl_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(recl_len)), .ty = .i32, .is_ptr = false };
+    var current_rec = prepared.rec_i32;
+    var current_offset: usize = 0;
 
     for (plans) |plan| {
-        const rec_for_plan = try recordNumberForPlan(ctx, builder, prepared.rec_i32, plan.rec_offset);
+        if (plan.rec_offset < current_offset) return error.InternalInvariantViolation;
+        const delta = plan.rec_offset - current_offset;
+        if (delta != 0) {
+            current_rec = try recordNumberForPlan(ctx, builder, current_rec, delta);
+            current_offset = plan.rec_offset;
+        }
+
+        const rec_for_plan = current_rec;
         const record_ptr_tmp = try ctx.nextTemp();
         try builder.callTyped(record_ptr_tmp, .ptr, record_ptr_name, &.{ prepared.unit_i32, rec_for_plan, recl_val });
         const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
@@ -305,12 +311,22 @@ fn emitDirectReadPlans(
     const fmt_items = prepared.fmt_items orelse return error.InternalInvariantViolation;
     const recl_len = prepared.recl orelse return error.InternalInvariantViolation;
 
-    const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr_ro", .ptr, &[_]utils.IRType{ .i32, .i32 }, false);
+    const record_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_ptr_ro", .ptr, &[_]utils.IRType{ .i32, .i32, .i32 }, false);
+    const recl_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(recl_len)), .ty = .i32, .is_ptr = false };
+    var current_rec = prepared.rec_i32;
+    var current_offset: usize = 0;
 
     for (plans) |plan| {
-        const rec_for_plan = try recordNumberForPlan(ctx, builder, prepared.rec_i32, plan.rec_offset);
+        if (plan.rec_offset < current_offset) return error.InternalInvariantViolation;
+        const delta = plan.rec_offset - current_offset;
+        if (delta != 0) {
+            current_rec = try recordNumberForPlan(ctx, builder, current_rec, delta);
+            current_offset = plan.rec_offset;
+        }
+
+        const rec_for_plan = current_rec;
         const record_ptr_tmp = try ctx.nextTemp();
-        try builder.callTyped(record_ptr_tmp, .ptr, record_ptr_name, &.{ prepared.unit_i32, rec_for_plan });
+        try builder.callTyped(record_ptr_tmp, .ptr, record_ptr_name, &.{ prepared.unit_i32, rec_for_plan, recl_val });
         const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
 
         var expanded = try expandReadTargets(ctx, builder, prepared.expanded_args[plan.start_arg..plan.end_arg]);
@@ -336,14 +352,10 @@ fn emitDirectWriteCall(
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
-    const count_text = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len));
-    const arg_buf = try std.fmt.allocPrint(
-        ctx.allocator,
-        "i32 {s}, i32 {s}, ptr {s}, ptr {s}, i32 {s}",
-        .{ unit_i32.name, rec_i32.name, sig_ptr, ptr_array.name, count_text },
-    );
-    const write_name = try ctx.ensureDeclRaw("f77_write_direct_v", .void, "i32, i32, ptr, ptr, i32", false);
-    try builder.call(null, .void, write_name, arg_buf);
+    const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const sig_ptr_val = ValueRef{ .name = sig_ptr, .ty = .ptr, .is_ptr = true };
+    const write_name = try ctx.ensureDeclRaw("f77_write_direct_v", .void, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .i32 }, false);
+    try builder.callTyped(null, .void, write_name, &.{ unit_i32, rec_i32, sig_ptr_val, ptr_array, count_val });
 }
 
 fn emitDirectReadCall(
@@ -353,21 +365,18 @@ fn emitDirectReadCall(
     rec_i32: ValueRef,
     args: []*ast.Expr,
 ) EmitError!void {
-    const sig_ptrs = try buildDirectReadSignatureAndPtrs(ctx, builder, args);
+    var sig_ptrs = try buildDirectReadSignatureAndPtrs(ctx, builder, args);
+    defer sig_ptrs.deinit(ctx.allocator);
     const sig = sig_ptrs.sig;
     const sig_global = try ctx.string_pool.intern(sig);
     const sig_ptr = try ctx.nextTemp();
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
-    const count_text = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len));
-    const arg_buf = try std.fmt.allocPrint(
-        ctx.allocator,
-        "i32 {s}, i32 {s}, ptr {s}, ptr {s}, i32 {s}",
-        .{ unit_i32.name, rec_i32.name, sig_ptr, ptr_array.name, count_text },
-    );
-    const read_name = try ctx.ensureDeclRaw("f77_read_direct_v", .i32, "i32, i32, ptr, ptr, i32", false);
-    try builder.call(null, .i32, read_name, arg_buf);
+    const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const sig_ptr_val = ValueRef{ .name = sig_ptr, .ty = .ptr, .is_ptr = true };
+    const read_name = try ctx.ensureDeclRaw("f77_read_direct_v", .i32, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .i32 }, false);
+    try builder.callTyped(null, .i32, read_name, &.{ unit_i32, rec_i32, sig_ptr_val, ptr_array, count_val });
 
     try applyComplexFixupsList(ctx, builder, sig_ptrs.complex_fixups.items);
 }

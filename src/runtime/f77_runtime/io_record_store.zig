@@ -179,13 +179,15 @@ pub export fn f77_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) callco
     return record;
 }
 
-pub export fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int) callconv(.c) ?[*]u8 {
+pub export fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) callconv(.c) ?[*]u8 {
     if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return null;
     const idx: usize = @intCast(unit);
     const du = &direct_units[idx];
-    if (du.recl <= 0 or du.data == null) return null;
+    const recl_local: c_int = if (du.recl > 0) du.recl else recl;
+    if (recl_local <= 0 or du.data == null) return null;
+    du.recl = recl_local;
 
-    const recl_size: usize = @intCast(du.recl);
+    const recl_size: usize = @intCast(recl_local);
     const range = directRecordRange(rec, recl_size) orelse return null;
     if (du.size < range.end) return null;
     return du.data.? + range.offset;

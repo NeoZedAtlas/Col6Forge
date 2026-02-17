@@ -1,3 +1,4 @@
+const std = @import("std");
 const F77_MAX_UNITS = 256;
 
 const DirectUnit = extern struct {
@@ -11,7 +12,7 @@ extern var direct_units: [F77_MAX_UNITS]DirectUnit;
 
 extern fn direct_signature_size(sig: [*:0]const u8) usize;
 extern fn f77_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
-extern fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int) ?[*]u8;
+extern fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
 extern fn f77_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn f77_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 
@@ -139,7 +140,8 @@ pub export fn f77_read_direct_v(
     const total_args = runtimeArgCount(arg_count);
 
     const recl: usize = if (du.recl > 0) @intCast(du.recl) else direct_signature_size(sig_c);
-    const record = f77_direct_record_ptr_ro(unit, rec) orelse return 0;
+    const recl_i32: c_int = if (recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0 else @intCast(recl);
+    const record = f77_direct_record_ptr_ro(unit, rec, recl_i32) orelse return 0;
     if (recl == 0) return 0;
 
     var pos: usize = 0;
