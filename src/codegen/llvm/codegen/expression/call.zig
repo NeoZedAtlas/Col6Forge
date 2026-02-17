@@ -42,8 +42,7 @@ pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IR
     }
     if (ret_ty == .complex_f64) {
         const sret_ptr = complex_result_ptr orelse return error.InvalidAbiState;
-        const call_tmp = try ctx.nextTemp();
-        try builder.callTyped(call_tmp, .ptr, fn_name, abi_args.items);
+        try builder.callTyped(null, abi_ret_ty, fn_name, abi_args.items);
         const value_tmp = try ctx.nextTemp();
         try builder.load(value_tmp, .complex_f64, sret_ptr);
         return .{ .name = value_tmp, .ty = .complex_f64, .is_ptr = false };
@@ -83,8 +82,7 @@ pub fn emitIndirectCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, ret_t
     }
     if (ret_ty == .complex_f64) {
         const sret_ptr = complex_result_ptr orelse return error.InvalidAbiState;
-        const call_tmp = try ctx.nextTemp();
-        try builder.callIndirectTyped(call_tmp, .ptr, fn_ptr.name, abi_args.items);
+        try builder.callIndirectTyped(null, abi_ret_ty, fn_ptr.name, abi_args.items);
         const value_tmp = try ctx.nextTemp();
         try builder.load(value_tmp, .complex_f64, sret_ptr);
         return .{ .name = value_tmp, .ty = .complex_f64, .is_ptr = false };

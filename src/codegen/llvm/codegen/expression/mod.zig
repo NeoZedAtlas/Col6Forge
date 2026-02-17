@@ -340,6 +340,25 @@ test "emitCall and emitArgPointer build call args" {
     try testing.expectEqualStrings("%t0", call_val.name);
 }
 
+test "emitCall complex_f64 uses hidden sret pointer and void call ABI" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const no_args = @constCast(&[_]*Expr{});
+    const call_val = try emitCall(&harness.ctx, &builder, "zfun_", .complex_f64, no_args, false);
+    try testing.expectEqual(IRType.complex_f64, call_val.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void @zfun_(ptr") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call ptr @zfun_") == null);
+}
+
 test "emitSubscriptPtr, emitIndex, and emitDimValue enforce subscripts" {
     const testing = std.testing;
     const allocator = testing.allocator;

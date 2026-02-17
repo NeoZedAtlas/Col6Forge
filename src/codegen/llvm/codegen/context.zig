@@ -351,7 +351,13 @@ pub const Context = struct {
 pub fn fortranAbiReturnType(ret_ty: IRType) IRType {
     return switch (ret_ty) {
         .complex_f32 => .i64,
-        .complex_f64 => .ptr,
+        .complex_f64 => .void,
         else => ret_ty,
     };
+}
+
+test "fortranAbiReturnType uses sret ABI for complex*16" {
+    const testing = std.testing;
+    try testing.expectEqual(IRType.void, fortranAbiReturnType(.complex_f64));
+    try testing.expectEqual(IRType.i64, fortranAbiReturnType(.complex_f32));
 }
