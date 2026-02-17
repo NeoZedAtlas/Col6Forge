@@ -16,6 +16,117 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 
+fn isIntegerType(ty: IRType) bool {
+    return ty == .i32 or ty == .i64;
+}
+
+fn isRealType(ty: IRType) bool {
+    return ty == .f32 or ty == .f64;
+}
+
+fn constI32(ctx: *Context, value: i64) ValueRef {
+    return .{ .name = utils.formatInt(ctx.allocator, value), .ty = .i32, .is_ptr = false };
+}
+
+fn lookupCharArgLen(ctx: *Context, name: []const u8) ?ValueRef {
+    var it = ctx.char_arg_lens.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
+            return entry.value_ptr.*;
+        }
+    }
+    return null;
+}
+
+fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) ?ValueRef {
+    if (sym.type_kind != .character) return null;
+    if (sym.kind == .parameter) {
+        if (sym.const_value) |cv| switch (cv) {
+            .string => |lit| {
+                const len = utils.decodedStringLen(lit.text);
+                return constI32(ctx, @intCast(len));
+            },
+            else => {},
+        };
+    }
+    if (sym.char_len) |char_len| {
+        return constI32(ctx, @intCast(char_len));
+    }
+    return lookupCharArgLen(ctx, name);
+}
+
+fn coerceToI32(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+    if (value.ty == .i32) return value;
+    return casting.coerce(ctx, builder, value, .i32);
+}
+
+fn emitLenValue(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?ValueRef {
+    switch (expr.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return null;
+            return charSymbolLengthValue(ctx, name, sym);
+        },
+        .literal => |lit| switch (lit.kind) {
+            .string => {
+                const len = utils.decodedStringLen(lit.text);
+                if (len > std.math.maxInt(i32)) return error.UnsupportedIntrinsicType;
+                return constI32(ctx, @intCast(len));
+            },
+            .hollerith => {
+                const bytes = utils.hollerithBytes(lit.text) orelse return null;
+                if (bytes.len > std.math.maxInt(i32)) return error.UnsupportedIntrinsicType;
+                return constI32(ctx, @intCast(bytes.len));
+            },
+            else => return null,
+        },
+        .call_or_subscript => |call| {
+            const sym = ctx.findSymbol(call.name) orelse return null;
+            return charSymbolLengthValue(ctx, call.name, sym);
+        },
+        .substring => |sub| {
+            const sym = ctx.findSymbol(sub.name) orelse return null;
+            var end_val = charSymbolLengthValue(ctx, sub.name, sym) orelse return null;
+            if (sub.end) |end_expr| {
+                end_val = try coerceToI32(ctx, builder, try dispatch.emitExpr(ctx, builder, end_expr));
+            }
+
+            var start_val = constI32(ctx, 1);
+            if (sub.start) |start_expr| {
+                start_val = try coerceToI32(ctx, builder, try dispatch.emitExpr(ctx, builder, start_expr));
+            }
+
+            const diff_tmp = try ctx.nextTemp();
+            try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
+            const len_tmp = try ctx.nextTemp();
+            try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, constI32(ctx, 1));
+            const len_val = ValueRef{ .name = len_tmp, .ty = .i32, .is_ptr = false };
+
+            const zero = utils.zeroValue(.i32);
+            const neg_tmp = try ctx.nextTemp();
+            try builder.compare(neg_tmp, "icmp", "slt", .i32, len_val, zero);
+            const neg = ValueRef{ .name = neg_tmp, .ty = .i1, .is_ptr = false };
+            const clamped_tmp = try ctx.nextTemp();
+            try builder.select(clamped_tmp, .i32, neg, zero, len_val);
+            return .{ .name = clamped_tmp, .ty = .i32, .is_ptr = false };
+        },
+        .binary => |bin| {
+            if (bin.op != .concat) return null;
+            const left = try emitLenValue(ctx, builder, bin.left) orelse return null;
+            const right = try emitLenValue(ctx, builder, bin.right) orelse return null;
+            const sum_tmp = try ctx.nextTemp();
+            try builder.binary(sum_tmp, "add", .i32, left, right);
+            return .{ .name = sum_tmp, .ty = .i32, .is_ptr = false };
+        },
+        .implied_do => return null,
+        else => return null,
+    }
+}
+
+fn emitIntrinsicLen(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    return try emitLenValue(ctx, builder, args[0]) orelse error.UnsupportedIntrinsicType;
+}
+
 fn buildSig(allocator: std.mem.Allocator, types: []const IRType) EmitError![]const u8 {
     var sig = std.array_list.Managed(u8).init(allocator);
     var first = true;
@@ -65,9 +176,9 @@ pub fn emitIntrinsicBinaryFloatValue(ctx: *Context, builder: anytype, base: []co
     if (right.ty != .f32 and right.ty != .f64) return error.UnsupportedIntrinsicType;
     if (left.ty != right.ty) return error.UnsupportedIntrinsicType;
     const name = try llvmIntrinsicName(ctx.allocator, base, left.ty);
-    const sig = try buildSig(ctx.allocator, &.{left.ty, right.ty});
+    const sig = try buildSig(ctx.allocator, &.{ left.ty, right.ty });
     _ = try ctx.ensureDeclRaw(name, left.ty, sig, false);
-    const args = try buildArgText(ctx.allocator, &.{left, right});
+    const args = try buildArgText(ctx.allocator, &.{ left, right });
     const tmp = try ctx.nextTemp();
     try builder.call(tmp, left.ty, name, args);
     return .{ .name = tmp, .ty = left.ty, .is_ptr = false };
@@ -246,68 +357,15 @@ fn emitIntrinsicHuge(ctx: *Context, args: []*Expr) EmitError!ValueRef {
     };
 }
 
-fn lenForExpr(ctx: *Context, expr: *Expr) ?usize {
-    switch (expr.*) {
-        .identifier => |name| {
-            const sym = ctx.findSymbol(name) orelse return null;
-            if (sym.kind == .parameter) {
-                if (sym.const_value) |cv| switch (cv) {
-                    .string => |lit| return utils.decodedStringLen(lit.text),
-                    else => {},
-                };
-            }
-            if (sym.type_kind != .character) return null;
-            return sym.char_len orelse 1;
-        },
-        .literal => |lit| switch (lit.kind) {
-            .string => return utils.decodedStringLen(lit.text),
-            .hollerith => {
-                const bytes = utils.hollerithBytes(lit.text) orelse return null;
-                return bytes.len;
-            },
-            else => return null,
-        },
-        .call_or_subscript => |call| {
-            const sym = ctx.findSymbol(call.name) orelse return null;
-            if (sym.type_kind != .character) return null;
-            return sym.char_len orelse 1;
-        },
-        .substring => |sub| {
-            const sym = ctx.findSymbol(sub.name) orelse return null;
-            if (sym.type_kind != .character) return null;
-            const base_len: i64 = @intCast(sym.char_len orelse 1);
-            const start = if (sub.start) |s| intLiteralValue(s) orelse return null else 1;
-            const end_ = if (sub.end) |e| intLiteralValue(e) orelse return null else base_len;
-            const span = end_ - start + 1;
-            if (span <= 0) return 0;
-            return @intCast(span);
-        },
-        .binary => |bin| {
-            if (bin.op != .concat) return null;
-            const left = lenForExpr(ctx, bin.left) orelse return null;
-            const right = lenForExpr(ctx, bin.right) orelse return null;
-            return left + right;
-        },
-        .implied_do => return null,
-        else => return null,
-    }
-}
-
-fn intLiteralValue(expr: *Expr) ?i64 {
-    if (expr.* != .literal) return null;
-    const lit = expr.literal;
-    if (lit.kind != .integer) return null;
-    return std.fmt.parseInt(i64, lit.text, 10) catch null;
-}
-
 fn emitMinMaxValue(ctx: *Context, builder: anytype, left_in: ValueRef, right_in: ValueRef, is_max: bool) EmitError!ValueRef {
     if (complex.isComplexType(left_in.ty) or complex.isComplexType(right_in.ty)) return error.UnsupportedIntrinsicType;
     const common_ty = ir.commonType(left_in.ty, right_in.ty);
-    if (common_ty != .i32 and common_ty != .f32 and common_ty != .f64) return error.UnsupportedIntrinsicType;
+    if (!isIntegerType(common_ty) and !isRealType(common_ty)) return error.UnsupportedIntrinsicType;
     const left = try casting.coerce(ctx, builder, left_in, common_ty);
     const right = try casting.coerce(ctx, builder, right_in, common_ty);
-    const pred = if (common_ty == .i32) (if (is_max) "sgt" else "slt") else (if (is_max) "ogt" else "olt");
-    const instr = if (common_ty == .i32) "icmp" else "fcmp";
+    const is_int = isIntegerType(common_ty);
+    const pred = if (is_int) (if (is_max) "sgt" else "slt") else (if (is_max) "ogt" else "olt");
+    const instr = if (is_int) "icmp" else "fcmp";
     const cond_name = try ctx.nextTemp();
     try builder.compare(cond_name, instr, pred, common_ty, left, right);
     const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
@@ -316,29 +374,37 @@ fn emitMinMaxValue(ctx: *Context, builder: anytype, left_in: ValueRef, right_in:
     return .{ .name = tmp, .ty = common_ty, .is_ptr = false };
 }
 
-fn emitMinMaxValueInt(ctx: *Context, builder: anytype, left_in: ValueRef, right_in: ValueRef, is_max: bool) EmitError!ValueRef {
+fn emitMinMaxValueInt(ctx: *Context, builder: anytype, left_in: ValueRef, right_in: ValueRef, int_ty: IRType, is_max: bool) EmitError!ValueRef {
+    if (!isIntegerType(int_ty)) return error.UnsupportedIntrinsicType;
     var left = left_in;
     var right = right_in;
     if (complex.isComplexType(left.ty) or complex.isComplexType(right.ty)) return error.UnsupportedIntrinsicType;
-    left = try casting.coerce(ctx, builder, left, .i32);
-    right = try casting.coerce(ctx, builder, right, .i32);
+    left = try casting.coerce(ctx, builder, left, int_ty);
+    right = try casting.coerce(ctx, builder, right, int_ty);
     const pred = if (is_max) "sgt" else "slt";
     const cond_name = try ctx.nextTemp();
-    try builder.compare(cond_name, "icmp", pred, .i32, left, right);
+    try builder.compare(cond_name, "icmp", pred, int_ty, left, right);
     const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
     const tmp = try ctx.nextTemp();
-    try builder.select(tmp, .i32, cond, left, right);
-    return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    try builder.select(tmp, int_ty, cond, left, right);
+    return .{ .name = tmp, .ty = int_ty, .is_ptr = false };
 }
 
 fn emitMinMaxNInt(ctx: *Context, builder: anytype, args: []*Expr, is_max: bool) EmitError!ValueRef {
     if (args.len < 2) return error.InvalidIntrinsicCall;
+    var int_ty: IRType = .i32;
+    for (args) |arg| {
+        if (try casting.exprType(ctx, arg) == .i64) {
+            int_ty = .i64;
+            break;
+        }
+    }
     var acc = try dispatch.emitExpr(ctx, builder, args[0]);
-    acc = try casting.coerce(ctx, builder, acc, .i32);
+    acc = try casting.coerce(ctx, builder, acc, int_ty);
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const next = try dispatch.emitExpr(ctx, builder, args[i]);
-        acc = try emitMinMaxValueInt(ctx, builder, acc, next, is_max);
+        acc = try emitMinMaxValueInt(ctx, builder, acc, next, int_ty, is_max);
     }
     return acc;
 }
@@ -352,7 +418,7 @@ fn emitIntrinsicInt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!Va
         value = try complex.extractComplex(ctx, builder, value, 0);
     }
     if (value.ty == .i32) return value;
-    if (value.ty == .f32 or value.ty == .f64) {
+    if (value.ty == .i64 or value.ty == .f32 or value.ty == .f64) {
         return casting.coerce(ctx, builder, value, .i32);
     }
     return error.UnsupportedIntrinsicType;
@@ -373,20 +439,27 @@ fn emitIntrinsicIdint(ctx: *Context, builder: anytype, args: []*Expr) EmitError!
     return casting.coerce(ctx, builder, value, .i32);
 }
 
+fn emitIntegerAbsValue(ctx: *Context, builder: anytype, value_in: ValueRef) EmitError!ValueRef {
+    if (!isIntegerType(value_in.ty)) return error.UnsupportedIntrinsicType;
+    const intrinsic_name = switch (value_in.ty) {
+        .i32 => "llvm.abs.i32",
+        .i64 => "llvm.abs.i64",
+        else => return error.UnsupportedIntrinsicType,
+    };
+    var sig_types = [_]IRType{ value_in.ty, .i1 };
+    _ = try ctx.ensureDeclRaw(intrinsic_name, value_in.ty, sig_types[0..], false);
+    const tmp = try ctx.nextTemp();
+    try builder.callTyped(tmp, value_in.ty, intrinsic_name, &.{ value_in, utils.zeroValue(.i1) });
+    return .{ .name = tmp, .ty = value_in.ty, .is_ptr = false };
+}
+
 fn emitIntrinsicIabs(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     var value = try dispatch.emitExpr(ctx, builder, args[0]);
     if (complex.isComplexType(value.ty)) return error.UnsupportedIntrinsicType;
-    value = try casting.coerce(ctx, builder, value, .i32);
-    const zero = utils.zeroValue(.i32);
-    const cond_name = try ctx.nextTemp();
-    try builder.compare(cond_name, "icmp", "slt", .i32, value, zero);
-    const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
-    const neg = try ctx.nextTemp();
-    try builder.binary(neg, "sub", .i32, zero, value);
-    const tmp = try ctx.nextTemp();
-    try builder.select(tmp, .i32, cond, .{ .name = neg, .ty = .i32, .is_ptr = false }, value);
-    return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    const int_ty: IRType = if (value.ty == .i64) .i64 else .i32;
+    value = try casting.coerce(ctx, builder, value, int_ty);
+    return emitIntegerAbsValue(ctx, builder, value);
 }
 
 fn emitIntrinsicSign(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
@@ -395,35 +468,25 @@ fn emitIntrinsicSign(ctx: *Context, builder: anytype, args: []*Expr) EmitError!V
     var sign = try dispatch.emitExpr(ctx, builder, args[1]);
     if (complex.isComplexType(mag.ty) or complex.isComplexType(sign.ty)) return error.UnsupportedIntrinsicType;
     const common_ty = ir.commonType(mag.ty, sign.ty);
-    if (common_ty != .i32 and common_ty != .f32 and common_ty != .f64) return error.UnsupportedIntrinsicType;
+    if (!isIntegerType(common_ty) and !isRealType(common_ty)) return error.UnsupportedIntrinsicType;
     mag = try casting.coerce(ctx, builder, mag, common_ty);
     sign = try casting.coerce(ctx, builder, sign, common_ty);
 
-    const abs_val = if (common_ty == .i32)
-        blk: {
-            const zero = utils.zeroValue(.i32);
-            const cond_name = try ctx.nextTemp();
-            try builder.compare(cond_name, "icmp", "slt", .i32, mag, zero);
-            const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
-            const neg = try ctx.nextTemp();
-            try builder.binary(neg, "sub", .i32, zero, mag);
-            const tmp = try ctx.nextTemp();
-            try builder.select(tmp, .i32, cond, .{ .name = neg, .ty = .i32, .is_ptr = false }, mag);
-            break :blk ValueRef{ .name = tmp, .ty = .i32, .is_ptr = false };
-        }
+    const abs_val = if (isIntegerType(common_ty))
+        try emitIntegerAbsValue(ctx, builder, mag)
     else
         try emitIntrinsicUnaryFloatValue(ctx, builder, "fabs", mag);
 
     const zero = utils.zeroValue(common_ty);
     const cond_name = try ctx.nextTemp();
-    if (common_ty == .i32) {
-        try builder.compare(cond_name, "icmp", "slt", .i32, sign, zero);
+    if (isIntegerType(common_ty)) {
+        try builder.compare(cond_name, "icmp", "slt", common_ty, sign, zero);
     } else {
         try builder.compare(cond_name, "fcmp", "olt", common_ty, sign, zero);
     }
     const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
     const neg = try ctx.nextTemp();
-    const neg_op = if (common_ty == .i32) "sub" else "fsub";
+    const neg_op = if (isIntegerType(common_ty)) "sub" else "fsub";
     try builder.binary(neg, neg_op, common_ty, zero, abs_val);
     const tmp = try ctx.nextTemp();
     try builder.select(tmp, common_ty, cond, .{ .name = neg, .ty = common_ty, .is_ptr = false }, abs_val);
@@ -436,18 +499,18 @@ fn emitIntrinsicDim(ctx: *Context, builder: anytype, args: []*Expr) EmitError!Va
     var right = try dispatch.emitExpr(ctx, builder, args[1]);
     if (complex.isComplexType(left.ty) or complex.isComplexType(right.ty)) return error.UnsupportedIntrinsicType;
     const common_ty = ir.commonType(left.ty, right.ty);
-    if (common_ty != .i32 and common_ty != .f32 and common_ty != .f64) return error.UnsupportedIntrinsicType;
+    if (!isIntegerType(common_ty) and !isRealType(common_ty)) return error.UnsupportedIntrinsicType;
     left = try casting.coerce(ctx, builder, left, common_ty);
     right = try casting.coerce(ctx, builder, right, common_ty);
 
     const diff_name = try ctx.nextTemp();
-    const sub_op = if (common_ty == .i32) "sub" else "fsub";
+    const sub_op = if (isIntegerType(common_ty)) "sub" else "fsub";
     try builder.binary(diff_name, sub_op, common_ty, left, right);
     const diff = ValueRef{ .name = diff_name, .ty = common_ty, .is_ptr = false };
 
     const cond_name = try ctx.nextTemp();
-    if (common_ty == .i32) {
-        try builder.compare(cond_name, "icmp", "sgt", .i32, left, right);
+    if (isIntegerType(common_ty)) {
+        try builder.compare(cond_name, "icmp", "sgt", common_ty, left, right);
     } else {
         try builder.compare(cond_name, "fcmp", "ogt", common_ty, left, right);
     }
@@ -464,14 +527,14 @@ fn emitIntrinsicRemainder(ctx: *Context, builder: anytype, args: []*Expr, allow_
     var right = try dispatch.emitExpr(ctx, builder, args[1]);
     if (complex.isComplexType(left.ty) or complex.isComplexType(right.ty)) return error.UnsupportedIntrinsicType;
     const common_ty = ir.commonType(left.ty, right.ty);
-    if (common_ty == .i32 and allow_int) {
-        left = try casting.coerce(ctx, builder, left, .i32);
-        right = try casting.coerce(ctx, builder, right, .i32);
+    if (isIntegerType(common_ty) and allow_int) {
+        left = try casting.coerce(ctx, builder, left, common_ty);
+        right = try casting.coerce(ctx, builder, right, common_ty);
         const tmp = try ctx.nextTemp();
-        try builder.binary(tmp, "srem", .i32, left, right);
-        return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+        try builder.binary(tmp, "srem", common_ty, left, right);
+        return .{ .name = tmp, .ty = common_ty, .is_ptr = false };
     }
-    if ((common_ty == .f32 or common_ty == .f64) and allow_float) {
+    if (isRealType(common_ty) and allow_float) {
         left = try casting.coerce(ctx, builder, left, common_ty);
         right = try casting.coerce(ctx, builder, right, common_ty);
         const tmp = try ctx.nextTemp();
@@ -686,105 +749,23 @@ fn constFloat(ctx: *Context, ty: IRType, value: f64) ValueRef {
 }
 
 fn emitComplexCexp(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    var value = try dispatch.emitExpr(ctx, builder, args[0]);
-    const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
-    value = try complex.coerceToComplex(ctx, builder, value, target_ty);
-    const elem_ty = complex.complexElemType(value.ty) orelse return error.UnsupportedIntrinsicType;
-    const real = try complex.extractComplex(ctx, builder, value, 0);
-    const imag = try complex.extractComplex(ctx, builder, value, 1);
-
-    const expa = try emitLibmUnaryFloatValue(ctx, builder, "expf", "exp", real);
-    const cosb = try emitLibmUnaryFloatValue(ctx, builder, "cosf", "cos", imag);
-    const sinb = try emitLibmUnaryFloatValue(ctx, builder, "sinf", "sin", imag);
-    const out_r = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, expa, cosb);
-    const out_i = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, expa, sinb);
-    return complex.buildComplex(ctx, builder, out_r, out_i, value.ty);
+    return emitRuntimeComplexUnary(ctx, builder, "f77_cexp", "f77_zexp", args);
 }
 
 fn emitComplexCsin(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    var value = try dispatch.emitExpr(ctx, builder, args[0]);
-    const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
-    value = try complex.coerceToComplex(ctx, builder, value, target_ty);
-    const elem_ty = complex.complexElemType(value.ty) orelse return error.UnsupportedIntrinsicType;
-    const real = try complex.extractComplex(ctx, builder, value, 0);
-    const imag = try complex.extractComplex(ctx, builder, value, 1);
-
-    const sin_a = try emitLibmUnaryFloatValue(ctx, builder, "sinf", "sin", real);
-    const cos_a = try emitLibmUnaryFloatValue(ctx, builder, "cosf", "cos", real);
-    const cosh_b = try emitLibmUnaryFloatValue(ctx, builder, "coshf", "cosh", imag);
-    const sinh_b = try emitLibmUnaryFloatValue(ctx, builder, "sinhf", "sinh", imag);
-    const out_r = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, sin_a, cosh_b);
-    const out_i = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, cos_a, sinh_b);
-    return complex.buildComplex(ctx, builder, out_r, out_i, value.ty);
+    return emitRuntimeComplexUnary(ctx, builder, "f77_csin", "f77_zsin", args);
 }
 
 fn emitComplexCcos(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    var value = try dispatch.emitExpr(ctx, builder, args[0]);
-    const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
-    value = try complex.coerceToComplex(ctx, builder, value, target_ty);
-    const elem_ty = complex.complexElemType(value.ty) orelse return error.UnsupportedIntrinsicType;
-    const real = try complex.extractComplex(ctx, builder, value, 0);
-    const imag = try complex.extractComplex(ctx, builder, value, 1);
-
-    const cos_a = try emitLibmUnaryFloatValue(ctx, builder, "cosf", "cos", real);
-    const sin_a = try emitLibmUnaryFloatValue(ctx, builder, "sinf", "sin", real);
-    const cosh_b = try emitLibmUnaryFloatValue(ctx, builder, "coshf", "cosh", imag);
-    const sinh_b = try emitLibmUnaryFloatValue(ctx, builder, "sinhf", "sinh", imag);
-    const out_r = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, cos_a, cosh_b);
-    var out_i = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, sin_a, sinh_b);
-    const zero = utils.zeroValue(elem_ty);
-    out_i = try complex.emitBinaryOp(ctx, builder, "fsub", elem_ty, zero, out_i);
-    return complex.buildComplex(ctx, builder, out_r, out_i, value.ty);
+    return emitRuntimeComplexUnary(ctx, builder, "f77_ccos", "f77_zcos", args);
 }
 
 fn emitComplexClog(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    var value = try dispatch.emitExpr(ctx, builder, args[0]);
-    const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
-    value = try complex.coerceToComplex(ctx, builder, value, target_ty);
-    const elem_ty = complex.complexElemType(value.ty) orelse return error.UnsupportedIntrinsicType;
-    const real = try complex.extractComplex(ctx, builder, value, 0);
-    const imag = try complex.extractComplex(ctx, builder, value, 1);
-
-    const real_sq = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, real, real);
-    const imag_sq = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, imag, imag);
-    const sum = try complex.emitBinaryOp(ctx, builder, "fadd", elem_ty, real_sq, imag_sq);
-    const mag = try emitIntrinsicUnaryFloatValue(ctx, builder, "sqrt", sum);
-    const log_mag = try emitLibmUnaryFloatValue(ctx, builder, "logf", "log", mag);
-    const arg = try emitLibmBinaryFloatValue(ctx, builder, "atan2f", "atan2", imag, real);
-    return complex.buildComplex(ctx, builder, log_mag, arg, value.ty);
+    return emitRuntimeComplexUnary(ctx, builder, "f77_clog", "f77_zlog", args);
 }
 
 fn emitComplexCsqrt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
-    var value = try dispatch.emitExpr(ctx, builder, args[0]);
-    const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
-    value = try complex.coerceToComplex(ctx, builder, value, target_ty);
-    const elem_ty = complex.complexElemType(value.ty) orelse return error.UnsupportedIntrinsicType;
-    const real = try complex.extractComplex(ctx, builder, value, 0);
-    const imag = try complex.extractComplex(ctx, builder, value, 1);
-
-    const real_sq = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, real, real);
-    const imag_sq = try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, imag, imag);
-    const sum = try complex.emitBinaryOp(ctx, builder, "fadd", elem_ty, real_sq, imag_sq);
-    const mag = try emitIntrinsicUnaryFloatValue(ctx, builder, "sqrt", sum);
-    const half = constFloat(ctx, elem_ty, 0.5);
-    const mag_plus = try complex.emitBinaryOp(ctx, builder, "fadd", elem_ty, mag, real);
-    const mag_minus = try complex.emitBinaryOp(ctx, builder, "fsub", elem_ty, mag, real);
-    const t = try emitIntrinsicUnaryFloatValue(ctx, builder, "sqrt", try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, mag_plus, half));
-    const u = try emitIntrinsicUnaryFloatValue(ctx, builder, "sqrt", try complex.emitBinaryOp(ctx, builder, "fmul", elem_ty, mag_minus, half));
-    const zero = utils.zeroValue(elem_ty);
-    const neg_u = try complex.emitBinaryOp(ctx, builder, "fsub", elem_ty, zero, u);
-    const cond_name = try ctx.nextTemp();
-    try builder.compare(cond_name, "fcmp", "olt", elem_ty, imag, zero);
-    const cond = ValueRef{ .name = cond_name, .ty = .i1, .is_ptr = false };
-    const imag_name = try ctx.nextTemp();
-    try builder.select(imag_name, elem_ty, cond, neg_u, u);
-    const imag_val = ValueRef{ .name = imag_name, .ty = elem_ty, .is_ptr = false };
-    return complex.buildComplex(ctx, builder, t, imag_val, value.ty);
+    return emitRuntimeComplexUnary(ctx, builder, "f77_csqrt", "f77_zsqrt", args);
 }
 
 fn emitRuntimeComplexUnary(
@@ -799,187 +780,399 @@ fn emitRuntimeComplexUnary(
     const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
     value = try complex.coerceToComplex(ctx, builder, value, target_ty);
     const fn_name = if (target_ty == .complex_f64) name_f64 else name_f32;
-    const sig = try buildSig(ctx.allocator, &.{target_ty});
-    _ = try ctx.ensureDeclRaw(fn_name, target_ty, sig, false);
-    const arg_text = try buildArgText(ctx.allocator, &.{value});
+    var sig_types = [_]IRType{target_ty};
+    _ = try ctx.ensureDeclRaw(fn_name, target_ty, sig_types[0..], false);
     const tmp = try ctx.nextTemp();
-    try builder.call(tmp, target_ty, fn_name, arg_text);
+    try builder.callTyped(tmp, target_ty, fn_name, &.{value});
     return .{ .name = tmp, .ty = target_ty, .is_ptr = false };
 }
 
+fn emitSin(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    if (complex.isComplexType(arg_ty)) return emitComplexCsin(ctx, builder, args);
+    return emitIntrinsicUnaryFloat(ctx, builder, "sin", args);
+}
+
+fn emitCos(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    if (complex.isComplexType(arg_ty)) return emitComplexCcos(ctx, builder, args);
+    return emitIntrinsicUnaryFloat(ctx, builder, "cos", args);
+}
+
+fn emitSqrt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    if (complex.isComplexType(arg_ty)) return emitComplexCsqrt(ctx, builder, args);
+    return emitIntrinsicUnaryFloat(ctx, builder, "sqrt", args);
+}
+
+fn emitExp(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    if (complex.isComplexType(arg_ty)) return emitComplexCexp(ctx, builder, args);
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLibmUnaryFloatValue(ctx, builder, "expf", "exp", value);
+}
+
+fn emitLog(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const arg_ty = try casting.exprType(ctx, args[0]);
+    if (complex.isComplexType(arg_ty)) return emitComplexClog(ctx, builder, args);
+    return emitDoubleUnaryLibm(ctx, builder, "log", args);
+}
+
+fn emitTan(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLibmUnaryFloatValue(ctx, builder, "tanf", "tan", value);
+}
+
+fn emitAsin(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLibmUnaryFloatValue(ctx, builder, "asinf", "asin", value);
+}
+
+fn emitAcos(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLibmUnaryFloatValue(ctx, builder, "acosf", "acos", value);
+}
+
+fn emitSinh(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLibmUnaryFloatValue(ctx, builder, "sinhf", "sinh", value);
+}
+
+fn emitCosh(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLibmUnaryFloatValue(ctx, builder, "coshf", "cosh", value);
+}
+
+fn emitAlog(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLibmUnaryFloatValue(ctx, builder, "logf", "log", value);
+}
+
+fn emitAlog10(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLibmUnaryFloatValue(ctx, builder, "log10f", "log10", value);
+}
+
+fn emitTanh(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLibmUnaryFloatValue(ctx, builder, "tanhf", "tanh", value);
+}
+
+fn emitAtan(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLibmUnaryFloatValue(ctx, builder, "atanf", "atan", value);
+}
+
+fn emitAtan2(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 2) return error.InvalidIntrinsicCall;
+    const left = try dispatch.emitExpr(ctx, builder, args[0]);
+    const right = try dispatch.emitExpr(ctx, builder, args[1]);
+    return emitLibmBinaryFloatValue(ctx, builder, "atan2f", "atan2", left, right);
+}
+
+const IntrinsicTag = enum {
+    sin,
+    cos,
+    sqrt,
+    abs,
+    iabs,
+    aint,
+    int_,
+    idint,
+    dabs,
+    dint,
+    dnint,
+    idnint,
+    amod,
+    mod_,
+    dmod,
+    min,
+    max,
+    dmin1,
+    dmax1,
+    amin0,
+    amax0,
+    amin1,
+    amax1,
+    min0,
+    max0,
+    min1,
+    max1,
+    sign,
+    dsign,
+    isign,
+    dim,
+    ddim,
+    idim,
+    dprod,
+    conjg,
+    dconjg,
+    cmplx,
+    dcmplx,
+    float_,
+    dble,
+    sngl,
+    aimag,
+    dimag,
+    cabs,
+    anint,
+    nint,
+    ichar,
+    epsilon,
+    huge,
+    len_,
+    tan,
+    dtan,
+    asin,
+    dasin,
+    acos,
+    dacos,
+    sinh,
+    dsinh,
+    cosh,
+    dcosh,
+    dsqrt,
+    dsin,
+    dcos,
+    exp,
+    dexp,
+    alog,
+    log_,
+    dlog,
+    alog10,
+    log10,
+    dlog10,
+    tanh,
+    dtanh,
+    atan,
+    datan,
+    atan2,
+    datan2,
+    csin,
+    ccos,
+    cexp,
+    clog,
+    csqrt,
+};
+
+const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
+    .{ "sin", .sin },
+    .{ "cos", .cos },
+    .{ "sqrt", .sqrt },
+    .{ "abs", .abs },
+    .{ "iabs", .iabs },
+    .{ "aint", .aint },
+    .{ "int", .int_ },
+    .{ "ifix", .int_ },
+    .{ "idint", .idint },
+    .{ "dabs", .dabs },
+    .{ "dint", .dint },
+    .{ "dnint", .dnint },
+    .{ "idnint", .idnint },
+    .{ "amod", .amod },
+    .{ "mod", .mod_ },
+    .{ "dmod", .dmod },
+    .{ "min", .min },
+    .{ "max", .max },
+    .{ "dmin1", .dmin1 },
+    .{ "dmax1", .dmax1 },
+    .{ "amin0", .amin0 },
+    .{ "amax0", .amax0 },
+    .{ "amin1", .amin1 },
+    .{ "amax1", .amax1 },
+    .{ "min0", .min0 },
+    .{ "max0", .max0 },
+    .{ "min1", .min1 },
+    .{ "max1", .max1 },
+    .{ "sign", .sign },
+    .{ "dsign", .dsign },
+    .{ "isign", .isign },
+    .{ "dim", .dim },
+    .{ "ddim", .ddim },
+    .{ "idim", .idim },
+    .{ "dprod", .dprod },
+    .{ "conjg", .conjg },
+    .{ "dconjg", .dconjg },
+    .{ "cmplx", .cmplx },
+    .{ "dcmplx", .dcmplx },
+    .{ "float", .float_ },
+    .{ "real", .float_ },
+    .{ "dble", .dble },
+    .{ "sngl", .sngl },
+    .{ "aimag", .aimag },
+    .{ "dimag", .dimag },
+    .{ "cabs", .cabs },
+    .{ "anint", .anint },
+    .{ "nint", .nint },
+    .{ "ichar", .ichar },
+    .{ "epsilon", .epsilon },
+    .{ "huge", .huge },
+    .{ "len", .len_ },
+    .{ "tan", .tan },
+    .{ "dtan", .dtan },
+    .{ "asin", .asin },
+    .{ "dasin", .dasin },
+    .{ "acos", .acos },
+    .{ "dacos", .dacos },
+    .{ "sinh", .sinh },
+    .{ "dsinh", .dsinh },
+    .{ "cosh", .cosh },
+    .{ "dcosh", .dcosh },
+    .{ "dsqrt", .dsqrt },
+    .{ "dsin", .dsin },
+    .{ "dcos", .dcos },
+    .{ "exp", .exp },
+    .{ "dexp", .dexp },
+    .{ "alog", .alog },
+    .{ "log", .log_ },
+    .{ "dlog", .dlog },
+    .{ "alog10", .alog10 },
+    .{ "log10", .log10 },
+    .{ "dlog10", .dlog10 },
+    .{ "tanh", .tanh },
+    .{ "dtanh", .dtanh },
+    .{ "atan", .atan },
+    .{ "datan", .datan },
+    .{ "atan2", .atan2 },
+    .{ "datan2", .datan2 },
+    .{ "csin", .csin },
+    .{ "ccos", .ccos },
+    .{ "cexp", .cexp },
+    .{ "clog", .clog },
+    .{ "csqrt", .csqrt },
+});
+
+fn lookupIntrinsicTag(ctx: *Context, name: []const u8) EmitError!?IntrinsicTag {
+    var stack_buf: [32]u8 = undefined;
+    var heap_buf: ?[]u8 = null;
+    const key: []u8 = if (name.len <= stack_buf.len)
+        stack_buf[0..name.len]
+    else blk: {
+        const buf = try ctx.allocator.alloc(u8, name.len);
+        heap_buf = buf;
+        break :blk buf;
+    };
+    defer if (heap_buf) |buf| ctx.allocator.free(buf);
+    for (name, 0..) |ch, idx| key[idx] = std.ascii.toLower(ch);
+    return intrinsic_tag_map.get(key);
+}
+
 pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args: []*Expr) EmitError!ValueRef {
-    if (std.ascii.eqlIgnoreCase(name, "SIN")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const arg_ty = try casting.exprType(ctx, args[0]);
-        if (complex.isComplexType(arg_ty)) return emitComplexCsin(ctx, builder, args);
-        return emitIntrinsicUnaryFloat(ctx, builder, "sin", args);
+    const tag = try lookupIntrinsicTag(ctx, name) orelse return error.UnknownIntrinsic;
+    switch (tag) {
+        .sin => return emitSin(ctx, builder, args),
+        .cos => return emitCos(ctx, builder, args),
+        .sqrt => return emitSqrt(ctx, builder, args),
+        .abs => return emitIntrinsicAbs(ctx, builder, args),
+        .iabs => return emitIntrinsicIabs(ctx, builder, args),
+        .aint => return emitIntrinsicUnaryFloat(ctx, builder, "trunc", args),
+        .int_ => return emitIntrinsicInt(ctx, builder, args),
+        .idint => return emitIntrinsicIdint(ctx, builder, args),
+        .dabs => return emitDoubleUnaryLibm(ctx, builder, "fabs", args),
+        .dint => return emitDoubleTrunc(ctx, builder, args),
+        .dnint => return emitDoubleRound(ctx, builder, args),
+        .idnint => return emitIntrinsicIdnint(ctx, builder, args),
+        .amod => return emitIntrinsicRemainder(ctx, builder, args, false, true),
+        .mod_ => return emitIntrinsicRemainder(ctx, builder, args, true, true),
+        .dmod => return emitDoubleRemainder(ctx, builder, args),
+        .min => return emitIntrinsicMinMax(ctx, builder, args, false),
+        .max => return emitIntrinsicMinMax(ctx, builder, args, true),
+        .dmin1 => return emitDoubleMinMax(ctx, builder, args, false),
+        .dmax1 => return emitDoubleMinMax(ctx, builder, args, true),
+        .amin0 => {
+            const int_min = try emitMinMaxNInt(ctx, builder, args, false);
+            return casting.coerce(ctx, builder, int_min, .f32);
+        },
+        .amax0 => {
+            const int_max = try emitMinMaxNInt(ctx, builder, args, true);
+            return casting.coerce(ctx, builder, int_max, .f32);
+        },
+        .amin1 => return emitIntrinsicMinMax(ctx, builder, args, false),
+        .amax1 => return emitIntrinsicMinMax(ctx, builder, args, true),
+        .min0 => return emitMinMaxNInt(ctx, builder, args, false),
+        .max0 => return emitMinMaxNInt(ctx, builder, args, true),
+        .min1 => {
+            const real_min = try emitIntrinsicMinMax(ctx, builder, args, false);
+            return casting.coerce(ctx, builder, real_min, .i32);
+        },
+        .max1 => {
+            const real_max = try emitIntrinsicMinMax(ctx, builder, args, true);
+            return casting.coerce(ctx, builder, real_max, .i32);
+        },
+        .sign => return emitIntrinsicSign(ctx, builder, args),
+        .dsign => return emitDoubleSign(ctx, builder, args),
+        .isign => {
+            const value = try emitIntrinsicSign(ctx, builder, args);
+            return casting.coerce(ctx, builder, value, .i32);
+        },
+        .dim => return emitIntrinsicDim(ctx, builder, args),
+        .ddim => return emitDoubleDim(ctx, builder, args),
+        .idim => {
+            const value = try emitIntrinsicDim(ctx, builder, args);
+            return casting.coerce(ctx, builder, value, .i32);
+        },
+        .dprod => return emitIntrinsicDprod(ctx, builder, args),
+        .conjg => return emitIntrinsicConjg(ctx, builder, args),
+        .dconjg => return emitIntrinsicDconjg(ctx, builder, args),
+        .cmplx => return emitIntrinsicCmplx(ctx, builder, args),
+        .dcmplx => return emitIntrinsicDcmplx(ctx, builder, args),
+        .float_ => return emitIntrinsicFloat(ctx, builder, args),
+        .dble => return emitIntrinsicDble(ctx, builder, args),
+        .sngl => return emitIntrinsicSngl(ctx, builder, args),
+        .aimag => return emitIntrinsicAimag(ctx, builder, args),
+        .dimag => return emitIntrinsicDimag(ctx, builder, args),
+        .cabs => return emitIntrinsicCabs(ctx, builder, args),
+        .anint => return emitIntrinsicAnint(ctx, builder, args),
+        .nint => return emitIntrinsicNint(ctx, builder, args),
+        .ichar => return emitIntrinsicIchar(ctx, builder, args),
+        .epsilon => return emitIntrinsicEpsilon(ctx, args),
+        .huge => return emitIntrinsicHuge(ctx, args),
+        .len_ => return emitIntrinsicLen(ctx, builder, args),
+        .tan => return emitTan(ctx, builder, args),
+        .dtan => return emitDoubleUnaryLibm(ctx, builder, "tan", args),
+        .asin => return emitAsin(ctx, builder, args),
+        .dasin => return emitDoubleUnaryLibm(ctx, builder, "asin", args),
+        .acos => return emitAcos(ctx, builder, args),
+        .dacos => return emitDoubleUnaryLibm(ctx, builder, "acos", args),
+        .sinh => return emitSinh(ctx, builder, args),
+        .dsinh => return emitDoubleUnaryLibm(ctx, builder, "sinh", args),
+        .cosh => return emitCosh(ctx, builder, args),
+        .dcosh => return emitDoubleUnaryLibm(ctx, builder, "cosh", args),
+        .dsqrt => return emitDoubleUnaryLibm(ctx, builder, "sqrt", args),
+        .dsin => return emitDoubleUnaryLibm(ctx, builder, "sin", args),
+        .dcos => return emitDoubleUnaryLibm(ctx, builder, "cos", args),
+        .exp => return emitExp(ctx, builder, args),
+        .dexp => return emitDoubleUnaryLibm(ctx, builder, "exp", args),
+        .alog => return emitAlog(ctx, builder, args),
+        .log_ => return emitLog(ctx, builder, args),
+        .dlog => return emitDoubleUnaryLibm(ctx, builder, "log", args),
+        .alog10 => return emitAlog10(ctx, builder, args),
+        .log10 => return emitDoubleUnaryLibm(ctx, builder, "log10", args),
+        .dlog10 => return emitDoubleUnaryLibm(ctx, builder, "log10", args),
+        .tanh => return emitTanh(ctx, builder, args),
+        .dtanh => return emitDoubleUnaryLibm(ctx, builder, "tanh", args),
+        .atan => return emitAtan(ctx, builder, args),
+        .datan => return emitDoubleUnaryLibm(ctx, builder, "atan", args),
+        .atan2 => return emitAtan2(ctx, builder, args),
+        .datan2 => return emitDoubleBinaryLibm(ctx, builder, "atan2", args),
+        .csin => return emitComplexCsin(ctx, builder, args),
+        .ccos => return emitComplexCcos(ctx, builder, args),
+        .cexp => return emitComplexCexp(ctx, builder, args),
+        .clog => return emitComplexClog(ctx, builder, args),
+        .csqrt => return emitComplexCsqrt(ctx, builder, args),
     }
-    if (std.ascii.eqlIgnoreCase(name, "COS")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const arg_ty = try casting.exprType(ctx, args[0]);
-        if (complex.isComplexType(arg_ty)) return emitComplexCcos(ctx, builder, args);
-        return emitIntrinsicUnaryFloat(ctx, builder, "cos", args);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "SQRT")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const arg_ty = try casting.exprType(ctx, args[0]);
-        if (complex.isComplexType(arg_ty)) return emitComplexCsqrt(ctx, builder, args);
-        return emitIntrinsicUnaryFloat(ctx, builder, "sqrt", args);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "ABS")) return emitIntrinsicAbs(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "IABS")) return emitIntrinsicIabs(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "AINT")) return emitIntrinsicUnaryFloat(ctx, builder, "trunc", args);
-    if (std.ascii.eqlIgnoreCase(name, "INT")) return emitIntrinsicInt(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "IFIX")) return emitIntrinsicInt(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "IDINT")) return emitIntrinsicIdint(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "DABS")) return emitDoubleUnaryLibm(ctx, builder, "fabs", args);
-    if (std.ascii.eqlIgnoreCase(name, "DINT")) return emitDoubleTrunc(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "DNINT")) return emitDoubleRound(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "IDNINT")) return emitIntrinsicIdnint(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "AMOD")) return emitIntrinsicRemainder(ctx, builder, args, false, true);
-    if (std.ascii.eqlIgnoreCase(name, "MOD")) return emitIntrinsicRemainder(ctx, builder, args, true, true);
-    if (std.ascii.eqlIgnoreCase(name, "DMOD")) return emitDoubleRemainder(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "MIN")) return emitIntrinsicMinMax(ctx, builder, args, false);
-    if (std.ascii.eqlIgnoreCase(name, "MAX")) return emitIntrinsicMinMax(ctx, builder, args, true);
-    if (std.ascii.eqlIgnoreCase(name, "DMIN1")) return emitDoubleMinMax(ctx, builder, args, false);
-    if (std.ascii.eqlIgnoreCase(name, "DMAX1")) return emitDoubleMinMax(ctx, builder, args, true);
-    if (std.ascii.eqlIgnoreCase(name, "AMIN0")) {
-        const int_min = try emitMinMaxNInt(ctx, builder, args, false);
-        return casting.coerce(ctx, builder, int_min, .f32);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "AMAX0")) {
-        const int_max = try emitMinMaxNInt(ctx, builder, args, true);
-        return casting.coerce(ctx, builder, int_max, .f32);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "AMIN1")) return emitIntrinsicMinMax(ctx, builder, args, false);
-    if (std.ascii.eqlIgnoreCase(name, "AMAX1")) return emitIntrinsicMinMax(ctx, builder, args, true);
-    if (std.ascii.eqlIgnoreCase(name, "MIN0")) return emitMinMaxNInt(ctx, builder, args, false);
-    if (std.ascii.eqlIgnoreCase(name, "MAX0")) return emitMinMaxNInt(ctx, builder, args, true);
-    if (std.ascii.eqlIgnoreCase(name, "MIN1")) {
-        const real_min = try emitIntrinsicMinMax(ctx, builder, args, false);
-        return casting.coerce(ctx, builder, real_min, .i32);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "MAX1")) {
-        const real_max = try emitIntrinsicMinMax(ctx, builder, args, true);
-        return casting.coerce(ctx, builder, real_max, .i32);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "SIGN")) return emitIntrinsicSign(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "DSIGN")) return emitDoubleSign(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "ISIGN")) {
-        const value = try emitIntrinsicSign(ctx, builder, args);
-        return casting.coerce(ctx, builder, value, .i32);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DIM")) return emitIntrinsicDim(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "DDIM")) return emitDoubleDim(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "IDIM")) {
-        const value = try emitIntrinsicDim(ctx, builder, args);
-        return casting.coerce(ctx, builder, value, .i32);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DPROD")) return emitIntrinsicDprod(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "CONJG")) return emitIntrinsicConjg(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "DCONJG")) return emitIntrinsicDconjg(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "CMPLX")) return emitIntrinsicCmplx(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "DCMPLX")) return emitIntrinsicDcmplx(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "FLOAT")) return emitIntrinsicFloat(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "REAL")) return emitIntrinsicFloat(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "DBLE")) return emitIntrinsicDble(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "SNGL")) return emitIntrinsicSngl(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "AIMAG")) return emitIntrinsicAimag(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "DIMAG")) return emitIntrinsicDimag(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "CABS")) return emitIntrinsicCabs(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "ANINT")) return emitIntrinsicAnint(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "NINT")) return emitIntrinsicNint(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "ICHAR")) return emitIntrinsicIchar(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "EPSILON")) return emitIntrinsicEpsilon(ctx, args);
-    if (std.ascii.eqlIgnoreCase(name, "HUGE")) return emitIntrinsicHuge(ctx, args);
-    if (std.ascii.eqlIgnoreCase(name, "LEN")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const len = lenForExpr(ctx, args[0]) orelse return error.UnsupportedIntrinsicType;
-        return .{ .name = utils.formatInt(ctx.allocator, @as(i64, @intCast(len))), .ty = .i32, .is_ptr = false };
-    }
-    if (std.ascii.eqlIgnoreCase(name, "TAN")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const value = try dispatch.emitExpr(ctx, builder, args[0]);
-        return emitLibmUnaryFloatValue(ctx, builder, "tanf", "tan", value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DTAN")) return emitDoubleUnaryLibm(ctx, builder, "tan", args);
-    if (std.ascii.eqlIgnoreCase(name, "ASIN")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const value = try dispatch.emitExpr(ctx, builder, args[0]);
-        return emitLibmUnaryFloatValue(ctx, builder, "asinf", "asin", value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DASIN")) return emitDoubleUnaryLibm(ctx, builder, "asin", args);
-    if (std.ascii.eqlIgnoreCase(name, "ACOS")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const value = try dispatch.emitExpr(ctx, builder, args[0]);
-        return emitLibmUnaryFloatValue(ctx, builder, "acosf", "acos", value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DACOS")) return emitDoubleUnaryLibm(ctx, builder, "acos", args);
-    if (std.ascii.eqlIgnoreCase(name, "SINH")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const value = try dispatch.emitExpr(ctx, builder, args[0]);
-        return emitLibmUnaryFloatValue(ctx, builder, "sinhf", "sinh", value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DSINH")) return emitDoubleUnaryLibm(ctx, builder, "sinh", args);
-    if (std.ascii.eqlIgnoreCase(name, "COSH")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const value = try dispatch.emitExpr(ctx, builder, args[0]);
-        return emitLibmUnaryFloatValue(ctx, builder, "coshf", "cosh", value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DCOSH")) return emitDoubleUnaryLibm(ctx, builder, "cosh", args);
-    if (std.ascii.eqlIgnoreCase(name, "DSQRT")) return emitDoubleUnaryLibm(ctx, builder, "sqrt", args);
-    if (std.ascii.eqlIgnoreCase(name, "DSIN")) return emitDoubleUnaryLibm(ctx, builder, "sin", args);
-    if (std.ascii.eqlIgnoreCase(name, "DCOS")) return emitDoubleUnaryLibm(ctx, builder, "cos", args);
-    if (std.ascii.eqlIgnoreCase(name, "EXP")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const arg_ty = try casting.exprType(ctx, args[0]);
-        if (complex.isComplexType(arg_ty)) return emitComplexCexp(ctx, builder, args);
-        const value = try dispatch.emitExpr(ctx, builder, args[0]);
-        return emitLibmUnaryFloatValue(ctx, builder, "expf", "exp", value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DEXP")) return emitDoubleUnaryLibm(ctx, builder, "exp", args);
-    if (std.ascii.eqlIgnoreCase(name, "ALOG")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const value = try dispatch.emitExpr(ctx, builder, args[0]);
-        return emitLibmUnaryFloatValue(ctx, builder, "logf", "log", value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "LOG")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const arg_ty = try casting.exprType(ctx, args[0]);
-        if (complex.isComplexType(arg_ty)) return emitComplexClog(ctx, builder, args);
-        return emitDoubleUnaryLibm(ctx, builder, "log", args);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DLOG")) return emitDoubleUnaryLibm(ctx, builder, "log", args);
-    if (std.ascii.eqlIgnoreCase(name, "ALOG10")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const value = try dispatch.emitExpr(ctx, builder, args[0]);
-        return emitLibmUnaryFloatValue(ctx, builder, "log10f", "log10", value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "LOG10")) return emitDoubleUnaryLibm(ctx, builder, "log10", args);
-    if (std.ascii.eqlIgnoreCase(name, "DLOG10")) return emitDoubleUnaryLibm(ctx, builder, "log10", args);
-    if (std.ascii.eqlIgnoreCase(name, "TANH")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const value = try dispatch.emitExpr(ctx, builder, args[0]);
-        return emitLibmUnaryFloatValue(ctx, builder, "tanhf", "tanh", value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DTANH")) return emitDoubleUnaryLibm(ctx, builder, "tanh", args);
-    if (std.ascii.eqlIgnoreCase(name, "ATAN")) {
-        if (args.len != 1) return error.InvalidIntrinsicCall;
-        const value = try dispatch.emitExpr(ctx, builder, args[0]);
-        return emitLibmUnaryFloatValue(ctx, builder, "atanf", "atan", value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DATAN")) return emitDoubleUnaryLibm(ctx, builder, "atan", args);
-    if (std.ascii.eqlIgnoreCase(name, "ATAN2")) {
-        if (args.len != 2) return error.InvalidIntrinsicCall;
-        const left = try dispatch.emitExpr(ctx, builder, args[0]);
-        const right = try dispatch.emitExpr(ctx, builder, args[1]);
-        return emitLibmBinaryFloatValue(ctx, builder, "atan2f", "atan2", left, right);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "DATAN2")) return emitDoubleBinaryLibm(ctx, builder, "atan2", args);
-    if (std.ascii.eqlIgnoreCase(name, "CSIN")) return emitComplexCsin(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "CCOS")) return emitComplexCcos(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "CEXP")) return emitComplexCexp(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "CLOG")) return emitComplexClog(ctx, builder, args);
-    if (std.ascii.eqlIgnoreCase(name, "CSQRT")) return emitComplexCsqrt(ctx, builder, args);
-    return error.UnknownIntrinsic;
 }
