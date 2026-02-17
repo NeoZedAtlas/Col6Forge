@@ -12,6 +12,7 @@ const CallOrSubscript = ast.CallOrSubscript;
 const Expr = ast.Expr;
 const Context = context.Context;
 const ValueRef = context.ValueRef;
+const index_ty: ir.IRType = .i64;
 
 pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) !ValueRef {
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
@@ -24,9 +25,9 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     var offset = try emitColumnMajorOffset(ctx, builder, sym, call.args);
 
     if (sym.type_kind == .character) {
-        const char_len: i64 = @intCast(sym.char_len orelse 1);
+        const char_len = sym.char_len orelse return error.ArraysUnsupported;
         if (char_len != 1) {
-            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, char_len), .ty = offset.ty, .is_ptr = false };
+            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = offset.ty, .is_ptr = false };
             offset = try binary.emitMul(ctx, builder, offset, scale);
         }
     }
@@ -39,8 +40,8 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
 // Compute the linear element offset for Fortran arrays (column-major order).
 // Preconditions: sym.dims.len > 0 and args.len == sym.dims.len.
 fn emitColumnMajorOffset(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, args: []*Expr) !ValueRef {
-    var offset = utils.zeroValue(.i32);
-    var stride = utils.oneValue();
+    var offset = utils.zeroValue(index_ty);
+    var stride = oneIndexValue();
 
     var idx: usize = 0;
     while (idx < sym.dims.len) : (idx += 1) {
@@ -67,11 +68,11 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
 
     if (call.args.len != 1) return error.InvalidSubscript;
     const idx1 = try emitIndex(ctx, builder, call.args[0]);
-    var idx1_adj = try binary.emitSub(ctx, builder, idx1, utils.oneValue());
+    var idx1_adj = try binary.emitSub(ctx, builder, idx1, oneIndexValue());
     if (sym.type_kind == .character) {
-        const char_len: i64 = @intCast(sym.char_len orelse 1);
+        const char_len = sym.char_len orelse return error.ArraysUnsupported;
         if (char_len != 1) {
-            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, char_len), .ty = idx1_adj.ty, .is_ptr = false };
+            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = idx1_adj.ty, .is_ptr = false };
             idx1_adj = try binary.emitMul(ctx, builder, idx1_adj, scale);
         }
     }
@@ -90,19 +91,19 @@ pub fn emitDimValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
                 return error.AssumedSizeDimUnsupported;
             }
             var upper = try dispatch.emitExpr(ctx, builder, range.upper);
-            upper = try casting.coerce(ctx, builder, upper, .i32);
-            var lower_val = utils.oneValue();
+            upper = try casting.coerce(ctx, builder, upper, index_ty);
+            var lower_val = oneIndexValue();
             if (range.lower) |lower_expr| {
                 lower_val = try dispatch.emitExpr(ctx, builder, lower_expr);
-                lower_val = try casting.coerce(ctx, builder, lower_val, .i32);
+                lower_val = try casting.coerce(ctx, builder, lower_val, index_ty);
             }
             const diff = try binary.emitSub(ctx, builder, upper, lower_val);
-            return binary.emitAdd(ctx, builder, diff, utils.oneValue());
+            return binary.emitAdd(ctx, builder, diff, oneIndexValue());
         },
         else => {},
     }
     const value = try dispatch.emitExpr(ctx, builder, expr);
-    return casting.coerce(ctx, builder, value, .i32);
+    return casting.coerce(ctx, builder, value, index_ty);
 }
 
 fn emitDimLower(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
@@ -110,16 +111,16 @@ fn emitDimLower(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
         const range = expr.dim_range;
         if (range.lower) |lower_expr| {
             var lower_val = try dispatch.emitExpr(ctx, builder, lower_expr);
-            lower_val = try casting.coerce(ctx, builder, lower_val, .i32);
+            lower_val = try casting.coerce(ctx, builder, lower_val, index_ty);
             return lower_val;
         }
     }
-    return utils.oneValue();
+    return oneIndexValue();
 }
 
 pub fn emitIndex(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     const value = try dispatch.emitExpr(ctx, builder, expr);
-    return casting.coerce(ctx, builder, value, .i32);
+    return casting.coerce(ctx, builder, value, index_ty);
 }
 
 pub fn loadValue(ctx: *Context, builder: anytype, ptr: ValueRef, ty: ir.IRType) !ValueRef {
@@ -132,4 +133,8 @@ pub fn loadI32(ctx: *Context, builder: anytype, ptr_name: []const u8) !ValueRef 
     const tmp = try ctx.nextTemp();
     try builder.loadI32(tmp, ptr_name);
     return .{ .name = tmp, .ty = .i32, .is_ptr = false };
+}
+
+fn oneIndexValue() ValueRef {
+    return .{ .name = "1", .ty = index_ty, .is_ptr = false };
 }

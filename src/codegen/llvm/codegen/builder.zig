@@ -201,7 +201,10 @@ pub fn Builder(comptime WriterType: type) type {
 
         pub fn gep(self: *@This(), tmp: []const u8, elem_ty: IRType, base_ptr: ValueRef, offset: ValueRef) !void {
             try self.bump();
-            try self.writer.print("  {s} = getelementptr {s}, ptr {s}, i32 {s}\n", .{ tmp, llvm_types.irTypeText(elem_ty), base_ptr.name, offset.name });
+            try self.writer.print(
+                "  {s} = getelementptr {s}, ptr {s}, {s} {s}\n",
+                .{ tmp, llvm_types.irTypeText(elem_ty), base_ptr.name, llvm_types.irTypeText(offset.ty), offset.name },
+            );
         }
 
         pub fn gepConstString(self: *@This(), tmp: []const u8, name: []const u8, len: usize) !void {
