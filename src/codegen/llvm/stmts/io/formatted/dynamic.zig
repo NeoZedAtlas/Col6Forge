@@ -14,13 +14,100 @@ const expansion = @import("../expansion.zig");
 const write_mod = @import("write.zig");
 const read_mod = @import("read.zig");
 
-const countFormatDescriptors = io_utils.countFormatDescriptors;
-const findReversionStart = io_utils.findReversionStart;
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
 const emitWriteFormatted = write_mod.emitWriteFormatted;
 const emitReadFormatted = read_mod.emitReadFormatted;
 const emitReadFormattedStatus = read_mod.emitReadFormattedStatus;
+
+const NumericFormat = struct {
+    value: i32,
+    items: []const ast.FormatItem,
+};
+
+fn lessThanNumericFormat(_: void, lhs: NumericFormat, rhs: NumericFormat) bool {
+    return lhs.value < rhs.value;
+}
+
+fn collectNumericFormats(ctx: *Context, list: *std.array_list.Managed(NumericFormat)) EmitError!void {
+    var it = ctx.formats.iterator();
+    while (it.next()) |entry| {
+        const label_text = entry.key_ptr.*;
+        const parsed = std.fmt.parseInt(i32, label_text, 10) catch continue;
+        try list.append(.{ .value = parsed, .items = entry.value_ptr.items });
+    }
+    if (list.items.len == 0) return error.MissingFormatLabel;
+
+    std.sort.heap(NumericFormat, list.items, {}, lessThanNumericFormat);
+
+    // Deduplicate numeric labels (e.g., "0010" and "10") to keep switch valid.
+    var write_idx: usize = 0;
+    for (list.items) |fmt| {
+        if (write_idx == 0 or list.items[write_idx - 1].value != fmt.value) {
+            list.items[write_idx] = fmt;
+            write_idx += 1;
+        }
+    }
+    list.items.len = write_idx;
+}
+
+fn emitFormatSelector(ctx: *Context, builder: anytype, label_var: []const u8) EmitError!ValueRef {
+    const var_value = try expr.emitExpr(ctx, builder, try makeIdentifierExpr(ctx, label_var));
+    return expr.coerce(ctx, builder, var_value, .i32);
+}
+
+fn emitMissingDynamicFormatTrap(ctx: *Context, builder: anytype) EmitError!void {
+    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, "", false);
+    try builder.callTyped(null, .void, trap_name, &.{});
+    try builder.emitUnreachable();
+}
+
+fn emitDynamicFormatSwitch(
+    ctx: *Context,
+    builder: anytype,
+    selector: ValueRef,
+    formats: []const NumericFormat,
+    dispatch: anytype,
+) EmitError!void {
+    const BuilderType = switch (@typeInfo(@TypeOf(builder))) {
+        .pointer => |p| p.child,
+        else => @TypeOf(builder),
+    };
+    const SwitchCase = BuilderType.SwitchCase;
+    const CasePlan = struct {
+        case_item: SwitchCase,
+        items: []const ast.FormatItem,
+    };
+
+    var plans = std.array_list.Managed(CasePlan).init(ctx.allocator);
+    defer plans.deinit();
+    var cases = std.array_list.Managed(SwitchCase).init(ctx.allocator);
+    defer cases.deinit();
+
+    for (formats) |fmt| {
+        const case_label = try ctx.nextLabel("fmt_case");
+        const case_item: SwitchCase = .{
+            .value = @as(i64, fmt.value),
+            .label = case_label,
+        };
+        try plans.append(.{ .case_item = case_item, .items = fmt.items });
+        try cases.append(case_item);
+    }
+
+    const done_label = try ctx.nextLabel("fmt_done");
+    const default_label = try ctx.nextLabel("fmt_default");
+    try builder.switchBr(selector, default_label, cases.items);
+
+    for (plans.items) |plan| {
+        try builder.label(plan.case_item.label);
+        try dispatch.emitMatched(ctx, builder, plan.items);
+        try builder.br(done_label);
+    }
+
+    try builder.label(default_label);
+    try dispatch.emitDefault(ctx, builder, done_label);
+    try builder.label(done_label);
+}
 
 pub fn emitWriteDynamicFormat(
     ctx: *Context,
@@ -34,105 +121,50 @@ pub fn emitWriteDynamicFormat(
     label_var: []const u8,
     expanded_values: *ExpandedWriteValues,
 ) EmitError!void {
-    const var_value = try expr.emitExpr(ctx, builder, try makeIdentifierExpr(ctx, label_var));
-    const var_i32 = try expr.coerce(ctx, builder, var_value, .i32);
-
-    const NumericFormat = struct {
-        value: i32,
-        items: []const ast.FormatItem,
-    };
     var numeric_formats = std.array_list.Managed(NumericFormat).init(ctx.allocator);
     defer numeric_formats.deinit();
+    try collectNumericFormats(ctx, &numeric_formats);
+    const var_i32 = try emitFormatSelector(ctx, builder, label_var);
 
-    var it = ctx.formats.iterator();
-    while (it.next()) |entry| {
-        const label_text = entry.key_ptr.*;
-        const parsed = std.fmt.parseInt(i32, label_text, 10) catch continue;
-        try numeric_formats.append(.{ .value = parsed, .items = entry.value_ptr.items });
-    }
-    if (numeric_formats.items.len == 0) return error.MissingFormatLabel;
+    const Dispatch = struct {
+        write: ast.WriteStmt,
+        unit_value: ValueRef,
+        unit_char_len: ?usize,
+        unit_record_count: ?usize,
+        is_internal: bool,
+        unit_i32: ValueRef,
+        expanded_values: *ExpandedWriteValues,
 
-    var compatible_formats = std.array_list.Managed(NumericFormat).init(ctx.allocator);
-    defer compatible_formats.deinit();
-    for (numeric_formats.items) |fmt_entry| {
-        if (isWriteFormatCompatible(fmt_entry.items, expanded_values)) {
-            try compatible_formats.append(fmt_entry);
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+            try emitWriteFormatted(
+                ctx_inner,
+                builder_inner,
+                self.write,
+                self.unit_value,
+                self.unit_char_len,
+                self.unit_record_count,
+                self.is_internal,
+                self.unit_i32,
+                items,
+                self.expanded_values,
+            );
         }
-    }
-    const formats = if (compatible_formats.items.len > 0) compatible_formats.items else numeric_formats.items;
 
-    const done_label = try ctx.nextLabel("fmt_done");
-    var check_label = try ctx.nextLabel("fmt_check");
-    try builder.br(check_label);
-
-    for (formats, 0..) |fmt_entry, idx| {
-        try builder.label(check_label);
-        const cmp_tmp = try ctx.nextTemp();
-        const const_text = utils.formatInt(ctx.allocator, fmt_entry.value);
-        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
-        try builder.compare(cmp_tmp, "icmp", "eq", .i32, var_i32, const_val);
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        const use_label = try ctx.nextLabel("fmt_use");
-        const next_label = if (idx + 1 < formats.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
-        try builder.brCond(cond, use_label, next_label);
-
-        try builder.label(use_label);
-        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_entry.items, expanded_values);
-        try builder.br(done_label);
-
-        check_label = next_label;
-    }
-
-    try builder.label(check_label);
-    // Fallback: use the first available format.
-    try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, formats[0].items, expanded_values);
-    try builder.br(done_label);
-    try builder.label(done_label);
-}
-
-fn isWriteFormatCompatible(fmt_items: []const ast.FormatItem, expanded_values: *ExpandedWriteValues) bool {
-    if (expanded_values.values.items.len == 0) return true;
-    const descriptor_count = countFormatDescriptors(fmt_items);
-    if (descriptor_count == 0) return false;
-    var has_char_arg = false;
-    for (expanded_values.values.items) |value| {
-        if (value.ty == .ptr) {
-            has_char_arg = true;
-            break;
+        fn emitDefault(_: @This(), ctx_inner: *Context, builder_inner: anytype, done_label: []const u8) EmitError!void {
+            _ = done_label;
+            try emitMissingDynamicFormatTrap(ctx_inner, builder_inner);
         }
-    }
-    if (!has_char_arg) {
-        for (fmt_items) |item| {
-            if (item == .char) return false;
-        }
-    }
-    var arg_index: usize = 0;
-    const reversion_start = findReversionStart(fmt_items);
-    var format_start: usize = 0;
-    var first_pass = true;
-    while (arg_index < expanded_values.values.items.len) {
-        if (!first_pass) {
-            // New record; format reversion controls descriptors only.
-        }
-        first_pass = false;
-        var idx: usize = format_start;
-        while (idx < fmt_items.len) : (idx += 1) {
-            const item = fmt_items[idx];
-            switch (item) {
-                .int, .real, .real_fixed, .logical, .char => {
-                    if (arg_index >= expanded_values.values.items.len) return true;
-                    if (item == .char and expanded_values.values.items[arg_index].ty != .ptr) return false;
-                    arg_index += 1;
-                },
-                .colon => {
-                    if (arg_index >= expanded_values.values.items.len) return true;
-                },
-                else => {},
-            }
-        }
-        format_start = reversion_start;
-    }
-    return true;
+    };
+
+    try emitDynamicFormatSwitch(ctx, builder, var_i32, numeric_formats.items, Dispatch{
+        .write = write,
+        .unit_value = unit_value,
+        .unit_char_len = unit_char_len,
+        .unit_record_count = unit_record_count,
+        .is_internal = is_internal,
+        .unit_i32 = unit_i32,
+        .expanded_values = expanded_values,
+    });
 }
 
 pub fn emitReadDynamicFormat(
@@ -147,49 +179,50 @@ pub fn emitReadDynamicFormat(
     label_var: []const u8,
     expanded: *ExpandedReadTargets,
 ) EmitError!void {
-    const var_value = try expr.emitExpr(ctx, builder, try makeIdentifierExpr(ctx, label_var));
-    const var_i32 = try expr.coerce(ctx, builder, var_value, .i32);
-
-    var numeric_formats = std.array_list.Managed(struct {
-        value: i32,
-        items: []const ast.FormatItem,
-    }).init(ctx.allocator);
+    var numeric_formats = std.array_list.Managed(NumericFormat).init(ctx.allocator);
     defer numeric_formats.deinit();
+    try collectNumericFormats(ctx, &numeric_formats);
+    const var_i32 = try emitFormatSelector(ctx, builder, label_var);
 
-    var it = ctx.formats.iterator();
-    while (it.next()) |entry| {
-        const label_text = entry.key_ptr.*;
-        const parsed = std.fmt.parseInt(i32, label_text, 10) catch continue;
-        try numeric_formats.append(.{ .value = parsed, .items = entry.value_ptr.items });
-    }
-    if (numeric_formats.items.len == 0) return error.MissingFormatLabel;
+    const Dispatch = struct {
+        read: ast.ReadStmt,
+        unit_value: ValueRef,
+        unit_char_len: ?usize,
+        unit_record_count: ?usize,
+        is_internal: bool,
+        unit_i32: ValueRef,
+        expanded: *ExpandedReadTargets,
 
-    const done_label = try ctx.nextLabel("fmt_done");
-    var check_label = try ctx.nextLabel("fmt_check");
-    try builder.br(check_label);
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+            try emitReadFormatted(
+                ctx_inner,
+                builder_inner,
+                self.read,
+                self.unit_value,
+                self.unit_char_len,
+                self.unit_record_count,
+                self.is_internal,
+                self.unit_i32,
+                items,
+                self.expanded,
+            );
+        }
 
-    for (numeric_formats.items, 0..) |fmt_entry, idx| {
-        try builder.label(check_label);
-        const cmp_tmp = try ctx.nextTemp();
-        const const_text = utils.formatInt(ctx.allocator, fmt_entry.value);
-        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
-        try builder.compare(cmp_tmp, "icmp", "eq", .i32, var_i32, const_val);
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        const use_label = try ctx.nextLabel("fmt_use");
-        const next_label = if (idx + 1 < numeric_formats.items.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
-        try builder.brCond(cond, use_label, next_label);
+        fn emitDefault(_: @This(), ctx_inner: *Context, builder_inner: anytype, done_label: []const u8) EmitError!void {
+            _ = done_label;
+            try emitMissingDynamicFormatTrap(ctx_inner, builder_inner);
+        }
+    };
 
-        try builder.label(use_label);
-        try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_entry.items, expanded);
-        try builder.br(done_label);
-
-        check_label = next_label;
-    }
-
-    try builder.label(check_label);
-    try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, numeric_formats.items[0].items, expanded);
-    try builder.br(done_label);
-    try builder.label(done_label);
+    try emitDynamicFormatSwitch(ctx, builder, var_i32, numeric_formats.items, Dispatch{
+        .read = read,
+        .unit_value = unit_value,
+        .unit_char_len = unit_char_len,
+        .unit_record_count = unit_record_count,
+        .is_internal = is_internal,
+        .unit_i32 = unit_i32,
+        .expanded = expanded,
+    });
 }
 pub fn emitReadDynamicFormatStatus(
     ctx: *Context,
@@ -203,55 +236,59 @@ pub fn emitReadDynamicFormatStatus(
     label_var: []const u8,
     expanded: *ExpandedReadTargets,
 ) EmitError!ValueRef {
-    const var_value = try expr.emitExpr(ctx, builder, try makeIdentifierExpr(ctx, label_var));
-    const var_i32 = try expr.coerce(ctx, builder, var_value, .i32);
-
-    var numeric_formats = std.array_list.Managed(struct {
-        value: i32,
-        items: []const ast.FormatItem,
-    }).init(ctx.allocator);
+    var numeric_formats = std.array_list.Managed(NumericFormat).init(ctx.allocator);
     defer numeric_formats.deinit();
-
-    var it = ctx.formats.iterator();
-    while (it.next()) |entry| {
-        const label_text = entry.key_ptr.*;
-        const parsed = std.fmt.parseInt(i32, label_text, 10) catch continue;
-        try numeric_formats.append(.{ .value = parsed, .items = entry.value_ptr.items });
-    }
-    if (numeric_formats.items.len == 0) return error.MissingFormatLabel;
+    try collectNumericFormats(ctx, &numeric_formats);
+    const var_i32 = try emitFormatSelector(ctx, builder, label_var);
 
     const status_ptr_tmp = try ctx.nextTemp();
     try builder.alloca(status_ptr_tmp, .i32);
     const status_ptr = ValueRef{ .name = status_ptr_tmp, .ty = .ptr, .is_ptr = true };
 
-    const done_label = try ctx.nextLabel("fmt_done");
-    var check_label = try ctx.nextLabel("fmt_check");
-    try builder.br(check_label);
+    const Dispatch = struct {
+        read: ast.ReadStmt,
+        unit_value: ValueRef,
+        unit_char_len: ?usize,
+        unit_record_count: ?usize,
+        is_internal: bool,
+        unit_i32: ValueRef,
+        expanded: *ExpandedReadTargets,
+        status_ptr: ValueRef,
 
-    for (numeric_formats.items, 0..) |fmt_entry, idx| {
-        try builder.label(check_label);
-        const cmp_tmp = try ctx.nextTemp();
-        const const_text = utils.formatInt(ctx.allocator, fmt_entry.value);
-        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
-        try builder.compare(cmp_tmp, "icmp", "eq", .i32, var_i32, const_val);
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        const use_label = try ctx.nextLabel("fmt_use");
-        const next_label = if (idx + 1 < numeric_formats.items.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
-        try builder.brCond(cond, use_label, next_label);
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+            const status_val = try emitReadFormattedStatus(
+                ctx_inner,
+                builder_inner,
+                self.read,
+                self.unit_value,
+                self.unit_char_len,
+                self.unit_record_count,
+                self.is_internal,
+                self.unit_i32,
+                items,
+                self.expanded,
+            );
+            try builder_inner.store(status_val, self.status_ptr);
+        }
 
-        try builder.label(use_label);
-        const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_entry.items, expanded);
-        try builder.store(status_val, status_ptr);
-        try builder.br(done_label);
+        fn emitDefault(self: @This(), _: *Context, builder_inner: anytype, done_label: []const u8) EmitError!void {
+            const status_error = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+            try builder_inner.store(status_error, self.status_ptr);
+            try builder_inner.br(done_label);
+        }
+    };
 
-        check_label = next_label;
-    }
+    try emitDynamicFormatSwitch(ctx, builder, var_i32, numeric_formats.items, Dispatch{
+        .read = read,
+        .unit_value = unit_value,
+        .unit_char_len = unit_char_len,
+        .unit_record_count = unit_record_count,
+        .is_internal = is_internal,
+        .unit_i32 = unit_i32,
+        .expanded = expanded,
+        .status_ptr = status_ptr,
+    });
 
-    try builder.label(check_label);
-    const status_val = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, numeric_formats.items[0].items, expanded);
-    try builder.store(status_val, status_ptr);
-    try builder.br(done_label);
-    try builder.label(done_label);
     const status_load = try ctx.nextTemp();
     try builder.load(status_load, .i32, status_ptr);
     return .{ .name = status_load, .ty = .i32, .is_ptr = false };
