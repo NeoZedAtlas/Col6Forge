@@ -9,6 +9,7 @@ const utils = @import("utils.zig");
 
 const Program = input.Program;
 const FormatInfo = context.FormatInfo;
+pub const CodegenOptions = context.CodegenOptions;
 
 const FormatMaps = struct {
     labels: std.StringHashMap(FormatInfo),
@@ -27,15 +28,28 @@ fn commonLayoutsCompatible(a: []const common.CommonItem, b: []const common.Commo
     return true;
 }
 
-pub fn emitModule(allocator: std.mem.Allocator, program: Program, sem: input.sema.SemanticProgram, source_name: []const u8) ![]const u8 {
+pub fn emitModule(
+    allocator: std.mem.Allocator,
+    program: Program,
+    sem: input.sema.SemanticProgram,
+    source_name: []const u8,
+    options: CodegenOptions,
+) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
     errdefer buffer.deinit();
     var writer = buffer.writer();
-    try emitModuleToWriter(&writer, allocator, program, sem, source_name);
+    try emitModuleToWriter(&writer, allocator, program, sem, source_name, options);
     return buffer.toOwnedSlice();
 }
 
-pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program: Program, sem: input.sema.SemanticProgram, source_name: []const u8) !void {
+pub fn emitModuleToWriter(
+    writer: anytype,
+    allocator: std.mem.Allocator,
+    program: Program,
+    sem: input.sema.SemanticProgram,
+    source_name: []const u8,
+    options: CodegenOptions,
+) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const scratch = arena.allocator();
@@ -131,6 +145,7 @@ pub fn emitModuleToWriter(writer: anytype, allocator: std.mem.Allocator, program
             &format_maps.inline_items,
             &string_pool,
             &intrinsic_wrappers,
+            options,
         );
         defer ctx.deinit();
         stmts.emitFunction(&ctx, &builder) catch |err| {
@@ -467,7 +482,7 @@ test "emitModuleToWriter emits module header and empty function" {
     var buffer = std.array_list.Managed(u8).init(allocator);
     defer buffer.deinit();
     var writer = buffer.writer();
-    try emitModuleToWriter(&writer, allocator, program, sem_prog, "test.f");
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "test.f", .{});
 
     const output = buffer.items;
     try testing.expect(std.mem.indexOf(u8, output, "source_filename = \"test.f\"") != null);

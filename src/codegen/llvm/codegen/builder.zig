@@ -116,6 +116,11 @@ pub fn Builder(comptime WriterType: type) type {
             try self.writer.writeAll("  ret void\n");
         }
 
+        pub fn emitUnreachable(self: *@This()) !void {
+            try self.bump();
+            try self.writer.writeAll("  unreachable\n");
+        }
+
         pub fn retValue(self: *@This(), ty: IRType, value: []const u8) !void {
             try self.bump();
             try self.writer.print("  ret {s} {s}\n", .{ llvm_types.irTypeText(ty), value });

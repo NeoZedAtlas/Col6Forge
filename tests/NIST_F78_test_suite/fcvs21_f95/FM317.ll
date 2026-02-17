@@ -2912,71 +2912,71 @@ bb443:
   br label %bb444
 bb444:
   %t1293 = sext i32 1 to i64
-  %t1294 = sub i64 %t1293, 1
-  %t1295 = mul i64 %t1294, 1
-  %t1296 = add i64 0, %t1295
-  %t1297 = sext i32 2 to i64
-  %t1298 = mul i64 1, %t1297
+  %t1294 = sext i32 2 to i64
+  %t1295 = sub i64 %t1293, 1
+  %t1296 = mul i64 %t1295, 1
+  %t1297 = add i64 0, %t1296
+  %t1298 = mul i64 1, %t1294
   %t1299 = sext i32 1 to i64
   %t1300 = sub i64 %t1299, 1
   %t1301 = mul i64 %t1300, %t1298
-  %t1302 = add i64 %t1296, %t1301
+  %t1302 = add i64 %t1297, %t1301
   %t1303 = getelementptr i32, ptr %t8, i64 %t1302
   store i32 1, ptr %t1303
   br label %bb445
 bb445:
   %t1304 = sext i32 2 to i64
-  %t1305 = sub i64 %t1304, 1
-  %t1306 = mul i64 %t1305, 1
-  %t1307 = add i64 0, %t1306
-  %t1308 = sext i32 2 to i64
-  %t1309 = mul i64 1, %t1308
+  %t1305 = sext i32 2 to i64
+  %t1306 = sub i64 %t1304, 1
+  %t1307 = mul i64 %t1306, 1
+  %t1308 = add i64 0, %t1307
+  %t1309 = mul i64 1, %t1305
   %t1310 = sext i32 1 to i64
   %t1311 = sub i64 %t1310, 1
   %t1312 = mul i64 %t1311, %t1309
-  %t1313 = add i64 %t1307, %t1312
+  %t1313 = add i64 %t1308, %t1312
   %t1314 = getelementptr i32, ptr %t8, i64 %t1313
   store i32 10, ptr %t1314
   br label %bb446
 bb446:
   %t1315 = sext i32 1 to i64
-  %t1316 = sub i64 %t1315, 1
-  %t1317 = mul i64 %t1316, 1
-  %t1318 = add i64 0, %t1317
-  %t1319 = sext i32 2 to i64
-  %t1320 = mul i64 1, %t1319
+  %t1316 = sext i32 2 to i64
+  %t1317 = sub i64 %t1315, 1
+  %t1318 = mul i64 %t1317, 1
+  %t1319 = add i64 0, %t1318
+  %t1320 = mul i64 1, %t1316
   %t1321 = sext i32 2 to i64
   %t1322 = sub i64 %t1321, 1
   %t1323 = mul i64 %t1322, %t1320
-  %t1324 = add i64 %t1318, %t1323
+  %t1324 = add i64 %t1319, %t1323
   %t1325 = getelementptr i32, ptr %t8, i64 %t1324
   store i32 100, ptr %t1325
   br label %bb447
 bb447:
   %t1326 = sext i32 2 to i64
-  %t1327 = sub i64 %t1326, 1
-  %t1328 = mul i64 %t1327, 1
-  %t1329 = add i64 0, %t1328
-  %t1330 = sext i32 2 to i64
-  %t1331 = mul i64 1, %t1330
+  %t1327 = sext i32 2 to i64
+  %t1328 = sub i64 %t1326, 1
+  %t1329 = mul i64 %t1328, 1
+  %t1330 = add i64 0, %t1329
+  %t1331 = mul i64 1, %t1327
   %t1332 = sext i32 2 to i64
   %t1333 = sub i64 %t1332, 1
   %t1334 = mul i64 %t1333, %t1331
-  %t1335 = add i64 %t1329, %t1334
+  %t1335 = add i64 %t1330, %t1334
   %t1336 = getelementptr i32, ptr %t8, i64 %t1335
   store i32 1000, ptr %t1336
   br label %bb448
 bb448:
   %t1337 = sext i32 1 to i64
-  %t1338 = sub i64 %t1337, 1
-  %t1339 = mul i64 %t1338, 1
-  %t1340 = add i64 0, %t1339
-  %t1341 = sext i32 2 to i64
-  %t1342 = mul i64 1, %t1341
+  %t1338 = sext i32 2 to i64
+  %t1339 = sub i64 %t1337, 1
+  %t1340 = mul i64 %t1339, 1
+  %t1341 = add i64 0, %t1340
+  %t1342 = mul i64 1, %t1338
   %t1343 = sext i32 3 to i64
   %t1344 = sub i64 %t1343, 1
   %t1345 = mul i64 %t1344, %t1342
-  %t1346 = add i64 %t1340, %t1345
+  %t1346 = add i64 %t1341, %t1345
   %t1347 = getelementptr i32, ptr %t8, i64 %t1346
   store i32 10000, ptr %t1347
   br label %bb449
@@ -3394,85 +3394,85 @@ bb508:
   br label %bb509
 bb509:
   %t1552 = sext i32 2 to i64
-  %t1553 = sub i64 %t1552, 1
-  %t1554 = mul i64 %t1553, 1
-  %t1555 = add i64 0, %t1554
-  %t1556 = sext i32 3 to i64
-  %t1557 = mul i64 1, %t1556
+  %t1553 = sext i32 3 to i64
+  %t1554 = sub i64 %t1552, 1
+  %t1555 = mul i64 %t1554, 1
+  %t1556 = add i64 0, %t1555
+  %t1557 = mul i64 1, %t1553
   %t1558 = sext i32 3 to i64
   %t1559 = sub i64 %t1558, 1
   %t1560 = mul i64 %t1559, %t1557
-  %t1561 = add i64 %t1555, %t1560
+  %t1561 = add i64 %t1556, %t1560
   %t1562 = getelementptr float, ptr %t9, i64 %t1561
   store float 1.0e0, ptr %t1562
   br label %bb510
 bb510:
   %t1563 = sext i32 3 to i64
-  %t1564 = sub i64 %t1563, 1
-  %t1565 = mul i64 %t1564, 1
-  %t1566 = add i64 0, %t1565
-  %t1567 = sext i32 3 to i64
-  %t1568 = mul i64 1, %t1567
+  %t1564 = sext i32 3 to i64
+  %t1565 = sub i64 %t1563, 1
+  %t1566 = mul i64 %t1565, 1
+  %t1567 = add i64 0, %t1566
+  %t1568 = mul i64 1, %t1564
   %t1569 = sext i32 3 to i64
   %t1570 = sub i64 %t1569, 1
   %t1571 = mul i64 %t1570, %t1568
-  %t1572 = add i64 %t1566, %t1571
+  %t1572 = add i64 %t1567, %t1571
   %t1573 = getelementptr float, ptr %t9, i64 %t1572
   store float 1.0e1, ptr %t1573
   br label %bb511
 bb511:
   %t1574 = sext i32 1 to i64
-  %t1575 = sub i64 %t1574, 1
-  %t1576 = mul i64 %t1575, 1
-  %t1577 = add i64 0, %t1576
-  %t1578 = sext i32 3 to i64
-  %t1579 = mul i64 1, %t1578
+  %t1575 = sext i32 3 to i64
+  %t1576 = sub i64 %t1574, 1
+  %t1577 = mul i64 %t1576, 1
+  %t1578 = add i64 0, %t1577
+  %t1579 = mul i64 1, %t1575
   %t1580 = sext i32 4 to i64
   %t1581 = sub i64 %t1580, 1
   %t1582 = mul i64 %t1581, %t1579
-  %t1583 = add i64 %t1577, %t1582
+  %t1583 = add i64 %t1578, %t1582
   %t1584 = getelementptr float, ptr %t9, i64 %t1583
   store float 1.0e2, ptr %t1584
   br label %bb512
 bb512:
   %t1585 = sext i32 2 to i64
-  %t1586 = sub i64 %t1585, 1
-  %t1587 = mul i64 %t1586, 1
-  %t1588 = add i64 0, %t1587
-  %t1589 = sext i32 3 to i64
-  %t1590 = mul i64 1, %t1589
+  %t1586 = sext i32 3 to i64
+  %t1587 = sub i64 %t1585, 1
+  %t1588 = mul i64 %t1587, 1
+  %t1589 = add i64 0, %t1588
+  %t1590 = mul i64 1, %t1586
   %t1591 = sext i32 4 to i64
   %t1592 = sub i64 %t1591, 1
   %t1593 = mul i64 %t1592, %t1590
-  %t1594 = add i64 %t1588, %t1593
+  %t1594 = add i64 %t1589, %t1593
   %t1595 = getelementptr float, ptr %t9, i64 %t1594
   store float 1.0e3, ptr %t1595
   br label %bb513
 bb513:
   %t1596 = sext i32 3 to i64
-  %t1597 = sub i64 %t1596, 1
-  %t1598 = mul i64 %t1597, 1
-  %t1599 = add i64 0, %t1598
-  %t1600 = sext i32 3 to i64
-  %t1601 = mul i64 1, %t1600
+  %t1597 = sext i32 3 to i64
+  %t1598 = sub i64 %t1596, 1
+  %t1599 = mul i64 %t1598, 1
+  %t1600 = add i64 0, %t1599
+  %t1601 = mul i64 1, %t1597
   %t1602 = sext i32 4 to i64
   %t1603 = sub i64 %t1602, 1
   %t1604 = mul i64 %t1603, %t1601
-  %t1605 = add i64 %t1599, %t1604
+  %t1605 = add i64 %t1600, %t1604
   %t1606 = getelementptr float, ptr %t9, i64 %t1605
   store float 1.0e4, ptr %t1606
   br label %bb514
 bb514:
   %t1607 = sext i32 3 to i64
-  %t1608 = sub i64 %t1607, 1
-  %t1609 = mul i64 %t1608, 1
-  %t1610 = add i64 0, %t1609
-  %t1611 = sext i32 3 to i64
-  %t1612 = mul i64 1, %t1611
+  %t1608 = sext i32 3 to i64
+  %t1609 = sub i64 %t1607, 1
+  %t1610 = mul i64 %t1609, 1
+  %t1611 = add i64 0, %t1610
+  %t1612 = mul i64 1, %t1608
   %t1613 = sext i32 3 to i64
   %t1614 = sub i64 %t1613, 1
   %t1615 = mul i64 %t1614, %t1612
-  %t1616 = add i64 %t1610, %t1615
+  %t1616 = add i64 %t1611, %t1615
   %t1617 = getelementptr float, ptr %t9, i64 %t1616
   %t1618 = call float @ff323_(ptr %t1617)
   store float %t1618, ptr %t20
@@ -4210,53 +4210,53 @@ entry:
   br label %bb0
 bb0:
   %t1 = sext i32 1 to i64
-  %t2 = sub i64 %t1, 1
-  %t3 = mul i64 %t2, 1
-  %t4 = add i64 0, %t3
-  %t5 = sext i32 2 to i64
-  %t6 = mul i64 1, %t5
+  %t2 = sext i32 2 to i64
+  %t3 = sub i64 %t1, 1
+  %t4 = mul i64 %t3, 1
+  %t5 = add i64 0, %t4
+  %t6 = mul i64 1, %t2
   %t7 = sext i32 1 to i64
   %t8 = sub i64 %t7, 1
   %t9 = mul i64 %t8, %t6
-  %t10 = add i64 %t4, %t9
+  %t10 = add i64 %t5, %t9
   %t11 = getelementptr float, ptr %arg0, i64 %t10
   %t12 = load float, ptr %t11
   %t13 = sext i32 2 to i64
-  %t14 = sub i64 %t13, 1
-  %t15 = mul i64 %t14, 1
-  %t16 = add i64 0, %t15
-  %t17 = sext i32 2 to i64
-  %t18 = mul i64 1, %t17
+  %t14 = sext i32 2 to i64
+  %t15 = sub i64 %t13, 1
+  %t16 = mul i64 %t15, 1
+  %t17 = add i64 0, %t16
+  %t18 = mul i64 1, %t14
   %t19 = sext i32 1 to i64
   %t20 = sub i64 %t19, 1
   %t21 = mul i64 %t20, %t18
-  %t22 = add i64 %t16, %t21
+  %t22 = add i64 %t17, %t21
   %t23 = getelementptr float, ptr %arg0, i64 %t22
   %t24 = load float, ptr %t23
   %t25 = fadd float %t12, %t24
   %t26 = sext i32 1 to i64
-  %t27 = sub i64 %t26, 1
-  %t28 = mul i64 %t27, 1
-  %t29 = add i64 0, %t28
-  %t30 = sext i32 2 to i64
-  %t31 = mul i64 1, %t30
+  %t27 = sext i32 2 to i64
+  %t28 = sub i64 %t26, 1
+  %t29 = mul i64 %t28, 1
+  %t30 = add i64 0, %t29
+  %t31 = mul i64 1, %t27
   %t32 = sext i32 2 to i64
   %t33 = sub i64 %t32, 1
   %t34 = mul i64 %t33, %t31
-  %t35 = add i64 %t29, %t34
+  %t35 = add i64 %t30, %t34
   %t36 = getelementptr float, ptr %arg0, i64 %t35
   %t37 = load float, ptr %t36
   %t38 = fadd float %t25, %t37
   %t39 = sext i32 2 to i64
-  %t40 = sub i64 %t39, 1
-  %t41 = mul i64 %t40, 1
-  %t42 = add i64 0, %t41
-  %t43 = sext i32 2 to i64
-  %t44 = mul i64 1, %t43
+  %t40 = sext i32 2 to i64
+  %t41 = sub i64 %t39, 1
+  %t42 = mul i64 %t41, 1
+  %t43 = add i64 0, %t42
+  %t44 = mul i64 1, %t40
   %t45 = sext i32 2 to i64
   %t46 = sub i64 %t45, 1
   %t47 = mul i64 %t46, %t44
-  %t48 = add i64 %t42, %t47
+  %t48 = add i64 %t43, %t47
   %t49 = getelementptr float, ptr %arg0, i64 %t48
   %t50 = load float, ptr %t49
   %t51 = fadd float %t38, %t50

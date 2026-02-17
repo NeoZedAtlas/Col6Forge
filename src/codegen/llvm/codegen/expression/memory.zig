@@ -47,13 +47,21 @@ fn emitColumnMajorOffset(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, 
     while (idx < sym.dims.len) : (idx += 1) {
         const idx_val = try emitIndex(ctx, builder, args[idx]);
         const lb = try emitDimLower(ctx, builder, sym.dims[idx]);
+        var dim_val: ?ValueRef = null;
+        if (ctx.options.bounds_check or idx + 1 < sym.dims.len) {
+            dim_val = try emitDimValue(ctx, builder, sym.dims[idx]);
+        }
+        if (ctx.options.bounds_check) {
+            const upper_delta = try binary.emitSub(ctx, builder, dim_val.?, oneIndexValue());
+            const upper = try binary.emitAdd(ctx, builder, lb, upper_delta);
+            try emitBoundsCheck(ctx, builder, idx_val, lb, upper);
+        }
         const idx_adj = try binary.emitSub(ctx, builder, idx_val, lb);
         const term = try binary.emitMul(ctx, builder, idx_adj, stride);
         offset = try binary.emitAdd(ctx, builder, offset, term);
 
         if (idx + 1 < sym.dims.len) {
-            const dim_val = try emitDimValue(ctx, builder, sym.dims[idx]);
-            stride = try binary.emitMul(ctx, builder, stride, dim_val);
+            stride = try binary.emitMul(ctx, builder, stride, dim_val.?);
         }
     }
 
@@ -68,6 +76,14 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
 
     if (call.args.len != 1) return error.InvalidSubscript;
     const idx1 = try emitIndex(ctx, builder, call.args[0]);
+    if (ctx.options.bounds_check) {
+        var extent_total = oneIndexValue();
+        for (sym.dims) |dim_expr| {
+            const dim_val = try emitDimValue(ctx, builder, dim_expr);
+            extent_total = try binary.emitMul(ctx, builder, extent_total, dim_val);
+        }
+        try emitBoundsCheck(ctx, builder, idx1, oneIndexValue(), extent_total);
+    }
     var idx1_adj = try binary.emitSub(ctx, builder, idx1, oneIndexValue());
     if (sym.type_kind == .character) {
         const char_len = sym.char_len orelse return error.ArraysUnsupported;
@@ -137,4 +153,29 @@ pub fn loadI32(ctx: *Context, builder: anytype, ptr_name: []const u8) !ValueRef 
 
 fn oneIndexValue() ValueRef {
     return .{ .name = "1", .ty = index_ty, .is_ptr = false };
+}
+
+fn emitBoundsCheck(ctx: *Context, builder: anytype, index: ValueRef, lower: ValueRef, upper: ValueRef) !void {
+    const below_name = try ctx.nextTemp();
+    try builder.compare(below_name, "icmp", "slt", index_ty, index, lower);
+    const below = ValueRef{ .name = below_name, .ty = .i1, .is_ptr = false };
+
+    const above_name = try ctx.nextTemp();
+    try builder.compare(above_name, "icmp", "sgt", index_ty, index, upper);
+    const above = ValueRef{ .name = above_name, .ty = .i1, .is_ptr = false };
+
+    const oob_name = try ctx.nextTemp();
+    try builder.binary(oob_name, "or", .i1, below, above);
+    const oob = ValueRef{ .name = oob_name, .ty = .i1, .is_ptr = false };
+
+    const fail_label = try ctx.nextLabel("bounds_fail");
+    const ok_label = try ctx.nextLabel("bounds_ok");
+    try builder.brCond(oob, fail_label, ok_label);
+
+    try builder.label(fail_label);
+    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, "", false);
+    try builder.callTyped(null, .void, trap_name, &.{});
+    try builder.emitUnreachable();
+
+    try builder.label(ok_label);
 }

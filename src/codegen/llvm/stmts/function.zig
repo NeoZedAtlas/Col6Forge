@@ -597,7 +597,7 @@ test "emitFunction emits a simple assignment" {
     var string_pool = context.StringPool.init(a);
     var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
     defer intrinsic_wrappers.deinit();
-    var ctx = Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers);
+    var ctx = Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, .{});
     defer ctx.deinit();
 
     var buffer = std.array_list.Managed(u8).init(allocator);

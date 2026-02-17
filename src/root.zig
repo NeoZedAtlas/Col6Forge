@@ -8,6 +8,7 @@ pub const pipeline = @import("driver/pipeline.zig");
 
 pub const Diagnostic = diag.Diagnostic;
 pub const EmitKind = pipeline.EmitKind;
+pub const PipelineOptions = pipeline.PipelineOptions;
 pub const LogicalLine = frontend.LogicalLine;
 pub const PipelineResult = pipeline.PipelineResult;
 pub const Token = frontend.Token;
@@ -18,6 +19,8 @@ pub const SemanticProgram = sema.SemanticProgram;
 pub const writeDiagnostic = diag.writeDiagnostic;
 pub const runPipeline = pipeline.runPipeline;
 pub const runPipelineToWriter = pipeline.runPipelineToWriter;
+pub const runPipelineWithOptions = pipeline.runPipelineWithOptions;
+pub const runPipelineToWriterWithOptions = pipeline.runPipelineToWriterWithOptions;
 pub const takeLastPipelineDiagnostic = pipeline.takeLastDiagnostic;
 pub const writePipelineErrorDiagnostic = pipeline.writePipelineErrorDiagnostic;
 pub const normalizeFixedForm = frontend.normalizeFixedForm;

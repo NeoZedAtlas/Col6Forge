@@ -10,6 +10,10 @@ pub const EmitKind = enum {
     llvm,
 };
 
+pub const PipelineOptions = struct {
+    bounds_check: bool = false,
+};
+
 pub const PipelineResult = struct {
     output: []const u8,
 };
@@ -31,6 +35,15 @@ threadlocal var diag_storage: DiagStorage = .{};
 threadlocal var has_diag: bool = false;
 
 pub fn runPipeline(allocator: std.mem.Allocator, input_path: []const u8, emit: EmitKind) !PipelineResult {
+    return runPipelineWithOptions(allocator, input_path, emit, .{});
+}
+
+pub fn runPipelineWithOptions(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    emit: EmitKind,
+    options: PipelineOptions,
+) !PipelineResult {
     _ = emit;
     clearLastDiagnostic();
 
@@ -50,13 +63,23 @@ pub fn runPipeline(allocator: std.mem.Allocator, input_path: []const u8, emit: E
     };
     defer source_form.freeLogicalLines(form, allocator, logical_lines);
 
-    const output = emitLlvmModule(allocator, input_path, contents, logical_lines) catch |err| {
+    const output = emitLlvmModule(allocator, input_path, contents, logical_lines, options) catch |err| {
         return err;
     };
     return .{ .output = output };
 }
 
 pub fn runPipelineToWriter(allocator: std.mem.Allocator, input_path: []const u8, emit: EmitKind, writer: anytype) !void {
+    return runPipelineToWriterWithOptions(allocator, input_path, emit, writer, .{});
+}
+
+pub fn runPipelineToWriterWithOptions(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    emit: EmitKind,
+    writer: anytype,
+    options: PipelineOptions,
+) !void {
     _ = emit;
     clearLastDiagnostic();
 
@@ -76,7 +99,7 @@ pub fn runPipelineToWriter(allocator: std.mem.Allocator, input_path: []const u8,
     };
     defer source_form.freeLogicalLines(form, allocator, logical_lines);
 
-    try emitLlvmModuleToWriter(allocator, input_path, contents, logical_lines, writer);
+    try emitLlvmModuleToWriter(allocator, input_path, contents, logical_lines, writer, options);
 }
 
 pub fn takeLastDiagnostic() ?diag.Diagnostic {
@@ -137,9 +160,16 @@ fn emitLlvmModule(
     input_path: []const u8,
     contents: []const u8,
     logical_lines: []logical_line.LogicalLine,
+    options: PipelineOptions,
 ) ![]const u8 {
     if (logical_lines.len == 0) {
-        return codegen.emitModule(allocator, .{ .units = &.{} }, .{ .units = &.{} }, input_path) catch |err| {
+        return codegen.emitModuleWithOptions(
+            allocator,
+            .{ .units = &.{} },
+            .{ .units = &.{} },
+            input_path,
+            .{ .bounds_check = options.bounds_check },
+        ) catch |err| {
             setCodegenDiagnostic(input_path, contents, err);
             return err;
         };
@@ -154,7 +184,13 @@ fn emitLlvmModule(
         setSemanticDiagnostic(input_path, contents, err);
         return err;
     };
-    return codegen.emitModule(allocator, program, sem, input_path) catch |err| {
+    return codegen.emitModuleWithOptions(
+        allocator,
+        program,
+        sem,
+        input_path,
+        .{ .bounds_check = options.bounds_check },
+    ) catch |err| {
         setCodegenDiagnostic(input_path, contents, err);
         return err;
     };
@@ -166,9 +202,17 @@ fn emitLlvmModuleToWriter(
     contents: []const u8,
     logical_lines: []logical_line.LogicalLine,
     writer: anytype,
+    options: PipelineOptions,
 ) !void {
     if (logical_lines.len == 0) {
-        return codegen.emitModuleToWriter(writer, allocator, .{ .units = &.{} }, .{ .units = &.{} }, input_path) catch |err| {
+        return codegen.emitModuleToWriterWithOptions(
+            writer,
+            allocator,
+            .{ .units = &.{} },
+            .{ .units = &.{} },
+            input_path,
+            .{ .bounds_check = options.bounds_check },
+        ) catch |err| {
             setCodegenDiagnostic(input_path, contents, err);
             return err;
         };
@@ -183,7 +227,14 @@ fn emitLlvmModuleToWriter(
         setSemanticDiagnostic(input_path, contents, err);
         return err;
     };
-    return codegen.emitModuleToWriter(writer, allocator, program, sem, input_path) catch |err| {
+    return codegen.emitModuleToWriterWithOptions(
+        writer,
+        allocator,
+        program,
+        sem,
+        input_path,
+        .{ .bounds_check = options.bounds_check },
+    ) catch |err| {
         setCodegenDiagnostic(input_path, contents, err);
         return err;
     };

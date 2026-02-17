@@ -35,7 +35,13 @@ fn runMain() !void {
         const use_null_output = if (null_output_value) |value| value.len > 0 and value[0] == '1' else false;
         if (use_null_output) {
             var null_writer = std.Io.null_writer;
-            Col6Forge.runPipelineToWriter(allocator, parsed.input_path, parsed.emit, &null_writer) catch |err| {
+            Col6Forge.runPipelineToWriterWithOptions(
+                allocator,
+                parsed.input_path,
+                parsed.emit,
+                &null_writer,
+                .{ .bounds_check = parsed.bounds_check },
+            ) catch |err| {
                 failPipeline(parsed.input_path, err);
             };
             return;
@@ -47,7 +53,13 @@ fn runMain() !void {
             var count: u128 = 0;
             const CountingWriter = std.Io.GenericWriter(*u128, error{}, countWrite);
             var count_writer = CountingWriter{ .context = &count };
-            Col6Forge.runPipelineToWriter(allocator, parsed.input_path, parsed.emit, &count_writer) catch |err| {
+            Col6Forge.runPipelineToWriterWithOptions(
+                allocator,
+                parsed.input_path,
+                parsed.emit,
+                &count_writer,
+                .{ .bounds_check = parsed.bounds_check },
+            ) catch |err| {
                 failPipeline(parsed.input_path, err);
             };
             var msg_buf: [64]u8 = undefined;
@@ -58,11 +70,22 @@ fn runMain() !void {
         var output_file = try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer output_file.close();
         var file_writer = FileOutputWriter{ .file = &output_file, .allocator = allocator };
-        Col6Forge.runPipelineToWriter(allocator, parsed.input_path, parsed.emit, &file_writer) catch |err| {
+        Col6Forge.runPipelineToWriterWithOptions(
+            allocator,
+            parsed.input_path,
+            parsed.emit,
+            &file_writer,
+            .{ .bounds_check = parsed.bounds_check },
+        ) catch |err| {
             failPipeline(parsed.input_path, err);
         };
     } else {
-        const result = Col6Forge.runPipeline(allocator, parsed.input_path, parsed.emit) catch |err| {
+        const result = Col6Forge.runPipelineWithOptions(
+            allocator,
+            parsed.input_path,
+            parsed.emit,
+            .{ .bounds_check = parsed.bounds_check },
+        ) catch |err| {
             failPipeline(parsed.input_path, err);
         };
         defer allocator.free(result.output);
@@ -102,6 +125,7 @@ const ParsedArgs = struct {
     input_path: []const u8,
     output_path: ?[]const u8,
     emit: Col6Forge.EmitKind,
+    bounds_check: bool,
     show_help: bool,
 };
 
@@ -125,6 +149,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
     var input_path: ?[]const u8 = null;
     var output_path: ?[]const u8 = null;
     var emit: Col6Forge.EmitKind = .llvm;
+    var bounds_check = false;
     var show_help = false;
 
     var i: usize = 1;
@@ -136,6 +161,10 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
         }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-fbounds-check")) {
+            bounds_check = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "-o")) {
@@ -164,6 +193,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
             .input_path = "",
             .output_path = output_path,
             .emit = emit,
+            .bounds_check = bounds_check,
             .show_help = true,
         } };
     }
@@ -173,6 +203,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
         .input_path = input_path.?,
         .output_path = output_path,
         .emit = emit,
+        .bounds_check = bounds_check,
         .show_help = false,
     } };
 }
@@ -220,6 +251,7 @@ fn printUsage(file: std.fs.File) !void {
         \\Usage: col6forge <file.f> -emit-llvm -o <out.ll>
         \\Options:
         \\  -emit-llvm    Emit LLVM IR (default)
+        \\  -fbounds-check  Enable runtime array bounds checking
         \\  -o <path>     Write output to file
         \\  -h, --help    Show this help
         \\
@@ -252,10 +284,15 @@ test "args parsing" {
     try testing.expectEqualStrings("", help.input_path);
     try testing.expectEqualStrings("out.ll", help.output_path.?);
     try testing.expectEqual(Col6Forge.EmitKind.llvm, help.emit);
+    try testing.expect(!help.bounds_check);
 
     const parsed = parseArgs(allocator, &[_][]const u8{ "col6forge", "-emit-llvm", "input.f" }).success;
     try testing.expect(!parsed.show_help);
     try testing.expectEqualStrings("input.f", parsed.input_path);
     try testing.expect(parsed.output_path == null);
     try testing.expectEqual(Col6Forge.EmitKind.llvm, parsed.emit);
+    try testing.expect(!parsed.bounds_check);
+
+    const parsed_bounds = parseArgs(allocator, &[_][]const u8{ "col6forge", "-fbounds-check", "input.f" }).success;
+    try testing.expect(parsed_bounds.bounds_check);
 }

@@ -15,6 +15,10 @@ pub const IRDecl = struct {
     varargs: bool,
 };
 
+pub const CodegenOptions = struct {
+    bounds_check: bool = false,
+};
+
 pub const FormatInfo = struct {
     items: []const FormatItem,
     global_name: []const u8,
@@ -101,6 +105,7 @@ pub const Context = struct {
     char_values: std.StringHashMap([]const u8),
     char_array_values: std.StringHashMap([]const u8),
     char_arg_lens: std.StringHashMap(ValueRef),
+    options: CodegenOptions,
     current_stmt: ?input.Stmt,
 
     pub fn init(
@@ -113,6 +118,7 @@ pub const Context = struct {
         inline_formats: *const std.AutoHashMap(usize, FormatInfo),
         string_pool: *StringPool,
         intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
+        options: CodegenOptions,
     ) Context {
         return .{
             .allocator = allocator,
@@ -137,6 +143,7 @@ pub const Context = struct {
             .char_values = std.StringHashMap([]const u8).init(allocator),
             .char_array_values = std.StringHashMap([]const u8).init(allocator),
             .char_arg_lens = std.StringHashMap(ValueRef).init(allocator),
+            .options = options,
             .current_stmt = null,
         };
     }

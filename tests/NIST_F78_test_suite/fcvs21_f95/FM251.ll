@@ -811,29 +811,29 @@ bb126:
   br label %bb127
 bb127:
   %t340 = sext i32 1 to i64
-  %t341 = sub i64 %t340, 1
-  %t342 = mul i64 %t341, 1
-  %t343 = add i64 0, %t342
-  %t344 = sext i32 3 to i64
-  %t345 = mul i64 1, %t344
+  %t341 = sext i32 3 to i64
+  %t342 = sub i64 %t340, 1
+  %t343 = mul i64 %t342, 1
+  %t344 = add i64 0, %t343
+  %t345 = mul i64 1, %t341
   %t346 = sext i32 1 to i64
   %t347 = sub i64 %t346, 1
   %t348 = mul i64 %t347, %t345
-  %t349 = add i64 %t343, %t348
+  %t349 = add i64 %t344, %t348
   %t350 = getelementptr i1, ptr %t13, i64 %t349
   store i1 1, ptr %t350
   br label %bb128
 bb128:
   %t351 = sext i32 1 to i64
-  %t352 = sub i64 %t351, 1
-  %t353 = mul i64 %t352, 1
-  %t354 = add i64 0, %t353
-  %t355 = sext i32 3 to i64
-  %t356 = mul i64 1, %t355
+  %t352 = sext i32 3 to i64
+  %t353 = sub i64 %t351, 1
+  %t354 = mul i64 %t353, 1
+  %t355 = add i64 0, %t354
+  %t356 = mul i64 1, %t352
   %t357 = sext i32 1 to i64
   %t358 = sub i64 %t357, 1
   %t359 = mul i64 %t358, %t356
-  %t360 = add i64 %t354, %t359
+  %t360 = add i64 %t355, %t359
   %t361 = getelementptr i1, ptr %t13, i64 %t360
   %t362 = load i1, ptr %t361
   br i1 %t362, label %if_then24, label %bb129
