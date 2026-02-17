@@ -9,6 +9,25 @@ const TypeKind = input.TypeKind;
 const IRType = ir.IRType;
 const FormatItem = input.FormatItem;
 
+pub const CaseInsensitiveStringContext = struct {
+    pub fn hash(_: @This(), key: []const u8) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        for (key) |ch| {
+            const lowered = std.ascii.toLower(ch);
+            hasher.update(&[_]u8{lowered});
+        }
+        return hasher.final();
+    }
+
+    pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(a, b);
+    }
+};
+
+pub fn CaseInsensitiveStringHashMap(comptime V: type) type {
+    return std.HashMap([]const u8, V, CaseInsensitiveStringContext, std.hash_map.default_max_load_percentage);
+}
+
 pub const IRDecl = struct {
     ret_type: IRType,
     sig: []const u8,
@@ -91,7 +110,7 @@ pub const Context = struct {
     formats: *const std.StringHashMap(FormatInfo),
     inline_formats: *const std.AutoHashMap(usize, FormatInfo),
     temp_index: usize,
-    locals: std.StringHashMap(ValueRef),
+    locals: CaseInsensitiveStringHashMap(ValueRef),
     ref_kinds: std.AutoHashMap(usize, input.sema.ResolvedRefKind),
     direct_recl: std.AutoHashMap(i32, usize),
     direct_recl_by_name: std.StringHashMap(usize),
@@ -129,7 +148,7 @@ pub const Context = struct {
             .formats = formats,
             .inline_formats = inline_formats,
             .temp_index = 0,
-            .locals = std.StringHashMap(ValueRef).init(allocator),
+            .locals = CaseInsensitiveStringHashMap(ValueRef).initContext(allocator, .{}),
             .ref_kinds = std.AutoHashMap(usize, input.sema.ResolvedRefKind).init(allocator),
             .direct_recl = std.AutoHashMap(i32, usize).init(allocator),
             .direct_recl_by_name = std.StringHashMap(usize).init(allocator),
@@ -194,11 +213,10 @@ pub const Context = struct {
     }
 
     pub fn buildLocals(self: *Context) !void {
-        for (self.sem.symbols) |sym| {
-            if (sym.storage == .dummy) {
-                continue;
-            }
-        }
+        // Local storage allocation is emitted in stmts/function.zig where
+        // builder context is available. Keep this explicit no-op to avoid
+        // accidental split ownership of local pointer construction.
+        _ = self;
     }
 
     pub fn nextLabel(self: *Context, prefix: []const u8) ![]const u8 {
@@ -208,14 +226,7 @@ pub const Context = struct {
     }
 
     pub fn getPointer(self: *Context, name: []const u8) !ValueRef {
-        if (self.locals.get(name)) |val| return val;
-        var it = self.locals.iterator();
-        while (it.next()) |entry| {
-            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
-                return entry.value_ptr.*;
-            }
-        }
-        return error.UnknownSymbol;
+        return self.locals.get(name) orelse error.UnknownSymbol;
     }
 
     pub fn findSymbol(self: *Context, name: []const u8) ?input.sema.Symbol {
