@@ -135,7 +135,7 @@ pub fn emitModuleToWriter(
             setCodegenDiagForUnit(unit, err);
             return err;
         };
-        var ctx = context.Context.init(
+        var ctx = try context.Context.init(
             scratch,
             unit,
             sem_unit,

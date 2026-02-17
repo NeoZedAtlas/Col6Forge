@@ -29,13 +29,7 @@ fn constI32(ctx: *Context, value: i64) ValueRef {
 }
 
 fn lookupCharArgLen(ctx: *Context, name: []const u8) ?ValueRef {
-    var it = ctx.char_arg_lens.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
-            return entry.value_ptr.*;
-        }
-    }
-    return null;
+    return ctx.char_arg_lens.get(name);
 }
 
 fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) ?ValueRef {

@@ -295,12 +295,7 @@ fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) 
     if (sym.char_len) |char_len| {
         return i32Const(ctx, @intCast(char_len));
     }
-    var it = ctx.char_arg_lens.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
-            return entry.value_ptr.*;
-        }
-    }
+    if (ctx.char_arg_lens.get(name)) |len_val| return len_val;
     return i32Const(ctx, 1);
 }
 

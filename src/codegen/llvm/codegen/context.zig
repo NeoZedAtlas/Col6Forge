@@ -62,6 +62,7 @@ pub const IntrinsicWrapperKind = enum {
 
 pub const StringPool = struct {
     allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
     names: std.StringHashMap([]const u8),
     items: std.array_list.Managed(StringEntry),
     counter: usize,
@@ -72,28 +73,26 @@ pub const StringPool = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator) StringPool {
-        return .{
-            .allocator = allocator,
-            .names = std.StringHashMap([]const u8).init(allocator),
-            .items = std.array_list.Managed(StringEntry).init(allocator),
-            .counter = 0,
-        };
+        var pool: StringPool = undefined;
+        pool.allocator = allocator;
+        pool.arena = std.heap.ArenaAllocator.init(allocator);
+        pool.names = std.StringHashMap([]const u8).init(allocator);
+        pool.items = std.array_list.Managed(StringEntry).init(allocator);
+        pool.counter = 0;
+        return pool;
     }
 
     pub fn deinit(self: *StringPool) void {
-        var it = self.names.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
-        }
         self.names.deinit();
         self.items.deinit();
+        self.arena.deinit();
     }
 
     pub fn intern(self: *StringPool, bytes: []const u8) ![]const u8 {
         if (self.names.get(bytes)) |name| return name;
-        const key = try self.allocator.dupe(u8, bytes);
-        const name = try std.fmt.allocPrint(self.allocator, "str{d}", .{self.counter});
+        const pool_allocator = self.arena.allocator();
+        const key = try pool_allocator.dupe(u8, bytes);
+        const name = try std.fmt.allocPrint(pool_allocator, "str{d}", .{self.counter});
         self.counter += 1;
         try self.names.put(key, name);
         try self.items.append(.{ .name = name, .bytes = key });
@@ -117,13 +116,14 @@ pub const Context = struct {
     label_map: std.StringHashMap([]const u8),
     label_index: std.StringHashMap(usize),
     label_counter: usize,
+    symbol_index: CaseInsensitiveStringHashMap(usize),
     string_pool: *StringPool,
     statement_functions: std.StringHashMap(StatementFunction),
     stmt_func_stack: std.array_list.Managed(StatementFunctionSubst),
     intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
     char_values: std.StringHashMap([]const u8),
     char_array_values: std.StringHashMap([]const u8),
-    char_arg_lens: std.StringHashMap(ValueRef),
+    char_arg_lens: CaseInsensitiveStringHashMap(ValueRef),
     options: CodegenOptions,
     current_stmt: ?input.Stmt,
 
@@ -138,8 +138,8 @@ pub const Context = struct {
         string_pool: *StringPool,
         intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
         options: CodegenOptions,
-    ) Context {
-        return .{
+    ) !Context {
+        var ctx = Context{
             .allocator = allocator,
             .unit = unit,
             .sem = sem,
@@ -155,16 +155,25 @@ pub const Context = struct {
             .label_map = std.StringHashMap([]const u8).init(allocator),
             .label_index = std.StringHashMap(usize).init(allocator),
             .label_counter = 0,
+            .symbol_index = CaseInsensitiveStringHashMap(usize).initContext(allocator, .{}),
             .string_pool = string_pool,
             .statement_functions = std.StringHashMap(StatementFunction).init(allocator),
             .stmt_func_stack = std.array_list.Managed(StatementFunctionSubst).init(allocator),
             .intrinsic_wrappers = intrinsic_wrappers,
             .char_values = std.StringHashMap([]const u8).init(allocator),
             .char_array_values = std.StringHashMap([]const u8).init(allocator),
-            .char_arg_lens = std.StringHashMap(ValueRef).init(allocator),
+            .char_arg_lens = CaseInsensitiveStringHashMap(ValueRef).initContext(allocator, .{}),
             .options = options,
             .current_stmt = null,
         };
+        errdefer ctx.symbol_index.deinit();
+
+        for (sem.symbols, 0..) |sym, idx| {
+            if (!ctx.symbol_index.contains(sym.name)) {
+                try ctx.symbol_index.put(sym.name, idx);
+            }
+        }
+        return ctx;
     }
 
     pub fn deinit(self: *Context) void {
@@ -174,6 +183,7 @@ pub const Context = struct {
         self.direct_recl_by_name.deinit();
         self.label_map.deinit();
         self.label_index.deinit();
+        self.symbol_index.deinit();
         self.statement_functions.deinit();
         self.stmt_func_stack.deinit();
         var it = self.char_values.iterator();
@@ -230,10 +240,8 @@ pub const Context = struct {
     }
 
     pub fn findSymbol(self: *Context, name: []const u8) ?input.sema.Symbol {
-        for (self.sem.symbols) |sym| {
-            if (std.ascii.eqlIgnoreCase(sym.name, name)) return sym;
-        }
-        return null;
+        const idx = self.symbol_index.get(name) orelse return null;
+        return self.sem.symbols[idx];
     }
 
     pub fn addStatementFunction(self: *Context, name: []const u8, params: []const []const u8, expr: *input.Expr) !void {
