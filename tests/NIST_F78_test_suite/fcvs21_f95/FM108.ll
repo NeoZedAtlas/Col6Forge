@@ -760,7 +760,7 @@ bb59:
   %t382 = getelementptr [8 x i8], ptr @str13, i32 0, i32 0
   call i32 @f77_formatted_read_core(i32 %t372, ptr %t373, ptr %t374, ptr %t382, i32 7, i32 0)
   %t383 = getelementptr i8, ptr %t6, i32 1
-  store i8 32, ptr %t383
+  call void @llvm.memset.p0.i32(ptr %t383, i8 32, i32 1, i1 false)
   br label %bb60
 bb60:
   %t384 = load i32, ptr %t28
@@ -1426,7 +1426,8 @@ entry:
 }
 declare void @f77_rewind(i32)
 declare void @f77_endfile(i32)
-declare void @f77_backspace(i32)
 declare i32 @f77_write_v(i32, ptr, ptr, ptr, i32, i32)
-declare i32 @f77_formatted_read_core(i32, ptr, ptr, ptr, i32, i32)
 declare ptr @f77_fmt_f(i32, i32, i32, double)
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+declare void @f77_backspace(i32)
+declare i32 @f77_formatted_read_core(i32, ptr, ptr, ptr, i32, i32)
