@@ -193,6 +193,27 @@ pub export fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) cal
     return du.data.? + range.offset;
 }
 
+fn directLastRecord(rec: c_int, count: c_int) ?c_int {
+    if (rec <= 0 or count <= 0) return null;
+    const count_minus_one = @subWithOverflow(count, 1);
+    if (count_minus_one[1] != 0) return null;
+    const last = @addWithOverflow(rec, count_minus_one[0]);
+    if (last[1] != 0) return null;
+    return last[0];
+}
+
+pub export fn f77_direct_record_span_ptr(unit: c_int, rec: c_int, recl: c_int, count: c_int) callconv(.c) ?[*]u8 {
+    const last_rec = directLastRecord(rec, count) orelse return null;
+    _ = f77_direct_record_ptr(unit, last_rec, recl) orelse return null;
+    return f77_direct_record_ptr(unit, rec, recl);
+}
+
+pub export fn f77_direct_record_span_ptr_ro(unit: c_int, rec: c_int, recl: c_int, count: c_int) callconv(.c) ?[*]u8 {
+    const last_rec = directLastRecord(rec, count) orelse return null;
+    _ = f77_direct_record_ptr_ro(unit, last_rec, recl) orelse return null;
+    return f77_direct_record_ptr_ro(unit, rec, recl);
+}
+
 pub export fn f77_direct_record_commit(unit: c_int, rec: c_int) callconv(.c) void {
     if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return;
     const idx: usize = @intCast(unit);
