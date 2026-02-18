@@ -5,10 +5,17 @@ extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn f77_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) c_int;
 extern fn f77_write_internal_core(buf: ?[*]u8, len: c_int, src: ?[*:0]const u8) void;
 extern fn f77_write_internal_n_core(buf: ?[*]u8, len: c_int, count: c_int, src: ?[*:0]const u8) void;
+extern fn f77_fmt_release_all() void;
 
 fn cstrlen(text: [*:0]const u8) usize {
     var i: usize = 0;
     while (text[i] != 0) : (i += 1) {}
+    return i;
+}
+
+fn cstrnlen(text: [*:0]const u8, limit: usize) usize {
+    var i: usize = 0;
+    while (i < limit and text[i] != 0) : (i += 1) {}
     return i;
 }
 
@@ -118,13 +125,11 @@ fn consumeStringArg(arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_inde
 }
 
 fn appendPaddedString(out: *RenderBuffer, text: [*:0]const u8, width_in: c_int, precision_opt: ?c_int) bool {
-    const text_len_raw = cstrlen(text);
-    var text_len: usize = text_len_raw;
-    if (precision_opt) |prec_in| {
+    const text_len: usize = if (precision_opt) |prec_in| blk: {
         const prec: c_int = if (prec_in < 0) 0 else prec_in;
         const limit: usize = @intCast(prec);
-        if (limit < text_len) text_len = limit;
-    }
+        break :blk cstrnlen(text, limit);
+    } else cstrlen(text);
 
     var width = width_in;
     var left_align = false;
@@ -338,6 +343,24 @@ fn renderWriteFormatted(
     return @ptrCast(out.data.?);
 }
 
+test "renderWriteFormatted uses precision-bounded scan for %*.*s" {
+    const std = @import("std");
+
+    var width: c_int = 3;
+    var precision: c_int = 3;
+    var raw_chars: [3]u8 = .{ 'A', 'B', 'C' };
+    var args: [3]?*anyopaque = .{
+        @ptrCast(&width),
+        @ptrCast(&precision),
+        @ptrCast(&raw_chars[0]),
+    };
+    var kinds: [3]u8 = .{ 'i', 'i', 's' };
+    const rendered = renderWriteFormatted("%*.*s", &args, &kinds, 3) orelse return error.OutOfMemory;
+    defer free(@ptrCast(rendered));
+
+    try std.testing.expectEqualStrings("ABC", std.mem.sliceTo(rendered, 0));
+}
+
 pub export fn f77_write_v(
     unit: c_int,
     fmt: ?[*:0]const u8,
@@ -346,6 +369,7 @@ pub export fn f77_write_v(
     arg_count: c_int,
     strict_status: c_int,
 ) callconv(.c) c_int {
+    defer f77_fmt_release_all();
     if (fmt == null) return if (strict_status != 0) 1 else 0;
     const rendered = renderWriteFormatted(fmt.?, arg_ptrs, arg_kinds, arg_count) orelse return if (strict_status != 0) 1 else 0;
     defer free(@ptrCast(rendered));
@@ -361,6 +385,7 @@ pub export fn f77_write_internal_v(
     arg_kinds: ?[*]const u8,
     arg_count: c_int,
 ) callconv(.c) void {
+    defer f77_fmt_release_all();
     if (buf == null or len <= 0 or count <= 0 or fmt == null) return;
     const rendered = renderWriteFormatted(fmt.?, arg_ptrs, arg_kinds, arg_count) orelse return;
     defer free(@ptrCast(rendered));

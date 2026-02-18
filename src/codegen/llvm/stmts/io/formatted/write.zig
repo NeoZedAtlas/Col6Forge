@@ -364,8 +364,8 @@ pub fn emitWriteFormatted(
                         const field_width = if (spec.width > 0) spec.width else arg_len;
                         const precision = if (arg_len > 0 and field_width > arg_len) arg_len else field_width;
                         if (value.ty != .ptr) {
-                            // For dynamic formats, allow non-character args to flow through by
-                            // materializing a temporary formatted string.
+                            // Keep historical behavior for legacy test suites that route
+                            // numeric values through A editing at runtime.
                             const width_text = utils.formatInt(ctx.allocator, @intCast(field_width));
                             switch (value.ty) {
                                 .i32 => {
@@ -413,13 +413,7 @@ pub fn emitWriteFormatted(
                                     try fmt_buf.appendSlice("%s");
                                     try args.append(.{ .ty = .ptr, .name = tmp });
                                 },
-                                else => {
-                                    const empty_name = try ctx.string_pool.intern("");
-                                    const empty_ptr = try ctx.nextTemp();
-                                    try builder.gepConstString(empty_ptr, empty_name, 1);
-                                    try fmt_buf.appendSlice("%s");
-                                    try args.append(.{ .ty = .ptr, .name = empty_ptr });
-                                },
+                                else => return error.UnsupportedIntrinsicType,
                             }
                         } else {
                             try fmt_buf.appendSlice("%*.*s");

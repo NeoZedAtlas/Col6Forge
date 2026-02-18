@@ -1,12 +1,16 @@
 const std = @import("std");
 
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
+extern fn malloc(size: usize) ?*anyopaque;
+extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
+extern fn free(ptr: ?*anyopaque) void;
 
-const F77_FMT_BUFFER_COUNT: usize = 64;
 const F77_FMT_BUFFER_LEN: usize = 64;
 
-var fmt_index: usize = 0;
-var fmt_buffers: [F77_FMT_BUFFER_COUNT][F77_FMT_BUFFER_LEN]u8 = [_][F77_FMT_BUFFER_LEN]u8{[_]u8{0} ** F77_FMT_BUFFER_LEN} ** F77_FMT_BUFFER_COUNT;
+var fmt_fallback: [F77_FMT_BUFFER_LEN]u8 = [_]u8{0} ** F77_FMT_BUFFER_LEN;
+var fmt_allocs: ?[*]?*anyopaque = null;
+var fmt_alloc_count: usize = 0;
+var fmt_alloc_cap: usize = 0;
 
 fn cstrlenRaw(text: []const u8) usize {
     var i: usize = 0;
@@ -14,10 +18,48 @@ fn cstrlenRaw(text: []const u8) usize {
     return i;
 }
 
+fn trackFmtAlloc(ptr: ?*anyopaque) bool {
+    if (fmt_alloc_count == fmt_alloc_cap) {
+        var new_cap: usize = if (fmt_alloc_cap == 0) 64 else fmt_alloc_cap;
+        while (new_cap <= fmt_alloc_count) {
+            const doubled = @mulWithOverflow(new_cap, 2);
+            if (doubled[1] != 0) return false;
+            new_cap = doubled[0];
+        }
+        const bytes_mul = @mulWithOverflow(new_cap, @sizeOf(?*anyopaque));
+        if (bytes_mul[1] != 0) return false;
+        const old_raw: ?*anyopaque = if (fmt_allocs) |arr| @ptrCast(arr) else null;
+        const new_raw = realloc(old_raw, bytes_mul[0]) orelse return false;
+        fmt_allocs = @ptrCast(@alignCast(new_raw));
+        fmt_alloc_cap = new_cap;
+    }
+    fmt_allocs.?[fmt_alloc_count] = ptr;
+    fmt_alloc_count += 1;
+    return true;
+}
+
 fn nextFmtBuffer() *[F77_FMT_BUFFER_LEN]u8 {
-    const idx = fmt_index % F77_FMT_BUFFER_COUNT;
-    fmt_index +%= 1;
-    return &fmt_buffers[idx];
+    const raw = malloc(F77_FMT_BUFFER_LEN) orelse return &fmt_fallback;
+    if (!trackFmtAlloc(raw)) {
+        free(raw);
+        return &fmt_fallback;
+    }
+    const out: *[F77_FMT_BUFFER_LEN]u8 = @ptrCast(@alignCast(raw));
+    out[0] = 0;
+    return out;
+}
+
+pub export fn f77_fmt_release_all() callconv(.c) void {
+    if (fmt_allocs) |arr| {
+        var i: usize = 0;
+        while (i < fmt_alloc_count) : (i += 1) {
+            free(arr[i]);
+        }
+        free(@ptrCast(arr));
+    }
+    fmt_allocs = null;
+    fmt_alloc_count = 0;
+    fmt_alloc_cap = 0;
 }
 
 fn asConstCStr(buf: anytype) [*:0]const u8 {
@@ -84,6 +126,23 @@ fn f77PadExp(buf: *[F77_FMT_BUFFER_LEN]u8, exp_digits: usize) void {
     while (i < needed) : (i += 1) {
         buf[sign_idx + i] = '0';
     }
+}
+
+pub export fn f77_fmt_copy(dst: ?[*]u8, dst_len: c_int, src: ?[*:0]const u8) callconv(.c) void {
+    if (dst == null or dst_len <= 0) return;
+    const out = dst.?;
+    const cap: usize = @intCast(dst_len);
+    if (src == null) {
+        out[0] = 0;
+        return;
+    }
+
+    const in = src.?;
+    var i: usize = 0;
+    while (i + 1 < cap and in[i] != 0) : (i += 1) {
+        out[i] = in[i];
+    }
+    out[i] = 0;
 }
 
 pub export fn f77_fmt_i(width: c_int, min_digits: c_int, sign_plus: c_int, value: c_int) callconv(.c) [*:0]const u8 {
@@ -385,4 +444,23 @@ pub export fn f77_fmt_g(width: c_int, precision: c_int, exp_width: c_int, scale_
     return asConstCStr(out);
 }
 
+test "f77_fmt_copy truncates and null-terminates" {
+    var dst: [4]u8 = [_]u8{ 0, 0, 0, 0 };
+    f77_fmt_copy(&dst, 4, "ABCDE");
+    try std.testing.expectEqual(@as(u8, 'A'), dst[0]);
+    try std.testing.expectEqual(@as(u8, 'B'), dst[1]);
+    try std.testing.expectEqual(@as(u8, 'C'), dst[2]);
+    try std.testing.expectEqual(@as(u8, 0), dst[3]);
+}
 
+test "formatted helper strings remain stable across many calls" {
+    const first = f77_fmt_i(0, 0, 0, 123);
+    defer f77_fmt_release_all();
+
+    var i: usize = 0;
+    while (i < 256) : (i += 1) {
+        _ = f77_fmt_i(0, 0, 0, @intCast(i));
+    }
+
+    try std.testing.expectEqualStrings("123", std.mem.sliceTo(first, 0));
+}
