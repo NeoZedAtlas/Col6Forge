@@ -243,7 +243,13 @@ fn emitReadFormattedImpl(
         const count_num: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
         const count_val = constI32(ctx, count_num);
         const read_name = try ctx.ensureDeclRaw("f77_read_internal_core", .i32, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
-        try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_val, fmt_ptr, ptr_array, kinds_ptr, arg_count_val });
+        if (return_status) {
+            const tmp = try ctx.nextTemp();
+            try builder.callTyped(tmp, .i32, read_name, &.{ unit_value, len_val, count_val, fmt_ptr, ptr_array, kinds_ptr, arg_count_val });
+            status_val = .{ .name = tmp, .ty = .i32, .is_ptr = false };
+        } else {
+            try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_val, fmt_ptr, ptr_array, kinds_ptr, arg_count_val });
+        }
     } else {
         const mode_val = ValueRef{ .name = if (return_status) "1" else "0", .ty = .i32, .is_ptr = false };
         const read_name = try ctx.ensureDeclRaw("f77_formatted_read_core", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
