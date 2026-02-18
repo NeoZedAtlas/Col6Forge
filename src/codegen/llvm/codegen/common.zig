@@ -4,6 +4,25 @@ const evaluator = @import("../../../semantic/evaluator.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
 
+pub const CaseInsensitiveStringContext = struct {
+    pub fn hash(_: @This(), key: []const u8) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        for (key) |ch| {
+            const lowered = std.ascii.toLower(ch);
+            hasher.update(&[_]u8{lowered});
+        }
+        return hasher.final();
+    }
+
+    pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(a, b);
+    }
+};
+
+fn CaseInsensitiveStringHashMap(comptime V: type) type {
+    return std.HashMap([]const u8, V, CaseInsensitiveStringContext, std.hash_map.default_max_load_percentage);
+}
+
 pub const CommonItem = struct {
     name: []const u8,
     offset: usize,
@@ -17,6 +36,12 @@ pub const CommonBlockLayout = struct {
     size: usize,
     alignment: usize,
     items: []CommonItem,
+
+    pub fn deinit(self: *CommonBlockLayout, allocator: std.mem.Allocator) void {
+        allocator.free(self.key);
+        allocator.free(self.global_name);
+        allocator.free(self.items);
+    }
 };
 
 pub const CommonBlockInfo = struct {
@@ -26,20 +51,51 @@ pub const CommonBlockInfo = struct {
     items: []const CommonItem,
 };
 
+pub const CommonLayoutOptions = struct {
+    align_items: bool = true,
+};
+
+pub fn deinitCommonLayouts(allocator: std.mem.Allocator, layouts: []CommonBlockLayout) void {
+    for (layouts) |*layout| layout.deinit(allocator);
+    allocator.free(layouts);
+}
+
 pub fn buildUnitCommonLayouts(allocator: std.mem.Allocator, unit: input.ProgramUnit, sem: *const input.sema.SemanticUnit) ![]CommonBlockLayout {
-    var blocks = std.StringHashMap(std.array_list.Managed([]const u8)).init(allocator);
+    return buildUnitCommonLayoutsWithOptions(allocator, unit, sem, .{});
+}
+
+pub fn buildUnitCommonLayoutsWithOptions(
+    allocator: std.mem.Allocator,
+    unit: input.ProgramUnit,
+    sem: *const input.sema.SemanticUnit,
+    options: CommonLayoutOptions,
+) ![]CommonBlockLayout {
+    var symbol_lookup = try SymbolLookup.init(allocator, sem);
+    defer symbol_lookup.deinit();
+
+    var blocks = CaseInsensitiveStringHashMap(std.array_list.Managed([]const u8)).initContext(allocator, .{});
+    defer {
+        var it_deinit = blocks.iterator();
+        while (it_deinit.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit();
+        }
+        blocks.deinit();
+    }
     var order = std.array_list.Managed([]const u8).init(allocator);
+    defer order.deinit();
 
     for (unit.decls) |decl| {
         switch (decl) {
             .common => |com| {
                 for (com.blocks) |block| {
-                    const key = try blockKey(allocator, block.name);
-                    if (!blocks.contains(key)) {
+                    const lookup_key = block.name orelse "";
+                    if (!blocks.contains(lookup_key)) {
+                        const key = try blockKey(allocator, block.name);
                         try blocks.put(key, std.array_list.Managed([]const u8).init(allocator));
                         try order.append(key);
                     }
-                    const list = blocks.getPtr(key) orelse return error.MissingCommonBlock;
+                    const list = blocks.getPtr(lookup_key) orelse return error.MissingCommonBlock;
                     for (block.items) |item| {
                         try list.append(item.name);
                     }
@@ -50,35 +106,43 @@ pub fn buildUnitCommonLayouts(allocator: std.mem.Allocator, unit: input.ProgramU
     }
 
     var layouts = std.array_list.Managed(CommonBlockLayout).init(allocator);
+    errdefer {
+        for (layouts.items) |*layout| layout.deinit(allocator);
+        layouts.deinit();
+    }
     for (order.items) |key| {
         const list = blocks.get(key) orelse return error.MissingCommonBlock;
         var items = std.array_list.Managed(CommonItem).init(allocator);
+        errdefer items.deinit();
         var offset: usize = 0;
         var max_align: usize = 1;
 
         for (list.items) |name| {
-            const sym = findSymbol(sem, name) orelse return error.UnknownSymbol;
+            const sym = findSymbol(sem, name, &symbol_lookup) orelse return error.UnknownSymbol;
             if (sym.storage != .common) return error.InvalidCommonSymbol;
             const ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
             const sa = if (sym.type_kind == .character) SizeAlign{ .size = sym.char_len orelse 1, .alignment = 1 } else try sizeAlign(ty);
-            const elem_count = if (sym.dims.len > 0) try arrayElementCount(sem, sym.dims) else 1;
+            const elem_count = if (sym.dims.len > 0) try arrayElementCountWithLookup(sem, sym.dims, &symbol_lookup) else 1;
             const elem_size = sa.size;
             const size_mul = @mulWithOverflow(elem_size, elem_count);
             if (size_mul[1] != 0) return error.ArraySizeOverflow;
             const item_size = size_mul[0];
-            offset = alignForward(offset, sa.alignment);
+            if (options.align_items) {
+                offset = alignForward(offset, sa.alignment);
+            }
             try items.append(.{ .name = name, .offset = offset, .ty = ty, .size = item_size });
             offset += item_size;
             if (sa.alignment > max_align) max_align = sa.alignment;
         }
 
-        const total = alignForward(offset, max_align);
+        const total = if (options.align_items) alignForward(offset, max_align) else offset;
+        const layout_key = try allocator.dupe(u8, key);
         const global_name = try commonGlobalName(allocator, key);
         try layouts.append(.{
-            .key = key,
+            .key = layout_key,
             .global_name = global_name,
             .size = total,
-            .alignment = max_align,
+            .alignment = if (options.align_items) max_align else 1,
             .items = try items.toOwnedSlice(),
         });
     }
@@ -119,7 +183,7 @@ fn alignForward(value: usize, alignment: usize) usize {
 }
 
 fn blockKey(allocator: std.mem.Allocator, name: ?[]const u8) ![]const u8 {
-    if (name == null) return "";
+    if (name == null) return allocator.alloc(u8, 0);
     var buffer = std.array_list.Managed(u8).init(allocator);
     for (name.?) |ch| {
         try buffer.append(std.ascii.toLower(ch));
@@ -127,7 +191,30 @@ fn blockKey(allocator: std.mem.Allocator, name: ?[]const u8) ![]const u8 {
     return buffer.toOwnedSlice();
 }
 
-fn findSymbol(sem: *const input.sema.SemanticUnit, name: []const u8) ?input.sema.Symbol {
+const SymbolLookup = struct {
+    map: CaseInsensitiveStringHashMap(usize),
+
+    fn init(allocator: std.mem.Allocator, sem: *const input.sema.SemanticUnit) !SymbolLookup {
+        var map = CaseInsensitiveStringHashMap(usize).initContext(allocator, .{});
+        errdefer map.deinit();
+        for (sem.symbols, 0..) |sym, idx| {
+            if (!map.contains(sym.name)) {
+                try map.put(sym.name, idx);
+            }
+        }
+        return .{ .map = map };
+    }
+
+    fn deinit(self: *SymbolLookup) void {
+        self.map.deinit();
+    }
+};
+
+fn findSymbol(sem: *const input.sema.SemanticUnit, name: []const u8, lookup: ?*const SymbolLookup) ?input.sema.Symbol {
+    if (lookup) |idx_lookup| {
+        const idx = idx_lookup.map.get(name) orelse return null;
+        return sem.symbols[idx];
+    }
     for (sem.symbols) |sym| {
         if (std.ascii.eqlIgnoreCase(sym.name, name)) return sym;
     }
@@ -135,10 +222,18 @@ fn findSymbol(sem: *const input.sema.SemanticUnit, name: []const u8) ?input.sema
 }
 
 pub fn arrayElementCount(sem: *const input.sema.SemanticUnit, dims: []*input.Expr) !usize {
+    return arrayElementCountWithLookup(sem, dims, null);
+}
+
+fn arrayElementCountWithLookup(
+    sem: *const input.sema.SemanticUnit,
+    dims: []*input.Expr,
+    lookup: ?*const SymbolLookup,
+) !usize {
     if (dims.len == 0) return 1;
     var total: usize = 1;
     for (dims) |dim| {
-        const value = try dimSizeValue(sem, dim) orelse return error.ArrayDimNotConstant;
+        const value = try dimSizeValue(sem, dim, lookup) orelse return error.ArrayDimNotConstant;
         if (value <= 0) return error.InvalidArrayDim;
         const dim_u: usize = @intCast(value);
         const mul = @mulWithOverflow(total, dim_u);
@@ -148,30 +243,36 @@ pub fn arrayElementCount(sem: *const input.sema.SemanticUnit, dims: []*input.Exp
     return total;
 }
 
-fn dimSizeValue(sem: *const input.sema.SemanticUnit, dim: *input.Expr) !?i64 {
+fn dimSizeValue(sem: *const input.sema.SemanticUnit, dim: *input.Expr, lookup: ?*const SymbolLookup) !?i64 {
     switch (dim.*) {
         .literal => |lit| {
             if (lit.kind == .assumed_size) return error.AssumedSizeDimUnsupported;
-            return evalConstInt(sem, dim);
+            return evalConstInt(sem, dim, lookup);
         },
         .dim_range => |range| {
             if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) {
                 return error.AssumedSizeDimUnsupported;
             }
-            const upper = (try evalConstInt(sem, range.upper)) orelse return null;
+            const upper = (try evalConstInt(sem, range.upper, lookup)) orelse return null;
             const lower = if (range.lower) |lower_expr|
-                (try evalConstInt(sem, lower_expr)) orelse return null
+                (try evalConstInt(sem, lower_expr, lookup)) orelse return null
             else
                 1;
             return upper - lower + 1;
         },
-        else => return evalConstInt(sem, dim),
+        else => return evalConstInt(sem, dim, lookup),
     }
 }
 
-fn evalConstInt(sem: *const input.sema.SemanticUnit, expr: *input.Expr) !?i64 {
+const ConstResolveCtx = struct {
+    sem: *const input.sema.SemanticUnit,
+    lookup: ?*const SymbolLookup,
+};
+
+fn evalConstInt(sem: *const input.sema.SemanticUnit, expr: *input.Expr, lookup: ?*const SymbolLookup) !?i64 {
+    var resolve_ctx = ConstResolveCtx{ .sem = sem, .lookup = lookup };
     const resolver = evaluator.ConstResolver{
-        .ctx = @ptrCast(@constCast(sem)),
+        .ctx = @ptrCast(&resolve_ctx),
         .resolveFn = resolveConstValue,
     };
     const value = try evaluator.evalConst(expr, resolver);
@@ -184,11 +285,9 @@ fn evalConstInt(sem: *const input.sema.SemanticUnit, expr: *input.Expr) !?i64 {
 }
 
 fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?input.sema.ConstValue {
-    const sem: *const input.sema.SemanticUnit = @ptrCast(@alignCast(ctx));
-    for (sem.symbols) |sym| {
-        if (std.ascii.eqlIgnoreCase(sym.name, name)) return sym.const_value;
-    }
-    return null;
+    const resolve_ctx: *const ConstResolveCtx = @ptrCast(@alignCast(ctx));
+    const sym = findSymbol(resolve_ctx.sem, name, resolve_ctx.lookup) orelse return null;
+    return sym.const_value;
 }
 
 test "buildUnitCommonLayouts computes offsets and alignment" {
