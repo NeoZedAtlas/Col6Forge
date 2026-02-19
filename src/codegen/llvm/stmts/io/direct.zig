@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
 const context = @import("../../codegen/context.zig");
+const common = @import("../../codegen/common.zig");
 const expr = @import("../../codegen/expression/mod.zig");
 const utils = @import("../../codegen/utils.zig");
 
@@ -45,7 +46,8 @@ pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) Em
 
     if (prepared.fmt_items) |fmt_items| {
         const recl_len = prepared.recl orelse return error.InternalInvariantViolation;
-        const record_count = try countDirectFormattedRecords(fmt_items, prepared.expanded_args.len);
+        const expanded_arg_count = try countExpandedDirectArgs(ctx, prepared.expanded_args);
+        const record_count = try countDirectFormattedRecords(fmt_items, expanded_arg_count);
         const recl_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(recl_len)), .ty = .i32, .is_ptr = false };
         const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(record_count)), .ty = .i32, .is_ptr = false };
 
@@ -53,7 +55,6 @@ pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) Em
         const record_ptr_tmp = try ctx.nextTemp();
         try builder.callTyped(record_ptr_tmp, .ptr, span_ptr_name, &.{ prepared.unit_i32, prepared.rec_i32, recl_val, count_val });
         const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
-
         var expanded_values = try expandWriteArgs(ctx, builder, prepared.expanded_args);
         defer expanded_values.deinit();
 
@@ -76,6 +77,7 @@ pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) Em
         return;
     }
 
+    if (write.format != .none) return error.MissingFormatLabel;
     try emitDirectWriteCall(ctx, builder, prepared.unit_i32, prepared.rec_i32, prepared.expanded_args);
 }
 
@@ -85,7 +87,8 @@ pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitE
 
     if (prepared.fmt_items) |fmt_items| {
         const recl_len = prepared.recl orelse return error.InternalInvariantViolation;
-        const record_count = try countDirectFormattedRecords(fmt_items, prepared.expanded_args.len);
+        const expanded_arg_count = try countExpandedDirectArgs(ctx, prepared.expanded_args);
+        const record_count = try countDirectFormattedRecords(fmt_items, expanded_arg_count);
         const recl_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(recl_len)), .ty = .i32, .is_ptr = false };
         const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(record_count)), .ty = .i32, .is_ptr = false };
 
@@ -93,9 +96,9 @@ pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitE
         const record_ptr_tmp = try ctx.nextTemp();
         try builder.callTyped(record_ptr_tmp, .ptr, span_ptr_name, &.{ prepared.unit_i32, prepared.rec_i32, recl_val, count_val });
         const record_ptr = ValueRef{ .name = record_ptr_tmp, .ty = .ptr, .is_ptr = true };
-
         var expanded = try expandReadTargets(ctx, builder, prepared.expanded_args);
         defer expanded.deinit();
+
         try emitReadFormatted(
             ctx,
             builder,
@@ -111,6 +114,7 @@ pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitE
         return;
     }
 
+    if (read.format != .none) return error.MissingFormatLabel;
     try emitDirectReadCall(ctx, builder, prepared.unit_i32, prepared.rec_i32, prepared.expanded_args);
 }
 const DirectRecordPlan = struct {
@@ -288,6 +292,33 @@ fn prepareDirectArgs(ctx: *Context, builder: anytype, stmt: anytype) EmitError!P
         .expanded_args = expanded_args,
         .fmt_items = fmt_items,
         .recl = recl,
+    };
+}
+
+fn countExpandedDirectArgs(ctx: *Context, args: []*ast.Expr) EmitError!usize {
+    var count: usize = 0;
+    for (args) |arg| {
+        count += try countExpandedDirectArg(ctx, arg);
+    }
+    return count;
+}
+
+fn countExpandedDirectArg(ctx: *Context, arg: *ast.Expr) EmitError!usize {
+    if (arg.* == .identifier) {
+        const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
+        if (sym.dims.len > 0) {
+            const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
+            return switch (sym.type_kind) {
+                .complex, .complex_double => elem_count * 2,
+                else => elem_count,
+            };
+        }
+    }
+
+    const arg_ty = try expr.exprType(ctx, arg);
+    return switch (arg_ty) {
+        .complex_f32, .complex_f64 => 2,
+        else => 1,
     };
 }
 
