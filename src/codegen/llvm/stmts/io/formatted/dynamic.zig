@@ -57,7 +57,7 @@ fn emitFormatSelector(ctx: *Context, builder: anytype, label_var: []const u8) Em
 }
 
 fn emitMissingDynamicFormatTrap(ctx: *Context, builder: anytype) EmitError!void {
-    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, "", false);
+    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, &.{}, false);
     try builder.callTyped(null, .void, trap_name, &.{});
     try builder.emitUnreachable();
 }

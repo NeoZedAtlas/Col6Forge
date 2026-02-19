@@ -283,12 +283,11 @@ pub fn parseOpenStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
     var unit_expr: ?*Expr = null;
     var recl_expr: ?*Expr = null;
-    var direct_access = false;
     var file_expr: ?*Expr = null;
-    var access_text: ?[]const u8 = null;
-    var form_text: ?[]const u8 = null;
-    var blank_text: ?[]const u8 = null;
-    var status_text: ?[]const u8 = null;
+    var access_expr: ?*Expr = null;
+    var form_expr: ?*Expr = null;
+    var blank_expr: ?*Expr = null;
+    var status_expr: ?*Expr = null;
     var first = true;
     while (!lp.peekIs(.r_paren)) {
         if (!first) {
@@ -312,22 +311,19 @@ pub fn parseOpenStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
             continue;
         }
         if (context.eqNoCase(name, "ACCESS")) {
-            access_text = try parseControlText(arena, lp) orelse access_text;
-            if (access_text) |val| {
-                if (context.eqNoCase(val, "DIRECT")) direct_access = true;
-            }
+            access_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }
         if (context.eqNoCase(name, "FORM")) {
-            form_text = try parseControlText(arena, lp) orelse form_text;
+            form_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }
         if (context.eqNoCase(name, "BLANK")) {
-            blank_text = try parseControlText(arena, lp) orelse blank_text;
+            blank_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }
         if (context.eqNoCase(name, "STATUS")) {
-            status_text = try parseControlText(arena, lp) orelse status_text;
+            status_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }
         if (context.eqNoCase(name, "RECL")) {
@@ -338,7 +334,7 @@ pub fn parseOpenStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
     }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     const unit_final = unit_expr orelse return error.UnexpectedToken;
-    return .{ .open = .{ .unit = unit_final, .recl = recl_expr, .direct = direct_access, .file = file_expr, .access = access_text, .form = form_text, .blank = blank_text, .status = status_text } };
+    return .{ .open = .{ .unit = unit_final, .recl = recl_expr, .file = file_expr, .access = access_expr, .form = form_expr, .blank = blank_expr, .status = status_expr } };
 }
 
 pub fn parseInquireStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
@@ -444,22 +440,6 @@ fn parseControlList(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError![]
     }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     return controls.toOwnedSlice();
-}
-
-fn parseControlText(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!?[]const u8 {
-    const tok = lp.peek() orelse return error.UnexpectedToken;
-    _ = lp.next();
-    var text = lp.tokenText(tok);
-    if (tok.kind == .string or tok.kind == .hollerith) {
-        if (text.len >= 2 and text[0] == text[text.len - 1] and (text[0] == '\'' or text[0] == '"')) {
-            text = text[1 .. text.len - 1];
-        }
-    }
-    var buf = try arena.alloc(u8, text.len);
-    for (text, 0..) |ch, i| {
-        buf[i] = std.ascii.toUpper(ch);
-    }
-    return buf;
 }
 
 fn parseIoList(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError![]*Expr {

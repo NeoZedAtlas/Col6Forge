@@ -194,12 +194,11 @@ pub const ReadStmt = struct {
 pub const OpenStmt = struct {
     unit: *Expr,
     recl: ?*Expr,
-    direct: bool,
     file: ?*Expr,
-    access: ?[]const u8,
-    form: ?[]const u8,
-    blank: ?[]const u8,
-    status: ?[]const u8,
+    access: ?*Expr,
+    form: ?*Expr,
+    blank: ?*Expr,
+    status: ?*Expr,
 };
 
 pub const InquireStmt = struct {

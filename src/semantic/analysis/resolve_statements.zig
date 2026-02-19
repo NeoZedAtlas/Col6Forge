@@ -60,6 +60,18 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
             if (open_stmt.file) |file_expr| {
                 try expressions.resolveExpr(self, file_expr);
             }
+            if (open_stmt.access) |access| {
+                try expressions.resolveExpr(self, access);
+            }
+            if (open_stmt.form) |form| {
+                try expressions.resolveExpr(self, form);
+            }
+            if (open_stmt.blank) |blank| {
+                try expressions.resolveExpr(self, blank);
+            }
+            if (open_stmt.status) |status| {
+                try expressions.resolveExpr(self, status);
+            }
         },
         .inquire => |inq| {
             for (inq.controls) |ctrl| {
@@ -176,6 +188,21 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             try expressions.resolveExpr(self, open_stmt.unit);
             if (open_stmt.recl) |recl| {
                 try expressions.resolveExpr(self, recl);
+            }
+            if (open_stmt.file) |file_expr| {
+                try expressions.resolveExpr(self, file_expr);
+            }
+            if (open_stmt.access) |access| {
+                try expressions.resolveExpr(self, access);
+            }
+            if (open_stmt.form) |form| {
+                try expressions.resolveExpr(self, form);
+            }
+            if (open_stmt.blank) |blank| {
+                try expressions.resolveExpr(self, blank);
+            }
+            if (open_stmt.status) |status| {
+                try expressions.resolveExpr(self, status);
             }
         },
         .inquire => |inq| {

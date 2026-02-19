@@ -48,6 +48,7 @@ extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn f77_trim_filename(file: ?[*]const u8, file_len: c_int, out: ?[*]u8, out_len: usize) void;
 extern fn f77_store_char(dst: ?[*]u8, len: c_int, src: [*:0]const u8) void;
 extern fn unformatted_truncate(unit: ?*UnformattedUnit, new_count: usize) void;
+extern fn f77_open_direct(unit: c_int, recl: c_int) void;
 
 fn asConstCStr(buf: anytype) [*:0]const u8 {
     return @ptrCast(buf);
@@ -69,6 +70,61 @@ fn cstrEq(a: [*:0]const u8, b: [*:0]const u8) bool {
         if (a[i] != b[i]) return false;
         if (a[i] == 0) return true;
     }
+}
+
+fn toUpperAscii(ch: u8) u8 {
+    if (ch >= 'a' and ch <= 'z') return ch - 32;
+    return ch;
+}
+
+fn isAsciiSpace(ch: u8) bool {
+    return ch == ' ' or ch == '\t';
+}
+
+fn trimControlRange(text: ?[*]const u8, len: c_int) struct { start: usize, end: usize } {
+    if (text == null or len <= 0) return .{ .start = 0, .end = 0 };
+    const n: usize = @intCast(len);
+    var start: usize = 0;
+    while (start < n and isAsciiSpace(text.?[start])) : (start += 1) {}
+    var end = n;
+    while (end > start and isAsciiSpace(text.?[end - 1])) : (end -= 1) {}
+    return .{ .start = start, .end = end };
+}
+
+fn controlEqIgnoreCase(text: ?[*]const u8, len: c_int, token_upper: []const u8) bool {
+    const range = trimControlRange(text, len);
+    if (range.end <= range.start) return false;
+    const used = range.end - range.start;
+    if (used != token_upper.len) return false;
+    var i: usize = 0;
+    while (i < used) : (i += 1) {
+        if (toUpperAscii(text.?[range.start + i]) != token_upper[i]) return false;
+    }
+    return true;
+}
+
+fn decodeAccess(text: ?[*]const u8, len: c_int, default: c_int) c_int {
+    if (controlEqIgnoreCase(text, len, "DIRECT")) return 1;
+    if (controlEqIgnoreCase(text, len, "SEQUENTIAL")) return 0;
+    return default;
+}
+
+fn decodeForm(text: ?[*]const u8, len: c_int, default: c_int) c_int {
+    if (controlEqIgnoreCase(text, len, "UNFORMATTED")) return 1;
+    if (controlEqIgnoreCase(text, len, "FORMATTED")) return 0;
+    return default;
+}
+
+fn decodeBlank(text: ?[*]const u8, len: c_int, default: c_int) c_int {
+    if (controlEqIgnoreCase(text, len, "NULL")) return 1;
+    if (controlEqIgnoreCase(text, len, "ZERO")) return 2;
+    return default;
+}
+
+fn decodeStatus(text: ?[*]const u8, len: c_int, default: c_int) c_int {
+    if (controlEqIgnoreCase(text, len, "KEEP")) return 1;
+    if (controlEqIgnoreCase(text, len, "DELETE")) return 2;
+    return default;
 }
 
 fn unformattedEnsureCapacityLocal(unit: *UnformattedUnit, needed: usize) void {
@@ -108,6 +164,32 @@ pub export fn f77_open(unit: c_int, file: ?[*]const u8, file_len: c_int, access:
     }
 }
 
+pub export fn f77_open_ex(
+    unit: c_int,
+    file: ?[*]const u8,
+    file_len: c_int,
+    access: ?[*]const u8,
+    access_len: c_int,
+    form: ?[*]const u8,
+    form_len: c_int,
+    blank: ?[*]const u8,
+    blank_len: c_int,
+    status: ?[*]const u8,
+    status_len: c_int,
+    recl: c_int,
+    has_recl: c_int,
+) callconv(.c) void {
+    const access_default: c_int = if (has_recl != 0) 1 else 0;
+    const access_code = decodeAccess(access, access_len, access_default);
+    const form_code = decodeForm(form, form_len, 0);
+    const blank_code = decodeBlank(blank, blank_len, 0);
+    const status_code = decodeStatus(status, status_len, 0);
+    f77_open(unit, file, file_len, access_code, form_code, blank_code, status_code);
+    if (access_code == 1 and has_recl != 0 and recl > 0) {
+        f77_open_direct(unit, recl);
+    }
+}
+
 pub export fn f77_close(unit: c_int, status: c_int) callconv(.c) void {
     if (unit < 0 or unit >= F77_MAX_UNITS) return;
     const idx: usize = @intCast(unit);
@@ -123,6 +205,11 @@ pub export fn f77_close(unit: c_int, status: c_int) callconv(.c) void {
     }
     ou.opened = 0;
     ou.filename[0] = 0;
+}
+
+pub export fn f77_close_ex(unit: c_int, status: ?[*]const u8, status_len: c_int) callconv(.c) void {
+    const status_code = decodeStatus(status, status_len, 0);
+    f77_close(unit, status_code);
 }
 
 pub export fn f77_inquire_unit(

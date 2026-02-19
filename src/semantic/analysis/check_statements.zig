@@ -59,6 +59,10 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             try checkExpr(self, open_stmt.unit);
             if (open_stmt.recl) |recl| try checkExpr(self, recl);
             if (open_stmt.file) |file_expr| try checkExpr(self, file_expr);
+            if (open_stmt.access) |access| try checkExpr(self, access);
+            if (open_stmt.form) |form| try checkExpr(self, form);
+            if (open_stmt.blank) |blank| try checkExpr(self, blank);
+            if (open_stmt.status) |status| try checkExpr(self, status);
         },
         .inquire => |inq| {
             for (inq.controls) |ctrl| try checkExpr(self, ctrl.value);

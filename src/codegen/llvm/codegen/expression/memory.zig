@@ -173,7 +173,7 @@ fn emitBoundsCheck(ctx: *Context, builder: anytype, index: ValueRef, lower: Valu
     try builder.brCond(oob, fail_label, ok_label);
 
     try builder.label(fail_label);
-    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, "", false);
+    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, &.{}, false);
     try builder.callTyped(null, .void, trap_name, &.{});
     try builder.emitUnreachable();
 

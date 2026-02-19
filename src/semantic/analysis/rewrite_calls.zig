@@ -97,6 +97,10 @@ fn rewriteStmt(
             changed = (try rewriteExpr(ctx, state, open_stmt.unit, stmt.*, prelude)) or changed;
             if (open_stmt.recl) |recl| changed = (try rewriteExpr(ctx, state, recl, stmt.*, prelude)) or changed;
             if (open_stmt.file) |file_expr| changed = (try rewriteExpr(ctx, state, file_expr, stmt.*, prelude)) or changed;
+            if (open_stmt.access) |access| changed = (try rewriteExpr(ctx, state, access, stmt.*, prelude)) or changed;
+            if (open_stmt.form) |form| changed = (try rewriteExpr(ctx, state, form, stmt.*, prelude)) or changed;
+            if (open_stmt.blank) |blank| changed = (try rewriteExpr(ctx, state, blank, stmt.*, prelude)) or changed;
+            if (open_stmt.status) |status| changed = (try rewriteExpr(ctx, state, status, stmt.*, prelude)) or changed;
         },
         .inquire => |*inq| {
             for (inq.controls) |*ctrl| {

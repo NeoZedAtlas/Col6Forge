@@ -169,9 +169,9 @@ pub fn emitModuleToWriter(
         try builder.defineEnd();
         try builder.entryLabel();
         for (block_data_mangled.items) |block_name| {
-            try builder.call(null, .void, block_name, "");
+            try builder.callTyped(null, .void, block_name, &.{});
         }
-        try builder.call(null, .void, entry_name, "");
+        try builder.callTyped(null, .void, entry_name, &.{});
         try builder.retValue(.i32, "0");
         try builder.functionEnd();
     }

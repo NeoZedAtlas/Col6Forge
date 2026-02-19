@@ -1,7 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
 const ir = @import("../../../ir.zig");
-const llvm_types = @import("../../types.zig");
 const context = @import("../context.zig");
 const utils = @import("../utils.zig");
 
@@ -121,30 +120,6 @@ fn emitIntrinsicLen(ctx: *Context, builder: anytype, args: []*Expr) EmitError!Va
     return try emitLenValue(ctx, builder, args[0]) orelse error.UnsupportedIntrinsicType;
 }
 
-fn buildSig(allocator: std.mem.Allocator, types: []const IRType) EmitError![]const u8 {
-    var sig = std.array_list.Managed(u8).init(allocator);
-    var first = true;
-    for (types) |ty| {
-        if (!first) try sig.appendSlice(", ");
-        first = false;
-        try sig.appendSlice(llvm_types.irTypeText(ty));
-    }
-    return sig.toOwnedSlice();
-}
-
-fn buildArgText(allocator: std.mem.Allocator, values: []const ValueRef) EmitError![]const u8 {
-    var args = std.array_list.Managed(u8).init(allocator);
-    var first = true;
-    for (values) |val| {
-        if (!first) try args.appendSlice(", ");
-        first = false;
-        try args.appendSlice(llvm_types.irTypeText(val.ty));
-        try args.appendSlice(" ");
-        try args.appendSlice(val.name);
-    }
-    return args.toOwnedSlice();
-}
-
 pub fn llvmIntrinsicName(allocator: std.mem.Allocator, base: []const u8, ty: IRType) EmitError![]const u8 {
     const suffix = switch (ty) {
         .f32 => "f32",
@@ -157,11 +132,9 @@ pub fn llvmIntrinsicName(allocator: std.mem.Allocator, base: []const u8, ty: IRT
 pub fn emitIntrinsicUnaryFloatValue(ctx: *Context, builder: anytype, base: []const u8, value: ValueRef) EmitError!ValueRef {
     if (value.ty != .f32 and value.ty != .f64) return error.UnsupportedIntrinsicType;
     const name = try llvmIntrinsicName(ctx.allocator, base, value.ty);
-    const sig = try buildSig(ctx.allocator, &.{value.ty});
-    _ = try ctx.ensureDeclRaw(name, value.ty, sig, false);
-    const args = try buildArgText(ctx.allocator, &.{value});
+    _ = try ctx.ensureDeclRaw(name, value.ty, &[_]IRType{value.ty}, false);
     const tmp = try ctx.nextTemp();
-    try builder.call(tmp, value.ty, name, args);
+    try builder.callTyped(tmp, value.ty, name, &.{value});
     return .{ .name = tmp, .ty = value.ty, .is_ptr = false };
 }
 
@@ -170,11 +143,9 @@ pub fn emitIntrinsicBinaryFloatValue(ctx: *Context, builder: anytype, base: []co
     if (right.ty != .f32 and right.ty != .f64) return error.UnsupportedIntrinsicType;
     if (left.ty != right.ty) return error.UnsupportedIntrinsicType;
     const name = try llvmIntrinsicName(ctx.allocator, base, left.ty);
-    const sig = try buildSig(ctx.allocator, &.{ left.ty, right.ty });
-    _ = try ctx.ensureDeclRaw(name, left.ty, sig, false);
-    const args = try buildArgText(ctx.allocator, &.{ left, right });
+    _ = try ctx.ensureDeclRaw(name, left.ty, &[_]IRType{ left.ty, right.ty }, false);
     const tmp = try ctx.nextTemp();
-    try builder.call(tmp, left.ty, name, args);
+    try builder.callTyped(tmp, left.ty, name, &.{ left, right });
     return .{ .name = tmp, .ty = left.ty, .is_ptr = false };
 }
 
@@ -550,11 +521,9 @@ fn emitLibmUnaryFloatValue(
         .f64 => name_f64,
         else => return error.UnsupportedIntrinsicType,
     };
-    const sig = try buildSig(ctx.allocator, &.{value.ty});
-    _ = try ctx.ensureDeclRaw(name, value.ty, sig, false);
-    const args = try buildArgText(ctx.allocator, &.{value});
+    _ = try ctx.ensureDeclRaw(name, value.ty, &[_]IRType{value.ty}, false);
     const tmp = try ctx.nextTemp();
-    try builder.call(tmp, value.ty, name, args);
+    try builder.callTyped(tmp, value.ty, name, &.{value});
     return .{ .name = tmp, .ty = value.ty, .is_ptr = false };
 }
 
@@ -572,11 +541,9 @@ fn emitLibmBinaryFloatValue(
     const left = try casting.coerce(ctx, builder, left_in, common_ty);
     const right = try casting.coerce(ctx, builder, right_in, common_ty);
     const name = if (common_ty == .f32) name_f32 else name_f64;
-    const sig = try buildSig(ctx.allocator, &.{ common_ty, common_ty });
-    _ = try ctx.ensureDeclRaw(name, common_ty, sig, false);
-    const args = try buildArgText(ctx.allocator, &.{ left, right });
+    _ = try ctx.ensureDeclRaw(name, common_ty, &[_]IRType{ common_ty, common_ty }, false);
     const tmp = try ctx.nextTemp();
-    try builder.call(tmp, common_ty, name, args);
+    try builder.callTyped(tmp, common_ty, name, &.{ left, right });
     return .{ .name = tmp, .ty = common_ty, .is_ptr = false };
 }
 
