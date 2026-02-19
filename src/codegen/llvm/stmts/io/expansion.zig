@@ -11,6 +11,7 @@ const Context = context.Context;
 const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
+const max_implied_do_expansion: usize = 1_000_000;
 
 const io_utils = @import("utils.zig");
 
@@ -71,9 +72,13 @@ pub fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) Emi
                 const char_len = sym.char_len orelse 1;
                 var idx: usize = 0;
                 while (idx < elem_count) : (idx += 1) {
-                    var offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                    var idx_buf: [32]u8 = undefined;
+                    const idx_text = std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch "0";
+                    var offset_val = ValueRef{ .name = idx_text, .ty = .i32, .is_ptr = false };
                     if (sym.type_kind == .character and char_len > 1) {
-                        const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = .i32, .is_ptr = false };
+                        var len_buf: [32]u8 = undefined;
+                        const len_text = std.fmt.bufPrint(&len_buf, "{d}", .{char_len}) catch "1";
+                        const scale = ValueRef{ .name = len_text, .ty = .i32, .is_ptr = false };
                         offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
                     }
                     const ptr_name = try ctx.nextTemp();
@@ -186,30 +191,59 @@ fn expandImpliedDo(ctx: *Context, implied: ast.ImpliedDo) EmitError![]*ast.Expr 
         end_val = inferImpliedDoEndFromItems(ctx, implied);
     }
     const end_val_final = end_val orelse return error.UnsupportedImpliedDo;
+    const iter_count = try impliedDoIterationCount(start_val, end_val_final, step_val);
+    const expanded_len = std.math.mul(usize, iter_count, implied.items.len) catch return error.ImpliedDoExpansionTooLarge;
+    if (expanded_len > max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
 
     var expanded = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
     errdefer expanded.deinit();
+    try expanded.ensureTotalCapacity(expanded_len);
 
     var idx: i64 = start_val;
+    var emitted: usize = 0;
     if (step_val > 0) {
         while (idx <= end_val_final) : (idx += step_val) {
             const iter_expr = try makeIntegerLiteral(ctx.allocator, idx);
             for (implied.items) |item| {
+                if (emitted >= max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
                 const clone = try cloneExprWithSubst(ctx, ctx.allocator, item, implied.var_name, iter_expr);
                 try expanded.append(clone);
+                emitted += 1;
             }
         }
     } else {
         while (idx >= end_val_final) : (idx += step_val) {
             const iter_expr = try makeIntegerLiteral(ctx.allocator, idx);
             for (implied.items) |item| {
+                if (emitted >= max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
                 const clone = try cloneExprWithSubst(ctx, ctx.allocator, item, implied.var_name, iter_expr);
                 try expanded.append(clone);
+                emitted += 1;
             }
         }
     }
 
     return expanded.toOwnedSlice();
+}
+
+fn impliedDoIterationCount(start_val: i64, end_val: i64, step_val: i64) EmitError!usize {
+    var count: usize = 0;
+    var idx = start_val;
+    if (step_val > 0) {
+        while (idx <= end_val) {
+            if (count >= max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
+            count += 1;
+            idx = std.math.add(i64, idx, step_val) catch return error.ImpliedDoExpansionTooLarge;
+        }
+        return count;
+    }
+
+    while (idx >= end_val) {
+        if (count >= max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
+        count += 1;
+        idx = std.math.add(i64, idx, step_val) catch return error.ImpliedDoExpansionTooLarge;
+    }
+    return count;
 }
 fn evalImpliedDoBound(ctx: *Context, node: *ast.Expr) EmitError!?i64 {
     if (try evalConstIntSem(ctx.sem, node)) |value| return value;
@@ -359,9 +393,13 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
                 const char_len = sym.char_len orelse 1;
                 var idx: usize = 0;
                 while (idx < elem_count) : (idx += 1) {
-                    var offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                    var idx_buf: [32]u8 = undefined;
+                    const idx_text = std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch "0";
+                    var offset_val = ValueRef{ .name = idx_text, .ty = .i32, .is_ptr = false };
                     if (sym.type_kind == .character and char_len > 1) {
-                        const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = .i32, .is_ptr = false };
+                        var len_buf: [32]u8 = undefined;
+                        const len_text = std.fmt.bufPrint(&len_buf, "{d}", .{char_len}) catch "1";
+                        const scale = ValueRef{ .name = len_text, .ty = .i32, .is_ptr = false };
                         offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
                     }
                     const ptr_name = try ctx.nextTemp();
@@ -424,7 +462,9 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
                 } else {
                     var idx: usize = 0;
                     while (idx < elem_count) : (idx += 1) {
-                        const offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                        var idx_buf: [32]u8 = undefined;
+                        const idx_text = std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch "0";
+                        const offset_val = ValueRef{ .name = idx_text, .ty = .i32, .is_ptr = false };
                         const ptr_name = try ctx.nextTemp();
                         try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
                         const tmp = try ctx.nextTemp();

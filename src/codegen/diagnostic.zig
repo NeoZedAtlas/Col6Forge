@@ -87,6 +87,7 @@ pub fn codegenErrorInfo(err: anyerror) struct { code: []const u8, message: []con
         error.AssumedSizeDimUnsupported => .{ .code = "CF4121", .message = "assumed-size dimension unsupported in this context" },
         error.ArrayDimNotConstant, error.InvalidArrayDim, error.ArraySizeOverflow => .{ .code = "CF4122", .message = "invalid or non-constant array dimension/size" },
         error.UnsupportedImpliedDo => .{ .code = "CF4123", .message = "unsupported implied DO expansion" },
+        error.ImpliedDoExpansionTooLarge => .{ .code = "CF4123", .message = "implied DO expansion exceeds compilation limit" },
         error.UnsupportedSubstring, error.UnsupportedConcat => .{ .code = "CF4124", .message = "unsupported character substring/concatenation lowering" },
         error.InvalidStatementFunctionDefinition, error.InvalidStatementFunctionCall => .{ .code = "CF4125", .message = "invalid statement function definition or invocation" },
         error.AmbiguousCallOrSubscript => .{ .code = "CF4126", .message = "cannot disambiguate between function call and array subscript" },
