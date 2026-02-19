@@ -93,10 +93,10 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
             .ptr => {
                 const arg_len = expanded_values.char_lens.items[idx];
                 try fmt_buf.appendSlice("%*.*s");
-                const width_text = utils.formatInt(ctx.allocator, @intCast(arg_len));
-                const prec_text = utils.formatInt(ctx.allocator, @intCast(arg_len));
-                try args.append(.{ .value = .{ .name = width_text, .ty = .i32, .is_ptr = false }, .kind = 'i' });
-                try args.append(.{ .value = .{ .name = prec_text, .ty = .i32, .is_ptr = false }, .kind = 'i' });
+                const width_val = try ctx.constI32(@intCast(arg_len));
+                const prec_val = try ctx.constI32(@intCast(arg_len));
+                try args.append(.{ .value = width_val, .kind = 'i' });
+                try args.append(.{ .value = prec_val, .kind = 'i' });
                 try args.append(.{ .value = .{ .name = value.name, .ty = .ptr, .is_ptr = true }, .kind = 's' });
             },
             .i1 => {
@@ -144,12 +144,12 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
     }
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, ptr_args.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const arg_count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(ptr_args.items.len)), .ty = .i32, .is_ptr = false };
+    const arg_count_val = try ctx.constI32(@intCast(ptr_args.items.len));
     const fmt_ptr_val = ValueRef{ .name = fmt_ptr, .ty = .ptr, .is_ptr = true };
     if (is_internal) {
-        const len_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?)), .ty = .i32, .is_ptr = false };
+        const len_val = try ctx.constI32(@intCast(unit_char_len.?));
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_ref = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(count_val)), .ty = .i32, .is_ptr = false };
+        const count_ref = try ctx.constI32(@intCast(count_val));
         const write_name = try ctx.ensureDeclRaw("f77_write_internal_v", .void, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .void, write_name, &.{ unit_value, len_val, count_ref, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val });
     } else {
@@ -323,12 +323,12 @@ pub fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt)
     try builder.gepConstString(fmt_ptr, fmt_global, fmt_buf.items.len + 1);
     const ptr_array = try emitPointerArrayFromNames(ctx, builder, arg_ptrs.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const arg_count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(arg_ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const arg_count_val = try ctx.constI32(@intCast(arg_ptrs.items.len));
     const fmt_ptr_val = ValueRef{ .name = fmt_ptr, .ty = .ptr, .is_ptr = true };
     if (is_internal) {
-        const len_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?)), .ty = .i32, .is_ptr = false };
+        const len_val = try ctx.constI32(@intCast(unit_char_len.?));
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_ref = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(count_val)), .ty = .i32, .is_ptr = false };
+        const count_ref = try ctx.constI32(@intCast(count_val));
         const read_name = try ctx.ensureDeclRaw("f77_read_internal_core", .i32, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val });
     } else {
@@ -397,13 +397,13 @@ pub fn emitListDirectedReadStatus(ctx: *Context, builder: anytype, read: ast.Rea
     try builder.gepConstString(fmt_ptr, fmt_global, fmt_buf.items.len + 1);
     const ptr_array = try emitPointerArrayFromNames(ctx, builder, arg_ptrs.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const arg_count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(arg_ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const arg_count_val = try ctx.constI32(@intCast(arg_ptrs.items.len));
     const fmt_ptr_val = ValueRef{ .name = fmt_ptr, .ty = .ptr, .is_ptr = true };
     var status_val: ValueRef = .{ .name = "0", .ty = .i32, .is_ptr = false };
     if (is_internal) {
-        const len_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(unit_char_len.?)), .ty = .i32, .is_ptr = false };
+        const len_val = try ctx.constI32(@intCast(unit_char_len.?));
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_ref = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(count_val)), .ty = .i32, .is_ptr = false };
+        const count_ref = try ctx.constI32(@intCast(count_val));
         const read_name = try ctx.ensureDeclRaw("f77_read_internal_core", .i32, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val });
     } else {

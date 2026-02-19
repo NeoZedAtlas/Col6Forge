@@ -32,7 +32,7 @@ pub fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStm
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
-    const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const count_val = try ctx.constI32(@intCast(sig_ptrs.ptrs.items.len));
     const sig_ptr_val = ValueRef{ .name = sig_ptr, .ty = .ptr, .is_ptr = true };
     const write_name = try ctx.ensureDeclRaw("f77_write_unformatted_v", .void, &[_]utils.IRType{ .i32, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .void, write_name, &.{ unit_i32, sig_ptr_val, ptr_array, count_val });
@@ -52,7 +52,7 @@ pub fn emitUnformattedReadStatus(ctx: *Context, builder: anytype, read: ast.Read
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
-    const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const count_val = try ctx.constI32(@intCast(sig_ptrs.ptrs.items.len));
     const sig_ptr_val = ValueRef{ .name = sig_ptr, .ty = .ptr, .is_ptr = true };
     const read_name = try ctx.ensureDeclRaw("f77_read_unformatted_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .i32 }, false);
     const tmp = try ctx.nextTemp();
@@ -76,7 +76,7 @@ pub fn emitUnformattedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) 
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
-    const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const count_val = try ctx.constI32(@intCast(sig_ptrs.ptrs.items.len));
     const sig_ptr_val = ValueRef{ .name = sig_ptr, .ty = .ptr, .is_ptr = true };
     const read_name = try ctx.ensureDeclRaw("f77_read_unformatted_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .i32, read_name, &.{ unit_i32, sig_ptr_val, ptr_array, count_val });

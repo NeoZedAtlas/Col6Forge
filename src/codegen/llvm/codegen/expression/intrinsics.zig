@@ -24,27 +24,27 @@ fn isRealType(ty: IRType) bool {
     return ty == .f32 or ty == .f64;
 }
 
-fn constI32(ctx: *Context, value: i64) ValueRef {
-    return .{ .name = utils.formatInt(ctx.allocator, value), .ty = .i32, .is_ptr = false };
+fn constI32(ctx: *Context, value: i64) EmitError!ValueRef {
+    return try ctx.constI32(value);
 }
 
 fn lookupCharArgLen(ctx: *Context, name: []const u8) ?ValueRef {
     return ctx.char_arg_lens.get(name);
 }
 
-fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) ?ValueRef {
+fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) EmitError!?ValueRef {
     if (sym.type_kind != .character) return null;
     if (sym.kind == .parameter) {
         if (sym.const_value) |cv| switch (cv) {
             .string => |lit| {
                 const len = utils.decodedStringLen(lit.text);
-                return constI32(ctx, @intCast(len));
+                return try constI32(ctx, @intCast(len));
             },
             else => {},
         };
     }
     if (sym.char_len) |char_len| {
-        return constI32(ctx, @intCast(char_len));
+        return try constI32(ctx, @intCast(char_len));
     }
     return lookupCharArgLen(ctx, name);
 }
@@ -58,33 +58,33 @@ fn emitLenValue(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?ValueRe
     switch (expr.*) {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return null;
-            return charSymbolLengthValue(ctx, name, sym);
+            return try charSymbolLengthValue(ctx, name, sym);
         },
         .literal => |lit| switch (lit.kind) {
             .string => {
                 const len = utils.decodedStringLen(lit.text);
                 if (len > std.math.maxInt(i32)) return error.UnsupportedIntrinsicType;
-                return constI32(ctx, @intCast(len));
+                return try constI32(ctx, @intCast(len));
             },
             .hollerith => {
                 const bytes = utils.hollerithBytes(lit.text) orelse return null;
                 if (bytes.len > std.math.maxInt(i32)) return error.UnsupportedIntrinsicType;
-                return constI32(ctx, @intCast(bytes.len));
+                return try constI32(ctx, @intCast(bytes.len));
             },
             else => return null,
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return null;
-            return charSymbolLengthValue(ctx, call.name, sym);
+            return try charSymbolLengthValue(ctx, call.name, sym);
         },
         .substring => |sub| {
             const sym = ctx.findSymbol(sub.name) orelse return null;
-            var end_val = charSymbolLengthValue(ctx, sub.name, sym) orelse return null;
+            var end_val = (try charSymbolLengthValue(ctx, sub.name, sym)) orelse return null;
             if (sub.end) |end_expr| {
                 end_val = try coerceToI32(ctx, builder, try dispatch.emitExpr(ctx, builder, end_expr));
             }
 
-            var start_val = constI32(ctx, 1);
+            var start_val = try constI32(ctx, 1);
             if (sub.start) |start_expr| {
                 start_val = try coerceToI32(ctx, builder, try dispatch.emitExpr(ctx, builder, start_expr));
             }
@@ -92,7 +92,7 @@ fn emitLenValue(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?ValueRe
             const diff_tmp = try ctx.nextTemp();
             try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
             const len_tmp = try ctx.nextTemp();
-            try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, constI32(ctx, 1));
+            try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, try constI32(ctx, 1));
             const len_val = ValueRef{ .name = len_tmp, .ty = .i32, .is_ptr = false };
 
             const zero = utils.zeroValue(.i32);
@@ -346,7 +346,7 @@ fn emitIntrinsicHuge(ctx: *Context, args: []*Expr) EmitError!ValueRef {
     return switch (arg_ty) {
         .f64, .complex_f64 => constFloat(ctx, .f64, std.math.floatMax(f64)),
         .f32, .complex_f32 => constFloat(ctx, .f32, std.math.floatMax(f32)),
-        .i32 => .{ .name = utils.formatInt(ctx.allocator, std.math.maxInt(i32)), .ty = .i32, .is_ptr = false },
+        .i32 => try constI32(ctx, std.math.maxInt(i32)),
         else => error.UnsupportedIntrinsicType,
     };
 }

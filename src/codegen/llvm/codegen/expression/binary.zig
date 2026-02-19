@@ -174,10 +174,10 @@ fn emitIntegerPow(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef,
         exp = try casting.coerce(ctx, builder, exp, .i64);
     }
 
-    const zero_i64 = constInt(ctx, .i64, 0);
-    const one_i64 = constInt(ctx, .i64, 1);
-    const one_ty = constInt(ctx, ty, 1);
-    const zero_ty = constInt(ctx, ty, 0);
+    const zero_i64 = try constInt(ctx, .i64, 0);
+    const one_i64 = try constInt(ctx, .i64, 1);
+    const one_ty = try constInt(ctx, ty, 1);
+    const zero_ty = try constInt(ctx, ty, 0);
 
     const neg_cond_name = try ctx.nextTemp();
     try builder.compare(neg_cond_name, "icmp", "slt", .i64, exp, zero_i64);
@@ -256,11 +256,11 @@ fn emitIntegerPow(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef,
 
 fn emitIntPowConst(ctx: *Context, builder: anytype, base: ValueRef, exp: u64, ty: IRType) EmitError!ValueRef {
     if (!isIntegerTy(ty)) return error.PowerUnsupported;
-    if (exp == 0) return constInt(ctx, ty, 1);
+    if (exp == 0) return try constInt(ctx, ty, 1);
     if (exp == 1) return base;
 
     var abs_exp = exp;
-    var result = constInt(ctx, ty, 1);
+    var result = try constInt(ctx, ty, 1);
     var cur = base;
 
     while (abs_exp > 0) {
@@ -310,8 +310,8 @@ fn constFloat(ctx: *Context, ty: IRType, value: f64) ValueRef {
     return .{ .name = utils.formatFloatValue(ctx.allocator, value, ty), .ty = ty, .is_ptr = false };
 }
 
-fn constInt(ctx: *Context, ty: IRType, value: i64) ValueRef {
-    return .{ .name = utils.formatInt(ctx.allocator, value), .ty = ty, .is_ptr = false };
+fn constInt(ctx: *Context, ty: IRType, value: i64) EmitError!ValueRef {
+    return .{ .name = try ctx.intLiteral(value), .ty = ty, .is_ptr = false };
 }
 
 fn emitComplexPowI(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {

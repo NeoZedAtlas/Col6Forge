@@ -170,7 +170,7 @@ fn emitDynamicCharArrayDispatch(
     for (entries, 0..) |entry, idx| {
         try builder.label(check_label);
         const cmp_tmp = try ctx.nextTemp();
-        const const_text = utils.formatInt(ctx.allocator, entry.index);
+        const const_text = try ctx.intLiteral(entry.index);
         const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
         try builder.compare(cmp_tmp, "icmp", "eq", .i32, idx_i32, const_val);
         const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };

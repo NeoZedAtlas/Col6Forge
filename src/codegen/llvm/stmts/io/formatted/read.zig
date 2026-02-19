@@ -35,8 +35,8 @@ const ScaleFixup = struct {
     scale_factor: i32,
 };
 
-fn constI32(ctx: *Context, value: usize) ValueRef {
-    return .{ .name = utils.formatInt(ctx.allocator, @intCast(value)), .ty = .i32, .is_ptr = false };
+fn constI32(ctx: *Context, value: usize) EmitError!ValueRef {
+    return ctx.constI32(@intCast(value));
 }
 
 fn emitReadFormattedImpl(
@@ -234,14 +234,14 @@ fn emitReadFormattedImpl(
     const fmt_ptr = ValueRef{ .name = fmt_ptr_name, .ty = .ptr, .is_ptr = true };
     const ptr_array = try emitPointerArrayFromNames(ctx, builder, arg_ptrs.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const arg_count_val = constI32(ctx, arg_ptrs.items.len);
+    const arg_count_val = try constI32(ctx, arg_ptrs.items.len);
 
     var status_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
 
     if (is_internal) {
-        const len_val = constI32(ctx, unit_char_len orelse return error.MissingFormatLabel);
+        const len_val = try constI32(ctx, unit_char_len orelse return error.MissingFormatLabel);
         const count_num: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_val = constI32(ctx, count_num);
+        const count_val = try constI32(ctx, count_num);
         const read_name = try ctx.ensureDeclRaw("f77_read_internal_core", .i32, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
         if (return_status) {
             const tmp = try ctx.nextTemp();
@@ -284,21 +284,21 @@ fn emitReadFormattedImpl(
         if (fixup.temp_ptr) |temp_ptr| {
             const start = if (fixup.field_width > fixup.target_len) fixup.field_width - fixup.target_len else 0;
             const src_gep = try ctx.nextTemp();
-            try builder.gep(src_gep, .i8, temp_ptr, constI32(ctx, start));
+            try builder.gep(src_gep, .i8, temp_ptr, try constI32(ctx, start));
             const src_ptr = ValueRef{ .name = src_gep, .ty = .ptr, .is_ptr = true };
 
             const memcpy_name = try ctx.ensureDeclRaw("llvm.memcpy.p0.p0.i32", .void, &[_]llvm_types.IRType{ .ptr, .ptr, .i32, .i1 }, false);
-            try builder.callTyped(null, .void, memcpy_name, &.{ fixup.target_ptr, src_ptr, constI32(ctx, fixup.target_len), false_i1 });
+            try builder.callTyped(null, .void, memcpy_name, &.{ fixup.target_ptr, src_ptr, try constI32(ctx, fixup.target_len), false_i1 });
         } else if (fixup.field_width < fixup.target_len) {
             const pad_len = fixup.target_len - fixup.field_width;
             if (pad_len == 0) continue;
 
             const dst_gep = try ctx.nextTemp();
-            try builder.gep(dst_gep, .i8, fixup.target_ptr, constI32(ctx, fixup.field_width));
+            try builder.gep(dst_gep, .i8, fixup.target_ptr, try constI32(ctx, fixup.field_width));
             const dst_ptr = ValueRef{ .name = dst_gep, .ty = .ptr, .is_ptr = true };
 
             const memset_name = try ctx.ensureDeclRaw("llvm.memset.p0.i32", .void, &[_]llvm_types.IRType{ .ptr, .i8, .i32, .i1 }, false);
-            try builder.callTyped(null, .void, memset_name, &.{ dst_ptr, space_i8, constI32(ctx, pad_len), false_i1 });
+            try builder.callTyped(null, .void, memset_name, &.{ dst_ptr, space_i8, try constI32(ctx, pad_len), false_i1 });
         }
     }
 

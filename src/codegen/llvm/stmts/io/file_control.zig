@@ -2,7 +2,6 @@ const std = @import("std");
 const ast = @import("../../../input.zig");
 const context = @import("../../codegen/context.zig");
 const expr = @import("../../codegen/expression/mod.zig");
-const utils = @import("../../codegen/utils.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -42,7 +41,7 @@ pub fn emitOpen(ctx: *Context, builder: anytype, open: ast.OpenStmt) EmitError!v
     var meta_args = std.array_list.Managed(u8).init(ctx.allocator);
     defer meta_args.deinit();
     if (file_ptr) |ptr| {
-        const len_text = utils.formatInt(ctx.allocator, @intCast(file_len));
+        const len_text = try ctx.intLiteral(@intCast(file_len));
         try meta_args.writer().print("i32 {s}, ptr {s}, i32 {s}, i32 {d}, i32 {d}, i32 {d}, i32 {d}", .{
             unit_i32.name,
             ptr.name,
@@ -181,7 +180,7 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
     if (spec.file_expr) |file_node| {
         const file_val = try expr.emitExpr(ctx, builder, file_node);
         const file_len = charLenForExpr(ctx, file_node) orelse 0;
-        const len_text = utils.formatInt(ctx.allocator, @intCast(file_len));
+        const len_text = try ctx.intLiteral(@intCast(file_len));
         try arg_buf.writer().print(
             "ptr {s}, i32 {s}, ptr {s}, ptr {s}, ptr {s}, ptr {s}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, i32 {d}, ptr {s}, ptr {s}",
             .{
@@ -296,3 +295,4 @@ pub fn emitEndfile(ctx: *Context, builder: anytype, endfile: ast.EndfileStmt) Em
     const endfile_name = try ctx.ensureDeclRaw("f77_endfile", .void, "i32", false);
     try builder.call(null, .void, endfile_name, arg_buf.items);
 }
+

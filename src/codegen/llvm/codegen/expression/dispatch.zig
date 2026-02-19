@@ -409,14 +409,14 @@ fn emitConcat(ctx: *Context, builder: anytype, bin: ast.BinaryExpr, subst_depth:
 fn copyChars(ctx: *Context, builder: anytype, dst_ptr: ValueRef, src_ptr: ValueRef, len: usize, dst_offset: usize) EmitError!void {
     var idx: usize = 0;
     while (idx < len) : (idx += 1) {
-        const src_off = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+        const src_off = try ctx.constI32(@intCast(idx));
         const src_gep = try ctx.nextTemp();
         try builder.gep(src_gep, .i8, src_ptr, src_off);
         const tmp = try ctx.nextTemp();
         try builder.load(tmp, .i8, .{ .name = src_gep, .ty = .ptr, .is_ptr = true });
 
         const dst_idx = dst_offset + idx;
-        const dst_off = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(dst_idx)), .ty = .i32, .is_ptr = false };
+        const dst_off = try ctx.constI32(@intCast(dst_idx));
         const dst_gep = try ctx.nextTemp();
         try builder.gep(dst_gep, .i8, dst_ptr, dst_off);
         try builder.store(.{ .name = tmp, .ty = .i8, .is_ptr = false }, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
@@ -433,7 +433,7 @@ fn emitCharCompare(
     rhs_len: usize,
 ) EmitError!ValueRef {
     const max_len = if (lhs_len > rhs_len) lhs_len else rhs_len;
-    const blank = ValueRef{ .name = utils.formatInt(ctx.allocator, 32), .ty = .i8, .is_ptr = false };
+    const blank = ValueRef{ .name = try ctx.intLiteral(32), .ty = .i8, .is_ptr = false };
     var eq_so_far: ?ValueRef = null;
     var lt_found: ?ValueRef = null;
     var gt_found: ?ValueRef = null;
@@ -442,7 +442,7 @@ fn emitCharCompare(
         var lhs_val = blank;
         var rhs_val = blank;
         if (idx < lhs_len) {
-            const offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+            const offset = try ctx.constI32(@intCast(idx));
             const lhs_gep = try ctx.nextTemp();
             try builder.gep(lhs_gep, .i8, lhs_ptr, offset);
             const lhs_tmp = try ctx.nextTemp();
@@ -450,7 +450,7 @@ fn emitCharCompare(
             lhs_val = .{ .name = lhs_tmp, .ty = .i8, .is_ptr = false };
         }
         if (idx < rhs_len) {
-            const offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+            const offset = try ctx.constI32(@intCast(idx));
             const rhs_gep = try ctx.nextTemp();
             try builder.gep(rhs_gep, .i8, rhs_ptr, offset);
             const rhs_tmp = try ctx.nextTemp();

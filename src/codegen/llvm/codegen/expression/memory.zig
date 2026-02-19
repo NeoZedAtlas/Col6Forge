@@ -27,7 +27,7 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     if (sym.type_kind == .character) {
         const char_len = sym.char_len orelse return error.ArraysUnsupported;
         if (char_len != 1) {
-            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = offset.ty, .is_ptr = false };
+            const scale = ValueRef{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = offset.ty, .is_ptr = false };
             offset = try binary.emitMul(ctx, builder, offset, scale);
         }
     }
@@ -88,7 +88,7 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
     if (sym.type_kind == .character) {
         const char_len = sym.char_len orelse return error.ArraysUnsupported;
         if (char_len != 1) {
-            const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = idx1_adj.ty, .is_ptr = false };
+            const scale = ValueRef{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = idx1_adj.ty, .is_ptr = false };
             idx1_adj = try binary.emitMul(ctx, builder, idx1_adj, scale);
         }
     }

@@ -110,9 +110,9 @@ pub fn buildDirectWriteSignatureAndPtrs(ctx: *Context, builder: anytype, args: [
                 const char_len = sym.char_len orelse 1;
                 var idx: usize = 0;
                 while (idx < elem_count) : (idx += 1) {
-                    var offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                    var offset_val = try ctx.constI32(@intCast(idx));
                     if (sym.type_kind == .character and char_len > 1) {
-                        const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = .i32, .is_ptr = false };
+                        const scale = try ctx.constI32(@intCast(char_len));
                         offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
                     }
                     const ptr_name = try ctx.nextTemp();
@@ -223,9 +223,9 @@ pub fn buildDirectReadSignatureAndPtrs(ctx: *Context, builder: anytype, args: []
                 const char_len = sym.char_len orelse 1;
                 var idx: usize = 0;
                 while (idx < elem_count) : (idx += 1) {
-                    var offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+                    var offset_val = try ctx.constI32(@intCast(idx));
                     if (sym.type_kind == .character and char_len > 1) {
-                        const scale = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(char_len)), .ty = .i32, .is_ptr = false };
+                        const scale = try ctx.constI32(@intCast(char_len));
                         offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
                     }
                     const ptr_name = try ctx.nextTemp();
@@ -333,10 +333,10 @@ fn storeCharacterLiteral(ctx: *Context, builder: anytype, target_ptr: ValueRef, 
     var i: usize = 0;
     while (i < char_len) : (i += 1) {
         const byte: u8 = if (i < text.len) text[i] else ' ';
-        const offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(i)), .ty = .i32, .is_ptr = false };
+        const offset = try ctx.constI32(@intCast(i));
         const gep = try ctx.nextTemp();
         try builder.gep(gep, .i8, target_ptr, offset);
-        const val = ValueRef{ .name = utils.formatInt(ctx.allocator, byte), .ty = .i8, .is_ptr = false };
+        const val = ValueRef{ .name = try ctx.intLiteral(byte), .ty = .i8, .is_ptr = false };
         try builder.store(val, .{ .name = gep, .ty = .ptr, .is_ptr = true });
     }
 }
@@ -528,7 +528,7 @@ pub fn emitPointerArrayFromValues(ctx: *Context, builder: anytype, ptrs: []const
     try builder.allocaArray(arr_name, .ptr, ptrs.len);
     const arr_ptr = ValueRef{ .name = arr_name, .ty = .ptr, .is_ptr = true };
     for (ptrs, 0..) |ptr, idx| {
-        const off = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+        const off = try ctx.constI32(@intCast(idx));
         const gep = try ctx.nextTemp();
         try builder.gep(gep, .ptr, arr_ptr, off);
         const slot_ptr = ValueRef{ .name = gep, .ty = .ptr, .is_ptr = true };
@@ -545,7 +545,7 @@ pub fn emitPointerArrayFromNames(ctx: *Context, builder: anytype, names: []const
     try builder.allocaArray(arr_name, .ptr, names.len);
     const arr_ptr = ValueRef{ .name = arr_name, .ty = .ptr, .is_ptr = true };
     for (names, 0..) |name, idx| {
-        const off = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(idx)), .ty = .i32, .is_ptr = false };
+        const off = try ctx.constI32(@intCast(idx));
         const gep = try ctx.nextTemp();
         try builder.gep(gep, .ptr, arr_ptr, off);
         const slot_ptr = ValueRef{ .name = gep, .ty = .ptr, .is_ptr = true };
@@ -571,3 +571,4 @@ pub fn appendIntFormat(buffer: *std.array_list.Managed(u8), width: usize, sign_p
         try buffer.writer().print("%{s}{d}d", .{ sign_flag, width });
     }
 }
+

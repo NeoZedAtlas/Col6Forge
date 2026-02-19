@@ -98,7 +98,7 @@ pub fn emitCharacterCall(ctx: *Context, builder: anytype, fn_name: []const u8, r
     var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer abi_args.deinit();
     try abi_args.append(result_ptr);
-    const result_len_val = i32Const(ctx, @intCast(result_len));
+    const result_len_val = try i32Const(ctx, @intCast(result_len));
     try appendAbiActualArgs(ctx, builder, &abi_args, args, result_len_val);
 
     try builder.callTyped(null, .void, fn_name, abi_args.items);
@@ -110,7 +110,7 @@ pub fn emitIndirectCharacterCall(ctx: *Context, builder: anytype, fn_ptr: ValueR
     var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer abi_args.deinit();
     try abi_args.append(result_ptr);
-    const result_len_val = i32Const(ctx, @intCast(result_len));
+    const result_len_val = try i32Const(ctx, @intCast(result_len));
     try appendAbiActualArgs(ctx, builder, &abi_args, args, result_len_val);
 
     try builder.callIndirectTyped(null, .void, fn_ptr.name, abi_args.items);
@@ -222,11 +222,11 @@ fn emitCharacterLengthArg(ctx: *Context, builder: anytype, expr: *Expr) !?ValueR
     switch (expr.*) {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
-            return charSymbolLengthValue(ctx, name, sym);
+            return try charSymbolLengthValue(ctx, name, sym);
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-            return charSymbolLengthValue(ctx, call.name, sym);
+            return try charSymbolLengthValue(ctx, call.name, sym);
         },
         .substring => |sub| {
             return try emitSubstringLengthValue(ctx, builder, sub);
@@ -240,7 +240,7 @@ fn emitCharacterLengthArg(ctx: *Context, builder: anytype, expr: *Expr) !?ValueR
                 },
                 else => return error.UnsupportedLiteral,
             };
-            return i32Const(ctx, len);
+            return try i32Const(ctx, len);
         },
         .binary => |bin| {
             if (bin.op != .concat) return error.UnsupportedCharacterArgumentLength;
@@ -266,7 +266,7 @@ fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
 
 fn emitSubstringLengthValue(ctx: *Context, builder: anytype, sub: ast.SubstringExpr) !ValueRef {
     const sym = ctx.findSymbol(sub.name) orelse return error.UnknownSymbol;
-    var end_val = charSymbolLengthValue(ctx, sub.name, sym);
+    var end_val = try charSymbolLengthValue(ctx, sub.name, sym);
     if (sub.end) |end_expr| {
         end_val = try dispatch.emitExpr(ctx, builder, end_expr);
         if (end_val.ty != .i32) {
@@ -274,7 +274,7 @@ fn emitSubstringLengthValue(ctx: *Context, builder: anytype, sub: ast.SubstringE
         }
     }
 
-    var start_val = i32Const(ctx, 1);
+    var start_val = try i32Const(ctx, 1);
     if (sub.start) |start_expr| {
         start_val = try dispatch.emitExpr(ctx, builder, start_expr);
         if (start_val.ty != .i32) {
@@ -285,20 +285,20 @@ fn emitSubstringLengthValue(ctx: *Context, builder: anytype, sub: ast.SubstringE
     const diff_tmp = try ctx.nextTemp();
     try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
     const len_tmp = try ctx.nextTemp();
-    try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, i32Const(ctx, 1));
+    try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, try i32Const(ctx, 1));
     return .{ .name = len_tmp, .ty = .i32, .is_ptr = false };
 }
 
-fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) ValueRef {
+fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) !ValueRef {
     if (sym.char_len) |char_len| {
-        return i32Const(ctx, @intCast(char_len));
+        return try i32Const(ctx, @intCast(char_len));
     }
     if (ctx.char_arg_lens.get(name)) |len_val| return len_val;
-    return i32Const(ctx, 1);
+    return try i32Const(ctx, 1);
 }
 
-fn i32Const(ctx: *Context, value: i64) ValueRef {
-    return .{ .name = utils.formatInt(ctx.allocator, value), .ty = .i32, .is_ptr = false };
+fn i32Const(ctx: *Context, value: i64) !ValueRef {
+    return try ctx.constI32(value);
 }
 
 fn isIntrinsicArrayConversionArg(ctx: *Context, call: ast.CallOrSubscript) bool {

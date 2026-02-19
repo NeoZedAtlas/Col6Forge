@@ -48,8 +48,8 @@ pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) Em
         const recl_len = prepared.recl orelse return error.InternalInvariantViolation;
         const expanded_arg_count = try countExpandedDirectArgs(ctx, prepared.expanded_args);
         const record_count = try countDirectFormattedRecords(fmt_items, expanded_arg_count);
-        const recl_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(recl_len)), .ty = .i32, .is_ptr = false };
-        const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(record_count)), .ty = .i32, .is_ptr = false };
+        const recl_val = try ctx.constI32(@intCast(recl_len));
+        const count_val = try ctx.constI32(@intCast(record_count));
 
         const span_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_span_ptr", .ptr, &[_]utils.IRType{ .i32, .i32, .i32, .i32 }, false);
         const record_ptr_tmp = try ctx.nextTemp();
@@ -89,8 +89,8 @@ pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitE
         const recl_len = prepared.recl orelse return error.InternalInvariantViolation;
         const expanded_arg_count = try countExpandedDirectArgs(ctx, prepared.expanded_args);
         const record_count = try countDirectFormattedRecords(fmt_items, expanded_arg_count);
-        const recl_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(recl_len)), .ty = .i32, .is_ptr = false };
-        const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(record_count)), .ty = .i32, .is_ptr = false };
+        const recl_val = try ctx.constI32(@intCast(recl_len));
+        const count_val = try ctx.constI32(@intCast(record_count));
 
         const span_ptr_name = try ctx.ensureDeclRaw("f77_direct_record_span_ptr_ro", .ptr, &[_]utils.IRType{ .i32, .i32, .i32, .i32 }, false);
         const record_ptr_tmp = try ctx.nextTemp();
@@ -335,7 +335,7 @@ fn recordNumberForPlan(
         return .{ .name = rec_tmp_one, .ty = .i32, .is_ptr = false };
     }
 
-    const offset_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(rec_offset)), .ty = .i32, .is_ptr = false };
+    const offset_val = try ctx.constI32(@intCast(rec_offset));
     const rec_tmp = try ctx.nextTemp();
     try builder.binary(rec_tmp, "add", .i32, base_rec, offset_val);
     return .{ .name = rec_tmp, .ty = .i32, .is_ptr = false };
@@ -356,7 +356,7 @@ fn emitDirectWriteCall(
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
-    const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const count_val = try ctx.constI32(@intCast(sig_ptrs.ptrs.items.len));
     const sig_ptr_val = ValueRef{ .name = sig_ptr, .ty = .ptr, .is_ptr = true };
     const write_name = try ctx.ensureDeclRaw("f77_write_direct_v", .void, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .void, write_name, &.{ unit_i32, rec_i32, sig_ptr_val, ptr_array, count_val });
@@ -377,7 +377,7 @@ fn emitDirectReadCall(
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
-    const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const count_val = try ctx.constI32(@intCast(sig_ptrs.ptrs.items.len));
     const sig_ptr_val = ValueRef{ .name = sig_ptr, .ty = .ptr, .is_ptr = true };
     const read_name = try ctx.ensureDeclRaw("f77_read_direct_v", .i32, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .i32, read_name, &.{ unit_i32, rec_i32, sig_ptr_val, ptr_array, count_val });

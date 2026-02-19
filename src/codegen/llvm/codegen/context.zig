@@ -124,6 +124,7 @@ pub const Context = struct {
     char_values: std.StringHashMap([]const u8),
     char_array_values: std.StringHashMap([]const u8),
     char_arg_lens: CaseInsensitiveStringHashMap(ValueRef),
+    int_literal_cache: std.AutoHashMap(i64, []const u8),
     options: CodegenOptions,
     current_stmt: ?input.Stmt,
 
@@ -163,6 +164,7 @@ pub const Context = struct {
             .char_values = std.StringHashMap([]const u8).init(allocator),
             .char_array_values = std.StringHashMap([]const u8).init(allocator),
             .char_arg_lens = CaseInsensitiveStringHashMap(ValueRef).initContext(allocator, .{}),
+            .int_literal_cache = std.AutoHashMap(i64, []const u8).init(allocator),
             .options = options,
             .current_stmt = null,
         };
@@ -199,6 +201,7 @@ pub const Context = struct {
         }
         self.char_array_values.deinit();
         self.char_arg_lens.deinit();
+        self.int_literal_cache.deinit();
     }
 
     pub fn buildBlockNames(self: *Context) ![][]const u8 {
@@ -337,6 +340,18 @@ pub const Context = struct {
     pub fn nextStringName(self: *Context) ![]const u8 {
         const name = try std.fmt.allocPrint(self.allocator, "str{d}", .{self.string_pool.counter});
         return name;
+    }
+
+    pub fn intLiteral(self: *Context, value: i64) ![]const u8 {
+        if (self.int_literal_cache.get(value)) |cached| return cached;
+        const arena_alloc = self.string_pool.arena.allocator();
+        const text = try std.fmt.allocPrint(arena_alloc, "{d}", .{value});
+        try self.int_literal_cache.put(value, text);
+        return text;
+    }
+
+    pub fn constI32(self: *Context, value: i64) !ValueRef {
+        return .{ .name = try self.intLiteral(value), .ty = .i32, .is_ptr = false };
     }
 
     pub fn setCurrentStmt(self: *Context, stmt: input.Stmt) void {

@@ -53,8 +53,8 @@ const RuntimeFormatValue = struct {
     len: ValueRef,
 };
 
-fn constI32(ctx: *Context, value: i64) ValueRef {
-    return .{ .name = utils.formatInt(ctx.allocator, value), .ty = .i32, .is_ptr = false };
+fn constI32(ctx: *Context, value: i64) EmitError!ValueRef {
+    return try ctx.constI32(value);
 }
 
 fn lookupCharArgLen(ctx: *Context, name: []const u8) ?ValueRef {
@@ -66,20 +66,20 @@ fn emitFormatExprLen(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitE
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return null;
             if (sym.type_kind != .character) return null;
-            if (sym.char_len) |len| return constI32(ctx, @intCast(len));
-            return lookupCharArgLen(ctx, name) orelse constI32(ctx, 1);
+            if (sym.char_len) |len| return try constI32(ctx, @intCast(len));
+            return lookupCharArgLen(ctx, name) orelse try constI32(ctx, 1);
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return null;
             if (sym.type_kind != .character) return null;
-            if (sym.char_len) |len| return constI32(ctx, @intCast(len));
-            return lookupCharArgLen(ctx, call.name) orelse constI32(ctx, 1);
+            if (sym.char_len) |len| return try constI32(ctx, @intCast(len));
+            return lookupCharArgLen(ctx, call.name) orelse try constI32(ctx, 1);
         },
         .literal => |lit| switch (lit.kind) {
-            .string => return constI32(ctx, @intCast(utils.decodedStringLen(lit.text))),
+            .string => return try constI32(ctx, @intCast(utils.decodedStringLen(lit.text))),
             .hollerith => {
                 const bytes = utils.hollerithBytes(lit.text) orelse return null;
-                return constI32(ctx, @intCast(bytes.len));
+                return try constI32(ctx, @intCast(bytes.len));
             },
             else => return null,
         },
@@ -87,13 +87,13 @@ fn emitFormatExprLen(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitE
             const sym = ctx.findSymbol(sub.name) orelse return null;
             if (sym.type_kind != .character) return null;
 
-            var end_val: ValueRef = if (sym.char_len) |len| constI32(ctx, @intCast(len)) else lookupCharArgLen(ctx, sub.name) orelse constI32(ctx, 1);
+            var end_val: ValueRef = if (sym.char_len) |len| try constI32(ctx, @intCast(len)) else lookupCharArgLen(ctx, sub.name) orelse try constI32(ctx, 1);
             if (sub.end) |end_expr| {
                 end_val = try expr.emitExpr(ctx, builder, end_expr);
                 if (end_val.ty != .i32) end_val = try expr.coerce(ctx, builder, end_val, .i32);
             }
 
-            var start_val = constI32(ctx, 1);
+            var start_val = try constI32(ctx, 1);
             if (sub.start) |start_expr| {
                 start_val = try expr.emitExpr(ctx, builder, start_expr);
                 if (start_val.ty != .i32) start_val = try expr.coerce(ctx, builder, start_val, .i32);
@@ -102,7 +102,7 @@ fn emitFormatExprLen(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitE
             const diff_tmp = try ctx.nextTemp();
             try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
             const len_tmp = try ctx.nextTemp();
-            try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, constI32(ctx, 1));
+            try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, try constI32(ctx, 1));
             return .{ .name = len_tmp, .ty = .i32, .is_ptr = false };
         },
         .binary => |bin| {
@@ -149,7 +149,7 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
             },
             .i1 => {
                 const select_tmp = try ctx.nextTemp();
-                try builder.select(select_tmp, .i32, value, constI32(ctx, 1), constI32(ctx, 0));
+                try builder.select(select_tmp, .i32, value, try constI32(ctx, 1), try constI32(ctx, 0));
                 const select_val = ValueRef{ .name = select_tmp, .ty = .i32, .is_ptr = false };
                 const tmp = try ctx.nextTemp();
                 try builder.alloca(tmp, .i32);
@@ -174,7 +174,7 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
     return .{
         .ptr_array = try emitPointerArrayFromValues(ctx, builder, ptr_args.items),
         .kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items),
-        .arg_count = constI32(ctx, @intCast(ptr_args.items.len)),
+        .arg_count = try constI32(ctx, @intCast(ptr_args.items.len)),
     };
 }
 
@@ -196,7 +196,7 @@ fn buildReadRuntimeArgs(ctx: *Context, builder: anytype, expanded: *ExpandedRead
     return .{
         .ptr_array = try emitPointerArrayFromValues(ctx, builder, expanded.ptrs.items),
         .kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items),
-        .arg_count = constI32(ctx, @intCast(expanded.ptrs.items.len)),
+        .arg_count = try constI32(ctx, @intCast(expanded.ptrs.items.len)),
     };
 }
 
@@ -215,16 +215,16 @@ fn emitWriteRuntimeFormatExpr(
     const runtime_args = try buildWriteRuntimeArgs(ctx, builder, expanded_values);
 
     if (is_internal) {
-        const len_val = constI32(ctx, @intCast(unit_char_len orelse return error.MissingFormatLabel));
+        const len_val = try constI32(ctx, @intCast(unit_char_len orelse return error.MissingFormatLabel));
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_ref = constI32(ctx, @intCast(count_val));
+        const count_ref = try constI32(ctx, @intCast(count_val));
         const write_name = try ctx.ensureDeclRaw("f77_write_internal_fmt_expr_v", .void, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .void, write_name, &.{ unit_value, len_val, count_ref, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count });
         return;
     }
 
     const write_name = try ctx.ensureDeclRaw("f77_write_fmt_expr_v", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
-    try builder.callTyped(null, .i32, write_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, constI32(ctx, 0) });
+    try builder.callTyped(null, .i32, write_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 0) });
 }
 
 fn emitReadRuntimeFormatExpr(
@@ -242,16 +242,16 @@ fn emitReadRuntimeFormatExpr(
     const runtime_args = try buildReadRuntimeArgs(ctx, builder, expanded);
 
     if (is_internal) {
-        const len_val = constI32(ctx, @intCast(unit_char_len orelse return error.MissingFormatLabel));
+        const len_val = try constI32(ctx, @intCast(unit_char_len orelse return error.MissingFormatLabel));
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_ref = constI32(ctx, @intCast(count_val));
+        const count_ref = try constI32(ctx, @intCast(count_val));
         const read_name = try ctx.ensureDeclRaw("f77_read_internal_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count });
         return;
     }
 
     const read_name = try ctx.ensureDeclRaw("f77_read_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
-    try builder.callTyped(null, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, constI32(ctx, 0) });
+    try builder.callTyped(null, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 0) });
 }
 
 fn emitReadRuntimeFormatExprStatus(
@@ -269,17 +269,17 @@ fn emitReadRuntimeFormatExprStatus(
     const runtime_args = try buildReadRuntimeArgs(ctx, builder, expanded);
 
     if (is_internal) {
-        const len_val = constI32(ctx, @intCast(unit_char_len orelse return error.MissingFormatLabel));
+        const len_val = try constI32(ctx, @intCast(unit_char_len orelse return error.MissingFormatLabel));
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_ref = constI32(ctx, @intCast(count_val));
+        const count_ref = try constI32(ctx, @intCast(count_val));
         const read_name = try ctx.ensureDeclRaw("f77_read_internal_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count });
-        return constI32(ctx, 0);
+        return try constI32(ctx, 0);
     }
 
     const read_name = try ctx.ensureDeclRaw("f77_read_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
     const status_tmp = try ctx.nextTemp();
-    try builder.callTyped(status_tmp, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, constI32(ctx, 1) });
+    try builder.callTyped(status_tmp, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 1) });
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
 }
 
@@ -554,3 +554,4 @@ pub fn emitReadFormatExprStatus(
         },
     }
 }
+
