@@ -78,6 +78,7 @@ const runtime_io_formatted_read = @import("f77_runtime/io_formatted_read.zig");
 const runtime_io_control = @import("f77_runtime/io_control.zig");
 const runtime_io_record_store = @import("f77_runtime/io_record_store.zig");
 const runtime_io_list_read = @import("f77_runtime/io_list_read.zig");
+const runtime_io_list_write = @import("f77_runtime/io_list_write.zig");
 const runtime_io_internal = @import("f77_runtime/io_internal.zig");
 const runtime_io_line_output = @import("f77_runtime/io_line_output.zig");
 const runtime_io_common = @import("f77_runtime/io_common.zig");
@@ -93,6 +94,7 @@ comptime {
     _ = runtime_io_control;
     _ = runtime_io_record_store;
     _ = runtime_io_list_read;
+    _ = runtime_io_list_write;
     _ = runtime_io_internal;
     _ = runtime_io_line_output;
     _ = runtime_io_common;

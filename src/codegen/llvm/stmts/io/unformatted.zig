@@ -1,4 +1,3 @@
-const std = @import("std");
 const ast = @import("../../../input.zig");
 const context = @import("../../codegen/context.zig");
 const expr = @import("../../codegen/expression/mod.zig");
@@ -33,15 +32,10 @@ pub fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStm
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
-    const count_text = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len));
-    const arg_buf = try std.fmt.allocPrint(
-        ctx.allocator,
-        "i32 {s}, ptr {s}, ptr {s}, i32 {s}",
-        .{ unit_i32.name, sig_ptr, ptr_array.name, count_text },
-    );
-
-    const write_name = try ctx.ensureDeclRaw("f77_write_unformatted_v", .void, "i32, ptr, ptr, i32", false);
-    try builder.call(null, .void, write_name, arg_buf);
+    const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const sig_ptr_val = ValueRef{ .name = sig_ptr, .ty = .ptr, .is_ptr = true };
+    const write_name = try ctx.ensureDeclRaw("f77_write_unformatted_v", .void, &[_]utils.IRType{ .i32, .ptr, .ptr, .i32 }, false);
+    try builder.callTyped(null, .void, write_name, &.{ unit_i32, sig_ptr_val, ptr_array, count_val });
 }
 pub fn emitUnformattedReadStatus(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!ValueRef {
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
@@ -58,15 +52,11 @@ pub fn emitUnformattedReadStatus(ctx: *Context, builder: anytype, read: ast.Read
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
-    const count_text = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len));
-    const arg_buf = try std.fmt.allocPrint(
-        ctx.allocator,
-        "i32 {s}, ptr {s}, ptr {s}, i32 {s}",
-        .{ unit_i32.name, sig_ptr, ptr_array.name, count_text },
-    );
-    const read_name = try ctx.ensureDeclRaw("f77_read_unformatted_v", .i32, "i32, ptr, ptr, i32", false);
+    const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const sig_ptr_val = ValueRef{ .name = sig_ptr, .ty = .ptr, .is_ptr = true };
+    const read_name = try ctx.ensureDeclRaw("f77_read_unformatted_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .i32 }, false);
     const tmp = try ctx.nextTemp();
-    try builder.call(tmp, .i32, read_name, arg_buf);
+    try builder.callTyped(tmp, .i32, read_name, &.{ unit_i32, sig_ptr_val, ptr_array, count_val });
 
     try applyComplexFixupsList(ctx, builder, sig_ptrs.complex_fixups.items);
     return .{ .name = tmp, .ty = .i32, .is_ptr = false };
@@ -86,14 +76,10 @@ pub fn emitUnformattedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) 
     try builder.gepConstString(sig_ptr, sig_global, sig.len + 1);
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, sig_ptrs.ptrs.items);
-    const count_text = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len));
-    const arg_buf = try std.fmt.allocPrint(
-        ctx.allocator,
-        "i32 {s}, ptr {s}, ptr {s}, i32 {s}",
-        .{ unit_i32.name, sig_ptr, ptr_array.name, count_text },
-    );
-    const read_name = try ctx.ensureDeclRaw("f77_read_unformatted_v", .i32, "i32, ptr, ptr, i32", false);
-    try builder.call(null, .i32, read_name, arg_buf);
+    const count_val = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(sig_ptrs.ptrs.items.len)), .ty = .i32, .is_ptr = false };
+    const sig_ptr_val = ValueRef{ .name = sig_ptr, .ty = .ptr, .is_ptr = true };
+    const read_name = try ctx.ensureDeclRaw("f77_read_unformatted_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .i32 }, false);
+    try builder.callTyped(null, .i32, read_name, &.{ unit_i32, sig_ptr_val, ptr_array, count_val });
 
     try applyComplexFixupsList(ctx, builder, sig_ptrs.complex_fixups.items);
 }

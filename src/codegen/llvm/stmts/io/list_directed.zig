@@ -9,6 +9,7 @@ const Context = context.Context;
 const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
+const max_static_implied_do_unroll: i64 = 4096;
 
 const io_utils = @import("utils.zig");
 const expansion = @import("expansion.zig");
@@ -29,6 +30,10 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
     const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, write.unit) else null;
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
+
+    if (!is_internal and try emitDynamicImpliedDoListWrite(ctx, builder, write, unit_i32)) {
+        return;
+    }
 
     const RuntimeArg = struct { value: ValueRef, kind: u8 };
     var args = std.array_list.Managed(RuntimeArg).init(ctx.allocator);
@@ -151,6 +156,113 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
         const write_name = try ctx.ensureDeclRaw("f77_write_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
         try builder.callTyped(null, .i32, write_name, &.{ unit_i32, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
     }
+}
+
+fn emitDynamicImpliedDoListWrite(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    unit_i32: ValueRef,
+) EmitError!bool {
+    if (write.args.len != 1) return false;
+    if (write.args[0].* != .implied_do) return false;
+    const implied = write.args[0].implied_do;
+    if (impliedBoundsStaticSmall(ctx, implied)) return false;
+    if (implied.items.len != 1) return false;
+    if (implied.items[0].* != .call_or_subscript) return false;
+
+    const call = implied.items[0].call_or_subscript;
+    const sym = ctx.findSymbol(call.name) orelse return false;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return false;
+
+    const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return false;
+    const step_val = if (implied.step) |step_expr|
+        (try evalConstIntSem(ctx.sem, step_expr)) orelse io_utils.intLiteralValue(step_expr) orelse return false
+    else
+        1;
+    if (step_val != 1) return false;
+
+    const helper_name = switch (sym.type_kind) {
+        .integer => "f77_write_list_i32_n",
+        .real => "f77_write_list_f32_n",
+        .double_precision => "f77_write_list_f64_n",
+        .complex => "f77_write_list_c32_n",
+        .complex_double => "f77_write_list_c64_n",
+        .logical => "f77_write_list_l_n",
+        else => return false,
+    };
+
+    const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return false;
+
+    var start_val = try expr.emitExpr(ctx, builder, implied.start);
+    start_val = try expr.coerce(ctx, builder, start_val, .i32);
+    var end_val = try expr.emitExpr(ctx, builder, implied.end);
+    end_val = try expr.coerce(ctx, builder, end_val, .i32);
+
+    const diff_tmp = try ctx.nextTemp();
+    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
+    const diff = ValueRef{ .name = diff_tmp, .ty = .i32, .is_ptr = false };
+    const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+    const count_tmp = try ctx.nextTemp();
+    try builder.binary(count_tmp, "add", .i32, diff, one);
+    const count_raw = ValueRef{ .name = count_tmp, .ty = .i32, .is_ptr = false };
+    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+    const nonpos_tmp = try ctx.nextTemp();
+    try builder.compare(nonpos_tmp, "icmp", "sle", .i32, count_raw, zero);
+    const nonpos = ValueRef{ .name = nonpos_tmp, .ty = .i1, .is_ptr = false };
+    const final_count_tmp = try ctx.nextTemp();
+    try builder.select(final_count_tmp, .i32, nonpos, zero, count_raw);
+    const final_count = ValueRef{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
+
+    const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
+    for (call.args, 0..) |arg, idx| {
+        base_args[idx] = arg;
+    }
+    base_args[loop_dim] = implied.start;
+    const base_expr = try ctx.allocator.create(ast.Expr);
+    base_expr.* = .{
+        .call_or_subscript = .{
+            .name = call.name,
+            .args = base_args,
+        },
+    };
+    const base_ptr = try expr.emitLValue(ctx, builder, base_expr);
+
+    const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
+    try builder.callTyped(null, .i32, decl, &.{ unit_i32, final_count, stride, base_ptr });
+    return true;
+}
+
+fn impliedBoundsStaticSmall(ctx: *Context, implied: ast.ImpliedDo) bool {
+    const start_const = evalConstIntSem(ctx.sem, implied.start) catch null;
+    const end_const = evalConstIntSem(ctx.sem, implied.end) catch null;
+    if (start_const == null or end_const == null) return false;
+    const step_const: i64 = if (implied.step) |step_expr|
+        (evalConstIntSem(ctx.sem, step_expr) catch null) orelse return false
+    else
+        1;
+    if (step_const == 0) return false;
+    const trip_count = impliedStaticTripCountBounded(start_const.?, end_const.?, step_const) orelse return false;
+    return trip_count <= max_static_implied_do_unroll;
+}
+
+fn impliedStaticTripCountBounded(start: i64, end: i64, step: i64) ?i64 {
+    var idx = start;
+    var count: i64 = 0;
+    if (step > 0) {
+        while (idx <= end) {
+            count += 1;
+            if (count > max_static_implied_do_unroll) return count;
+            idx = std.math.add(i64, idx, step) catch return null;
+        }
+        return count;
+    }
+    while (idx >= end) {
+        count += 1;
+        if (count > max_static_implied_do_unroll) return count;
+        idx = std.math.add(i64, idx, step) catch return null;
+    }
+    return count;
 }
 pub fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
