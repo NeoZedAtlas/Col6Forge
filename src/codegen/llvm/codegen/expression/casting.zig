@@ -100,7 +100,7 @@ fn formatConstIntForType(ctx: *Context, ty: IRType, value: i64) []const u8 {
     return if (ty == .f32 or ty == .f64)
         utils.formatFloatValue(ctx.allocator, @as(f64, @floatFromInt(value)), ty)
     else
-        utils.formatInt(ctx.allocator, value);
+        ctx.intLiteral(value) catch unreachable;
 }
 
 pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) EmitError!ValueRef {

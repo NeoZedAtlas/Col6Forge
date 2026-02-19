@@ -12,6 +12,7 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 const max_implied_do_expansion: usize = 1_000_000;
+const max_implied_do_iterations: usize = 65_536;
 
 const io_utils = @import("utils.zig");
 
@@ -192,6 +193,7 @@ fn expandImpliedDo(ctx: *Context, implied: ast.ImpliedDo) EmitError![]*ast.Expr 
     }
     const end_val_final = end_val orelse return error.UnsupportedImpliedDo;
     const iter_count = try impliedDoIterationCount(start_val, end_val_final, step_val);
+    if (iter_count > max_implied_do_iterations) return error.ImpliedDoExpansionTooLarge;
     const expanded_len = std.math.mul(usize, iter_count, implied.items.len) catch return error.ImpliedDoExpansionTooLarge;
     if (expanded_len > max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
 
@@ -203,20 +205,30 @@ fn expandImpliedDo(ctx: *Context, implied: ast.ImpliedDo) EmitError![]*ast.Expr 
     var emitted: usize = 0;
     if (step_val > 0) {
         while (idx <= end_val_final) : (idx += step_val) {
-            const iter_expr = try makeIntegerLiteral(ctx.allocator, idx);
+            var iter_expr = ast.Expr{
+                .literal = .{
+                    .kind = .integer,
+                    .text = try ctx.intLiteral(idx),
+                },
+            };
             for (implied.items) |item| {
                 if (emitted >= max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
-                const clone = try cloneExprWithSubst(ctx, ctx.allocator, item, implied.var_name, iter_expr);
+                const clone = try cloneExprWithSubst(ctx, ctx.allocator, item, implied.var_name, &iter_expr);
                 try expanded.append(clone);
                 emitted += 1;
             }
         }
     } else {
         while (idx >= end_val_final) : (idx += step_val) {
-            const iter_expr = try makeIntegerLiteral(ctx.allocator, idx);
+            var iter_expr = ast.Expr{
+                .literal = .{
+                    .kind = .integer,
+                    .text = try ctx.intLiteral(idx),
+                },
+            };
             for (implied.items) |item| {
                 if (emitted >= max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
-                const clone = try cloneExprWithSubst(ctx, ctx.allocator, item, implied.var_name, iter_expr);
+                const clone = try cloneExprWithSubst(ctx, ctx.allocator, item, implied.var_name, &iter_expr);
                 try expanded.append(clone);
                 emitted += 1;
             }
@@ -268,12 +280,6 @@ fn subscriptUsesLoopVar(args: []*ast.Expr, name: []const u8) bool {
         }
     }
     return false;
-}
-fn makeIntegerLiteral(allocator: std.mem.Allocator, value: i64) EmitError!*ast.Expr {
-    const text = try std.fmt.allocPrint(allocator, "{d}", .{value});
-    const node = try allocator.create(ast.Expr);
-    node.* = .{ .literal = .{ .kind = .integer, .text = text } };
-    return node;
 }
 fn cloneExprWithSubst(
     ctx: *Context,
