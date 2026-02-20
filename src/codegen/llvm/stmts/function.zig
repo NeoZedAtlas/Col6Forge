@@ -287,7 +287,7 @@ fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {
         const base_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{layout.global_name});
         const base_ref = ValueRef{ .name = base_name, .ty = .ptr, .is_ptr = true };
         for (layout.items) |item| {
-            const offset_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{item.offset});
+            const offset_text = try ctx.intLiteral(@intCast(item.offset));
             const offset_val = ValueRef{ .name = offset_text, .ty = .i32, .is_ptr = false };
             const ptr_name = try ctx.nextTemp();
             try builder.gep(ptr_name, .i8, base_ref, offset_val);
@@ -393,7 +393,7 @@ fn applyEquivalencePair(ctx: *Context, builder: anytype, anchor: *ast.Expr, othe
         const anchor_ptr = try expression.emitSubscriptPtr(ctx, builder, a_call);
         var base_ptr = anchor_ptr;
         if (b_offset != 0) {
-            const neg_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{-b_offset});
+            const neg_text = try ctx.intLiteral(-b_offset);
             const neg_val = ValueRef{ .name = neg_text, .ty = .i32, .is_ptr = false };
             const ptr_name = try ctx.nextTemp();
             const elem_ty = llvm_types.typeFromKind(a_sym.type_kind);

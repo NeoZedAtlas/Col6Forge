@@ -16,6 +16,11 @@ const FormatMaps = struct {
     inline_items: std.AutoHashMap(usize, FormatInfo),
 };
 
+const AssignedFormatAlias = struct {
+    target_name: []const u8,
+    source_label: []const u8,
+};
+
 fn commonLayoutsCompatible(a: []const common.CommonItem, b: []const common.CommonItem) bool {
     if (a.len == 0 or b.len == 0) return true;
     const a_last = a[a.len - 1];
@@ -216,36 +221,62 @@ fn emitIabsWrapper(builder: anytype, name: []const u8) !void {
 fn buildFormatMaps(allocator: std.mem.Allocator, builder: anytype, unit: input.ProgramUnit) !FormatMaps {
     var label_map = std.StringHashMap(FormatInfo).init(allocator);
     var inline_map = std.AutoHashMap(usize, FormatInfo).init(allocator);
+    var assigned_aliases = std.array_list.Managed(AssignedFormatAlias).init(allocator);
+    defer assigned_aliases.deinit();
     const unit_mangled = try utils.mangleName(allocator, unit.name);
-    try collectFormatLabelsFromStmts(allocator, builder, unit_mangled, unit.stmts, &label_map);
-    try collectAssignedFormatsFromStmts(unit.stmts, &label_map);
     var inline_index: usize = 0;
-    try collectInlineFormatsFromStmts(allocator, builder, unit_mangled, unit.stmts, &inline_map, &inline_index);
+    try collectFormatsAndInlineFromStmts(
+        allocator,
+        builder,
+        unit_mangled,
+        unit.stmts,
+        &label_map,
+        &inline_map,
+        &inline_index,
+        &assigned_aliases,
+    );
+    try applyAssignedFormatAliases(&label_map, assigned_aliases.items);
     return .{ .labels = label_map, .inline_items = inline_map };
 }
 
-fn collectFormatLabelsFromStmts(
+fn collectFormatsAndInlineFromStmts(
     allocator: std.mem.Allocator,
     builder: anytype,
     unit_mangled: []const u8,
     stmt_list: []const input.Stmt,
     label_map: *std.StringHashMap(FormatInfo),
+    inline_map: *std.AutoHashMap(usize, FormatInfo),
+    inline_index: *usize,
+    assigned_aliases: *std.array_list.Managed(AssignedFormatAlias),
 ) anyerror!void {
     for (stmt_list) |stmt_item| {
-        collectFormatLabelsFromNode(allocator, builder, unit_mangled, stmt_item.node, stmt_item.label, label_map) catch |err| {
+        collectFormatsAndInlineFromNode(
+            allocator,
+            builder,
+            unit_mangled,
+            stmt_item.node,
+            stmt_item.label,
+            label_map,
+            inline_map,
+            inline_index,
+            assigned_aliases,
+        ) catch |err| {
             codegen_diag.setFromStmt(stmt_item, err);
             return err;
         };
     }
 }
 
-fn collectFormatLabelsFromNode(
+fn collectFormatsAndInlineFromNode(
     allocator: std.mem.Allocator,
     builder: anytype,
     unit_mangled: []const u8,
     node: input.StmtNode,
     label: ?[]const u8,
     label_map: *std.StringHashMap(FormatInfo),
+    inline_map: *std.AutoHashMap(usize, FormatInfo),
+    inline_index: *usize,
+    assigned_aliases: *std.array_list.Managed(AssignedFormatAlias),
 ) anyerror!void {
     switch (node) {
         .format => |fmt| {
@@ -260,87 +291,16 @@ fn collectFormatLabelsFromNode(
                 .string_len = format_bytes.len + 1,
             });
         },
-        .if_block => |ifb| {
-            try collectFormatLabelsFromStmts(allocator, builder, unit_mangled, ifb.then_stmts, label_map);
-            try collectFormatLabelsFromStmts(allocator, builder, unit_mangled, ifb.else_stmts, label_map);
-        },
-        .if_single => |ifs| {
-            try collectFormatLabelsFromNode(allocator, builder, unit_mangled, ifs.stmt.*, null, label_map);
-        },
-        else => {},
-    }
-}
-
-fn collectAssignedFormatsFromStmts(
-    stmt_list: []const input.Stmt,
-    label_map: *std.StringHashMap(FormatInfo),
-) anyerror!void {
-    for (stmt_list) |stmt_item| {
-        collectAssignedFormatsFromNode(stmt_item.node, label_map) catch |err| {
-            codegen_diag.setFromStmt(stmt_item, err);
-            return err;
-        };
-    }
-}
-
-fn collectAssignedFormatsFromNode(
-    node: input.StmtNode,
-    label_map: *std.StringHashMap(FormatInfo),
-) anyerror!void {
-    switch (node) {
         .assignment => |assign| {
             if (assign.target.* != .identifier) return;
             if (assign.value.* != .literal) return;
             const lit = assign.value.literal;
             if (lit.kind != .integer) return;
-            const fmt_info = label_map.get(lit.text) orelse return;
-            if (label_map.contains(assign.target.identifier)) return;
-            try label_map.put(assign.target.identifier, fmt_info);
+            try assigned_aliases.append(.{
+                .target_name = assign.target.identifier,
+                .source_label = lit.text,
+            });
         },
-        .if_block => |ifb| {
-            try collectAssignedFormatsFromStmts(ifb.then_stmts, label_map);
-            try collectAssignedFormatsFromStmts(ifb.else_stmts, label_map);
-        },
-        .if_single => |ifs| {
-            try collectAssignedFormatsFromNode(ifs.stmt.*, label_map);
-        },
-        else => {},
-    }
-}
-
-fn collectInlineFormatsFromStmts(
-    allocator: std.mem.Allocator,
-    builder: anytype,
-    unit_mangled: []const u8,
-    stmt_list: []const input.Stmt,
-    inline_map: *std.AutoHashMap(usize, FormatInfo),
-    inline_index: *usize,
-) anyerror!void {
-    for (stmt_list) |stmt_item| {
-        collectInlineFormatsFromNode(allocator, builder, unit_mangled, stmt_item.node, inline_map, inline_index) catch |err| {
-            codegen_diag.setFromStmt(stmt_item, err);
-            return err;
-        };
-    }
-}
-
-fn setCodegenDiagForUnit(unit: input.ProgramUnit, err: anyerror) void {
-    if (unit.stmts.len > 0) {
-        codegen_diag.setFromStmt(unit.stmts[0], err);
-        return;
-    }
-    codegen_diag.setAt(1, 1, "", err);
-}
-
-fn collectInlineFormatsFromNode(
-    allocator: std.mem.Allocator,
-    builder: anytype,
-    unit_mangled: []const u8,
-    node: input.StmtNode,
-    inline_map: *std.AutoHashMap(usize, FormatInfo),
-    inline_index: *usize,
-) anyerror!void {
-    switch (node) {
         .write => |write| {
             if (write.format != .inline_items) return;
             const items = write.format.inline_items;
@@ -372,14 +332,61 @@ fn collectInlineFormatsFromNode(
             });
         },
         .if_block => |ifb| {
-            try collectInlineFormatsFromStmts(allocator, builder, unit_mangled, ifb.then_stmts, inline_map, inline_index);
-            try collectInlineFormatsFromStmts(allocator, builder, unit_mangled, ifb.else_stmts, inline_map, inline_index);
+            try collectFormatsAndInlineFromStmts(
+                allocator,
+                builder,
+                unit_mangled,
+                ifb.then_stmts,
+                label_map,
+                inline_map,
+                inline_index,
+                assigned_aliases,
+            );
+            try collectFormatsAndInlineFromStmts(
+                allocator,
+                builder,
+                unit_mangled,
+                ifb.else_stmts,
+                label_map,
+                inline_map,
+                inline_index,
+                assigned_aliases,
+            );
         },
         .if_single => |ifs| {
-            try collectInlineFormatsFromNode(allocator, builder, unit_mangled, ifs.stmt.*, inline_map, inline_index);
+            try collectFormatsAndInlineFromNode(
+                allocator,
+                builder,
+                unit_mangled,
+                ifs.stmt.*,
+                null,
+                label_map,
+                inline_map,
+                inline_index,
+                assigned_aliases,
+            );
         },
         else => {},
     }
+}
+
+fn applyAssignedFormatAliases(
+    label_map: *std.StringHashMap(FormatInfo),
+    aliases: []const AssignedFormatAlias,
+) anyerror!void {
+    for (aliases) |alias| {
+        const fmt_info = label_map.get(alias.source_label) orelse continue;
+        if (label_map.contains(alias.target_name)) continue;
+        try label_map.put(alias.target_name, fmt_info);
+    }
+}
+
+fn setCodegenDiagForUnit(unit: input.ProgramUnit, err: anyerror) void {
+    if (unit.stmts.len > 0) {
+        codegen_diag.setFromStmt(unit.stmts[0], err);
+        return;
+    }
+    codegen_diag.setAt(1, 1, "", err);
 }
 
 fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const input.FormatItem) ![]const u8 {

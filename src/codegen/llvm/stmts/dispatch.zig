@@ -238,7 +238,7 @@ pub fn emitStmtListRange(
         try builder.label(block_name);
         switch (stmt.node) {
             .do_loop => |loop| {
-                const end_label_idx = label_index.get(loop.end_label) orelse cfg.findLabelIndex(stmts, loop.end_label) orelse return error.MissingLabel;
+                const end_label_idx = label_index.get(loop.end_label) orelse return error.MissingLabel;
                 if (end_label_idx <= i) return error.InvalidDoLabel;
                 if (end_label_idx > end_idx) return error.InvalidDoLabel;
                 const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
@@ -247,7 +247,7 @@ pub fn emitStmtListRange(
                 continue;
             },
             .do_while => |loop| {
-                const end_label_idx = label_index.get(loop.end_label) orelse cfg.findLabelIndex(stmts, loop.end_label) orelse return error.MissingLabel;
+                const end_label_idx = label_index.get(loop.end_label) orelse return error.MissingLabel;
                 if (end_label_idx <= i) return error.InvalidDoLabel;
                 if (end_label_idx > end_idx) return error.InvalidDoLabel;
                 const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;

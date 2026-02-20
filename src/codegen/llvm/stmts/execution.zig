@@ -491,7 +491,7 @@ fn emitCharLenValue(ctx: *Context, builder: anytype, value_expr: *ast.Expr) Emit
 }
 
 fn constI32(ctx: *Context, value: i64) ValueRef {
-    return .{ .name = utils.formatInt(ctx.allocator, value), .ty = .i32, .is_ptr = false };
+    return ctx.constI32(value) catch unreachable;
 }
 
 fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
