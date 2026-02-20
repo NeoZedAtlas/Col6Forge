@@ -89,6 +89,8 @@ fn semanticErrorInfo(err: anyerror) struct { code: []const u8, message: []const 
         error.InvalidFormatStatement => .{ .code = "CF3121", .message = "FORMAT statement requires a statement label" },
         error.UnknownCommonBlock => .{ .code = "CF3122", .message = "SAVE references unknown COMMON block" },
         error.InvalidLogicalIfNesting => .{ .code = "CF3123", .message = "LOGICAL IF statement cannot contain nested IF" },
+        error.InvalidIoControlType => .{ .code = "CF3124", .message = "I/O control specifier requires CHARACTER expression" },
+        error.InvalidIoControlValue => .{ .code = "CF3125", .message = "invalid literal value for I/O control specifier" },
         else => .{ .code = "CF3199", .message = "semantic analysis failed" },
     };
 }

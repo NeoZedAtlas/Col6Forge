@@ -258,6 +258,24 @@ look up `CF2001` in this file.
 - Meaning: `SAVE` references a `COMMON` block name not declared in the unit.
 - Typical fix: declare the `COMMON` block before using `SAVE /name/`.
 
+## CF3123
+
+- Stage: semantic analysis
+- Meaning: logical IF statement nests another IF statement.
+- Typical fix: rewrite as block IF/ENDIF form.
+
+## CF3124
+
+- Stage: semantic analysis
+- Meaning: `OPEN`/`CLOSE` control specifier requires a CHARACTER expression.
+- Typical fix: pass a CHARACTER variable or string literal for control keywords.
+
+## CF3125
+
+- Stage: semantic analysis
+- Meaning: literal value for an I/O control specifier is not recognized.
+- Typical fix: use a standard keyword such as `DIRECT`/`SEQUENTIAL`, `FORMATTED`/`UNFORMATTED`, `NULL`/`ZERO`, `KEEP`/`DELETE`.
+
 ## CF3199
 
 - Stage: semantic analysis (catch-all)

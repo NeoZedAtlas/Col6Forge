@@ -247,8 +247,13 @@ pub fn emitClose(ctx: *Context, builder: anytype, close_stmt: ast.CloseStmt) Emi
     var status_expr: ?*ast.Expr = null;
     for (close_stmt.controls) |control| {
         if (control.name) |name| {
-            if (std.ascii.eqlIgnoreCase(name, "UNIT")) unit_expr = control.value;
-            if (std.ascii.eqlIgnoreCase(name, "STATUS")) status_expr = control.value;
+            if (std.ascii.eqlIgnoreCase(name, "UNIT")) {
+                unit_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "STATUS")) {
+                status_expr = control.value;
+            }
+        } else if (unit_expr == null) {
+            unit_expr = control.value;
         }
     }
     const unit_node = unit_expr orelse return;

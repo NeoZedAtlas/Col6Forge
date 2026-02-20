@@ -121,7 +121,16 @@ fn decodeBlank(text: ?[*]const u8, len: c_int, default: c_int) c_int {
     return default;
 }
 
-fn decodeStatus(text: ?[*]const u8, len: c_int, default: c_int) c_int {
+fn decodeOpenStatus(text: ?[*]const u8, len: c_int, default: c_int) c_int {
+    if (controlEqIgnoreCase(text, len, "UNKNOWN")) return 0;
+    if (controlEqIgnoreCase(text, len, "OLD")) return 1;
+    if (controlEqIgnoreCase(text, len, "NEW")) return 2;
+    if (controlEqIgnoreCase(text, len, "SCRATCH")) return 3;
+    if (controlEqIgnoreCase(text, len, "REPLACE")) return 4;
+    return default;
+}
+
+fn decodeCloseStatus(text: ?[*]const u8, len: c_int, default: c_int) c_int {
     if (controlEqIgnoreCase(text, len, "KEEP")) return 1;
     if (controlEqIgnoreCase(text, len, "DELETE")) return 2;
     return default;
@@ -183,7 +192,7 @@ pub export fn f77_open_ex(
     const access_code = decodeAccess(access, access_len, access_default);
     const form_code = decodeForm(form, form_len, 0);
     const blank_code = decodeBlank(blank, blank_len, 0);
-    const status_code = decodeStatus(status, status_len, 0);
+    const status_code = decodeOpenStatus(status, status_len, 0);
     f77_open(unit, file, file_len, access_code, form_code, blank_code, status_code);
     if (access_code == 1 and has_recl != 0 and recl > 0) {
         f77_open_direct(unit, recl);
@@ -208,7 +217,7 @@ pub export fn f77_close(unit: c_int, status: c_int) callconv(.c) void {
 }
 
 pub export fn f77_close_ex(unit: c_int, status: ?[*]const u8, status_len: c_int) callconv(.c) void {
-    const status_code = decodeStatus(status, status_len, 0);
+    const status_code = decodeCloseStatus(status, status_len, 0);
     f77_close(unit, status_code);
 }
 

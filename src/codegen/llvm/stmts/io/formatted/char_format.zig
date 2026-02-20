@@ -163,33 +163,50 @@ fn emitDynamicCharArrayDispatch(
     idx_i32: ValueRef,
     dispatch: anytype,
 ) EmitError!void {
-    const done_label = try ctx.nextLabel("fmt_done");
-    var check_label = try ctx.nextLabel("fmt_check");
-    try builder.br(check_label);
+    const BuilderType = switch (@typeInfo(@TypeOf(builder))) {
+        .pointer => |p| p.child,
+        else => @TypeOf(builder),
+    };
+    const SwitchCase = BuilderType.SwitchCase;
+    const CasePlan = struct {
+        case_item: SwitchCase,
+        items: []const ast.FormatItem,
+    };
 
-    for (entries, 0..) |entry, idx| {
-        try builder.label(check_label);
-        const cmp_tmp = try ctx.nextTemp();
-        const const_text = try ctx.intLiteral(entry.index);
-        const const_val = ValueRef{ .name = const_text, .ty = .i32, .is_ptr = false };
-        try builder.compare(cmp_tmp, "icmp", "eq", .i32, idx_i32, const_val);
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        const use_label = try ctx.nextLabel("fmt_use");
-        const next_label = if (idx + 1 < entries.len) try ctx.nextLabel("fmt_check") else try ctx.nextLabel("fmt_fallback");
-        try builder.brCond(cond, use_label, next_label);
+    var plans = std.array_list.Managed(CasePlan).init(ctx.allocator);
+    defer plans.deinit();
+    var cases = std.array_list.Managed(SwitchCase).init(ctx.allocator);
+    defer cases.deinit();
 
-        try builder.label(use_label);
-        try dispatch.emit(ctx, builder, entry.items);
-        try builder.br(done_label);
-
-        check_label = next_label;
+    for (entries) |entry| {
+        const case_label = try ctx.nextLabel("fmt_case");
+        const case_item: SwitchCase = .{
+            .value = @as(i64, entry.index),
+            .label = case_label,
+        };
+        try plans.append(.{ .case_item = case_item, .items = entry.items });
+        try cases.append(case_item);
     }
 
-    try builder.label(check_label);
-    // Fallback: use the first statically known format.
-    try dispatch.emit(ctx, builder, entries[0].items);
-    try builder.br(done_label);
+    const done_label = try ctx.nextLabel("fmt_done");
+    const default_label = try ctx.nextLabel("fmt_default");
+    try builder.switchBr(idx_i32, default_label, cases.items);
+
+    for (plans.items) |plan| {
+        try builder.label(plan.case_item.label);
+        try dispatch.emitMatched(ctx, builder, plan.items);
+        try builder.br(done_label);
+    }
+
+    try builder.label(default_label);
+    try dispatch.emitDefault(ctx, builder, done_label);
     try builder.label(done_label);
+}
+
+fn emitMissingDynamicCharFormatTrap(ctx: *Context, builder: anytype) EmitError!void {
+    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, &.{}, false);
+    try builder.callTyped(null, .void, trap_name, &.{});
+    try builder.emitUnreachable();
 }
 
 fn buildCharArrayFormatEntries(ctx: *Context, name: []const u8) EmitError![]CharFormatEntry {
@@ -237,7 +254,7 @@ pub fn emitWriteDynamicCharArrayFormat(
         unit_i32: ValueRef,
         expanded_values: *ExpandedWriteValues,
 
-        fn emit(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
             try emitWriteFormatted(
                 ctx_inner,
                 builder_inner,
@@ -250,6 +267,11 @@ pub fn emitWriteDynamicCharArrayFormat(
                 items,
                 self.expanded_values,
             );
+        }
+
+        fn emitDefault(_: @This(), ctx_inner: *Context, builder_inner: anytype, done_label: []const u8) EmitError!void {
+            _ = done_label;
+            try emitMissingDynamicCharFormatTrap(ctx_inner, builder_inner);
         }
     };
     try emitDynamicCharArrayDispatch(ctx, builder, entries, idx_i32, Dispatch{
@@ -290,7 +312,7 @@ pub fn emitReadDynamicCharArrayFormat(
         unit_i32: ValueRef,
         expanded: *ExpandedReadTargets,
 
-        fn emit(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
             try emitReadFormatted(
                 ctx_inner,
                 builder_inner,
@@ -303,6 +325,11 @@ pub fn emitReadDynamicCharArrayFormat(
                 items,
                 self.expanded,
             );
+        }
+
+        fn emitDefault(_: @This(), ctx_inner: *Context, builder_inner: anytype, done_label: []const u8) EmitError!void {
+            _ = done_label;
+            try emitMissingDynamicCharFormatTrap(ctx_inner, builder_inner);
         }
     };
     try emitDynamicCharArrayDispatch(ctx, builder, entries, idx_i32, Dispatch{
@@ -348,7 +375,7 @@ pub fn emitReadDynamicCharArrayFormatStatus(
         expanded: *ExpandedReadTargets,
         status_ptr: ValueRef,
 
-        fn emit(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
             const status_val = try emitReadFormattedStatus(
                 ctx_inner,
                 builder_inner,
@@ -362,6 +389,12 @@ pub fn emitReadDynamicCharArrayFormatStatus(
                 self.expanded,
             );
             try builder_inner.store(status_val, self.status_ptr);
+        }
+
+        fn emitDefault(self: @This(), _: *Context, builder_inner: anytype, done_label: []const u8) EmitError!void {
+            const status_error = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+            try builder_inner.store(status_error, self.status_ptr);
+            try builder_inner.br(done_label);
         }
     };
     try emitDynamicCharArrayDispatch(ctx, builder, entries, idx_i32, Dispatch{

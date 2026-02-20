@@ -63,12 +63,28 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             if (open_stmt.form) |form| try checkExpr(self, form);
             if (open_stmt.blank) |blank| try checkExpr(self, blank);
             if (open_stmt.status) |status| try checkExpr(self, status);
+            try checkOpenControl(self, open_stmt.access, &.{ "DIRECT", "SEQUENTIAL" });
+            try checkOpenControl(self, open_stmt.form, &.{ "FORMATTED", "UNFORMATTED" });
+            try checkOpenControl(self, open_stmt.blank, &.{ "NULL", "ZERO" });
+            try checkOpenControl(self, open_stmt.status, &.{ "UNKNOWN", "OLD", "NEW", "SCRATCH", "REPLACE" });
         },
         .inquire => |inq| {
             for (inq.controls) |ctrl| try checkExpr(self, ctrl.value);
         },
         .close => |cls| {
             for (cls.controls) |ctrl| try checkExpr(self, ctrl.value);
+            for (cls.controls) |ctrl| {
+                if (ctrl.name) |name| {
+                    if (std.ascii.eqlIgnoreCase(name, "STATUS")) {
+                        try checkCharControlExpr(self, ctrl.value);
+                        if (controlLiteralText(ctrl.value)) |text| {
+                            if (!textInSet(text, &.{ "KEEP", "DELETE" })) {
+                                return error.InvalidIoControlValue;
+                            }
+                        }
+                    }
+                }
+            }
         },
         .data => |data| {
             for (data.inits) |init| {
@@ -248,6 +264,40 @@ fn checkKnownProcedureCallArity(self: *context.Context, name: []const u8, got: u
             if (got > max) return error.InvalidArgumentCount;
         }
     }
+}
+
+fn checkOpenControl(self: *context.Context, node: ?*ast.Expr, allowed: []const []const u8) CheckError!void {
+    const expr_node = node orelse return;
+    try checkCharControlExpr(self, expr_node);
+    if (controlLiteralText(expr_node)) |text| {
+        if (!textInSet(text, allowed)) return error.InvalidIoControlValue;
+    }
+}
+
+fn checkCharControlExpr(self: *context.Context, expr_node: *ast.Expr) CheckError!void {
+    const ty = try resolve_expr.exprType(self, expr_node);
+    if (ty != .character) return error.InvalidIoControlType;
+}
+
+fn controlLiteralText(expr_node: *ast.Expr) ?[]const u8 {
+    switch (expr_node.*) {
+        .literal => |lit| {
+            if (lit.kind != .string and lit.kind != .hollerith) return null;
+            var text = lit.text;
+            if (text.len >= 2 and text[0] == text[text.len - 1] and (text[0] == '\'' or text[0] == '"')) {
+                text = text[1 .. text.len - 1];
+            }
+            return text;
+        },
+        else => return null,
+    }
+}
+
+fn textInSet(text: []const u8, allowed: []const []const u8) bool {
+    for (allowed) |candidate| {
+        if (std.ascii.eqlIgnoreCase(text, candidate)) return true;
+    }
+    return false;
 }
 
 fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {

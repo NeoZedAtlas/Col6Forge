@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../../input.zig");
 const context = @import("../../../codegen/context.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
+const llvm_types = @import("../../../types.zig");
 const utils = @import("../../../codegen/utils.zig");
 
 const Context = context.Context;
@@ -52,8 +53,13 @@ fn collectNumericFormats(ctx: *Context, list: *std.array_list.Managed(NumericFor
 }
 
 fn emitFormatSelector(ctx: *Context, builder: anytype, label_var: []const u8) EmitError!ValueRef {
-    const var_value = try expr.emitExpr(ctx, builder, try makeIdentifierExpr(ctx, label_var));
-    return expr.coerce(ctx, builder, var_value, .i32);
+    const sym = ctx.findSymbol(label_var) orelse return error.UnknownSymbol;
+    const ptr = try ctx.getPointer(label_var);
+    const tmp = try ctx.nextTemp();
+    const ty = llvm_types.typeFromKind(sym.type_kind);
+    try builder.load(tmp, ty, ptr);
+    const value = ValueRef{ .name = tmp, .ty = ty, .is_ptr = false };
+    return expr.coerce(ctx, builder, value, .i32);
 }
 
 fn emitMissingDynamicFormatTrap(ctx: *Context, builder: anytype) EmitError!void {
@@ -292,9 +298,4 @@ pub fn emitReadDynamicFormatStatus(
     const status_load = try ctx.nextTemp();
     try builder.load(status_load, .i32, status_ptr);
     return .{ .name = status_load, .ty = .i32, .is_ptr = false };
-}
-fn makeIdentifierExpr(ctx: *Context, name: []const u8) !*ast.Expr {
-    const node = try ctx.allocator.create(ast.Expr);
-    node.* = .{ .identifier = name };
-    return node;
 }
