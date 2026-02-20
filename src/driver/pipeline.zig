@@ -14,6 +14,7 @@ pub const PipelineOptions = struct {
     bounds_check: bool = false,
     time_report: bool = false,
     coarse_source_map: bool = false,
+    capture_profile: bool = false,
 };
 
 pub const PipelineResult = struct {
@@ -36,16 +37,40 @@ const DiagStorage = struct {
 threadlocal var diag_storage: DiagStorage = .{};
 threadlocal var has_diag: bool = false;
 
+pub const PipelineStage = enum {
+    none,
+    read,
+    normalize,
+    parse,
+    semantic,
+    codegen,
+    pipeline,
+};
+
+pub const PipelineProfileSample = struct {
+    read_ns: u64 = 0,
+    normalize_ns: u64 = 0,
+    parse_ns: u64 = 0,
+    semantic_ns: u64 = 0,
+    codegen_ns: u64 = 0,
+    total_ns: u64 = 0,
+    failed_stage: PipelineStage = .none,
+};
+
+threadlocal var profile_storage: PipelineProfileSample = .{};
+threadlocal var has_profile: bool = false;
+
 const PipelineProfileMode = enum {
     buffer,
     writer,
 };
 
 const PipelineProfile = struct {
-    enabled: bool,
+    time_report: bool,
+    capture_profile: bool,
     input_path: []const u8,
     mode: PipelineProfileMode,
-    failed_stage: ?[]const u8 = null,
+    failed_stage: PipelineStage = .none,
     read_ns: u64 = 0,
     normalize_ns: u64 = 0,
     parse_ns: u64 = 0,
@@ -53,13 +78,25 @@ const PipelineProfile = struct {
     codegen_ns: u64 = 0,
     total_ns: u64 = 0,
 
-    fn markFailure(self: *PipelineProfile, stage: []const u8) void {
-        if (!self.enabled or self.failed_stage != null) return;
+    fn markFailure(self: *PipelineProfile, stage: PipelineStage) void {
+        if (self.failed_stage != .none) return;
         self.failed_stage = stage;
     }
 
+    fn sample(self: *const PipelineProfile) PipelineProfileSample {
+        return .{
+            .read_ns = self.read_ns,
+            .normalize_ns = self.normalize_ns,
+            .parse_ns = self.parse_ns,
+            .semantic_ns = self.semantic_ns,
+            .codegen_ns = self.codegen_ns,
+            .total_ns = self.total_ns,
+            .failed_stage = self.failed_stage,
+        };
+    }
+
     fn emit(self: *const PipelineProfile) void {
-        if (!self.enabled) return;
+        if (!self.time_report) return;
 
         var stderr = std.fs.File.stderr();
         var buffer: [768]u8 = undefined;
@@ -68,8 +105,8 @@ const PipelineProfile = struct {
             .buffer => "buffer",
             .writer => "writer",
         };
-        const status_text = if (self.failed_stage == null) "ok" else "error";
-        const failed_stage = self.failed_stage orelse "-";
+        const status_text = if (self.failed_stage == .none) "ok" else "error";
+        const failed_stage = stageName(self.failed_stage);
 
         writer.interface.print(
             "profile: file={s} mode={s} status={s} fail_stage={s} total_ms={d:.3} read_ms={d:.3} normalize_ms={d:.3} parse_ms={d:.3} sema_ms={d:.3} codegen_ms={d:.3}\n",
@@ -102,14 +139,20 @@ pub fn runPipelineWithOptions(
 ) !PipelineResult {
     _ = emit;
     clearLastDiagnostic();
+    clearLastProfile();
     var profile = PipelineProfile{
-        .enabled = options.time_report,
+        .time_report = options.time_report,
+        .capture_profile = options.capture_profile,
         .input_path = input_path,
         .mode = .buffer,
     };
     const total_start = nowNs();
     defer {
         profile.total_ns = elapsedNs(total_start);
+        if (profile.capture_profile) {
+            profile_storage = profile.sample();
+            has_profile = true;
+        }
         profile.emit();
     }
 
@@ -117,7 +160,7 @@ pub fn runPipelineWithOptions(
     const read_start = nowNs();
     const contents = std.fs.cwd().readFileAlloc(allocator, input_path, max_size) catch |err| {
         profile.read_ns = elapsedNs(read_start);
-        profile.markFailure("read");
+        profile.markFailure(.read);
         if (err == error.FileNotFound) {
             setLastDiagnostic(input_path, 1, 1, "CF0001", "input file not found", "");
         }
@@ -130,7 +173,7 @@ pub fn runPipelineWithOptions(
     const normalize_start = nowNs();
     const logical_lines = source_form.normalize(form, allocator, contents, options.coarse_source_map) catch |err| {
         profile.normalize_ns = elapsedNs(normalize_start);
-        profile.markFailure("normalize");
+        profile.markFailure(.normalize);
         setDefaultDiagnostic(input_path, contents, "CF0002", "failed to normalize source form", err);
         return err;
     };
@@ -138,7 +181,7 @@ pub fn runPipelineWithOptions(
     defer source_form.freeLogicalLines(form, allocator, logical_lines);
 
     const output = emitLlvmModule(allocator, input_path, contents, logical_lines, options, &profile) catch |err| {
-        profile.markFailure("pipeline");
+        profile.markFailure(.pipeline);
         return err;
     };
     return .{ .output = output };
@@ -157,14 +200,20 @@ pub fn runPipelineToWriterWithOptions(
 ) !void {
     _ = emit;
     clearLastDiagnostic();
+    clearLastProfile();
     var profile = PipelineProfile{
-        .enabled = options.time_report,
+        .time_report = options.time_report,
+        .capture_profile = options.capture_profile,
         .input_path = input_path,
         .mode = .writer,
     };
     const total_start = nowNs();
     defer {
         profile.total_ns = elapsedNs(total_start);
+        if (profile.capture_profile) {
+            profile_storage = profile.sample();
+            has_profile = true;
+        }
         profile.emit();
     }
 
@@ -172,7 +221,7 @@ pub fn runPipelineToWriterWithOptions(
     const read_start = nowNs();
     const contents = std.fs.cwd().readFileAlloc(allocator, input_path, max_size) catch |err| {
         profile.read_ns = elapsedNs(read_start);
-        profile.markFailure("read");
+        profile.markFailure(.read);
         if (err == error.FileNotFound) {
             setLastDiagnostic(input_path, 1, 1, "CF0001", "input file not found", "");
         }
@@ -185,7 +234,7 @@ pub fn runPipelineToWriterWithOptions(
     const normalize_start = nowNs();
     const logical_lines = source_form.normalize(form, allocator, contents, options.coarse_source_map) catch |err| {
         profile.normalize_ns = elapsedNs(normalize_start);
-        profile.markFailure("normalize");
+        profile.markFailure(.normalize);
         setDefaultDiagnostic(input_path, contents, "CF0002", "failed to normalize source form", err);
         return err;
     };
@@ -193,7 +242,7 @@ pub fn runPipelineToWriterWithOptions(
     defer source_form.freeLogicalLines(form, allocator, logical_lines);
 
     emitLlvmModuleToWriter(allocator, input_path, contents, logical_lines, writer, options, &profile) catch |err| {
-        profile.markFailure("pipeline");
+        profile.markFailure(.pipeline);
         return err;
     };
 }
@@ -209,6 +258,12 @@ pub fn takeLastDiagnostic() ?diag.Diagnostic {
         .message = diag_storage.message_buf[0..diag_storage.message_len],
         .line_text = diag_storage.line_text_buf[0..diag_storage.line_text_len],
     };
+}
+
+pub fn takeLastProfileSample() ?PipelineProfileSample {
+    if (!has_profile) return null;
+    has_profile = false;
+    return profile_storage;
 }
 
 pub fn writePipelineErrorDiagnostic(writer: *std.Io.Writer, input_path: []const u8, err: anyerror) !void {
@@ -270,7 +325,7 @@ fn emitLlvmModule(
         ) catch |err| {
             if (profile) |p| {
                 p.codegen_ns = elapsedNs(codegen_start);
-                p.markFailure("codegen");
+                p.markFailure(.codegen);
             }
             setCodegenDiagnostic(input_path, contents, err);
             return err;
@@ -284,7 +339,7 @@ fn emitLlvmModule(
     const program = parser.parseProgram(arena.allocator(), logical_lines) catch |err| {
         if (profile) |p| {
             p.parse_ns = elapsedNs(parse_start);
-            p.markFailure("parse");
+            p.markFailure(.parse);
         }
         setParseDiagnostic(input_path, contents, logical_lines, err);
         return err;
@@ -295,7 +350,7 @@ fn emitLlvmModule(
     const sem = semantic.analyzeProgram(arena.allocator(), program) catch |err| {
         if (profile) |p| {
             p.semantic_ns = elapsedNs(semantic_start);
-            p.markFailure("semantic");
+            p.markFailure(.semantic);
         }
         setSemanticDiagnostic(input_path, contents, err);
         return err;
@@ -312,7 +367,7 @@ fn emitLlvmModule(
     ) catch |err| {
         if (profile) |p| {
             p.codegen_ns = elapsedNs(codegen_start);
-            p.markFailure("codegen");
+            p.markFailure(.codegen);
         }
         setCodegenDiagnostic(input_path, contents, err);
         return err;
@@ -342,7 +397,7 @@ fn emitLlvmModuleToWriter(
         ) catch |err| {
             if (profile) |p| {
                 p.codegen_ns = elapsedNs(codegen_start);
-                p.markFailure("codegen");
+                p.markFailure(.codegen);
             }
             setCodegenDiagnostic(input_path, contents, err);
             return err;
@@ -356,7 +411,7 @@ fn emitLlvmModuleToWriter(
     const program = parser.parseProgram(arena.allocator(), logical_lines) catch |err| {
         if (profile) |p| {
             p.parse_ns = elapsedNs(parse_start);
-            p.markFailure("parse");
+            p.markFailure(.parse);
         }
         setParseDiagnostic(input_path, contents, logical_lines, err);
         return err;
@@ -367,7 +422,7 @@ fn emitLlvmModuleToWriter(
     const sem = semantic.analyzeProgram(arena.allocator(), program) catch |err| {
         if (profile) |p| {
             p.semantic_ns = elapsedNs(semantic_start);
-            p.markFailure("semantic");
+            p.markFailure(.semantic);
         }
         setSemanticDiagnostic(input_path, contents, err);
         return err;
@@ -385,7 +440,7 @@ fn emitLlvmModuleToWriter(
     ) catch |err| {
         if (profile) |p| {
             p.codegen_ns = elapsedNs(codegen_start);
-            p.markFailure("codegen");
+            p.markFailure(.codegen);
         }
         setCodegenDiagnostic(input_path, contents, err);
         return err;
@@ -406,6 +461,18 @@ fn elapsedNs(start_ns: i128) u64 {
 
 fn nsToMs(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
+}
+
+fn stageName(stage: PipelineStage) []const u8 {
+    return switch (stage) {
+        .none => "-",
+        .read => "read",
+        .normalize => "normalize",
+        .parse => "parse",
+        .semantic => "semantic",
+        .codegen => "codegen",
+        .pipeline => "pipeline",
+    };
 }
 
 fn setParseDiagnostic(
@@ -510,6 +577,10 @@ fn setLastDiagnostic(
 
 fn clearLastDiagnostic() void {
     has_diag = false;
+}
+
+fn clearLastProfile() void {
+    has_profile = false;
 }
 
 fn copyTrunc(buf: []u8, text: []const u8) usize {

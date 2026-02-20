@@ -42,6 +42,8 @@ pub fn main() !void {
     }
 
     var log_state: LogState = .{};
+    var profile_collector = PipelineProfileCollector.init(options.profile_summary);
+    defer profile_collector.deinit(allocator);
 
     const root_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(root_path);
@@ -97,6 +99,7 @@ pub fn main() !void {
                 options,
                 &log_state,
                 &dir_locks,
+                &profile_collector,
             ) catch {
                 failures += 1;
                 _ = progress.completed.fetchAdd(1, .seq_cst);
@@ -106,9 +109,11 @@ pub fn main() !void {
             _ = progress.completed.fetchAdd(1, .seq_cst);
         }
         if (failures > 0) {
+            profile_collector.print(&log_state);
             log_state.stderr("verification failed: {d}\n", .{failures});
             return error.VerificationFailed;
         }
+        profile_collector.print(&log_state);
         log_state.stdout("verification passed\n", .{});
         return;
     }
@@ -136,15 +141,18 @@ pub fn main() !void {
             &progress,
             &dir_locks,
             &failures,
+            &profile_collector,
         });
     }
     pool.waitAndWork(&wait_group);
 
     const failure_count = failures.load(.seq_cst);
     if (failure_count > 0) {
+        profile_collector.print(&log_state);
         log_state.stderr("verification failed: {d}\n", .{failure_count});
         return error.VerificationFailed;
     }
+    profile_collector.print(&log_state);
     log_state.stdout("verification passed\n", .{});
 }
 
@@ -159,7 +167,124 @@ const Options = struct {
     jobs: usize,
     incremental: bool,
     clean_cache: bool,
+    profile_summary: bool,
 };
+
+const StageSamples = struct {
+    values: std.ArrayList(u64) = .empty,
+
+    fn deinit(self: *StageSamples, allocator: std.mem.Allocator) void {
+        self.values.deinit(allocator);
+    }
+
+    fn append(self: *StageSamples, allocator: std.mem.Allocator, ns: u64) !void {
+        try self.values.append(allocator, ns);
+    }
+
+    fn sort(self: *StageSamples) void {
+        std.sort.heap(u64, self.values.items, {}, std.sort.asc(u64));
+    }
+};
+
+const PipelineProfileCollector = struct {
+    enabled: bool,
+    mutex: std.Thread.Mutex = .{},
+    count: usize = 0,
+    failures: usize = 0,
+    read: StageSamples = .{},
+    normalize: StageSamples = .{},
+    parse: StageSamples = .{},
+    semantic: StageSamples = .{},
+    codegen: StageSamples = .{},
+    total: StageSamples = .{},
+
+    fn init(enabled: bool) PipelineProfileCollector {
+        return .{ .enabled = enabled };
+    }
+
+    fn deinit(self: *PipelineProfileCollector, allocator: std.mem.Allocator) void {
+        self.read.deinit(allocator);
+        self.normalize.deinit(allocator);
+        self.parse.deinit(allocator);
+        self.semantic.deinit(allocator);
+        self.codegen.deinit(allocator);
+        self.total.deinit(allocator);
+    }
+
+    fn record(self: *PipelineProfileCollector, allocator: std.mem.Allocator, sample: Col6Forge.PipelineProfileSample) !void {
+        if (!self.enabled) return;
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.count += 1;
+        if (sample.failed_stage != .none) self.failures += 1;
+        try self.read.append(allocator, sample.read_ns);
+        try self.normalize.append(allocator, sample.normalize_ns);
+        try self.parse.append(allocator, sample.parse_ns);
+        try self.semantic.append(allocator, sample.semantic_ns);
+        try self.codegen.append(allocator, sample.codegen_ns);
+        try self.total.append(allocator, sample.total_ns);
+    }
+
+    fn print(self: *PipelineProfileCollector, log_state: *LogState) void {
+        if (!self.enabled or self.count == 0) return;
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.read.sort();
+        self.normalize.sort();
+        self.parse.sort();
+        self.semantic.sort();
+        self.codegen.sort();
+        self.total.sort();
+
+        log_state.stdout(
+            "pipeline profile summary: samples={d} failed={d}\n",
+            .{ self.count, self.failures },
+        );
+        printStageLine(log_state, "read", self.read.values.items);
+        printStageLine(log_state, "normalize", self.normalize.values.items);
+        printStageLine(log_state, "parse", self.parse.values.items);
+        printStageLine(log_state, "semantic", self.semantic.values.items);
+        printStageLine(log_state, "codegen", self.codegen.values.items);
+        printStageLine(log_state, "total", self.total.values.items);
+    }
+};
+
+fn printStageLine(log_state: *LogState, name: []const u8, samples: []const u64) void {
+    if (samples.len == 0) return;
+    const p50 = percentileNs(samples, 0.50);
+    const p95 = percentileNs(samples, 0.95);
+    const max_ns = samples[samples.len - 1];
+    const avg = avgNs(samples);
+    log_state.stdout(
+        "  {s}: avg_ms={d:.3} p50_ms={d:.3} p95_ms={d:.3} max_ms={d:.3}\n",
+        .{ name, nsToMsF64(avg), nsToMs(p50), nsToMs(p95), nsToMs(max_ns) },
+    );
+}
+
+fn percentileNs(samples: []const u64, q: f64) u64 {
+    if (samples.len == 0) return 0;
+    const clamped = @max(0.0, @min(1.0, q));
+    const idx_f = clamped * @as(f64, @floatFromInt(samples.len - 1));
+    const idx: usize = @intFromFloat(@round(idx_f));
+    return samples[idx];
+}
+
+fn avgNs(samples: []const u64) f64 {
+    if (samples.len == 0) return 0.0;
+    var sum: f64 = 0.0;
+    for (samples) |ns| sum += @as(f64, @floatFromInt(ns));
+    return sum / @as(f64, @floatFromInt(samples.len));
+}
+
+fn nsToMs(ns: u64) f64 {
+    return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
+}
+
+fn nsToMsF64(ns: f64) f64 {
+    return ns / 1_000_000.0;
+}
 
 const ParseArgError = union(enum) {
     missing_value: []const u8,
@@ -194,6 +319,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var jobs = defaultJobs();
     var incremental = true;
     var clean_cache = false;
+    var profile_summary = false;
     var suite: ?TestSuite = null;
     var suite_flag: ?[]const u8 = null;
 
@@ -290,6 +416,10 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
             clean_cache = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--profile-summary")) {
+            profile_summary = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
             continue;
@@ -323,6 +453,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
         .jobs = jobs,
         .incremental = incremental,
         .clean_cache = clean_cache,
+        .profile_summary = profile_summary,
     } };
 }
 
@@ -343,7 +474,7 @@ fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--runtime-backend <c|zig>] [--timeout <ms>] [--jobs <n>] [--incremental|--no-incremental] [--clean-cache] [-emit-llvm]
+        \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--runtime-backend <c|zig>] [--timeout <ms>] [--jobs <n>] [--incremental|--no-incremental] [--clean-cache] [--profile-summary] [-emit-llvm]
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
         \\  --fcvs21_f95       Use the Fortran 95 adapted NIST F78 suite
@@ -356,6 +487,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  --incremental      Enable translation/object/runtime cache (default)
         \\  --no-incremental   Disable incremental cache and rebuild everything
         \\  --clean-cache      Delete zig-cache/verify/cache before running
+        \\  --profile-summary  Print pipeline stage timing summary (p50/p95/max)
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
         \\
@@ -464,6 +596,7 @@ fn emitPipelineToFile(
     input_path: []const u8,
     emit: Col6Forge.EmitKind,
     output_path: []const u8,
+    capture_profile: bool,
 ) !void {
     var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
     defer out_file.close();
@@ -474,7 +607,10 @@ fn emitPipelineToFile(
         input_path,
         emit,
         &out_writer.interface,
-        .{ .coarse_source_map = true },
+        .{
+            .coarse_source_map = true,
+            .capture_profile = capture_profile,
+        },
     );
     try out_writer.interface.flush();
 }
@@ -1028,6 +1164,7 @@ fn processCase(
     options: Options,
     log_state: *LogState,
     dir_locks: *DirLocks,
+    profile_collector: *PipelineProfileCollector,
 ) !bool {
     var timer = try std.time.Timer.start();
     const abs_input_path = try std.fs.path.join(allocator, &.{ root_path, case.input_path });
@@ -1149,10 +1286,23 @@ fn processCase(
                 return false;
             };
         } else {
-            emitPipelineToFile(allocator, abs_input_path, options.emit, ll_path) catch |err| {
+            emitPipelineToFile(
+                allocator,
+                abs_input_path,
+                options.emit,
+                ll_path,
+                options.profile_summary,
+            ) catch |err| {
                 try reportPipelineError(log_state, abs_input_path, err);
                 return false;
             };
+            if (options.profile_summary) {
+                if (Col6Forge.takeLastPipelineProfileSample()) |sample| {
+                    profile_collector.record(allocator, sample) catch |err| {
+                        log_state.stderr("profile record failed: {s}\n", .{@errorName(err)});
+                    };
+                }
+            }
             if (options.incremental) {
                 copyFileAbsolute(ll_path, ll_cache_path.?) catch |err| {
                     log_state.stderr("failed to update cached ll: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
@@ -1300,6 +1450,7 @@ fn runCaseParallel(
     progress: *Progress,
     dir_locks: *DirLocks,
     failures: *std.atomic.Value(usize),
+    profile_collector: *PipelineProfileCollector,
 ) void {
     logProgress(log_state, progress, case.input_path);
     const ok = processCase(
@@ -1313,6 +1464,7 @@ fn runCaseParallel(
         options,
         log_state,
         dir_locks,
+        profile_collector,
     ) catch |err| {
         log_state.stderr("internal error: {s}\n", .{@errorName(err)});
         _ = failures.fetchAdd(1, .seq_cst);
