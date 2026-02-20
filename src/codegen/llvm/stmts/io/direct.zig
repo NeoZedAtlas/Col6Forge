@@ -20,6 +20,7 @@ const emitPointerArrayFromValues = io_utils.emitPointerArrayFromValues;
 const emitKindArray = io_utils.emitKindArray;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const expandIoArgs = expansion.expandIoArgs;
+const ExpandedIoArgs = expansion.ExpandedIoArgs;
 const expandWriteArgs = expansion.expandWriteArgs;
 const expandReadTargets = expansion.expandReadTargets;
 const emitWriteFormattedDirect = formatted.emitWriteFormattedDirect;
@@ -29,23 +30,23 @@ const formatFromCharArrayData = formatted.formatFromCharArrayData;
 const PreparedDirectArgs = struct {
     unit_i32: ValueRef,
     rec_i32: ValueRef,
-    expanded_args: []*ast.Expr,
+    expanded_args: ExpandedIoArgs,
     fmt_items: ?[]const ast.FormatItem,
     recl: ?usize,
 
-    pub fn deinit(self: PreparedDirectArgs, allocator: std.mem.Allocator) void {
-        allocator.free(self.expanded_args);
+    pub fn deinit(self: *PreparedDirectArgs, allocator: std.mem.Allocator) void {
+        self.expanded_args.deinit(allocator);
     }
 };
 
 pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
-    const prepared = try prepareDirectArgs(ctx, builder, write);
+    var prepared = try prepareDirectArgs(ctx, builder, write);
     defer prepared.deinit(ctx.allocator);
 
     if (prepared.fmt_items) |fmt_items| {
         const recl_len = prepared.recl orelse return error.InternalInvariantViolation;
         const recl_val = try ctx.constI32(@intCast(recl_len));
-        var expanded_values = try expandWriteArgs(ctx, builder, prepared.expanded_args);
+        var expanded_values = try expandWriteArgs(ctx, builder, prepared.expanded_args.items);
         defer expanded_values.deinit();
 
         try emitWriteFormattedDirect(
@@ -62,17 +63,17 @@ pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) Em
     }
 
     if (write.format != .none) return error.MissingFormatLabel;
-    try emitDirectWriteCall(ctx, builder, prepared.unit_i32, prepared.rec_i32, prepared.expanded_args);
+    try emitDirectWriteCall(ctx, builder, prepared.unit_i32, prepared.rec_i32, prepared.expanded_args.items);
 }
 
 pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
-    const prepared = try prepareDirectArgs(ctx, builder, read);
+    var prepared = try prepareDirectArgs(ctx, builder, read);
     defer prepared.deinit(ctx.allocator);
 
     if (prepared.fmt_items) |fmt_items| {
         const recl_len = prepared.recl orelse return error.InternalInvariantViolation;
         const recl_val = try ctx.constI32(@intCast(recl_len));
-        var expanded = try expandReadTargets(ctx, builder, prepared.expanded_args);
+        var expanded = try expandReadTargets(ctx, builder, prepared.expanded_args.items);
         defer expanded.deinit();
 
         try emitReadFormattedDirect(
@@ -89,7 +90,7 @@ pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitE
     }
 
     if (read.format != .none) return error.MissingFormatLabel;
-    try emitDirectReadCall(ctx, builder, prepared.unit_i32, prepared.rec_i32, prepared.expanded_args);
+    try emitDirectReadCall(ctx, builder, prepared.unit_i32, prepared.rec_i32, prepared.expanded_args.items);
 }
 fn prepareDirectArgs(ctx: *Context, builder: anytype, stmt: anytype) EmitError!PreparedDirectArgs {
     const rec_expr = stmt.rec orelse return error.MissingRecordNumber;

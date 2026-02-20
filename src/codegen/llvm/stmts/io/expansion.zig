@@ -59,11 +59,22 @@ pub const ExpandedWriteValues = struct {
         self.char_lens.deinit();
     }
 };
+
+pub const ExpandedIoArgs = struct {
+    items: []*ast.Expr,
+    clone_arena: std.heap.ArenaAllocator,
+
+    pub fn deinit(self: *ExpandedIoArgs, allocator: std.mem.Allocator) void {
+        allocator.free(self.items);
+        self.clone_arena.deinit();
+    }
+};
+
 pub fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedReadTargets {
     var expanded = ExpandedReadTargets.init(ctx.allocator);
-    const flat_args = try expandIoArgs(ctx, args);
-    defer ctx.allocator.free(flat_args);
-    for (flat_args) |arg| {
+    var flat_args = try expandIoArgs(ctx, args);
+    defer flat_args.deinit(ctx.allocator);
+    for (flat_args.items) |arg| {
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
@@ -159,26 +170,40 @@ pub fn applyComplexFixups(ctx: *Context, builder: anytype, expanded: *ExpandedRe
         try builder.store(complex_val, fixup.target_ptr);
     }
 }
-pub fn expandIoArgs(ctx: *Context, args: []*ast.Expr) EmitError![]*ast.Expr {
+pub fn expandIoArgs(ctx: *Context, args: []*ast.Expr) EmitError!ExpandedIoArgs {
+    var clone_arena = std.heap.ArenaAllocator.init(ctx.allocator);
+    errdefer clone_arena.deinit();
+
     var expanded = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
     errdefer expanded.deinit();
+    const clone_allocator = clone_arena.allocator();
+
     for (args) |arg| {
-        try appendExpandedIoArg(ctx, &expanded, arg);
+        try appendExpandedIoArg(ctx, clone_allocator, &expanded, arg);
     }
-    return expanded.toOwnedSlice();
+
+    return .{
+        .items = try expanded.toOwnedSlice(),
+        .clone_arena = clone_arena,
+    };
 }
-fn appendExpandedIoArg(ctx: *Context, expanded: *std.array_list.Managed(*ast.Expr), arg: *ast.Expr) EmitError!void {
+fn appendExpandedIoArg(
+    ctx: *Context,
+    clone_allocator: std.mem.Allocator,
+    expanded: *std.array_list.Managed(*ast.Expr),
+    arg: *ast.Expr,
+) EmitError!void {
     if (arg.* == .implied_do) {
-        const implied_expanded = try expandImpliedDo(ctx, arg.implied_do);
+        const implied_expanded = try expandImpliedDo(ctx, clone_allocator, arg.implied_do);
         defer ctx.allocator.free(implied_expanded);
         for (implied_expanded) |item| {
-            try appendExpandedIoArg(ctx, expanded, item);
+            try appendExpandedIoArg(ctx, clone_allocator, expanded, item);
         }
         return;
     }
     try expanded.append(arg);
 }
-fn expandImpliedDo(ctx: *Context, implied: ast.ImpliedDo) EmitError![]*ast.Expr {
+fn expandImpliedDo(ctx: *Context, clone_allocator: std.mem.Allocator, implied: ast.ImpliedDo) EmitError![]*ast.Expr {
     const start_val_opt = try evalImpliedDoBound(ctx, implied.start);
     const end_val_opt = try evalImpliedDoBound(ctx, implied.end);
     const step_val_opt = if (implied.step) |step| try evalImpliedDoBound(ctx, step) else 1;
@@ -213,7 +238,7 @@ fn expandImpliedDo(ctx: *Context, implied: ast.ImpliedDo) EmitError![]*ast.Expr 
             };
             for (implied.items) |item| {
                 if (emitted >= max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
-                const clone = try cloneExprWithSubst(ctx, ctx.allocator, item, implied.var_name, &iter_expr);
+                const clone = try cloneExprWithSubst(ctx, clone_allocator, item, implied.var_name, &iter_expr);
                 try expanded.append(clone);
                 emitted += 1;
             }
@@ -228,7 +253,7 @@ fn expandImpliedDo(ctx: *Context, implied: ast.ImpliedDo) EmitError![]*ast.Expr 
             };
             for (implied.items) |item| {
                 if (emitted >= max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
-                const clone = try cloneExprWithSubst(ctx, ctx.allocator, item, implied.var_name, &iter_expr);
+                const clone = try cloneExprWithSubst(ctx, clone_allocator, item, implied.var_name, &iter_expr);
                 try expanded.append(clone);
                 emitted += 1;
             }
@@ -387,9 +412,9 @@ fn cloneExprListWithSubst(
 }
 pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedWriteValues {
     var expanded = ExpandedWriteValues.init(ctx.allocator);
-    const flat_args = try expandIoArgs(ctx, args);
-    defer ctx.allocator.free(flat_args);
-    for (flat_args) |arg| {
+    var flat_args = try expandIoArgs(ctx, args);
+    defer flat_args.deinit(ctx.allocator);
+    for (flat_args.items) |arg| {
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
@@ -451,9 +476,9 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
 }
 pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedWriteValues {
     var expanded = ExpandedWriteValues.init(ctx.allocator);
-    const flat_args = try expandIoArgs(ctx, args);
-    defer ctx.allocator.free(flat_args);
-    for (flat_args) |arg| {
+    var flat_args = try expandIoArgs(ctx, args);
+    defer flat_args.deinit(ctx.allocator);
+    for (flat_args.items) |arg| {
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {

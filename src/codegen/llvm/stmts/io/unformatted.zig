@@ -166,10 +166,10 @@ pub fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStm
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
 
-    const expanded_args = try expandIoArgs(ctx, write.args);
-    defer ctx.allocator.free(expanded_args);
+    var expanded_args = try expandIoArgs(ctx, write.args);
+    defer expanded_args.deinit(ctx.allocator);
 
-    var args = try buildUnformattedWriteArgs(ctx, builder, expanded_args);
+    var args = try buildUnformattedWriteArgs(ctx, builder, expanded_args.items);
     defer args.deinit();
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, args.ptrs.items);
@@ -185,10 +185,10 @@ fn emitUnformattedReadImpl(ctx: *Context, builder: anytype, read: ast.ReadStmt, 
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
 
-    const expanded_args = try expandIoArgs(ctx, read.args);
-    defer ctx.allocator.free(expanded_args);
+    var expanded_args = try expandIoArgs(ctx, read.args);
+    defer expanded_args.deinit(ctx.allocator);
 
-    var args = try buildUnformattedReadArgs(ctx, builder, expanded_args);
+    var args = try buildUnformattedReadArgs(ctx, builder, expanded_args.items);
     defer args.deinit();
 
     const ptr_array = try emitPointerArrayFromValues(ctx, builder, args.ptrs.items);
