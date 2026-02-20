@@ -251,14 +251,12 @@ pub export fn f77_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_int) c
     du.nextrec = 1;
 }
 
-pub export fn f77_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
-    if (unit < 0 or unit >= F77_MAX_UNITS or sig == null) return 0;
-    const sig_c = sig.?;
+fn unformattedBeginWriteSized(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int {
+    if (unit < 0 or unit >= F77_MAX_UNITS) return 0;
     const idx: usize = @intCast(unit);
     const uu = &unformatted_units[idx];
     uu.used = 1;
 
-    const record_size = direct_signature_size(sig_c);
     var record: ?[*]u8 = null;
     if (record_size > 0) {
         const record_raw = realloc(null, record_size) orelse return 0;
@@ -302,15 +300,14 @@ pub export fn f77_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_
     return 1;
 }
 
-pub export fn f77_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
-    if (unit < 0 or unit >= F77_MAX_UNITS or sig == null) return 1;
-    const sig_c = sig.?;
+fn unformattedBeginReadSized(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int {
+    if (unit < 0 or unit >= F77_MAX_UNITS) return 1;
     const idx: usize = @intCast(unit);
     const uu = &unformatted_units[idx];
     uu.used = 1;
 
     if (uu.count == 0 and uu.pos == 0 and unformattedFileHasData(unit)) {
-        const record_size = direct_signature_size(sig_c);
+        const record_size = record_size_hint;
         unformattedEnsureCapacityLocal(uu, 1);
         if (uu.records) |records| {
             var record: ?[*]u8 = null;
@@ -343,6 +340,24 @@ pub export fn f77_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_r
     if (out_record) |p| p.* = rec.data;
     if (out_len) |p| p.* = rec.len;
     return 0;
+}
+
+pub export fn f77_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
+    if (sig == null) return 0;
+    return unformattedBeginWriteSized(unit, direct_signature_size(sig.?), out_record, out_len);
+}
+
+pub export fn f77_unformatted_begin_write_len(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
+    return unformattedBeginWriteSized(unit, record_size, out_record, out_len);
+}
+
+pub export fn f77_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
+    if (sig == null) return 1;
+    return unformattedBeginReadSized(unit, direct_signature_size(sig.?), out_record, out_len);
+}
+
+pub export fn f77_unformatted_begin_read_len(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
+    return unformattedBeginReadSized(unit, record_size_hint, out_record, out_len);
 }
 
 test "directRecordRange validates record offsets safely" {

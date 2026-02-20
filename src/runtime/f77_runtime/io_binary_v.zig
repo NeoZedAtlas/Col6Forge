@@ -15,6 +15,8 @@ extern fn f77_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
 extern fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
 extern fn f77_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn f77_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
+extern fn f77_unformatted_begin_write_len(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
+extern fn f77_unformatted_begin_read_len(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 
 fn runtimeArgCount(arg_count: c_int) usize {
     return @intCast(@max(arg_count, 0));
@@ -24,6 +26,43 @@ fn runtimeArgPtrAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) ?*anyopa
     if (idx >= total) return null;
     if (arg_ptrs == null) return null;
     return arg_ptrs.?[idx];
+}
+
+fn runtimeArgKindAt(arg_kinds: ?[*]const u8, idx: usize, total: usize) u8 {
+    if (idx >= total or arg_kinds == null) return 0;
+    return arg_kinds.?[idx];
+}
+
+fn runtimeArgLenAt(arg_lens: ?[*]const c_int, idx: usize, total: usize) c_int {
+    if (idx >= total or arg_lens == null) return 0;
+    return arg_lens.?[idx];
+}
+
+fn typedFieldSize(kind: u8, len_in: c_int) ?usize {
+    return switch (kind) {
+        'i', 'f' => 4,
+        'd', 'c' => 8,
+        'z' => 16,
+        'l' => 1,
+        's' => blk: {
+            if (len_in < 0) break :blk null;
+            break :blk @intCast(len_in);
+        },
+        else => null,
+    };
+}
+
+fn checkedAdd(lhs: usize, rhs: usize) ?usize {
+    const out = @addWithOverflow(lhs, rhs);
+    if (out[1] != 0) return null;
+    return out[0];
+}
+
+fn copyRawBytes(dst: [*]u8, src: [*]const u8, n: usize) void {
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        dst[i] = src[i];
+    }
 }
 pub export fn f77_write_direct_v(
     unit: c_int,
@@ -379,6 +418,86 @@ pub export fn f77_read_unformatted_v(
             },
             else => {},
         }
+    }
+    return 0;
+}
+
+pub export fn f77_write_unformatted_typed(
+    unit: c_int,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_lens: ?[*]const c_int,
+    arg_count: c_int,
+) callconv(.c) void {
+    const total_args = runtimeArgCount(arg_count);
+
+    var record_size: usize = 0;
+    var i: usize = 0;
+    while (i < total_args) : (i += 1) {
+        const kind = runtimeArgKindAt(arg_kinds, i, total_args);
+        const len = runtimeArgLenAt(arg_lens, i, total_args);
+        const field_size = typedFieldSize(kind, len) orelse return;
+        record_size = checkedAdd(record_size, field_size) orelse return;
+    }
+
+    var record: ?[*]u8 = null;
+    var stored_size: usize = 0;
+    if (f77_unformatted_begin_write_len(unit, record_size, &record, &stored_size) == 0) return;
+    if (record == null) return;
+
+    const dst = record.?;
+    var pos: usize = 0;
+    i = 0;
+    while (i < total_args and pos < stored_size) : (i += 1) {
+        const kind = runtimeArgKindAt(arg_kinds, i, total_args);
+        const len = runtimeArgLenAt(arg_lens, i, total_args);
+        const field_size = typedFieldSize(kind, len) orelse return;
+        const arg_any = runtimeArgPtrAt(arg_ptrs, i, total_args);
+        if (arg_any != null and pos + field_size <= stored_size) {
+            const src: [*]const u8 = @ptrCast(arg_any.?);
+            copyRawBytes(dst + pos, src, field_size);
+        }
+        pos += field_size;
+    }
+}
+
+pub export fn f77_read_unformatted_typed(
+    unit: c_int,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_lens: ?[*]const c_int,
+    arg_count: c_int,
+) callconv(.c) c_int {
+    const total_args = runtimeArgCount(arg_count);
+
+    var expected_size: usize = 0;
+    var i: usize = 0;
+    while (i < total_args) : (i += 1) {
+        const kind = runtimeArgKindAt(arg_kinds, i, total_args);
+        const len = runtimeArgLenAt(arg_lens, i, total_args);
+        const field_size = typedFieldSize(kind, len) orelse return 1;
+        expected_size = checkedAdd(expected_size, field_size) orelse return 1;
+    }
+
+    var record: ?[*]u8 = null;
+    var record_size: usize = 0;
+    const prep = f77_unformatted_begin_read_len(unit, expected_size, &record, &record_size);
+    if (prep != 0) return prep;
+    if (record == null) return 0;
+
+    const src = record.?;
+    var pos: usize = 0;
+    i = 0;
+    while (i < total_args and pos < record_size) : (i += 1) {
+        const kind = runtimeArgKindAt(arg_kinds, i, total_args);
+        const len = runtimeArgLenAt(arg_lens, i, total_args);
+        const field_size = typedFieldSize(kind, len) orelse return 1;
+        const arg_any = runtimeArgPtrAt(arg_ptrs, i, total_args);
+        if (arg_any != null and pos + field_size <= record_size) {
+            const dst: [*]u8 = @ptrCast(arg_any.?);
+            copyRawBytes(dst, src + pos, field_size);
+        }
+        pos += field_size;
     }
     return 0;
 }
