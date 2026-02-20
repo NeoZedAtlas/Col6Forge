@@ -16,6 +16,11 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+    const tools_optimize = b.option(
+        std.builtin.OptimizeMode,
+        "tools_optimize",
+        "Optimization mode for build tools (golden/verify/blas/lapack/test-harness)",
+    ) orelse optimize;
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -88,7 +93,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tools/golden_runner.zig"),
             .target = target,
-            .optimize = optimize,
+            .optimize = tools_optimize,
             .imports = &.{
                 .{ .name = "Col6Forge", .module = mod },
             },
@@ -100,7 +105,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tools/verify_runner.zig"),
             .target = target,
-            .optimize = optimize,
+            .optimize = tools_optimize,
             .imports = &.{
                 .{ .name = "Col6Forge", .module = mod },
             },
@@ -112,7 +117,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tools/blas_runner.zig"),
             .target = target,
-            .optimize = optimize,
+            .optimize = tools_optimize,
             .imports = &.{
                 .{ .name = "Col6Forge", .module = mod },
             },
@@ -124,7 +129,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tools/lapack_runner.zig"),
             .target = target,
-            .optimize = optimize,
+            .optimize = tools_optimize,
             .imports = &.{
                 .{ .name = "Col6Forge", .module = mod },
             },
@@ -136,7 +141,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tools/test_harness.zig"),
             .target = target,
-            .optimize = optimize,
+            .optimize = tools_optimize,
         }),
     });
 
@@ -145,11 +150,19 @@ pub fn build(b: *std.Build) void {
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
-    b.installArtifact(golden_runner);
-    b.installArtifact(verify_runner);
-    b.installArtifact(blas_runner);
-    b.installArtifact(lapack_runner);
-    b.installArtifact(test_harness);
+
+    const install_golden_runner = b.addInstallArtifact(golden_runner, .{});
+    const install_verify_runner = b.addInstallArtifact(verify_runner, .{});
+    const install_blas_runner = b.addInstallArtifact(blas_runner, .{});
+    const install_lapack_runner = b.addInstallArtifact(lapack_runner, .{});
+    const install_test_harness = b.addInstallArtifact(test_harness, .{});
+
+    const tools_step = b.step("tools", "Install all developer runner tools");
+    tools_step.dependOn(&install_golden_runner.step);
+    tools_step.dependOn(&install_verify_runner.step);
+    tools_step.dependOn(&install_blas_runner.step);
+    tools_step.dependOn(&install_lapack_runner.step);
+    tools_step.dependOn(&install_test_harness.step);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -207,7 +220,6 @@ pub fn build(b: *std.Build) void {
     const golden_step = b.step("golden", "Run golden file tests");
     const run_golden = b.addRunArtifact(golden_runner);
     golden_step.dependOn(&run_golden.step);
-    run_golden.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_golden.addArgs(args);
     }
@@ -220,7 +232,6 @@ pub fn build(b: *std.Build) void {
     }
     const run_verify = b.addRunArtifact(verify_runner);
     verify_step.dependOn(&run_verify.step);
-    run_verify.step.dependOn(b.getInstallStep());
     if (verify_fcvs21_f95) {
         run_verify.addArgs(&.{ "--tests-dir", "tests/NIST_F78_test_suite/fcvs21_f95" });
     } else if (verify_fcsv78) {
@@ -233,7 +244,6 @@ pub fn build(b: *std.Build) void {
     const blas_verify_step = b.step("blas-verify", "Run BLAS 3.12.0 verification tests");
     const run_blas_verify = b.addRunArtifact(blas_runner);
     blas_verify_step.dependOn(&run_blas_verify.step);
-    run_blas_verify.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_blas_verify.addArgs(args);
     }
@@ -241,7 +251,6 @@ pub fn build(b: *std.Build) void {
     const lapack_verify_step = b.step("lapack-verify", "Run LAPACK-lite 3.1.1 verification tests");
     const run_lapack_verify = b.addRunArtifact(lapack_runner);
     lapack_verify_step.dependOn(&run_lapack_verify.step);
-    run_lapack_verify.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_lapack_verify.addArgs(args);
     }
@@ -249,7 +258,6 @@ pub fn build(b: *std.Build) void {
     const test_all_step = b.step("test-all", "Run unified test harness");
     const run_test_all = b.addRunArtifact(test_harness);
     test_all_step.dependOn(&run_test_all.step);
-    run_test_all.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_test_all.addArgs(args);
     }
