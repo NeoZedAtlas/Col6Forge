@@ -17,6 +17,7 @@ extern fn f77_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_reco
 extern fn f77_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn f77_unformatted_begin_write_len(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn f77_unformatted_begin_read_len(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
+extern fn f77_rewind(unit: c_int) void;
 
 fn runtimeArgCount(arg_count: c_int) usize {
     return @intCast(@max(arg_count, 0));
@@ -64,6 +65,8 @@ fn copyRawBytes(dst: [*]u8, src: [*]const u8, n: usize) void {
         dst[i] = src[i];
     }
 }
+
+// Compatibility entrypoint retained for existing generated IR.
 pub export fn f77_write_direct_v(
     unit: c_int,
     rec: c_int,
@@ -165,6 +168,7 @@ pub export fn f77_write_direct_v(
     du.nextrec = rec + 1;
 }
 
+// Compatibility entrypoint retained for existing generated IR.
 pub export fn f77_read_direct_v(
     unit: c_int,
     rec: c_int,
@@ -358,6 +362,7 @@ pub export fn f77_read_direct_typed(
     return assigned;
 }
 
+// Compatibility entrypoint retained for existing generated IR.
 pub export fn f77_write_unformatted_v(
     unit: c_int,
     sig: ?[*:0]const u8,
@@ -438,6 +443,7 @@ pub export fn f77_write_unformatted_v(
     }
 }
 
+// Compatibility entrypoint retained for existing generated IR.
 pub export fn f77_read_unformatted_v(
     unit: c_int,
     sig: ?[*:0]const u8,
@@ -599,4 +605,71 @@ pub export fn f77_read_unformatted_typed(
         pos += field_size;
     }
     return 0;
+}
+
+test "typed direct io roundtrip handles integer, complex and character" {
+    const unit: c_int = 37;
+    const rec: c_int = 1;
+
+    var int_in: c_int = 12345;
+    var complex_in: [2]f32 = .{ 1.25, -2.5 };
+    var char_in: [4]u8 = .{ 'A', 'B', 'C', 'D' };
+    var write_args: [3]?*anyopaque = .{
+        @ptrCast(&int_in),
+        @ptrCast(&complex_in),
+        @ptrCast(&char_in),
+    };
+    const write_kinds: [3]u8 = .{ 'i', 'c', 's' };
+    const write_lens: [3]c_int = .{ 0, 0, 4 };
+    f77_write_direct_typed(unit, rec, &write_args, &write_kinds, &write_lens, 3);
+
+    var int_out: c_int = 0;
+    var complex_out: [2]f32 = .{ 0.0, 0.0 };
+    var char_out: [4]u8 = .{ 0, 0, 0, 0 };
+    var read_args: [3]?*anyopaque = .{
+        @ptrCast(&int_out),
+        @ptrCast(&complex_out),
+        @ptrCast(&char_out),
+    };
+    const status = f77_read_direct_typed(unit, rec, &read_args, &write_kinds, &write_lens, 3);
+
+    try std.testing.expectEqual(@as(c_int, 3), status);
+    try std.testing.expectEqual(int_in, int_out);
+    try std.testing.expectEqual(complex_in[0], complex_out[0]);
+    try std.testing.expectEqual(complex_in[1], complex_out[1]);
+    try std.testing.expectEqualSlices(u8, char_in[0..], char_out[0..]);
+}
+
+test "typed unformatted io roundtrip handles character, complex*16 and logical" {
+    const unit: c_int = 38;
+
+    var char_in: [5]u8 = .{ 'H', 'E', 'L', 'L', 'O' };
+    var complex_in: [2]f64 = .{ 3.5, -4.25 };
+    var logical_in: u8 = 1;
+    var write_args: [3]?*anyopaque = .{
+        @ptrCast(&char_in),
+        @ptrCast(&complex_in),
+        @ptrCast(&logical_in),
+    };
+    const kinds: [3]u8 = .{ 's', 'z', 'l' };
+    const lens: [3]c_int = .{ 5, 0, 0 };
+    f77_write_unformatted_typed(unit, &write_args, &kinds, &lens, 3);
+
+    f77_rewind(unit);
+
+    var char_out: [5]u8 = .{ 0, 0, 0, 0, 0 };
+    var complex_out: [2]f64 = .{ 0.0, 0.0 };
+    var logical_out: u8 = 0;
+    var read_args: [3]?*anyopaque = .{
+        @ptrCast(&char_out),
+        @ptrCast(&complex_out),
+        @ptrCast(&logical_out),
+    };
+    const status = f77_read_unformatted_typed(unit, &read_args, &kinds, &lens, 3);
+
+    try std.testing.expectEqual(@as(c_int, 0), status);
+    try std.testing.expectEqualSlices(u8, char_in[0..], char_out[0..]);
+    try std.testing.expectEqual(complex_in[0], complex_out[0]);
+    try std.testing.expectEqual(complex_in[1], complex_out[1]);
+    try std.testing.expectEqual(logical_in, logical_out);
 }
