@@ -24,7 +24,144 @@ const expandWriteArgsList = expansion.expandWriteArgsList;
 const expandReadTargets = expansion.expandReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
 
+fn emitI32Array(ctx: *Context, builder: anytype, values: []const i32) EmitError!ValueRef {
+    if (values.len == 0) {
+        return .{ .name = "null", .ty = .ptr, .is_ptr = false };
+    }
+    const arr_name = try ctx.nextTemp();
+    try builder.allocaArray(arr_name, .i32, values.len);
+    const arr_ptr = ValueRef{ .name = arr_name, .ty = .ptr, .is_ptr = true };
+    for (values, 0..) |value, idx| {
+        const off = try ctx.constI32(@intCast(idx));
+        const gep = try ctx.nextTemp();
+        try builder.gep(gep, .i32, arr_ptr, off);
+        const slot_ptr = ValueRef{ .name = gep, .ty = .ptr, .is_ptr = true };
+        try builder.store(try ctx.constI32(value), slot_ptr);
+    }
+    return arr_ptr;
+}
+
+fn emitListDirectedWriteExternal(ctx: *Context, builder: anytype, write: ast.WriteStmt, unit_i32: ValueRef) EmitError!void {
+    var expanded_values = try expandWriteArgsList(ctx, builder, write.args);
+    defer expanded_values.deinit();
+
+    var ptr_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer ptr_args.deinit();
+    var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_kinds.deinit();
+    var arg_lens = std.array_list.Managed(i32).init(ctx.allocator);
+    defer arg_lens.deinit();
+
+    for (expanded_values.values.items, 0..) |value, idx| {
+        switch (value.ty) {
+            .i32, .f32, .f64, .i1, .complex_f32, .complex_f64 => {
+                const tmp = try ctx.nextTemp();
+                try builder.alloca(tmp, value.ty);
+                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                try builder.store(value, ptr);
+                try ptr_args.append(ptr);
+                try arg_kinds.append(switch (value.ty) {
+                    .i32 => 'i',
+                    .f32 => 'f',
+                    .f64 => 'd',
+                    .i1 => 'l',
+                    .complex_f32 => 'c',
+                    .complex_f64 => 'z',
+                    else => unreachable,
+                });
+                try arg_lens.append(0);
+            },
+            .ptr => {
+                const arg_len = expanded_values.char_lens.items[idx];
+                if (arg_len > std.math.maxInt(i32)) return error.IntegerOverflow;
+                try ptr_args.append(.{ .name = value.name, .ty = .ptr, .is_ptr = true });
+                try arg_kinds.append('s');
+                try arg_lens.append(@intCast(arg_len));
+            },
+            else => return error.UnsupportedIntrinsicType,
+        }
+    }
+
+    const ptr_array = try emitPointerArrayFromValues(ctx, builder, ptr_args.items);
+    const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
+    const lens_array = try emitI32Array(ctx, builder, arg_lens.items);
+    const arg_count_val = try ctx.constI32(@intCast(ptr_args.items.len));
+    const write_name = try ctx.ensureDeclRaw("f77_write_list_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
+    try builder.callTyped(null, .i32, write_name, &.{ unit_i32, ptr_array, kinds_ptr, lens_array, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
+}
+
+fn emitListDirectedReadExternal(ctx: *Context, builder: anytype, read: ast.ReadStmt, unit_i32: ValueRef, status_mode: bool) EmitError!ValueRef {
+    var expanded = try expandReadTargets(ctx, builder, read.args);
+    defer expanded.deinit();
+
+    var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_kinds.deinit();
+    var arg_lens = std.array_list.Managed(i32).init(ctx.allocator);
+    defer arg_lens.deinit();
+
+    for (expanded.types.items, 0..) |ty, idx| {
+        switch (ty) {
+            .i32 => {
+                try arg_kinds.append('i');
+                try arg_lens.append(0);
+            },
+            .f32 => {
+                try arg_kinds.append('f');
+                try arg_lens.append(0);
+            },
+            .f64 => {
+                try arg_kinds.append('d');
+                try arg_lens.append(0);
+            },
+            .i1 => {
+                try arg_kinds.append('l');
+                try arg_lens.append(0);
+            },
+            .ptr => {
+                const len = expanded.char_lens.items[idx];
+                if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
+                try arg_kinds.append('s');
+                try arg_lens.append(@intCast(len));
+            },
+            else => return error.UnsupportedIntrinsicType,
+        }
+    }
+
+    const ptr_array = try emitPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
+    const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
+    const lens_array = try emitI32Array(ctx, builder, arg_lens.items);
+    const arg_count_val = try ctx.constI32(@intCast(expanded.ptrs.items.len));
+    const mode_val = ValueRef{ .name = if (status_mode) "1" else "0", .ty = .i32, .is_ptr = false };
+    const read_name = try ctx.ensureDeclRaw("f77_read_list_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
+    var status_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+    if (status_mode) {
+        const tmp = try ctx.nextTemp();
+        try builder.callTyped(tmp, .i32, read_name, &.{ unit_i32, ptr_array, kinds_ptr, lens_array, arg_count_val, mode_val });
+        status_val = .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    } else {
+        try builder.callTyped(null, .i32, read_name, &.{ unit_i32, ptr_array, kinds_ptr, lens_array, arg_count_val, mode_val });
+    }
+
+    try applyComplexFixups(ctx, builder, &expanded);
+    return status_val;
+}
+
 pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
+    const unit_value = try expr.emitExpr(ctx, builder, write.unit);
+    const unit_char_len = charLenForExpr(ctx, write.unit);
+    const is_internal = unit_char_len != null and unit_value.ty == .ptr;
+    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
+
+    if (!is_internal and try emitDynamicImpliedDoListWrite(ctx, builder, write, unit_i32)) {
+        return;
+    }
+    if (is_internal) {
+        return emitListDirectedWriteLegacy(ctx, builder, write);
+    }
+    return emitListDirectedWriteExternal(ctx, builder, write, unit_i32);
+}
+
+fn emitListDirectedWriteLegacy(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
     const unit_char_len = charLenForExpr(ctx, write.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
@@ -215,18 +352,18 @@ fn emitDynamicImpliedDoListWrite(
     const final_count = ValueRef{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
 
     const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
+    defer ctx.allocator.free(base_args);
     for (call.args, 0..) |arg, idx| {
         base_args[idx] = arg;
     }
     base_args[loop_dim] = implied.start;
-    const base_expr = try ctx.allocator.create(ast.Expr);
-    base_expr.* = .{
+    var base_expr = ast.Expr{
         .call_or_subscript = .{
             .name = call.name,
             .args = base_args,
         },
     };
-    const base_ptr = try expr.emitLValue(ctx, builder, base_expr);
+    const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
 
     const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
     try builder.callTyped(null, .i32, decl, &.{ unit_i32, final_count, stride, base_ptr });
@@ -264,7 +401,39 @@ fn impliedStaticTripCountBounded(start: i64, end: i64, step: i64) ?i64 {
     }
     return count;
 }
+
 pub fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
+    const unit_value = try expr.emitExpr(ctx, builder, read.unit);
+    const unit_char_len = charLenForExpr(ctx, read.unit);
+    const is_internal = unit_char_len != null and unit_value.ty == .ptr;
+    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
+
+    if (!is_internal) {
+        if (try emitDynamicImpliedDoListRead(ctx, builder, read, unit_i32)) |_| {
+            return;
+        }
+        _ = try emitListDirectedReadExternal(ctx, builder, read, unit_i32, false);
+        return;
+    }
+    return emitListDirectedReadLegacy(ctx, builder, read);
+}
+
+pub fn emitListDirectedReadStatus(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!ValueRef {
+    const unit_value = try expr.emitExpr(ctx, builder, read.unit);
+    const unit_char_len = charLenForExpr(ctx, read.unit);
+    const is_internal = unit_char_len != null and unit_value.ty == .ptr;
+    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
+
+    if (!is_internal) {
+        if (try emitDynamicImpliedDoListRead(ctx, builder, read, unit_i32)) |status| {
+            return status;
+        }
+        return emitListDirectedReadExternal(ctx, builder, read, unit_i32, true);
+    }
+    return emitListDirectedReadStatusLegacy(ctx, builder, read);
+}
+
+fn emitListDirectedReadLegacy(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
     const unit_char_len = charLenForExpr(ctx, read.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
@@ -338,7 +507,7 @@ pub fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt)
 
     try applyComplexFixups(ctx, builder, &expanded);
 }
-pub fn emitListDirectedReadStatus(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!ValueRef {
+fn emitListDirectedReadStatusLegacy(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!ValueRef {
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
     const unit_char_len = charLenForExpr(ctx, read.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
@@ -474,18 +643,18 @@ fn emitDynamicImpliedDoListRead(
     const final_count = ValueRef{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
 
     const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
+    defer ctx.allocator.free(base_args);
     for (call.args, 0..) |arg, idx| {
         base_args[idx] = arg;
     }
     base_args[loop_dim] = implied.start;
-    const base_expr = try ctx.allocator.create(ast.Expr);
-    base_expr.* = .{
+    var base_expr = ast.Expr{
         .call_or_subscript = .{
             .name = call.name,
             .args = base_args,
         },
     };
-    const base_ptr = try expr.emitLValue(ctx, builder, base_expr);
+    const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
 
     const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
     const status_tmp = try ctx.nextTemp();

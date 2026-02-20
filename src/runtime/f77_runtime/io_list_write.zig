@@ -63,6 +63,25 @@ fn cstrlenRaw(text: []const u8) usize {
     return i;
 }
 
+fn runtimeArgCount(arg_count: c_int) usize {
+    return @intCast(@max(arg_count, 0));
+}
+
+fn runtimeArgPtrAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) ?*anyopaque {
+    if (idx >= total or arg_ptrs == null) return null;
+    return arg_ptrs.?[idx];
+}
+
+fn runtimeArgKindAt(arg_kinds: ?[*]const u8, idx: usize, total: usize) u8 {
+    if (idx >= total or arg_kinds == null) return 0;
+    return arg_kinds.?[idx];
+}
+
+fn runtimeArgLenAt(arg_lens: ?[*]const c_int, idx: usize, total: usize) c_int {
+    if (idx >= total or arg_lens == null) return 0;
+    return arg_lens.?[idx];
+}
+
 fn checkedMul(lhs: usize, rhs: usize) ?usize {
     const out = @mulWithOverflow(lhs, rhs);
     if (out[1] != 0) return null;
@@ -116,18 +135,18 @@ fn appendC64(out: *LineBuffer, real: f64, imag: f64) bool {
     return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
 }
 
-fn writeBufferLine(unit: c_int, out: *LineBuffer) c_int {
+fn writeBufferLine(unit: c_int, out: *LineBuffer, strict_status: c_int) c_int {
     if (!out.terminate()) return 1;
-    return f77_write_rendered_line(unit, @ptrCast(out.data.?), 1);
+    return f77_write_rendered_line(unit, @ptrCast(out.data.?), strict_status);
 }
 
-fn writeEmptyLine(unit: c_int) c_int {
+fn writeEmptyLine(unit: c_int, strict_status: c_int) c_int {
     var empty: [1]u8 = .{0};
-    return f77_write_rendered_line(unit, @ptrCast(&empty), 1);
+    return f77_write_rendered_line(unit, @ptrCast(&empty), strict_status);
 }
 
 pub export fn f77_write_list_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
-    if (count <= 0) return writeEmptyLine(unit);
+    if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
     var out: LineBuffer = .{};
@@ -139,11 +158,11 @@ pub export fn f77_write_list_i32_n(unit: c_int, count: c_int, stride: c_int, bas
         const idx = offsetIndex(i, stride) orelse return 1;
         if (!appendI32(&out, data[idx])) return 1;
     }
-    return writeBufferLine(unit, &out);
+    return writeBufferLine(unit, &out, 1);
 }
 
 pub export fn f77_write_list_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
-    if (count <= 0) return writeEmptyLine(unit);
+    if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
     var out: LineBuffer = .{};
@@ -155,11 +174,11 @@ pub export fn f77_write_list_f32_n(unit: c_int, count: c_int, stride: c_int, bas
         const idx = offsetIndex(i, stride) orelse return 1;
         if (!appendF32(&out, data[idx])) return 1;
     }
-    return writeBufferLine(unit, &out);
+    return writeBufferLine(unit, &out, 1);
 }
 
 pub export fn f77_write_list_f64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
-    if (count <= 0) return writeEmptyLine(unit);
+    if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
     var out: LineBuffer = .{};
@@ -171,11 +190,11 @@ pub export fn f77_write_list_f64_n(unit: c_int, count: c_int, stride: c_int, bas
         const idx = offsetIndex(i, stride) orelse return 1;
         if (!appendF64(&out, data[idx])) return 1;
     }
-    return writeBufferLine(unit, &out);
+    return writeBufferLine(unit, &out, 1);
 }
 
 pub export fn f77_write_list_c32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
-    if (count <= 0) return writeEmptyLine(unit);
+    if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
     var out: LineBuffer = .{};
@@ -188,11 +207,11 @@ pub export fn f77_write_list_c32_n(unit: c_int, count: c_int, stride: c_int, bas
         const imag_idx = checkedAdd(elem_idx, 1) orelse return 1;
         if (!appendC32(&out, data[elem_idx], data[imag_idx])) return 1;
     }
-    return writeBufferLine(unit, &out);
+    return writeBufferLine(unit, &out, 1);
 }
 
 pub export fn f77_write_list_c64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
-    if (count <= 0) return writeEmptyLine(unit);
+    if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
     var out: LineBuffer = .{};
@@ -205,11 +224,11 @@ pub export fn f77_write_list_c64_n(unit: c_int, count: c_int, stride: c_int, bas
         const imag_idx = checkedAdd(elem_idx, 1) orelse return 1;
         if (!appendC64(&out, data[elem_idx], data[imag_idx])) return 1;
     }
-    return writeBufferLine(unit, &out);
+    return writeBufferLine(unit, &out, 1);
 }
 
 pub export fn f77_write_list_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const u8) callconv(.c) c_int {
-    if (count <= 0) return writeEmptyLine(unit);
+    if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
     var out: LineBuffer = .{};
@@ -221,5 +240,66 @@ pub export fn f77_write_list_l_n(unit: c_int, count: c_int, stride: c_int, base:
         const idx = offsetIndex(i, stride) orelse return 1;
         if (!out.appendByte(if (data[idx] != 0) 'T' else 'F')) return 1;
     }
-    return writeBufferLine(unit, &out);
+    return writeBufferLine(unit, &out, 1);
+}
+
+pub export fn f77_write_list_v(
+    unit: c_int,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_lens: ?[*]const c_int,
+    arg_count: c_int,
+    strict_status: c_int,
+) callconv(.c) c_int {
+    const total = runtimeArgCount(arg_count);
+    if (total == 0) return writeEmptyLine(unit, strict_status);
+
+    var out: LineBuffer = .{};
+    defer out.deinit();
+
+    var i: usize = 0;
+    while (i < total) : (i += 1) {
+        const kind = runtimeArgKindAt(arg_kinds, i, total);
+        const arg = runtimeArgPtrAt(arg_ptrs, i, total) orelse return if (strict_status != 0) 1 else 0;
+
+        if (i != 0 and !out.appendByte(' ')) return if (strict_status != 0) 1 else 0;
+
+        switch (kind) {
+            'i' => {
+                const ptr: *const c_int = @ptrCast(@alignCast(arg));
+                if (!appendI32(&out, ptr.*)) return if (strict_status != 0) 1 else 0;
+            },
+            'f' => {
+                const ptr: *const f32 = @ptrCast(@alignCast(arg));
+                if (!appendF32(&out, ptr.*)) return if (strict_status != 0) 1 else 0;
+            },
+            'd' => {
+                const ptr: *const f64 = @ptrCast(@alignCast(arg));
+                if (!appendF64(&out, ptr.*)) return if (strict_status != 0) 1 else 0;
+            },
+            'l' => {
+                const ptr: *const u8 = @ptrCast(@alignCast(arg));
+                if (!out.appendByte(if (ptr.* != 0) 'T' else 'F')) return if (strict_status != 0) 1 else 0;
+            },
+            's' => {
+                const len_raw = runtimeArgLenAt(arg_lens, i, total);
+                const len: usize = @intCast(@max(len_raw, 0));
+                if (len != 0) {
+                    const text: [*]const u8 = @ptrCast(arg);
+                    if (!out.appendSlice(text[0..len])) return if (strict_status != 0) 1 else 0;
+                }
+            },
+            'c' => {
+                const ptr: [*]const f32 = @ptrCast(@alignCast(arg));
+                if (!appendC32(&out, ptr[0], ptr[1])) return if (strict_status != 0) 1 else 0;
+            },
+            'z' => {
+                const ptr: [*]const f64 = @ptrCast(@alignCast(arg));
+                if (!appendC64(&out, ptr[0], ptr[1])) return if (strict_status != 0) 1 else 0;
+            },
+            else => return if (strict_status != 0) 1 else 0,
+        }
+    }
+
+    return writeBufferLine(unit, &out, strict_status);
 }

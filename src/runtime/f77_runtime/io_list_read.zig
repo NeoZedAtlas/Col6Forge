@@ -44,6 +44,25 @@ fn cstrlenRaw(text: []const u8) usize {
     return i;
 }
 
+fn runtimeArgCount(arg_count: c_int) usize {
+    return @intCast(@max(arg_count, 0));
+}
+
+fn runtimeArgPtrAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) ?*anyopaque {
+    if (idx >= total or arg_ptrs == null) return null;
+    return arg_ptrs.?[idx];
+}
+
+fn runtimeArgKindAt(arg_kinds: ?[*]const u8, idx: usize, total: usize) u8 {
+    if (idx >= total or arg_kinds == null) return 0;
+    return arg_kinds.?[idx];
+}
+
+fn runtimeArgLenAt(arg_lens: ?[*]const c_int, idx: usize, total: usize) c_int {
+    if (idx >= total or arg_lens == null) return 0;
+    return arg_lens.?[idx];
+}
+
 fn checkedMul(lhs: usize, rhs: usize) ?usize {
     const out = @mulWithOverflow(lhs, rhs);
     if (out[1] != 0) return null;
@@ -286,6 +305,96 @@ pub export fn f77_read_list_l_n(unit: c_int, count: c_int, stride: c_int, base: 
         const idx = offsetIndex(i, stride) orelse return -1;
         out[idx] = @intCast(f77_parse_logical_field(asConstCStr(&token), token_len));
     }
+    f77DiscardToRecordEnd(file);
+    return 0;
+}
+
+pub export fn f77_read_list_v(
+    unit: c_int,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_lens: ?[*]const c_int,
+    arg_count: c_int,
+    status_mode: c_int,
+) callconv(.c) c_int {
+    const total = runtimeArgCount(arg_count);
+    if (total == 0) return 0;
+
+    var is_stdin = false;
+    const file = f77OpenListInput(unit, &is_stdin) orelse return if (status_mode != 0) 1 else -1;
+    defer f77CloseListInput(unit, is_stdin, file);
+
+    var token: [256]u8 = [_]u8{0} ** 256;
+    var i: usize = 0;
+    while (i < total) : (i += 1) {
+        const kind = runtimeArgKindAt(arg_kinds, i, total);
+        const arg = runtimeArgPtrAt(arg_ptrs, i, total) orelse return if (status_mode != 0) 1 else -1;
+        switch (kind) {
+            'i' => {
+                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                const out: *c_int = @ptrCast(@alignCast(arg));
+                out.* = @intCast(strtol(asConstCStr(&token), null, 10));
+            },
+            'f' => {
+                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                f77_normalize_exponent(asCStr(&token));
+                const out: *f32 = @ptrCast(@alignCast(arg));
+                out.* = @floatCast(strtod(asConstCStr(&token), null));
+            },
+            'd' => {
+                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                f77_normalize_exponent(asCStr(&token));
+                const out: *f64 = @ptrCast(@alignCast(arg));
+                out.* = strtod(asConstCStr(&token), null);
+            },
+            'l' => {
+                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
+                const out: *u8 = @ptrCast(@alignCast(arg));
+                out.* = @intCast(f77_parse_logical_field(asConstCStr(&token), token_len));
+            },
+            's' => {
+                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                const out: [*]u8 = @ptrCast(arg);
+                const len_raw = runtimeArgLenAt(arg_lens, i, total);
+                const len: usize = @intCast(@max(len_raw, 0));
+                var j: usize = 0;
+                while (j < len) : (j += 1) {
+                    out[j] = ' ';
+                }
+                const token_len = cstrlenRaw(token[0..]);
+                const copy_len = @min(token_len, len);
+                j = 0;
+                while (j < copy_len) : (j += 1) {
+                    out[j] = token[j];
+                }
+            },
+            'c' => {
+                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                f77_normalize_exponent(asCStr(&token));
+                const real = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
+                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                f77_normalize_exponent(asCStr(&token));
+                const imag = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
+                const out: [*]f32 = @ptrCast(@alignCast(arg));
+                out[0] = real;
+                out[1] = imag;
+            },
+            'z' => {
+                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                f77_normalize_exponent(asCStr(&token));
+                const real = strtod(asConstCStr(&token), null);
+                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                f77_normalize_exponent(asCStr(&token));
+                const imag = strtod(asConstCStr(&token), null);
+                const out: [*]f64 = @ptrCast(@alignCast(arg));
+                out[0] = real;
+                out[1] = imag;
+            },
+            else => return if (status_mode != 0) 1 else -1,
+        }
+    }
+
     f77DiscardToRecordEnd(file);
     return 0;
 }
