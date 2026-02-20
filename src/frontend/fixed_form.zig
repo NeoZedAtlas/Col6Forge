@@ -7,6 +7,14 @@ pub const mapIndexToPos = logical_line.mapIndexToPos;
 pub const mapIndexToPosExclusive = logical_line.mapIndexToPosExclusive;
 
 pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![]LogicalLine {
+    return normalizeFixedFormWithMapMode(allocator, contents, false);
+}
+
+pub fn normalizeFixedFormWithMapMode(
+    allocator: std.mem.Allocator,
+    contents: []const u8,
+    coarse_source_map: bool,
+) ![]LogicalLine {
     var list = std.array_list.Managed(LogicalLine).init(allocator);
     var buffer = std.array_list.Managed(u8).init(allocator);
     var segments = std.array_list.Managed(Segment).init(allocator);
@@ -34,7 +42,13 @@ pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![
         if (trimmed_code.len == 0 and !is_cont) {
             if (in_stmt) {
                 const text_owned = try buffer.toOwnedSlice();
-                const segments_owned = try segments.toOwnedSlice();
+                const segments_owned = try makeSegmentsOwned(
+                    allocator,
+                    &segments,
+                    coarse_source_map,
+                    current_start,
+                    text_owned.len,
+                );
                 try list.append(.{
                     .label = current_label,
                     .text = text_owned,
@@ -52,7 +66,13 @@ pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![
         if (!is_cont or !in_stmt) {
             if (in_stmt) {
                 const text_owned = try buffer.toOwnedSlice();
-                const segments_owned = try segments.toOwnedSlice();
+                const segments_owned = try makeSegmentsOwned(
+                    allocator,
+                    &segments,
+                    coarse_source_map,
+                    current_start,
+                    text_owned.len,
+                );
                 try list.append(.{
                     .label = current_label,
                     .text = text_owned,
@@ -73,17 +93,25 @@ pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![
 
         if (trimmed_code.len > 0) {
             try buffer.appendSlice(trimmed_code);
-            try segments.append(.{
-                .line = line_no,
-                .column = 7,
-                .length = trimmed_code.len,
-            });
+            if (!coarse_source_map) {
+                try segments.append(.{
+                    .line = line_no,
+                    .column = 7,
+                    .length = trimmed_code.len,
+                });
+            }
         }
     }
 
     if (in_stmt) {
         const text_owned = try buffer.toOwnedSlice();
-        const segments_owned = try segments.toOwnedSlice();
+        const segments_owned = try makeSegmentsOwned(
+            allocator,
+            &segments,
+            coarse_source_map,
+            current_start,
+            text_owned.len,
+        );
         try list.append(.{
             .label = current_label,
             .text = text_owned,
@@ -96,6 +124,27 @@ pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![
     }
 
     return list.toOwnedSlice();
+}
+
+fn makeSegmentsOwned(
+    allocator: std.mem.Allocator,
+    segments: *std.array_list.Managed(Segment),
+    coarse_source_map: bool,
+    start_line: usize,
+    text_len: usize,
+) ![]Segment {
+    if (!coarse_source_map) {
+        return segments.toOwnedSlice();
+    }
+
+    segments.clearRetainingCapacity();
+    const out = try allocator.alloc(Segment, 1);
+    out[0] = .{
+        .line = start_line,
+        .column = 1,
+        .length = text_len,
+    };
+    return out;
 }
 
 pub fn freeLogicalLines(allocator: std.mem.Allocator, lines: []LogicalLine) void {
@@ -120,36 +169,41 @@ fn isContinuation(line: []const u8) bool {
 
 fn parseLabel(allocator: std.mem.Allocator, line: []const u8) !?[]const u8 {
     const end = if (line.len < 5) line.len else 5;
-    const label_slice = std.mem.trim(u8, line[0..end], " \t");
-    if (label_slice.len == 0) return null;
-    var buffer = std.array_list.Managed(u8).init(allocator);
-    for (label_slice) |ch| {
+
+    var compact_buf: [5]u8 = undefined;
+    var compact_len: usize = 0;
+    var idx: usize = 0;
+    while (idx < end) : (idx += 1) {
+        const ch = line[idx];
         if (ch == ' ' or ch == '\t') continue;
-        try buffer.append(ch);
+        compact_buf[compact_len] = ch;
+        compact_len += 1;
     }
-    if (buffer.items.len == 0) {
-        buffer.deinit();
-        return null;
-    }
+    if (compact_len == 0) return null;
+
     var all_digits = true;
-    for (buffer.items) |ch| {
+    var i: usize = 0;
+    while (i < compact_len) : (i += 1) {
+        const ch = compact_buf[i];
         if (!std.ascii.isDigit(ch)) {
             all_digits = false;
             break;
         }
     }
+
+    var start: usize = 0;
     if (all_digits) {
-        var start: usize = 0;
-        while (start < buffer.items.len and buffer.items[start] == '0') : (start += 1) {}
-        if (start == buffer.items.len) {
-            buffer.items.len = 1;
-            buffer.items[0] = '0';
-        } else if (start > 0) {
-            std.mem.copyForwards(u8, buffer.items[0 .. buffer.items.len - start], buffer.items[start..]);
-            buffer.items.len -= start;
+        while (start < compact_len and compact_buf[start] == '0') : (start += 1) {}
+        if (start == compact_len) {
+            compact_buf[0] = '0';
+            compact_len = 1;
+            start = 0;
         }
     }
-    const owned = try buffer.toOwnedSlice();
+
+    const out_len = compact_len - start;
+    const owned = try allocator.alloc(u8, out_len);
+    @memcpy(owned, compact_buf[start..compact_len]);
     return owned;
 }
 

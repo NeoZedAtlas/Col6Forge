@@ -13,6 +13,7 @@ pub const EmitKind = enum {
 pub const PipelineOptions = struct {
     bounds_check: bool = false,
     time_report: bool = false,
+    coarse_source_map: bool = false,
 };
 
 pub const PipelineResult = struct {
@@ -127,7 +128,7 @@ pub fn runPipelineWithOptions(
 
     const form = detectSourceForm(input_path);
     const normalize_start = nowNs();
-    const logical_lines = source_form.normalize(form, allocator, contents) catch |err| {
+    const logical_lines = source_form.normalize(form, allocator, contents, options.coarse_source_map) catch |err| {
         profile.normalize_ns = elapsedNs(normalize_start);
         profile.markFailure("normalize");
         setDefaultDiagnostic(input_path, contents, "CF0002", "failed to normalize source form", err);
@@ -182,7 +183,7 @@ pub fn runPipelineToWriterWithOptions(
 
     const form = detectSourceForm(input_path);
     const normalize_start = nowNs();
-    const logical_lines = source_form.normalize(form, allocator, contents) catch |err| {
+    const logical_lines = source_form.normalize(form, allocator, contents, options.coarse_source_map) catch |err| {
         profile.normalize_ns = elapsedNs(normalize_start);
         profile.markFailure("normalize");
         setDefaultDiagnostic(input_path, contents, "CF0002", "failed to normalize source form", err);

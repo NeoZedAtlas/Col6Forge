@@ -8,10 +8,15 @@ pub const SourceForm = enum {
     free,
 };
 
-pub fn normalize(form: SourceForm, allocator: std.mem.Allocator, contents: []const u8) ![]logical_line.LogicalLine {
+pub fn normalize(
+    form: SourceForm,
+    allocator: std.mem.Allocator,
+    contents: []const u8,
+    coarse_source_map: bool,
+) ![]logical_line.LogicalLine {
     return switch (form) {
-        .fixed => fixed_form.normalizeFixedForm(allocator, contents),
-        .free => free_form.normalizeFreeForm(allocator, contents),
+        .fixed => fixed_form.normalizeFixedFormWithMapMode(allocator, contents, coarse_source_map),
+        .free => free_form.normalizeFreeFormWithMapMode(allocator, contents, coarse_source_map),
     };
 }
 

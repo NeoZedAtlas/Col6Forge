@@ -11,9 +11,17 @@ const KindState = enum {
 };
 
 pub fn normalizeFreeForm(allocator: std.mem.Allocator, contents: []const u8) ![]LogicalLine {
+    return normalizeFreeFormWithMapMode(allocator, contents, false);
+}
+
+pub fn normalizeFreeFormWithMapMode(
+    allocator: std.mem.Allocator,
+    contents: []const u8,
+    coarse_source_map: bool,
+) ![]LogicalLine {
+    _ = coarse_source_map;
     var list = std.array_list.Managed(LogicalLine).init(allocator);
     var buffer = std.array_list.Managed(u8).init(allocator);
-    var segments = std.array_list.Managed(Segment).init(allocator);
     var kind_state: KindState = .unknown;
 
     var in_stmt = false;
@@ -30,7 +38,7 @@ pub fn normalizeFreeForm(allocator: std.mem.Allocator, contents: []const u8) ![]
 
         if (trimmed.len == 0) {
             if (in_stmt and !continued) {
-                try flushLogicalLine(allocator, &list, &buffer, &segments, stmt_start, stmt_end, &kind_state);
+                try flushLogicalLine(allocator, &list, &buffer, stmt_start, stmt_end, &kind_state);
                 in_stmt = false;
             }
             continue;
@@ -62,25 +70,19 @@ pub fn normalizeFreeForm(allocator: std.mem.Allocator, contents: []const u8) ![]
 
         if (part.len > 0) {
             try buffer.appendSlice(part);
-            try segments.append(.{
-                .line = line_no,
-                .column = 1,
-                .length = part.len,
-            });
         }
 
         continued = cont;
         if (!continued) {
-            try flushLogicalLine(allocator, &list, &buffer, &segments, stmt_start, stmt_end, &kind_state);
+            try flushLogicalLine(allocator, &list, &buffer, stmt_start, stmt_end, &kind_state);
             in_stmt = false;
         }
     }
 
     if (in_stmt) {
-        try flushLogicalLine(allocator, &list, &buffer, &segments, stmt_start, stmt_end, &kind_state);
+        try flushLogicalLine(allocator, &list, &buffer, stmt_start, stmt_end, &kind_state);
     } else {
         buffer.deinit();
-        segments.deinit();
     }
 
     return list.toOwnedSlice();
@@ -99,20 +101,12 @@ fn flushLogicalLine(
     allocator: std.mem.Allocator,
     list: *std.array_list.Managed(LogicalLine),
     buffer: *std.array_list.Managed(u8),
-    segments: *std.array_list.Managed(Segment),
     start_line: usize,
     end_line: usize,
     kind_state: *KindState,
 ) !void {
-    const raw_text = try buffer.toOwnedSlice();
-    defer allocator.free(raw_text);
-
-    try rewriteAndAppend(allocator, list, raw_text, start_line, end_line, kind_state);
-
-    const old_segments = try segments.toOwnedSlice();
-    allocator.free(old_segments);
-    buffer.* = std.array_list.Managed(u8).init(allocator);
-    segments.* = std.array_list.Managed(Segment).init(allocator);
+    try rewriteAndAppend(allocator, list, buffer.items, start_line, end_line, kind_state);
+    buffer.clearRetainingCapacity();
 }
 
 fn trimCr(line: []const u8) []const u8 {

@@ -947,23 +947,19 @@ fn translateSources(
             if (fileExistsAbsolute(ll_cache_path)) {
                 try copyFileAbsolute(ll_cache_path, ll_path);
             } else {
-                const ir = Col6Forge.runPipeline(allocator, src_path, emit) catch |err| {
+                emitPipelineToFile(allocator, src_path, emit, ll_path) catch |err| {
                     printPipelineError(src_path, err);
                     allocator.free(ll_path);
                     return err;
                 };
-                defer allocator.free(ir.output);
-                try writeFile(ll_path, ir.output);
-                try writeFile(ll_cache_path, ir.output);
+                try copyFileAbsolute(ll_path, ll_cache_path);
             }
         } else {
-            const ir = Col6Forge.runPipeline(allocator, src_path, emit) catch |err| {
+            emitPipelineToFile(allocator, src_path, emit, ll_path) catch |err| {
                 printPipelineError(src_path, err);
                 allocator.free(ll_path);
                 return err;
             };
-            defer allocator.free(ir.output);
-            try writeFile(ll_path, ir.output);
         }
 
         ll_paths[idx] = ll_path;
@@ -1311,6 +1307,26 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
     var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(contents);
+}
+
+fn emitPipelineToFile(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    emit: Col6Forge.EmitKind,
+    output_path: []const u8,
+) !void {
+    var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
+    defer out_file.close();
+    var out_buf: [32 * 1024]u8 = undefined;
+    var out_writer = out_file.writer(&out_buf);
+    try Col6Forge.runPipelineToWriterWithOptions(
+        allocator,
+        input_path,
+        emit,
+        &out_writer.interface,
+        .{ .coarse_source_map = true },
+    );
+    try out_writer.interface.flush();
 }
 
 fn emitCacheTag(_: Col6Forge.EmitKind) []const u8 {

@@ -459,6 +459,26 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
     try file.writeAll(contents);
 }
 
+fn emitPipelineToFile(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    emit: Col6Forge.EmitKind,
+    output_path: []const u8,
+) !void {
+    var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
+    defer out_file.close();
+    var out_buf: [32 * 1024]u8 = undefined;
+    var out_writer = out_file.writer(&out_buf);
+    try Col6Forge.runPipelineToWriterWithOptions(
+        allocator,
+        input_path,
+        emit,
+        &out_writer.interface,
+        .{ .coarse_source_map = true },
+    );
+    try out_writer.interface.flush();
+}
+
 fn emitCacheTag(_: Col6Forge.EmitKind) []const u8 {
     return "llvm";
 }
@@ -1129,14 +1149,15 @@ fn processCase(
                 return false;
             };
         } else {
-            const ir = Col6Forge.runPipeline(allocator, abs_input_path, options.emit) catch |err| {
+            emitPipelineToFile(allocator, abs_input_path, options.emit, ll_path) catch |err| {
                 try reportPipelineError(log_state, abs_input_path, err);
                 return false;
             };
-            defer allocator.free(ir.output);
-            try writeFile(ll_path, ir.output);
             if (options.incremental) {
-                try writeFile(ll_cache_path.?, ir.output);
+                copyFileAbsolute(ll_path, ll_cache_path.?) catch |err| {
+                    log_state.stderr("failed to update cached ll: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+                    return false;
+                };
             }
         }
 
