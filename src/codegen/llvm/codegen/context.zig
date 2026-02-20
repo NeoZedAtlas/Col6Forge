@@ -3,6 +3,7 @@ const input = @import("../../input.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
 const utils = @import("utils.zig");
+const common = @import("common.zig");
 
 const ProgramUnit = input.ProgramUnit;
 const TypeKind = input.TypeKind;
@@ -116,7 +117,9 @@ pub const Context = struct {
     label_map: std.StringHashMap([]const u8),
     label_index: std.StringHashMap(usize),
     label_counter: usize,
+    symbol_index_exact: std.StringHashMap(usize),
     symbol_index: CaseInsensitiveStringHashMap(usize),
+    array_elem_count_cache: std.AutoHashMap(usize, usize),
     string_pool: *StringPool,
     statement_functions: std.StringHashMap(StatementFunction),
     stmt_func_stack: std.array_list.Managed(StatementFunctionSubst),
@@ -156,7 +159,9 @@ pub const Context = struct {
             .label_map = std.StringHashMap([]const u8).init(allocator),
             .label_index = std.StringHashMap(usize).init(allocator),
             .label_counter = 0,
+            .symbol_index_exact = std.StringHashMap(usize).init(allocator),
             .symbol_index = CaseInsensitiveStringHashMap(usize).initContext(allocator, .{}),
+            .array_elem_count_cache = std.AutoHashMap(usize, usize).init(allocator),
             .string_pool = string_pool,
             .statement_functions = std.StringHashMap(StatementFunction).init(allocator),
             .stmt_func_stack = std.array_list.Managed(StatementFunctionSubst).init(allocator),
@@ -168,9 +173,14 @@ pub const Context = struct {
             .options = options,
             .current_stmt = null,
         };
+        errdefer ctx.symbol_index_exact.deinit();
         errdefer ctx.symbol_index.deinit();
+        errdefer ctx.array_elem_count_cache.deinit();
 
         for (sem.symbols, 0..) |sym, idx| {
+            if (!ctx.symbol_index_exact.contains(sym.name)) {
+                try ctx.symbol_index_exact.put(sym.name, idx);
+            }
             if (!ctx.symbol_index.contains(sym.name)) {
                 try ctx.symbol_index.put(sym.name, idx);
             }
@@ -189,7 +199,9 @@ pub const Context = struct {
         }
         self.label_map.deinit();
         self.label_index.deinit();
+        self.symbol_index_exact.deinit();
         self.symbol_index.deinit();
+        self.array_elem_count_cache.deinit();
         self.statement_functions.deinit();
         self.stmt_func_stack.deinit();
         var it = self.char_values.iterator();
@@ -212,11 +224,11 @@ pub const Context = struct {
         var names = std.array_list.Managed([]const u8).init(self.allocator);
         for (self.unit.stmts, 0..) |stmt, idx| {
             const name = if (stmt.label) |label| blk: {
-                const block_name = try std.fmt.allocPrint(self.allocator, "L{s}", .{label});
+                const block_name = try self.allocPrefixedName("L", label);
                 try self.label_map.put(label, block_name);
                 try self.label_index.put(label, idx);
                 break :blk block_name;
-            } else try std.fmt.allocPrint(self.allocator, "bb{d}", .{idx});
+            } else try self.allocIndexedName("bb", idx, false);
             try names.append(name);
         }
         return names.toOwnedSlice();
@@ -247,8 +259,22 @@ pub const Context = struct {
     }
 
     pub fn findSymbol(self: *Context, name: []const u8) ?input.sema.Symbol {
+        if (self.symbol_index_exact.get(name)) |idx_exact| {
+            return self.sem.symbols[idx_exact];
+        }
         const idx = self.symbol_index.get(name) orelse return null;
         return self.sem.symbols[idx];
+    }
+
+    pub fn arrayElemCountForSymbol(self: *Context, sym: input.sema.Symbol) !usize {
+        if (sym.dims.len == 0) return 1;
+        if (self.symbolIndexForName(sym.name)) |idx| {
+            if (self.array_elem_count_cache.get(idx)) |cached| return cached;
+            const count = try common.arrayElementCount(self.sem, sym.dims);
+            try self.array_elem_count_cache.put(idx, count);
+            return count;
+        }
+        return common.arrayElementCount(self.sem, sym.dims);
     }
 
     pub fn addStatementFunction(self: *Context, name: []const u8, params: []const []const u8, expr: *input.Expr) !void {
@@ -356,6 +382,18 @@ pub const Context = struct {
         cursor += prefix.len;
         @memcpy(out[cursor .. cursor + digits.len], digits);
         return out;
+    }
+
+    fn allocPrefixedName(self: *Context, prefix: []const u8, suffix: []const u8) ![]const u8 {
+        const out = try self.allocator.alloc(u8, prefix.len + suffix.len);
+        @memcpy(out[0..prefix.len], prefix);
+        @memcpy(out[prefix.len..], suffix);
+        return out;
+    }
+
+    fn symbolIndexForName(self: *Context, name: []const u8) ?usize {
+        if (self.symbol_index_exact.get(name)) |idx| return idx;
+        return self.symbol_index.get(name);
     }
 };
 

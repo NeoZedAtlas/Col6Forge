@@ -133,7 +133,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         if (isSaved(&save_info, sym.name) and !is_return_symbol) continue;
         if (sym.type_kind == .character) {
             const char_len = sym.char_len orelse 1;
-            const elem_count = if (sym.dims.len > 0) try common.arrayElementCount(ctx.sem, sym.dims) else 1;
+            const elem_count = try ctx.arrayElemCountForSymbol(sym);
             const total = elem_count * char_len;
             const alloca_name = try ctx.nextTemp();
             if (total == 1) {
@@ -146,7 +146,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         }
         const ty = llvm_types.typeFromKind(sym.type_kind);
         if (sym.dims.len > 0) {
-            const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
+            const elem_count = try ctx.arrayElemCountForSymbol(sym);
             const alloca_name = try ctx.nextTemp();
             try builder.allocaArray(alloca_name, ty, elem_count);
             try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
@@ -280,13 +280,13 @@ fn installSavedGlobals(ctx: *Context, builder: anytype, save_info: *const SaveIn
         var alignment: usize = 1;
         if (sym.type_kind == .character) {
             const char_len = sym.char_len orelse 1;
-            const elem_count = if (sym.dims.len > 0) try common.arrayElementCount(ctx.sem, sym.dims) else 1;
+            const elem_count = try ctx.arrayElemCountForSymbol(sym);
             total_size = elem_count * char_len;
             alignment = 1;
         } else {
             const ty = llvm_types.typeFromKind(sym.type_kind);
             const sa = sizeAlignForType(ty);
-            const elem_count = if (sym.dims.len > 0) try common.arrayElementCount(ctx.sem, sym.dims) else 1;
+            const elem_count = try ctx.arrayElemCountForSymbol(sym);
             total_size = sa.size * elem_count;
             alignment = sa.alignment;
         }
@@ -376,7 +376,7 @@ fn symbolElemSize(sym: sema.Symbol) ?usize {
 }
 
 fn symbolTotalSize(ctx: *Context, sym: sema.Symbol) ?usize {
-    const elem_count: usize = if (sym.dims.len > 0) common.arrayElementCount(ctx.sem, sym.dims) catch return null else 1;
+    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return null;
     const elem_size = symbolElemSize(sym) orelse return null;
     return elem_count * elem_size;
 }

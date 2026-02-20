@@ -83,19 +83,18 @@ pub fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) Emi
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
-                const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
+                const elem_count = try ctx.arrayElemCountForSymbol(sym);
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
                 const char_len = sym.char_len orelse 1;
+                const char_scale: ?ValueRef = if (sym.type_kind == .character and char_len > 1)
+                    .{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = .i32, .is_ptr = false }
+                else
+                    null;
                 var idx: usize = 0;
                 while (idx < elem_count) : (idx += 1) {
-                    var idx_buf: [32]u8 = undefined;
-                    const idx_text = std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch "0";
-                    var offset_val = ValueRef{ .name = idx_text, .ty = .i32, .is_ptr = false };
-                    if (sym.type_kind == .character and char_len > 1) {
-                        var len_buf: [32]u8 = undefined;
-                        const len_text = std.fmt.bufPrint(&len_buf, "{d}", .{char_len}) catch "1";
-                        const scale = ValueRef{ .name = len_text, .ty = .i32, .is_ptr = false };
+                    var offset_val = ValueRef{ .name = try ctx.intLiteral(@intCast(idx)), .ty = .i32, .is_ptr = false };
+                    if (char_scale) |scale| {
                         offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
                     }
                     const ptr_name = try ctx.nextTemp();
@@ -314,7 +313,7 @@ fn inferImpliedDoEndFromItems(ctx: *Context, implied: ast.ImpliedDo) ?i64 {
         if (!subscriptUsesLoopVar(call.args, implied.var_name)) continue;
         const sym = ctx.findSymbol(call.name) orelse continue;
         if (sym.dims.len != 1) continue;
-        const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch continue;
+        const elem_count = ctx.arrayElemCountForSymbol(sym) catch continue;
         return @intCast(elem_count);
     }
     return null;
@@ -439,19 +438,18 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
-                const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
+                const elem_count = try ctx.arrayElemCountForSymbol(sym);
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
                 const char_len = sym.char_len orelse 1;
+                const char_scale: ?ValueRef = if (sym.type_kind == .character and char_len > 1)
+                    .{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = .i32, .is_ptr = false }
+                else
+                    null;
                 var idx: usize = 0;
                 while (idx < elem_count) : (idx += 1) {
-                    var idx_buf: [32]u8 = undefined;
-                    const idx_text = std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch "0";
-                    var offset_val = ValueRef{ .name = idx_text, .ty = .i32, .is_ptr = false };
-                    if (sym.type_kind == .character and char_len > 1) {
-                        var len_buf: [32]u8 = undefined;
-                        const len_text = std.fmt.bufPrint(&len_buf, "{d}", .{char_len}) catch "1";
-                        const scale = ValueRef{ .name = len_text, .ty = .i32, .is_ptr = false };
+                    var offset_val = ValueRef{ .name = try ctx.intLiteral(@intCast(idx)), .ty = .i32, .is_ptr = false };
+                    if (char_scale) |scale| {
                         offset_val = try expr.emitMul(ctx, builder, offset_val, scale);
                     }
                     const ptr_name = try ctx.nextTemp();
@@ -503,7 +501,7 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
-                const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
+                const elem_count = try ctx.arrayElemCountForSymbol(sym);
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
                 const char_len = sym.char_len orelse 1;
@@ -514,9 +512,7 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
                 } else {
                     var idx: usize = 0;
                     while (idx < elem_count) : (idx += 1) {
-                        var idx_buf: [32]u8 = undefined;
-                        const idx_text = std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch "0";
-                        const offset_val = ValueRef{ .name = idx_text, .ty = .i32, .is_ptr = false };
+                        const offset_val = ValueRef{ .name = try ctx.intLiteral(@intCast(idx)), .ty = .i32, .is_ptr = false };
                         const ptr_name = try ctx.nextTemp();
                         try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
                         const tmp = try ctx.nextTemp();

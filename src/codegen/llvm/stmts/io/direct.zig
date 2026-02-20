@@ -1,7 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
 const llvm_types = @import("../../types.zig");
-const common = @import("../../codegen/common.zig");
 const context = @import("../../codegen/context.zig");
 const expr = @import("../../codegen/expression/mod.zig");
 const utils = @import("../../codegen/utils.zig");
@@ -173,7 +172,7 @@ fn appendArg(args: *TypedDirectArgs, ptr: ValueRef, kind: u8, len: i32) EmitErro
 }
 
 fn appendArrayArgs(ctx: *Context, builder: anytype, args: *TypedDirectArgs, sym: anytype) EmitError!void {
-    const elem_count = try common.arrayElementCount(ctx.sem, sym.dims);
+    const elem_count = try ctx.arrayElemCountForSymbol(sym);
     const base_ptr = try ctx.getPointer(sym.name);
     const elem_ty = if (sym.type_kind == .character) utils.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
     const char_len = sym.char_len orelse 1;
