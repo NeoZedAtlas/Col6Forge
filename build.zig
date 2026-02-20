@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
         std.builtin.OptimizeMode,
         "tools_optimize",
         "Optimization mode for build tools (golden/verify/blas/lapack/test-harness)",
-    ) orelse optimize;
+    ) orelse .Debug;
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`

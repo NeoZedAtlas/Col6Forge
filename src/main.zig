@@ -40,7 +40,10 @@ fn runMain() !void {
                 parsed.input_path,
                 parsed.emit,
                 &null_writer,
-                .{ .bounds_check = parsed.bounds_check },
+                .{
+                    .bounds_check = parsed.bounds_check,
+                    .time_report = parsed.time_report,
+                },
             ) catch |err| {
                 failPipeline(parsed.input_path, err);
             };
@@ -58,7 +61,10 @@ fn runMain() !void {
                 parsed.input_path,
                 parsed.emit,
                 &count_writer,
-                .{ .bounds_check = parsed.bounds_check },
+                .{
+                    .bounds_check = parsed.bounds_check,
+                    .time_report = parsed.time_report,
+                },
             ) catch |err| {
                 failPipeline(parsed.input_path, err);
             };
@@ -75,7 +81,10 @@ fn runMain() !void {
             parsed.input_path,
             parsed.emit,
             &file_writer,
-            .{ .bounds_check = parsed.bounds_check },
+            .{
+                .bounds_check = parsed.bounds_check,
+                .time_report = parsed.time_report,
+            },
         ) catch |err| {
             failPipeline(parsed.input_path, err);
         };
@@ -84,7 +93,10 @@ fn runMain() !void {
             allocator,
             parsed.input_path,
             parsed.emit,
-            .{ .bounds_check = parsed.bounds_check },
+            .{
+                .bounds_check = parsed.bounds_check,
+                .time_report = parsed.time_report,
+            },
         ) catch |err| {
             failPipeline(parsed.input_path, err);
         };
@@ -126,6 +138,7 @@ const ParsedArgs = struct {
     output_path: ?[]const u8,
     emit: Col6Forge.EmitKind,
     bounds_check: bool,
+    time_report: bool,
     show_help: bool,
 };
 
@@ -150,6 +163,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
     var output_path: ?[]const u8 = null;
     var emit: Col6Forge.EmitKind = .llvm;
     var bounds_check = false;
+    var time_report = false;
     var show_help = false;
 
     var i: usize = 1;
@@ -165,6 +179,10 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
         }
         if (std.mem.eql(u8, arg, "-fbounds-check")) {
             bounds_check = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-ftime-report") or std.mem.eql(u8, arg, "--time-report")) {
+            time_report = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "-o")) {
@@ -194,6 +212,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
             .output_path = output_path,
             .emit = emit,
             .bounds_check = bounds_check,
+            .time_report = time_report,
             .show_help = true,
         } };
     }
@@ -204,6 +223,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
         .output_path = output_path,
         .emit = emit,
         .bounds_check = bounds_check,
+        .time_report = time_report,
         .show_help = false,
     } };
 }
@@ -252,6 +272,7 @@ fn printUsage(file: std.fs.File) !void {
         \\Options:
         \\  -emit-llvm    Emit LLVM IR (default)
         \\  -fbounds-check  Enable runtime array bounds checking
+        \\  -ftime-report, --time-report  Print parse/sema/codegen timing report to stderr
         \\  -o <path>     Write output to file
         \\  -h, --help    Show this help
         \\
@@ -285,6 +306,7 @@ test "args parsing" {
     try testing.expectEqualStrings("out.ll", help.output_path.?);
     try testing.expectEqual(Col6Forge.EmitKind.llvm, help.emit);
     try testing.expect(!help.bounds_check);
+    try testing.expect(!help.time_report);
 
     const parsed = parseArgs(allocator, &[_][]const u8{ "col6forge", "-emit-llvm", "input.f" }).success;
     try testing.expect(!parsed.show_help);
@@ -292,7 +314,11 @@ test "args parsing" {
     try testing.expect(parsed.output_path == null);
     try testing.expectEqual(Col6Forge.EmitKind.llvm, parsed.emit);
     try testing.expect(!parsed.bounds_check);
+    try testing.expect(!parsed.time_report);
 
     const parsed_bounds = parseArgs(allocator, &[_][]const u8{ "col6forge", "-fbounds-check", "input.f" }).success;
     try testing.expect(parsed_bounds.bounds_check);
+
+    const parsed_timing = parseArgs(allocator, &[_][]const u8{ "col6forge", "-ftime-report", "input.f" }).success;
+    try testing.expect(parsed_timing.time_report);
 }

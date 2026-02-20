@@ -12,6 +12,7 @@ pub const EmitKind = enum {
 
 pub const PipelineOptions = struct {
     bounds_check: bool = false,
+    time_report: bool = false,
 };
 
 pub const PipelineResult = struct {
@@ -34,6 +35,60 @@ const DiagStorage = struct {
 threadlocal var diag_storage: DiagStorage = .{};
 threadlocal var has_diag: bool = false;
 
+const PipelineProfileMode = enum {
+    buffer,
+    writer,
+};
+
+const PipelineProfile = struct {
+    enabled: bool,
+    input_path: []const u8,
+    mode: PipelineProfileMode,
+    failed_stage: ?[]const u8 = null,
+    read_ns: u64 = 0,
+    normalize_ns: u64 = 0,
+    parse_ns: u64 = 0,
+    semantic_ns: u64 = 0,
+    codegen_ns: u64 = 0,
+    total_ns: u64 = 0,
+
+    fn markFailure(self: *PipelineProfile, stage: []const u8) void {
+        if (!self.enabled or self.failed_stage != null) return;
+        self.failed_stage = stage;
+    }
+
+    fn emit(self: *const PipelineProfile) void {
+        if (!self.enabled) return;
+
+        var stderr = std.fs.File.stderr();
+        var buffer: [768]u8 = undefined;
+        var writer = stderr.writer(&buffer);
+        const mode_text = switch (self.mode) {
+            .buffer => "buffer",
+            .writer => "writer",
+        };
+        const status_text = if (self.failed_stage == null) "ok" else "error";
+        const failed_stage = self.failed_stage orelse "-";
+
+        writer.interface.print(
+            "profile: file={s} mode={s} status={s} fail_stage={s} total_ms={d:.3} read_ms={d:.3} normalize_ms={d:.3} parse_ms={d:.3} sema_ms={d:.3} codegen_ms={d:.3}\n",
+            .{
+                self.input_path,
+                mode_text,
+                status_text,
+                failed_stage,
+                nsToMs(self.total_ns),
+                nsToMs(self.read_ns),
+                nsToMs(self.normalize_ns),
+                nsToMs(self.parse_ns),
+                nsToMs(self.semantic_ns),
+                nsToMs(self.codegen_ns),
+            },
+        ) catch return;
+        writer.interface.flush() catch {};
+    }
+};
+
 pub fn runPipeline(allocator: std.mem.Allocator, input_path: []const u8, emit: EmitKind) !PipelineResult {
     return runPipelineWithOptions(allocator, input_path, emit, .{});
 }
@@ -46,24 +101,43 @@ pub fn runPipelineWithOptions(
 ) !PipelineResult {
     _ = emit;
     clearLastDiagnostic();
+    var profile = PipelineProfile{
+        .enabled = options.time_report,
+        .input_path = input_path,
+        .mode = .buffer,
+    };
+    const total_start = nowNs();
+    defer {
+        profile.total_ns = elapsedNs(total_start);
+        profile.emit();
+    }
 
     const max_size = 64 * 1024 * 1024;
+    const read_start = nowNs();
     const contents = std.fs.cwd().readFileAlloc(allocator, input_path, max_size) catch |err| {
+        profile.read_ns = elapsedNs(read_start);
+        profile.markFailure("read");
         if (err == error.FileNotFound) {
             setLastDiagnostic(input_path, 1, 1, "CF0001", "input file not found", "");
         }
         return err;
     };
+    profile.read_ns = elapsedNs(read_start);
     defer allocator.free(contents);
 
     const form = detectSourceForm(input_path);
+    const normalize_start = nowNs();
     const logical_lines = source_form.normalize(form, allocator, contents) catch |err| {
+        profile.normalize_ns = elapsedNs(normalize_start);
+        profile.markFailure("normalize");
         setDefaultDiagnostic(input_path, contents, "CF0002", "failed to normalize source form", err);
         return err;
     };
+    profile.normalize_ns = elapsedNs(normalize_start);
     defer source_form.freeLogicalLines(form, allocator, logical_lines);
 
-    const output = emitLlvmModule(allocator, input_path, contents, logical_lines, options) catch |err| {
+    const output = emitLlvmModule(allocator, input_path, contents, logical_lines, options, &profile) catch |err| {
+        profile.markFailure("pipeline");
         return err;
     };
     return .{ .output = output };
@@ -82,24 +156,45 @@ pub fn runPipelineToWriterWithOptions(
 ) !void {
     _ = emit;
     clearLastDiagnostic();
+    var profile = PipelineProfile{
+        .enabled = options.time_report,
+        .input_path = input_path,
+        .mode = .writer,
+    };
+    const total_start = nowNs();
+    defer {
+        profile.total_ns = elapsedNs(total_start);
+        profile.emit();
+    }
 
     const max_size = 64 * 1024 * 1024;
+    const read_start = nowNs();
     const contents = std.fs.cwd().readFileAlloc(allocator, input_path, max_size) catch |err| {
+        profile.read_ns = elapsedNs(read_start);
+        profile.markFailure("read");
         if (err == error.FileNotFound) {
             setLastDiagnostic(input_path, 1, 1, "CF0001", "input file not found", "");
         }
         return err;
     };
+    profile.read_ns = elapsedNs(read_start);
     defer allocator.free(contents);
 
     const form = detectSourceForm(input_path);
+    const normalize_start = nowNs();
     const logical_lines = source_form.normalize(form, allocator, contents) catch |err| {
+        profile.normalize_ns = elapsedNs(normalize_start);
+        profile.markFailure("normalize");
         setDefaultDiagnostic(input_path, contents, "CF0002", "failed to normalize source form", err);
         return err;
     };
+    profile.normalize_ns = elapsedNs(normalize_start);
     defer source_form.freeLogicalLines(form, allocator, logical_lines);
 
-    try emitLlvmModuleToWriter(allocator, input_path, contents, logical_lines, writer, options);
+    emitLlvmModuleToWriter(allocator, input_path, contents, logical_lines, writer, options, &profile) catch |err| {
+        profile.markFailure("pipeline");
+        return err;
+    };
 }
 
 pub fn takeLastDiagnostic() ?diag.Diagnostic {
@@ -161,39 +256,68 @@ fn emitLlvmModule(
     contents: []const u8,
     logical_lines: []logical_line.LogicalLine,
     options: PipelineOptions,
+    profile: ?*PipelineProfile,
 ) ![]const u8 {
     if (logical_lines.len == 0) {
-        return codegen.emitModuleWithOptions(
+        const codegen_start = nowNs();
+        const output = codegen.emitModuleWithOptions(
             allocator,
             .{ .units = &.{} },
             .{ .units = &.{} },
             input_path,
             .{ .bounds_check = options.bounds_check },
         ) catch |err| {
+            if (profile) |p| {
+                p.codegen_ns = elapsedNs(codegen_start);
+                p.markFailure("codegen");
+            }
             setCodegenDiagnostic(input_path, contents, err);
             return err;
         };
+        if (profile) |p| p.codegen_ns = elapsedNs(codegen_start);
+        return output;
     }
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
+    const parse_start = nowNs();
     const program = parser.parseProgram(arena.allocator(), logical_lines) catch |err| {
+        if (profile) |p| {
+            p.parse_ns = elapsedNs(parse_start);
+            p.markFailure("parse");
+        }
         setParseDiagnostic(input_path, contents, logical_lines, err);
         return err;
     };
+    if (profile) |p| p.parse_ns = elapsedNs(parse_start);
+
+    const semantic_start = nowNs();
     const sem = semantic.analyzeProgram(arena.allocator(), program) catch |err| {
+        if (profile) |p| {
+            p.semantic_ns = elapsedNs(semantic_start);
+            p.markFailure("semantic");
+        }
         setSemanticDiagnostic(input_path, contents, err);
         return err;
     };
-    return codegen.emitModuleWithOptions(
+    if (profile) |p| p.semantic_ns = elapsedNs(semantic_start);
+
+    const codegen_start = nowNs();
+    const output = codegen.emitModuleWithOptions(
         allocator,
         program,
         sem,
         input_path,
         .{ .bounds_check = options.bounds_check },
     ) catch |err| {
+        if (profile) |p| {
+            p.codegen_ns = elapsedNs(codegen_start);
+            p.markFailure("codegen");
+        }
         setCodegenDiagnostic(input_path, contents, err);
         return err;
     };
+    if (profile) |p| p.codegen_ns = elapsedNs(codegen_start);
+    return output;
 }
 
 fn emitLlvmModuleToWriter(
@@ -203,9 +327,11 @@ fn emitLlvmModuleToWriter(
     logical_lines: []logical_line.LogicalLine,
     writer: anytype,
     options: PipelineOptions,
+    profile: ?*PipelineProfile,
 ) !void {
     if (logical_lines.len == 0) {
-        return codegen.emitModuleToWriterWithOptions(
+        const codegen_start = nowNs();
+        codegen.emitModuleToWriterWithOptions(
             writer,
             allocator,
             .{ .units = &.{} },
@@ -213,21 +339,42 @@ fn emitLlvmModuleToWriter(
             input_path,
             .{ .bounds_check = options.bounds_check },
         ) catch |err| {
+            if (profile) |p| {
+                p.codegen_ns = elapsedNs(codegen_start);
+                p.markFailure("codegen");
+            }
             setCodegenDiagnostic(input_path, contents, err);
             return err;
         };
+        if (profile) |p| p.codegen_ns = elapsedNs(codegen_start);
+        return;
     }
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
+    const parse_start = nowNs();
     const program = parser.parseProgram(arena.allocator(), logical_lines) catch |err| {
+        if (profile) |p| {
+            p.parse_ns = elapsedNs(parse_start);
+            p.markFailure("parse");
+        }
         setParseDiagnostic(input_path, contents, logical_lines, err);
         return err;
     };
+    if (profile) |p| p.parse_ns = elapsedNs(parse_start);
+
+    const semantic_start = nowNs();
     const sem = semantic.analyzeProgram(arena.allocator(), program) catch |err| {
+        if (profile) |p| {
+            p.semantic_ns = elapsedNs(semantic_start);
+            p.markFailure("semantic");
+        }
         setSemanticDiagnostic(input_path, contents, err);
         return err;
     };
-    return codegen.emitModuleToWriterWithOptions(
+    if (profile) |p| p.semantic_ns = elapsedNs(semantic_start);
+
+    const codegen_start = nowNs();
+    codegen.emitModuleToWriterWithOptions(
         writer,
         allocator,
         program,
@@ -235,9 +382,29 @@ fn emitLlvmModuleToWriter(
         input_path,
         .{ .bounds_check = options.bounds_check },
     ) catch |err| {
+        if (profile) |p| {
+            p.codegen_ns = elapsedNs(codegen_start);
+            p.markFailure("codegen");
+        }
         setCodegenDiagnostic(input_path, contents, err);
         return err;
     };
+    if (profile) |p| p.codegen_ns = elapsedNs(codegen_start);
+    return;
+}
+
+fn nowNs() i128 {
+    return std.time.nanoTimestamp();
+}
+
+fn elapsedNs(start_ns: i128) u64 {
+    const end_ns = std.time.nanoTimestamp();
+    if (end_ns <= start_ns) return 0;
+    return @intCast(end_ns - start_ns);
+}
+
+fn nsToMs(ns: u64) f64 {
+    return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
 }
 
 fn setParseDiagnostic(

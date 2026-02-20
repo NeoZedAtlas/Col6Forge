@@ -72,11 +72,11 @@ pub fn normalizeFixedForm(allocator: std.mem.Allocator, contents: []const u8) ![
         }
 
         if (trimmed_code.len > 0) {
-            try buffer.appendSlice(code);
+            try buffer.appendSlice(trimmed_code);
             try segments.append(.{
                 .line = line_no,
                 .column = 7,
-                .length = code.len,
+                .length = trimmed_code.len,
             });
         }
     }
