@@ -305,7 +305,7 @@ fn emitDynamicImpliedDoListWrite(
 
     const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return false;
     const step_val = if (implied.step) |step_expr|
-        (try evalConstIntSem(ctx.sem, step_expr)) orelse io_utils.intLiteralValue(step_expr) orelse return false
+        (try evalConstIntSem(ctx, step_expr)) orelse io_utils.intLiteralValue(step_expr) orelse return false
     else
         1;
     if (step_val != 1) return false;
@@ -362,11 +362,11 @@ fn emitDynamicImpliedDoListWrite(
 }
 
 fn impliedBoundsStaticSmall(ctx: *Context, implied: ast.ImpliedDo) bool {
-    const start_const = evalConstIntSem(ctx.sem, implied.start) catch null;
-    const end_const = evalConstIntSem(ctx.sem, implied.end) catch null;
+    const start_const = evalConstIntSem(ctx, implied.start) catch null;
+    const end_const = evalConstIntSem(ctx, implied.end) catch null;
     if (start_const == null or end_const == null) return false;
     const step_const: i64 = if (implied.step) |step_expr|
-        (evalConstIntSem(ctx.sem, step_expr) catch null) orelse return false
+        (evalConstIntSem(ctx, step_expr) catch null) orelse return false
     else
         1;
     if (step_const == 0) return false;
@@ -446,7 +446,7 @@ fn emitDynamicImpliedDoListRead(
     const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return null;
 
     const step_val = if (implied.step) |step_expr|
-        (try evalConstIntSem(ctx.sem, step_expr)) orelse io_utils.intLiteralValue(step_expr) orelse return null
+        (try evalConstIntSem(ctx, step_expr)) orelse io_utils.intLiteralValue(step_expr) orelse return null
     else
         1;
     if (step_val != 1) return null;

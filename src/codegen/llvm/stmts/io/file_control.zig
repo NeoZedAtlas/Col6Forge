@@ -55,12 +55,12 @@ pub fn emitOpen(ctx: *Context, builder: anytype, open: ast.OpenStmt) EmitError!v
 
         // Track constant RECL by unit number (when constant) and by unit variable
         // name (when the unit is an identifier).
-        if (try evalConstIntSem(ctx.sem, recl_expr)) |recl_const| {
+        if (try evalConstIntSem(ctx, recl_expr)) |recl_const| {
             const recl_key: usize = @intCast(recl_const);
             if (open.unit.* == .identifier) {
                 try ctx.direct_recl_by_name.put(open.unit.identifier, recl_key);
             }
-            if (try evalConstIntSem(ctx.sem, open.unit)) |unit_const| {
+            if (try evalConstIntSem(ctx, open.unit)) |unit_const| {
                 const unit_key: i32 = @intCast(unit_const);
                 try ctx.direct_recl.put(unit_key, recl_key);
             }
@@ -275,4 +275,3 @@ pub fn emitEndfile(ctx: *Context, builder: anytype, endfile: ast.EndfileStmt) Em
     const endfile_name = try ctx.ensureDeclRaw("f77_endfile", .void, &.{.i32}, false);
     try builder.callTyped(null, .void, endfile_name, &.{unit_i32});
 }
-

@@ -80,7 +80,7 @@ pub fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
             if (bin.op != .concat) return null;
             const left_len = charLenForExpr(ctx, bin.left) orelse return null;
             const right_len = charLenForExpr(ctx, bin.right) orelse return null;
-            return left_len + right_len;
+            return std.math.add(usize, left_len, right_len) catch null;
         },
         .literal => |lit| switch (lit.kind) {
             .string => return utils.decodedStringLen(lit.text),
@@ -107,10 +107,13 @@ pub fn internalUnitRecordCount(ctx: *Context, expr_node: *ast.Expr) ?usize {
 fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     const sym = ctx.findSymbol(sub.name) orelse return null;
     if (sym.type_kind != .character) return null;
-    const base_len: i64 = @intCast(sym.char_len orelse 1);
+    const base_len_usize = sym.char_len orelse 1;
+    if (base_len_usize > @as(usize, @intCast(std.math.maxInt(i64)))) return null;
+    const base_len: i64 = @intCast(base_len_usize);
     const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;
     const end_val = if (sub.end) |end_expr| intLiteralValue(end_expr) orelse return null else base_len;
-    const length = end_val - start_val + 1;
+    const delta = checkedSubI64(end_val, start_val) orelse return null;
+    const length = checkedAddI64(delta, 1) orelse return null;
     if (length <= 0) return null;
     return @intCast(length);
 }
@@ -121,7 +124,7 @@ pub fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
             const value = intLiteralValue(un.expr) orelse return null;
             return switch (un.op) {
                 .plus => value,
-                .minus => -value,
+                .minus => checkedNegI64(value),
                 else => null,
             };
         },
@@ -129,10 +132,10 @@ pub fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
             const left = intLiteralValue(bin.left) orelse return null;
             const right = intLiteralValue(bin.right) orelse return null;
             return switch (bin.op) {
-                .add => left + right,
-                .sub => left - right,
-                .mul => left * right,
-                .div => if (right == 0) null else @divTrunc(left, right),
+                .add => checkedAddI64(left, right),
+                .sub => checkedSubI64(left, right),
+                .mul => checkedMulI64(left, right),
+                .div => checkedDivTruncI64(left, right),
                 .power => if (right < 0) null else powInt(left, right),
                 else => null,
             };
@@ -140,12 +143,48 @@ pub fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
         else => null,
     };
 }
-fn powInt(base: i64, exp: i64) i64 {
+fn checkedAddI64(lhs: i64, rhs: i64) ?i64 {
+    const out = @addWithOverflow(lhs, rhs);
+    if (out[1] != 0) return null;
+    return out[0];
+}
+
+fn checkedSubI64(lhs: i64, rhs: i64) ?i64 {
+    const out = @subWithOverflow(lhs, rhs);
+    if (out[1] != 0) return null;
+    return out[0];
+}
+
+fn checkedMulI64(lhs: i64, rhs: i64) ?i64 {
+    const out = @mulWithOverflow(lhs, rhs);
+    if (out[1] != 0) return null;
+    return out[0];
+}
+
+fn checkedNegI64(value: i64) ?i64 {
+    const out = @subWithOverflow(@as(i64, 0), value);
+    if (out[1] != 0) return null;
+    return out[0];
+}
+
+fn checkedDivTruncI64(lhs: i64, rhs: i64) ?i64 {
+    if (rhs == 0) return null;
+    if (lhs == std.math.minInt(i64) and rhs == -1) return null;
+    return @divTrunc(lhs, rhs);
+}
+
+fn powInt(base: i64, exp: i64) ?i64 {
     if (exp <= 0) return 1;
     var result: i64 = 1;
-    var i: i64 = 0;
-    while (i < exp) : (i += 1) {
-        result *= base;
+    var factor = base;
+    var remaining: u64 = @intCast(exp);
+    while (remaining != 0) : (remaining >>= 1) {
+        if ((remaining & 1) != 0) {
+            result = checkedMulI64(result, factor) orelse return null;
+        }
+        if (remaining > 1) {
+            factor = checkedMulI64(factor, factor) orelse return null;
+        }
     }
     return result;
 }
@@ -168,10 +207,10 @@ pub fn countFormatDescriptors(items: []const ast.FormatItem) usize {
     }
     return count;
 }
-pub fn evalConstIntSem(sem: *const sema_mod.SemanticUnit, expr_node: *ast.Expr) EmitError!?i64 {
+pub fn evalConstIntSem(ctx: *Context, expr_node: *ast.Expr) EmitError!?i64 {
     const resolver = evaluator.ConstResolver{
-        .ctx = @ptrCast(@constCast(sem)),
-        .resolveFn = resolveConstValueSem,
+        .ctx = @ptrCast(ctx),
+        .resolveFn = resolveConstValueCtx,
     };
     const value = try evaluator.evalConst(expr_node, resolver);
     return switch (value orelse return null) {
@@ -179,12 +218,10 @@ pub fn evalConstIntSem(sem: *const sema_mod.SemanticUnit, expr_node: *ast.Expr) 
         else => null,
     };
 }
-fn resolveConstValueSem(ctx: *anyopaque, name: []const u8) ?sema_mod.ConstValue {
-    const sem: *const sema_mod.SemanticUnit = @ptrCast(@alignCast(ctx));
-    for (sem.symbols) |sym| {
-        if (std.mem.eql(u8, sym.name, name)) return sym.const_value;
-    }
-    return null;
+fn resolveConstValueCtx(ctx_any: *anyopaque, name: []const u8) ?sema_mod.ConstValue {
+    const ctx: *Context = @ptrCast(@alignCast(ctx_any));
+    const sym = ctx.findSymbol(name) orelse return null;
+    return sym.const_value;
 }
 pub fn findReversionStart(items: []const ast.FormatItem) usize {
     var idx: ?usize = null;
@@ -269,4 +306,3 @@ pub fn appendIntFormat(buffer: *std.array_list.Managed(u8), width: usize, sign_p
         try buffer.writer().print("%{s}{d}d", .{ sign_flag, width });
     }
 }
-

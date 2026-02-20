@@ -258,7 +258,7 @@ fn impliedDoIterationCount(start_val: i64, end_val: i64, step_val: i64) EmitErro
     return count;
 }
 fn evalImpliedDoBound(ctx: *Context, node: *ast.Expr) EmitError!?i64 {
-    if (try evalConstIntSem(ctx.sem, node)) |value| return value;
+    if (try evalConstIntSem(ctx, node)) |value| return value;
     return intLiteralValue(node);
 }
 fn inferImpliedDoEndFromItems(ctx: *Context, implied: ast.ImpliedDo) ?i64 {

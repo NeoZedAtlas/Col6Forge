@@ -303,7 +303,7 @@ fn resolveFormatItemsForDirect(ctx: *Context, format: ast.FormatSpec) EmitError!
     }
 }
 fn lookupDirectRecl(ctx: *Context, unit_expr: *ast.Expr) EmitError!?usize {
-    if (try evalConstIntSem(ctx.sem, unit_expr)) |unit_const| {
+    if (try evalConstIntSem(ctx, unit_expr)) |unit_const| {
         const unit_key: i32 = @intCast(unit_const);
         if (ctx.direct_recl.get(unit_key)) |recl| return recl;
     }
