@@ -13,7 +13,7 @@ const RuntimeBackend = enum {
     zig,
 };
 
-const CACHE_SCHEMA_VERSION: u32 = 1;
+const CACHE_SCHEMA_VERSION: u32 = 2;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -56,6 +56,8 @@ pub fn main() !void {
     defer allocator.free(cache_dir);
     const runtime_cache_key = try computeRuntimeCacheKey(allocator, root_path);
     defer allocator.free(runtime_cache_key);
+    const compiler_cache_key = try computeCompilerCacheKey(allocator, root_path);
+    defer allocator.free(compiler_cache_key);
 
     var gfortran_cmd = options.gfortran_path;
     if (std.mem.eql(u8, gfortran_cmd, defaultGfortran())) {
@@ -89,6 +91,7 @@ pub fn main() !void {
                 root_path,
                 cache_dir,
                 runtime_cache_key,
+                compiler_cache_key,
                 gfortran_cmd,
                 case,
                 options,
@@ -125,6 +128,7 @@ pub fn main() !void {
             root_path,
             cache_dir,
             runtime_cache_key,
+            compiler_cache_key,
             gfortran_cmd,
             case,
             options,
@@ -500,17 +504,58 @@ fn copyFileAbsolute(src_path: []const u8, dst_path: []const u8) !void {
 fn buildVerifyCachePath(
     allocator: std.mem.Allocator,
     cache_dir: []const u8,
+    compiler_cache_key: []const u8,
     source_hash: u64,
     emit: Col6Forge.EmitKind,
     ext: []const u8,
 ) ![]const u8 {
     const name = try std.fmt.allocPrint(
         allocator,
-        "v{d}_{s}_{x:0>16}{s}",
-        .{ CACHE_SCHEMA_VERSION, emitCacheTag(emit), source_hash, ext },
+        "v{d}_{s}_{s}_{x:0>16}{s}",
+        .{ CACHE_SCHEMA_VERSION, emitCacheTag(emit), compiler_cache_key, source_hash, ext },
     );
     defer allocator.free(name);
     return std.fs.path.join(allocator, &.{ cache_dir, name });
+}
+
+fn computeCompilerCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
+    const src_dir = try std.fs.path.join(allocator, &.{ root_path, "src" });
+    defer allocator.free(src_dir);
+
+    var dir = try std.fs.openDirAbsolute(src_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var files: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (files.items) |p| allocator.free(p);
+        files.deinit(allocator);
+    }
+
+    while (try walker.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.ascii.endsWithIgnoreCase(entry.path, ".zig")) continue;
+        if (std.mem.startsWith(u8, entry.path, "runtime/") or std.mem.startsWith(u8, entry.path, "runtime\\")) continue;
+        try files.append(allocator, try allocator.dupe(u8, entry.path));
+    }
+    std.sort.heap([]const u8, files.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lessThan);
+
+    var hasher = std.hash.XxHash64.init(0);
+    for (files.items) |rel_path| {
+        hasher.update(rel_path);
+        const abs_path = try std.fs.path.join(allocator, &.{ src_dir, rel_path });
+        defer allocator.free(abs_path);
+        var digest = try hashFileXx64(abs_path);
+        hasher.update(std.mem.asBytes(&digest));
+    }
+    const final = hasher.final();
+    return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
 }
 
 fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
@@ -957,6 +1002,7 @@ fn processCase(
     root_path: []const u8,
     cache_dir: []const u8,
     runtime_cache_key: []const u8,
+    compiler_cache_key: []const u8,
     gfortran_cmd: []const u8,
     case: TestCase,
     options: Options,
@@ -1061,12 +1107,12 @@ fn processCase(
 
     const source_hash = if (options.incremental) try hashFileXx64(abs_input_path) else 0;
     const ll_cache_path = if (options.incremental)
-        try buildVerifyCachePath(allocator, cache_dir, source_hash, options.emit, ".ll")
+        try buildVerifyCachePath(allocator, cache_dir, compiler_cache_key, source_hash, options.emit, ".ll")
     else
         null;
     defer if (ll_cache_path) |p| allocator.free(p);
     const obj_cache_path = if (options.incremental)
-        try buildVerifyCachePath(allocator, cache_dir, source_hash, options.emit, ".o")
+        try buildVerifyCachePath(allocator, cache_dir, compiler_cache_key, source_hash, options.emit, ".o")
     else
         null;
     defer if (obj_cache_path) |p| allocator.free(p);
@@ -1225,6 +1271,7 @@ fn runCaseParallel(
     root_path: []const u8,
     cache_dir: []const u8,
     runtime_cache_key: []const u8,
+    compiler_cache_key: []const u8,
     gfortran_cmd: []const u8,
     case: TestCase,
     options: Options,
@@ -1239,6 +1286,7 @@ fn runCaseParallel(
         root_path,
         cache_dir,
         runtime_cache_key,
+        compiler_cache_key,
         gfortran_cmd,
         case,
         options,
