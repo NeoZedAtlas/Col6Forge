@@ -237,7 +237,7 @@ pub const Context = struct {
     }
 
     pub fn nextLabel(self: *Context, prefix: []const u8) ![]const u8 {
-        const name = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ prefix, self.label_counter });
+        const name = try self.allocIndexedName(prefix, self.label_counter, false);
         self.label_counter += 1;
         return name;
     }
@@ -310,20 +310,21 @@ pub const Context = struct {
     }
 
     pub fn nextTemp(self: *Context) ![]const u8 {
-        const name = try utils.formatTempName(self.allocator, "t", self.temp_index);
+        const name = try self.allocIndexedName("t", self.temp_index, true);
         self.temp_index += 1;
         return name;
     }
 
     pub fn nextStringName(self: *Context) ![]const u8 {
-        const name = try std.fmt.allocPrint(self.allocator, "str{d}", .{self.string_pool.counter});
-        return name;
+        return self.allocIndexedName("str", self.string_pool.counter, false);
     }
 
     pub fn intLiteral(self: *Context, value: i64) ![]const u8 {
         if (self.int_literal_cache.get(value)) |cached| return cached;
         const arena_alloc = self.string_pool.arena.allocator();
-        const text = try std.fmt.allocPrint(arena_alloc, "{d}", .{value});
+        var buf: [32]u8 = undefined;
+        const text_buf = try std.fmt.bufPrint(&buf, "{d}", .{value});
+        const text = try arena_alloc.dupe(u8, text_buf);
         try self.int_literal_cache.put(value, text);
         return text;
     }
@@ -339,7 +340,36 @@ pub const Context = struct {
     pub fn clearCurrentStmt(self: *Context) void {
         self.current_stmt = null;
     }
+
+    fn allocIndexedName(self: *Context, prefix: []const u8, index: usize, with_percent: bool) ![]const u8 {
+        var digits_buf: [32]u8 = undefined;
+        const digits = writeUnsignedDecimal(&digits_buf, index);
+        const prefix_extra: usize = if (with_percent) 1 else 0;
+        const total_len = prefix_extra + prefix.len + digits.len;
+        const out = try self.allocator.alloc(u8, total_len);
+        var cursor: usize = 0;
+        if (with_percent) {
+            out[cursor] = '%';
+            cursor += 1;
+        }
+        @memcpy(out[cursor .. cursor + prefix.len], prefix);
+        cursor += prefix.len;
+        @memcpy(out[cursor .. cursor + digits.len], digits);
+        return out;
+    }
 };
+
+fn writeUnsignedDecimal(buffer: []u8, value: usize) []const u8 {
+    var v = value;
+    var cursor = buffer.len;
+    while (true) {
+        cursor -= 1;
+        buffer[cursor] = '0' + @as(u8, @intCast(v % 10));
+        v /= 10;
+        if (v == 0) break;
+    }
+    return buffer[cursor..];
+}
 
 pub fn fortranAbiReturnType(ret_ty: IRType) IRType {
     return switch (ret_ty) {

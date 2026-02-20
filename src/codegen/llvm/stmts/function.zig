@@ -157,16 +157,18 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
     }
 
-    try installCommonLocals(ctx, builder);
-    var orig_locals = std.StringHashMap(ValueRef).init(ctx.allocator);
-    defer orig_locals.deinit();
-    {
+    if (unitHasCommonDecls(ctx.unit.decls)) {
+        try installCommonLocals(ctx, builder);
+    }
+    if (unitHasEquivalenceDecls(ctx.unit.decls)) {
+        var orig_locals = std.StringHashMap(ValueRef).init(ctx.allocator);
+        defer orig_locals.deinit();
         var it = ctx.locals.iterator();
         while (it.next()) |entry| {
             try orig_locals.put(entry.key_ptr.*, entry.value_ptr.*);
         }
+        try applyEquivalences(ctx, builder, &orig_locals);
     }
-    try applyEquivalences(ctx, builder, &orig_locals);
 
     const block_names = try ctx.buildBlockNames();
     defer {
@@ -224,6 +226,20 @@ fn buildSaveInfo(ctx: *Context) !SaveInfo {
 fn isSaved(save_info: *const SaveInfo, name: []const u8) bool {
     if (save_info.save_all) return true;
     return save_info.names.contains(name);
+}
+
+fn unitHasCommonDecls(decls: []const ast.Decl) bool {
+    for (decls) |decl| {
+        if (decl == .common) return true;
+    }
+    return false;
+}
+
+fn unitHasEquivalenceDecls(decls: []const ast.Decl) bool {
+    for (decls) |decl| {
+        if (decl == .equivalence) return true;
+    }
+    return false;
 }
 
 const SizeAlign = struct {

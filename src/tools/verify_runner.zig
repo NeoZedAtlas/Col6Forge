@@ -196,6 +196,14 @@ const PipelineProfileCollector = struct {
     parse: StageSamples = .{},
     semantic: StageSamples = .{},
     codegen: StageSamples = .{},
+    codegen_prelude: StageSamples = .{},
+    codegen_common_layouts: StageSamples = .{},
+    codegen_format_maps: StageSamples = .{},
+    codegen_unit_emit: StageSamples = .{},
+    codegen_intrinsic_wrappers: StageSamples = .{},
+    codegen_string_globals: StageSamples = .{},
+    codegen_entry_main: StageSamples = .{},
+    codegen_decls: StageSamples = .{},
     total: StageSamples = .{},
 
     fn init(enabled: bool) PipelineProfileCollector {
@@ -208,6 +216,14 @@ const PipelineProfileCollector = struct {
         self.parse.deinit(allocator);
         self.semantic.deinit(allocator);
         self.codegen.deinit(allocator);
+        self.codegen_prelude.deinit(allocator);
+        self.codegen_common_layouts.deinit(allocator);
+        self.codegen_format_maps.deinit(allocator);
+        self.codegen_unit_emit.deinit(allocator);
+        self.codegen_intrinsic_wrappers.deinit(allocator);
+        self.codegen_string_globals.deinit(allocator);
+        self.codegen_entry_main.deinit(allocator);
+        self.codegen_decls.deinit(allocator);
         self.total.deinit(allocator);
     }
 
@@ -223,6 +239,14 @@ const PipelineProfileCollector = struct {
         try self.parse.append(allocator, sample.parse_ns);
         try self.semantic.append(allocator, sample.semantic_ns);
         try self.codegen.append(allocator, sample.codegen_ns);
+        try self.codegen_prelude.append(allocator, sample.codegen_prelude_ns);
+        try self.codegen_common_layouts.append(allocator, sample.codegen_common_layouts_ns);
+        try self.codegen_format_maps.append(allocator, sample.codegen_format_maps_ns);
+        try self.codegen_unit_emit.append(allocator, sample.codegen_unit_emit_ns);
+        try self.codegen_intrinsic_wrappers.append(allocator, sample.codegen_intrinsic_wrappers_ns);
+        try self.codegen_string_globals.append(allocator, sample.codegen_string_globals_ns);
+        try self.codegen_entry_main.append(allocator, sample.codegen_entry_main_ns);
+        try self.codegen_decls.append(allocator, sample.codegen_decls_ns);
         try self.total.append(allocator, sample.total_ns);
     }
 
@@ -236,6 +260,14 @@ const PipelineProfileCollector = struct {
         self.parse.sort();
         self.semantic.sort();
         self.codegen.sort();
+        self.codegen_prelude.sort();
+        self.codegen_common_layouts.sort();
+        self.codegen_format_maps.sort();
+        self.codegen_unit_emit.sort();
+        self.codegen_intrinsic_wrappers.sort();
+        self.codegen_string_globals.sort();
+        self.codegen_entry_main.sort();
+        self.codegen_decls.sort();
         self.total.sort();
 
         log_state.stdout(
@@ -247,6 +279,14 @@ const PipelineProfileCollector = struct {
         printStageLine(log_state, "parse", self.parse.values.items);
         printStageLine(log_state, "semantic", self.semantic.values.items);
         printStageLine(log_state, "codegen", self.codegen.values.items);
+        printStageLine(log_state, "  cg.prelude", self.codegen_prelude.values.items);
+        printStageLine(log_state, "  cg.common", self.codegen_common_layouts.values.items);
+        printStageLine(log_state, "  cg.format", self.codegen_format_maps.values.items);
+        printStageLine(log_state, "  cg.emit", self.codegen_unit_emit.values.items);
+        printStageLine(log_state, "  cg.wrap", self.codegen_intrinsic_wrappers.values.items);
+        printStageLine(log_state, "  cg.strings", self.codegen_string_globals.values.items);
+        printStageLine(log_state, "  cg.main", self.codegen_entry_main.values.items);
+        printStageLine(log_state, "  cg.decls", self.codegen_decls.values.items);
         printStageLine(log_state, "total", self.total.values.items);
     }
 };

@@ -5,6 +5,8 @@ pub const diagnostic = @import("diagnostic.zig");
 
 pub const IRType = ir.IRType;
 pub const CodegenOptions = llvm.CodegenOptions;
+pub const CodegenSubStage = llvm.CodegenSubStage;
+pub const CodegenBreakdownSample = llvm.CodegenBreakdownSample;
 
 pub fn emitModule(allocator: @import("std").mem.Allocator, program: input.Program, sem: input.sema.SemanticProgram, source_name: []const u8) ![]const u8 {
     diagnostic.clear();
@@ -41,4 +43,8 @@ pub fn emitModuleToWriterWithOptions(
 
 pub fn takeDiagnostic() ?diagnostic.CodegenDiagnostic {
     return diagnostic.take();
+}
+
+pub fn takeLastBreakdownSample() ?CodegenBreakdownSample {
+    return llvm.takeLastBreakdownSample();
 }

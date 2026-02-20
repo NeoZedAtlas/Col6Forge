@@ -62,11 +62,16 @@ pub const ExpandedWriteValues = struct {
 
 pub const ExpandedIoArgs = struct {
     items: []*ast.Expr,
-    clone_arena: std.heap.ArenaAllocator,
+    clone_arena: ?std.heap.ArenaAllocator = null,
+    owns_items: bool = false,
 
     pub fn deinit(self: *ExpandedIoArgs, allocator: std.mem.Allocator) void {
-        allocator.free(self.items);
-        self.clone_arena.deinit();
+        if (self.owns_items) {
+            allocator.free(self.items);
+        }
+        if (self.clone_arena) |*arena| {
+            arena.deinit();
+        }
     }
 };
 
@@ -171,6 +176,21 @@ pub fn applyComplexFixups(ctx: *Context, builder: anytype, expanded: *ExpandedRe
     }
 }
 pub fn expandIoArgs(ctx: *Context, args: []*ast.Expr) EmitError!ExpandedIoArgs {
+    var has_implied_do = false;
+    for (args) |arg| {
+        if (arg.* == .implied_do) {
+            has_implied_do = true;
+            break;
+        }
+    }
+    if (!has_implied_do) {
+        return .{
+            .items = args,
+            .clone_arena = null,
+            .owns_items = false,
+        };
+    }
+
     var clone_arena = std.heap.ArenaAllocator.init(ctx.allocator);
     errdefer clone_arena.deinit();
 
@@ -185,6 +205,7 @@ pub fn expandIoArgs(ctx: *Context, args: []*ast.Expr) EmitError!ExpandedIoArgs {
     return .{
         .items = try expanded.toOwnedSlice(),
         .clone_arena = clone_arena,
+        .owns_items = true,
     };
 }
 fn appendExpandedIoArg(

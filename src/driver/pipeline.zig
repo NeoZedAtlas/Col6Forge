@@ -53,6 +53,14 @@ pub const PipelineProfileSample = struct {
     parse_ns: u64 = 0,
     semantic_ns: u64 = 0,
     codegen_ns: u64 = 0,
+    codegen_prelude_ns: u64 = 0,
+    codegen_common_layouts_ns: u64 = 0,
+    codegen_format_maps_ns: u64 = 0,
+    codegen_unit_emit_ns: u64 = 0,
+    codegen_intrinsic_wrappers_ns: u64 = 0,
+    codegen_string_globals_ns: u64 = 0,
+    codegen_entry_main_ns: u64 = 0,
+    codegen_decls_ns: u64 = 0,
     total_ns: u64 = 0,
     failed_stage: PipelineStage = .none,
 };
@@ -76,6 +84,14 @@ const PipelineProfile = struct {
     parse_ns: u64 = 0,
     semantic_ns: u64 = 0,
     codegen_ns: u64 = 0,
+    codegen_prelude_ns: u64 = 0,
+    codegen_common_layouts_ns: u64 = 0,
+    codegen_format_maps_ns: u64 = 0,
+    codegen_unit_emit_ns: u64 = 0,
+    codegen_intrinsic_wrappers_ns: u64 = 0,
+    codegen_string_globals_ns: u64 = 0,
+    codegen_entry_main_ns: u64 = 0,
+    codegen_decls_ns: u64 = 0,
     total_ns: u64 = 0,
 
     fn markFailure(self: *PipelineProfile, stage: PipelineStage) void {
@@ -90,6 +106,14 @@ const PipelineProfile = struct {
             .parse_ns = self.parse_ns,
             .semantic_ns = self.semantic_ns,
             .codegen_ns = self.codegen_ns,
+            .codegen_prelude_ns = self.codegen_prelude_ns,
+            .codegen_common_layouts_ns = self.codegen_common_layouts_ns,
+            .codegen_format_maps_ns = self.codegen_format_maps_ns,
+            .codegen_unit_emit_ns = self.codegen_unit_emit_ns,
+            .codegen_intrinsic_wrappers_ns = self.codegen_intrinsic_wrappers_ns,
+            .codegen_string_globals_ns = self.codegen_string_globals_ns,
+            .codegen_entry_main_ns = self.codegen_entry_main_ns,
+            .codegen_decls_ns = self.codegen_decls_ns,
             .total_ns = self.total_ns,
             .failed_stage = self.failed_stage,
         };
@@ -126,6 +150,18 @@ const PipelineProfile = struct {
         writer.interface.flush() catch {};
     }
 };
+
+fn applyCodegenBreakdown(profile: *PipelineProfile) void {
+    const sample = codegen.takeLastBreakdownSample() orelse return;
+    profile.codegen_prelude_ns = sample.prelude_ns;
+    profile.codegen_common_layouts_ns = sample.common_layouts_ns;
+    profile.codegen_format_maps_ns = sample.format_maps_ns;
+    profile.codegen_unit_emit_ns = sample.unit_emit_ns;
+    profile.codegen_intrinsic_wrappers_ns = sample.intrinsic_wrappers_ns;
+    profile.codegen_string_globals_ns = sample.string_globals_ns;
+    profile.codegen_entry_main_ns = sample.entry_main_ns;
+    profile.codegen_decls_ns = sample.decls_ns;
+}
 
 pub fn runPipeline(allocator: std.mem.Allocator, input_path: []const u8, emit: EmitKind) !PipelineResult {
     return runPipelineWithOptions(allocator, input_path, emit, .{});
@@ -325,12 +361,16 @@ fn emitLlvmModule(
         ) catch |err| {
             if (profile) |p| {
                 p.codegen_ns = elapsedNs(codegen_start);
+                applyCodegenBreakdown(p);
                 p.markFailure(.codegen);
             }
             setCodegenDiagnostic(input_path, contents, err);
             return err;
         };
-        if (profile) |p| p.codegen_ns = elapsedNs(codegen_start);
+        if (profile) |p| {
+            p.codegen_ns = elapsedNs(codegen_start);
+            applyCodegenBreakdown(p);
+        }
         return output;
     }
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -367,12 +407,16 @@ fn emitLlvmModule(
     ) catch |err| {
         if (profile) |p| {
             p.codegen_ns = elapsedNs(codegen_start);
+            applyCodegenBreakdown(p);
             p.markFailure(.codegen);
         }
         setCodegenDiagnostic(input_path, contents, err);
         return err;
     };
-    if (profile) |p| p.codegen_ns = elapsedNs(codegen_start);
+    if (profile) |p| {
+        p.codegen_ns = elapsedNs(codegen_start);
+        applyCodegenBreakdown(p);
+    }
     return output;
 }
 
@@ -397,12 +441,16 @@ fn emitLlvmModuleToWriter(
         ) catch |err| {
             if (profile) |p| {
                 p.codegen_ns = elapsedNs(codegen_start);
+                applyCodegenBreakdown(p);
                 p.markFailure(.codegen);
             }
             setCodegenDiagnostic(input_path, contents, err);
             return err;
         };
-        if (profile) |p| p.codegen_ns = elapsedNs(codegen_start);
+        if (profile) |p| {
+            p.codegen_ns = elapsedNs(codegen_start);
+            applyCodegenBreakdown(p);
+        }
         return;
     }
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -440,12 +488,16 @@ fn emitLlvmModuleToWriter(
     ) catch |err| {
         if (profile) |p| {
             p.codegen_ns = elapsedNs(codegen_start);
+            applyCodegenBreakdown(p);
             p.markFailure(.codegen);
         }
         setCodegenDiagnostic(input_path, contents, err);
         return err;
     };
-    if (profile) |p| p.codegen_ns = elapsedNs(codegen_start);
+    if (profile) |p| {
+        p.codegen_ns = elapsedNs(codegen_start);
+        applyCodegenBreakdown(p);
+    }
     return;
 }
 

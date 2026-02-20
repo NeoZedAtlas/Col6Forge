@@ -21,6 +21,59 @@ const AssignedFormatAlias = struct {
     source_label: []const u8,
 };
 
+pub const CodegenSubStage = enum {
+    none,
+    prelude,
+    common_layouts,
+    format_maps,
+    unit_emit,
+    intrinsic_wrappers,
+    string_globals,
+    entry_main,
+    decls,
+};
+
+pub const CodegenBreakdownSample = struct {
+    prelude_ns: u64 = 0,
+    common_layouts_ns: u64 = 0,
+    format_maps_ns: u64 = 0,
+    unit_emit_ns: u64 = 0,
+    intrinsic_wrappers_ns: u64 = 0,
+    string_globals_ns: u64 = 0,
+    entry_main_ns: u64 = 0,
+    decls_ns: u64 = 0,
+    total_ns: u64 = 0,
+    failed_stage: CodegenSubStage = .none,
+};
+
+threadlocal var codegen_breakdown_storage: CodegenBreakdownSample = .{};
+threadlocal var has_codegen_breakdown: bool = false;
+
+fn clearLastBreakdownSample() void {
+    has_codegen_breakdown = false;
+    codegen_breakdown_storage = .{};
+}
+
+pub fn takeLastBreakdownSample() ?CodegenBreakdownSample {
+    if (!has_codegen_breakdown) return null;
+    has_codegen_breakdown = false;
+    return codegen_breakdown_storage;
+}
+
+fn nowNs() i128 {
+    return std.time.nanoTimestamp();
+}
+
+fn elapsedNs(start: i128) u64 {
+    const end = std.time.nanoTimestamp();
+    if (end <= start) return 0;
+    return @intCast(end - start);
+}
+
+fn markFailure(sample: *CodegenBreakdownSample, stage: CodegenSubStage) void {
+    if (sample.failed_stage == .none) sample.failed_stage = stage;
+}
+
 fn commonLayoutsCompatible(a: []const common.CommonItem, b: []const common.CommonItem) bool {
     if (a.len == 0 or b.len == 0) return true;
     const a_last = a[a.len - 1];
@@ -55,6 +108,16 @@ pub fn emitModuleToWriter(
     source_name: []const u8,
     options: CodegenOptions,
 ) !void {
+    clearLastBreakdownSample();
+    var breakdown: CodegenBreakdownSample = .{};
+    const total_start = nowNs();
+    defer {
+        breakdown.total_ns = elapsedNs(total_start);
+        codegen_breakdown_storage = breakdown;
+        has_codegen_breakdown = true;
+    }
+
+    const prelude_start = nowNs();
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const scratch = arena.allocator();
@@ -92,11 +155,14 @@ pub fn emitModuleToWriter(
             else => {},
         }
     }
+    breakdown.prelude_ns = elapsedNs(prelude_start);
 
+    const common_start = nowNs();
     var common_blocks = std.StringHashMap(common.CommonBlockInfo).init(scratch);
     defer common_blocks.deinit();
     for (program.units) |unit| {
         const sem_unit = sem_map.get(unit.name) orelse {
+            markFailure(&breakdown, .common_layouts);
             setCodegenDiagForUnit(unit, error.MissingSemanticUnit);
             return error.MissingSemanticUnit;
         };
@@ -104,6 +170,7 @@ pub fn emitModuleToWriter(
         for (layouts) |layout| {
             if (common_blocks.getPtr(layout.key)) |info| {
                 if (!commonLayoutsCompatible(info.items, layout.items)) {
+                    markFailure(&breakdown, .common_layouts);
                     setCodegenDiagForUnit(unit, error.CommonBlockMismatch);
                     return error.CommonBlockMismatch;
                 }
@@ -125,6 +192,7 @@ pub fn emitModuleToWriter(
         const info = entry.value_ptr.*;
         try builder.commonGlobal(info.global_name, info.size, info.alignment);
     }
+    breakdown.common_layouts_ns = elapsedNs(common_start);
 
     var string_pool = context.StringPool.init(scratch);
     defer string_pool.deinit();
@@ -132,14 +200,20 @@ pub fn emitModuleToWriter(
     defer intrinsic_wrappers.deinit();
 
     for (program.units) |unit| {
+        const format_start = nowNs();
         const sem_unit = sem_map.get(unit.name) orelse {
+            markFailure(&breakdown, .format_maps);
             setCodegenDiagForUnit(unit, error.MissingSemanticUnit);
             return error.MissingSemanticUnit;
         };
         var format_maps = buildFormatMaps(scratch, &builder, unit) catch |err| {
+            markFailure(&breakdown, .format_maps);
             setCodegenDiagForUnit(unit, err);
             return err;
         };
+        breakdown.format_maps_ns += elapsedNs(format_start);
+
+        const unit_emit_start = nowNs();
         var ctx = try context.Context.init(
             scratch,
             unit,
@@ -154,6 +228,7 @@ pub fn emitModuleToWriter(
         );
         defer ctx.deinit();
         stmts.emitFunction(&ctx, &builder) catch |err| {
+            markFailure(&breakdown, .unit_emit);
             if (ctx.current_stmt) |stmt| {
                 codegen_diag.setFromStmt(stmt, err);
             } else {
@@ -161,14 +236,20 @@ pub fn emitModuleToWriter(
             }
             return err;
         };
+        breakdown.unit_emit_ns += elapsedNs(unit_emit_start);
     }
 
+    const wrappers_start = nowNs();
     try emitIntrinsicWrappers(&builder, &intrinsic_wrappers);
+    breakdown.intrinsic_wrappers_ns = elapsedNs(wrappers_start);
 
+    const strings_start = nowNs();
     for (string_pool.items.items) |entry| {
         try builder.globalString(entry.name, entry.bytes);
     }
+    breakdown.string_globals_ns = elapsedNs(strings_start);
 
+    const main_start = nowNs();
     if (program_mangled) |entry_name| {
         try builder.defineStartWithRet(.i32, "main");
         try builder.defineEnd();
@@ -180,13 +261,16 @@ pub fn emitModuleToWriter(
         try builder.retValue(.i32, "0");
         try builder.functionEnd();
     }
+    breakdown.entry_main_ns = elapsedNs(main_start);
 
+    const decls_start = nowNs();
     var decl_it = decls.iterator();
     while (decl_it.next()) |entry| {
         const decl = entry.value_ptr.*;
         const name = entry.key_ptr.*;
         try builder.declare(name, decl.ret_type, decl.sig, decl.varargs);
     }
+    breakdown.decls_ns = elapsedNs(decls_start);
 
     return;
 }
@@ -281,15 +365,16 @@ fn collectFormatsAndInlineFromNode(
     switch (node) {
         .format => |fmt| {
             const format_label = label orelse return error.FormatMissingLabel;
-            if (label_map.contains(format_label)) return error.DuplicateFormatLabel;
+            const label_entry = try label_map.getOrPut(format_label);
+            if (label_entry.found_existing) return error.DuplicateFormatLabel;
             const format_bytes = try buildPrintfFormat(allocator, fmt.items);
             const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}{s}", .{ unit_mangled, format_label });
             try builder.globalString(global_name, format_bytes);
-            try label_map.put(format_label, .{
+            label_entry.value_ptr.* = .{
                 .items = fmt.items,
                 .global_name = global_name,
                 .string_len = format_bytes.len + 1,
-            });
+            };
         },
         .assignment => |assign| {
             if (assign.target.* != .identifier) return;
@@ -305,31 +390,33 @@ fn collectFormatsAndInlineFromNode(
             if (write.format != .inline_items) return;
             const items = write.format.inline_items;
             const key = @as(usize, @intFromPtr(items.ptr));
-            if (inline_map.contains(key)) return;
+            const inline_entry = try inline_map.getOrPut(key);
+            if (inline_entry.found_existing) return;
             const format_bytes = try buildPrintfFormat(allocator, items);
             const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}inline{d}", .{ unit_mangled, inline_index.* });
             inline_index.* += 1;
             try builder.globalString(global_name, format_bytes);
-            try inline_map.put(key, .{
+            inline_entry.value_ptr.* = .{
                 .items = items,
                 .global_name = global_name,
                 .string_len = format_bytes.len + 1,
-            });
+            };
         },
         .read => |read| {
             if (read.format != .inline_items) return;
             const items = read.format.inline_items;
             const key = @as(usize, @intFromPtr(items.ptr));
-            if (inline_map.contains(key)) return;
+            const inline_entry = try inline_map.getOrPut(key);
+            if (inline_entry.found_existing) return;
             const format_bytes = try buildPrintfFormat(allocator, items);
             const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}inline{d}", .{ unit_mangled, inline_index.* });
             inline_index.* += 1;
             try builder.globalString(global_name, format_bytes);
-            try inline_map.put(key, .{
+            inline_entry.value_ptr.* = .{
                 .items = items,
                 .global_name = global_name,
                 .string_len = format_bytes.len + 1,
-            });
+            };
         },
         .if_block => |ifb| {
             try collectFormatsAndInlineFromStmts(
@@ -376,8 +463,9 @@ fn applyAssignedFormatAliases(
 ) anyerror!void {
     for (aliases) |alias| {
         const fmt_info = label_map.get(alias.source_label) orelse continue;
-        if (label_map.contains(alias.target_name)) continue;
-        try label_map.put(alias.target_name, fmt_info);
+        const alias_entry = try label_map.getOrPut(alias.target_name);
+        if (alias_entry.found_existing) continue;
+        alias_entry.value_ptr.* = fmt_info;
     }
 }
 
