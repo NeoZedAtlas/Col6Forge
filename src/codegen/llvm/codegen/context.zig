@@ -183,6 +183,10 @@ pub const Context = struct {
         self.ref_kinds.deinit();
         self.direct_recl.deinit();
         self.direct_recl_by_name.deinit();
+        var label_it = self.label_map.iterator();
+        while (label_it.next()) |entry| {
+            self.allocator.free(entry.value_ptr.*);
+        }
         self.label_map.deinit();
         self.label_index.deinit();
         self.symbol_index.deinit();

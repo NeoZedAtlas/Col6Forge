@@ -226,6 +226,7 @@ pub fn emitStmtListRange(
     stmts: []Stmt,
     block_names: [][]const u8,
     label_map: *const std.StringHashMap([]const u8),
+    label_index: *const std.StringHashMap(usize),
     start_idx: usize,
     end_idx: usize,
     end_next: []const u8,
@@ -237,20 +238,20 @@ pub fn emitStmtListRange(
         try builder.label(block_name);
         switch (stmt.node) {
             .do_loop => |loop| {
-                const end_label_idx = cfg.findLabelIndex(stmts, loop.end_label) orelse return error.MissingLabel;
+                const end_label_idx = label_index.get(loop.end_label) orelse cfg.findLabelIndex(stmts, loop.end_label) orelse return error.MissingLabel;
                 if (end_label_idx <= i) return error.InvalidDoLabel;
                 if (end_label_idx > end_idx) return error.InvalidDoLabel;
                 const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
-                try control.emitDoList(ctx, builder, stmts, block_names, label_map, i, end_label_idx, after_loop, emitStmtListRange);
+                try control.emitDoList(ctx, builder, stmts, block_names, label_map, label_index, i, end_label_idx, after_loop, emitStmtListRange);
                 i = end_label_idx + 1;
                 continue;
             },
             .do_while => |loop| {
-                const end_label_idx = cfg.findLabelIndex(stmts, loop.end_label) orelse return error.MissingLabel;
+                const end_label_idx = label_index.get(loop.end_label) orelse cfg.findLabelIndex(stmts, loop.end_label) orelse return error.MissingLabel;
                 if (end_label_idx <= i) return error.InvalidDoLabel;
                 if (end_label_idx > end_idx) return error.InvalidDoLabel;
                 const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
-                try control.emitDoWhileList(ctx, builder, stmts, block_names, label_map, i, end_label_idx, after_loop, emitStmtListRange);
+                try control.emitDoWhileList(ctx, builder, stmts, block_names, label_map, label_index, i, end_label_idx, after_loop, emitStmtListRange);
                 i = end_label_idx + 1;
                 continue;
             },

@@ -170,8 +170,10 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
 
     const block_names = try ctx.buildBlockNames();
     defer {
-        for (block_names) |name| {
-            ctx.allocator.free(name);
+        for (block_names, 0..) |name, idx| {
+            if (idx >= ctx.unit.stmts.len or ctx.unit.stmts[idx].label == null) {
+                ctx.allocator.free(name);
+            }
         }
         ctx.allocator.free(block_names);
     }

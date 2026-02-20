@@ -130,10 +130,10 @@ pub fn emitIfBlock(
     try builder.brCond(cond, then_entry, else_entry);
 
     if (then_blocks) |*blocks| {
-        try emit_stmt_list_range(ctx, builder, ifb.then_stmts, blocks.names, &blocks.label_map, 0, blocks.names.len - 1, next_block);
+        try emit_stmt_list_range(ctx, builder, ifb.then_stmts, blocks.names, &blocks.label_map, &blocks.label_index, 0, blocks.names.len - 1, next_block);
     }
     if (else_blocks) |*blocks| {
-        try emit_stmt_list_range(ctx, builder, ifb.else_stmts, blocks.names, &blocks.label_map, 0, blocks.names.len - 1, next_block);
+        try emit_stmt_list_range(ctx, builder, ifb.else_stmts, blocks.names, &blocks.label_map, &blocks.label_index, 0, blocks.names.len - 1, next_block);
     }
     return true;
 }

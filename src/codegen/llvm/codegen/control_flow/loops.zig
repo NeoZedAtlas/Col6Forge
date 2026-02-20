@@ -27,6 +27,7 @@ pub fn emitDo(
         ctx.unit.stmts,
         block_names,
         null,
+        null,
         do_idx,
         end_idx,
         after_loop,
@@ -51,6 +52,7 @@ pub fn emitDoWhile(
         ctx.unit.stmts,
         block_names,
         null,
+        null,
         do_idx,
         end_idx,
         after_loop,
@@ -66,6 +68,7 @@ pub fn emitDoList(
     stmts: []ast.Stmt,
     block_names: [][]const u8,
     label_map: *const std.StringHashMap([]const u8),
+    label_index: *const std.StringHashMap(usize),
     do_idx: usize,
     end_idx: usize,
     after_loop: []const u8,
@@ -77,6 +80,7 @@ pub fn emitDoList(
         stmts,
         block_names,
         label_map,
+        label_index,
         do_idx,
         end_idx,
         after_loop,
@@ -92,6 +96,7 @@ pub fn emitDoWhileList(
     stmts: []ast.Stmt,
     block_names: [][]const u8,
     label_map: *const std.StringHashMap([]const u8),
+    label_index: *const std.StringHashMap(usize),
     do_idx: usize,
     end_idx: usize,
     after_loop: []const u8,
@@ -103,6 +108,7 @@ pub fn emitDoWhileList(
         stmts,
         block_names,
         label_map,
+        label_index,
         do_idx,
         end_idx,
         after_loop,
@@ -118,6 +124,7 @@ fn emitDoImpl(
     stmts: []ast.Stmt,
     block_names: [][]const u8,
     label_map: ?*const std.StringHashMap([]const u8),
+    label_index: ?*const std.StringHashMap(usize),
     do_idx: usize,
     end_idx: usize,
     after_loop: []const u8,
@@ -204,7 +211,7 @@ fn emitDoImpl(
     try builder.brCond(has_more, body_start, after_loop);
 
     if (comptime use_list) {
-        try emit_stmt_list_range(ctx, builder, stmts, block_names, label_map.?, do_idx + 1, end_idx, inc_label);
+        try emit_stmt_list_range(ctx, builder, stmts, block_names, label_map.?, label_index.?, do_idx + 1, end_idx, inc_label);
     } else {
         try emit_sequence_with_end(ctx, builder, block_names, do_idx + 1, end_idx, inc_label);
     }
@@ -306,6 +313,7 @@ fn emitDoWhileImpl(
     stmts: []ast.Stmt,
     block_names: [][]const u8,
     label_map: ?*const std.StringHashMap([]const u8),
+    label_index: ?*const std.StringHashMap(usize),
     do_idx: usize,
     end_idx: usize,
     after_loop: []const u8,
@@ -326,7 +334,7 @@ fn emitDoWhileImpl(
     try builder.brCond(cond_raw, block_names[do_idx + 1], after_loop);
 
     if (comptime use_list) {
-        try emit_stmt_list_range(ctx, builder, stmts, block_names, label_map.?, do_idx + 1, end_idx, inc_label);
+        try emit_stmt_list_range(ctx, builder, stmts, block_names, label_map.?, label_index.?, do_idx + 1, end_idx, inc_label);
     } else {
         try emit_sequence_with_end(ctx, builder, block_names, do_idx + 1, end_idx, inc_label);
     }
