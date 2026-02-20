@@ -26,6 +26,7 @@ fn checkedAdd(lhs: usize, rhs: usize) ?usize {
 
 extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
 extern fn strtod(nptr: [*:0]const u8, endptr: ?*?[*:0]u8) f64;
+extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
@@ -33,6 +34,186 @@ extern fn f77_direct_record_commit(unit: c_int, rec: c_int) void;
 extern fn f77_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
 extern fn f77_normalize_exponent(buf: ?[*]u8) void;
 extern fn f77_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
+
+fn cstrlenRaw(text: []const u8) usize {
+    var i: usize = 0;
+    while (i < text.len and text[i] != 0) : (i += 1) {}
+    return i;
+}
+
+fn runtimeArgCount(arg_count: c_int) usize {
+    return @intCast(@max(arg_count, 0));
+}
+
+fn runtimeArgPtrAt(arg_ptrs: ?[*]?*anyopaque, idx: usize, total: usize) ?*anyopaque {
+    if (idx >= total or arg_ptrs == null) return null;
+    return arg_ptrs.?[idx];
+}
+
+fn runtimeArgKindAt(arg_kinds: ?[*]const u8, idx: usize, total: usize) u8 {
+    if (idx >= total or arg_kinds == null) return 0;
+    return arg_kinds.?[idx];
+}
+
+fn runtimeArgLenAt(arg_lens: ?[*]const c_int, idx: usize, total: usize) c_int {
+    if (idx >= total or arg_lens == null) return 0;
+    return arg_lens.?[idx];
+}
+
+const ListLineBuffer = struct {
+    data: ?[*]u8 = null,
+    len: usize = 0,
+    cap: usize = 0,
+
+    fn deinit(self: *ListLineBuffer) void {
+        if (self.data) |ptr| {
+            free(@ptrCast(ptr));
+        }
+        self.* = .{};
+    }
+
+    fn ensure(self: *ListLineBuffer, extra: usize) bool {
+        const needed = self.len + extra + 1;
+        if (needed <= self.cap) return true;
+        var new_cap: usize = if (self.cap == 0) 64 else self.cap;
+        while (new_cap < needed) {
+            const doubled = @mulWithOverflow(new_cap, 2);
+            if (doubled[1] != 0) return false;
+            new_cap = doubled[0];
+        }
+        const prev: ?*anyopaque = if (self.data) |ptr| @ptrCast(ptr) else null;
+        const new_raw = realloc(prev, new_cap) orelse return false;
+        self.data = @ptrCast(new_raw);
+        self.cap = new_cap;
+        return true;
+    }
+
+    fn appendByte(self: *ListLineBuffer, ch: u8) bool {
+        if (!self.ensure(1)) return false;
+        self.data.?[self.len] = ch;
+        self.len += 1;
+        return true;
+    }
+
+    fn appendSlice(self: *ListLineBuffer, text: []const u8) bool {
+        if (text.len == 0) return true;
+        if (!self.ensure(text.len)) return false;
+        var i: usize = 0;
+        while (i < text.len) : (i += 1) {
+            self.data.?[self.len + i] = text[i];
+        }
+        self.len += text.len;
+        return true;
+    }
+
+    fn terminate(self: *ListLineBuffer) bool {
+        if (!self.ensure(0)) return false;
+        self.data.?[self.len] = 0;
+        return true;
+    }
+};
+
+fn appendListI32(out: *ListLineBuffer, value: c_int) bool {
+    var tmp: [64]u8 = [_]u8{0} ** 64;
+    _ = snprintf(&tmp[0], tmp.len, "%d", value);
+    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+}
+
+fn appendListF32(out: *ListLineBuffer, value: f32) bool {
+    var tmp: [96]u8 = [_]u8{0} ** 96;
+    _ = snprintf(&tmp[0], tmp.len, "%.9g", @as(f64, @floatCast(value)));
+    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+}
+
+fn appendListF64(out: *ListLineBuffer, value: f64) bool {
+    var tmp: [128]u8 = [_]u8{0} ** 128;
+    _ = snprintf(&tmp[0], tmp.len, "%.17g", value);
+    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+}
+
+fn appendListC32(out: *ListLineBuffer, real: f32, imag: f32) bool {
+    var tmp: [192]u8 = [_]u8{0} ** 192;
+    _ = snprintf(&tmp[0], tmp.len, "(%.9g,%.9g)", @as(f64, @floatCast(real)), @as(f64, @floatCast(imag)));
+    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+}
+
+fn appendListC64(out: *ListLineBuffer, real: f64, imag: f64) bool {
+    var tmp: [256]u8 = [_]u8{0} ** 256;
+    _ = snprintf(&tmp[0], tmp.len, "(%.17g,%.17g)", real, imag);
+    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+}
+
+fn isListDelim(ch: u8) bool {
+    return isSpace(ch) or ch == ',' or ch == '(' or ch == ')';
+}
+
+fn parseListToken(record: []const u8, idx: *usize, out: *[256]u8) c_int {
+    var i = idx.*;
+    while (i < record.len and isListDelim(record[i])) : (i += 1) {}
+    if (i >= record.len) {
+        out[0] = 0;
+        idx.* = i;
+        return -1;
+    }
+
+    var used: usize = 0;
+    if (record[i] == '\'' or record[i] == '"') {
+        const quote = record[i];
+        i += 1;
+        while (i < record.len) {
+            const ch = record[i];
+            i += 1;
+            if (ch == quote) {
+                if (i < record.len and record[i] == quote) {
+                    if (used + 1 < out.len) {
+                        out[used] = quote;
+                        used += 1;
+                    }
+                    i += 1;
+                    continue;
+                }
+                break;
+            }
+            if (used + 1 < out.len) {
+                out[used] = ch;
+                used += 1;
+            }
+        }
+    } else {
+        while (i < record.len and !isListDelim(record[i])) : (i += 1) {
+            if (used + 1 < out.len) {
+                out[used] = record[i];
+                used += 1;
+            }
+        }
+    }
+
+    out[used] = 0;
+    idx.* = i;
+    return @intCast(used);
+}
+
+fn nextInternalListToken(
+    record: *[4096]u8,
+    rec_len: usize,
+    src: [*]const u8,
+    rec_stride: usize,
+    record_count: usize,
+    rec_index: *usize,
+    idx: *usize,
+    token: *[256]u8,
+) bool {
+    while (true) {
+        const used = parseListToken(record[0..rec_len], idx, token);
+        if (used >= 0) return true;
+
+        rec_index.* += 1;
+        if (rec_index.* >= record_count) return false;
+        const rec_offset = checkedMul(rec_index.*, rec_stride) orelse return false;
+        loadInternalRecord(record, src + rec_offset, rec_len);
+        idx.* = 0;
+    }
+}
 
 fn loadInternalRecord(record: *[4096]u8, src: [*]const u8, record_len: usize) void {
     var i: usize = 0;
@@ -63,6 +244,184 @@ fn countFormatRecords(fmt: [*:0]const u8) usize {
     if (i == 0 or fmt[i - 1] != '\n') records += 1;
     if (records == 0) return 1;
     return records;
+}
+
+pub export fn f77_write_internal_list_v(
+    buf: ?[*]u8,
+    len: c_int,
+    count: c_int,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_lens: ?[*]const c_int,
+    arg_count: c_int,
+) callconv(.c) void {
+    if (buf == null or len <= 0 or count <= 0) return;
+
+    const total = runtimeArgCount(arg_count);
+    var rendered: ListLineBuffer = .{};
+    defer rendered.deinit();
+
+    var i: usize = 0;
+    while (i < total) : (i += 1) {
+        if (i != 0 and !rendered.appendByte(' ')) return;
+        const kind = runtimeArgKindAt(arg_kinds, i, total);
+        const arg = runtimeArgPtrAt(arg_ptrs, i, total) orelse return;
+
+        switch (kind) {
+            'i' => {
+                const ptr: *const c_int = @ptrCast(@alignCast(arg));
+                if (!appendListI32(&rendered, ptr.*)) return;
+            },
+            'f' => {
+                const ptr: *const f32 = @ptrCast(@alignCast(arg));
+                if (!appendListF32(&rendered, ptr.*)) return;
+            },
+            'd' => {
+                const ptr: *const f64 = @ptrCast(@alignCast(arg));
+                if (!appendListF64(&rendered, ptr.*)) return;
+            },
+            'l' => {
+                const ptr: *const u8 = @ptrCast(@alignCast(arg));
+                if (!rendered.appendByte(if (ptr.* != 0) 'T' else 'F')) return;
+            },
+            's' => {
+                const len_raw = runtimeArgLenAt(arg_lens, i, total);
+                const n: usize = @intCast(@max(len_raw, 0));
+                if (n != 0) {
+                    const text: [*]const u8 = @ptrCast(arg);
+                    if (!rendered.appendSlice(text[0..n])) return;
+                }
+            },
+            'c' => {
+                const ptr: [*]const f32 = @ptrCast(@alignCast(arg));
+                if (!appendListC32(&rendered, ptr[0], ptr[1])) return;
+            },
+            'z' => {
+                const ptr: [*]const f64 = @ptrCast(@alignCast(arg));
+                if (!appendListC64(&rendered, ptr[0], ptr[1])) return;
+            },
+            else => return,
+        }
+    }
+
+    if (!rendered.terminate()) return;
+    f77_write_internal_n_core(buf, len, count, @ptrCast(rendered.data.?));
+}
+
+pub export fn f77_read_internal_list_v(
+    buf: ?[*]const u8,
+    len: c_int,
+    count: c_int,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_lens: ?[*]const c_int,
+    arg_count: c_int,
+    status_mode: c_int,
+) callconv(.c) c_int {
+    if (buf == null or len <= 0 or count <= 0) return if (status_mode != 0) 1 else 0;
+
+    const src = buf.?;
+    const rec_len: usize = @min(@as(usize, @intCast(len)), 4095);
+    const rec_stride: usize = @intCast(len);
+    const record_count: usize = @intCast(count);
+
+    var record: [4096]u8 = [_]u8{0} ** 4096;
+    var rec_index: usize = 0;
+    var idx: usize = 0;
+    loadInternalRecord(&record, src, rec_len);
+
+    const total = runtimeArgCount(arg_count);
+    var token: [256]u8 = [_]u8{0} ** 256;
+    var arg_idx: usize = 0;
+    while (arg_idx < total) : (arg_idx += 1) {
+        const kind = runtimeArgKindAt(arg_kinds, arg_idx, total);
+        const arg = runtimeArgPtrAt(arg_ptrs, arg_idx, total) orelse return if (status_mode != 0) 1 else 0;
+
+        switch (kind) {
+            'i' => {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                    return if (status_mode != 0) -1 else 0;
+                }
+                const out: *c_int = @ptrCast(@alignCast(arg));
+                out.* = @intCast(strtol(asConstCStr(&token), null, 10));
+            },
+            'f' => {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                    return if (status_mode != 0) -1 else 0;
+                }
+                f77_normalize_exponent(asCStr(&token));
+                const out: *f32 = @ptrCast(@alignCast(arg));
+                out.* = @floatCast(strtod(asConstCStr(&token), null));
+            },
+            'd' => {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                    return if (status_mode != 0) -1 else 0;
+                }
+                f77_normalize_exponent(asCStr(&token));
+                const out: *f64 = @ptrCast(@alignCast(arg));
+                out.* = strtod(asConstCStr(&token), null);
+            },
+            'l' => {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                    return if (status_mode != 0) -1 else 0;
+                }
+                const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
+                const out: *u8 = @ptrCast(@alignCast(arg));
+                out.* = @intCast(f77_parse_logical_field(asConstCStr(&token), token_len));
+            },
+            's' => {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                    return if (status_mode != 0) -1 else 0;
+                }
+                const out: [*]u8 = @ptrCast(arg);
+                const len_raw = runtimeArgLenAt(arg_lens, arg_idx, total);
+                const n: usize = @intCast(@max(len_raw, 0));
+                var j: usize = 0;
+                while (j < n) : (j += 1) {
+                    out[j] = ' ';
+                }
+                const token_len = cstrlenRaw(token[0..]);
+                const copy_len = @min(token_len, n);
+                j = 0;
+                while (j < copy_len) : (j += 1) {
+                    out[j] = token[j];
+                }
+            },
+            'c' => {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                    return if (status_mode != 0) -1 else 0;
+                }
+                f77_normalize_exponent(asCStr(&token));
+                const real = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                    return if (status_mode != 0) -1 else 0;
+                }
+                f77_normalize_exponent(asCStr(&token));
+                const imag = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
+                const out: [*]f32 = @ptrCast(@alignCast(arg));
+                out[0] = real;
+                out[1] = imag;
+            },
+            'z' => {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                    return if (status_mode != 0) -1 else 0;
+                }
+                f77_normalize_exponent(asCStr(&token));
+                const real = strtod(asConstCStr(&token), null);
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                    return if (status_mode != 0) -1 else 0;
+                }
+                f77_normalize_exponent(asCStr(&token));
+                const imag = strtod(asConstCStr(&token), null);
+                const out: [*]f64 = @ptrCast(@alignCast(arg));
+                out[0] = real;
+                out[1] = imag;
+            },
+            else => return if (status_mode != 0) 1 else 0,
+        }
+    }
+
+    return 0;
 }
 
 pub export fn f77_read_internal_core(
