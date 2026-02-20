@@ -80,13 +80,20 @@ fn evalCharExprRaw(ctx: *Context, value: *ast.Expr) !?[]const u8 {
         .call_or_subscript => |call| {
             if (call.args.len != 1) return null;
             const idx_val = intLiteralValue(call.args[0]) orelse return null;
-            const key = try std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ call.name, idx_val });
-            defer ctx.allocator.free(key);
+            var key_buf = std.array_list.Managed(u8).init(ctx.allocator);
+            defer key_buf.deinit();
+            const key = try formatCharArrayKey(&key_buf, call.name, idx_val);
             if (ctx.char_array_values.get(key)) |val| return val;
             return null;
         },
         else => return null,
     }
+}
+
+fn formatCharArrayKey(buffer: *std.array_list.Managed(u8), name: []const u8, idx: i64) ![]const u8 {
+    buffer.clearRetainingCapacity();
+    try buffer.writer().print("{s}[{d}]", .{ name, idx });
+    return buffer.items;
 }
 
 fn trackCharAssignment(ctx: *Context, target: *ast.Expr, value: ?[]const u8) void {
@@ -110,8 +117,9 @@ fn trackCharAssignment(ctx: *Context, target: *ast.Expr, value: ?[]const u8) voi
                 invalidateCharArrayEntries(ctx, call.name);
                 return;
             };
-            const key = std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ call.name, idx_val }) catch return;
-            defer ctx.allocator.free(key);
+            var key_buf = std.array_list.Managed(u8).init(ctx.allocator);
+            defer key_buf.deinit();
+            const key = formatCharArrayKey(&key_buf, call.name, idx_val) catch return;
             updateCharMap(&ctx.char_array_values, ctx, key, value);
         },
         else => {},
@@ -204,7 +212,7 @@ pub fn emitCallWithAlternateReturns(
         const label = alt_labels[idx];
         const target = cfg.resolveLabel(ctx, local_label_map, label) orelse return error.MissingLabel;
         const idx_val = ValueRef{
-            .name = utils.formatInt(ctx.allocator, @as(i64, @intCast(idx + 1))),
+            .name = try ctx.intLiteral(@as(i64, @intCast(idx + 1))),
             .ty = .i32,
             .is_ptr = false,
         };
@@ -369,10 +377,10 @@ fn storeCharacterValue(ctx: *Context, builder: anytype, target_ptr: ValueRef, ch
             var i: usize = 0;
             while (i < char_len) : (i += 1) {
                 const byte: u8 = if (i < bytes.len) bytes[i] else ' ';
-                const offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(i)), .ty = .i32, .is_ptr = false };
+                const offset = ValueRef{ .name = try ctx.intLiteral(@intCast(i)), .ty = .i32, .is_ptr = false };
                 const gep = try ctx.nextTemp();
                 try builder.gep(gep, .i8, target_ptr, offset);
-                const val = ValueRef{ .name = utils.formatInt(ctx.allocator, byte), .ty = .i8, .is_ptr = false };
+                const val = ValueRef{ .name = try ctx.intLiteral(byte), .ty = .i8, .is_ptr = false };
                 try builder.store(val, .{ .name = gep, .ty = .ptr, .is_ptr = true });
             }
             return;
@@ -383,10 +391,10 @@ fn storeCharacterValue(ctx: *Context, builder: anytype, target_ptr: ValueRef, ch
     const src_len = charLenForExpr(ctx, value_expr) orelse 1;
     var i: usize = 0;
     while (i < char_len) : (i += 1) {
-        const offset = ValueRef{ .name = utils.formatInt(ctx.allocator, @intCast(i)), .ty = .i32, .is_ptr = false };
+        const offset = ValueRef{ .name = try ctx.intLiteral(@intCast(i)), .ty = .i32, .is_ptr = false };
         const dst_gep = try ctx.nextTemp();
         try builder.gep(dst_gep, .i8, target_ptr, offset);
-        var val = ValueRef{ .name = utils.formatInt(ctx.allocator, 32), .ty = .i8, .is_ptr = false };
+        var val = ValueRef{ .name = try ctx.intLiteral(32), .ty = .i8, .is_ptr = false };
         if (i < src_len) {
             const src_gep = try ctx.nextTemp();
             try builder.gep(src_gep, .i8, src_ptr, offset);
@@ -449,7 +457,7 @@ fn storeCharacterValueDynamic(
     try builder.label(pad_block);
     const pad_gep = try ctx.nextTemp();
     try builder.gep(pad_gep, .i8, target_ptr, idx_val);
-    const blank = ValueRef{ .name = utils.formatInt(ctx.allocator, 32), .ty = .i8, .is_ptr = false };
+    const blank = ValueRef{ .name = try ctx.intLiteral(32), .ty = .i8, .is_ptr = false };
     try builder.store(blank, .{ .name = pad_gep, .ty = .ptr, .is_ptr = true });
     try builder.br(loop_inc);
 

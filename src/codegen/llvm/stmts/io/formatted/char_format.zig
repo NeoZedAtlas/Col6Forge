@@ -92,6 +92,13 @@ fn trimRightSpaces(bytes: []const u8) []const u8 {
     while (end > 0 and bytes[end - 1] == ' ') : (end -= 1) {}
     return bytes[0..end];
 }
+
+fn formatCharArrayKey(buffer: *std.array_list.Managed(u8), name: []const u8, idx: anytype) ![]const u8 {
+    buffer.clearRetainingCapacity();
+    try buffer.writer().print("{s}[{d}]", .{ name, idx });
+    return buffer.items;
+}
+
 pub fn resolveCharFormatItemsFromExpr(ctx: *Context, expr_node: *ast.Expr) EmitError!?[]const ast.FormatItem {
     const raw = try resolveCharFormatString(ctx, expr_node) orelse return null;
     const trimmed = trimRightSpaces(raw);
@@ -115,10 +122,11 @@ fn resolveCharFormatString(ctx: *Context, expr_node: *ast.Expr) EmitError!?[]con
                 const char_len = sym.char_len orelse 1;
                 var buffer = std.array_list.Managed(u8).init(ctx.allocator);
                 errdefer buffer.deinit();
+                var key_buf = std.array_list.Managed(u8).init(ctx.allocator);
+                defer key_buf.deinit();
                 var idx: usize = 1;
                 while (idx <= elem_count) : (idx += 1) {
-                    const key = try std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ name, idx });
-                    defer ctx.allocator.free(key);
+                    const key = try formatCharArrayKey(&key_buf, name, idx);
                     if (ctx.char_array_values.get(key)) |val| {
                         try buffer.appendSlice(val);
                     } else {
@@ -143,8 +151,9 @@ fn resolveCharFormatString(ctx: *Context, expr_node: *ast.Expr) EmitError!?[]con
         .call_or_subscript => |call| {
             if (call.args.len != 1) return null;
             const idx_val = intLiteralValue(call.args[0]) orelse return null;
-            const key = try std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ call.name, idx_val });
-            defer ctx.allocator.free(key);
+            var key_buf = std.array_list.Managed(u8).init(ctx.allocator);
+            defer key_buf.deinit();
+            const key = try formatCharArrayKey(&key_buf, call.name, idx_val);
             if (ctx.char_array_values.get(key)) |val| return val;
             return null;
         },
@@ -215,10 +224,11 @@ fn buildCharArrayFormatEntries(ctx: *Context, name: []const u8) EmitError![]Char
     const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return &.{};
     var entries = std.array_list.Managed(CharFormatEntry).init(ctx.allocator);
     errdefer entries.deinit();
+    var key_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer key_buf.deinit();
     var idx: usize = 1;
     while (idx <= elem_count) : (idx += 1) {
-        const key = try std.fmt.allocPrint(ctx.allocator, "{s}[{d}]", .{ name, idx });
-        defer ctx.allocator.free(key);
+        const key = try formatCharArrayKey(&key_buf, name, idx);
         const value = ctx.char_array_values.get(key) orelse return &.{};
         const trimmed = trimRightSpaces(value);
         if (trimmed.len == 0) return &.{};
