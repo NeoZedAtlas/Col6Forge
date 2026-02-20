@@ -1,3 +1,5 @@
+const std = @import("std");
+
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
 }
@@ -24,6 +26,10 @@ fn checkedAdd(lhs: usize, rhs: usize) ?usize {
 
 extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
 extern fn strtod(nptr: [*:0]const u8, endptr: ?*?[*:0]u8) f64;
+extern fn free(ptr: ?*anyopaque) void;
+extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
+extern fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
+extern fn f77_direct_record_commit(unit: c_int, rec: c_int) void;
 extern fn f77_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
 extern fn f77_normalize_exponent(buf: ?[*]u8) void;
 extern fn f77_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
@@ -38,6 +44,25 @@ fn loadInternalRecord(record: *[4096]u8, src: [*]const u8, record_len: usize) vo
         record[i] = src[i];
     }
     record[record_len] = 0;
+}
+
+fn addRecordOffset(base: c_int, offset: usize) ?c_int {
+    if (offset > @as(usize, @intCast(std.math.maxInt(c_int)))) return null;
+    const off_i32: c_int = @intCast(offset);
+    const out = @addWithOverflow(base, off_i32);
+    if (out[1] != 0) return null;
+    return out[0];
+}
+
+fn countFormatRecords(fmt: [*:0]const u8) usize {
+    var records: usize = 0;
+    var i: usize = 0;
+    while (fmt[i] != 0) : (i += 1) {
+        if (fmt[i] == '\n') records += 1;
+    }
+    if (i == 0 or fmt[i - 1] != '\n') records += 1;
+    if (records == 0) return 1;
+    return records;
 }
 
 pub export fn f77_read_internal_core(
@@ -198,6 +223,54 @@ pub export fn f77_read_internal_core(
     return assigned;
 }
 
+pub export fn f77_read_direct_internal_core(
+    unit: c_int,
+    rec: c_int,
+    recl: c_int,
+    fmt: ?[*:0]const u8,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_count: c_int,
+    status_mode: c_int,
+) callconv(.c) c_int {
+    if (rec <= 0 or recl <= 0 or fmt == null) return if (status_mode != 0) 1 else 0;
+
+    const fmt_c = fmt.?;
+    const record_count = countFormatRecords(fmt_c);
+    const recl_usize: usize = @intCast(recl);
+    const total_bytes = checkedMul(record_count, recl_usize) orelse return if (status_mode != 0) 1 else 0;
+
+    const buffer_raw = realloc(null, total_bytes) orelse return if (status_mode != 0) 1 else 0;
+    defer free(buffer_raw);
+    const buffer: [*]u8 = @ptrCast(buffer_raw);
+
+    var record_idx: usize = 0;
+    while (record_idx < record_count) : (record_idx += 1) {
+        const rec_num = addRecordOffset(rec, record_idx) orelse return if (status_mode != 0) 1 else 0;
+        const src = f77_direct_record_ptr_ro(unit, rec_num, recl) orelse return -1;
+        const offset = checkedMul(record_idx, recl_usize) orelse return if (status_mode != 0) 1 else 0;
+        var i: usize = 0;
+        while (i < recl_usize) : (i += 1) {
+            buffer[offset + i] = src[i];
+        }
+    }
+
+    const assigned = f77_read_internal_core(
+        buffer,
+        recl,
+        @intCast(record_count),
+        fmt_c,
+        arg_ptrs,
+        arg_kinds,
+        arg_count,
+    );
+
+    const last_rec = addRecordOffset(rec, record_count - 1) orelse return if (status_mode != 0) 1 else 0;
+    f77_direct_record_commit(unit, last_rec);
+    if (status_mode != 0) return 0;
+    return assigned;
+}
+
 fn writeInternalMarkedSlice(dst: [*]u8, len: usize, src: []const u8) void {
     var i: usize = 0;
     while (i < len) : (i += 1) {
@@ -316,8 +389,6 @@ pub export fn f77_write_internal_n_core(buf: ?[*]u8, len: c_int, count: c_int, s
 }
 
 test "internal io helpers detect overflow" {
-    const std = @import("std");
-
     try std.testing.expectEqual(@as(usize, 42), checkedMul(6, 7).?);
     try std.testing.expectEqual(@as(usize, 43), checkedAdd(40, 3).?);
     try std.testing.expect(checkedMul(std.math.maxInt(usize), 2) == null);
@@ -325,8 +396,6 @@ test "internal io helpers detect overflow" {
 }
 
 test "writeInternalMarkedSlice ignores oversized relative tab" {
-    const std = @import("std");
-
     var out: [4]u8 = undefined;
     const src = "\x01R184467440737095516161844674407370955161\x02X";
     writeInternalMarkedSlice(&out, out.len, src);

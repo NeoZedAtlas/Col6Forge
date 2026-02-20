@@ -1,3 +1,5 @@
+const std = @import("std");
+
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
@@ -5,6 +7,8 @@ extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn f77_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) c_int;
 extern fn f77_write_internal_core(buf: ?[*]u8, len: c_int, src: ?[*:0]const u8) void;
 extern fn f77_write_internal_n_core(buf: ?[*]u8, len: c_int, count: c_int, src: ?[*:0]const u8) void;
+extern fn f77_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
+extern fn f77_direct_record_commit(unit: c_int, rec: c_int) void;
 extern fn f77_fmt_release_all() void;
 
 fn cstrlen(text: [*:0]const u8) usize {
@@ -93,6 +97,25 @@ fn runtimeArgKindAt(arg_kinds: ?[*]const u8, idx: usize, total: usize) u8 {
     if (idx >= total) return 0;
     if (arg_kinds == null) return 0;
     return arg_kinds.?[idx];
+}
+
+fn addRecordOffset(base: c_int, offset: usize) ?c_int {
+    if (offset > @as(usize, @intCast(std.math.maxInt(c_int)))) return null;
+    const off_i32: c_int = @intCast(offset);
+    const out = @addWithOverflow(base, off_i32);
+    if (out[1] != 0) return null;
+    return out[0];
+}
+
+fn countRenderedRecords(text: [*:0]const u8) usize {
+    var records: usize = 0;
+    var i: usize = 0;
+    while (text[i] != 0) : (i += 1) {
+        if (text[i] == '\n') records += 1;
+    }
+    if (i == 0 or text[i - 1] != '\n') records += 1;
+    if (records == 0) return 1;
+    return records;
 }
 
 fn consumeIntArg(arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_index: *usize, total: usize) c_int {
@@ -344,8 +367,6 @@ fn renderWriteFormatted(
 }
 
 test "renderWriteFormatted uses precision-bounded scan for %*.*s" {
-    const std = @import("std");
-
     var width: c_int = 3;
     var precision: c_int = 3;
     var raw_chars: [3]u8 = .{ 'A', 'B', 'C' };
@@ -394,4 +415,43 @@ pub export fn f77_write_internal_v(
     } else {
         f77_write_internal_core(buf, len, rendered);
     }
+}
+
+pub export fn f77_write_direct_internal_v(
+    unit: c_int,
+    rec: c_int,
+    recl: c_int,
+    fmt: ?[*:0]const u8,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_count: c_int,
+) callconv(.c) c_int {
+    defer f77_fmt_release_all();
+    if (rec <= 0 or recl <= 0 or fmt == null) return 1;
+
+    const rendered = renderWriteFormatted(fmt.?, arg_ptrs, arg_kinds, arg_count) orelse return 1;
+    defer free(@ptrCast(rendered));
+
+    const record_count = countRenderedRecords(rendered);
+    var start: usize = 0;
+    var current: usize = 0;
+    while (current < record_count) : (current += 1) {
+        const rec_num = addRecordOffset(rec, current) orelse return 1;
+        const dst = f77_direct_record_ptr(unit, rec_num, recl) orelse return 1;
+
+        var end = start;
+        while (rendered[end] != 0 and rendered[end] != '\n') : (end += 1) {}
+
+        const saved = rendered[end];
+        rendered[end] = 0;
+        f77_write_internal_core(dst, recl, @ptrCast(rendered + start));
+        rendered[end] = saved;
+
+        if (saved == 0) break;
+        start = end + 1;
+    }
+
+    const last_rec = addRecordOffset(rec, record_count - 1) orelse return 1;
+    f77_direct_record_commit(unit, last_rec);
+    return 0;
 }

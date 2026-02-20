@@ -21,6 +21,12 @@ const emitKindArray = io_utils.emitKindArray;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
 
+const DirectIoSpec = struct {
+    unit_i32: ValueRef,
+    rec_i32: ValueRef,
+    recl_i32: ValueRef,
+};
+
 const CharFixup = struct {
     target_ptr: ValueRef,
     target_len: usize,
@@ -51,6 +57,7 @@ fn emitReadFormattedImpl(
     fmt_items: []const ast.FormatItem,
     expanded: *ExpandedReadTargets,
     return_status: bool,
+    direct_spec: ?DirectIoSpec,
 ) EmitError!ValueRef {
     _ = read;
 
@@ -238,7 +245,13 @@ fn emitReadFormattedImpl(
 
     var status_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
 
-    if (is_internal) {
+    if (direct_spec) |direct| {
+        const mode_val = ValueRef{ .name = if (return_status) "1" else "0", .ty = .i32, .is_ptr = false };
+        const read_name = try ctx.ensureDeclRaw("f77_read_direct_internal_core", .i32, &[_]llvm_types.IRType{ .i32, .i32, .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
+        const tmp = try ctx.nextTemp();
+        try builder.callTyped(tmp, .i32, read_name, &.{ direct.unit_i32, direct.rec_i32, direct.recl_i32, fmt_ptr, ptr_array, kinds_ptr, arg_count_val, mode_val });
+        status_val = .{ .name = tmp, .ty = .i32, .is_ptr = false };
+    } else if (is_internal) {
         const len_val = try constI32(ctx, unit_char_len orelse return error.MissingFormatLabel);
         const count_num: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
         const count_val = try constI32(ctx, count_num);
@@ -329,6 +342,7 @@ pub fn emitReadFormatted(
         fmt_items,
         expanded,
         false,
+        null,
     );
 }
 
@@ -356,5 +370,33 @@ pub fn emitReadFormattedStatus(
         fmt_items,
         expanded,
         true,
+        null,
+    );
+}
+
+pub fn emitReadFormattedDirect(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    unit_i32: ValueRef,
+    rec_i32: ValueRef,
+    recl_i32: ValueRef,
+    fmt_items: []const ast.FormatItem,
+    expanded: *ExpandedReadTargets,
+) EmitError!void {
+    const dummy_unit = ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    _ = try emitReadFormattedImpl(
+        ctx,
+        builder,
+        read,
+        dummy_unit,
+        null,
+        null,
+        true,
+        unit_i32,
+        fmt_items,
+        expanded,
+        false,
+        .{ .unit_i32 = unit_i32, .rec_i32 = rec_i32, .recl_i32 = recl_i32 },
     );
 }

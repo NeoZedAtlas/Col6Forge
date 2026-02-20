@@ -5,8 +5,10 @@ const char_format = @import("char_format.zig");
 const format_expr = @import("format_expr.zig");
 
 pub const emitWriteFormatted = write.emitWriteFormatted;
+pub const emitWriteFormattedDirect = write.emitWriteFormattedDirect;
 pub const emitReadFormatted = read.emitReadFormatted;
 pub const emitReadFormattedStatus = read.emitReadFormattedStatus;
+pub const emitReadFormattedDirect = read.emitReadFormattedDirect;
 pub const formatFromCharArrayData = char_format.formatFromCharArrayData;
 pub const emitWriteDynamicFormat = dynamic_mod.emitWriteDynamicFormat;
 pub const emitReadDynamicFormat = dynamic_mod.emitReadDynamicFormat;

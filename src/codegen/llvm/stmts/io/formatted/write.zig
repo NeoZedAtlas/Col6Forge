@@ -22,6 +22,12 @@ const emitPointerArrayFromValues = io_utils.emitPointerArrayFromValues;
 const emitKindArray = io_utils.emitKindArray;
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 
+const DirectIoSpec = struct {
+    unit_i32: ValueRef,
+    rec_i32: ValueRef,
+    recl_i32: ValueRef,
+};
+
 fn appendTabMarker(fmt_buf: *std.array_list.Managed(u8), tab: ast.TabFormat) !void {
     try fmt_buf.append(0x01);
     const kind: u8 = switch (tab.kind) {
@@ -37,7 +43,7 @@ fn appendTabMarker(fmt_buf: *std.array_list.Managed(u8), tab: ast.TabFormat) !vo
     try fmt_buf.append(0x02);
 }
 
-pub fn emitWriteFormatted(
+fn emitWriteFormattedImpl(
     ctx: *Context,
     builder: anytype,
     write: ast.WriteStmt,
@@ -48,6 +54,7 @@ pub fn emitWriteFormatted(
     unit_i32: ValueRef,
     fmt_items: []const ast.FormatItem,
     expanded_values: *ExpandedWriteValues,
+    direct_spec: ?DirectIoSpec,
 ) EmitError!void {
     _ = write;
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
@@ -512,7 +519,10 @@ pub fn emitWriteFormatted(
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
     const arg_count_val = try ctx.constI32(@intCast(ptr_args.items.len));
     const fmt_ptr_val = ValueRef{ .name = fmt_ptr, .ty = .ptr, .is_ptr = true };
-    if (is_internal) {
+    if (direct_spec) |direct| {
+        const write_name = try ctx.ensureDeclRaw("f77_write_direct_internal_v", .i32, &[_]llvm_types.IRType{ .i32, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
+        try builder.callTyped(null, .i32, write_name, &.{ direct.unit_i32, direct.rec_i32, direct.recl_i32, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val });
+    } else if (is_internal) {
         const len_val = try ctx.constI32(@intCast(unit_char_len.?));
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
         const count_ref = try ctx.constI32(@intCast(count_val));
@@ -522,4 +532,57 @@ pub fn emitWriteFormatted(
         const write_name = try ctx.ensureDeclRaw("f77_write_v", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
         try builder.callTyped(null, .i32, write_name, &.{ unit_i32, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
     }
+}
+
+pub fn emitWriteFormatted(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    fmt_items: []const ast.FormatItem,
+    expanded_values: *ExpandedWriteValues,
+) EmitError!void {
+    return emitWriteFormattedImpl(
+        ctx,
+        builder,
+        write,
+        unit_value,
+        unit_char_len,
+        unit_record_count,
+        is_internal,
+        unit_i32,
+        fmt_items,
+        expanded_values,
+        null,
+    );
+}
+
+pub fn emitWriteFormattedDirect(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    unit_i32: ValueRef,
+    rec_i32: ValueRef,
+    recl_i32: ValueRef,
+    fmt_items: []const ast.FormatItem,
+    expanded_values: *ExpandedWriteValues,
+) EmitError!void {
+    const dummy_unit = ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    return emitWriteFormattedImpl(
+        ctx,
+        builder,
+        write,
+        dummy_unit,
+        null,
+        null,
+        true,
+        unit_i32,
+        fmt_items,
+        expanded_values,
+        .{ .unit_i32 = unit_i32, .rec_i32 = rec_i32, .recl_i32 = recl_i32 },
+    );
 }
