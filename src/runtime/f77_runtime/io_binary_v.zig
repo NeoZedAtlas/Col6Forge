@@ -259,6 +259,105 @@ pub export fn f77_read_direct_v(
     return assigned;
 }
 
+pub export fn f77_write_direct_typed(
+    unit: c_int,
+    rec: c_int,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_lens: ?[*]const c_int,
+    arg_count: c_int,
+) callconv(.c) void {
+    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return;
+    const idx: usize = @intCast(unit);
+    const du = &direct_units[idx];
+    const total_args = runtimeArgCount(arg_count);
+
+    var record_size: usize = 0;
+    var i: usize = 0;
+    while (i < total_args) : (i += 1) {
+        const kind = runtimeArgKindAt(arg_kinds, i, total_args);
+        const len = runtimeArgLenAt(arg_lens, i, total_args);
+        const field_size = typedFieldSize(kind, len) orelse return;
+        record_size = checkedAdd(record_size, field_size) orelse return;
+    }
+
+    if (du.recl == 0) {
+        if (record_size > @as(usize, @intCast(std.math.maxInt(c_int)))) return;
+        du.recl = @intCast(record_size);
+    }
+    if (du.recl <= 0) return;
+
+    const record = f77_direct_record_ptr(unit, rec, du.recl) orelse return;
+    const recl: usize = @intCast(du.recl);
+    var z: usize = 0;
+    while (z < recl) : (z += 1) record[z] = 0;
+
+    var pos: usize = 0;
+    i = 0;
+    while (i < total_args and pos < recl) : (i += 1) {
+        const kind = runtimeArgKindAt(arg_kinds, i, total_args);
+        const len = runtimeArgLenAt(arg_lens, i, total_args);
+        const field_size = typedFieldSize(kind, len) orelse return;
+        const arg_any = runtimeArgPtrAt(arg_ptrs, i, total_args);
+        if (arg_any != null and pos < recl) {
+            const src: [*]const u8 = @ptrCast(arg_any.?);
+            const remaining = recl - pos;
+            const copy_n = if (field_size < remaining) field_size else remaining;
+            copyRawBytes(record + pos, src, copy_n);
+        }
+        pos += field_size;
+    }
+    du.nextrec = rec + 1;
+}
+
+pub export fn f77_read_direct_typed(
+    unit: c_int,
+    rec: c_int,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_lens: ?[*]const c_int,
+    arg_count: c_int,
+) callconv(.c) c_int {
+    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return 0;
+    const idx: usize = @intCast(unit);
+    const du = &direct_units[idx];
+    const total_args = runtimeArgCount(arg_count);
+
+    var expected_size: usize = 0;
+    var i: usize = 0;
+    while (i < total_args) : (i += 1) {
+        const kind = runtimeArgKindAt(arg_kinds, i, total_args);
+        const len = runtimeArgLenAt(arg_lens, i, total_args);
+        const field_size = typedFieldSize(kind, len) orelse return 0;
+        expected_size = checkedAdd(expected_size, field_size) orelse return 0;
+    }
+
+    const recl: usize = if (du.recl > 0) @intCast(du.recl) else expected_size;
+    if (recl == 0) return 0;
+    if (recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
+    const recl_i32: c_int = @intCast(recl);
+    const record = f77_direct_record_ptr_ro(unit, rec, recl_i32) orelse return 0;
+
+    var pos: usize = 0;
+    var assigned: c_int = 0;
+    i = 0;
+    while (i < total_args and pos < recl) : (i += 1) {
+        const kind = runtimeArgKindAt(arg_kinds, i, total_args);
+        const len = runtimeArgLenAt(arg_lens, i, total_args);
+        const field_size = typedFieldSize(kind, len) orelse return 0;
+        const arg_any = runtimeArgPtrAt(arg_ptrs, i, total_args);
+        if (arg_any != null and pos + field_size <= recl) {
+            const dst: [*]u8 = @ptrCast(arg_any.?);
+            copyRawBytes(dst, record + pos, field_size);
+            assigned += 1;
+        }
+        pos += field_size;
+    }
+
+    du.nextrec = rec + 1;
+    return assigned;
+}
+
 pub export fn f77_write_unformatted_v(
     unit: c_int,
     sig: ?[*:0]const u8,
