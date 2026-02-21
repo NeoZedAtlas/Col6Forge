@@ -21,6 +21,11 @@ pub fn build(b: *std.Build) void {
         "tools_optimize",
         "Optimization mode for build tools (golden/verify/blas/lapack/test-harness)",
     ) orelse .Debug;
+    const run_from_install = b.option(
+        bool,
+        "run_from_install",
+        "Run `zig build run` from zig-out/bin via install step (default: false, runs from cache artifact)",
+    ) orelse false;
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -180,9 +185,11 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
 
-    // By making the run step depend on the default step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
-    run_cmd.step.dependOn(b.getInstallStep());
+    // Running directly from the cache avoids extra install work in tight edit/run loops.
+    // Opt into install-dir execution with `-Drun_from_install=true` when needed.
+    if (run_from_install) {
+        run_cmd.step.dependOn(b.getInstallStep());
+    }
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
@@ -216,6 +223,20 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    // Compile-focused fast path: build core artifacts and tests without executing them.
+    const check_step = b.step("check", "Compile CLI and tests without running");
+    check_step.dependOn(&exe.step);
+    check_step.dependOn(&mod_tests.step);
+    check_step.dependOn(&exe_tests.step);
+
+    // Compile all developer runners without install/copy overhead.
+    const tools_check_step = b.step("tools-check", "Compile developer runner tools without install");
+    tools_check_step.dependOn(&golden_runner.step);
+    tools_check_step.dependOn(&verify_runner.step);
+    tools_check_step.dependOn(&blas_runner.step);
+    tools_check_step.dependOn(&lapack_runner.step);
+    tools_check_step.dependOn(&test_harness.step);
 
     const golden_step = b.step("golden", "Run golden file tests");
     const run_golden = b.addRunArtifact(golden_runner);
