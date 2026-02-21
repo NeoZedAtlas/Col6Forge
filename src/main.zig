@@ -1,5 +1,6 @@
 const std = @import("std");
 const Col6Forge = @import("Col6Forge");
+const cc_driver = @import("driver/cc_driver.zig");
 
 pub fn main() void {
     runMain() catch |err| {
@@ -19,6 +20,10 @@ fn runMain() !void {
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
+
+    if (args.len >= 2 and std.mem.eql(u8, args[1], "cc")) {
+        cc_driver.runOrExit(allocator, args);
+    }
 
     const parsed = switch (parseArgs(allocator, args)) {
         .success => |value| value,
@@ -268,13 +273,17 @@ fn failWithUsage(parse_err: ParseArgError) noreturn {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: col6forge <file.f> -emit-llvm -o <out.ll>
-        \\Options:
+        \\Usage:
+        \\  col6forge <file.f> -emit-llvm -o <out.ll>
+        \\  col6forge cc <file.f> [options] [extra_link_inputs...] [-- <zig-cc-flags...>]
+        \\Options (IR mode):
         \\  -emit-llvm    Emit LLVM IR (default)
         \\  -fbounds-check  Enable runtime array bounds checking
         \\  -ftime-report, --time-report  Print parse/sema/codegen timing report to stderr
         \\  -o <path>     Write output to file
         \\  -h, --help    Show this help
+        \\
+        \\Run `col6forge cc --help` for compiler-driver mode details.
         \\
     );
 }
