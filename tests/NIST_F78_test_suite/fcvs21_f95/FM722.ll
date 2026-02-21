@@ -2200,17 +2200,16 @@ entry:
   %t0 = alloca double
   br label %bb0
 bb0:
-  %t1 = load float, ptr %arg0
-  %t2 = fpext float %t1 to double
-  %t3 = fadd double %t2, 1.0e4
-  store double %t3, ptr %t0
+  %t1 = load double, ptr %arg0
+  %t2 = fadd double %t1, 1.0e4
+  store double %t2, ptr %t0
   br label %bb1
 bb1:
+  %t3 = load double, ptr %t0
+  ret double %t3
+exit:
   %t4 = load double, ptr %t0
   ret double %t4
-exit:
-  %t5 = load double, ptr %t0
-  ret double %t5
 }
 define i64 @zf724_(ptr %arg0, ptr %arg1) {
 entry:
@@ -2254,10 +2253,9 @@ entry:
   %t0 = getelementptr i8, ptr @common_bvn001_, i32 0
   br label %bb0
 bb0:
-  %t1 = call float %arg0(ptr %arg1)
-  %t2 = fpext float %t1 to double
-  %t3 = fadd double %t2, 1.0e3
-  store double %t3, ptr %t0
+  %t1 = call double %arg0(ptr %arg1)
+  %t2 = fadd double %t1, 1.0e3
+  store double %t2, ptr %t0
   br label %bb1
 bb1:
   ret void

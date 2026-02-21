@@ -24,15 +24,15 @@ target triple = "x86_64-pc-windows-gnu"
 @fmt_fm900_70071 = private unnamed_addr constant [91 x i8] c"                          +0.7E+03  +0.4E+03\0A                          +0.7+003  +0.4+003\0A\00", align 1
 @fmt_fm900_70080 = private unnamed_addr constant [42 x i8] c"                          %14.7E  %14.7E\0A\00", align 1
 @fmt_fm900_70081 = private unnamed_addr constant [115 x i8] c"                          +0.9876543E-04  +0.1357913E-04\0A                          +0.9876543-004  +0.1357913-004\0A\00", align 1
-@fmt_fm900_70090 = private unnamed_addr constant [152 x i8] c"   %3d    INSPECT                                LEADING PLUS SIGN/ZEROOPTIONAL\0A                                                 FOR THE SECOND NUMBER\0A\00", align 1
+@fmt_fm900_70090 = private unnamed_addr constant [153 x i8] c"   %3d    INSPECT                                LEADING PLUS SIGN/ZERO OPTIONAL\0A                                                 FOR THE SECOND NUMBER\0A\00", align 1
 @fmt_fm900_70091 = private unnamed_addr constant [41 x i8] c"                          %5.2f  %11.4E\0A\00", align 1
 @fmt_fm900_70092 = private unnamed_addr constant [91 x i8] c"                          19.34  +0.2468E+02\0A                          19.34  +0.2468+002\0A\00", align 1
-@fmt_fm900_70100 = private unnamed_addr constant [151 x i8] c"   %3d    INSPECT                                LEADING PLUS SIGN/ZEROOPTIONAL\0A                                                 FOR THE FIRST NUMBER\0A\00", align 1
+@fmt_fm900_70100 = private unnamed_addr constant [152 x i8] c"   %3d    INSPECT                                LEADING PLUS SIGN/ZERO OPTIONAL\0A                                                 FOR THE FIRST NUMBER\0A\00", align 1
 @fmt_fm900_70101 = private unnamed_addr constant [41 x i8] c"                          %10.3E  %4.1f\0A\00", align 1
 @fmt_fm900_70102 = private unnamed_addr constant [87 x i8] c"                          +0.765E+02  87.6\0A                          +0.765+002  87.6\0A\00", align 1
 @fmt_fm900_70110 = private unnamed_addr constant [76 x i8] c"                 COMPUTED:                       3 COMPUTED LINES EXPECTED\0A\00", align 1
 @fmt_fm900_70111 = private unnamed_addr constant [116 x i8] c"                          %7.2f%11.4E\0A                          %7.2f%11.4E\0A                          %7.2f%11.4E\0A\0A\00", align 1
-@fmt_fm900_70112 = private unnamed_addr constant [223 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULDMATCH \0A                                                 EITHER ONE OF THE 2 POSSIBLE  \0A                                                 ANSWERS BELOW\0A\00", align 1
+@fmt_fm900_70112 = private unnamed_addr constant [224 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULD MATCH \0A                                                 EITHER ONE OF THE 2 POSSIBLE  \0A                                                 ANSWERS BELOW\0A\00", align 1
 @fmt_fm900_70113 = private unnamed_addr constant [91 x i8] c"                           +43.96+0.5407E+02\0A                           +43.96+0.5407+002\0A\00", align 1
 @fmt_fm900_2109 = private unnamed_addr constant [29 x i8] c"\0A        D CONVERSION TEST\0A\0A\00", align 1
 @fmt_fm900_2110 = private unnamed_addr constant [9 x i8] c"  %8.1E\0A\00", align 1
@@ -42,7 +42,7 @@ target triple = "x86_64-pc-windows-gnu"
 @fmt_fm900_70122 = private unnamed_addr constant [106 x i8] c"                          +0.1D+06\0A                          +0.1E+06\0A                          +0.1+006\0A\00", align 1
 @fmt_fm900_70130 = private unnamed_addr constant [76 x i8] c"                 COMPUTED:                       2 COMPUTED LINES EXPECTED\0A\00", align 1
 @fmt_fm900_70131 = private unnamed_addr constant [67 x i8] c"                          %10.3E\0A                          %10.3E\0A\00", align 1
-@fmt_fm900_70132 = private unnamed_addr constant [215 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULDMATCH \0A                                                 ONE OF THE 3 POSSIBLE ANSWERS \0A                                                 BELOW\0A\00", align 1
+@fmt_fm900_70132 = private unnamed_addr constant [216 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULD MATCH \0A                                                 ONE OF THE 3 POSSIBLE ANSWERS \0A                                                 BELOW\0A\00", align 1
 @fmt_fm900_70133 = private unnamed_addr constant [112 x i8] c"                          -0.334D-04\0A                          -0.334E-04\0A                          -0.334-004\0A\00", align 1
 @fmt_fm900_70140 = private unnamed_addr constant [34 x i8] c"                          %14.7E\0A\00", align 1
 @fmt_fm900_70141 = private unnamed_addr constant [124 x i8] c"                          +0.7657654D+00\0A                          +0.7657654E+00\0A                          +0.7657654+000\0A\00", align 1
@@ -57,7 +57,7 @@ target triple = "x86_64-pc-windows-gnu"
 @fmt_fm900_2116 = private unnamed_addr constant [65 x i8] c"%9.2E%9.2E%9.2E%9.2E%9.2E%9.2E%9.2E%9.2E\0A  %9.2E%9.2E%9.2E%9.2E\0A\00", align 1
 @fmt_fm900_2117 = private unnamed_addr constant [78 x i8] c"          %9.2E%9.2E%9.2E%9.2E%9.2E\0A%3.1f%3.1f%3.1f%3.1f%3.1f%3.1f%3.1f%3.1f\0A\00", align 1
 @fmt_fm900_70180 = private unnamed_addr constant [135 x i8] c"                          %3.1f%3.1f%3.1f%3.1f%3.1f%3.1f%3.1f%3.1f\0A                          %3.1f%3.1f%3.1f%3.1f%3.1f%3.1f%3.1f%3.1f\0A\00", align 1
-@fmt_fm900_70181 = private unnamed_addr constant [79 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULDEQUAL\0A\00", align 1
+@fmt_fm900_70181 = private unnamed_addr constant [80 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULD EQUAL\0A\00", align 1
 @fmt_fm900_70182 = private unnamed_addr constant [52 x i8] c"                          9.91.19.92.29.93.39.94.4\0A\00", align 1
 @fmt_fm900_70190 = private unnamed_addr constant [95 x i8] c"                          %9.2E%9.2E%9.2E%9.2E\0A                          %9.2E%9.2E%9.2E%9.2E\0A\00", align 1
 @fmt_fm900_70191 = private unnamed_addr constant [190 x i8] c"                          -0.99D+01-0.98D+01-0.97D+01-0.96D+01\0A                          -0.99E+01-0.98E+01-0.97E+01-0.96E+01\0A                          -0.99+001-0.98+001-0.97+001-0.96+001\0A\00", align 1
@@ -104,9 +104,9 @@ target triple = "x86_64-pc-windows-gnu"
 @fmt_fm900_2128 = private unnamed_addr constant [47 x i8] c"%8.2f%9.4E%9.2f%9.3E%9.0E%9.4E%9.4f%9.2E%9.4E\0A\00", align 1
 @fmt_fm900_2129 = private unnamed_addr constant [33 x i8] c"\0A        SCALE FACTOR ON WRITE\0A\0A\00", align 1
 @fmt_fm900_70350 = private unnamed_addr constant [58 x i8] c"                          %12.2f%12.4E%12.4f%12.2E%12.4E\0A\00", align 1
-@fmt_fm900_70351 = private unnamed_addr constant [259 x i8] c"                               +987.66 +0.0099E+06    +98.7654   +9.88E+02+8.6479D+02\0A                               +987.66 +0.0099E+06    +98.7654   +9.88E+02+8.6479E+02\0A                               +987.66 +0.0099+006    +98.7654   +9.88+002+8.6479+002\0A\00", align 1
+@fmt_fm900_70351 = private unnamed_addr constant [262 x i8] c"                               +987.66 +0.0099E+06    +98.7654   +9.88E+02 +8.6479D+02\0A                               +987.66 +0.0099E+06    +98.7654   +9.88E+02 +8.6479E+02\0A                               +987.66 +0.0099+006    +98.7654   +9.88+002 +8.6479+002\0A\00", align 1
 @fmt_fm900_70352 = private unnamed_addr constant [56 x i8] c"                                                    OR\0A\00", align 1
-@fmt_fm900_70353 = private unnamed_addr constant [259 x i8] c"                               +987.66 +0.0099E+06    +98.76539  +9.88E+02+8.6479D+02\0A                               +987.66 +0.0099E+06    +98.76539  +9.88E+02+8.6479E+02\0A                               +987.66 +0.0099+006    +98.76539  +9.88+002+8.6479+002\0A\00", align 1
+@fmt_fm900_70353 = private unnamed_addr constant [262 x i8] c"                               +987.66 +0.0099E+06    +98.76539  +9.88E+02 +8.6479D+02\0A                               +987.66 +0.0099E+06    +98.76539  +9.88E+02 +8.6479E+02\0A                               +987.66 +0.0099+006    +98.76539  +9.88+002 +8.6479+002\0A\00", align 1
 @fmt_fm900_70360 = private unnamed_addr constant [52 x i8] c"                          %12.4E%12.2f%12.4E%16.4E\0A\00", align 1
 @fmt_fm900_70361 = private unnamed_addr constant [226 x i8] c"                           +0.0086E+06    +8647.86 +8.6579D+03      +9877.\0A                           +0.0086E+06    +8647.86 +8.6579E+03      +9877.\0A                           +0.0086+006    +8647.86 +8.6579+003      +9877.\0A\00", align 1
 @fmt_fm900_80000 = private unnamed_addr constant [55 x i8] c"   %3d    DELETED                                %31s\0A\00", align 1
@@ -1697,7 +1697,7 @@ bb117:
 bb118:
   %t838 = load i32, ptr %t41
   %t839 = load i32, ptr %t42
-  %t840 = getelementptr [152 x i8], ptr @str35, i32 0, i32 0
+  %t840 = getelementptr [153 x i8], ptr @str35, i32 0, i32 0
   %t841 = alloca i32
   store i32 %t839, ptr %t841
   %t842 = alloca ptr, i32 1
@@ -1767,7 +1767,7 @@ bb127:
 bb128:
   %t877 = load i32, ptr %t41
   %t878 = load i32, ptr %t42
-  %t879 = getelementptr [151 x i8], ptr @str37, i32 0, i32 0
+  %t879 = getelementptr [152 x i8], ptr @str37, i32 0, i32 0
   %t880 = alloca i32
   store i32 %t878, ptr %t880
   %t881 = alloca ptr, i32 1
@@ -1917,7 +1917,7 @@ bb143:
   br label %bb144
 bb144:
   %t968 = load i32, ptr %t41
-  %t969 = getelementptr [223 x i8], ptr @str42, i32 0, i32 0
+  %t969 = getelementptr [224 x i8], ptr @str42, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t968, ptr %t969, ptr null, ptr null, i32 0, i32 0)
   br label %L70112
 L70112:
@@ -2264,7 +2264,7 @@ bb174:
   br label %bb175
 bb175:
   %t1175 = load i32, ptr %t41
-  %t1176 = getelementptr [215 x i8], ptr @str55, i32 0, i32 0
+  %t1176 = getelementptr [216 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1175, ptr %t1176, ptr null, ptr null, i32 0, i32 0)
   br label %L70132
 L70132:
@@ -2539,7 +2539,7 @@ bb203:
   br label %bb204
 bb204:
   %t1314 = load i32, ptr %t41
-  %t1315 = getelementptr [215 x i8], ptr @str55, i32 0, i32 0
+  %t1315 = getelementptr [216 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1314, ptr %t1315, ptr null, ptr null, i32 0, i32 0)
   br label %bb205
 bb205:
@@ -2695,7 +2695,7 @@ bb213:
   br label %bb214
 bb214:
   %t1403 = load i32, ptr %t41
-  %t1404 = getelementptr [215 x i8], ptr @str55, i32 0, i32 0
+  %t1404 = getelementptr [216 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1403, ptr %t1404, ptr null, ptr null, i32 0, i32 0)
   br label %bb215
 bb215:
@@ -3177,7 +3177,7 @@ bb233:
   br label %bb234
 bb234:
   %t1736 = load i32, ptr %t41
-  %t1737 = getelementptr [79 x i8], ptr @str72, i32 0, i32 0
+  %t1737 = getelementptr [80 x i8], ptr @str72, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1736, ptr %t1737, ptr null, ptr null, i32 0, i32 0)
   br label %L70181
 L70181:
@@ -3275,7 +3275,7 @@ bb243:
   br label %bb244
 bb244:
   %t1792 = load i32, ptr %t41
-  %t1793 = getelementptr [215 x i8], ptr @str55, i32 0, i32 0
+  %t1793 = getelementptr [216 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1792, ptr %t1793, ptr null, ptr null, i32 0, i32 0)
   br label %bb245
 bb245:
@@ -3498,7 +3498,7 @@ bb263:
   br label %bb264
 bb264:
   %t1907 = load i32, ptr %t41
-  %t1908 = getelementptr [215 x i8], ptr @str55, i32 0, i32 0
+  %t1908 = getelementptr [216 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1907, ptr %t1908, ptr null, ptr null, i32 0, i32 0)
   br label %bb265
 bb265:
@@ -3688,7 +3688,7 @@ bb272:
   br label %bb273
 bb273:
   %t2046 = load i32, ptr %t41
-  %t2047 = getelementptr [79 x i8], ptr @str72, i32 0, i32 0
+  %t2047 = getelementptr [80 x i8], ptr @str72, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t2046, ptr %t2047, ptr null, ptr null, i32 0, i32 0)
   br label %bb274
 bb274:
@@ -5172,7 +5172,7 @@ bb429:
   br label %bb430
 bb430:
   %t2873 = load i32, ptr %t41
-  %t2874 = getelementptr [259 x i8], ptr @str114, i32 0, i32 0
+  %t2874 = getelementptr [262 x i8], ptr @str114, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t2873, ptr %t2874, ptr null, ptr null, i32 0, i32 0)
   br label %L70351
 L70351:
@@ -5188,7 +5188,7 @@ L70353:
   br label %bb435
 bb435:
   %t2877 = load i32, ptr %t41
-  %t2878 = getelementptr [259 x i8], ptr @str115, i32 0, i32 0
+  %t2878 = getelementptr [262 x i8], ptr @str115, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t2877, ptr %t2878, ptr null, ptr null, i32 0, i32 0)
   br label %bb436
 bb436:
@@ -5561,14 +5561,14 @@ exit:
 @str32 = private unnamed_addr constant [103 x i8] c"                          -0.2345E+02  -0.6879E+02\0A                          -0.2345+002  -0.6879+002\0A\00", align 1
 @str33 = private unnamed_addr constant [91 x i8] c"                          +0.7E+03  +0.4E+03\0A                          +0.7+003  +0.4+003\0A\00", align 1
 @str34 = private unnamed_addr constant [115 x i8] c"                          +0.9876543E-04  +0.1357913E-04\0A                          +0.9876543-004  +0.1357913-004\0A\00", align 1
-@str35 = private unnamed_addr constant [152 x i8] c"   %3d    INSPECT                                LEADING PLUS SIGN/ZEROOPTIONAL\0A                                                 FOR THE SECOND NUMBER\0A\00", align 1
+@str35 = private unnamed_addr constant [153 x i8] c"   %3d    INSPECT                                LEADING PLUS SIGN/ZERO OPTIONAL\0A                                                 FOR THE SECOND NUMBER\0A\00", align 1
 @str36 = private unnamed_addr constant [91 x i8] c"                          19.34  +0.2468E+02\0A                          19.34  +0.2468+002\0A\00", align 1
-@str37 = private unnamed_addr constant [151 x i8] c"   %3d    INSPECT                                LEADING PLUS SIGN/ZEROOPTIONAL\0A                                                 FOR THE FIRST NUMBER\0A\00", align 1
+@str37 = private unnamed_addr constant [152 x i8] c"   %3d    INSPECT                                LEADING PLUS SIGN/ZERO OPTIONAL\0A                                                 FOR THE FIRST NUMBER\0A\00", align 1
 @str38 = private unnamed_addr constant [87 x i8] c"                          +0.765E+02  87.6\0A                          +0.765+002  87.6\0A\00", align 1
 @str39 = private unnamed_addr constant [76 x i8] c"                 COMPUTED:                       3 COMPUTED LINES EXPECTED\0A\00", align 1
 @str40 = private unnamed_addr constant [95 x i8] c"                          %s%s\0A                          %s%s\0A                          %s%s\0A\0A\00", align 1
 @str41 = private unnamed_addr constant [7 x i8] c"ssssss\00", align 1
-@str42 = private unnamed_addr constant [223 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULDMATCH \0A                                                 EITHER ONE OF THE 2 POSSIBLE  \0A                                                 ANSWERS BELOW\0A\00", align 1
+@str42 = private unnamed_addr constant [224 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULD MATCH \0A                                                 EITHER ONE OF THE 2 POSSIBLE  \0A                                                 ANSWERS BELOW\0A\00", align 1
 @str43 = private unnamed_addr constant [91 x i8] c"                           +43.96+0.5407E+02\0A                           +43.96+0.5407+002\0A\00", align 1
 @str44 = private unnamed_addr constant [29 x i8] c"\0A        D CONVERSION TEST\0A\0A\00", align 1
 @str45 = private unnamed_addr constant [7 x i8] c"  %8lf\00", align 1
@@ -5581,7 +5581,7 @@ exit:
 @str52 = private unnamed_addr constant [106 x i8] c"                          +0.1D+06\0A                          +0.1E+06\0A                          +0.1+006\0A\00", align 1
 @str53 = private unnamed_addr constant [76 x i8] c"                 COMPUTED:                       2 COMPUTED LINES EXPECTED\0A\00", align 1
 @str54 = private unnamed_addr constant [59 x i8] c"                          %s\0A                          %s\0A\00", align 1
-@str55 = private unnamed_addr constant [215 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULDMATCH \0A                                                 ONE OF THE 3 POSSIBLE ANSWERS \0A                                                 BELOW\0A\00", align 1
+@str55 = private unnamed_addr constant [216 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULD MATCH \0A                                                 ONE OF THE 3 POSSIBLE ANSWERS \0A                                                 BELOW\0A\00", align 1
 @str56 = private unnamed_addr constant [112 x i8] c"                          -0.334D-04\0A                          -0.334E-04\0A                          -0.334-004\0A\00", align 1
 @str57 = private unnamed_addr constant [124 x i8] c"                          +0.7657654D+00\0A                          +0.7657654E+00\0A                          +0.7657654+000\0A\00", align 1
 @str58 = private unnamed_addr constant [136 x i8] c"                          +0.12345678901D+10\0A                          +0.12345678901E+10\0A                          +0.12345678901+010\0A\00", align 1
@@ -5598,7 +5598,7 @@ exit:
 @str69 = private unnamed_addr constant [14 x i8] c"DDDDDffffffff\00", align 1
 @str70 = private unnamed_addr constant [87 x i8] c"                          %s%s%s%s%s%s%s%s\0A                          %s%s%s%s%s%s%s%s\0A\00", align 1
 @str71 = private unnamed_addr constant [17 x i8] c"ssssssssssssssss\00", align 1
-@str72 = private unnamed_addr constant [79 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULDEQUAL\0A\00", align 1
+@str72 = private unnamed_addr constant [80 x i8] c"                 CORRECT:                        EACH RESULT LINE SHOULD EQUAL\0A\00", align 1
 @str73 = private unnamed_addr constant [52 x i8] c"                          9.91.19.92.29.93.39.94.4\0A\00", align 1
 @str74 = private unnamed_addr constant [71 x i8] c"                          %s%s%s%s\0A                          %s%s%s%s\0A\00", align 1
 @str75 = private unnamed_addr constant [9 x i8] c"ssssssss\00", align 1
@@ -5640,8 +5640,8 @@ exit:
 @str111 = private unnamed_addr constant [154 x i8] c"                           +0.8658D+04      +98.77\0A                           +0.8658E+04      +98.77\0A                           +0.8658+004      +98.77\0A\00", align 1
 @str112 = private unnamed_addr constant [33 x i8] c"\0A        SCALE FACTOR ON WRITE\0A\0A\00", align 1
 @str113 = private unnamed_addr constant [38 x i8] c"                          %s%s%s%s%s\0A\00", align 1
-@str114 = private unnamed_addr constant [259 x i8] c"                               +987.66 +0.0099E+06    +98.7654   +9.88E+02+8.6479D+02\0A                               +987.66 +0.0099E+06    +98.7654   +9.88E+02+8.6479E+02\0A                               +987.66 +0.0099+006    +98.7654   +9.88+002+8.6479+002\0A\00", align 1
-@str115 = private unnamed_addr constant [259 x i8] c"                               +987.66 +0.0099E+06    +98.76539  +9.88E+02+8.6479D+02\0A                               +987.66 +0.0099E+06    +98.76539  +9.88E+02+8.6479E+02\0A                               +987.66 +0.0099+006    +98.76539  +9.88+002+8.6479+002\0A\00", align 1
+@str114 = private unnamed_addr constant [262 x i8] c"                               +987.66 +0.0099E+06    +98.7654   +9.88E+02 +8.6479D+02\0A                               +987.66 +0.0099E+06    +98.7654   +9.88E+02 +8.6479E+02\0A                               +987.66 +0.0099+006    +98.7654   +9.88+002 +8.6479+002\0A\00", align 1
+@str115 = private unnamed_addr constant [262 x i8] c"                               +987.66 +0.0099E+06    +98.76539  +9.88E+02 +8.6479D+02\0A                               +987.66 +0.0099E+06    +98.76539  +9.88E+02 +8.6479E+02\0A                               +987.66 +0.0099+006    +98.76539  +9.88+002 +8.6479+002\0A\00", align 1
 @str116 = private unnamed_addr constant [226 x i8] c"                           +0.0086E+06    +8647.86 +8.6579D+03      +9877.\0A                           +0.0086E+06    +8647.86 +8.6579E+03      +9877.\0A                           +0.0086+006    +8647.86 +8.6579+003      +9877.\0A\00", align 1
 @str117 = private unnamed_addr constant [40 x i8] c"                      %5d TESTS PASSED\0A\00", align 1
 @str118 = private unnamed_addr constant [40 x i8] c"                      %5d TESTS FAILED\0A\00", align 1

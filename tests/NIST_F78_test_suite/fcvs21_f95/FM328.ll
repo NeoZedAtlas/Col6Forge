@@ -3533,7 +3533,7 @@ entry:
   call void @fm328_()
   ret i32 0
 }
-declare ptr @col6forge_fmt_e(i32, i32, i32, i32, i32, double)
-declare float @llvm.round.f32(float)
 declare i32 @col6forge_write_v(i32, ptr, ptr, ptr, i32, i32)
+declare float @llvm.round.f32(float)
 declare float @llvm.fabs.f32(float)
+declare ptr @col6forge_fmt_e(i32, i32, i32, i32, i32, double)

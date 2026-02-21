@@ -24,6 +24,7 @@ pub fn main() !void {
             return error.InvalidArguments;
         },
     };
+    defer allocator.free(options.suite_names);
 
     if (options.show_help) {
         try printUsage(std.fs.File.stdout());
@@ -113,6 +114,7 @@ const SuiteKind = enum {
 
 const Suite = struct {
     name: []const u8,
+    build_step: []const u8,
     exe_name: []const u8,
     description: []const u8,
     kind: SuiteKind,
@@ -149,12 +151,14 @@ const ParseArgsOutcome = union(enum) {
 const suites = [_]Suite{
     .{
         .name = "golden",
+        .build_step = "golden",
         .exe_name = exeName("golden_runner"),
         .description = "Golden file tests",
         .kind = .golden,
     },
     .{
         .name = "nist",
+        .build_step = "verify",
         .exe_name = exeName("verify_runner"),
         .description = "NIST F78 verification tests",
         .kind = .nist,
@@ -303,20 +307,21 @@ fn runSuite(
     allocator: std.mem.Allocator,
     suite: Suite,
     options: Options,
-    exe_dir: []const u8,
+    _exe_dir: []const u8,
     root_dir: []const u8,
     runner_jobs: usize,
     output: *OutputMux,
 ) !bool {
-    const exe_path = try std.fs.path.join(allocator, &.{ exe_dir, suite.exe_name });
-    defer allocator.free(exe_path);
+    _ = _exe_dir;
 
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
     var timeout_arg: ?[]const u8 = null;
     defer if (timeout_arg) |value| allocator.free(value);
 
-    try argv.append(allocator, exe_path);
+    // Always invoke the suite through `zig build <step>` so test-all uses
+    // the same freshly-built runner binaries as direct suite execution.
+    try argv.appendSlice(allocator, &.{ "zig", "build", suite.build_step, "--" });
     if (options.tests_dir) |dir| {
         try argv.append(allocator, "--tests-dir");
         try argv.append(allocator, dir);
@@ -390,9 +395,30 @@ fn runSuiteParallel(
 }
 
 fn projectRootFromExeDir(allocator: std.mem.Allocator, exe_dir: []const u8) ![]const u8 {
-    const root_guess = try std.fs.path.join(allocator, &.{ exe_dir, "..", ".." });
-    defer allocator.free(root_guess);
-    return std.fs.cwd().realpathAlloc(allocator, root_guess);
+    const cwd_root = try std.fs.cwd().realpathAlloc(allocator, ".");
+    errdefer allocator.free(cwd_root);
+    const cwd_build = try std.fs.path.join(allocator, &.{ cwd_root, "build.zig" });
+    defer allocator.free(cwd_build);
+    if (pathExists(cwd_build)) return cwd_root;
+    allocator.free(cwd_root);
+
+    const guess_two = try std.fs.path.join(allocator, &.{ exe_dir, "..", ".." });
+    defer allocator.free(guess_two);
+    const two_abs = try std.fs.cwd().realpathAlloc(allocator, guess_two);
+    defer allocator.free(two_abs);
+    const two_build = try std.fs.path.join(allocator, &.{ two_abs, "build.zig" });
+    defer allocator.free(two_build);
+    if (pathExists(two_build)) return try allocator.dupe(u8, two_abs);
+
+    const guess_three = try std.fs.path.join(allocator, &.{ exe_dir, "..", "..", ".." });
+    defer allocator.free(guess_three);
+    const three_abs = try std.fs.cwd().realpathAlloc(allocator, guess_three);
+    defer allocator.free(three_abs);
+    const three_build = try std.fs.path.join(allocator, &.{ three_abs, "build.zig" });
+    defer allocator.free(three_build);
+    if (pathExists(three_build)) return try allocator.dupe(u8, three_abs);
+
+    return error.FileNotFound;
 }
 
 fn exeName(comptime base: []const u8) []const u8 {
@@ -564,4 +590,9 @@ fn streamPipeTo(pipe: std.fs.File, out: std.fs.File, output: *OutputMux) void {
 
 fn defaultJobs() usize {
     return std.Thread.getCpuCount() catch 1;
+}
+
+fn pathExists(path: []const u8) bool {
+    std.fs.accessAbsolute(path, .{}) catch return false;
+    return true;
 }

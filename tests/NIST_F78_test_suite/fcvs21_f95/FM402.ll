@@ -28,8 +28,8 @@ target triple = "x86_64-pc-windows-gnu"
 @fmt_fm402_70004 = private unnamed_addr constant [86 x i8] c"%3d%2d%4d%3d%4d%4d                                                      %s%s%s%s%s%s\0A\00", align 1
 @fmt_fm402_70005 = private unnamed_addr constant [100 x i8] c"%3d%2d%4d%3d%4d%4d                                                  %1s%1s%1s%1s%1s%1s%1s%1s%1s%1s\0A\00", align 1
 @fmt_fm402_70006 = private unnamed_addr constant [92 x i8] c"%3d%2d%4d%3d%4d%4d                                                      %1s%1s%1s%1s%1s%1s\0A\00", align 1
-@fmt_fm402_70007 = private unnamed_addr constant [77 x i8] c"%3d%2d%4d%3d%4d%4dABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789                     \0A\00", align 1
-@fmt_fm402_70008 = private unnamed_addr constant [76 x i8] c"%3d%2d%4d%3d%4d%4d=+-*/(),'.ABMYZ01589=+-()A5+Z.1'A,4                     \0A\00", align 1
+@fmt_fm402_70007 = private unnamed_addr constant [80 x i8] c"%3d%2d%4d%3d%4d%4dABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789                        \0A\00", align 1
+@fmt_fm402_70008 = private unnamed_addr constant [80 x i8] c"%3d%2d%4d%3d%4d%4d=+-*/(),'.ABMYZ01589=+-()A5+Z.1'A,4                         \0A\00", align 1
 @fmt_fm402_70009 = private unnamed_addr constant [32 x i8] c"%3d%2d%4d%3d%4d%4d          %s\0A\00", align 1
 @fmt_fm402_70010 = private unnamed_addr constant [34 x i8] c"%3d%2d%4d%3d%4d%4d          %50s\0A\00", align 1
 @fmt_fm402_70011 = private unnamed_addr constant [80 x i8] c"%3d%2d%4d%3d%4d%4d                                                            \0A\00", align 1
@@ -42,7 +42,7 @@ target triple = "x86_64-pc-windows-gnu"
 @fmt_fm402_232 = private unnamed_addr constant [92 x i8] c"                                                                      %s%s%s%s%s%s%s%s%s%s\0A\00", align 1
 @fmt_fm402_242 = private unnamed_addr constant [88 x i8] c"                                                                          %s%s%s%s%s%s\0A\00", align 1
 @fmt_fm402_70020 = private unnamed_addr constant [82 x i8] c"            %4d%4d                                                           %1s\0A\00", align 1
-@fmt_fm402_70021 = private unnamed_addr constant [65 x i8] c"  THE INITIAL RECORD FOR TESTS 25 THROUGH 29 COULD NOTBE FOUND,\0A\00", align 1
+@fmt_fm402_70021 = private unnamed_addr constant [66 x i8] c"  THE INITIAL RECORD FOR TESTS 25 THROUGH 29 COULD NOT BE FOUND,\0A\00", align 1
 @fmt_fm402_70022 = private unnamed_addr constant [51 x i8] c" THEREFORE TESTS 25 THROUGH 29     ARE   DELETED.\0A\00", align 1
 @fmt_fm402_252 = private unnamed_addr constant [102 x i8] c"                                                                      %1s%1s%1s%1s%1s%1s%1s%1s%1s%1s\0A\00", align 1
 @fmt_fm402_262 = private unnamed_addr constant [102 x i8] c"                                                                      %1s%1s%1s%1s%1s%1s%1s%1s%1s%1s\0A\00", align 1
@@ -50,13 +50,13 @@ target triple = "x86_64-pc-windows-gnu"
 @fmt_fm402_282 = private unnamed_addr constant [102 x i8] c"                                                                      %1s%1s%1s%1s%1s%1s%1s%1s%1s%1s\0A\00", align 1
 @fmt_fm402_292 = private unnamed_addr constant [94 x i8] c"                                                                          %1s%1s%1s%1s%1s%1s\0A\00", align 1
 @fmt_fm402_70031 = private unnamed_addr constant [82 x i8] c"            %4d%4d                                                           %1s\0A\00", align 1
-@fmt_fm402_70032 = private unnamed_addr constant [63 x i8] c"  THE START RECORD FOR TESTS 30 THROUGH 32 COULD NOTBE FOUND,\0A\00", align 1
+@fmt_fm402_70032 = private unnamed_addr constant [66 x i8] c"  THE START RECORD FOR TESTS 30 THROUGH 32 COULD NOT   BE FOUND,\0A\00", align 1
 @fmt_fm402_70033 = private unnamed_addr constant [51 x i8] c" THEREFORE TESTS 30 THROUGH 32     ARE   DELETED.\0A\00", align 1
 @fmt_fm402_302 = private unnamed_addr constant [75 x i8] c"                    %s%s%s%s                                          %1s\0A\00", align 1
 @fmt_fm402_312 = private unnamed_addr constant [35 x i8] c"                              %5s\0A\00", align 1
 @fmt_fm402_322 = private unnamed_addr constant [36 x i8] c"                              %10s\0A\00", align 1
 @fmt_fm402_70034 = private unnamed_addr constant [20 x i8] c"            %4d%4d\0A\00", align 1
-@fmt_fm402_70035 = private unnamed_addr constant [61 x i8] c"    THE START RECORD FOR TESTS 33 AND 34 COULD NOT BEFOUND,\0A\00", align 1
+@fmt_fm402_70035 = private unnamed_addr constant [63 x i8] c"    THE START RECORD FOR TESTS 33 AND 34 COULD NOT BE  FOUND,\0A\00", align 1
 @fmt_fm402_70036 = private unnamed_addr constant [47 x i8] c" THEREFORE TESTS 33 AND 34     ARE   DELETED.\0A\00", align 1
 @fmt_fm402_332 = private unnamed_addr constant [36 x i8] c"                              %50s\0A\00", align 1
 @fmt_fm402_342 = private unnamed_addr constant [34 x i8] c"                              %s\0A\00", align 1
@@ -4475,7 +4475,7 @@ bb257:
   %t2651 = load i32, ptr %t22
   %t2652 = load i32, ptr %t23
   %t2653 = load i32, ptr %t24
-  %t2654 = getelementptr [77 x i8], ptr @str43, i32 0, i32 0
+  %t2654 = getelementptr [80 x i8], ptr @str43, i32 0, i32 0
   %t2655 = alloca i32
   store i32 %t2648, ptr %t2655
   %t2656 = alloca i32
@@ -4517,7 +4517,7 @@ bb259:
   %t2675 = load i32, ptr %t22
   %t2676 = load i32, ptr %t23
   %t2677 = load i32, ptr %t24
-  %t2678 = getelementptr [76 x i8], ptr @str45, i32 0, i32 0
+  %t2678 = getelementptr [80 x i8], ptr @str45, i32 0, i32 0
   %t2679 = alloca i32
   store i32 %t2672, ptr %t2679
   %t2680 = alloca i32
@@ -6325,7 +6325,7 @@ L70022:
   br label %L4028
 L4028:
   %t3671 = load i32, ptr %t12
-  %t3672 = getelementptr [65 x i8], ptr @str58, i32 0, i32 0
+  %t3672 = getelementptr [66 x i8], ptr @str58, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t3671, ptr %t3672, ptr null, ptr null, i32 0, i32 0)
   br label %bb439
 bb439:
@@ -7645,7 +7645,7 @@ L70033:
   br label %L4033
 L4033:
   %t4439 = load i32, ptr %t12
-  %t4440 = getelementptr [63 x i8], ptr @str60, i32 0, i32 0
+  %t4440 = getelementptr [66 x i8], ptr @str60, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t4439, ptr %t4440, ptr null, ptr null, i32 0, i32 0)
   br label %bb555
 bb555:
@@ -8614,7 +8614,7 @@ L70036:
   br label %L4037
 L4037:
   %t5096 = load i32, ptr %t12
-  %t5097 = getelementptr [61 x i8], ptr @str74, i32 0, i32 0
+  %t5097 = getelementptr [63 x i8], ptr @str74, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t5096, ptr %t5097, ptr null, ptr null, i32 0, i32 0)
   br label %bb631
 bb631:
@@ -10395,9 +10395,9 @@ exit:
 @str40 = private unnamed_addr constant [21 x i8] c"     %5d       PASS\0A\00", align 1
 @str41 = private unnamed_addr constant [46 x i8] c"     %5d       FAIL          %6d         %6d\0A\00", align 1
 @str42 = private unnamed_addr constant [4 x i8] c"iii\00", align 1
-@str43 = private unnamed_addr constant [77 x i8] c"%3d%2d%4d%3d%4d%4dABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789                     \0A\00", align 1
+@str43 = private unnamed_addr constant [80 x i8] c"%3d%2d%4d%3d%4d%4dABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789                        \0A\00", align 1
 @str44 = private unnamed_addr constant [7 x i8] c"iiiiii\00", align 1
-@str45 = private unnamed_addr constant [76 x i8] c"%3d%2d%4d%3d%4d%4d=+-*/(),'.ABMYZ01589=+-()A5+Z.1'A,4                     \0A\00", align 1
+@str45 = private unnamed_addr constant [80 x i8] c"%3d%2d%4d%3d%4d%4d=+-*/(),'.ABMYZ01589=+-()A5+Z.1'A,4                         \0A\00", align 1
 @str46 = private unnamed_addr constant [35 x i8] c"%3d%2d%4d%3d%4d%4d          %*.*s\0A\00", align 1
 @str47 = private unnamed_addr constant [10 x i8] c"iiiiiiiis\00", align 1
 @str48 = private unnamed_addr constant [80 x i8] c"%3d%2d%4d%3d%4d%4d                                                            \0A\00", align 1
@@ -10410,9 +10410,9 @@ exit:
 @str55 = private unnamed_addr constant [7 x i8] c"cccccc\00", align 1
 @str56 = private unnamed_addr constant [78 x i8] c"            %4d%4d                                                           \00", align 1
 @str57 = private unnamed_addr constant [3 x i8] c"dd\00", align 1
-@str58 = private unnamed_addr constant [65 x i8] c"  THE INITIAL RECORD FOR TESTS 25 THROUGH 29 COULD NOTBE FOUND,\0A\00", align 1
+@str58 = private unnamed_addr constant [66 x i8] c"  THE INITIAL RECORD FOR TESTS 25 THROUGH 29 COULD NOT BE FOUND,\0A\00", align 1
 @str59 = private unnamed_addr constant [51 x i8] c" THEREFORE TESTS 25 THROUGH 29     ARE   DELETED.\0A\00", align 1
-@str60 = private unnamed_addr constant [63 x i8] c"  THE START RECORD FOR TESTS 30 THROUGH 32 COULD NOTBE FOUND,\0A\00", align 1
+@str60 = private unnamed_addr constant [66 x i8] c"  THE START RECORD FOR TESTS 30 THROUGH 32 COULD NOT   BE FOUND,\0A\00", align 1
 @str61 = private unnamed_addr constant [51 x i8] c" THEREFORE TESTS 30 THROUGH 32     ARE   DELETED.\0A\00", align 1
 @str62 = private unnamed_addr constant [76 x i8] c"                    %1c%2c%5c%10c                                          \00", align 1
 @str63 = private unnamed_addr constant [5 x i8] c"cccc\00", align 1
@@ -10426,7 +10426,7 @@ exit:
 @str71 = private unnamed_addr constant [70 x i8] c"                              %10c                                   \00", align 1
 @str72 = private unnamed_addr constant [6 x i8] c"PQRST\00", align 1
 @str73 = private unnamed_addr constant [79 x i8] c"            %4d%4d                                                            \00", align 1
-@str74 = private unnamed_addr constant [61 x i8] c"    THE START RECORD FOR TESTS 33 AND 34 COULD NOT BEFOUND,\0A\00", align 1
+@str74 = private unnamed_addr constant [63 x i8] c"    THE START RECORD FOR TESTS 33 AND 34 COULD NOT BE  FOUND,\0A\00", align 1
 @str75 = private unnamed_addr constant [47 x i8] c" THEREFORE TESTS 33 AND 34     ARE   DELETED.\0A\00", align 1
 @str76 = private unnamed_addr constant [35 x i8] c"                              %50c\00", align 1
 @str77 = private unnamed_addr constant [51 x i8] c"ABCDEFG    HIJKLMN    OPQRSTUVWXYZ      0123456789\00", align 1
