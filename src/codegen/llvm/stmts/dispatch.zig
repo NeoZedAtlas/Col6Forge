@@ -108,7 +108,8 @@ fn emitStmtInner(
             return true;
         },
         .pause => {
-            try execution.emitDefaultReturn(ctx, builder);
+            try execution.emitPause(ctx, builder);
+            try builder.br(next_block);
             return true;
         },
         .stop => {

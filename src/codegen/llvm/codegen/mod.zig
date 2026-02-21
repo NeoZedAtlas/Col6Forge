@@ -585,3 +585,54 @@ test "emitModuleToWriter emits module header and empty function" {
     try testing.expect(std.mem.indexOf(u8, output, "source_filename = \"test.f\"") != null);
     try testing.expect(std.mem.indexOf(u8, output, "define void @unit_") != null);
 }
+
+test "PAUSE lowers to runtime call with configured mode" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const stmt_list = try a.alloc(input.Stmt, 2);
+    stmt_list[0] = .{ .label = null, .node = .{ .pause = {} } };
+    stmt_list[1] = .{ .label = null, .node = .{ .cont = {} } };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = try a.alloc(input.sema.Symbol, 0),
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(
+        &writer,
+        allocator,
+        program,
+        sem_prog,
+        "pause_test.f",
+        .{ .pause_mode = .auto },
+    );
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "call void @f77_pause(i32 0)") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call void @f77_pause(i32 0)\n  br label") != null);
+}

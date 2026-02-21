@@ -36,7 +36,14 @@ pub const IRDecl = struct {
 };
 
 pub const CodegenOptions = struct {
+    pub const PauseMode = enum(u8) {
+        auto = 0,
+        continue_ = 1,
+        stop = 2,
+    };
+
     bounds_check: bool = false,
+    pause_mode: PauseMode = .auto,
 };
 
 pub const FormatInfo = struct {

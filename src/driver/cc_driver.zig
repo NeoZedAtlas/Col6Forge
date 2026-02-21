@@ -48,6 +48,7 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
         work_rel,
         parsed.fortran_inputs,
         parsed.bounds_check,
+        parsed.pause_mode,
         parsed.time_report,
     );
     defer translated.deinit(allocator);
@@ -149,6 +150,7 @@ const ParsedArgs = struct {
     output_path: ?[]const u8,
     compile_only: bool,
     bounds_check: bool,
+    pause_mode: Col6Forge.PauseMode,
     time_report: bool,
     show_help: bool,
     forward_args: []const []const u8,
@@ -163,6 +165,8 @@ const ParsedArgs = struct {
 const ParseArgError = union(enum) {
     missing_input_file,
     missing_output_path,
+    missing_pause_mode,
+    invalid_pause_mode: []const u8,
 };
 
 const ParseArgsOutcome = union(enum) {
@@ -183,6 +187,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
     var output_path: ?[]const u8 = null;
     var compile_only = false;
     var bounds_check = false;
+    var pause_mode: Col6Forge.PauseMode = .auto;
     var time_report = false;
     var show_help = false;
 
@@ -215,6 +220,17 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
         }
         if (std.mem.eql(u8, arg, "-fbounds-check")) {
             bounds_check = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-fpause-mode")) {
+            if (i + 1 >= args.len) return .{ .failure = .missing_pause_mode };
+            i += 1;
+            pause_mode = parsePauseMode(args[i]) orelse return .{ .failure = .{ .invalid_pause_mode = args[i] } };
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "-fpause-mode=")) {
+            const value = arg["-fpause-mode=".len..];
+            pause_mode = parsePauseMode(value) orelse return .{ .failure = .{ .invalid_pause_mode = value } };
             continue;
         }
         if (std.mem.eql(u8, arg, "-ftime-report") or std.mem.eql(u8, arg, "--time-report")) {
@@ -251,10 +267,18 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
         .output_path = output_path,
         .compile_only = compile_only,
         .bounds_check = bounds_check,
+        .pause_mode = pause_mode,
         .time_report = time_report,
         .show_help = show_help,
         .forward_args = forward_args.toOwnedSlice(allocator) catch return .{ .failure = .missing_input_file },
     } };
+}
+
+fn parsePauseMode(value: []const u8) ?Col6Forge.PauseMode {
+    if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
+    if (std.ascii.eqlIgnoreCase(value, "continue")) return .continue_;
+    if (std.ascii.eqlIgnoreCase(value, "stop")) return .stop;
+    return null;
 }
 
 fn forwardFlagNeedsValue(flag: []const u8) bool {
@@ -371,6 +395,7 @@ fn translateFortranInputs(
     work_rel: []const u8,
     fortran_inputs: []const []const u8,
     bounds_check: bool,
+    pause_mode: Col6Forge.PauseMode,
     time_report: bool,
 ) !TranslatedFortran {
     var ll_paths: std.ArrayList([]const u8) = .empty;
@@ -390,6 +415,7 @@ fn translateFortranInputs(
             input_path,
             ll_path,
             bounds_check,
+            pause_mode,
             time_report,
         ) catch |err| {
             allocator.free(ll_path);
@@ -409,6 +435,8 @@ fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
     switch (parse_err) {
         .missing_input_file => try writer.interface.writeAll("error: missing input files\n"),
         .missing_output_path => try writer.interface.writeAll("error: missing output path after -o\n"),
+        .missing_pause_mode => try writer.interface.writeAll("error: missing pause mode after -fpause-mode\n"),
+        .invalid_pause_mode => |value| try writer.interface.print("error: invalid pause mode: {s}\n", .{value}),
     }
     try writer.interface.flush();
 }
@@ -426,6 +454,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  -o <path>                   Output object/executable path
         \\  -emit-llvm                  Emit LLVM IR internally (default)
         \\  -fbounds-check              Enable runtime array bounds checks in pipeline
+        \\  -fpause-mode <auto|continue|stop>  PAUSE runtime policy (default: auto)
         \\  -ftime-report, --time-report  Print parse/sema/codegen timing report to stderr
         \\  -h, --help                  Show this help
         \\
@@ -617,6 +646,7 @@ fn emitPipelineToFile(
     input_path: []const u8,
     output_path: []const u8,
     bounds_check: bool,
+    pause_mode: Col6Forge.PauseMode,
     time_report: bool,
 ) !void {
     var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
@@ -630,6 +660,7 @@ fn emitPipelineToFile(
         &out_writer.interface,
         .{
             .bounds_check = bounds_check,
+            .pause_mode = pause_mode,
             .time_report = time_report,
             .coarse_source_map = true,
         },
@@ -797,6 +828,7 @@ test "parse cc args supports multi fortran and passthrough" {
     try testing.expectEqualStrings("-O2", parsed.forward_args[0]);
     try testing.expectEqualStrings("-L", parsed.forward_args[1]);
     try testing.expectEqualStrings("libdir", parsed.forward_args[2]);
+    try testing.expect(parsed.pause_mode == .auto);
 }
 
 test "parse cc args supports direct driver invocation" {
@@ -819,4 +851,21 @@ test "parse cc args supports direct driver invocation" {
     try testing.expect(parsed.compile_only);
     try testing.expectEqual(@as(usize, 1), parsed.forward_args.len);
     try testing.expectEqualStrings("-O2", parsed.forward_args[0]);
+    try testing.expect(parsed.pause_mode == .auto);
+}
+
+test "parse cc args accepts -fpause-mode" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const outcome = parseArgs(allocator, &[_][]const u8{
+        "col6forge-cc",
+        "a.f",
+        "-fpause-mode=stop",
+    });
+    try testing.expect(outcome == .success);
+
+    var parsed = outcome.success;
+    defer parsed.deinit(allocator);
+    try testing.expect(parsed.pause_mode == .stop);
 }

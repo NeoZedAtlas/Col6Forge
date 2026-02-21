@@ -51,6 +51,7 @@ fn runMain() !void {
                 &null_writer,
                 .{
                     .bounds_check = parsed.bounds_check,
+                    .pause_mode = parsed.pause_mode,
                     .time_report = parsed.time_report,
                 },
             ) catch |err| {
@@ -72,6 +73,7 @@ fn runMain() !void {
                 &count_writer,
                 .{
                     .bounds_check = parsed.bounds_check,
+                    .pause_mode = parsed.pause_mode,
                     .time_report = parsed.time_report,
                 },
             ) catch |err| {
@@ -92,6 +94,7 @@ fn runMain() !void {
             &file_writer,
             .{
                 .bounds_check = parsed.bounds_check,
+                .pause_mode = parsed.pause_mode,
                 .time_report = parsed.time_report,
             },
         ) catch |err| {
@@ -104,6 +107,7 @@ fn runMain() !void {
             parsed.emit,
             .{
                 .bounds_check = parsed.bounds_check,
+                .pause_mode = parsed.pause_mode,
                 .time_report = parsed.time_report,
             },
         ) catch |err| {
@@ -153,12 +157,15 @@ const ParsedArgs = struct {
     output_path: ?[]const u8,
     emit: Col6Forge.EmitKind,
     bounds_check: bool,
+    pause_mode: Col6Forge.PauseMode,
     time_report: bool,
     show_help: bool,
 };
 
 const ParseArgError = union(enum) {
     missing_output_path,
+    missing_pause_mode,
+    invalid_pause_mode: []const u8,
     unknown_flag: []const u8,
     too_many_inputs: struct {
         first: []const u8,
@@ -178,6 +185,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
     var output_path: ?[]const u8 = null;
     var emit: Col6Forge.EmitKind = .llvm;
     var bounds_check = false;
+    var pause_mode: Col6Forge.PauseMode = .auto;
     var time_report = false;
     var show_help = false;
 
@@ -194,6 +202,17 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
         }
         if (std.mem.eql(u8, arg, "-fbounds-check")) {
             bounds_check = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-fpause-mode")) {
+            if (i + 1 >= args.len) return .{ .failure = .missing_pause_mode };
+            i += 1;
+            pause_mode = parsePauseMode(args[i]) orelse return .{ .failure = .{ .invalid_pause_mode = args[i] } };
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "-fpause-mode=")) {
+            const value = arg["-fpause-mode=".len..];
+            pause_mode = parsePauseMode(value) orelse return .{ .failure = .{ .invalid_pause_mode = value } };
             continue;
         }
         if (std.mem.eql(u8, arg, "-ftime-report") or std.mem.eql(u8, arg, "--time-report")) {
@@ -227,6 +246,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
             .output_path = output_path,
             .emit = emit,
             .bounds_check = bounds_check,
+            .pause_mode = pause_mode,
             .time_report = time_report,
             .show_help = true,
         } };
@@ -238,9 +258,17 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
         .output_path = output_path,
         .emit = emit,
         .bounds_check = bounds_check,
+        .pause_mode = pause_mode,
         .time_report = time_report,
         .show_help = false,
     } };
+}
+
+fn parsePauseMode(value: []const u8) ?Col6Forge.PauseMode {
+    if (std.ascii.eqlIgnoreCase(value, "auto")) return .auto;
+    if (std.ascii.eqlIgnoreCase(value, "continue")) return .continue_;
+    if (std.ascii.eqlIgnoreCase(value, "stop")) return .stop;
+    return null;
 }
 
 fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
@@ -265,6 +293,8 @@ fn failPipeline(input_path: []const u8, err: anyerror) noreturn {
 fn writeParseArgError(writer: *std.Io.Writer, parse_err: ParseArgError) void {
     switch (parse_err) {
         .missing_output_path => writer.print("error: missing output path after -o\n", .{}) catch {},
+        .missing_pause_mode => writer.print("error: missing pause mode after -fpause-mode\n", .{}) catch {},
+        .invalid_pause_mode => |value| writer.print("error: invalid pause mode: {s}\n", .{value}) catch {},
         .unknown_flag => |flag| writer.print("error: unknown flag: {s}\n", .{flag}) catch {},
         .too_many_inputs => |inputs| writer.print("error: multiple input files provided: {s} and {s}\n", .{ inputs.first, inputs.extra }) catch {},
         .missing_input_file => writer.print("error: missing input file\n", .{}) catch {},
@@ -290,6 +320,7 @@ fn printUsage(file: std.fs.File) !void {
         \\Options (IR mode):
         \\  -emit-llvm    Emit LLVM IR (default)
         \\  -fbounds-check  Enable runtime array bounds checking
+        \\  -fpause-mode <auto|continue|stop>  PAUSE runtime policy (default: auto)
         \\  -ftime-report, --time-report  Print parse/sema/codegen timing report to stderr
         \\  -o <path>     Write output to file
         \\  -h, --help    Show this help
@@ -326,6 +357,7 @@ test "args parsing" {
     try testing.expectEqualStrings("out.ll", help.output_path.?);
     try testing.expectEqual(Col6Forge.EmitKind.llvm, help.emit);
     try testing.expect(!help.bounds_check);
+    try testing.expect(help.pause_mode == .auto);
     try testing.expect(!help.time_report);
 
     const parsed = parseArgs(allocator, &[_][]const u8{ "col6forge", "-emit-llvm", "input.f" }).success;
@@ -334,10 +366,14 @@ test "args parsing" {
     try testing.expect(parsed.output_path == null);
     try testing.expectEqual(Col6Forge.EmitKind.llvm, parsed.emit);
     try testing.expect(!parsed.bounds_check);
+    try testing.expect(parsed.pause_mode == .auto);
     try testing.expect(!parsed.time_report);
 
     const parsed_bounds = parseArgs(allocator, &[_][]const u8{ "col6forge", "-fbounds-check", "input.f" }).success;
     try testing.expect(parsed_bounds.bounds_check);
+
+    const parsed_pause = parseArgs(allocator, &[_][]const u8{ "col6forge", "-fpause-mode=stop", "input.f" }).success;
+    try testing.expect(parsed_pause.pause_mode == .stop);
 
     const parsed_timing = parseArgs(allocator, &[_][]const u8{ "col6forge", "-ftime-report", "input.f" }).success;
     try testing.expect(parsed_timing.time_report);

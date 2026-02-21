@@ -84,6 +84,7 @@ const runtime_io_line_output = @import("f77_runtime/io_line_output.zig");
 const runtime_io_common = @import("f77_runtime/io_common.zig");
 const runtime_io_stdio = @import("f77_runtime/io_stdio.zig");
 const runtime_io_dynamic_format = @import("f77_runtime/io_dynamic_format.zig");
+const runtime_pause = @import("f77_runtime/pause.zig");
 
 comptime {
     _ = runtime_formatting;
@@ -100,4 +101,5 @@ comptime {
     _ = runtime_io_common;
     _ = runtime_io_stdio;
     _ = runtime_io_dynamic_format;
+    _ = runtime_pause;
 }

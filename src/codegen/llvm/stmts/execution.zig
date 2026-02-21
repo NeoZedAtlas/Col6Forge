@@ -12,6 +12,17 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 
+pub fn emitPause(ctx: *Context, builder: anytype) EmitError!void {
+    const pause_mode: i64 = switch (ctx.options.pause_mode) {
+        .auto => 0,
+        .continue_ => 1,
+        .stop => 2,
+    };
+    const pause_name = try ctx.ensureDeclRaw("f77_pause", .void, &[_]llvm_types.IRType{.i32}, false);
+    const mode_val = ValueRef{ .name = try ctx.intLiteral(pause_mode), .ty = .i32, .is_ptr = false };
+    try builder.callTyped(null, .void, pause_name, &.{mode_val});
+}
+
 pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!void {
     if (assign.target.* == .call_or_subscript) {
         const target = assign.target.call_or_subscript;

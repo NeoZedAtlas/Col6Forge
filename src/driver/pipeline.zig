@@ -10,8 +10,11 @@ pub const EmitKind = enum {
     llvm,
 };
 
+pub const PauseMode = codegen.CodegenOptions.PauseMode;
+
 pub const PipelineOptions = struct {
     bounds_check: bool = false,
+    pause_mode: PauseMode = .auto,
     time_report: bool = false,
     coarse_source_map: bool = false,
     capture_profile: bool = false,
@@ -357,7 +360,10 @@ fn emitLlvmModule(
             .{ .units = &.{} },
             .{ .units = &.{} },
             input_path,
-            .{ .bounds_check = options.bounds_check },
+            .{
+                .bounds_check = options.bounds_check,
+                .pause_mode = options.pause_mode,
+            },
         ) catch |err| {
             if (profile) |p| {
                 p.codegen_ns = elapsedNs(codegen_start);
@@ -403,7 +409,10 @@ fn emitLlvmModule(
         program,
         sem,
         input_path,
-        .{ .bounds_check = options.bounds_check },
+        .{
+            .bounds_check = options.bounds_check,
+            .pause_mode = options.pause_mode,
+        },
     ) catch |err| {
         if (profile) |p| {
             p.codegen_ns = elapsedNs(codegen_start);
@@ -437,7 +446,10 @@ fn emitLlvmModuleToWriter(
             .{ .units = &.{} },
             .{ .units = &.{} },
             input_path,
-            .{ .bounds_check = options.bounds_check },
+            .{
+                .bounds_check = options.bounds_check,
+                .pause_mode = options.pause_mode,
+            },
         ) catch |err| {
             if (profile) |p| {
                 p.codegen_ns = elapsedNs(codegen_start);
@@ -484,7 +496,10 @@ fn emitLlvmModuleToWriter(
         program,
         sem,
         input_path,
-        .{ .bounds_check = options.bounds_check },
+        .{
+            .bounds_check = options.bounds_check,
+            .pause_mode = options.pause_mode,
+        },
     ) catch |err| {
         if (profile) |p| {
             p.codegen_ns = elapsedNs(codegen_start);
