@@ -414,7 +414,15 @@ fn storeCharacterValueDynamic(
     value_expr: *ast.Expr,
 ) EmitError!void {
     const src_ptr = try expr.emitExpr(ctx, builder, value_expr);
-    const src_len = (try emitCharLenValue(ctx, builder, value_expr)) orelse constI32(ctx, 1);
+    var target_len_i32 = target_len;
+    if (target_len_i32.ty != .i32) {
+        target_len_i32 = try expr.coerce(ctx, builder, target_len_i32, .i32);
+    }
+
+    var src_len = (try emitCharLenValue(ctx, builder, value_expr)) orelse constI32(ctx, 1);
+    if (src_len.ty != .i32) {
+        src_len = try expr.coerce(ctx, builder, src_len, .i32);
+    }
 
     const idx_ptr = try ctx.nextTemp();
     try builder.alloca(idx_ptr, .i32);
@@ -434,7 +442,7 @@ fn storeCharacterValueDynamic(
     try builder.load(idx_val_tmp, .i32, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
     const idx_val = ValueRef{ .name = idx_val_tmp, .ty = .i32, .is_ptr = false };
     const cmp_tmp = try ctx.nextTemp();
-    try builder.compare(cmp_tmp, "icmp", "slt", .i32, idx_val, target_len);
+    try builder.compare(cmp_tmp, "icmp", "slt", .i32, idx_val, target_len_i32);
     const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
     try builder.brCond(cond, loop_body, loop_end);
 

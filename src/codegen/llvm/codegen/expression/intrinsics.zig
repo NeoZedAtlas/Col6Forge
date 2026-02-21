@@ -299,6 +299,53 @@ fn emitIntrinsicIchar(ctx: *Context, builder: anytype, args: []*Expr) EmitError!
     return .{ .name = tmp_int, .ty = .i32, .is_ptr = false };
 }
 
+fn emitIntrinsicAchar(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    var value = try dispatch.emitExpr(ctx, builder, args[0]);
+    value = try casting.coerce(ctx, builder, value, .i32);
+
+    const ch_tmp = try ctx.nextTemp();
+    try builder.cast(ch_tmp, "trunc", .i32, value, .i8);
+
+    const buf_name = try ctx.nextTemp();
+    try builder.allocaArray(buf_name, .i8, 2);
+    const buf_ptr = ValueRef{ .name = buf_name, .ty = .ptr, .is_ptr = true };
+
+    const first_gep = try ctx.nextTemp();
+    try builder.gep(first_gep, .i8, buf_ptr, try constI32(ctx, 0));
+    try builder.store(
+        .{ .name = ch_tmp, .ty = .i8, .is_ptr = false },
+        .{ .name = first_gep, .ty = .ptr, .is_ptr = true },
+    );
+
+    const second_gep = try ctx.nextTemp();
+    try builder.gep(second_gep, .i8, buf_ptr, try constI32(ctx, 1));
+    try builder.store(
+        .{ .name = "0", .ty = .i8, .is_ptr = false },
+        .{ .name = second_gep, .ty = .ptr, .is_ptr = true },
+    );
+
+    return buf_ptr;
+}
+
+fn emitIntrinsicRand(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len > 1) return error.InvalidIntrinsicCall;
+    if (args.len == 1) {
+        _ = try dispatch.emitExpr(ctx, builder, args[0]);
+    }
+
+    const rand_name = try ctx.ensureDeclRaw("rand", .i32, &[_]IRType{}, false);
+    const rand_tmp = try ctx.nextTemp();
+    try builder.callTyped(rand_tmp, .i32, rand_name, &.{});
+    const rand_i32 = ValueRef{ .name = rand_tmp, .ty = .i32, .is_ptr = false };
+    const rand_f32 = try casting.coerce(ctx, builder, rand_i32, .f32);
+
+    const scale = constFloat(ctx, .f32, 1.0 / 2147483647.0);
+    const out_tmp = try ctx.nextTemp();
+    try builder.binary(out_tmp, "fmul", .f32, rand_f32, scale);
+    return .{ .name = out_tmp, .ty = .f32, .is_ptr = false };
+}
+
 fn emitIntrinsicEpsilon(ctx: *Context, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     const arg_ty = try casting.exprType(ctx, args[0]);
@@ -893,6 +940,8 @@ const IntrinsicTag = enum {
     anint,
     nint,
     ichar,
+    achar,
+    rand_,
     epsilon,
     huge,
     len_,
@@ -980,6 +1029,10 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "anint", .anint },
     .{ "nint", .nint },
     .{ "ichar", .ichar },
+    .{ "iachar", .ichar },
+    .{ "achar", .achar },
+    .{ "char", .achar },
+    .{ "rand", .rand_ },
     .{ "epsilon", .epsilon },
     .{ "huge", .huge },
     .{ "len", .len_ },
@@ -1100,6 +1153,8 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .anint => return emitIntrinsicAnint(ctx, builder, args),
         .nint => return emitIntrinsicNint(ctx, builder, args),
         .ichar => return emitIntrinsicIchar(ctx, builder, args),
+        .achar => return emitIntrinsicAchar(ctx, builder, args),
+        .rand_ => return emitIntrinsicRand(ctx, builder, args),
         .epsilon => return emitIntrinsicEpsilon(ctx, args),
         .huge => return emitIntrinsicHuge(ctx, args),
         .len_ => return emitIntrinsicLen(ctx, builder, args),

@@ -342,6 +342,9 @@ fn intrinsicArity(name: []const u8) ?Arity {
     {
         return .{ .min = 2, .max = 2 };
     }
+    if (std.ascii.eqlIgnoreCase(name, "RAND")) {
+        return .{ .min = 0, .max = 1 };
+    }
     if (std.ascii.eqlIgnoreCase(name, "SIN") or
         std.ascii.eqlIgnoreCase(name, "COS") or
         std.ascii.eqlIgnoreCase(name, "TAN") or
@@ -372,6 +375,8 @@ fn intrinsicArity(name: []const u8) ?Arity {
         std.ascii.eqlIgnoreCase(name, "DIMAG") or
         std.ascii.eqlIgnoreCase(name, "CABS") or
         std.ascii.eqlIgnoreCase(name, "ICHAR") or
+        std.ascii.eqlIgnoreCase(name, "IACHAR") or
+        std.ascii.eqlIgnoreCase(name, "ACHAR") or
         std.ascii.eqlIgnoreCase(name, "EPSILON") or
         std.ascii.eqlIgnoreCase(name, "HUGE") or
         std.ascii.eqlIgnoreCase(name, "EXP") or

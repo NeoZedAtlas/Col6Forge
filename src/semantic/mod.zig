@@ -38,18 +38,16 @@ pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticP
     }
 
     var units = std.array_list.Managed(SemanticUnit).init(arena);
-    var inherited_implicit: []const symbols.ImplicitRule = &.{};
     for (mutable_program.units) |*unit| {
         var unit_analyzer = analyzer.UnitAnalyzer.init(
             arena,
             unit,
-            inherited_implicit,
+            &.{},
             &known_function_types,
             &known_procedure_sigs,
         );
         const sem_unit = try unit_analyzer.analyze();
         try units.append(sem_unit);
-        inherited_implicit = sem_unit.implicit_rules;
     }
     try validateCommonBlocks(arena, mutable_program, units.items);
     return .{ .units = try units.toOwnedSlice() };
@@ -445,6 +443,59 @@ test "semantic reports CF3108 for assignment type mismatch" {
     try testing.expectError(error.AssignmentTypeMismatch, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.eql(u8, diag.code, "CF3108"));
+}
+
+test "semantic accepts ACHAR and IACHAR intrinsic typing" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*1 C\n" ++
+        "      INTEGER I\n" ++
+        "      C=ACHAR(65)\n" ++
+        "      I=IACHAR(C)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+}
+
+test "semantic IMPLICIT rules are unit-local" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE A\n" ++
+        "      IMPLICIT INTEGER(A-Z)\n" ++
+        "      END\n" ++
+        "      FUNCTION R()\n" ++
+        "      R=1\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+    try testing.expect(sem.units.len >= 2);
+
+    const fn_unit = sem.units[1];
+    var found = false;
+    for (fn_unit.symbols) |sym| {
+        if (std.ascii.eqlIgnoreCase(sym.name, "R")) {
+            try testing.expectEqual(ast.TypeKind.real, sym.type_kind);
+            found = true;
+            break;
+        }
+    }
+    try testing.expect(found);
 }
 
 test "semantic reports CF3109 for invalid array subscript rank" {

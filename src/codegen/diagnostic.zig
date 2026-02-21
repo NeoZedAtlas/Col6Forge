@@ -26,6 +26,10 @@ pub fn clear() void {
     has_diag = false;
 }
 
+pub fn has() bool {
+    return has_diag;
+}
+
 pub fn set(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
     var next: Storage = .{
         .line = if (line == 0) 1 else line,

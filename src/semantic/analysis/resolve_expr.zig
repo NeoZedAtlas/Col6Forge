@@ -261,9 +261,14 @@ fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
         std.ascii.eqlIgnoreCase(name, "MAX0") or
         std.ascii.eqlIgnoreCase(name, "MAX1") or
         std.ascii.eqlIgnoreCase(name, "ICHAR") or
+        std.ascii.eqlIgnoreCase(name, "IACHAR") or
         std.ascii.eqlIgnoreCase(name, "LEN"))
     {
         return .integer;
+    }
+
+    if (std.ascii.eqlIgnoreCase(name, "ACHAR")) {
+        return .character;
     }
 
     if (std.ascii.eqlIgnoreCase(name, "DBLE") or
@@ -298,6 +303,7 @@ fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
     if (std.ascii.eqlIgnoreCase(name, "FLOAT") or
         std.ascii.eqlIgnoreCase(name, "REAL") or
         std.ascii.eqlIgnoreCase(name, "SNGL") or
+        std.ascii.eqlIgnoreCase(name, "RAND") or
         std.ascii.eqlIgnoreCase(name, "AINT") or
         std.ascii.eqlIgnoreCase(name, "ANINT") or
         std.ascii.eqlIgnoreCase(name, "AMOD") or

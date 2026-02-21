@@ -78,6 +78,12 @@ pub fn parseWriteStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtE
         _ = lp.expect(.equals) orelse return error.UnexpectedToken;
         const name = lp.tokenText(name_tok);
         if (context.eqNoCase(name, "UNIT")) {
+            const unit_tok = lp.peek() orelse return error.UnexpectedToken;
+            if (unit_tok.kind == .star) {
+                _ = lp.next();
+                unit_expr = try makeIntegerLiteral(arena, 6);
+                continue;
+            }
             unit_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }
@@ -205,6 +211,12 @@ pub fn parseReadStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
         _ = lp.expect(.equals) orelse return error.UnexpectedToken;
         const name = lp.tokenText(name_tok);
         if (context.eqNoCase(name, "UNIT")) {
+            const unit_tok = lp.peek() orelse return error.UnexpectedToken;
+            if (unit_tok.kind == .star) {
+                _ = lp.next();
+                unit_expr = try makeIntegerLiteral(arena, 5);
+                continue;
+            }
             unit_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }
@@ -276,6 +288,48 @@ pub fn parseReadStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
 
     const args = try parseIoList(arena, lp);
     return .{ .read = .{ .unit = unit_final, .format = format_spec, .rec = rec_expr, .args = args, .err_label = err_label, .end_label = end_label, .iostat = iostat_expr } };
+}
+
+pub fn parsePrintStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    _ = lp.consumeKeyword("PRINT");
+    const fmt_tok = lp.peek() orelse return error.UnexpectedToken;
+    var format_spec: ast.FormatSpec = .{ .none = {} };
+
+    if (fmt_tok.kind == .star) {
+        _ = lp.next();
+        format_spec = .{ .list_directed = {} };
+    } else if (fmt_tok.kind == .integer and !helpers.nextTokenIs(lp.*, .equals)) {
+        _ = lp.next();
+        format_spec = .{ .label = normalizeLabelText(lp.tokenText(fmt_tok)) };
+    } else if (fmt_tok.kind == .identifier and !helpers.nextTokenIs(lp.*, .equals)) {
+        const fmt_expr = try expr.parseExpr(lp, arena, 0);
+        format_spec = .{ .expr = fmt_expr };
+    } else if (fmt_tok.kind == .string or fmt_tok.kind == .hollerith) {
+        if (lp.index + 2 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .slash and lp.tokens[lp.index + 2].kind == .slash) {
+            const fmt_expr = try expr.parseExpr(lp, arena, 0);
+            format_spec = .{ .expr = fmt_expr };
+        } else {
+            _ = lp.next();
+            const items = try format.parseInlineFormatSpec(arena, lp.tokenText(fmt_tok), fmt_tok.kind);
+            format_spec = .{ .inline_items = items };
+        }
+    } else {
+        return error.UnexpectedToken;
+    }
+
+    var args: []*Expr = &.{};
+    if (lp.consume(.comma)) {
+        args = try parseIoList(arena, lp);
+    }
+    const unit_expr = try makeIntegerLiteral(arena, 6);
+    return .{ .write = .{
+        .unit = unit_expr,
+        .format = format_spec,
+        .rec = null,
+        .args = args,
+        .err_label = null,
+        .iostat = null,
+    } };
 }
 
 pub fn parseOpenStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {

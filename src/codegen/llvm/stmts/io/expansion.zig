@@ -310,21 +310,85 @@ fn inferImpliedDoEndFromItems(ctx: *Context, implied: ast.ImpliedDo) ?i64 {
     for (implied.items) |item| {
         if (item.* != .call_or_subscript) continue;
         const call = item.call_or_subscript;
-        if (!subscriptUsesLoopVar(call.args, implied.var_name)) continue;
+        const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse continue;
         const sym = ctx.findSymbol(call.name) orelse continue;
-        if (sym.dims.len != 1) continue;
-        const elem_count = ctx.arrayElemCountForSymbol(sym) catch continue;
-        return @intCast(elem_count);
+        if (sym.dims.len == 0 or loop_dim >= sym.dims.len) continue;
+        const extent = staticDimExtent(ctx, sym.dims[loop_dim]) orelse continue;
+        return extent;
     }
     return null;
 }
-fn subscriptUsesLoopVar(args: []*ast.Expr, name: []const u8) bool {
-    for (args) |arg| {
-        if (arg.* == .identifier and std.ascii.eqlIgnoreCase(arg.identifier, name)) {
-            return true;
+fn impliedLoopDim(args: []*ast.Expr, loop_var: []const u8) ?usize {
+    var found: ?usize = null;
+    for (args, 0..) |arg, idx| {
+        const is_loop_var = arg.* == .identifier and std.ascii.eqlIgnoreCase(arg.identifier, loop_var);
+        if (is_loop_var) {
+            if (found != null) return null;
+            found = idx;
+            continue;
         }
+        if (exprContainsIdentifier(arg, loop_var)) return null;
     }
-    return false;
+    return found;
+}
+fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
+    return switch (node.*) {
+        .identifier => |ident| std.ascii.eqlIgnoreCase(ident, name),
+        .unary => |un| exprContainsIdentifier(un.expr, name),
+        .binary => |bin| exprContainsIdentifier(bin.left, name) or exprContainsIdentifier(bin.right, name),
+        .complex_literal => |lit| exprContainsIdentifier(lit.real, name) or exprContainsIdentifier(lit.imag, name),
+        .call_or_subscript => |call| blk: {
+            for (call.args) |arg| {
+                if (exprContainsIdentifier(arg, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .substring => |sub| blk: {
+            for (sub.args) |arg| {
+                if (exprContainsIdentifier(arg, name)) break :blk true;
+            }
+            if (sub.start) |start_expr| {
+                if (exprContainsIdentifier(start_expr, name)) break :blk true;
+            }
+            if (sub.end) |end_expr| {
+                if (exprContainsIdentifier(end_expr, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .dim_range => |range| blk: {
+            if (range.lower) |lower| {
+                if (exprContainsIdentifier(lower, name)) break :blk true;
+            }
+            break :blk exprContainsIdentifier(range.upper, name);
+        },
+        .implied_do => |implied| blk: {
+            for (implied.items) |item| {
+                if (exprContainsIdentifier(item, name)) break :blk true;
+            }
+            if (exprContainsIdentifier(implied.start, name)) break :blk true;
+            if (exprContainsIdentifier(implied.end, name)) break :blk true;
+            if (implied.step) |step_expr| {
+                if (exprContainsIdentifier(step_expr, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
+}
+fn staticIntValue(ctx: *Context, node: *ast.Expr) ?i64 {
+    return (evalConstIntSem(ctx, node) catch null) orelse intLiteralValue(node);
+}
+fn staticDimExtent(ctx: *Context, dim: *ast.Expr) ?i64 {
+    return switch (dim.*) {
+        .dim_range => |range| blk: {
+            const upper = staticIntValue(ctx, range.upper) orelse break :blk null;
+            const lower = if (range.lower) |lower_expr| staticIntValue(ctx, lower_expr) orelse break :blk null else 1;
+            if (upper < lower) break :blk 0;
+            const diff = std.math.sub(i64, upper, lower) catch break :blk null;
+            break :blk std.math.add(i64, diff, 1) catch null;
+        },
+        else => staticIntValue(ctx, dim),
+    };
 }
 fn cloneExprWithSubst(
     ctx: *Context,

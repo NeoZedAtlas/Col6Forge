@@ -229,10 +229,12 @@ pub fn emitModuleToWriter(
         defer ctx.deinit();
         stmts.emitFunction(&ctx, &builder) catch |err| {
             markFailure(&breakdown, .unit_emit);
-            if (ctx.current_stmt) |stmt| {
-                codegen_diag.setFromStmt(stmt, err);
-            } else {
-                setCodegenDiagForUnit(unit, err);
+            if (!codegen_diag.has()) {
+                if (ctx.current_stmt) |stmt| {
+                    codegen_diag.setFromStmt(stmt, err);
+                } else {
+                    setCodegenDiagForUnit(unit, err);
+                }
             }
             return err;
         };

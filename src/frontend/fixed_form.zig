@@ -35,8 +35,9 @@ pub fn normalizeFixedFormWithMapMode(
             continue;
         }
 
-        const is_cont = isContinuation(line);
-        const code = codeSlice(line);
+        const cont_kind = continuationKind(line);
+        const is_cont = cont_kind != .none;
+        const code = codeSlice(line, cont_kind);
         const trimmed_code = std.mem.trimRight(u8, code, " \t");
 
         if (trimmed_code.len == 0 and !is_cont) {
@@ -96,7 +97,7 @@ pub fn normalizeFixedFormWithMapMode(
             if (!coarse_source_map) {
                 try segments.append(.{
                     .line = line_no,
-                    .column = 7,
+                    .column = codeStartColumn(cont_kind),
                     .length = trimmed_code.len,
                 });
             }
@@ -161,10 +162,34 @@ fn isCommentLine(line: []const u8) bool {
     return line[0] == 'c' or line[0] == 'C' or line[0] == '*' or line[0] == '!';
 }
 
-fn isContinuation(line: []const u8) bool {
-    if (line.len < 6) return false;
-    const mark = line[5];
-    return mark != ' ' and mark != '0';
+const ContinuationKind = enum {
+    none,
+    col6,
+    col7,
+    col8,
+};
+
+fn continuationKind(line: []const u8) ContinuationKind {
+    if (line.len >= 6) {
+        const mark = line[5];
+        if (mark != ' ' and mark != '0') return .col6;
+    }
+
+    // Compatibility extension for legacy sources where continuation marker is
+    // shifted right by one or two columns.
+    if (line.len >= 7 and line[0] == ' ' and line[1] == ' ' and line[2] == ' ' and line[3] == ' ' and line[4] == ' ' and line[5] == ' ') {
+        const mark = line[6];
+        if (mark >= '1' and mark <= '9' and (line.len == 7 or line[7] == ' ' or line[7] == '\t')) {
+            return .col7;
+        }
+    }
+    if (line.len >= 8 and line[0] == ' ' and line[1] == ' ' and line[2] == ' ' and line[3] == ' ' and line[4] == ' ' and line[5] == ' ' and line[6] == ' ') {
+        const mark = line[7];
+        if (mark >= '1' and mark <= '9' and (line.len == 8 or line[8] == ' ' or line[8] == '\t')) {
+            return .col8;
+        }
+    }
+    return .none;
 }
 
 fn parseLabel(allocator: std.mem.Allocator, line: []const u8) !?[]const u8 {
@@ -207,10 +232,23 @@ fn parseLabel(allocator: std.mem.Allocator, line: []const u8) !?[]const u8 {
     return owned;
 }
 
-fn codeSlice(line: []const u8) []const u8 {
-    if (line.len <= 6) return "";
+fn codeStartColumn(kind: ContinuationKind) usize {
+    return switch (kind) {
+        .none, .col6 => 7,
+        .col7 => 8,
+        .col8 => 9,
+    };
+}
+
+fn codeSlice(line: []const u8, kind: ContinuationKind) []const u8 {
+    const start: usize = switch (kind) {
+        .none, .col6 => 6,
+        .col7 => 7,
+        .col8 => 8,
+    };
+    if (line.len <= start) return "";
     const end = if (line.len < 72) line.len else 72;
-    return line[6..end];
+    return line[start..end];
 }
 
 test "normalizeFixedForm joins continuations and preserves labels" {
@@ -243,4 +281,32 @@ test "normalizeFixedForm joins continuations and preserves labels" {
     try testing.expectEqualStrings("CONTINUE", lines[1].text);
     try testing.expectEqual(@as(usize, 5), lines[1].span.start_line);
     try testing.expectEqual(@as(usize, 5), lines[1].span.end_line);
+}
+
+test "normalizeFixedForm supports continuation marker in column 7" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text =
+        "       DIMENSION A(10)\n" ++
+        "      1 ,B(10)\n";
+    const lines = try normalizeFixedForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 1), lines.len);
+    try testing.expectEqualStrings(" DIMENSION A(10),B(10)", lines[0].text);
+}
+
+test "normalizeFixedForm supports continuation marker in column 8" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text =
+        "       FORMAT('A'\n" ++
+        "       1 ,'B')\n";
+    const lines = try normalizeFixedForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 1), lines.len);
+    try testing.expectEqualStrings(" FORMAT('A','B')", lines[0].text);
 }

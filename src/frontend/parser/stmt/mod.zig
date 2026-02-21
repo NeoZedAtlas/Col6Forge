@@ -82,6 +82,11 @@ pub fn parseStatement(
         index.* += 1;
         return .{ .label = label, .node = stmt_node };
     }
+    if (lp.isKeywordSplit("PRINT")) {
+        const stmt_node = try io.parsePrintStatement(arena, &lp);
+        index.* += 1;
+        return .{ .label = label, .node = stmt_node };
+    }
     if (lp.isKeywordSplit("READ")) {
         const stmt_node = try io.parseReadStatement(arena, &lp);
         index.* += 1;
@@ -420,6 +425,11 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator) ParseStmtError
         node.* = try io.parseReadStatement(arena, lp);
         return node;
     }
+    if (lp.isKeywordSplit("PRINT")) {
+        const node = try arena.create(StmtNode);
+        node.* = try io.parsePrintStatement(arena, lp);
+        return node;
+    }
     if (lp.isKeywordSplit("REWIND")) {
         const node = try arena.create(StmtNode);
         node.* = try io.parseRewindStatement(arena, lp);
@@ -536,6 +546,84 @@ test "parseStatement parses assignment" {
 
     try testing.expectEqual(@as(usize, 1), idx);
     try testing.expect(stmt_node.node == .assignment);
+}
+
+test "parseStatement handles READ with UNIT equals star" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      READ (UNIT=*,FMT=1) A\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+
+    try testing.expect(stmt_node.node == .read);
+    const read_stmt = stmt_node.node.read;
+    try testing.expect(read_stmt.unit.* == .literal);
+    try testing.expectEqual(ast.LiteralKind.integer, read_stmt.unit.literal.kind);
+    try testing.expectEqualStrings("5", read_stmt.unit.literal.text);
+    try testing.expect(read_stmt.format == .label);
+    try testing.expectEqualStrings("1", read_stmt.format.label);
+}
+
+test "parseStatement handles WRITE with UNIT equals star" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      WRITE (UNIT=*,FMT=*) A\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+
+    try testing.expect(stmt_node.node == .write);
+    const write_stmt = stmt_node.node.write;
+    try testing.expect(write_stmt.unit.* == .literal);
+    try testing.expectEqual(ast.LiteralKind.integer, write_stmt.unit.literal.kind);
+    try testing.expectEqualStrings("6", write_stmt.unit.literal.text);
+    try testing.expect(write_stmt.format == .list_directed);
+}
+
+test "parseStatement handles PRINT statement" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      PRINT 67,DTOT\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+
+    try testing.expect(stmt_node.node == .write);
+    const write_stmt = stmt_node.node.write;
+    try testing.expect(write_stmt.unit.* == .literal);
+    try testing.expectEqual(ast.LiteralKind.integer, write_stmt.unit.literal.kind);
+    try testing.expectEqualStrings("6", write_stmt.unit.literal.text);
+    try testing.expect(write_stmt.format == .label);
+    try testing.expectEqualStrings("67", write_stmt.format.label);
+    try testing.expectEqual(@as(usize, 1), write_stmt.args.len);
 }
 
 test "parseIfBlock stops at ENDIF" {

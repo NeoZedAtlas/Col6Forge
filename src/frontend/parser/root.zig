@@ -26,6 +26,7 @@ pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.Lo
         .lines = lines,
         .index = 0,
         .block_data_counter = 0,
+        .implicit_program_counter = 0,
     };
     const program = try parser.parseProgram();
     return expandEntries(arena_allocator, program);
@@ -36,6 +37,7 @@ const Parser = struct {
     lines: []logical_line.LogicalLine,
     index: usize,
     block_data_counter: usize,
+    implicit_program_counter: usize,
 
     fn parseProgram(self: *Parser) !Program {
         var units = std.array_list.Managed(ProgramUnit).init(self.arena);
@@ -59,11 +61,20 @@ const Parser = struct {
         };
         defer self.arena.free(header_tokens);
         var lp = LineParser.init(header_line, header_tokens);
-        const header = parseProgramUnitHeader(self.arena, &lp, &self.block_data_counter) catch |err| {
-            setParseDiagnosticFromStream(header_line, lp, err);
-            return err;
+        var parsed_implicit_program = false;
+        const header = parseProgramUnitHeader(self.arena, &lp, &self.block_data_counter) catch |err| switch (err) {
+            error.ExpectedProgramUnit => blk: {
+                parsed_implicit_program = true;
+                break :blk try self.syntheticProgramHeader();
+            },
+            else => {
+                setParseDiagnosticFromStream(header_line, lp, err);
+                return err;
+            },
         };
-        self.index += 1;
+        if (!parsed_implicit_program) {
+            self.index += 1;
+        }
 
         var decls = std.array_list.Managed(Decl).init(self.arena);
         var decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
@@ -130,6 +141,17 @@ const Parser = struct {
             .decls = try decls.toOwnedSlice(),
             .decl_sources = try decl_sources.toOwnedSlice(),
             .stmts = try stmts.toOwnedSlice(),
+        };
+    }
+
+    fn syntheticProgramHeader(self: *Parser) !ProgramUnitHeader {
+        const name = try std.fmt.allocPrint(self.arena, "__COL6FORGE_PROGRAM{d}", .{self.implicit_program_counter});
+        self.implicit_program_counter += 1;
+        return .{
+            .kind = .program,
+            .name = name,
+            .args = &.{},
+            .type_decl = null,
         };
     }
 };
@@ -683,4 +705,27 @@ test "parseProgram handles CONTAINS internal function blocks" {
     try testing.expectEqual(@as(usize, 2), program.units.len);
     try testing.expectEqualStrings("OUTER", program.units[0].name);
     try testing.expectEqualStrings("SXVALS", program.units[1].name);
+}
+
+test "parseProgram supports implicit main program header" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      IMPLICIT INTEGER(A-Z)\n" ++
+        "      A=1\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqual(ProgramUnitKind.program, unit.kind);
+    try testing.expect(std.mem.startsWith(u8, unit.name, "__COL6FORGE_PROGRAM"));
+    try testing.expectEqual(@as(usize, 1), unit.decls.len);
+    try testing.expectEqual(@as(usize, 1), unit.stmts.len);
 }
