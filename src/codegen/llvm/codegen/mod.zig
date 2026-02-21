@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 const input = @import("../../input.zig");
 const context = @import("context.zig");
 const builder_mod = @import("builder.zig");
@@ -633,6 +633,6 @@ test "PAUSE lowers to runtime call with configured mode" {
     );
 
     const output = buffer.items;
-    try testing.expect(std.mem.indexOf(u8, output, "call void @f77_pause(i32 0)") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "call void @f77_pause(i32 0)\n  br label") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call void @col6forge_pause(i32 0)") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call void @col6forge_pause(i32 0)\n  br label") != null);
 }

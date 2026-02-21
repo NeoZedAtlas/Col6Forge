@@ -1,5 +1,5 @@
-const std = @import("std");
-const F77_MAX_UNITS = 256;
+﻿const std = @import("std");
+const COL6FORGE_MAX_UNITS = 256;
 
 const DirectUnit = extern struct {
     recl: c_int,
@@ -8,15 +8,15 @@ const DirectUnit = extern struct {
     size: usize,
 };
 
-extern var direct_units: [F77_MAX_UNITS]DirectUnit;
+extern var direct_units: [COL6FORGE_MAX_UNITS]DirectUnit;
 
-extern fn f77_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
-extern fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
-extern fn f77_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
-extern fn f77_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
-extern fn f77_unformatted_begin_write_len(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
-extern fn f77_unformatted_begin_read_len(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
-extern fn f77_rewind(unit: c_int) void;
+extern fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
+extern fn col6forge_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
+extern fn col6forge_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
+extern fn col6forge_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
+extern fn col6forge_unformatted_begin_write_len(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
+extern fn col6forge_unformatted_begin_read_len(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
+extern fn col6forge_rewind(unit: c_int) void;
 
 fn runtimeArgCount(arg_count: c_int) usize {
     return @intCast(@max(arg_count, 0));
@@ -83,7 +83,7 @@ fn copyRawBytes(dst: [*]u8, src: [*]const u8, n: usize) void {
     }
 }
 
-pub export fn f77_write_direct_typed(
+pub export fn col6forge_write_direct_typed(
     unit: c_int,
     rec: c_int,
     arg_ptrs: ?[*]?*anyopaque,
@@ -91,7 +91,7 @@ pub export fn f77_write_direct_typed(
     arg_lens: ?[*]const c_int,
     arg_count: c_int,
 ) callconv(.c) void {
-    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return;
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return;
     const idx: usize = @intCast(unit);
     const du = &direct_units[idx];
     const total_args = runtimeArgCount(arg_count);
@@ -111,7 +111,7 @@ pub export fn f77_write_direct_typed(
     }
     if (du.recl <= 0) return;
 
-    const record = f77_direct_record_ptr(unit, rec, du.recl) orelse return;
+    const record = col6forge_direct_record_ptr(unit, rec, du.recl) orelse return;
     const recl: usize = @intCast(du.recl);
     var z: usize = 0;
     while (z < recl) : (z += 1) record[z] = 0;
@@ -134,7 +134,7 @@ pub export fn f77_write_direct_typed(
     du.nextrec = rec + 1;
 }
 
-pub export fn f77_read_direct_typed(
+pub export fn col6forge_read_direct_typed(
     unit: c_int,
     rec: c_int,
     arg_ptrs: ?[*]?*anyopaque,
@@ -142,7 +142,7 @@ pub export fn f77_read_direct_typed(
     arg_lens: ?[*]const c_int,
     arg_count: c_int,
 ) callconv(.c) c_int {
-    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return 0;
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
     const idx: usize = @intCast(unit);
     const du = &direct_units[idx];
     const total_args = runtimeArgCount(arg_count);
@@ -160,7 +160,7 @@ pub export fn f77_read_direct_typed(
     if (recl == 0) return 0;
     if (recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
     const recl_i32: c_int = @intCast(recl);
-    const record = f77_direct_record_ptr_ro(unit, rec, recl_i32) orelse return 0;
+    const record = col6forge_direct_record_ptr_ro(unit, rec, recl_i32) orelse return 0;
 
     var pos: usize = 0;
     var assigned: c_int = 0;
@@ -182,7 +182,7 @@ pub export fn f77_read_direct_typed(
     return assigned;
 }
 
-pub export fn f77_write_unformatted_typed(
+pub export fn col6forge_write_unformatted_typed(
     unit: c_int,
     arg_ptrs: ?[*]?*anyopaque,
     arg_kinds: ?[*]const u8,
@@ -202,7 +202,7 @@ pub export fn f77_write_unformatted_typed(
 
     var record: ?[*]u8 = null;
     var stored_size: usize = 0;
-    if (f77_unformatted_begin_write_len(unit, record_size, &record, &stored_size) == 0) return;
+    if (col6forge_unformatted_begin_write_len(unit, record_size, &record, &stored_size) == 0) return;
     if (record == null) return;
 
     const dst = record.?;
@@ -221,7 +221,7 @@ pub export fn f77_write_unformatted_typed(
     }
 }
 
-pub export fn f77_read_unformatted_typed(
+pub export fn col6forge_read_unformatted_typed(
     unit: c_int,
     arg_ptrs: ?[*]?*anyopaque,
     arg_kinds: ?[*]const u8,
@@ -241,7 +241,7 @@ pub export fn f77_read_unformatted_typed(
 
     var record: ?[*]u8 = null;
     var record_size: usize = 0;
-    const prep = f77_unformatted_begin_read_len(unit, expected_size, &record, &record_size);
+    const prep = col6forge_unformatted_begin_read_len(unit, expected_size, &record, &record_size);
     if (prep != 0) return prep;
     if (record == null) return 0;
 
@@ -263,7 +263,7 @@ pub export fn f77_read_unformatted_typed(
 }
 
 fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const T) c_int {
-    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return 1;
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 1;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 1;
 
@@ -279,7 +279,7 @@ fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
     }
     if (du.recl <= 0) return 1;
 
-    const record = f77_direct_record_ptr(unit, rec, du.recl) orelse return 1;
+    const record = col6forge_direct_record_ptr(unit, rec, du.recl) orelse return 1;
     const recl: usize = @intCast(du.recl);
     var z: usize = 0;
     while (z < recl) : (z += 1) record[z] = 0;
@@ -300,7 +300,7 @@ fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
 }
 
 fn directReadScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]T) c_int {
-    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return 0;
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 0;
 
@@ -312,7 +312,7 @@ fn directReadScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, st
     const recl: usize = if (du.recl > 0) @intCast(du.recl) else expected_size;
     if (recl == 0 or recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
 
-    const record = f77_direct_record_ptr_ro(unit, rec, @intCast(recl)) orelse return 0;
+    const record = col6forge_direct_record_ptr_ro(unit, rec, @intCast(recl)) orelse return 0;
     const dst_data = base.?;
     var assigned: c_int = 0;
     var pos: usize = 0;
@@ -331,7 +331,7 @@ fn directReadScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, st
 }
 
 fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const T) c_int {
-    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return 1;
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 1;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 1;
 
@@ -347,7 +347,7 @@ fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, 
     }
     if (du.recl <= 0) return 1;
 
-    const record = f77_direct_record_ptr(unit, rec, du.recl) orelse return 1;
+    const record = col6forge_direct_record_ptr(unit, rec, du.recl) orelse return 1;
     const recl: usize = @intCast(du.recl);
     var z: usize = 0;
     while (z < recl) : (z += 1) record[z] = 0;
@@ -368,7 +368,7 @@ fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, 
 }
 
 fn directReadComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]T) c_int {
-    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return 0;
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 0;
 
@@ -380,7 +380,7 @@ fn directReadComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
     const recl: usize = if (du.recl > 0) @intCast(du.recl) else expected_size;
     if (recl == 0 or recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
 
-    const record = f77_direct_record_ptr_ro(unit, rec, @intCast(recl)) orelse return 0;
+    const record = col6forge_direct_record_ptr_ro(unit, rec, @intCast(recl)) orelse return 0;
     const dst_data = base.?;
     var assigned: c_int = 0;
     var pos: usize = 0;
@@ -407,7 +407,7 @@ fn unformattedWriteScalarN(comptime T: type, unit: c_int, count: c_int, stride: 
     const record_size = checkedMul(count_u, field_size) orelse return 1;
     var record: ?[*]u8 = null;
     var stored_size: usize = 0;
-    if (f77_unformatted_begin_write_len(unit, record_size, &record, &stored_size) == 0) return 1;
+    if (col6forge_unformatted_begin_write_len(unit, record_size, &record, &stored_size) == 0) return 1;
     if (record == null) return 1;
 
     const dst = record.?;
@@ -434,7 +434,7 @@ fn unformattedReadScalarN(comptime T: type, unit: c_int, count: c_int, stride: c
     const expected_size = checkedMul(count_u, field_size) orelse return 1;
     var record: ?[*]u8 = null;
     var record_size: usize = 0;
-    const prep = f77_unformatted_begin_read_len(unit, expected_size, &record, &record_size);
+    const prep = col6forge_unformatted_begin_read_len(unit, expected_size, &record, &record_size);
     if (prep != 0) return prep;
     if (record == null) return 1;
 
@@ -462,7 +462,7 @@ fn unformattedWriteComplexN(comptime T: type, unit: c_int, count: c_int, stride:
     const record_size = checkedMul(count_u, field_size) orelse return 1;
     var record: ?[*]u8 = null;
     var stored_size: usize = 0;
-    if (f77_unformatted_begin_write_len(unit, record_size, &record, &stored_size) == 0) return 1;
+    if (col6forge_unformatted_begin_write_len(unit, record_size, &record, &stored_size) == 0) return 1;
     if (record == null) return 1;
 
     const dst = record.?;
@@ -489,7 +489,7 @@ fn unformattedReadComplexN(comptime T: type, unit: c_int, count: c_int, stride: 
     const expected_size = checkedMul(count_u, field_size) orelse return 1;
     var record: ?[*]u8 = null;
     var record_size: usize = 0;
-    const prep = f77_unformatted_begin_read_len(unit, expected_size, &record, &record_size);
+    const prep = col6forge_unformatted_begin_read_len(unit, expected_size, &record, &record_size);
     if (prep != 0) return prep;
     if (record == null) return 1;
 
@@ -508,99 +508,99 @@ fn unformattedReadComplexN(comptime T: type, unit: c_int, count: c_int, stride: 
     return 0;
 }
 
-pub export fn f77_write_direct_i32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
+pub export fn col6forge_write_direct_i32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
     return directWriteScalarN(c_int, unit, rec, count, stride, base);
 }
 
-pub export fn f77_read_direct_i32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
+pub export fn col6forge_read_direct_i32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
     return directReadScalarN(c_int, unit, rec, count, stride, base);
 }
 
-pub export fn f77_write_direct_f32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
+pub export fn col6forge_write_direct_f32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
     return directWriteScalarN(f32, unit, rec, count, stride, base);
 }
 
-pub export fn f77_read_direct_f32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
+pub export fn col6forge_read_direct_f32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
     return directReadScalarN(f32, unit, rec, count, stride, base);
 }
 
-pub export fn f77_write_direct_f64_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
+pub export fn col6forge_write_direct_f64_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
     return directWriteScalarN(f64, unit, rec, count, stride, base);
 }
 
-pub export fn f77_read_direct_f64_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
+pub export fn col6forge_read_direct_f64_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
     return directReadScalarN(f64, unit, rec, count, stride, base);
 }
 
-pub export fn f77_write_direct_c32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
+pub export fn col6forge_write_direct_c32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
     return directWriteComplexN(f32, unit, rec, count, stride, base);
 }
 
-pub export fn f77_read_direct_c32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
+pub export fn col6forge_read_direct_c32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
     return directReadComplexN(f32, unit, rec, count, stride, base);
 }
 
-pub export fn f77_write_direct_c64_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
+pub export fn col6forge_write_direct_c64_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
     return directWriteComplexN(f64, unit, rec, count, stride, base);
 }
 
-pub export fn f77_read_direct_c64_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
+pub export fn col6forge_read_direct_c64_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
     return directReadComplexN(f64, unit, rec, count, stride, base);
 }
 
-pub export fn f77_write_direct_l_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const u8) callconv(.c) c_int {
+pub export fn col6forge_write_direct_l_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const u8) callconv(.c) c_int {
     return directWriteScalarN(u8, unit, rec, count, stride, base);
 }
 
-pub export fn f77_read_direct_l_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]u8) callconv(.c) c_int {
+pub export fn col6forge_read_direct_l_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]u8) callconv(.c) c_int {
     return directReadScalarN(u8, unit, rec, count, stride, base);
 }
 
-pub export fn f77_write_unformatted_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
+pub export fn col6forge_write_unformatted_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
     return unformattedWriteScalarN(c_int, unit, count, stride, base);
 }
 
-pub export fn f77_read_unformatted_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
+pub export fn col6forge_read_unformatted_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
     return unformattedReadScalarN(c_int, unit, count, stride, base);
 }
 
-pub export fn f77_write_unformatted_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
+pub export fn col6forge_write_unformatted_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
     return unformattedWriteScalarN(f32, unit, count, stride, base);
 }
 
-pub export fn f77_read_unformatted_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
+pub export fn col6forge_read_unformatted_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
     return unformattedReadScalarN(f32, unit, count, stride, base);
 }
 
-pub export fn f77_write_unformatted_f64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
+pub export fn col6forge_write_unformatted_f64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
     return unformattedWriteScalarN(f64, unit, count, stride, base);
 }
 
-pub export fn f77_read_unformatted_f64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
+pub export fn col6forge_read_unformatted_f64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
     return unformattedReadScalarN(f64, unit, count, stride, base);
 }
 
-pub export fn f77_write_unformatted_c32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
+pub export fn col6forge_write_unformatted_c32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
     return unformattedWriteComplexN(f32, unit, count, stride, base);
 }
 
-pub export fn f77_read_unformatted_c32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
+pub export fn col6forge_read_unformatted_c32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
     return unformattedReadComplexN(f32, unit, count, stride, base);
 }
 
-pub export fn f77_write_unformatted_c64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
+pub export fn col6forge_write_unformatted_c64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
     return unformattedWriteComplexN(f64, unit, count, stride, base);
 }
 
-pub export fn f77_read_unformatted_c64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
+pub export fn col6forge_read_unformatted_c64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
     return unformattedReadComplexN(f64, unit, count, stride, base);
 }
 
-pub export fn f77_write_unformatted_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const u8) callconv(.c) c_int {
+pub export fn col6forge_write_unformatted_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const u8) callconv(.c) c_int {
     return unformattedWriteScalarN(u8, unit, count, stride, base);
 }
 
-pub export fn f77_read_unformatted_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]u8) callconv(.c) c_int {
+pub export fn col6forge_read_unformatted_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]u8) callconv(.c) c_int {
     return unformattedReadScalarN(u8, unit, count, stride, base);
 }
 
@@ -618,7 +618,7 @@ test "typed direct io roundtrip handles integer, complex and character" {
     };
     const write_kinds: [3]u8 = .{ 'i', 'c', 's' };
     const write_lens: [3]c_int = .{ 0, 0, 4 };
-    f77_write_direct_typed(unit, rec, &write_args, &write_kinds, &write_lens, 3);
+    col6forge_write_direct_typed(unit, rec, &write_args, &write_kinds, &write_lens, 3);
 
     var int_out: c_int = 0;
     var complex_out: [2]f32 = .{ 0.0, 0.0 };
@@ -628,7 +628,7 @@ test "typed direct io roundtrip handles integer, complex and character" {
         @ptrCast(&complex_out),
         @ptrCast(&char_out),
     };
-    const status = f77_read_direct_typed(unit, rec, &read_args, &write_kinds, &write_lens, 3);
+    const status = col6forge_read_direct_typed(unit, rec, &read_args, &write_kinds, &write_lens, 3);
 
     try std.testing.expectEqual(@as(c_int, 3), status);
     try std.testing.expectEqual(int_in, int_out);
@@ -650,9 +650,9 @@ test "typed unformatted io roundtrip handles character, complex*16 and logical" 
     };
     const kinds: [3]u8 = .{ 's', 'z', 'l' };
     const lens: [3]c_int = .{ 5, 0, 0 };
-    f77_write_unformatted_typed(unit, &write_args, &kinds, &lens, 3);
+    col6forge_write_unformatted_typed(unit, &write_args, &kinds, &lens, 3);
 
-    f77_rewind(unit);
+    col6forge_rewind(unit);
 
     var char_out: [5]u8 = .{ 0, 0, 0, 0, 0 };
     var complex_out: [2]f64 = .{ 0.0, 0.0 };
@@ -662,7 +662,7 @@ test "typed unformatted io roundtrip handles character, complex*16 and logical" 
         @ptrCast(&complex_out),
         @ptrCast(&logical_out),
     };
-    const status = f77_read_unformatted_typed(unit, &read_args, &kinds, &lens, 3);
+    const status = col6forge_read_unformatted_typed(unit, &read_args, &kinds, &lens, 3);
 
     try std.testing.expectEqual(@as(c_int, 0), status);
     try std.testing.expectEqualSlices(u8, char_in[0..], char_out[0..]);

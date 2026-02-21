@@ -1,4 +1,4 @@
-const F77_MAX_UNITS = 256;
+﻿const COL6FORGE_MAX_UNITS = 256;
 
 const FILE = opaque {};
 
@@ -30,8 +30,8 @@ const UnformattedUnit = extern struct {
     used: u8,
 };
 
-extern var direct_units: [F77_MAX_UNITS]DirectUnit;
-extern var unformatted_units: [F77_MAX_UNITS]UnformattedUnit;
+extern var direct_units: [COL6FORGE_MAX_UNITS]DirectUnit;
+extern var unformatted_units: [COL6FORGE_MAX_UNITS]UnformattedUnit;
 
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 
@@ -150,16 +150,16 @@ fn unformattedFileHasData(unit: c_int) bool {
     return size > 0;
 }
 
-pub export fn f77_open_direct(unit: c_int, recl: c_int) callconv(.c) void {
-    if (unit < 0 or unit >= F77_MAX_UNITS) return;
+pub export fn col6forge_open_direct(unit: c_int, recl: c_int) callconv(.c) void {
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return;
     if (recl <= 0) return;
     const idx: usize = @intCast(unit);
     direct_units[idx].recl = recl;
     direct_units[idx].nextrec = 1;
 }
 
-pub export fn f77_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) callconv(.c) ?[*]u8 {
-    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return null;
+pub export fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) callconv(.c) ?[*]u8 {
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return null;
     const idx: usize = @intCast(unit);
     const du = &direct_units[idx];
     const recl_local: c_int = if (du.recl > 0) du.recl else recl;
@@ -179,8 +179,8 @@ pub export fn f77_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) callco
     return record;
 }
 
-pub export fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) callconv(.c) ?[*]u8 {
-    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return null;
+pub export fn col6forge_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) callconv(.c) ?[*]u8 {
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return null;
     const idx: usize = @intCast(unit);
     const du = &direct_units[idx];
     const recl_local: c_int = if (du.recl > 0) du.recl else recl;
@@ -202,20 +202,20 @@ fn directLastRecord(rec: c_int, count: c_int) ?c_int {
     return last[0];
 }
 
-pub export fn f77_direct_record_span_ptr(unit: c_int, rec: c_int, recl: c_int, count: c_int) callconv(.c) ?[*]u8 {
+pub export fn col6forge_direct_record_span_ptr(unit: c_int, rec: c_int, recl: c_int, count: c_int) callconv(.c) ?[*]u8 {
     const last_rec = directLastRecord(rec, count) orelse return null;
-    _ = f77_direct_record_ptr(unit, last_rec, recl) orelse return null;
-    return f77_direct_record_ptr(unit, rec, recl);
+    _ = col6forge_direct_record_ptr(unit, last_rec, recl) orelse return null;
+    return col6forge_direct_record_ptr(unit, rec, recl);
 }
 
-pub export fn f77_direct_record_span_ptr_ro(unit: c_int, rec: c_int, recl: c_int, count: c_int) callconv(.c) ?[*]u8 {
+pub export fn col6forge_direct_record_span_ptr_ro(unit: c_int, rec: c_int, recl: c_int, count: c_int) callconv(.c) ?[*]u8 {
     const last_rec = directLastRecord(rec, count) orelse return null;
-    _ = f77_direct_record_ptr_ro(unit, last_rec, recl) orelse return null;
-    return f77_direct_record_ptr_ro(unit, rec, recl);
+    _ = col6forge_direct_record_ptr_ro(unit, last_rec, recl) orelse return null;
+    return col6forge_direct_record_ptr_ro(unit, rec, recl);
 }
 
-pub export fn f77_direct_record_commit(unit: c_int, rec: c_int) callconv(.c) void {
-    if (unit < 0 or unit >= F77_MAX_UNITS or rec <= 0) return;
+pub export fn col6forge_direct_record_commit(unit: c_int, rec: c_int) callconv(.c) void {
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return;
     const idx: usize = @intCast(unit);
     const du = &direct_units[idx];
     const next = rec + 1;
@@ -224,11 +224,11 @@ pub export fn f77_direct_record_commit(unit: c_int, rec: c_int) callconv(.c) voi
     }
 }
 
-pub export fn f77_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_int) callconv(.c) void {
+pub export fn col6forge_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_int) callconv(.c) void {
     if (recl == null or nextrec == null) return;
     const recl_ptr = recl.?;
     const nextrec_ptr = nextrec.?;
-    if (unit < 0 or unit >= F77_MAX_UNITS) {
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) {
         recl_ptr.* = 0;
         nextrec_ptr.* = 1;
         return;
@@ -252,7 +252,7 @@ pub export fn f77_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_int) c
 }
 
 fn unformattedBeginWriteSized(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int {
-    if (unit < 0 or unit >= F77_MAX_UNITS) return 0;
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return 0;
     const idx: usize = @intCast(unit);
     const uu = &unformatted_units[idx];
     uu.used = 1;
@@ -301,7 +301,7 @@ fn unformattedBeginWriteSized(unit: c_int, record_size: usize, out_record: ?*?[*
 }
 
 fn unformattedBeginReadSized(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int {
-    if (unit < 0 or unit >= F77_MAX_UNITS) return 1;
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return 1;
     const idx: usize = @intCast(unit);
     const uu = &unformatted_units[idx];
     uu.used = 1;
@@ -342,21 +342,21 @@ fn unformattedBeginReadSized(unit: c_int, record_size_hint: usize, out_record: ?
     return 0;
 }
 
-pub export fn f77_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
+pub export fn col6forge_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
     if (sig == null) return 0;
     return unformattedBeginWriteSized(unit, direct_signature_size(sig.?), out_record, out_len);
 }
 
-pub export fn f77_unformatted_begin_write_len(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
+pub export fn col6forge_unformatted_begin_write_len(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
     return unformattedBeginWriteSized(unit, record_size, out_record, out_len);
 }
 
-pub export fn f77_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
+pub export fn col6forge_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
     if (sig == null) return 1;
     return unformattedBeginReadSized(unit, direct_signature_size(sig.?), out_record, out_len);
 }
 
-pub export fn f77_unformatted_begin_read_len(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
+pub export fn col6forge_unformatted_begin_read_len(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
     return unformattedBeginReadSized(unit, record_size_hint, out_record, out_len);
 }
 

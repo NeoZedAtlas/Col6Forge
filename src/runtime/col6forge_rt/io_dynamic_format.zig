@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 
 const TabKind = enum { absolute, relative_right, relative_left };
 const BlankCtrl = enum { nulls, zeros };
@@ -26,7 +26,7 @@ const Token = union(enum) {
     scale: i32,
 };
 
-extern fn f77_write_v(
+extern fn col6forge_write_v(
     unit: c_int,
     fmt: ?[*:0]const u8,
     arg_ptrs: ?[*]?*anyopaque,
@@ -34,7 +34,7 @@ extern fn f77_write_v(
     arg_count: c_int,
     strict_status: c_int,
 ) c_int;
-extern fn f77_write_internal_v(
+extern fn col6forge_write_internal_v(
     buf: ?[*]u8,
     len: c_int,
     count: c_int,
@@ -43,7 +43,7 @@ extern fn f77_write_internal_v(
     arg_kinds: ?[*]const u8,
     arg_count: c_int,
 ) void;
-extern fn f77_formatted_read_core(
+extern fn col6forge_formatted_read_core(
     unit: c_int,
     fmt: ?[*:0]const u8,
     arg_ptrs: ?[*]?*anyopaque,
@@ -51,7 +51,7 @@ extern fn f77_formatted_read_core(
     arg_count: c_int,
     status_mode: c_int,
 ) c_int;
-extern fn f77_read_internal_core(
+extern fn col6forge_read_internal_core(
     buf: ?[*]u8,
     len: c_int,
     count: c_int,
@@ -390,7 +390,7 @@ fn parseTokens(a: std.mem.Allocator, trimmed: []const u8) ?[]Token {
     return p.parseItems(false) catch null;
 }
 
-pub export fn f77_write_fmt_expr_v(unit: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int, strict_status: c_int) callconv(.c) c_int {
+pub export fn col6forge_write_fmt_expr_v(unit: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int, strict_status: c_int) callconv(.c) c_int {
     const allocator = std.heap.page_allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -398,10 +398,10 @@ pub export fn f77_write_fmt_expr_v(unit: c_int, fmt_ptr: ?[*]const u8, fmt_len: 
     const toks = parseTokens(arena.allocator(), trimmed) orelse return if (strict_status != 0) 1 else 0;
     const fmt_c = lowerWrite(allocator, toks, arg_kinds, arg_count) catch return if (strict_status != 0) 1 else 0;
     defer allocator.free(fmt_c);
-    return f77_write_v(unit, asConstCStr(fmt_c), arg_ptrs, arg_kinds, arg_count, strict_status);
+    return col6forge_write_v(unit, asConstCStr(fmt_c), arg_ptrs, arg_kinds, arg_count, strict_status);
 }
 
-pub export fn f77_write_internal_fmt_expr_v(buf: ?[*]u8, len: c_int, count: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int) callconv(.c) void {
+pub export fn col6forge_write_internal_fmt_expr_v(buf: ?[*]u8, len: c_int, count: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int) callconv(.c) void {
     const allocator = std.heap.page_allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -409,10 +409,10 @@ pub export fn f77_write_internal_fmt_expr_v(buf: ?[*]u8, len: c_int, count: c_in
     const toks = parseTokens(arena.allocator(), trimmed) orelse return;
     const fmt_c = lowerWrite(allocator, toks, arg_kinds, arg_count) catch return;
     defer allocator.free(fmt_c);
-    f77_write_internal_v(buf, len, count, asConstCStr(fmt_c), arg_ptrs, arg_kinds, arg_count);
+    col6forge_write_internal_v(buf, len, count, asConstCStr(fmt_c), arg_ptrs, arg_kinds, arg_count);
 }
 
-pub export fn f77_read_fmt_expr_core(unit: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int, status_mode: c_int) callconv(.c) c_int {
+pub export fn col6forge_read_fmt_expr_core(unit: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int, status_mode: c_int) callconv(.c) c_int {
     const allocator = std.heap.page_allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -420,10 +420,10 @@ pub export fn f77_read_fmt_expr_core(unit: c_int, fmt_ptr: ?[*]const u8, fmt_len
     const toks = parseTokens(arena.allocator(), trimmed) orelse return if (status_mode != 0) 1 else -1;
     const fmt_c = lowerRead(allocator, toks, arg_kinds, arg_count) catch return if (status_mode != 0) 1 else -1;
     defer allocator.free(fmt_c);
-    return f77_formatted_read_core(unit, asConstCStr(fmt_c), arg_ptrs, arg_kinds, arg_count, status_mode);
+    return col6forge_formatted_read_core(unit, asConstCStr(fmt_c), arg_ptrs, arg_kinds, arg_count, status_mode);
 }
 
-pub export fn f77_read_internal_fmt_expr_core(buf: ?[*]u8, len: c_int, count: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int) callconv(.c) c_int {
+pub export fn col6forge_read_internal_fmt_expr_core(buf: ?[*]u8, len: c_int, count: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int) callconv(.c) c_int {
     const allocator = std.heap.page_allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -431,5 +431,5 @@ pub export fn f77_read_internal_fmt_expr_core(buf: ?[*]u8, len: c_int, count: c_
     const toks = parseTokens(arena.allocator(), trimmed) orelse return 1;
     const fmt_c = lowerRead(allocator, toks, arg_kinds, arg_count) catch return 1;
     defer allocator.free(fmt_c);
-    return f77_read_internal_core(buf, len, count, asConstCStr(fmt_c), arg_ptrs, arg_kinds, arg_count);
+    return col6forge_read_internal_core(buf, len, count, asConstCStr(fmt_c), arg_ptrs, arg_kinds, arg_count);
 }

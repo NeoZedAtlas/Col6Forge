@@ -1,4 +1,4 @@
-const F77_MAX_UNITS = 256;
+﻿const COL6FORGE_MAX_UNITS = 256;
 
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 
@@ -10,7 +10,7 @@ const OpenUnit = extern struct {
     blank: c_int,
 };
 
-extern var open_units: [F77_MAX_UNITS]OpenUnit;
+extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
 
 fn cstrlen(text: [*:0]const u8) usize {
     var i: usize = 0;
@@ -44,7 +44,7 @@ fn copyCharField(dst: ?[*]u8, len: c_int, src: [*:0]const u8) void {
 pub export fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) callconv(.c) void {
     if (buf == null or len == 0) return;
     const out = buf.?;
-    if (unit >= 0 and unit < F77_MAX_UNITS) {
+    if (unit >= 0 and unit < COL6FORGE_MAX_UNITS) {
         const idx: usize = @intCast(unit);
         if (open_units[idx].opened != 0 and open_units[idx].filename[0] != 0) {
             const name = &open_units[idx].filename;
@@ -60,7 +60,7 @@ pub export fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) callconv(.c) v
     out[len - 1] = 0;
 }
 
-pub export fn f77_parse_logical_field(buf: ?[*]const u8, len: c_int) callconv(.c) c_int {
+pub export fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) callconv(.c) c_int {
     if (buf == null or len <= 0) return 0;
     const in = buf.?;
     var i: usize = 0;
@@ -74,7 +74,7 @@ pub export fn f77_parse_logical_field(buf: ?[*]const u8, len: c_int) callconv(.c
     return 0;
 }
 
-pub export fn f77_normalize_exponent(buf: ?[*]u8) callconv(.c) void {
+pub export fn col6forge_normalize_exponent(buf: ?[*]u8) callconv(.c) void {
     if (buf == null) return;
     const out = buf.?;
     var i: usize = 0;
@@ -84,7 +84,7 @@ pub export fn f77_normalize_exponent(buf: ?[*]u8) callconv(.c) void {
     }
 }
 
-pub export fn f77_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) callconv(.c) void {
+pub export fn col6forge_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) callconv(.c) void {
     if (buf == null or used == null) return;
     const out = buf.?;
     const used_ptr = used.?;
@@ -107,11 +107,11 @@ pub export fn f77_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int
     used_ptr.* = @intCast(write_idx);
 }
 
-pub export fn f77_store_char(dst: ?[*]u8, len: c_int, src: [*:0]const u8) callconv(.c) void {
+pub export fn col6forge_store_char(dst: ?[*]u8, len: c_int, src: [*:0]const u8) callconv(.c) void {
     copyCharField(dst, len, src);
 }
 
-pub export fn f77_trim_filename(file: ?[*]const u8, file_len: c_int, out: ?[*]u8, out_len: usize) callconv(.c) void {
+pub export fn col6forge_trim_filename(file: ?[*]const u8, file_len: c_int, out: ?[*]u8, out_len: usize) callconv(.c) void {
     if (out == null or out_len == 0) return;
     const dst = out.?;
     dst[0] = 0;

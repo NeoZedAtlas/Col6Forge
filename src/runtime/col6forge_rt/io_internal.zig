@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
@@ -29,11 +29,11 @@ extern fn strtod(nptr: [*:0]const u8, endptr: ?*?[*:0]u8) f64;
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
-extern fn f77_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
-extern fn f77_direct_record_commit(unit: c_int, rec: c_int) void;
-extern fn f77_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
-extern fn f77_normalize_exponent(buf: ?[*]u8) void;
-extern fn f77_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
+extern fn col6forge_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
+extern fn col6forge_direct_record_commit(unit: c_int, rec: c_int) void;
+extern fn col6forge_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
+extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
+extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 
 fn cstrlenRaw(text: []const u8) usize {
     var i: usize = 0;
@@ -246,7 +246,7 @@ fn countFormatRecords(fmt: [*:0]const u8) usize {
     return records;
 }
 
-pub export fn f77_write_internal_list_v(
+pub export fn col6forge_write_internal_list_v(
     buf: ?[*]u8,
     len: c_int,
     count: c_int,
@@ -305,10 +305,10 @@ pub export fn f77_write_internal_list_v(
     }
 
     if (!rendered.terminate()) return;
-    f77_write_internal_n_core(buf, len, count, @ptrCast(rendered.data.?));
+    col6forge_write_internal_n_core(buf, len, count, @ptrCast(rendered.data.?));
 }
 
-pub export fn f77_read_internal_list_v(
+pub export fn col6forge_read_internal_list_v(
     buf: ?[*]const u8,
     len: c_int,
     count: c_int,
@@ -349,7 +349,7 @@ pub export fn f77_read_internal_list_v(
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
                     return if (status_mode != 0) -1 else 0;
                 }
-                f77_normalize_exponent(asCStr(&token));
+                col6forge_normalize_exponent(asCStr(&token));
                 const out: *f32 = @ptrCast(@alignCast(arg));
                 out.* = @floatCast(strtod(asConstCStr(&token), null));
             },
@@ -357,7 +357,7 @@ pub export fn f77_read_internal_list_v(
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
                     return if (status_mode != 0) -1 else 0;
                 }
-                f77_normalize_exponent(asCStr(&token));
+                col6forge_normalize_exponent(asCStr(&token));
                 const out: *f64 = @ptrCast(@alignCast(arg));
                 out.* = strtod(asConstCStr(&token), null);
             },
@@ -367,7 +367,7 @@ pub export fn f77_read_internal_list_v(
                 }
                 const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
                 const out: *u8 = @ptrCast(@alignCast(arg));
-                out.* = @intCast(f77_parse_logical_field(asConstCStr(&token), token_len));
+                out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
             },
             's' => {
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
@@ -391,12 +391,12 @@ pub export fn f77_read_internal_list_v(
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
                     return if (status_mode != 0) -1 else 0;
                 }
-                f77_normalize_exponent(asCStr(&token));
+                col6forge_normalize_exponent(asCStr(&token));
                 const real = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
                     return if (status_mode != 0) -1 else 0;
                 }
-                f77_normalize_exponent(asCStr(&token));
+                col6forge_normalize_exponent(asCStr(&token));
                 const imag = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
                 const out: [*]f32 = @ptrCast(@alignCast(arg));
                 out[0] = real;
@@ -406,12 +406,12 @@ pub export fn f77_read_internal_list_v(
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
                     return if (status_mode != 0) -1 else 0;
                 }
-                f77_normalize_exponent(asCStr(&token));
+                col6forge_normalize_exponent(asCStr(&token));
                 const real = strtod(asConstCStr(&token), null);
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
                     return if (status_mode != 0) -1 else 0;
                 }
-                f77_normalize_exponent(asCStr(&token));
+                col6forge_normalize_exponent(asCStr(&token));
                 const imag = strtod(asConstCStr(&token), null);
                 const out: [*]f64 = @ptrCast(@alignCast(arg));
                 out[0] = real;
@@ -424,7 +424,7 @@ pub export fn f77_read_internal_list_v(
     return 0;
 }
 
-pub export fn f77_read_internal_core(
+pub export fn col6forge_read_internal_core(
     buf: ?[*]const u8,
     len: c_int,
     count: c_int,
@@ -547,19 +547,19 @@ pub export fn f77_read_internal_core(
         arg_index += 1;
 
         if (conv == 'd' and kind == 'd') {
-            f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
+            col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             const out: *c_int = @ptrCast(@alignCast(arg_any));
             out.* = @intCast(strtol(asConstCStr(&field), null, 10));
             assigned += 1;
         } else if (conv == 'f' and is_long and kind == 'D') {
-            f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
-            f77_normalize_exponent(asCStr(&field));
+            col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
+            col6forge_normalize_exponent(asCStr(&field));
             const out: *f64 = @ptrCast(@alignCast(arg_any));
             out.* = strtod(asConstCStr(&field), null);
             assigned += 1;
         } else if (conv == 'f' and !is_long and kind == 'f') {
-            f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
-            f77_normalize_exponent(asCStr(&field));
+            col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
+            col6forge_normalize_exponent(asCStr(&field));
             const out: *f32 = @ptrCast(@alignCast(arg_any));
             out.* = @floatCast(strtod(asConstCStr(&field), null));
             assigned += 1;
@@ -575,14 +575,14 @@ pub export fn f77_read_internal_core(
             assigned += 1;
         } else if (conv == 'L' and kind == 'L') {
             const out: *u8 = @ptrCast(@alignCast(arg_any));
-            out.* = @intCast(f77_parse_logical_field(asConstCStr(&field), used));
+            out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&field), used));
             assigned += 1;
         }
     }
     return assigned;
 }
 
-pub export fn f77_read_direct_internal_core(
+pub export fn col6forge_read_direct_internal_core(
     unit: c_int,
     rec: c_int,
     recl: c_int,
@@ -606,7 +606,7 @@ pub export fn f77_read_direct_internal_core(
     var record_idx: usize = 0;
     while (record_idx < record_count) : (record_idx += 1) {
         const rec_num = addRecordOffset(rec, record_idx) orelse return if (status_mode != 0) 1 else 0;
-        const src = f77_direct_record_ptr_ro(unit, rec_num, recl) orelse return -1;
+        const src = col6forge_direct_record_ptr_ro(unit, rec_num, recl) orelse return -1;
         const offset = checkedMul(record_idx, recl_usize) orelse return if (status_mode != 0) 1 else 0;
         var i: usize = 0;
         while (i < recl_usize) : (i += 1) {
@@ -614,7 +614,7 @@ pub export fn f77_read_direct_internal_core(
         }
     }
 
-    const assigned = f77_read_internal_core(
+    const assigned = col6forge_read_internal_core(
         buffer,
         recl,
         @intCast(record_count),
@@ -625,7 +625,7 @@ pub export fn f77_read_direct_internal_core(
     );
 
     const last_rec = addRecordOffset(rec, record_count - 1) orelse return if (status_mode != 0) 1 else 0;
-    f77_direct_record_commit(unit, last_rec);
+    col6forge_direct_record_commit(unit, last_rec);
     if (status_mode != 0) return 0;
     return assigned;
 }
@@ -692,7 +692,7 @@ fn writeInternalMarkedSlice(dst: [*]u8, len: usize, src: []const u8) void {
     }
 }
 
-pub export fn f77_write_internal_core(buf: ?[*]u8, len: c_int, src: ?[*:0]const u8) callconv(.c) void {
+pub export fn col6forge_write_internal_core(buf: ?[*]u8, len: c_int, src: ?[*:0]const u8) callconv(.c) void {
     if (buf == null or src == null or len <= 0) return;
 
     const dst = buf.?;
@@ -704,7 +704,7 @@ pub export fn f77_write_internal_core(buf: ?[*]u8, len: c_int, src: ?[*:0]const 
     writeInternalMarkedSlice(dst, width, in[0..line_len]);
 }
 
-pub export fn f77_write_internal_n_core(buf: ?[*]u8, len: c_int, count: c_int, src: ?[*:0]const u8) callconv(.c) void {
+pub export fn col6forge_write_internal_n_core(buf: ?[*]u8, len: c_int, count: c_int, src: ?[*:0]const u8) callconv(.c) void {
     if (buf == null or src == null or len <= 0 or count <= 0) return;
 
     const dst = buf.?;

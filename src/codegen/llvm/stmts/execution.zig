@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 const ast = @import("../../input.zig");
 const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
@@ -18,7 +18,7 @@ pub fn emitPause(ctx: *Context, builder: anytype) EmitError!void {
         .continue_ => 1,
         .stop => 2,
     };
-    const pause_name = try ctx.ensureDeclRaw("f77_pause", .void, &[_]llvm_types.IRType{.i32}, false);
+    const pause_name = try ctx.ensureDeclRaw("col6forge_pause", .void, &[_]llvm_types.IRType{.i32}, false);
     const mode_val = ValueRef{ .name = try ctx.intLiteral(pause_mode), .ty = .i32, .is_ptr = false };
     try builder.callTyped(null, .void, pause_name, &.{mode_val});
 }

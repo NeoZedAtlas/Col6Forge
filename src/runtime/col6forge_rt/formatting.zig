@@ -1,13 +1,13 @@
-const std = @import("std");
+﻿const std = @import("std");
 
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn malloc(size: usize) ?*anyopaque;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) void;
 
-const F77_FMT_BUFFER_LEN: usize = 64;
+const COL6FORGE_FMT_BUFFER_LEN: usize = 64;
 
-var fmt_fallback: [F77_FMT_BUFFER_LEN]u8 = [_]u8{0} ** F77_FMT_BUFFER_LEN;
+var fmt_fallback: [COL6FORGE_FMT_BUFFER_LEN]u8 = [_]u8{0} ** COL6FORGE_FMT_BUFFER_LEN;
 var fmt_allocs: ?[*]?*anyopaque = null;
 var fmt_alloc_count: usize = 0;
 var fmt_alloc_cap: usize = 0;
@@ -38,18 +38,18 @@ fn trackFmtAlloc(ptr: ?*anyopaque) bool {
     return true;
 }
 
-fn nextFmtBuffer() *[F77_FMT_BUFFER_LEN]u8 {
-    const raw = malloc(F77_FMT_BUFFER_LEN) orelse return &fmt_fallback;
+fn nextFmtBuffer() *[COL6FORGE_FMT_BUFFER_LEN]u8 {
+    const raw = malloc(COL6FORGE_FMT_BUFFER_LEN) orelse return &fmt_fallback;
     if (!trackFmtAlloc(raw)) {
         free(raw);
         return &fmt_fallback;
     }
-    const out: *[F77_FMT_BUFFER_LEN]u8 = @ptrCast(@alignCast(raw));
+    const out: *[COL6FORGE_FMT_BUFFER_LEN]u8 = @ptrCast(@alignCast(raw));
     out[0] = 0;
     return out;
 }
 
-pub export fn f77_fmt_release_all() callconv(.c) void {
+pub export fn col6forge_fmt_release_all() callconv(.c) void {
     if (fmt_allocs) |arr| {
         var i: usize = 0;
         while (i < fmt_alloc_count) : (i += 1) {
@@ -74,21 +74,21 @@ fn findByte(buf: []const u8, ch: u8) ?usize {
     return null;
 }
 
-fn fmtBufLen(buf: *[F77_FMT_BUFFER_LEN]u8) usize {
+fn fmtBufLen(buf: *[COL6FORGE_FMT_BUFFER_LEN]u8) usize {
     return cstrlenRaw(buf[0..]);
 }
 
-fn fillStars(buf: *[F77_FMT_BUFFER_LEN]u8, width_in: c_int) void {
+fn fillStars(buf: *[COL6FORGE_FMT_BUFFER_LEN]u8, width_in: c_int) void {
     var width = width_in;
     if (width < 0) width = 0;
-    const usable: usize = @min(@as(usize, @intCast(width)), F77_FMT_BUFFER_LEN - 1);
+    const usable: usize = @min(@as(usize, @intCast(width)), COL6FORGE_FMT_BUFFER_LEN - 1);
     var i: usize = 0;
     while (i < usable) : (i += 1) {
         buf[i] = '*';
     }
     buf[usable] = 0;
 }
-fn f77PadExp(buf: *[F77_FMT_BUFFER_LEN]u8, exp_digits: usize) void {
+fn col6forgePadExp(buf: *[COL6FORGE_FMT_BUFFER_LEN]u8, exp_digits: usize) void {
     var exp_idx_opt = findByte(buf[0..], 'E');
     if (exp_idx_opt == null) {
         exp_idx_opt = findByte(buf[0..], 'e');
@@ -97,14 +97,14 @@ fn f77PadExp(buf: *[F77_FMT_BUFFER_LEN]u8, exp_digits: usize) void {
     const exp_idx = exp_idx_opt.?;
 
     var sign_idx = exp_idx + 1;
-    if (sign_idx >= F77_FMT_BUFFER_LEN) return;
+    if (sign_idx >= COL6FORGE_FMT_BUFFER_LEN) return;
     if (buf[sign_idx] == '+' or buf[sign_idx] == '-') {
         sign_idx += 1;
     }
-    if (sign_idx >= F77_FMT_BUFFER_LEN) return;
+    if (sign_idx >= COL6FORGE_FMT_BUFFER_LEN) return;
 
     var digits: usize = 0;
-    while (sign_idx + digits < F77_FMT_BUFFER_LEN) : (digits += 1) {
+    while (sign_idx + digits < COL6FORGE_FMT_BUFFER_LEN) : (digits += 1) {
         const ch = buf[sign_idx + digits];
         if (ch < '0' or ch > '9') break;
     }
@@ -113,7 +113,7 @@ fn f77PadExp(buf: *[F77_FMT_BUFFER_LEN]u8, exp_digits: usize) void {
     const needed = exp_digits - digits;
     const cur_len = fmtBufLen(buf);
     if (sign_idx + digits > cur_len) return;
-    if (cur_len + needed + 1 >= F77_FMT_BUFFER_LEN) return;
+    if (cur_len + needed + 1 >= COL6FORGE_FMT_BUFFER_LEN) return;
 
     const tail_len = cur_len - (sign_idx + digits);
     const move_len = digits + tail_len + 1;
@@ -128,7 +128,7 @@ fn f77PadExp(buf: *[F77_FMT_BUFFER_LEN]u8, exp_digits: usize) void {
     }
 }
 
-pub export fn f77_fmt_copy(dst: ?[*]u8, dst_len: c_int, src: ?[*:0]const u8) callconv(.c) void {
+pub export fn col6forge_fmt_copy(dst: ?[*]u8, dst_len: c_int, src: ?[*:0]const u8) callconv(.c) void {
     if (dst == null or dst_len <= 0) return;
     const out = dst.?;
     const cap: usize = @intCast(dst_len);
@@ -145,7 +145,7 @@ pub export fn f77_fmt_copy(dst: ?[*]u8, dst_len: c_int, src: ?[*:0]const u8) cal
     out[i] = 0;
 }
 
-pub export fn f77_fmt_i(width: c_int, min_digits: c_int, sign_plus: c_int, value: c_int) callconv(.c) [*:0]const u8 {
+pub export fn col6forge_fmt_i(width: c_int, min_digits: c_int, sign_plus: c_int, value: c_int) callconv(.c) [*:0]const u8 {
     var tmp: [128]u8 = [_]u8{0} ** 128;
     var digits: [128]u8 = [_]u8{0} ** 128;
     const out = nextFmtBuffer();
@@ -185,18 +185,18 @@ pub export fn f77_fmt_i(width: c_int, min_digits: c_int, sign_plus: c_int, value
     return asConstCStr(out);
 }
 
-pub export fn f77_fmt_list_g(precision: c_int, exp_width: c_int, value: f64) callconv(.c) [*:0]const u8 {
+pub export fn col6forge_fmt_list_g(precision: c_int, exp_width: c_int, value: f64) callconv(.c) [*:0]const u8 {
     const out = nextFmtBuffer();
     var p = precision;
     if (p <= 0) p = 1;
     _ = snprintf(&out[0], out.len, "%#.*G", p, value);
     if (exp_width > 0) {
-        f77PadExp(out, @intCast(exp_width));
+        col6forgePadExp(out, @intCast(exp_width));
     }
     return asConstCStr(out);
 }
 
-pub export fn f77_fmt_f(width: c_int, precision: c_int, sign_plus: c_int, value: f64) callconv(.c) [*:0]const u8 {
+pub export fn col6forge_fmt_f(width: c_int, precision: c_int, sign_plus: c_int, value: f64) callconv(.c) [*:0]const u8 {
     var tmp: [128]u8 = [_]u8{0} ** 128;
     const out = nextFmtBuffer();
     var p = precision;
@@ -246,7 +246,7 @@ pub export fn f77_fmt_f(width: c_int, precision: c_int, sign_plus: c_int, value:
     return asConstCStr(out);
 }
 
-pub export fn f77_fmt_e(width: c_int, precision: c_int, exp_width: c_int, scale_factor: c_int, sign_plus: c_int, value: f64) callconv(.c) [*:0]const u8 {
+pub export fn col6forge_fmt_e(width: c_int, precision: c_int, exp_width: c_int, scale_factor: c_int, sign_plus: c_int, value: f64) callconv(.c) [*:0]const u8 {
     var tmp: [128]u8 = [_]u8{0} ** 128;
     var tmp2: [128]u8 = [_]u8{0} ** 128;
     var exp_buf: [16]u8 = [_]u8{0} ** 16;
@@ -343,8 +343,8 @@ pub export fn f77_fmt_e(width: c_int, precision: c_int, exp_width: c_int, scale_
     return asConstCStr(out);
 }
 
-pub export fn f77_fmt_d(width: c_int, precision: c_int, exp_width: c_int, scale_factor: c_int, sign_plus: c_int, value: f64) callconv(.c) [*:0]const u8 {
-    const buf_const = f77_fmt_e(width, precision, exp_width, scale_factor, sign_plus, value);
+pub export fn col6forge_fmt_d(width: c_int, precision: c_int, exp_width: c_int, scale_factor: c_int, sign_plus: c_int, value: f64) callconv(.c) [*:0]const u8 {
+    const buf_const = col6forge_fmt_e(width, precision, exp_width, scale_factor, sign_plus, value);
     const buf: [*:0]u8 = @constCast(buf_const);
     var i: usize = 0;
     while (buf[i] != 0) : (i += 1) {
@@ -356,7 +356,7 @@ pub export fn f77_fmt_d(width: c_int, precision: c_int, exp_width: c_int, scale_
     return buf_const;
 }
 
-pub export fn f77_fmt_g(width: c_int, precision: c_int, exp_width: c_int, scale_factor: c_int, sign_plus: c_int, value: f64) callconv(.c) [*:0]const u8 {
+pub export fn col6forge_fmt_g(width: c_int, precision: c_int, exp_width: c_int, scale_factor: c_int, sign_plus: c_int, value: f64) callconv(.c) [*:0]const u8 {
     var p = precision;
     if (p <= 0) p = 1;
 
@@ -366,7 +366,7 @@ pub export fn f77_fmt_g(width: c_int, precision: c_int, exp_width: c_int, scale_
         exp_val = @as(c_int, @intFromFloat(@floor(std.math.log10(abs_val))));
     }
     if (abs_val != 0.0 and (exp_val < -p or exp_val >= p)) {
-        return f77_fmt_e(width, p, exp_width, scale_factor, sign_plus, value);
+        return col6forge_fmt_e(width, p, exp_width, scale_factor, sign_plus, value);
     }
 
     var digits_before = exp_val + 1;
@@ -444,9 +444,9 @@ pub export fn f77_fmt_g(width: c_int, precision: c_int, exp_width: c_int, scale_
     return asConstCStr(out);
 }
 
-test "f77_fmt_copy truncates and null-terminates" {
+test "col6forge_fmt_copy truncates and null-terminates" {
     var dst: [4]u8 = [_]u8{ 0, 0, 0, 0 };
-    f77_fmt_copy(&dst, 4, "ABCDE");
+    col6forge_fmt_copy(&dst, 4, "ABCDE");
     try std.testing.expectEqual(@as(u8, 'A'), dst[0]);
     try std.testing.expectEqual(@as(u8, 'B'), dst[1]);
     try std.testing.expectEqual(@as(u8, 'C'), dst[2]);
@@ -454,12 +454,12 @@ test "f77_fmt_copy truncates and null-terminates" {
 }
 
 test "formatted helper strings remain stable across many calls" {
-    const first = f77_fmt_i(0, 0, 0, 123);
-    defer f77_fmt_release_all();
+    const first = col6forge_fmt_i(0, 0, 0, 123);
+    defer col6forge_fmt_release_all();
 
     var i: usize = 0;
     while (i < 256) : (i += 1) {
-        _ = f77_fmt_i(0, 0, 0, @intCast(i));
+        _ = col6forge_fmt_i(0, 0, 0, @intCast(i));
     }
 
     try std.testing.expectEqualStrings("123", std.mem.sliceTo(first, 0));

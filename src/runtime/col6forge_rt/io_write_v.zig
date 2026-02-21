@@ -1,15 +1,15 @@
-const std = @import("std");
+﻿const std = @import("std");
 
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 
-extern fn f77_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) c_int;
-extern fn f77_write_internal_core(buf: ?[*]u8, len: c_int, src: ?[*:0]const u8) void;
-extern fn f77_write_internal_n_core(buf: ?[*]u8, len: c_int, count: c_int, src: ?[*:0]const u8) void;
-extern fn f77_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
-extern fn f77_direct_record_commit(unit: c_int, rec: c_int) void;
-extern fn f77_fmt_release_all() void;
+extern fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) c_int;
+extern fn col6forge_write_internal_core(buf: ?[*]u8, len: c_int, src: ?[*:0]const u8) void;
+extern fn col6forge_write_internal_n_core(buf: ?[*]u8, len: c_int, count: c_int, src: ?[*:0]const u8) void;
+extern fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
+extern fn col6forge_direct_record_commit(unit: c_int, rec: c_int) void;
+extern fn col6forge_fmt_release_all() void;
 
 fn cstrlen(text: [*:0]const u8) usize {
     var i: usize = 0;
@@ -382,7 +382,7 @@ test "renderWriteFormatted uses precision-bounded scan for %*.*s" {
     try std.testing.expectEqualStrings("ABC", std.mem.sliceTo(rendered, 0));
 }
 
-pub export fn f77_write_v(
+pub export fn col6forge_write_v(
     unit: c_int,
     fmt: ?[*:0]const u8,
     arg_ptrs: ?[*]?*anyopaque,
@@ -390,14 +390,14 @@ pub export fn f77_write_v(
     arg_count: c_int,
     strict_status: c_int,
 ) callconv(.c) c_int {
-    defer f77_fmt_release_all();
+    defer col6forge_fmt_release_all();
     if (fmt == null) return if (strict_status != 0) 1 else 0;
     const rendered = renderWriteFormatted(fmt.?, arg_ptrs, arg_kinds, arg_count) orelse return if (strict_status != 0) 1 else 0;
     defer free(@ptrCast(rendered));
-    return f77_write_rendered_line(unit, rendered, strict_status);
+    return col6forge_write_rendered_line(unit, rendered, strict_status);
 }
 
-pub export fn f77_write_internal_v(
+pub export fn col6forge_write_internal_v(
     buf: ?[*]u8,
     len: c_int,
     count: c_int,
@@ -406,18 +406,18 @@ pub export fn f77_write_internal_v(
     arg_kinds: ?[*]const u8,
     arg_count: c_int,
 ) callconv(.c) void {
-    defer f77_fmt_release_all();
+    defer col6forge_fmt_release_all();
     if (buf == null or len <= 0 or count <= 0 or fmt == null) return;
     const rendered = renderWriteFormatted(fmt.?, arg_ptrs, arg_kinds, arg_count) orelse return;
     defer free(@ptrCast(rendered));
     if (count > 1) {
-        f77_write_internal_n_core(buf, len, count, rendered);
+        col6forge_write_internal_n_core(buf, len, count, rendered);
     } else {
-        f77_write_internal_core(buf, len, rendered);
+        col6forge_write_internal_core(buf, len, rendered);
     }
 }
 
-pub export fn f77_write_direct_internal_v(
+pub export fn col6forge_write_direct_internal_v(
     unit: c_int,
     rec: c_int,
     recl: c_int,
@@ -426,7 +426,7 @@ pub export fn f77_write_direct_internal_v(
     arg_kinds: ?[*]const u8,
     arg_count: c_int,
 ) callconv(.c) c_int {
-    defer f77_fmt_release_all();
+    defer col6forge_fmt_release_all();
     if (rec <= 0 or recl <= 0 or fmt == null) return 1;
 
     const rendered = renderWriteFormatted(fmt.?, arg_ptrs, arg_kinds, arg_count) orelse return 1;
@@ -437,14 +437,14 @@ pub export fn f77_write_direct_internal_v(
     var current: usize = 0;
     while (current < record_count) : (current += 1) {
         const rec_num = addRecordOffset(rec, current) orelse return 1;
-        const dst = f77_direct_record_ptr(unit, rec_num, recl) orelse return 1;
+        const dst = col6forge_direct_record_ptr(unit, rec_num, recl) orelse return 1;
 
         var end = start;
         while (rendered[end] != 0 and rendered[end] != '\n') : (end += 1) {}
 
         const saved = rendered[end];
         rendered[end] = 0;
-        f77_write_internal_core(dst, recl, @ptrCast(rendered + start));
+        col6forge_write_internal_core(dst, recl, @ptrCast(rendered + start));
         rendered[end] = saved;
 
         if (saved == 0) break;
@@ -452,6 +452,6 @@ pub export fn f77_write_direct_internal_v(
     }
 
     const last_rec = addRecordOffset(rec, record_count - 1) orelse return 1;
-    f77_direct_record_commit(unit, last_rec);
+    col6forge_direct_record_commit(unit, last_rec);
     return 0;
 }

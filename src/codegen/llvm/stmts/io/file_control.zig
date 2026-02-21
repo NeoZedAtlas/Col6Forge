@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 const ast = @import("../../../input.zig");
 const context = @import("../../codegen/context.zig");
 const expr = @import("../../codegen/expression/mod.zig");
@@ -67,7 +67,7 @@ pub fn emitOpen(ctx: *Context, builder: anytype, open: ast.OpenStmt) EmitError!v
         }
     }
 
-    const open_name = try ctx.ensureDeclRaw("f77_open_ex", .void, &.{ .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .i32, .i32 }, false);
+    const open_name = try ctx.ensureDeclRaw("col6forge_open_ex", .void, &.{ .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .i32, .i32 }, false);
     const args = [_]ValueRef{
         unit_i32,
         file_arg.ptr,
@@ -88,7 +88,7 @@ pub fn emitOpen(ctx: *Context, builder: anytype, open: ast.OpenStmt) EmitError!v
 pub fn emitRewind(ctx: *Context, builder: anytype, rewind: ast.RewindStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, rewind.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
-    const rewind_name = try ctx.ensureDeclRaw("f77_rewind", .void, &.{.i32}, false);
+    const rewind_name = try ctx.ensureDeclRaw("col6forge_rewind", .void, &.{.i32}, false);
     try builder.callTyped(null, .void, rewind_name, &.{unit_i32});
 }
 const InquireSpec = struct {
@@ -208,7 +208,7 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
             recl_ptr,
             nextrec_ptr,
         };
-        const fn_name = try ctx.ensureDeclRaw("f77_inquire_file", .void, &.{ .ptr, .i32, .ptr, .ptr, .ptr, .ptr, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .ptr }, true);
+        const fn_name = try ctx.ensureDeclRaw("col6forge_inquire_file", .void, &.{ .ptr, .i32, .ptr, .ptr, .ptr, .ptr, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .ptr }, true);
         try builder.callTyped(null, .void, fn_name, args[0..]);
         return;
     }
@@ -239,7 +239,7 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
         recl_ptr,
         nextrec_ptr,
     };
-    const fn_name = try ctx.ensureDeclRaw("f77_inquire_unit", .void, &.{ .i32, .ptr, .ptr, .ptr, .ptr, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .ptr }, true);
+    const fn_name = try ctx.ensureDeclRaw("col6forge_inquire_unit", .void, &.{ .i32, .ptr, .ptr, .ptr, .ptr, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .ptr }, true);
     try builder.callTyped(null, .void, fn_name, args[0..]);
 }
 pub fn emitClose(ctx: *Context, builder: anytype, close_stmt: ast.CloseStmt) EmitError!void {
@@ -260,18 +260,18 @@ pub fn emitClose(ctx: *Context, builder: anytype, close_stmt: ast.CloseStmt) Emi
     const unit_value = try expr.emitExpr(ctx, builder, unit_node);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
     const status_arg = try emitCharArg(ctx, builder, status_expr);
-    const fn_name = try ctx.ensureDeclRaw("f77_close_ex", .void, &.{ .i32, .ptr, .i32 }, false);
+    const fn_name = try ctx.ensureDeclRaw("col6forge_close_ex", .void, &.{ .i32, .ptr, .i32 }, false);
     try builder.callTyped(null, .void, fn_name, &.{ unit_i32, status_arg.ptr, status_arg.len });
 }
 pub fn emitBackspace(ctx: *Context, builder: anytype, backspace: ast.BackspaceStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, backspace.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
-    const backspace_name = try ctx.ensureDeclRaw("f77_backspace", .void, &.{.i32}, false);
+    const backspace_name = try ctx.ensureDeclRaw("col6forge_backspace", .void, &.{.i32}, false);
     try builder.callTyped(null, .void, backspace_name, &.{unit_i32});
 }
 pub fn emitEndfile(ctx: *Context, builder: anytype, endfile: ast.EndfileStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, endfile.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
-    const endfile_name = try ctx.ensureDeclRaw("f77_endfile", .void, &.{.i32}, false);
+    const endfile_name = try ctx.ensureDeclRaw("col6forge_endfile", .void, &.{.i32}, false);
     try builder.callTyped(null, .void, endfile_name, &.{unit_i32});
 }

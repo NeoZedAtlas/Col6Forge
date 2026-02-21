@@ -1,4 +1,4 @@
-const F77_MAX_UNITS = 256;
+﻿const COL6FORGE_MAX_UNITS = 256;
 
 const FILE = opaque {};
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
@@ -18,14 +18,14 @@ const OpenUnit = extern struct {
     blank: c_int,
 };
 
-extern var unit_pos: [F77_MAX_UNITS]c_long;
-extern var open_units: [F77_MAX_UNITS]OpenUnit;
+extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
+extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
 
-extern fn f77_runtime_stdin() ?*FILE;
+extern fn col6forge_rt_stdin() ?*FILE;
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
-extern fn f77_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
-extern fn f77_normalize_exponent(buf: ?[*]u8) void;
-extern fn f77_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
+extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
+extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
+extern fn col6forge_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
 
 fn asCStr(buf: anytype) [*:0]u8 {
     return @ptrCast(buf);
@@ -114,7 +114,7 @@ fn parseListCharRecord(record: []const u8, idx: *usize, out: *[128]u8) c_int {
     return @intCast(used);
 }
 
-pub export fn f77_formatted_read_core(
+pub export fn col6forge_formatted_read_core(
     unit: c_int,
     fmt: ?[*:0]const u8,
     arg_ptrs: ?[*]?*anyopaque,
@@ -126,7 +126,7 @@ pub export fn f77_formatted_read_core(
     const fmt_c = fmt.?;
     const total_args: usize = @intCast(@max(arg_count, 0));
 
-    const unit_opened = if (unit >= 0 and unit < F77_MAX_UNITS)
+    const unit_opened = if (unit >= 0 and unit < COL6FORGE_MAX_UNITS)
         open_units[@as(usize, @intCast(unit))].opened != 0
     else
         false;
@@ -135,9 +135,9 @@ pub export fn f77_formatted_read_core(
     var file: ?*FILE = null;
     if ((unit == 5 or unit == 0) and !unit_opened) {
         is_stdin = true;
-        file = f77_runtime_stdin();
+        file = col6forge_rt_stdin();
     } else {
-        if (unit < 0 or unit >= F77_MAX_UNITS) {
+        if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) {
             return if (status_mode != 0) 1 else -1;
         }
         var name: [32]u8 = [_]u8{0} ** 32;
@@ -173,7 +173,7 @@ pub export fn f77_formatted_read_core(
     }
 
     var blank_mode: c_int = 0;
-    if (unit >= 0 and unit < F77_MAX_UNITS and open_units[@as(usize, @intCast(unit))].opened != 0 and open_units[@as(usize, @intCast(unit))].blank == 2) {
+    if (unit >= 0 and unit < COL6FORGE_MAX_UNITS and open_units[@as(usize, @intCast(unit))].opened != 0 and open_units[@as(usize, @intCast(unit))].blank == 2) {
         blank_mode = 1;
     }
 
@@ -274,19 +274,19 @@ pub export fn f77_formatted_read_core(
         arg_index += 1;
 
         if (conv == 'd' and kind == 'd') {
-            f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
+            col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             const out: *c_int = @ptrCast(@alignCast(arg));
             out.* = @intCast(strtol(asConstCStr(&field), null, 10));
             assigned += 1;
         } else if (conv == 'f' and is_long and kind == 'D') {
-            f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
-            f77_normalize_exponent(asCStr(&field));
+            col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
+            col6forge_normalize_exponent(asCStr(&field));
             const out: *f64 = @ptrCast(@alignCast(arg));
             out.* = strtod(asConstCStr(&field), null);
             assigned += 1;
         } else if (conv == 'f' and !is_long and kind == 'f') {
-            f77_apply_blank_mode(asCStr(&field), &used, blank_mode);
-            f77_normalize_exponent(asCStr(&field));
+            col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
+            col6forge_normalize_exponent(asCStr(&field));
             const out: *f32 = @ptrCast(@alignCast(arg));
             out.* = @floatCast(strtod(asConstCStr(&field), null));
             assigned += 1;
@@ -326,7 +326,7 @@ pub export fn f77_formatted_read_core(
             assigned += 1;
         } else if (conv == 'L' and kind == 'L') {
             const out: *u8 = @ptrCast(@alignCast(arg));
-            out.* = @intCast(f77_parse_logical_field(asConstCStr(&field), used));
+            out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&field), used));
             assigned += 1;
         }
     }
@@ -358,3 +358,4 @@ test "runtimeArgPtrAt handles missing and null entries" {
     try std.testing.expect(null_entry.available);
     try std.testing.expect(null_entry.ptr == null);
 }
+

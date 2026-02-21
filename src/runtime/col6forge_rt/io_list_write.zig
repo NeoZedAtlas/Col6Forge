@@ -1,8 +1,8 @@
-extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
+﻿extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 
-extern fn f77_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) c_int;
+extern fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) c_int;
 
 const LineBuffer = struct {
     data: ?[*]u8 = null,
@@ -137,15 +137,15 @@ fn appendC64(out: *LineBuffer, real: f64, imag: f64) bool {
 
 fn writeBufferLine(unit: c_int, out: *LineBuffer, strict_status: c_int) c_int {
     if (!out.terminate()) return 1;
-    return f77_write_rendered_line(unit, @ptrCast(out.data.?), strict_status);
+    return col6forge_write_rendered_line(unit, @ptrCast(out.data.?), strict_status);
 }
 
 fn writeEmptyLine(unit: c_int, strict_status: c_int) c_int {
     var empty: [1]u8 = .{0};
-    return f77_write_rendered_line(unit, @ptrCast(&empty), strict_status);
+    return col6forge_write_rendered_line(unit, @ptrCast(&empty), strict_status);
 }
 
-pub export fn f77_write_list_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
+pub export fn col6forge_write_list_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
@@ -161,7 +161,7 @@ pub export fn f77_write_list_i32_n(unit: c_int, count: c_int, stride: c_int, bas
     return writeBufferLine(unit, &out, 1);
 }
 
-pub export fn f77_write_list_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
+pub export fn col6forge_write_list_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
@@ -177,7 +177,7 @@ pub export fn f77_write_list_f32_n(unit: c_int, count: c_int, stride: c_int, bas
     return writeBufferLine(unit, &out, 1);
 }
 
-pub export fn f77_write_list_f64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
+pub export fn col6forge_write_list_f64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
@@ -193,7 +193,7 @@ pub export fn f77_write_list_f64_n(unit: c_int, count: c_int, stride: c_int, bas
     return writeBufferLine(unit, &out, 1);
 }
 
-pub export fn f77_write_list_c32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
+pub export fn col6forge_write_list_c32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
@@ -210,7 +210,7 @@ pub export fn f77_write_list_c32_n(unit: c_int, count: c_int, stride: c_int, bas
     return writeBufferLine(unit, &out, 1);
 }
 
-pub export fn f77_write_list_c64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
+pub export fn col6forge_write_list_c64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
@@ -227,7 +227,7 @@ pub export fn f77_write_list_c64_n(unit: c_int, count: c_int, stride: c_int, bas
     return writeBufferLine(unit, &out, 1);
 }
 
-pub export fn f77_write_list_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const u8) callconv(.c) c_int {
+pub export fn col6forge_write_list_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const u8) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
@@ -243,7 +243,7 @@ pub export fn f77_write_list_l_n(unit: c_int, count: c_int, stride: c_int, base:
     return writeBufferLine(unit, &out, 1);
 }
 
-pub export fn f77_write_list_v(
+pub export fn col6forge_write_list_v(
     unit: c_int,
     arg_ptrs: ?[*]?*anyopaque,
     arg_kinds: ?[*]const u8,

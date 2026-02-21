@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 const ast = @import("../../../../input.zig");
 const llvm_types = @import("../../../types.zig");
 const context = @import("../../../codegen/context.zig");
@@ -298,7 +298,7 @@ fn emitWriteFormattedImpl(
                             try appendIntFormat(&fmt_buf, spec.width, sign_plus);
                             try args.append(.{ .ty = .i32, .name = coerced.name });
                         } else {
-                            const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
+                            const fmt_i_name = try ctx.ensureDeclRaw("col6forge_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
                             const tmp = try ctx.nextTemp();
                             const width_val = try ctx.constI32(@intCast(spec.width));
                             const min_val = try ctx.constI32(@intCast(spec.min_digits));
@@ -330,7 +330,7 @@ fn emitWriteFormattedImpl(
                             const width_val = try ctx.constI32(@intCast(spec.width));
                             const prec_val = try ctx.constI32(@intCast(spec.precision));
                             const sign_val = ValueRef{ .name = if (sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
-                            const fmt_name = try ctx.ensureDeclRaw("f77_fmt_f", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .f64 }, false);
+                            const fmt_name = try ctx.ensureDeclRaw("col6forge_fmt_f", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .f64 }, false);
                             try builder.callTyped(fmt_tmp, .ptr, fmt_name, &.{ width_val, prec_val, sign_val, coerced });
                             try fmt_buf.appendSlice("%s");
                             try args.append(.{ .ty = .ptr, .name = fmt_tmp });
@@ -350,9 +350,9 @@ fn emitWriteFormattedImpl(
                             const scale_val = try ctx.constI32(@intCast(scale_factor));
                             const sign_val = ValueRef{ .name = if (sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
                             const fmt_name = switch (spec.kind) {
-                                .d => try ctx.ensureDeclRaw("f77_fmt_d", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
-                                .g => try ctx.ensureDeclRaw("f77_fmt_g", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
-                                .e => try ctx.ensureDeclRaw("f77_fmt_e", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
+                                .d => try ctx.ensureDeclRaw("col6forge_fmt_d", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
+                                .g => try ctx.ensureDeclRaw("col6forge_fmt_g", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
+                                .e => try ctx.ensureDeclRaw("col6forge_fmt_e", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
                             };
                             try builder.callTyped(fmt_tmp, .ptr, fmt_name, &.{ width_val, prec_val, exp_val, scale_val, sign_val, coerced });
                             try fmt_buf.appendSlice("%s");
@@ -376,7 +376,7 @@ fn emitWriteFormattedImpl(
                             const width_val = try ctx.constI32(@intCast(field_width));
                             switch (value.ty) {
                                 .i32 => {
-                                    const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
+                                    const fmt_i_name = try ctx.ensureDeclRaw("col6forge_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
                                     const tmp = try ctx.nextTemp();
                                     try builder.callTyped(tmp, .ptr, fmt_i_name, &.{
                                         width_val,
@@ -392,7 +392,7 @@ fn emitWriteFormattedImpl(
                                     const one_val = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
                                     const zero_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
                                     try builder.select(select_tmp, .i32, value, one_val, zero_val);
-                                    const fmt_i_name = try ctx.ensureDeclRaw("f77_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
+                                    const fmt_i_name = try ctx.ensureDeclRaw("col6forge_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
                                     const tmp = try ctx.nextTemp();
                                     const select_val = ValueRef{ .name = select_tmp, .ty = .i32, .is_ptr = false };
                                     try builder.callTyped(tmp, .ptr, fmt_i_name, &.{
@@ -406,7 +406,7 @@ fn emitWriteFormattedImpl(
                                 },
                                 .f32, .f64 => {
                                     const coerced = try expr.coerce(ctx, builder, value, .f64);
-                                    const fmt_f_name = try ctx.ensureDeclRaw("f77_fmt_f", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .f64 }, false);
+                                    const fmt_f_name = try ctx.ensureDeclRaw("col6forge_fmt_f", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .f64 }, false);
                                     const tmp = try ctx.nextTemp();
                                     try builder.callTyped(tmp, .ptr, fmt_f_name, &.{
                                         width_val,
@@ -520,16 +520,16 @@ fn emitWriteFormattedImpl(
     const arg_count_val = try ctx.constI32(@intCast(ptr_args.items.len));
     const fmt_ptr_val = ValueRef{ .name = fmt_ptr, .ty = .ptr, .is_ptr = true };
     if (direct_spec) |direct| {
-        const write_name = try ctx.ensureDeclRaw("f77_write_direct_internal_v", .i32, &[_]llvm_types.IRType{ .i32, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
+        const write_name = try ctx.ensureDeclRaw("col6forge_write_direct_internal_v", .i32, &[_]llvm_types.IRType{ .i32, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .i32, write_name, &.{ direct.unit_i32, direct.rec_i32, direct.recl_i32, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val });
     } else if (is_internal) {
         const len_val = try ctx.constI32(@intCast(unit_char_len.?));
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
         const count_ref = try ctx.constI32(@intCast(count_val));
-        const write_name = try ctx.ensureDeclRaw("f77_write_internal_v", .void, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
+        const write_name = try ctx.ensureDeclRaw("col6forge_write_internal_v", .void, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .void, write_name, &.{ unit_value, len_val, count_ref, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val });
     } else {
-        const write_name = try ctx.ensureDeclRaw("f77_write_v", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
+        const write_name = try ctx.ensureDeclRaw("col6forge_write_v", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
         try builder.callTyped(null, .i32, write_name, &.{ unit_i32, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
     }
 }

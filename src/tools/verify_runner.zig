@@ -1,4 +1,4 @@
-//! Verification runner for the NIST F78 test suite.
+﻿//! Verification runner for the NIST F78 test suite.
 //!
 //! Runner (IO): translates F77 sources to LLVM IR, compiles and runs both
 //! the reference compiler (gfortran) and the translated output (zig cc).
@@ -773,9 +773,9 @@ fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) !
     while (try walker.next()) |entry| {
         if (entry.kind != .file) continue;
         if (!std.ascii.endsWithIgnoreCase(entry.path, ".zig")) continue;
-        if (!(std.mem.eql(u8, entry.path, "f77_runtime.zig") or
-            std.mem.startsWith(u8, entry.path, "f77_runtime/") or
-            std.mem.startsWith(u8, entry.path, "f77_runtime\\")))
+        if (!(std.mem.eql(u8, entry.path, "col6forge_rt.zig") or
+            std.mem.startsWith(u8, entry.path, "col6forge_rt/") or
+            std.mem.startsWith(u8, entry.path, "col6forge_rt\\")))
         {
             continue;
         }
@@ -1661,16 +1661,16 @@ fn prepareRuntimeArtifacts(
 ) !RuntimeArtifacts {
     return switch (backend) {
         .c, .zig => blk: {
-            const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "f77_runtime.zig" });
+            const runtime_src = try std.fs.path.join(allocator, &.{ root_path, "src", "runtime", "col6forge_rt.zig" });
             defer allocator.free(runtime_src);
             const runtime_obj_name = if (incremental)
                 try std.fmt.allocPrint(
                     allocator,
-                    "f77_runtime_v{d}_{s}_{s}.o",
+                    "col6forge_rt_v{d}_{s}_{s}.o",
                     .{ CACHE_SCHEMA_VERSION, runtimeBackendTag(backend), runtime_cache_key },
                 )
             else
-                try allocator.dupe(u8, "f77_runtime.o");
+                try allocator.dupe(u8, "col6forge_rt.o");
             defer allocator.free(runtime_obj_name);
             const runtime_obj = try std.fs.path.join(allocator, &.{ output_dir, runtime_obj_name });
             errdefer allocator.free(runtime_obj);

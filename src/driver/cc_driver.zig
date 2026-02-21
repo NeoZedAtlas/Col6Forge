@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 const builtin = @import("builtin");
 const Col6Forge = @import("Col6Forge");
 const RUNTIME_CACHE_SCHEMA_VERSION: u32 = 1;
@@ -613,7 +613,7 @@ fn prepareRuntimeObjectCached(allocator: std.mem.Allocator, cfg: RuntimeBuildCon
     defer allocator.free(cache_key);
     const obj_name = try std.fmt.allocPrint(
         allocator,
-        "f77_runtime_v{d}_{s}.o",
+        "col6forge_rt_v{d}_{s}.o",
         .{ RUNTIME_CACHE_SCHEMA_VERSION, cache_key },
     );
     defer allocator.free(obj_name);
@@ -624,7 +624,7 @@ fn prepareRuntimeObjectCached(allocator: std.mem.Allocator, cfg: RuntimeBuildCon
 
     const tmp_name = try std.fmt.allocPrint(
         allocator,
-        "f77_runtime_tmp_{d}_{s}.o",
+        "col6forge_rt_tmp_{d}_{s}.o",
         .{ std.time.nanoTimestamp(), cache_key },
     );
     defer allocator.free(tmp_name);
@@ -684,7 +684,7 @@ fn buildRuntimeObject(allocator: std.mem.Allocator, runtime_obj_path: []const u8
     if (cfg.ofmt) |ofmt| {
         try argv.appendSlice(allocator, &.{ "-ofmt", ofmt });
     }
-    try argv.append(allocator, "src/runtime/f77_runtime.zig");
+    try argv.append(allocator, "src/runtime/col6forge_rt.zig");
     try runCheckedCommand(allocator, argv.items, "zig build-obj runtime");
 }
 

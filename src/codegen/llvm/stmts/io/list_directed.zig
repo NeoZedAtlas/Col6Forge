@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 const ast = @import("../../../input.zig");
 const context = @import("../../codegen/context.zig");
 const expr = @import("../../codegen/expression/mod.zig");
@@ -84,7 +84,7 @@ fn emitListDirectedWriteExternal(ctx: *Context, builder: anytype, write: ast.Wri
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
     const lens_array = try emitI32Array(ctx, builder, arg_lens.items);
     const arg_count_val = try ctx.constI32(@intCast(ptr_args.items.len));
-    const write_name = try ctx.ensureDeclRaw("f77_write_list_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
+    const write_name = try ctx.ensureDeclRaw("col6forge_write_list_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
     try builder.callTyped(null, .i32, write_name, &.{ unit_i32, ptr_array, kinds_ptr, lens_array, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
 }
 
@@ -143,7 +143,7 @@ fn emitListDirectedWriteInternal(
     const len_val = try ctx.constI32(@intCast(unit_char_len));
     const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
     const count_ref = try ctx.constI32(@intCast(count_val));
-    const write_name = try ctx.ensureDeclRaw("f77_write_internal_list_v", .void, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
+    const write_name = try ctx.ensureDeclRaw("col6forge_write_internal_list_v", .void, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .void, write_name, &.{ unit_value, len_val, count_ref, ptr_array, kinds_ptr, lens_array, arg_count_val });
 }
 
@@ -189,7 +189,7 @@ fn emitListDirectedReadExternal(ctx: *Context, builder: anytype, read: ast.ReadS
     const lens_array = try emitI32Array(ctx, builder, arg_lens.items);
     const arg_count_val = try ctx.constI32(@intCast(expanded.ptrs.items.len));
     const mode_val = ValueRef{ .name = if (status_mode) "1" else "0", .ty = .i32, .is_ptr = false };
-    const read_name = try ctx.ensureDeclRaw("f77_read_list_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
+    const read_name = try ctx.ensureDeclRaw("col6forge_read_list_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
     var status_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
     if (status_mode) {
         const tmp = try ctx.nextTemp();
@@ -256,7 +256,7 @@ fn emitListDirectedReadInternal(
     const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
     const count_ref = try ctx.constI32(@intCast(count_val));
     const mode_val = ValueRef{ .name = if (status_mode) "1" else "0", .ty = .i32, .is_ptr = false };
-    const read_name = try ctx.ensureDeclRaw("f77_read_internal_list_v", .i32, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
+    const read_name = try ctx.ensureDeclRaw("col6forge_read_internal_list_v", .i32, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
     var status_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
     if (status_mode) {
         const tmp = try ctx.nextTemp();
@@ -311,12 +311,12 @@ fn emitDynamicImpliedDoListWrite(
     if (step_val != 1) return false;
 
     const helper_name = switch (sym.type_kind) {
-        .integer => "f77_write_list_i32_n",
-        .real => "f77_write_list_f32_n",
-        .double_precision => "f77_write_list_f64_n",
-        .complex => "f77_write_list_c32_n",
-        .complex_double => "f77_write_list_c64_n",
-        .logical => "f77_write_list_l_n",
+        .integer => "col6forge_write_list_i32_n",
+        .real => "col6forge_write_list_f32_n",
+        .double_precision => "col6forge_write_list_f64_n",
+        .complex => "col6forge_write_list_c32_n",
+        .complex_double => "col6forge_write_list_c64_n",
+        .logical => "col6forge_write_list_l_n",
         else => return false,
     };
 
@@ -452,12 +452,12 @@ fn emitDynamicImpliedDoListRead(
     if (step_val != 1) return null;
 
     const helper_name = switch (sym.type_kind) {
-        .integer => "f77_read_list_i32_n",
-        .real => "f77_read_list_f32_n",
-        .double_precision => "f77_read_list_f64_n",
-        .complex => "f77_read_list_c32_n",
-        .complex_double => "f77_read_list_c64_n",
-        .logical => "f77_read_list_l_n",
+        .integer => "col6forge_read_list_i32_n",
+        .real => "col6forge_read_list_f32_n",
+        .double_precision => "col6forge_read_list_f64_n",
+        .complex => "col6forge_read_list_c32_n",
+        .complex_double => "col6forge_read_list_c64_n",
+        .logical => "col6forge_read_list_l_n",
         else => return null,
     };
 

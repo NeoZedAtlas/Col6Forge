@@ -1,4 +1,4 @@
-const F77_MAX_UNITS = 256;
+﻿const COL6FORGE_MAX_UNITS = 256;
 
 const FILE = opaque {};
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
@@ -18,13 +18,13 @@ const OpenUnit = extern struct {
     blank: c_int,
 };
 
-extern var unit_pos: [F77_MAX_UNITS]c_long;
-extern var open_units: [F77_MAX_UNITS]OpenUnit;
+extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
+extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
 
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
-extern fn f77_runtime_stdin() ?*FILE;
-extern fn f77_normalize_exponent(buf: ?[*]u8) void;
-extern fn f77_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
+extern fn col6forge_rt_stdin() ?*FILE;
+extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
+extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
@@ -92,17 +92,17 @@ fn listDelim(ch: c_int) bool {
     return isSpace(b) or b == ',' or b == '(' or b == ')';
 }
 
-fn f77OpenListInput(unit: c_int, is_stdin: *bool) ?*FILE {
+fn col6forgeOpenListInput(unit: c_int, is_stdin: *bool) ?*FILE {
     is_stdin.* = false;
-    const unit_opened = if (unit >= 0 and unit < F77_MAX_UNITS)
+    const unit_opened = if (unit >= 0 and unit < COL6FORGE_MAX_UNITS)
         open_units[@as(usize, @intCast(unit))].opened != 0
     else
         false;
     if ((unit == 5 or unit == 0) and !unit_opened) {
         is_stdin.* = true;
-        return f77_runtime_stdin();
+        return col6forge_rt_stdin();
     }
-    if (unit < 0 or unit >= F77_MAX_UNITS) return null;
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return null;
 
     var name: [32]u8 = [_]u8{0} ** 32;
     unit_filename(unit, &name, name.len);
@@ -114,16 +114,16 @@ fn f77OpenListInput(unit: c_int, is_stdin: *bool) ?*FILE {
     return file;
 }
 
-fn f77CloseListInput(unit: c_int, is_stdin: bool, file: ?*FILE) void {
+fn col6forgeCloseListInput(unit: c_int, is_stdin: bool, file: ?*FILE) void {
     if (file == null or is_stdin) return;
     const stream = file.?;
-    if (unit >= 0 and unit < F77_MAX_UNITS) {
+    if (unit >= 0 and unit < COL6FORGE_MAX_UNITS) {
         unit_pos[@as(usize, @intCast(unit))] = ftell(stream);
     }
     _ = fclose(stream);
 }
 
-fn f77ReadListTokenStream(file: *FILE, out: *[256]u8) bool {
+fn col6forgeReadListTokenStream(file: *FILE, out: *[256]u8) bool {
     var ch: c_int = 0;
     while (true) {
         ch = fgetc(file);
@@ -178,7 +178,7 @@ fn f77ReadListTokenStream(file: *FILE, out: *[256]u8) bool {
     return true;
 }
 
-fn f77DiscardToRecordEnd(file: *FILE) void {
+fn col6forgeDiscardToRecordEnd(file: *FILE) void {
     var ch: c_int = 0;
     while (true) {
         ch = fgetc(file);
@@ -186,130 +186,130 @@ fn f77DiscardToRecordEnd(file: *FILE) void {
     }
 }
 
-pub export fn f77_read_list_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
+pub export fn col6forge_read_list_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
     if (base == null or count <= 0 or stride <= 0) return 0;
 
     var is_stdin = false;
-    const file = f77OpenListInput(unit, &is_stdin) orelse return -1;
-    defer f77CloseListInput(unit, is_stdin, file);
+    const file = col6forgeOpenListInput(unit, &is_stdin) orelse return -1;
+    defer col6forgeCloseListInput(unit, is_stdin, file);
 
     const out = base.?;
     var token: [256]u8 = [_]u8{0} ** 256;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (!f77ReadListTokenStream(file, &token)) return -1;
+        if (!col6forgeReadListTokenStream(file, &token)) return -1;
         const idx = offsetIndex(i, stride) orelse return -1;
         out[idx] = @intCast(strtol(asConstCStr(&token), null, 10));
     }
-    f77DiscardToRecordEnd(file);
+    col6forgeDiscardToRecordEnd(file);
     return 0;
 }
 
-pub export fn f77_read_list_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
+pub export fn col6forge_read_list_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
     if (base == null or count <= 0 or stride <= 0) return 0;
 
     var is_stdin = false;
-    const file = f77OpenListInput(unit, &is_stdin) orelse return -1;
-    defer f77CloseListInput(unit, is_stdin, file);
+    const file = col6forgeOpenListInput(unit, &is_stdin) orelse return -1;
+    defer col6forgeCloseListInput(unit, is_stdin, file);
 
     const out = base.?;
     var token: [256]u8 = [_]u8{0} ** 256;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (!f77ReadListTokenStream(file, &token)) return -1;
-        f77_normalize_exponent(asCStr(&token));
+        if (!col6forgeReadListTokenStream(file, &token)) return -1;
+        col6forge_normalize_exponent(asCStr(&token));
         const idx = offsetIndex(i, stride) orelse return -1;
         out[idx] = @floatCast(strtod(asConstCStr(&token), null));
     }
-    f77DiscardToRecordEnd(file);
+    col6forgeDiscardToRecordEnd(file);
     return 0;
 }
 
-pub export fn f77_read_list_f64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
+pub export fn col6forge_read_list_f64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
     if (base == null or count <= 0 or stride <= 0) return 0;
 
     var is_stdin = false;
-    const file = f77OpenListInput(unit, &is_stdin) orelse return -1;
-    defer f77CloseListInput(unit, is_stdin, file);
+    const file = col6forgeOpenListInput(unit, &is_stdin) orelse return -1;
+    defer col6forgeCloseListInput(unit, is_stdin, file);
 
     const out = base.?;
     var token: [256]u8 = [_]u8{0} ** 256;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (!f77ReadListTokenStream(file, &token)) return -1;
-        f77_normalize_exponent(asCStr(&token));
+        if (!col6forgeReadListTokenStream(file, &token)) return -1;
+        col6forge_normalize_exponent(asCStr(&token));
         const idx = offsetIndex(i, stride) orelse return -1;
         out[idx] = strtod(asConstCStr(&token), null);
     }
-    f77DiscardToRecordEnd(file);
+    col6forgeDiscardToRecordEnd(file);
     return 0;
 }
 
-pub export fn f77_read_list_c32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
+pub export fn col6forge_read_list_c32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
     if (base == null or count <= 0 or stride <= 0) return 0;
 
     var is_stdin = false;
-    const file = f77OpenListInput(unit, &is_stdin) orelse return -1;
-    defer f77CloseListInput(unit, is_stdin, file);
+    const file = col6forgeOpenListInput(unit, &is_stdin) orelse return -1;
+    defer col6forgeCloseListInput(unit, is_stdin, file);
 
     const out = base.?;
     var token: [256]u8 = [_]u8{0} ** 256;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (!f77ReadListTokenStream(file, &token)) return -1;
-        f77_normalize_exponent(asCStr(&token));
+        if (!col6forgeReadListTokenStream(file, &token)) return -1;
+        col6forge_normalize_exponent(asCStr(&token));
         const elem_idx = complexOffsetIndex(i, stride) orelse return -1;
         const imag_idx = checkedAdd(elem_idx, 1) orelse return -1;
         out[elem_idx] = @floatCast(strtod(asConstCStr(&token), null));
         out[imag_idx] = 0.0;
     }
-    f77DiscardToRecordEnd(file);
+    col6forgeDiscardToRecordEnd(file);
     return 0;
 }
 
-pub export fn f77_read_list_c64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
+pub export fn col6forge_read_list_c64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
     if (base == null or count <= 0 or stride <= 0) return 0;
 
     var is_stdin = false;
-    const file = f77OpenListInput(unit, &is_stdin) orelse return -1;
-    defer f77CloseListInput(unit, is_stdin, file);
+    const file = col6forgeOpenListInput(unit, &is_stdin) orelse return -1;
+    defer col6forgeCloseListInput(unit, is_stdin, file);
 
     const out = base.?;
     var token: [256]u8 = [_]u8{0} ** 256;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (!f77ReadListTokenStream(file, &token)) return -1;
-        f77_normalize_exponent(asCStr(&token));
+        if (!col6forgeReadListTokenStream(file, &token)) return -1;
+        col6forge_normalize_exponent(asCStr(&token));
         const elem_idx = complexOffsetIndex(i, stride) orelse return -1;
         const imag_idx = checkedAdd(elem_idx, 1) orelse return -1;
         out[elem_idx] = strtod(asConstCStr(&token), null);
         out[imag_idx] = 0.0;
     }
-    f77DiscardToRecordEnd(file);
+    col6forgeDiscardToRecordEnd(file);
     return 0;
 }
 
-pub export fn f77_read_list_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]u8) callconv(.c) c_int {
+pub export fn col6forge_read_list_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]u8) callconv(.c) c_int {
     if (base == null or count <= 0 or stride <= 0) return 0;
 
     var is_stdin = false;
-    const file = f77OpenListInput(unit, &is_stdin) orelse return -1;
-    defer f77CloseListInput(unit, is_stdin, file);
+    const file = col6forgeOpenListInput(unit, &is_stdin) orelse return -1;
+    defer col6forgeCloseListInput(unit, is_stdin, file);
 
     const out = base.?;
     var token: [256]u8 = [_]u8{0} ** 256;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (!f77ReadListTokenStream(file, &token)) return -1;
+        if (!col6forgeReadListTokenStream(file, &token)) return -1;
         const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
         const idx = offsetIndex(i, stride) orelse return -1;
-        out[idx] = @intCast(f77_parse_logical_field(asConstCStr(&token), token_len));
+        out[idx] = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
     }
-    f77DiscardToRecordEnd(file);
+    col6forgeDiscardToRecordEnd(file);
     return 0;
 }
 
-pub export fn f77_read_list_v(
+pub export fn col6forge_read_list_v(
     unit: c_int,
     arg_ptrs: ?[*]?*anyopaque,
     arg_kinds: ?[*]const u8,
@@ -321,8 +321,8 @@ pub export fn f77_read_list_v(
     if (total == 0) return 0;
 
     var is_stdin = false;
-    const file = f77OpenListInput(unit, &is_stdin) orelse return if (status_mode != 0) 1 else -1;
-    defer f77CloseListInput(unit, is_stdin, file);
+    const file = col6forgeOpenListInput(unit, &is_stdin) orelse return if (status_mode != 0) 1 else -1;
+    defer col6forgeCloseListInput(unit, is_stdin, file);
 
     var token: [256]u8 = [_]u8{0} ** 256;
     var i: usize = 0;
@@ -331,30 +331,30 @@ pub export fn f77_read_list_v(
         const arg = runtimeArgPtrAt(arg_ptrs, i, total) orelse return if (status_mode != 0) 1 else -1;
         switch (kind) {
             'i' => {
-                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
                 const out: *c_int = @ptrCast(@alignCast(arg));
                 out.* = @intCast(strtol(asConstCStr(&token), null, 10));
             },
             'f' => {
-                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
-                f77_normalize_exponent(asCStr(&token));
+                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                col6forge_normalize_exponent(asCStr(&token));
                 const out: *f32 = @ptrCast(@alignCast(arg));
                 out.* = @floatCast(strtod(asConstCStr(&token), null));
             },
             'd' => {
-                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
-                f77_normalize_exponent(asCStr(&token));
+                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                col6forge_normalize_exponent(asCStr(&token));
                 const out: *f64 = @ptrCast(@alignCast(arg));
                 out.* = strtod(asConstCStr(&token), null);
             },
             'l' => {
-                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
                 const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
                 const out: *u8 = @ptrCast(@alignCast(arg));
-                out.* = @intCast(f77_parse_logical_field(asConstCStr(&token), token_len));
+                out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
             },
             's' => {
-                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
                 const out: [*]u8 = @ptrCast(arg);
                 const len_raw = runtimeArgLenAt(arg_lens, i, total);
                 const len: usize = @intCast(@max(len_raw, 0));
@@ -370,22 +370,22 @@ pub export fn f77_read_list_v(
                 }
             },
             'c' => {
-                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
-                f77_normalize_exponent(asCStr(&token));
+                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                col6forge_normalize_exponent(asCStr(&token));
                 const real = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
-                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
-                f77_normalize_exponent(asCStr(&token));
+                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                col6forge_normalize_exponent(asCStr(&token));
                 const imag = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
                 const out: [*]f32 = @ptrCast(@alignCast(arg));
                 out[0] = real;
                 out[1] = imag;
             },
             'z' => {
-                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
-                f77_normalize_exponent(asCStr(&token));
+                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                col6forge_normalize_exponent(asCStr(&token));
                 const real = strtod(asConstCStr(&token), null);
-                if (!f77ReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
-                f77_normalize_exponent(asCStr(&token));
+                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                col6forge_normalize_exponent(asCStr(&token));
                 const imag = strtod(asConstCStr(&token), null);
                 const out: [*]f64 = @ptrCast(@alignCast(arg));
                 out[0] = real;
@@ -395,7 +395,7 @@ pub export fn f77_read_list_v(
         }
     }
 
-    f77DiscardToRecordEnd(file);
+    col6forgeDiscardToRecordEnd(file);
     return 0;
 }
 
@@ -408,3 +408,4 @@ test "list index helpers detect arithmetic overflow" {
     try std.testing.expect(checkedMul(std.math.maxInt(usize), 2) == null);
     try std.testing.expect(checkedAdd(std.math.maxInt(usize), 1) == null);
 }
+

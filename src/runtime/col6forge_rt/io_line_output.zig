@@ -1,4 +1,4 @@
-const F77_MAX_UNITS = 256;
+﻿const COL6FORGE_MAX_UNITS = 256;
 
 const FILE = opaque {};
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
@@ -16,11 +16,11 @@ const OpenUnit = extern struct {
     blank: c_int,
 };
 
-extern var unit_pos: [F77_MAX_UNITS]c_long;
-extern var open_units: [F77_MAX_UNITS]OpenUnit;
+extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
+extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
 
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
-extern fn f77_runtime_stdout() ?*FILE;
+extern fn col6forge_rt_stdout() ?*FILE;
 
 fn cstrlen(text: [*:0]const u8) usize {
     var i: usize = 0;
@@ -32,17 +32,17 @@ fn asConstCStr(buf: anytype) [*:0]const u8 {
     return @ptrCast(buf);
 }
 
-pub export fn f77_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) callconv(.c) c_int {
+pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) callconv(.c) c_int {
     if (text == null) return if (strict_status != 0) 1 else 0;
     const src = text.?;
     const src_len = cstrlen(src);
-    const unit_opened = if (unit >= 0 and unit < F77_MAX_UNITS)
+    const unit_opened = if (unit >= 0 and unit < COL6FORGE_MAX_UNITS)
         open_units[@as(usize, @intCast(unit))].opened != 0
     else
         false;
 
     if ((unit == 6 or unit == 0) and !unit_opened) {
-        const out = f77_runtime_stdout() orelse return if (strict_status != 0) 1 else 0;
+        const out = col6forge_rt_stdout() orelse return if (strict_status != 0) 1 else 0;
         _ = fwrite(@ptrCast(src), 1, src_len, out);
         if (src_len == 0 or src[src_len - 1] != '\n') {
             const nl: [1]u8 = .{'\n'};
@@ -52,7 +52,7 @@ pub export fn f77_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_
         return 0;
     }
 
-    if (unit < 0 or unit >= F77_MAX_UNITS) {
+    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) {
         return if (strict_status != 0) 1 else 0;
     }
     const idx: usize = @intCast(unit);
@@ -83,3 +83,4 @@ pub export fn f77_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_
     unit_pos[idx] = ftell(stream);
     return 0;
 }
+

@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
@@ -108,12 +108,12 @@ pub fn build(b: *std.Build) void {
     });
 
     // Runtime artifact for ecosystem consumers:
-    // dependency("Col6Forge").artifact("col6forge_runtime")
+    // dependency("Col6Forge").artifact("col6forge_rt")
     const runtime_lib = b.addLibrary(.{
-        .name = "col6forge_runtime",
+        .name = "col6forge_rt",
         .linkage = .static,
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/runtime/f77_runtime.zig"),
+            .root_source_file = b.path("src/runtime/col6forge_rt.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -185,9 +185,9 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(runtime_lib);
 
     // Stable paths for dependent packages:
-    // dependency("Col6Forge").namedLazyPath("col6forge_runtime_src")
-    b.addNamedLazyPath("col6forge_runtime_src", b.path("src/runtime/f77_runtime.zig"));
-    b.addNamedLazyPath("col6forge_runtime_dir", b.path("src/runtime"));
+    // dependency("Col6Forge").namedLazyPath("col6forge_rt_src")
+    b.addNamedLazyPath("col6forge_rt_src", b.path("src/runtime/col6forge_rt.zig"));
+    b.addNamedLazyPath("col6forge_rt_dir", b.path("src/runtime"));
     b.addNamedLazyPath("col6forge_src_dir", b.path("src"));
 
     const install_golden_runner = b.addInstallArtifact(golden_runner, .{});

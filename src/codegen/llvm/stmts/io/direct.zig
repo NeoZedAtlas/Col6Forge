@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 const ast = @import("../../../input.zig");
 const llvm_types = @import("../../types.zig");
 const context = @import("../../codegen/context.zig");
@@ -270,7 +270,7 @@ fn emitDirectWriteCall(
     const kinds_ptr = try emitKindArray(ctx, builder, typed.kinds.items);
     const lens_ptr = try emitI32Array(ctx, builder, typed.lens.items);
     const count_val = try ctx.constI32(@intCast(typed.ptrs.items.len));
-    const write_name = try ctx.ensureDeclRaw("f77_write_direct_typed", .void, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
+    const write_name = try ctx.ensureDeclRaw("col6forge_write_direct_typed", .void, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .void, write_name, &.{ unit_i32, rec_i32, ptr_array, kinds_ptr, lens_ptr, count_val });
 }
 
@@ -288,7 +288,7 @@ fn emitDirectReadCall(
     const kinds_ptr = try emitKindArray(ctx, builder, typed.kinds.items);
     const lens_ptr = try emitI32Array(ctx, builder, typed.lens.items);
     const count_val = try ctx.constI32(@intCast(typed.ptrs.items.len));
-    const read_name = try ctx.ensureDeclRaw("f77_read_direct_typed", .i32, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
+    const read_name = try ctx.ensureDeclRaw("col6forge_read_direct_typed", .i32, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .i32, read_name, &.{ unit_i32, rec_i32, ptr_array, kinds_ptr, lens_ptr, count_val });
 }
 
@@ -346,12 +346,12 @@ fn emitDynamicImpliedDoDirectWrite(
     if (step_val != 1) return false;
 
     const helper_name = switch (sym.type_kind) {
-        .integer => "f77_write_direct_i32_n",
-        .real => "f77_write_direct_f32_n",
-        .double_precision => "f77_write_direct_f64_n",
-        .complex => "f77_write_direct_c32_n",
-        .complex_double => "f77_write_direct_c64_n",
-        .logical => "f77_write_direct_l_n",
+        .integer => "col6forge_write_direct_i32_n",
+        .real => "col6forge_write_direct_f32_n",
+        .double_precision => "col6forge_write_direct_f64_n",
+        .complex => "col6forge_write_direct_c32_n",
+        .complex_double => "col6forge_write_direct_c64_n",
+        .logical => "col6forge_write_direct_l_n",
         else => return false,
     };
 
@@ -392,12 +392,12 @@ fn emitDynamicImpliedDoDirectRead(
     if (step_val != 1) return false;
 
     const helper_name = switch (sym.type_kind) {
-        .integer => "f77_read_direct_i32_n",
-        .real => "f77_read_direct_f32_n",
-        .double_precision => "f77_read_direct_f64_n",
-        .complex => "f77_read_direct_c32_n",
-        .complex_double => "f77_read_direct_c64_n",
-        .logical => "f77_read_direct_l_n",
+        .integer => "col6forge_read_direct_i32_n",
+        .real => "col6forge_read_direct_f32_n",
+        .double_precision => "col6forge_read_direct_f64_n",
+        .complex => "col6forge_read_direct_c32_n",
+        .complex_double => "col6forge_read_direct_c64_n",
+        .logical => "col6forge_read_direct_l_n",
         else => return false,
     };
 

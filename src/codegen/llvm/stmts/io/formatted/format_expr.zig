@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 const ast = @import("../../../../input.zig");
 const llvm_types = @import("../../../types.zig");
 const context = @import("../../../codegen/context.zig");
@@ -218,12 +218,12 @@ fn emitWriteRuntimeFormatExpr(
         const len_val = try constI32(ctx, @intCast(unit_char_len orelse return error.MissingFormatLabel));
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
         const count_ref = try constI32(ctx, @intCast(count_val));
-        const write_name = try ctx.ensureDeclRaw("f77_write_internal_fmt_expr_v", .void, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
+        const write_name = try ctx.ensureDeclRaw("col6forge_write_internal_fmt_expr_v", .void, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .void, write_name, &.{ unit_value, len_val, count_ref, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count });
         return;
     }
 
-    const write_name = try ctx.ensureDeclRaw("f77_write_fmt_expr_v", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
+    const write_name = try ctx.ensureDeclRaw("col6forge_write_fmt_expr_v", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
     try builder.callTyped(null, .i32, write_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 0) });
 }
 
@@ -245,12 +245,12 @@ fn emitReadRuntimeFormatExpr(
         const len_val = try constI32(ctx, @intCast(unit_char_len orelse return error.MissingFormatLabel));
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
         const count_ref = try constI32(ctx, @intCast(count_val));
-        const read_name = try ctx.ensureDeclRaw("f77_read_internal_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
+        const read_name = try ctx.ensureDeclRaw("col6forge_read_internal_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count });
         return;
     }
 
-    const read_name = try ctx.ensureDeclRaw("f77_read_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
+    const read_name = try ctx.ensureDeclRaw("col6forge_read_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
     try builder.callTyped(null, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 0) });
 }
 
@@ -272,12 +272,12 @@ fn emitReadRuntimeFormatExprStatus(
         const len_val = try constI32(ctx, @intCast(unit_char_len orelse return error.MissingFormatLabel));
         const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
         const count_ref = try constI32(ctx, @intCast(count_val));
-        const read_name = try ctx.ensureDeclRaw("f77_read_internal_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
+        const read_name = try ctx.ensureDeclRaw("col6forge_read_internal_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count });
         return try constI32(ctx, 0);
     }
 
-    const read_name = try ctx.ensureDeclRaw("f77_read_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
+    const read_name = try ctx.ensureDeclRaw("col6forge_read_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 1) });
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };

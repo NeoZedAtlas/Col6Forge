@@ -1,4 +1,4 @@
-const std = @import("std");
+﻿const std = @import("std");
 const ast = @import("../../../input.zig");
 const ir = @import("../../../ir.zig");
 const context = @import("../context.zig");
@@ -757,23 +757,23 @@ fn constFloat(ctx: *Context, ty: IRType, value: f64) ValueRef {
 }
 
 fn emitComplexCexp(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    return emitRuntimeComplexUnary(ctx, builder, "f77_cexp", "f77_zexp", args);
+    return emitRuntimeComplexUnary(ctx, builder, "col6forge_cexp", "col6forge_zexp", args);
 }
 
 fn emitComplexCsin(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    return emitRuntimeComplexUnary(ctx, builder, "f77_csin", "f77_zsin", args);
+    return emitRuntimeComplexUnary(ctx, builder, "col6forge_csin", "col6forge_zsin", args);
 }
 
 fn emitComplexCcos(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    return emitRuntimeComplexUnary(ctx, builder, "f77_ccos", "f77_zcos", args);
+    return emitRuntimeComplexUnary(ctx, builder, "col6forge_ccos", "col6forge_zcos", args);
 }
 
 fn emitComplexClog(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    return emitRuntimeComplexUnary(ctx, builder, "f77_clog", "f77_zlog", args);
+    return emitRuntimeComplexUnary(ctx, builder, "col6forge_clog", "col6forge_zlog", args);
 }
 
 fn emitComplexCsqrt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    return emitRuntimeComplexUnary(ctx, builder, "f77_csqrt", "f77_zsqrt", args);
+    return emitRuntimeComplexUnary(ctx, builder, "col6forge_csqrt", "col6forge_zsqrt", args);
 }
 
 fn emitRuntimeComplexUnary(

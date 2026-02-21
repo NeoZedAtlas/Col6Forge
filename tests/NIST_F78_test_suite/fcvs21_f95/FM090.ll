@@ -125,72 +125,72 @@ bb5:
 bb6:
   %t82 = load i32, ptr %t1
   %t83 = getelementptr [3 x i8], ptr @str0, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t82, ptr %t83, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t82, ptr %t83, ptr null, ptr null, i32 0, i32 0)
   br label %bb7
 bb7:
   %t84 = load i32, ptr %t1
   %t85 = getelementptr [47 x i8], ptr @str1, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t84, ptr %t85, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t84, ptr %t85, ptr null, ptr null, i32 0, i32 0)
   br label %bb8
 bb8:
   %t86 = load i32, ptr %t1
   %t87 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t86, ptr %t87, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t86, ptr %t87, ptr null, ptr null, i32 0, i32 0)
   br label %bb9
 bb9:
   %t88 = load i32, ptr %t1
   %t89 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t88, ptr %t89, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t88, ptr %t89, ptr null, ptr null, i32 0, i32 0)
   br label %bb10
 bb10:
   %t90 = load i32, ptr %t1
   %t91 = getelementptr [35 x i8], ptr @str3, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t90, ptr %t91, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t90, ptr %t91, ptr null, ptr null, i32 0, i32 0)
   br label %bb11
 bb11:
   %t92 = load i32, ptr %t1
   %t93 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t92, ptr %t93, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t92, ptr %t93, ptr null, ptr null, i32 0, i32 0)
   br label %bb12
 bb12:
   %t94 = load i32, ptr %t1
   %t95 = getelementptr [51 x i8], ptr @str4, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t94, ptr %t95, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t94, ptr %t95, ptr null, ptr null, i32 0, i32 0)
   br label %bb13
 bb13:
   %t96 = load i32, ptr %t1
   %t97 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t96, ptr %t97, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t96, ptr %t97, ptr null, ptr null, i32 0, i32 0)
   br label %bb14
 bb14:
   %t98 = load i32, ptr %t1
   %t99 = getelementptr [38 x i8], ptr @str5, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t98, ptr %t99, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t98, ptr %t99, ptr null, ptr null, i32 0, i32 0)
   br label %bb15
 bb15:
   %t100 = load i32, ptr %t1
   %t101 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t100, ptr %t101, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t100, ptr %t101, ptr null, ptr null, i32 0, i32 0)
   br label %bb16
 bb16:
   %t102 = load i32, ptr %t1
   %t103 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t102, ptr %t103, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t102, ptr %t103, ptr null, ptr null, i32 0, i32 0)
   br label %bb17
 bb17:
   %t104 = load i32, ptr %t1
   %t105 = getelementptr [54 x i8], ptr @str6, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t104, ptr %t105, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t104, ptr %t105, ptr null, ptr null, i32 0, i32 0)
   br label %bb18
 bb18:
   %t106 = load i32, ptr %t1
   %t107 = getelementptr [54 x i8], ptr @str7, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t106, ptr %t107, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t106, ptr %t107, ptr null, ptr null, i32 0, i32 0)
   br label %bb19
 bb19:
   %t108 = load i32, ptr %t1
   %t109 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t108, ptr %t109, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t108, ptr %t109, ptr null, ptr null, i32 0, i32 0)
   br label %L1001
 L1001:
   br label %bb21
@@ -371,7 +371,7 @@ bb75:
   %t121 = getelementptr ptr, ptr %t120, i32 0
   store ptr %t119, ptr %t121
   %t122 = getelementptr [2 x i8], ptr @str9, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t116, ptr %t118, ptr %t120, ptr %t122, i32 1, i32 0)
+  call i32 @col6forge_write_v(i32 %t116, ptr %t118, ptr %t120, ptr %t122, i32 1, i32 0)
   br label %bb76
 bb76:
   %t123 = load i32, ptr %t5
@@ -403,7 +403,7 @@ bb79:
   %t137 = getelementptr ptr, ptr %t136, i32 0
   store ptr %t135, ptr %t137
   %t138 = getelementptr [2 x i8], ptr @str9, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t132, ptr %t134, ptr %t136, ptr %t138, i32 1, i32 0)
+  call i32 @col6forge_write_v(i32 %t132, ptr %t134, ptr %t136, ptr %t138, i32 1, i32 0)
   br label %bb80
 bb80:
   br label %L1011
@@ -439,7 +439,7 @@ bb84:
   %t153 = getelementptr ptr, ptr %t150, i32 2
   store ptr %t149, ptr %t153
   %t154 = getelementptr [4 x i8], ptr @str12, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t142, ptr %t146, ptr %t150, ptr %t154, i32 3, i32 0)
+  call i32 @col6forge_write_v(i32 %t142, ptr %t146, ptr %t150, ptr %t154, i32 3, i32 0)
   br label %L1011
 L1011:
   br label %bb86
@@ -541,7 +541,7 @@ bb114:
   %t165 = getelementptr ptr, ptr %t164, i32 0
   store ptr %t163, ptr %t165
   %t166 = getelementptr [2 x i8], ptr @str9, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t160, ptr %t162, ptr %t164, ptr %t166, i32 1, i32 0)
+  call i32 @col6forge_write_v(i32 %t160, ptr %t162, ptr %t164, ptr %t166, i32 1, i32 0)
   br label %bb115
 bb115:
   %t167 = load i32, ptr %t5
@@ -573,7 +573,7 @@ bb118:
   %t181 = getelementptr ptr, ptr %t180, i32 0
   store ptr %t179, ptr %t181
   %t182 = getelementptr [2 x i8], ptr @str9, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t176, ptr %t178, ptr %t180, ptr %t182, i32 1, i32 0)
+  call i32 @col6forge_write_v(i32 %t176, ptr %t178, ptr %t180, ptr %t182, i32 1, i32 0)
   br label %bb119
 bb119:
   br label %L1021
@@ -609,7 +609,7 @@ bb123:
   %t197 = getelementptr ptr, ptr %t194, i32 2
   store ptr %t193, ptr %t197
   %t198 = getelementptr [4 x i8], ptr @str12, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t186, ptr %t190, ptr %t194, ptr %t198, i32 3, i32 0)
+  call i32 @col6forge_write_v(i32 %t186, ptr %t190, ptr %t194, ptr %t198, i32 3, i32 0)
   br label %L1021
 L1021:
   br label %bb125
@@ -703,7 +703,7 @@ bb160:
   %t209 = getelementptr ptr, ptr %t208, i32 0
   store ptr %t207, ptr %t209
   %t210 = getelementptr [2 x i8], ptr @str9, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t204, ptr %t206, ptr %t208, ptr %t210, i32 1, i32 0)
+  call i32 @col6forge_write_v(i32 %t204, ptr %t206, ptr %t208, ptr %t210, i32 1, i32 0)
   br label %bb161
 bb161:
   %t211 = load i32, ptr %t5
@@ -735,7 +735,7 @@ bb164:
   %t225 = getelementptr ptr, ptr %t224, i32 0
   store ptr %t223, ptr %t225
   %t226 = getelementptr [2 x i8], ptr @str9, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t220, ptr %t222, ptr %t224, ptr %t226, i32 1, i32 0)
+  call i32 @col6forge_write_v(i32 %t220, ptr %t222, ptr %t224, ptr %t226, i32 1, i32 0)
   br label %bb165
 bb165:
   br label %L1031
@@ -771,7 +771,7 @@ bb169:
   %t241 = getelementptr ptr, ptr %t238, i32 2
   store ptr %t237, ptr %t241
   %t242 = getelementptr [4 x i8], ptr @str12, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t230, ptr %t234, ptr %t238, ptr %t242, i32 3, i32 0)
+  call i32 @col6forge_write_v(i32 %t230, ptr %t234, ptr %t238, ptr %t242, i32 3, i32 0)
   br label %L1031
 L1031:
   br label %L99999
@@ -780,32 +780,32 @@ L99999:
 bb172:
   %t243 = load i32, ptr %t1
   %t244 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t243, ptr %t244, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t243, ptr %t244, ptr null, ptr null, i32 0, i32 0)
   br label %bb173
 bb173:
   %t245 = load i32, ptr %t1
   %t246 = getelementptr [54 x i8], ptr @str7, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t245, ptr %t246, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t245, ptr %t246, ptr null, ptr null, i32 0, i32 0)
   br label %bb174
 bb174:
   %t247 = load i32, ptr %t1
   %t248 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t247, ptr %t248, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t247, ptr %t248, ptr null, ptr null, i32 0, i32 0)
   br label %bb175
 bb175:
   %t249 = load i32, ptr %t1
   %t250 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t249, ptr %t250, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t249, ptr %t250, ptr null, ptr null, i32 0, i32 0)
   br label %bb176
 bb176:
   %t251 = load i32, ptr %t1
   %t252 = getelementptr [43 x i8], ptr @str13, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t251, ptr %t252, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t251, ptr %t252, ptr null, ptr null, i32 0, i32 0)
   br label %bb177
 bb177:
   %t253 = load i32, ptr %t1
   %t254 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t253, ptr %t254, ptr null, ptr null, i32 0, i32 0)
+  call i32 @col6forge_write_v(i32 %t253, ptr %t254, ptr null, ptr null, i32 0, i32 0)
   br label %bb178
 bb178:
   %t255 = load i32, ptr %t1
@@ -817,7 +817,7 @@ bb178:
   %t260 = getelementptr ptr, ptr %t259, i32 0
   store ptr %t258, ptr %t260
   %t261 = getelementptr [2 x i8], ptr @str9, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t255, ptr %t257, ptr %t259, ptr %t261, i32 1, i32 0)
+  call i32 @col6forge_write_v(i32 %t255, ptr %t257, ptr %t259, ptr %t261, i32 1, i32 0)
   br label %bb179
 bb179:
   %t262 = load i32, ptr %t1
@@ -829,7 +829,7 @@ bb179:
   %t267 = getelementptr ptr, ptr %t266, i32 0
   store ptr %t265, ptr %t267
   %t268 = getelementptr [2 x i8], ptr @str9, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t262, ptr %t264, ptr %t266, ptr %t268, i32 1, i32 0)
+  call i32 @col6forge_write_v(i32 %t262, ptr %t264, ptr %t266, ptr %t268, i32 1, i32 0)
   br label %bb180
 bb180:
   %t269 = load i32, ptr %t1
@@ -841,7 +841,7 @@ bb180:
   %t274 = getelementptr ptr, ptr %t273, i32 0
   store ptr %t272, ptr %t274
   %t275 = getelementptr [2 x i8], ptr @str9, i32 0, i32 0
-  call i32 @f77_write_v(i32 %t269, ptr %t271, ptr %t273, ptr %t275, i32 1, i32 0)
+  call i32 @col6forge_write_v(i32 %t269, ptr %t271, ptr %t273, ptr %t275, i32 1, i32 0)
   br label %bb181
 bb181:
   ret void
@@ -904,4 +904,4 @@ entry:
   call void @fm090_()
   ret i32 0
 }
-declare i32 @f77_write_v(i32, ptr, ptr, ptr, i32, i32)
+declare i32 @col6forge_write_v(i32, ptr, ptr, ptr, i32, i32)
