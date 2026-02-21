@@ -120,6 +120,12 @@ look up `CF2001` in this file.
 - Meaning: expression nesting exceeds parser recursion limit.
 - Typical fix: simplify deeply nested expressions or split into intermediate assignments.
 
+## CF2012
+
+- Stage: parser
+- Meaning: `MODULE ... END MODULE` program units are not supported yet.
+- Typical fix: use supported F77-style top-level units (`PROGRAM`/`SUBROUTINE`/`FUNCTION`/`BLOCK DATA`) or wait for module support.
+
 ## CF2099
 
 - Stage: parser (catch-all)

@@ -173,6 +173,9 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
     var type_info: ?TypeInfo = null;
     var allow_missing_name = false;
 
+    if (lp.isKeywordSplit("MODULE")) {
+        return error.UnsupportedModuleUnit;
+    }
     if (lp.isKeywordSplit("PROGRAM")) {
         _ = lp.consumeKeyword("PROGRAM");
         kind = .program;
@@ -339,6 +342,7 @@ fn parseErrorInfo(err: anyerror) struct { code: []const u8, message: []const u8 
         error.DeclarationInIfBlock => .{ .code = "CF2009", .message = "declaration is not allowed inside IF executable block" },
         error.EndDoWithoutDo => .{ .code = "CF2010", .message = "END DO/ENDDO found without matching DO" },
         error.ExpressionDepthExceeded => .{ .code = "CF2011", .message = "expression nesting exceeds parser limit" },
+        error.UnsupportedModuleUnit => .{ .code = "CF2012", .message = "MODULE program units are not supported yet" },
         else => .{ .code = "CF2099", .message = "parser failed to understand source" },
     };
 }
@@ -728,4 +732,20 @@ test "parseProgram supports implicit main program header" {
     try testing.expect(std.mem.startsWith(u8, unit.name, "__COL6FORGE_PROGRAM"));
     try testing.expectEqual(@as(usize, 1), unit.decls.len);
     try testing.expectEqual(@as(usize, 1), unit.stmts.len);
+}
+
+test "parseProgram reports unsupported MODULE unit" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      MODULE MINPACK_MODULE\n" ++
+        "      END MODULE MINPACK_MODULE\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    try testing.expectError(error.UnsupportedModuleUnit, parseProgram(arena.allocator(), lines));
 }
