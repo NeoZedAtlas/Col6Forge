@@ -6,12 +6,12 @@ const llvm_types = @import("../types.zig");
 
 pub const CaseInsensitiveStringContext = struct {
     pub fn hash(_: @This(), key: []const u8) u64 {
-        var hasher = std.hash.Wyhash.init(0);
+        var h: u64 = 0xcbf29ce484222325;
         for (key) |ch| {
-            const lowered = std.ascii.toLower(ch);
-            hasher.update(&[_]u8{lowered});
+            const lowered = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
+            h = (h ^ @as(u64, lowered)) *% 0x100000001b3;
         }
-        return hasher.final();
+        return h;
     }
 
     pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
