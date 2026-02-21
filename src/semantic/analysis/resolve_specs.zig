@@ -41,6 +41,12 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                     .type_kind = rule.type_kind,
                     .char_len = char_len,
                 });
+                applyImplicitRuleToExistingSymbols(self, .{
+                    .start = rule.start,
+                    .end = rule.end,
+                    .type_kind = rule.type_kind,
+                    .char_len = char_len,
+                });
             }
         },
         .dimension => |dim| {
@@ -143,6 +149,20 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
             }
         },
         .type_decl => return error.UnexpectedTypeDecl,
+    }
+}
+
+fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.ImplicitRule) void {
+    for (self.symbols.items) |*sym| {
+        if (sym.type_explicit) continue;
+        if (sym.name.len == 0) continue;
+        const first = std.ascii.toUpper(sym.name[0]);
+        if (first < rule.start or first > rule.end) continue;
+        sym.type_kind = rule.type_kind;
+        sym.char_len = switch (rule.type_kind) {
+            .character => rule.char_len orelse 1,
+            else => null,
+        };
     }
 }
 

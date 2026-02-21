@@ -9,6 +9,7 @@ extern fn fgetc(stream: *FILE) c_int;
 extern fn ungetc(c: c_int, stream: *FILE) c_int;
 extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
 extern fn strtod(nptr: [*:0]const u8, endptr: ?*?[*:0]u8) f64;
+extern fn exit(status: c_int) noreturn;
 
 const OpenUnit = extern struct {
     opened: c_int,
@@ -84,6 +85,11 @@ fn offsetIndex(i: c_int, stride: c_int) ?usize {
 fn complexOffsetIndex(i: c_int, stride: c_int) ?usize {
     const idx = offsetIndex(i, stride) orelse return null;
     return checkedMul(idx, 2);
+}
+
+fn listReadFail(status_mode: c_int, code: c_int) c_int {
+    if (status_mode != 0) return code;
+    exit(2);
 }
 
 fn listDelim(ch: c_int) bool {
@@ -321,40 +327,40 @@ pub export fn col6forge_read_list_v(
     if (total == 0) return 0;
 
     var is_stdin = false;
-    const file = col6forgeOpenListInput(unit, &is_stdin) orelse return if (status_mode != 0) 1 else -1;
+    const file = col6forgeOpenListInput(unit, &is_stdin) orelse return listReadFail(status_mode, 1);
     defer col6forgeCloseListInput(unit, is_stdin, file);
 
     var token: [256]u8 = [_]u8{0} ** 256;
     var i: usize = 0;
     while (i < total) : (i += 1) {
         const kind = runtimeArgKindAt(arg_kinds, i, total);
-        const arg = runtimeArgPtrAt(arg_ptrs, i, total) orelse return if (status_mode != 0) 1 else -1;
+        const arg = runtimeArgPtrAt(arg_ptrs, i, total) orelse return listReadFail(status_mode, 1);
         switch (kind) {
             'i' => {
-                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return listReadFail(status_mode, -1);
                 const out: *c_int = @ptrCast(@alignCast(arg));
                 out.* = @intCast(strtol(asConstCStr(&token), null, 10));
             },
             'f' => {
-                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return listReadFail(status_mode, -1);
                 col6forge_normalize_exponent(asCStr(&token));
                 const out: *f32 = @ptrCast(@alignCast(arg));
                 out.* = @floatCast(strtod(asConstCStr(&token), null));
             },
             'd' => {
-                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return listReadFail(status_mode, -1);
                 col6forge_normalize_exponent(asCStr(&token));
                 const out: *f64 = @ptrCast(@alignCast(arg));
                 out.* = strtod(asConstCStr(&token), null);
             },
             'l' => {
-                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return listReadFail(status_mode, -1);
                 const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
                 const out: *u8 = @ptrCast(@alignCast(arg));
                 out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
             },
             's' => {
-                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return listReadFail(status_mode, -1);
                 const out: [*]u8 = @ptrCast(arg);
                 const len_raw = runtimeArgLenAt(arg_lens, i, total);
                 const len: usize = @intCast(@max(len_raw, 0));
@@ -370,10 +376,10 @@ pub export fn col6forge_read_list_v(
                 }
             },
             'c' => {
-                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return listReadFail(status_mode, -1);
                 col6forge_normalize_exponent(asCStr(&token));
                 const real = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
-                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return listReadFail(status_mode, -1);
                 col6forge_normalize_exponent(asCStr(&token));
                 const imag = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
                 const out: [*]f32 = @ptrCast(@alignCast(arg));
@@ -381,17 +387,17 @@ pub export fn col6forge_read_list_v(
                 out[1] = imag;
             },
             'z' => {
-                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return listReadFail(status_mode, -1);
                 col6forge_normalize_exponent(asCStr(&token));
                 const real = strtod(asConstCStr(&token), null);
-                if (!col6forgeReadListTokenStream(file, &token)) return if (status_mode != 0) -1 else -1;
+                if (!col6forgeReadListTokenStream(file, &token)) return listReadFail(status_mode, -1);
                 col6forge_normalize_exponent(asCStr(&token));
                 const imag = strtod(asConstCStr(&token), null);
                 const out: [*]f64 = @ptrCast(@alignCast(arg));
                 out[0] = real;
                 out[1] = imag;
             },
-            else => return if (status_mode != 0) 1 else -1,
+            else => return listReadFail(status_mode, 1),
         }
     }
 

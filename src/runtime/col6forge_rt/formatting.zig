@@ -88,6 +88,39 @@ fn fillStars(buf: *[COL6FORGE_FMT_BUFFER_LEN]u8, width_in: c_int) void {
     }
     buf[usable] = 0;
 }
+
+fn formatSpecialFloat(out: *[COL6FORGE_FMT_BUFFER_LEN]u8, width: c_int, sign_plus: c_int, value: f64) bool {
+    if (std.math.isFinite(value)) return false;
+
+    const text: []const u8 = if (std.math.isNan(value))
+        "NaN"
+    else if (std.math.signbit(value))
+        "-Inf"
+    else if (sign_plus != 0)
+        "+Inf"
+    else
+        "Inf";
+
+    const len = text.len;
+    if (width > 0 and @as(usize, @intCast(width)) < len) {
+        fillStars(out, width);
+        return true;
+    }
+
+    var pad: usize = 0;
+    if (width > 0 and @as(usize, @intCast(width)) > len) {
+        pad = @as(usize, @intCast(width)) - len;
+        if (pad >= out.len) pad = out.len - 1;
+    }
+
+    var i: usize = 0;
+    while (i < pad) : (i += 1) out[i] = ' ';
+    i = 0;
+    while (i < len and pad + i < out.len - 1) : (i += 1) out[pad + i] = text[i];
+    out[pad + @min(len, (out.len - 1) - pad)] = 0;
+    return true;
+}
+
 fn col6forgePadExp(buf: *[COL6FORGE_FMT_BUFFER_LEN]u8, exp_digits: usize) void {
     var exp_idx_opt = findByte(buf[0..], 'E');
     if (exp_idx_opt == null) {
@@ -257,6 +290,10 @@ pub export fn col6forge_fmt_e(width: c_int, precision: c_int, exp_width: c_int, 
     var ew = exp_width;
     if (ew <= 0) ew = 2;
 
+    if (formatSpecialFloat(out, width, sign_plus, value)) {
+        return asConstCStr(out);
+    }
+
     const abs_val = @abs(value);
     var exp_val: c_int = 0;
     if (abs_val != 0.0) {
@@ -359,6 +396,10 @@ pub export fn col6forge_fmt_d(width: c_int, precision: c_int, exp_width: c_int, 
 pub export fn col6forge_fmt_g(width: c_int, precision: c_int, exp_width: c_int, scale_factor: c_int, sign_plus: c_int, value: f64) callconv(.c) [*:0]const u8 {
     var p = precision;
     if (p <= 0) p = 1;
+
+    if (!std.math.isFinite(value)) {
+        return col6forge_fmt_e(width, p, exp_width, scale_factor, sign_plus, value);
+    }
 
     const abs_val = @abs(value);
     var exp_val: c_int = 0;
@@ -463,4 +504,19 @@ test "formatted helper strings remain stable across many calls" {
     }
 
     try std.testing.expectEqualStrings("123", std.mem.sliceTo(first, 0));
+}
+
+test "col6forge_fmt_e handles infinities and nan without panic" {
+    const inf = col6forge_fmt_e(12, 5, 2, 0, 0, std.math.inf(f64));
+    const neg_inf = col6forge_fmt_e(12, 5, 2, 0, 0, -std.math.inf(f64));
+    const nan = col6forge_fmt_e(12, 5, 2, 0, 0, std.math.nan(f64));
+
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.sliceTo(inf, 0), "Inf") != null);
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.sliceTo(neg_inf, 0), "-Inf") != null);
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.sliceTo(nan, 0), "NaN") != null);
+}
+
+test "col6forge_fmt_g avoids log10 overflow for infinities" {
+    const out = col6forge_fmt_g(12, 5, 2, 0, 1, std.math.inf(f64));
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.sliceTo(out, 0), "Inf") != null);
 }

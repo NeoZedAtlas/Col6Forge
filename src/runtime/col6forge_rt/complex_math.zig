@@ -56,6 +56,11 @@ pub export fn col6forge_csin(z: col6forge_complex32) callconv(.c) col6forge_comp
     };
 }
 
+pub export fn col6forge_csin_ptr(out: ?*col6forge_complex32, input: ?*const col6forge_complex32) callconv(.c) void {
+    if (out == null or input == null) return;
+    out.?.* = col6forge_csin(input.?.*);
+}
+
 pub export fn col6forge_ccos(z: col6forge_complex32) callconv(.c) col6forge_complex32 {
     const a = z.r;
     const b = z.i;
@@ -63,6 +68,11 @@ pub export fn col6forge_ccos(z: col6forge_complex32) callconv(.c) col6forge_comp
         .r = std.math.cos(a) * std.math.cosh(b),
         .i = -std.math.sin(a) * std.math.sinh(b),
     };
+}
+
+pub export fn col6forge_ccos_ptr(out: ?*col6forge_complex32, input: ?*const col6forge_complex32) callconv(.c) void {
+    if (out == null or input == null) return;
+    out.?.* = col6forge_ccos(input.?.*);
 }
 
 pub export fn col6forge_cexp(z: col6forge_complex32) callconv(.c) col6forge_complex32 {
@@ -75,6 +85,11 @@ pub export fn col6forge_cexp(z: col6forge_complex32) callconv(.c) col6forge_comp
     };
 }
 
+pub export fn col6forge_cexp_ptr(out: ?*col6forge_complex32, input: ?*const col6forge_complex32) callconv(.c) void {
+    if (out == null or input == null) return;
+    out.?.* = col6forge_cexp(input.?.*);
+}
+
 pub export fn col6forge_clog(z: col6forge_complex32) callconv(.c) col6forge_complex32 {
     const a = z.r;
     const b = z.i;
@@ -85,6 +100,11 @@ pub export fn col6forge_clog(z: col6forge_complex32) callconv(.c) col6forge_comp
     };
 }
 
+pub export fn col6forge_clog_ptr(out: ?*col6forge_complex32, input: ?*const col6forge_complex32) callconv(.c) void {
+    if (out == null or input == null) return;
+    out.?.* = col6forge_clog(input.?.*);
+}
+
 pub export fn col6forge_csqrt(z: col6forge_complex32) callconv(.c) col6forge_complex32 {
     const a = z.r;
     const b = z.i;
@@ -93,6 +113,11 @@ pub export fn col6forge_csqrt(z: col6forge_complex32) callconv(.c) col6forge_com
     var u = @sqrt((mag - a) * @as(f32, 0.5));
     if (b < 0.0) u = -u;
     return .{ .r = t, .i = u };
+}
+
+pub export fn col6forge_csqrt_ptr(out: ?*col6forge_complex32, input: ?*const col6forge_complex32) callconv(.c) void {
+    if (out == null or input == null) return;
+    out.?.* = col6forge_csqrt(input.?.*);
 }
 
 pub export fn col6forge_cpowi(z: col6forge_complex32, n: c_int) callconv(.c) col6forge_complex32 {
@@ -125,6 +150,11 @@ pub export fn col6forge_zsin(z: col6forge_complex64) callconv(.c) col6forge_comp
     };
 }
 
+pub export fn col6forge_zsin_ptr(out: ?*col6forge_complex64, input: ?*const col6forge_complex64) callconv(.c) void {
+    if (out == null or input == null) return;
+    out.?.* = col6forge_zsin(input.?.*);
+}
+
 pub export fn col6forge_zcos(z: col6forge_complex64) callconv(.c) col6forge_complex64 {
     const a = z.r;
     const b = z.i;
@@ -132,6 +162,11 @@ pub export fn col6forge_zcos(z: col6forge_complex64) callconv(.c) col6forge_comp
         .r = std.math.cos(a) * std.math.cosh(b),
         .i = -std.math.sin(a) * std.math.sinh(b),
     };
+}
+
+pub export fn col6forge_zcos_ptr(out: ?*col6forge_complex64, input: ?*const col6forge_complex64) callconv(.c) void {
+    if (out == null or input == null) return;
+    out.?.* = col6forge_zcos(input.?.*);
 }
 
 pub export fn col6forge_zexp(z: col6forge_complex64) callconv(.c) col6forge_complex64 {
@@ -144,6 +179,11 @@ pub export fn col6forge_zexp(z: col6forge_complex64) callconv(.c) col6forge_comp
     };
 }
 
+pub export fn col6forge_zexp_ptr(out: ?*col6forge_complex64, input: ?*const col6forge_complex64) callconv(.c) void {
+    if (out == null or input == null) return;
+    out.?.* = col6forge_zexp(input.?.*);
+}
+
 pub export fn col6forge_zlog(z: col6forge_complex64) callconv(.c) col6forge_complex64 {
     const a = z.r;
     const b = z.i;
@@ -154,6 +194,11 @@ pub export fn col6forge_zlog(z: col6forge_complex64) callconv(.c) col6forge_comp
     };
 }
 
+pub export fn col6forge_zlog_ptr(out: ?*col6forge_complex64, input: ?*const col6forge_complex64) callconv(.c) void {
+    if (out == null or input == null) return;
+    out.?.* = col6forge_zlog(input.?.*);
+}
+
 pub export fn col6forge_zsqrt(z: col6forge_complex64) callconv(.c) col6forge_complex64 {
     const a = z.r;
     const b = z.i;
@@ -162,6 +207,11 @@ pub export fn col6forge_zsqrt(z: col6forge_complex64) callconv(.c) col6forge_com
     var u = @sqrt((mag - a) * @as(f64, 0.5));
     if (b < 0.0) u = -u;
     return .{ .r = t, .i = u };
+}
+
+pub export fn col6forge_zsqrt_ptr(out: ?*col6forge_complex64, input: ?*const col6forge_complex64) callconv(.c) void {
+    if (out == null or input == null) return;
+    out.?.* = col6forge_zsqrt(input.?.*);
 }
 
 pub export fn col6forge_zpowi(z: col6forge_complex64, n: c_int) callconv(.c) col6forge_complex64 {
@@ -203,4 +253,20 @@ test "complex integer power keeps valid inverse for nonzero values" {
     const inv_z = col6forge_zpowi(.{ .r = 4.0, .i = 0.0 }, -1);
     try std.testing.expectApproxEqAbs(@as(f64, 0.25), inv_z.r, 1e-12);
     try std.testing.expectApproxEqAbs(@as(f64, 0.0), inv_z.i, 1e-12);
+}
+
+test "pointer unary wrappers match direct complex implementations" {
+    var in_c: col6forge_complex32 = .{ .r = 0.5, .i = -0.25 };
+    var out_c: col6forge_complex32 = .{ .r = 0.0, .i = 0.0 };
+    col6forge_cexp_ptr(&out_c, &in_c);
+    const want_c = col6forge_cexp(in_c);
+    try std.testing.expectApproxEqAbs(want_c.r, out_c.r, 1e-6);
+    try std.testing.expectApproxEqAbs(want_c.i, out_c.i, 1e-6);
+
+    var in_z: col6forge_complex64 = .{ .r = -3.0, .i = 4.0 };
+    var out_z: col6forge_complex64 = .{ .r = 0.0, .i = 0.0 };
+    col6forge_zsqrt_ptr(&out_z, &in_z);
+    const want_z = col6forge_zsqrt(in_z);
+    try std.testing.expectApproxEqAbs(want_z.r, out_z.r, 1e-12);
+    try std.testing.expectApproxEqAbs(want_z.i, out_z.i, 1e-12);
 }

@@ -757,23 +757,23 @@ fn constFloat(ctx: *Context, ty: IRType, value: f64) ValueRef {
 }
 
 fn emitComplexCexp(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    return emitRuntimeComplexUnary(ctx, builder, "col6forge_cexp", "col6forge_zexp", args);
+    return emitRuntimeComplexUnary(ctx, builder, "col6forge_cexp_ptr", "col6forge_zexp_ptr", args);
 }
 
 fn emitComplexCsin(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    return emitRuntimeComplexUnary(ctx, builder, "col6forge_csin", "col6forge_zsin", args);
+    return emitRuntimeComplexUnary(ctx, builder, "col6forge_csin_ptr", "col6forge_zsin_ptr", args);
 }
 
 fn emitComplexCcos(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    return emitRuntimeComplexUnary(ctx, builder, "col6forge_ccos", "col6forge_zcos", args);
+    return emitRuntimeComplexUnary(ctx, builder, "col6forge_ccos_ptr", "col6forge_zcos_ptr", args);
 }
 
 fn emitComplexClog(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    return emitRuntimeComplexUnary(ctx, builder, "col6forge_clog", "col6forge_zlog", args);
+    return emitRuntimeComplexUnary(ctx, builder, "col6forge_clog_ptr", "col6forge_zlog_ptr", args);
 }
 
 fn emitComplexCsqrt(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    return emitRuntimeComplexUnary(ctx, builder, "col6forge_csqrt", "col6forge_zsqrt", args);
+    return emitRuntimeComplexUnary(ctx, builder, "col6forge_csqrt_ptr", "col6forge_zsqrt_ptr", args);
 }
 
 fn emitRuntimeComplexUnary(
@@ -788,10 +788,21 @@ fn emitRuntimeComplexUnary(
     const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
     value = try complex.coerceToComplex(ctx, builder, value, target_ty);
     const fn_name = if (target_ty == .complex_f64) name_f64 else name_f32;
-    var sig_types = [_]IRType{target_ty};
-    _ = try ctx.ensureDeclRaw(fn_name, target_ty, sig_types[0..], false);
+    _ = try ctx.ensureDeclRaw(fn_name, .void, &.{ .ptr, .ptr }, false);
+
+    const input_slot = try ctx.nextTemp();
+    try builder.alloca(input_slot, target_ty);
+    const input_ptr = ValueRef{ .name = input_slot, .ty = .ptr, .is_ptr = true };
+    try builder.store(value, input_ptr);
+
+    const output_slot = try ctx.nextTemp();
+    try builder.alloca(output_slot, target_ty);
+    const output_ptr = ValueRef{ .name = output_slot, .ty = .ptr, .is_ptr = true };
+
+    try builder.callTyped(null, .void, fn_name, &.{ output_ptr, input_ptr });
+
     const tmp = try ctx.nextTemp();
-    try builder.callTyped(tmp, target_ty, fn_name, &.{value});
+    try builder.load(tmp, target_ty, output_ptr);
     return .{ .name = tmp, .ty = target_ty, .is_ptr = false };
 }
 

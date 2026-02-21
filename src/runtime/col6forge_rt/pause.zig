@@ -50,9 +50,22 @@ fn waitForEnter() void {
     }
 }
 
+fn emitPauseSeparatorLine() void {
+    if (col6forge_rt_stdout()) |out| {
+        const nl = "\n";
+        _ = fwrite(@ptrCast(nl.ptr), 1, nl.len, out);
+        _ = fflush(out);
+    }
+}
+
 pub export fn col6forge_pause(mode: c_int) callconv(.c) void {
-    switch (resolvePauseAction(mode, isInteractiveStdio())) {
-        .continue_ => return,
+    const interactive = isInteractiveStdio();
+    switch (resolvePauseAction(mode, interactive)) {
+        .continue_ => {
+            // Legacy PAUSE in batch mode still leaves a visible separator line.
+            if (mode == 0 and !interactive) emitPauseSeparatorLine();
+            return;
+        },
         .wait => waitForEnter(),
         .stop => exit(0),
     }

@@ -92,13 +92,16 @@ pub fn normalizeFixedFormWithMapMode(
             current_end = line_no;
         }
 
-        if (trimmed_code.len > 0) {
-            try buffer.appendSlice(trimmed_code);
+        // Keep the entire fixed-form statement field (cols 7-72), including
+        // trailing blanks. This is required for valid Hollerith/constants and
+        // long FORMAT statements that rely on exact character counts.
+        if (code.len > 0 and (trimmed_code.len > 0 or is_cont)) {
+            try buffer.appendSlice(code);
             if (!coarse_source_map) {
                 try segments.append(.{
                     .line = line_no,
                     .column = codeStartColumn(cont_kind),
-                    .length = trimmed_code.len,
+                    .length = code.len,
                 });
             }
         }
