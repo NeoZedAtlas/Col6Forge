@@ -93,6 +93,20 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // Standalone cc-like driver tool:
+    // dependency("Col6Forge").artifact("col6forge-cc")
+    const cc_exe = b.addExecutable(.{
+        .name = "col6forge-cc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "Col6Forge", .module = mod },
+            },
+        }),
+    });
+
     // Runtime artifact for ecosystem consumers:
     // dependency("Col6Forge").artifact("col6forge_runtime")
     const runtime_lib = b.addLibrary(.{
@@ -167,7 +181,14 @@ pub fn build(b: *std.Build) void {
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
+    b.installArtifact(cc_exe);
     b.installArtifact(runtime_lib);
+
+    // Stable paths for dependent packages:
+    // dependency("Col6Forge").namedLazyPath("col6forge_runtime_src")
+    b.addNamedLazyPath("col6forge_runtime_src", b.path("src/runtime/f77_runtime.zig"));
+    b.addNamedLazyPath("col6forge_runtime_dir", b.path("src/runtime"));
+    b.addNamedLazyPath("col6forge_src_dir", b.path("src"));
 
     const install_golden_runner = b.addInstallArtifact(golden_runner, .{});
     const install_verify_runner = b.addInstallArtifact(verify_runner, .{});
@@ -213,9 +234,8 @@ pub fn build(b: *std.Build) void {
     // Compiler-driver entrypoint:
     // zig build cc -- hello.f -o zig-out/hello.exe
     const cc_step = b.step("cc", "Compile/link Fortran through col6forge cc driver");
-    const run_cc = b.addRunArtifact(exe);
+    const run_cc = b.addRunArtifact(cc_exe);
     cc_step.dependOn(&run_cc.step);
-    run_cc.addArg("cc");
     if (b.args) |args| {
         run_cc.addArgs(args);
     }
@@ -250,6 +270,7 @@ pub fn build(b: *std.Build) void {
     // Compile-focused fast path: build core artifacts and tests without executing them.
     const check_step = b.step("check", "Compile CLI and tests without running");
     check_step.dependOn(&exe.step);
+    check_step.dependOn(&cc_exe.step);
     check_step.dependOn(&mod_tests.step);
     check_step.dependOn(&exe_tests.step);
 

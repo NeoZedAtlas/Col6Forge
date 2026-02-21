@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Col6Forge = @import("Col6Forge");
+const RUNTIME_CACHE_SCHEMA_VERSION: u32 = 1;
 
 pub fn runOrExit(allocator: std.mem.Allocator, args: []const []const u8) noreturn {
     run(allocator, args) catch |err| {
@@ -36,6 +37,8 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
         try runPassthroughCommand(allocator, passthrough_argv.items);
         return;
     }
+
+    const runtime_cfg = extractRuntimeBuildConfig(parsed.forward_args);
 
     const work_rel = try makeWorkDir(allocator);
     defer allocator.free(work_rel);
@@ -126,16 +129,19 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
     var runtime_obj_path: ?[]const u8 = null;
     defer if (runtime_obj_path) |path| allocator.free(path);
     if (parsed.fortran_inputs.len != 0) {
-        const runtime_obj_name = try std.fmt.allocPrint(allocator, "f77_runtime{s}", .{objectExt()});
-        defer allocator.free(runtime_obj_name);
-        runtime_obj_path = try std.fs.path.join(allocator, &.{ work_rel, runtime_obj_name });
-        try buildRuntimeObject(allocator, runtime_obj_path.?);
+        runtime_obj_path = try prepareRuntimeObjectCached(allocator, runtime_cfg);
         try link_argv.append(allocator, runtime_obj_path.?);
     }
 
     try link_argv.appendSlice(allocator, parsed.forward_args);
     try runCheckedCommand(allocator, link_argv.items, "zig cc link");
 }
+
+const RuntimeBuildConfig = struct {
+    target: ?[]const u8 = null,
+    cpu: ?[]const u8 = null,
+    ofmt: ?[]const u8 = null,
+};
 
 const ParsedArgs = struct {
     fortran_inputs: []const []const u8,
@@ -181,7 +187,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseArgsOu
     var show_help = false;
 
     var passthrough = false;
-    var i: usize = 2;
+    var i: usize = if (args.len >= 2 and std.mem.eql(u8, args[1], "cc")) 2 else 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
 
@@ -305,6 +311,52 @@ fn hasInlineFlagValue(flag: []const u8) bool {
     return false;
 }
 
+fn extractRuntimeBuildConfig(forward_args: []const []const u8) RuntimeBuildConfig {
+    var cfg: RuntimeBuildConfig = .{};
+    var i: usize = 0;
+    while (i < forward_args.len) : (i += 1) {
+        const arg = forward_args[i];
+        if (std.mem.eql(u8, arg, "-target") or std.mem.eql(u8, arg, "--target")) {
+            if (i + 1 < forward_args.len) {
+                i += 1;
+                cfg.target = forward_args[i];
+            }
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "-target=")) {
+            cfg.target = arg["-target=".len..];
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--target=")) {
+            cfg.target = arg["--target=".len..];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-mcpu")) {
+            if (i + 1 < forward_args.len) {
+                i += 1;
+                cfg.cpu = forward_args[i];
+            }
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "-mcpu=")) {
+            cfg.cpu = arg["-mcpu=".len..];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "-ofmt")) {
+            if (i + 1 < forward_args.len) {
+                i += 1;
+                cfg.ofmt = forward_args[i];
+            }
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "-ofmt=")) {
+            cfg.ofmt = arg["-ofmt=".len..];
+            continue;
+        }
+    }
+    return cfg;
+}
+
 const TranslatedFortran = struct {
     ll_paths: []const []const u8,
 
@@ -363,7 +415,9 @@ fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: col6forge cc <inputs...> [options] [-- <zig-cc-flags...>]
+        \\Usage:
+        \\  col6forge cc <inputs...> [options] [-- <zig-cc-flags...>]
+        \\  col6forge-cc <inputs...> [options] [-- <zig-cc-flags...>]
         \\Inputs:
         \\  - One or more Fortran sources (.f/.for/.f77/.f90/.f95/.f03/.f08)
         \\  - Additional non-Fortran inputs are forwarded to `zig cc`
@@ -450,6 +504,114 @@ fn makeWorkDir(allocator: std.mem.Allocator) ![]const u8 {
     return work_rel;
 }
 
+fn cacheDirRel() []const u8 {
+    return "zig-cache/cc-driver/cache";
+}
+
+fn fileExists(path: []const u8) bool {
+    std.fs.cwd().access(path, .{}) catch return false;
+    return true;
+}
+
+fn hashFileXx64(path: []const u8) !u64 {
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+    var hasher = std.hash.XxHash64.init(0);
+    var buf: [64 * 1024]u8 = undefined;
+    while (true) {
+        const n = try file.read(&buf);
+        if (n == 0) break;
+        hasher.update(buf[0..n]);
+    }
+    return hasher.final();
+}
+
+fn computeRuntimeSourceKey(allocator: std.mem.Allocator) ![]const u8 {
+    var dir = try std.fs.cwd().openDir("src/runtime", .{ .iterate = true });
+    defer dir.close();
+
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    var files: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (files.items) |p| allocator.free(p);
+        files.deinit(allocator);
+    }
+
+    while (try walker.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.ascii.endsWithIgnoreCase(entry.path, ".zig")) continue;
+        try files.append(allocator, try allocator.dupe(u8, entry.path));
+    }
+    std.sort.heap([]const u8, files.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lessThan);
+
+    var hasher = std.hash.XxHash64.init(0);
+    for (files.items) |rel_path| {
+        hasher.update(rel_path);
+        const abs_rel = try std.fs.path.join(allocator, &.{ "src/runtime", rel_path });
+        defer allocator.free(abs_rel);
+        var digest = try hashFileXx64(abs_rel);
+        hasher.update(std.mem.asBytes(&digest));
+    }
+    const final = hasher.final();
+    return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
+}
+
+fn computeRuntimeCacheKey(allocator: std.mem.Allocator, cfg: RuntimeBuildConfig) ![]const u8 {
+    const source_key = try computeRuntimeSourceKey(allocator);
+    defer allocator.free(source_key);
+
+    var hasher = std.hash.XxHash64.init(0);
+    hasher.update(source_key);
+    hasher.update(std.mem.asBytes(&RUNTIME_CACHE_SCHEMA_VERSION));
+    if (cfg.target) |target| hasher.update(target);
+    if (cfg.cpu) |cpu| hasher.update(cpu);
+    if (cfg.ofmt) |ofmt| hasher.update(ofmt);
+    const final = hasher.final();
+    return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
+}
+
+fn prepareRuntimeObjectCached(allocator: std.mem.Allocator, cfg: RuntimeBuildConfig) ![]const u8 {
+    const cache_dir = cacheDirRel();
+    try std.fs.cwd().makePath(cache_dir);
+
+    const cache_key = try computeRuntimeCacheKey(allocator, cfg);
+    defer allocator.free(cache_key);
+    const obj_name = try std.fmt.allocPrint(
+        allocator,
+        "f77_runtime_v{d}_{s}.o",
+        .{ RUNTIME_CACHE_SCHEMA_VERSION, cache_key },
+    );
+    defer allocator.free(obj_name);
+
+    const runtime_obj_path = try std.fs.path.join(allocator, &.{ cache_dir, obj_name });
+    errdefer allocator.free(runtime_obj_path);
+    if (fileExists(runtime_obj_path)) return runtime_obj_path;
+
+    const tmp_name = try std.fmt.allocPrint(
+        allocator,
+        "f77_runtime_tmp_{d}_{s}.o",
+        .{ std.time.nanoTimestamp(), cache_key },
+    );
+    defer allocator.free(tmp_name);
+    const tmp_path = try std.fs.path.join(allocator, &.{ cache_dir, tmp_name });
+    defer allocator.free(tmp_path);
+
+    try buildRuntimeObject(allocator, tmp_path, cfg);
+    std.fs.cwd().rename(tmp_path, runtime_obj_path) catch |err| switch (err) {
+        error.PathAlreadyExists => {
+            std.fs.cwd().deleteFile(tmp_path) catch {};
+        },
+        else => return err,
+    };
+    return runtime_obj_path;
+}
+
 fn emitPipelineToFile(
     allocator: std.mem.Allocator,
     input_path: []const u8,
@@ -475,17 +637,24 @@ fn emitPipelineToFile(
     try out_writer.interface.flush();
 }
 
-fn buildRuntimeObject(allocator: std.mem.Allocator, runtime_obj_path: []const u8) !void {
+fn buildRuntimeObject(allocator: std.mem.Allocator, runtime_obj_path: []const u8, cfg: RuntimeBuildConfig) !void {
     const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{runtime_obj_path});
     defer allocator.free(emit_arg);
-    const argv = [_][]const u8{
-        "zig",
-        "build-obj",
-        "-ODebug",
-        emit_arg,
-        "src/runtime/f77_runtime.zig",
-    };
-    try runCheckedCommand(allocator, &argv, "zig build-obj runtime");
+
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+    try argv.appendSlice(allocator, &.{ "zig", "build-obj", "-ODebug", emit_arg });
+    if (cfg.target) |target| {
+        try argv.appendSlice(allocator, &.{ "-target", target });
+    }
+    if (cfg.cpu) |cpu| {
+        try argv.appendSlice(allocator, &.{ "-mcpu", cpu });
+    }
+    if (cfg.ofmt) |ofmt| {
+        try argv.appendSlice(allocator, &.{ "-ofmt", ofmt });
+    }
+    try argv.append(allocator, "src/runtime/f77_runtime.zig");
+    try runCheckedCommand(allocator, argv.items, "zig build-obj runtime");
 }
 
 const ProcessResult = struct {
@@ -628,4 +797,26 @@ test "parse cc args supports multi fortran and passthrough" {
     try testing.expectEqualStrings("-O2", parsed.forward_args[0]);
     try testing.expectEqualStrings("-L", parsed.forward_args[1]);
     try testing.expectEqualStrings("libdir", parsed.forward_args[2]);
+}
+
+test "parse cc args supports direct driver invocation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const outcome = parseArgs(allocator, &[_][]const u8{
+        "col6forge-cc",
+        "a.f",
+        "-c",
+        "-O2",
+    });
+    try testing.expect(outcome == .success);
+
+    var parsed = outcome.success;
+    defer parsed.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), parsed.fortran_inputs.len);
+    try testing.expectEqualStrings("a.f", parsed.fortran_inputs[0]);
+    try testing.expect(parsed.compile_only);
+    try testing.expectEqual(@as(usize, 1), parsed.forward_args.len);
+    try testing.expectEqualStrings("-O2", parsed.forward_args[0]);
 }

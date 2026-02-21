@@ -21,6 +21,10 @@ fn runMain() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
+    if (args.len >= 1 and isCcToolInvocation(args[0])) {
+        cc_driver.runOrExit(allocator, args);
+    }
+
     if (args.len >= 2 and std.mem.eql(u8, args[1], "cc")) {
         cc_driver.runOrExit(allocator, args);
     }
@@ -108,6 +112,12 @@ fn runMain() !void {
         defer allocator.free(result.output);
         try std.fs.File.stdout().writeAll(result.output);
     }
+}
+
+fn isCcToolInvocation(argv0: []const u8) bool {
+    const base = std.fs.path.basename(argv0);
+    const name = if (std.ascii.endsWithIgnoreCase(base, ".exe")) base[0 .. base.len - 4] else base;
+    return std.ascii.eqlIgnoreCase(name, "col6forge-cc") or std.ascii.eqlIgnoreCase(name, "col6cc");
 }
 
 fn countWrite(counter: *u128, bytes: []const u8) error{}!usize {
@@ -276,6 +286,7 @@ fn printUsage(file: std.fs.File) !void {
         \\Usage:
         \\  col6forge <file.f> -emit-llvm -o <out.ll>
         \\  col6forge cc <file.f> [options] [extra_link_inputs...] [-- <zig-cc-flags...>]
+        \\  col6forge-cc <file.f> [options] [extra_link_inputs...] [-- <zig-cc-flags...>]
         \\Options (IR mode):
         \\  -emit-llvm    Emit LLVM IR (default)
         \\  -fbounds-check  Enable runtime array bounds checking
@@ -330,4 +341,12 @@ test "args parsing" {
 
     const parsed_timing = parseArgs(allocator, &[_][]const u8{ "col6forge", "-ftime-report", "input.f" }).success;
     try testing.expect(parsed_timing.time_report);
+}
+
+test "cc executable name detection" {
+    const testing = std.testing;
+    try testing.expect(isCcToolInvocation("col6forge-cc"));
+    try testing.expect(isCcToolInvocation("col6forge-cc.exe"));
+    try testing.expect(isCcToolInvocation("C:\\tools\\col6cc.exe"));
+    try testing.expect(!isCcToolInvocation("col6forge"));
 }
