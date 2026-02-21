@@ -93,6 +93,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // Runtime artifact for ecosystem consumers:
+    // dependency("Col6Forge").artifact("col6forge_runtime")
+    const runtime_lib = b.addLibrary(.{
+        .name = "col6forge_runtime",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/runtime/f77_runtime.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
     const golden_runner = b.addExecutable(.{
         .name = "golden_runner",
         .root_module = b.createModule(.{
@@ -155,6 +167,7 @@ pub fn build(b: *std.Build) void {
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
+    b.installArtifact(runtime_lib);
 
     const install_golden_runner = b.addInstallArtifact(golden_runner, .{});
     const install_verify_runner = b.addInstallArtifact(verify_runner, .{});
@@ -195,6 +208,16 @@ pub fn build(b: *std.Build) void {
     // command itself, like this: `zig build run -- arg1 arg2 etc`
     if (b.args) |args| {
         run_cmd.addArgs(args);
+    }
+
+    // Compiler-driver entrypoint:
+    // zig build cc -- hello.f -o zig-out/hello.exe
+    const cc_step = b.step("cc", "Compile/link Fortran through col6forge cc driver");
+    const run_cc = b.addRunArtifact(exe);
+    cc_step.dependOn(&run_cc.step);
+    run_cc.addArg("cc");
+    if (b.args) |args| {
+        run_cc.addArgs(args);
     }
 
     // Creates an executable that will run `test` blocks from the provided module.
