@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../input.zig");
 const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
+const llvm_types = @import("../types.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -39,6 +40,9 @@ const expandReadTargets = expansion.expandReadTargets;
 const charLenForExpr = io_utils.charLenForExpr;
 const internalUnitRecordCount = io_utils.internalUnitRecordCount;
 const emitIoStatusBranches = io_utils.emitIoStatusBranches;
+const findReversionStart = io_utils.findReversionStart;
+const evalConstIntSem = io_utils.evalConstIntSem;
+const intLiteralValue = io_utils.intLiteralValue;
 
 pub const emitOpen = file_control.emitOpen;
 pub const emitInquire = file_control.emitInquire;
@@ -86,6 +90,9 @@ pub fn emitWrite(
     switch (write.format) {
         .label => |label| {
             if (ctx.formats.get(label)) |fmt_info| {
+                if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, unit_i32, is_internal, fmt_info.items)) {
+                    return false;
+                }
                 try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded_values);
                 return false;
             }
@@ -104,6 +111,9 @@ pub fn emitWrite(
             return error.MissingFormatLabel;
         },
         .inline_items => |items| {
+            if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, unit_i32, is_internal, items)) {
+                return false;
+            }
             try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, &expanded_values);
             return false;
         },
@@ -114,6 +124,329 @@ pub fn emitWrite(
         .none => unreachable,
         .list_directed => unreachable,
     }
+}
+
+const DynamicDImpliedFormatPlan = struct {
+    pre: []u8,
+    post: []u8,
+    indent: usize,
+    per_line: usize,
+    width: usize,
+    precision: usize,
+};
+
+fn emitDynamicImpliedDoFormattedWrite(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    unit_i32: ValueRef,
+    is_internal: bool,
+    fmt_items: []const ast.FormatItem,
+) EmitError!bool {
+    if (is_internal) return false;
+    if (write.args.len != 2) return false;
+    if (write.args[1].* != .implied_do) return false;
+
+    const implied = write.args[1].implied_do;
+    if (implied.items.len != 1) return false;
+    if (implied.items[0].* != .call_or_subscript) return false;
+
+    const step_val: i64 = if (implied.step) |step_expr|
+        (try evalConstIntSem(ctx, step_expr)) orelse intLiteralValue(step_expr) orelse return false
+    else
+        1;
+    if (step_val != 1) return false;
+
+    const plan = parseDynamicDImpliedFormat(ctx, fmt_items) orelse return false;
+    defer {
+        ctx.allocator.free(plan.pre);
+        ctx.allocator.free(plan.post);
+    }
+
+    const call = implied.items[0].call_or_subscript;
+    const sym = ctx.findSymbol(call.name) orelse return false;
+    if (sym.type_kind != .double_precision) return false;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return false;
+
+    const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return false;
+    const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return false;
+
+    var start_val = try expr.emitExpr(ctx, builder, implied.start);
+    start_val = try expr.coerce(ctx, builder, start_val, .i32);
+    var end_val = try expr.emitExpr(ctx, builder, implied.end);
+    end_val = try expr.coerce(ctx, builder, end_val, .i32);
+
+    const diff_tmp = try ctx.nextTemp();
+    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
+    const diff = ValueRef{ .name = diff_tmp, .ty = .i32, .is_ptr = false };
+    const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+    const count_tmp = try ctx.nextTemp();
+    try builder.binary(count_tmp, "add", .i32, diff, one);
+    const count_raw = ValueRef{ .name = count_tmp, .ty = .i32, .is_ptr = false };
+    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+    const nonpos_tmp = try ctx.nextTemp();
+    try builder.compare(nonpos_tmp, "icmp", "sle", .i32, count_raw, zero);
+    const nonpos = ValueRef{ .name = nonpos_tmp, .ty = .i1, .is_ptr = false };
+    const final_count_tmp = try ctx.nextTemp();
+    try builder.select(final_count_tmp, .i32, nonpos, zero, count_raw);
+    const final_count = ValueRef{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
+
+    const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
+    defer ctx.allocator.free(base_args);
+    for (call.args, 0..) |arg, idx| {
+        base_args[idx] = arg;
+    }
+    base_args[loop_dim] = implied.start;
+    var base_expr = ast.Expr{
+        .call_or_subscript = .{
+            .name = call.name,
+            .args = base_args,
+        },
+    };
+    const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
+
+    const title_arg = write.args[0];
+    const title_ptr = try expr.emitExpr(ctx, builder, title_arg);
+    if (title_ptr.ty != .ptr) return false;
+    const title_len = charLenForExpr(ctx, title_arg) orelse return false;
+
+    const pre_ptr = try emitStaticStringPtr(ctx, builder, plan.pre);
+    const post_ptr = try emitStaticStringPtr(ctx, builder, plan.post);
+
+    const decl = try ctx.ensureDeclRaw(
+        "col6forge_write_fmt_d_implied",
+        .i32,
+        &[_]llvm_types.IRType{
+            .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .i32, .i32, .ptr, .i32, .i32, .i32, .i32,
+        },
+        false,
+    );
+    try builder.callTyped(
+        null,
+        .i32,
+        decl,
+        &.{
+            unit_i32,
+            pre_ptr,
+            try ctx.constI32(@intCast(plan.pre.len)),
+            .{ .name = title_ptr.name, .ty = .ptr, .is_ptr = true },
+            try ctx.constI32(@intCast(title_len)),
+            post_ptr,
+            try ctx.constI32(@intCast(plan.post.len)),
+            final_count,
+            stride,
+            base_ptr,
+            try ctx.constI32(@intCast(plan.indent)),
+            try ctx.constI32(@intCast(plan.per_line)),
+            try ctx.constI32(@intCast(plan.width)),
+            try ctx.constI32(@intCast(plan.precision)),
+        },
+    );
+    return true;
+}
+
+fn parseDynamicDImpliedFormat(ctx: *Context, fmt_items: []const ast.FormatItem) ?DynamicDImpliedFormatPlan {
+    const reversion_start = findReversionStart(fmt_items);
+    if (reversion_start == 0 or reversion_start > fmt_items.len) return null;
+
+    var pre_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer pre_buf.deinit();
+    var post_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer post_buf.deinit();
+
+    var seen_char = false;
+    for (fmt_items[0..reversion_start]) |item| {
+        switch (item) {
+            .literal => |lit| {
+                if (seen_char) {
+                    post_buf.appendSlice(lit) catch return null;
+                } else {
+                    pre_buf.appendSlice(lit) catch return null;
+                }
+            },
+            .spaces => |count| {
+                var i: usize = 0;
+                while (i < count) : (i += 1) {
+                    if (seen_char) {
+                        post_buf.append(' ') catch return null;
+                    } else {
+                        pre_buf.append(' ') catch return null;
+                    }
+                }
+            },
+            .char => |spec| {
+                if (seen_char or spec.width != 0) return null;
+                seen_char = true;
+            },
+            else => return null,
+        }
+    }
+    if (!seen_char) return null;
+
+    var indent: usize = 0;
+    var seen_descriptor = false;
+    var per_line: usize = 0;
+    var width: usize = 0;
+    var precision: usize = 0;
+
+    for (fmt_items[reversion_start..]) |item| {
+        switch (item) {
+            .reversion_anchor => {},
+            .spaces => |count| {
+                if (seen_descriptor) return null;
+                indent += count;
+            },
+            .literal => |lit| {
+                if (seen_descriptor) return null;
+                for (lit) |ch| {
+                    if (ch != ' ') return null;
+                }
+                indent += lit.len;
+            },
+            .real => |spec| {
+                if (spec.kind != .d) return null;
+                if (!seen_descriptor) {
+                    width = spec.width;
+                    precision = spec.precision;
+                    seen_descriptor = true;
+                } else if (spec.width != width or spec.precision != precision) {
+                    return null;
+                }
+                per_line += 1;
+            },
+            else => return null,
+        }
+    }
+
+    if (!seen_descriptor or per_line == 0) return null;
+    if (width == 0) return null;
+
+    const pre = pre_buf.toOwnedSlice() catch return null;
+    const post = post_buf.toOwnedSlice() catch {
+        ctx.allocator.free(pre);
+        return null;
+    };
+
+    return .{
+        .pre = pre,
+        .post = post,
+        .indent = indent,
+        .per_line = per_line,
+        .width = width,
+        .precision = precision,
+    };
+}
+
+fn emitStaticStringPtr(ctx: *Context, builder: anytype, text: []const u8) EmitError!ValueRef {
+    if (text.len == 0) {
+        return .{ .name = "null", .ty = .ptr, .is_ptr = false };
+    }
+    const global = try ctx.string_pool.intern(text);
+    const ptr_tmp = try ctx.nextTemp();
+    try builder.gepConstString(ptr_tmp, global, text.len + 1);
+    return .{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true };
+}
+
+fn impliedLoopDim(args: []*ast.Expr, loop_var: []const u8) ?usize {
+    var found: ?usize = null;
+    for (args, 0..) |arg, idx| {
+        const is_loop_var = arg.* == .identifier and std.ascii.eqlIgnoreCase(arg.identifier, loop_var);
+        if (is_loop_var) {
+            if (found != null) return null;
+            found = idx;
+            continue;
+        }
+        if (exprContainsIdentifier(arg, loop_var)) return null;
+    }
+    return found;
+}
+
+fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
+    return switch (node.*) {
+        .identifier => |ident| std.ascii.eqlIgnoreCase(ident, name),
+        .unary => |un| exprContainsIdentifier(un.expr, name),
+        .binary => |bin| exprContainsIdentifier(bin.left, name) or exprContainsIdentifier(bin.right, name),
+        .complex_literal => |lit| exprContainsIdentifier(lit.real, name) or exprContainsIdentifier(lit.imag, name),
+        .call_or_subscript => |call| blk: {
+            for (call.args) |arg| {
+                if (exprContainsIdentifier(arg, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .substring => |sub| blk: {
+            for (sub.args) |arg| {
+                if (exprContainsIdentifier(arg, name)) break :blk true;
+            }
+            if (sub.start) |start_expr| {
+                if (exprContainsIdentifier(start_expr, name)) break :blk true;
+            }
+            if (sub.end) |end_expr| {
+                if (exprContainsIdentifier(end_expr, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .dim_range => |range| blk: {
+            if (range.lower) |lower| {
+                if (exprContainsIdentifier(lower, name)) break :blk true;
+            }
+            break :blk exprContainsIdentifier(range.upper, name);
+        },
+        .implied_do => |implied| blk: {
+            for (implied.items) |item| {
+                if (exprContainsIdentifier(item, name)) break :blk true;
+            }
+            if (exprContainsIdentifier(implied.start, name)) break :blk true;
+            if (exprContainsIdentifier(implied.end, name)) break :blk true;
+            if (implied.step) |step_expr| {
+                if (exprContainsIdentifier(step_expr, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
+fn impliedStrideForDim(ctx: *Context, builder: anytype, dims: []*ast.Expr, loop_dim: usize) EmitError!ValueRef {
+    var stride = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+    var idx: usize = 0;
+    while (idx < loop_dim) : (idx += 1) {
+        const extent = try impliedDimExtent(ctx, builder, dims[idx]);
+        const mul_tmp = try ctx.nextTemp();
+        try builder.binary(mul_tmp, "mul", .i32, stride, extent);
+        stride = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
+    }
+    return stride;
+}
+
+fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) EmitError!ValueRef {
+    return switch (dim.*) {
+        .dim_range => |range| blk: {
+            if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return error.UnsupportedImpliedDo;
+            var upper = try expr.emitExpr(ctx, builder, range.upper);
+            upper = try expr.coerce(ctx, builder, upper, .i32);
+            const lower = if (range.lower) |lower_expr|
+                try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr), .i32)
+            else
+                ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+            const diff_tmp = try ctx.nextTemp();
+            try builder.binary(diff_tmp, "sub", .i32, upper, lower);
+            const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+            const extent_tmp = try ctx.nextTemp();
+            try builder.binary(extent_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, one);
+            break :blk ValueRef{ .name = extent_tmp, .ty = .i32, .is_ptr = false };
+        },
+        .literal => |lit| {
+            if (lit.kind == .assumed_size) return error.UnsupportedImpliedDo;
+            var value = try expr.emitExpr(ctx, builder, dim);
+            value = try expr.coerce(ctx, builder, value, .i32);
+            return value;
+        },
+        else => {
+            var value = try expr.emitExpr(ctx, builder, dim);
+            value = try expr.coerce(ctx, builder, value, .i32);
+            return value;
+        },
+    };
 }
 
 pub fn emitRead(
