@@ -755,6 +755,37 @@ test "semantic accepts PARAMETER string concatenation constant fold" {
     try testing.expect(found);
 }
 
+test "semantic folds LEN over concatenated PARAMETER string" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER N\n" ++
+        "      PARAMETER (N=LEN('A'//'B'))\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+    try testing.expectEqual(@as(usize, 1), sem.units.len);
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "N")) continue;
+        found = true;
+        const cv = sym.const_value orelse return error.TestExpectedEqual;
+        switch (cv) {
+            .integer => |v| try testing.expectEqual(@as(i64, 2), v),
+            else => return error.TestExpectedEqual,
+        }
+    }
+    try testing.expect(found);
+}
+
 test "semantic CF3112 diagnostic includes PARAMETER name and types" {
     const testing = std.testing;
     const allocator = testing.allocator;

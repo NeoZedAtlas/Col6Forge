@@ -8,6 +8,7 @@ const ComplexConst = symbols.ComplexConst;
 pub const ConstResolver = struct {
     ctx: *anyopaque,
     resolveFn: *const fn (ctx: *anyopaque, name: []const u8) ?ConstValue,
+    allocator: ?std.mem.Allocator = null,
 
     pub fn resolve(self: ConstResolver, name: []const u8) ?ConstValue {
         return self.resolveFn(self.ctx, name);
@@ -40,7 +41,7 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
         .binary => |bin| {
             const left = (try evalConst(bin.left, resolver)) orelse return null;
             const right = (try evalConst(bin.right, resolver)) orelse return null;
-            return try evalBinary(bin.op, left, right);
+            return try evalBinary(bin.op, left, right, resolver);
         },
         .complex_literal => |lit| {
             const real_val = (try evalConst(lit.real, resolver)) orelse return null;
@@ -58,6 +59,11 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
 }
 
 fn evalConstCall(call: ast.CallOrSubscript, resolver: ?ConstResolver) anyerror!?ConstValue {
+    if (std.ascii.eqlIgnoreCase(call.name, "LEN")) {
+        if (call.args.len != 1) return null;
+        const len = (try evalConstCharLen(call.args[0], resolver)) orelse return null;
+        return .{ .integer = std.math.cast(i64, len) orelse return error.NumberTooLong };
+    }
     if (std.ascii.eqlIgnoreCase(call.name, "SQRT")) {
         if (call.args.len != 1) return null;
         const arg = (try evalConst(call.args[0], resolver)) orelse return null;
@@ -203,7 +209,13 @@ fn negateConst(value: ConstValue) ConstValue {
     };
 }
 
-fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue) !?ConstValue {
+fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?ConstResolver) !?ConstValue {
+    if (op == .concat) {
+        if (left != .string or right != .string) return null;
+        const allocator = if (resolver) |res| res.allocator orelse return null else return null;
+        const joined = (try concatStringLiterals(allocator, left.string, right.string)) orelse return null;
+        return .{ .string = .{ .kind = .string, .text = joined } };
+    }
     if (left == .string or right == .string) return null;
 
     if (left == .complex or right == .complex) {
@@ -290,4 +302,129 @@ fn toComplex(value: ConstValue) ?ComplexConst {
         .complex => |v| v,
         .string => null,
     };
+}
+
+fn evalConstCharLen(expr: *const ast.Expr, resolver: ?ConstResolver) !?usize {
+    return switch (expr.*) {
+        .literal => |lit| literalByteLen(lit),
+        .binary => |bin| blk: {
+            if (bin.op != .concat) break :blk null;
+            const left_len = (try evalConstCharLen(bin.left, resolver)) orelse return null;
+            const right_len = (try evalConstCharLen(bin.right, resolver)) orelse return null;
+            break :blk std.math.add(usize, left_len, right_len) catch return error.NumberTooLong;
+        },
+        .identifier => |name| blk: {
+            if (resolver) |res| {
+                const value = res.resolve(name) orelse break :blk null;
+                break :blk constStringByteLen(value);
+            }
+            break :blk null;
+        },
+        else => blk: {
+            const value = (try evalConst(expr, resolver)) orelse break :blk null;
+            break :blk constStringByteLen(value);
+        },
+    };
+}
+
+fn constStringByteLen(value: ConstValue) ?usize {
+    return switch (value) {
+        .string => |lit| literalByteLen(lit),
+        else => null,
+    };
+}
+
+fn literalByteLen(lit: ast.Literal) ?usize {
+    return switch (lit.kind) {
+        .string => decodedQuotedStringLen(lit.text),
+        .hollerith => hollerithByteLen(lit.text),
+        else => null,
+    };
+}
+
+fn decodedQuotedStringLen(text: []const u8) usize {
+    if (text.len < 2) return text.len;
+    const quote = text[0];
+    if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) return text.len;
+    var len: usize = 0;
+    var i: usize = 1;
+    const end = text.len - 1;
+    while (i < end) {
+        if (text[i] == quote and i + 1 < end and text[i + 1] == quote) {
+            len += 1;
+            i += 2;
+            continue;
+        }
+        len += 1;
+        i += 1;
+    }
+    return len;
+}
+
+fn hollerithByteLen(text: []const u8) ?usize {
+    const idx = std.mem.indexOfScalar(u8, text, 'H') orelse std.mem.indexOfScalar(u8, text, 'h') orelse return null;
+    if (idx + 1 > text.len) return null;
+    return text.len - (idx + 1);
+}
+
+fn concatStringLiterals(allocator: std.mem.Allocator, left: ast.Literal, right: ast.Literal) !?[]const u8 {
+    const left_bytes = (try decodeLiteralBytes(allocator, left)) orelse return null;
+    defer allocator.free(left_bytes);
+    const right_bytes = (try decodeLiteralBytes(allocator, right)) orelse return null;
+    defer allocator.free(right_bytes);
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    try out.append(allocator, '\'');
+    try appendEscaped(allocator, &out, left_bytes);
+    try appendEscaped(allocator, &out, right_bytes);
+    try out.append(allocator, '\'');
+    return @as(?[]const u8, try out.toOwnedSlice(allocator));
+}
+
+fn decodeLiteralBytes(allocator: std.mem.Allocator, lit: ast.Literal) !?[]u8 {
+    return switch (lit.kind) {
+        .string => try decodeQuotedString(allocator, lit.text),
+        .hollerith => decodeHollerith(allocator, lit.text),
+        else => null,
+    };
+}
+
+fn decodeQuotedString(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    if (text.len < 2) return allocator.dupe(u8, text);
+    const quote = text[0];
+    if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) {
+        return allocator.dupe(u8, text);
+    }
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+    var i: usize = 1;
+    const end = text.len - 1;
+    while (i < end) {
+        if (text[i] == quote and i + 1 < end and text[i + 1] == quote) {
+            try out.append(allocator, quote);
+            i += 2;
+            continue;
+        }
+        try out.append(allocator, text[i]);
+        i += 1;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn decodeHollerith(allocator: std.mem.Allocator, text: []const u8) ?[]u8 {
+    const idx = std.mem.indexOfScalar(u8, text, 'H') orelse std.mem.indexOfScalar(u8, text, 'h') orelse return null;
+    if (idx + 1 > text.len) return null;
+    return allocator.dupe(u8, text[idx + 1 ..]) catch null;
+}
+
+fn appendEscaped(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) !void {
+    for (bytes) |ch| {
+        if (ch == '\'') {
+            try out.append(allocator, '\'');
+            try out.append(allocator, '\'');
+            continue;
+        }
+        try out.append(allocator, ch);
+    }
 }
