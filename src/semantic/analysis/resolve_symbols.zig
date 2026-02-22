@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
+const intrinsics = @import("intrinsics.zig");
 
 const SymbolKind = symbols.SymbolKind;
 const Symbol = symbols.Symbol;
@@ -186,96 +187,7 @@ pub fn implicitCharLen(self: *context.Context, name: []const u8) ?usize {
 }
 
 pub fn isIntrinsicName(name: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(name, "SIN") or
-        std.ascii.eqlIgnoreCase(name, "COS") or
-        std.ascii.eqlIgnoreCase(name, "TAN") or
-        std.ascii.eqlIgnoreCase(name, "LEN") or
-        std.ascii.eqlIgnoreCase(name, "ASIN") or
-        std.ascii.eqlIgnoreCase(name, "ACOS") or
-        std.ascii.eqlIgnoreCase(name, "SINH") or
-        std.ascii.eqlIgnoreCase(name, "COSH") or
-        std.ascii.eqlIgnoreCase(name, "SQRT") or
-        std.ascii.eqlIgnoreCase(name, "ABS") or
-        std.ascii.eqlIgnoreCase(name, "IABS") or
-        std.ascii.eqlIgnoreCase(name, "AINT") or
-        std.ascii.eqlIgnoreCase(name, "ANINT") or
-        std.ascii.eqlIgnoreCase(name, "NINT") or
-        std.ascii.eqlIgnoreCase(name, "INT") or
-        std.ascii.eqlIgnoreCase(name, "IFIX") or
-        std.ascii.eqlIgnoreCase(name, "IDINT") or
-        std.ascii.eqlIgnoreCase(name, "DINT") or
-        std.ascii.eqlIgnoreCase(name, "DNINT") or
-        std.ascii.eqlIgnoreCase(name, "IDNINT") or
-        std.ascii.eqlIgnoreCase(name, "AMOD") or
-        std.ascii.eqlIgnoreCase(name, "MOD") or
-        std.ascii.eqlIgnoreCase(name, "DMOD") or
-        std.ascii.eqlIgnoreCase(name, "MIN") or
-        std.ascii.eqlIgnoreCase(name, "MAX") or
-        std.ascii.eqlIgnoreCase(name, "DMIN1") or
-        std.ascii.eqlIgnoreCase(name, "DMAX1") or
-        std.ascii.eqlIgnoreCase(name, "AMIN0") or
-        std.ascii.eqlIgnoreCase(name, "AMIN1") or
-        std.ascii.eqlIgnoreCase(name, "MIN0") or
-        std.ascii.eqlIgnoreCase(name, "MIN1") or
-        std.ascii.eqlIgnoreCase(name, "AMAX0") or
-        std.ascii.eqlIgnoreCase(name, "AMAX1") or
-        std.ascii.eqlIgnoreCase(name, "MAX0") or
-        std.ascii.eqlIgnoreCase(name, "MAX1") or
-        std.ascii.eqlIgnoreCase(name, "SIGN") or
-        std.ascii.eqlIgnoreCase(name, "ISIGN") or
-        std.ascii.eqlIgnoreCase(name, "DSIGN") or
-        std.ascii.eqlIgnoreCase(name, "DIM") or
-        std.ascii.eqlIgnoreCase(name, "IDIM") or
-        std.ascii.eqlIgnoreCase(name, "DDIM") or
-        std.ascii.eqlIgnoreCase(name, "DPROD") or
-        std.ascii.eqlIgnoreCase(name, "CONJG") or
-        std.ascii.eqlIgnoreCase(name, "DCONJG") or
-        std.ascii.eqlIgnoreCase(name, "CMPLX") or
-        std.ascii.eqlIgnoreCase(name, "DCMPLX") or
-        std.ascii.eqlIgnoreCase(name, "FLOAT") or
-        std.ascii.eqlIgnoreCase(name, "REAL") or
-        std.ascii.eqlIgnoreCase(name, "DBLE") or
-        std.ascii.eqlIgnoreCase(name, "SNGL") or
-        std.ascii.eqlIgnoreCase(name, "AIMAG") or
-        std.ascii.eqlIgnoreCase(name, "DIMAG") or
-        std.ascii.eqlIgnoreCase(name, "CABS") or
-        std.ascii.eqlIgnoreCase(name, "ICHAR") or
-        std.ascii.eqlIgnoreCase(name, "IACHAR") or
-        std.ascii.eqlIgnoreCase(name, "ACHAR") or
-        std.ascii.eqlIgnoreCase(name, "RAND") or
-        std.ascii.eqlIgnoreCase(name, "DPMPAR") or
-        std.ascii.eqlIgnoreCase(name, "EPSILON") or
-        std.ascii.eqlIgnoreCase(name, "HUGE") or
-        std.ascii.eqlIgnoreCase(name, "EXP") or
-        std.ascii.eqlIgnoreCase(name, "ALOG") or
-        std.ascii.eqlIgnoreCase(name, "ALOG10") or
-        std.ascii.eqlIgnoreCase(name, "LOG") or
-        std.ascii.eqlIgnoreCase(name, "LOG10") or
-        std.ascii.eqlIgnoreCase(name, "TANH") or
-        std.ascii.eqlIgnoreCase(name, "DABS") or
-        std.ascii.eqlIgnoreCase(name, "DSQRT") or
-        std.ascii.eqlIgnoreCase(name, "DEXP") or
-        std.ascii.eqlIgnoreCase(name, "DLOG") or
-        std.ascii.eqlIgnoreCase(name, "DLOG10") or
-        std.ascii.eqlIgnoreCase(name, "DSIN") or
-        std.ascii.eqlIgnoreCase(name, "DCOS") or
-        std.ascii.eqlIgnoreCase(name, "DTAN") or
-        std.ascii.eqlIgnoreCase(name, "DASIN") or
-        std.ascii.eqlIgnoreCase(name, "DACOS") or
-        std.ascii.eqlIgnoreCase(name, "DATAN") or
-        std.ascii.eqlIgnoreCase(name, "DATAN2") or
-        std.ascii.eqlIgnoreCase(name, "DSINH") or
-        std.ascii.eqlIgnoreCase(name, "DCOSH") or
-        std.ascii.eqlIgnoreCase(name, "DTANH") or
-        std.ascii.eqlIgnoreCase(name, "CSIN") or
-        std.ascii.eqlIgnoreCase(name, "CCOS") or
-        std.ascii.eqlIgnoreCase(name, "CEXP") or
-        std.ascii.eqlIgnoreCase(name, "CLOG") or
-        std.ascii.eqlIgnoreCase(name, "CSQRT") or
-        std.ascii.eqlIgnoreCase(name, "ATAN") or
-        std.ascii.eqlIgnoreCase(name, "ATAN2") or
-        std.ascii.eqlIgnoreCase(name, "ANY") or
-        std.ascii.eqlIgnoreCase(name, "ALLOCATED");
+    return intrinsics.isIntrinsicName(name);
 }
 
 fn findKnownHostParameter(self: *context.Context, name: []const u8) ?Symbol {
@@ -289,11 +201,15 @@ fn findKnownHostParameter(self: *context.Context, name: []const u8) ?Symbol {
 }
 
 fn findKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+    var key_buf: [128]u8 = undefined;
+    if (name.len <= key_buf.len) {
+        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+        if (self.known_procedure_sigs.get(key_buf[0..name.len])) |sig| return sig;
+    }
+    // Compatibility fallback for oversized names or non-normalized preexisting keys.
     var it = self.known_procedure_sigs.iterator();
     while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
-            return entry.value_ptr.*;
-        }
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
     }
     return null;
 }

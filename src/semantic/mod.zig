@@ -55,7 +55,8 @@ pub fn analyzeProgramWithKnown(
         try known_function_types.put(known.name, known.type_kind);
     }
     for (known_proc_sigs) |known| {
-        try known_procedure_sigs.put(known.name, .{
+        const key = try lowerDup(arena, known.name);
+        try known_procedure_sigs.put(key, .{
             .kind = known.kind,
             .arg_count = known.arg_count,
         });
@@ -66,7 +67,8 @@ pub fn analyzeProgramWithKnown(
             try known_function_types.put(unit.name, inferFunctionType(unit));
         }
         if (unit.kind == .function or unit.kind == .subroutine) {
-            try known_procedure_sigs.put(unit.name, .{ .kind = unit.kind, .arg_count = unit.args.len });
+            const key = try lowerDup(arena, unit.name);
+            try known_procedure_sigs.put(key, .{ .kind = unit.kind, .arg_count = unit.args.len });
         }
     }
 
