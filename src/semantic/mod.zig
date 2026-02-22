@@ -604,6 +604,27 @@ test "semantic reports CF3109 for invalid array subscript rank" {
     try testing.expect(std.mem.eql(u8, diag.code, "CF3109"));
 }
 
+test "semantic reports CF3109 when scalar is used as array" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER X\n" ++
+        "      X(5)=10\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidSubscript, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3109"));
+}
+
 test "semantic reports CF3110 for procedure argument count mismatch" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -9,6 +9,7 @@ const ResolvedRefKind = symbols.ResolvedRefKind;
 pub const ResolveError = anyerror;
 
 pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
+    invalidateExprTypeCache(self, expr);
     switch (expr.*) {
         .identifier => |name| {
             _ = try symbols_mod.ensureSymbol(self, name);
@@ -51,11 +52,8 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                 } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
                     kind = .call;
                 } else if (sym.type_explicit and call.args.len > 0) {
-                    kind = .subscript;
-                    // Keep explicitly declared variables addressable even when
-                    // modern declaration attributes dropped rank information.
-                    sym.dims = try syntheticDims(self, call.args.len);
-                    self.symbols.items[idx] = sym;
+                    // Explicitly declared scalars cannot be used as arrays.
+                    return error.InvalidSubscript;
                 } else {
                     // Default to function call when nothing declares it as an array.
                     kind = .call;
@@ -125,6 +123,18 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
 }
 
 pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
+    return exprTypeCached(self, expr);
+}
+
+fn exprTypeCached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
+    const key: usize = @intFromPtr(expr);
+    if (self.expr_type_cache.get(key)) |cached| return cached;
+    const computed = try exprTypeUncached(self, expr);
+    try self.expr_type_cache.put(key, computed);
+    return computed;
+}
+
+fn exprTypeUncached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
     switch (expr.*) {
         .identifier => |name| {
             const idx = try symbols_mod.ensureSymbol(self, name);
@@ -149,8 +159,8 @@ pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKi
             };
         },
         .complex_literal => |lit| {
-            const real_kind = try exprType(self, lit.real);
-            const imag_kind = try exprType(self, lit.imag);
+            const real_kind = try exprTypeCached(self, lit.real);
+            const imag_kind = try exprTypeCached(self, lit.imag);
             if (real_kind == .double_precision or imag_kind == .double_precision or real_kind == .complex_double or imag_kind == .complex_double) {
                 return .complex_double;
             }
@@ -159,7 +169,7 @@ pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKi
         .unary => |un| {
             return switch (un.op) {
                 .not => .logical,
-                .plus, .minus => exprType(self, un.expr),
+                .plus, .minus => exprTypeCached(self, un.expr),
             };
         },
         .binary => |bin| {
@@ -168,8 +178,8 @@ pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKi
                 .concat => return .character,
                 else => {},
             }
-            const left = try exprType(self, bin.left);
-            const right = try exprType(self, bin.right);
+            const left = try exprTypeCached(self, bin.left);
+            const right = try exprTypeCached(self, bin.right);
             return promoteNumericType(left, right);
         },
         .implied_do => return error.UnsupportedImpliedDo,
@@ -259,127 +269,106 @@ fn validateBinaryOperands(op: ast.BinaryOp, left_kind: ast.TypeKind, right_kind:
     }
 }
 
+const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
+    .{ "CMPLX", .complex },
+    .{ "CONJG", .complex },
+    .{ "CSIN", .complex },
+    .{ "CCOS", .complex },
+    .{ "CEXP", .complex },
+    .{ "CLOG", .complex },
+    .{ "CSQRT", .complex },
+    .{ "DCMPLX", .complex_double },
+    .{ "DCONJG", .complex_double },
+    .{ "ANY", .logical },
+    .{ "ALLOCATED", .logical },
+    .{ "INT", .integer },
+    .{ "IFIX", .integer },
+    .{ "IDINT", .integer },
+    .{ "NINT", .integer },
+    .{ "IDNINT", .integer },
+    .{ "IABS", .integer },
+    .{ "MOD", .integer },
+    .{ "ISIGN", .integer },
+    .{ "IDIM", .integer },
+    .{ "MIN0", .integer },
+    .{ "MIN1", .integer },
+    .{ "MAX0", .integer },
+    .{ "MAX1", .integer },
+    .{ "ICHAR", .integer },
+    .{ "IACHAR", .integer },
+    .{ "LEN", .integer },
+    .{ "ACHAR", .character },
+    .{ "DBLE", .double_precision },
+    .{ "DINT", .double_precision },
+    .{ "DNINT", .double_precision },
+    .{ "DMOD", .double_precision },
+    .{ "DSIGN", .double_precision },
+    .{ "DDIM", .double_precision },
+    .{ "DMIN1", .double_precision },
+    .{ "DMAX1", .double_precision },
+    .{ "DABS", .double_precision },
+    .{ "DSQRT", .double_precision },
+    .{ "DEXP", .double_precision },
+    .{ "DLOG", .double_precision },
+    .{ "DLOG10", .double_precision },
+    .{ "DSIN", .double_precision },
+    .{ "DCOS", .double_precision },
+    .{ "DTAN", .double_precision },
+    .{ "DASIN", .double_precision },
+    .{ "DACOS", .double_precision },
+    .{ "DATAN", .double_precision },
+    .{ "DATAN2", .double_precision },
+    .{ "DSINH", .double_precision },
+    .{ "DCOSH", .double_precision },
+    .{ "DTANH", .double_precision },
+    .{ "DIMAG", .double_precision },
+    .{ "DPROD", .double_precision },
+    .{ "FLOAT", .real },
+    .{ "REAL", .real },
+    .{ "DPMPAR", .real },
+    .{ "SNGL", .real },
+    .{ "RAND", .real },
+    .{ "AINT", .real },
+    .{ "ANINT", .real },
+    .{ "AMOD", .real },
+    .{ "SIGN", .real },
+    .{ "DIM", .real },
+    .{ "AMIN0", .real },
+    .{ "AMIN1", .real },
+    .{ "AMAX0", .real },
+    .{ "AMAX1", .real },
+    .{ "AIMAG", .real },
+    .{ "CABS", .real },
+    .{ "EPSILON", .real },
+    .{ "HUGE", .real },
+    .{ "EXP", .real },
+    .{ "ALOG", .real },
+    .{ "ALOG10", .real },
+    .{ "LOG", .real },
+    .{ "LOG10", .real },
+    .{ "SIN", .real },
+    .{ "COS", .real },
+    .{ "TAN", .real },
+    .{ "ASIN", .real },
+    .{ "ACOS", .real },
+    .{ "ATAN", .real },
+    .{ "ATAN2", .real },
+    .{ "SINH", .real },
+    .{ "COSH", .real },
+    .{ "TANH", .real },
+    .{ "ABS", .real },
+    .{ "SQRT", .real },
+});
+
 fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
-    if (std.ascii.eqlIgnoreCase(name, "CMPLX") or
-        std.ascii.eqlIgnoreCase(name, "CONJG") or
-        std.ascii.eqlIgnoreCase(name, "CSIN") or
-        std.ascii.eqlIgnoreCase(name, "CCOS") or
-        std.ascii.eqlIgnoreCase(name, "CEXP") or
-        std.ascii.eqlIgnoreCase(name, "CLOG") or
-        std.ascii.eqlIgnoreCase(name, "CSQRT"))
-    {
-        return .complex;
+    var upper_buf: [64]u8 = undefined;
+    if (name.len <= upper_buf.len) {
+        for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
+        if (IntrinsicReturnTypeMap.get(upper_buf[0..name.len])) |ty| return ty;
     }
-    if (std.ascii.eqlIgnoreCase(name, "DCMPLX") or std.ascii.eqlIgnoreCase(name, "DCONJG")) return .complex_double;
-
-    if (std.ascii.eqlIgnoreCase(name, "ANY") or
-        std.ascii.eqlIgnoreCase(name, "ALLOCATED"))
-    {
-        return .logical;
-    }
-
-    if (std.ascii.eqlIgnoreCase(name, "INT") or
-        std.ascii.eqlIgnoreCase(name, "IFIX") or
-        std.ascii.eqlIgnoreCase(name, "IDINT") or
-        std.ascii.eqlIgnoreCase(name, "NINT") or
-        std.ascii.eqlIgnoreCase(name, "IDNINT") or
-        std.ascii.eqlIgnoreCase(name, "IABS") or
-        std.ascii.eqlIgnoreCase(name, "MOD") or
-        std.ascii.eqlIgnoreCase(name, "ISIGN") or
-        std.ascii.eqlIgnoreCase(name, "IDIM") or
-        std.ascii.eqlIgnoreCase(name, "MIN0") or
-        std.ascii.eqlIgnoreCase(name, "MIN1") or
-        std.ascii.eqlIgnoreCase(name, "MAX0") or
-        std.ascii.eqlIgnoreCase(name, "MAX1") or
-        std.ascii.eqlIgnoreCase(name, "ICHAR") or
-        std.ascii.eqlIgnoreCase(name, "IACHAR") or
-        std.ascii.eqlIgnoreCase(name, "LEN"))
-    {
-        return .integer;
-    }
-
-    if (std.ascii.eqlIgnoreCase(name, "ACHAR")) {
-        return .character;
-    }
-
-    if (std.ascii.eqlIgnoreCase(name, "DBLE") or
-        std.ascii.eqlIgnoreCase(name, "DINT") or
-        std.ascii.eqlIgnoreCase(name, "DNINT") or
-        std.ascii.eqlIgnoreCase(name, "DMOD") or
-        std.ascii.eqlIgnoreCase(name, "DSIGN") or
-        std.ascii.eqlIgnoreCase(name, "DDIM") or
-        std.ascii.eqlIgnoreCase(name, "DMIN1") or
-        std.ascii.eqlIgnoreCase(name, "DMAX1") or
-        std.ascii.eqlIgnoreCase(name, "DABS") or
-        std.ascii.eqlIgnoreCase(name, "DSQRT") or
-        std.ascii.eqlIgnoreCase(name, "DEXP") or
-        std.ascii.eqlIgnoreCase(name, "DLOG") or
-        std.ascii.eqlIgnoreCase(name, "DLOG10") or
-        std.ascii.eqlIgnoreCase(name, "DSIN") or
-        std.ascii.eqlIgnoreCase(name, "DCOS") or
-        std.ascii.eqlIgnoreCase(name, "DTAN") or
-        std.ascii.eqlIgnoreCase(name, "DASIN") or
-        std.ascii.eqlIgnoreCase(name, "DACOS") or
-        std.ascii.eqlIgnoreCase(name, "DATAN") or
-        std.ascii.eqlIgnoreCase(name, "DATAN2") or
-        std.ascii.eqlIgnoreCase(name, "DSINH") or
-        std.ascii.eqlIgnoreCase(name, "DCOSH") or
-        std.ascii.eqlIgnoreCase(name, "DTANH") or
-        std.ascii.eqlIgnoreCase(name, "DIMAG") or
-        std.ascii.eqlIgnoreCase(name, "DPROD"))
-    {
-        return .double_precision;
-    }
-
-    if (std.ascii.eqlIgnoreCase(name, "FLOAT") or
-        std.ascii.eqlIgnoreCase(name, "REAL") or
-        std.ascii.eqlIgnoreCase(name, "DPMPAR") or
-        std.ascii.eqlIgnoreCase(name, "SNGL") or
-        std.ascii.eqlIgnoreCase(name, "RAND") or
-        std.ascii.eqlIgnoreCase(name, "AINT") or
-        std.ascii.eqlIgnoreCase(name, "ANINT") or
-        std.ascii.eqlIgnoreCase(name, "AMOD") or
-        std.ascii.eqlIgnoreCase(name, "SIGN") or
-        std.ascii.eqlIgnoreCase(name, "DIM") or
-        std.ascii.eqlIgnoreCase(name, "AMIN0") or
-        std.ascii.eqlIgnoreCase(name, "AMIN1") or
-        std.ascii.eqlIgnoreCase(name, "AMAX0") or
-        std.ascii.eqlIgnoreCase(name, "AMAX1") or
-        std.ascii.eqlIgnoreCase(name, "AIMAG") or
-        std.ascii.eqlIgnoreCase(name, "CABS") or
-        std.ascii.eqlIgnoreCase(name, "EPSILON") or
-        std.ascii.eqlIgnoreCase(name, "HUGE") or
-        std.ascii.eqlIgnoreCase(name, "EXP") or
-        std.ascii.eqlIgnoreCase(name, "ALOG") or
-        std.ascii.eqlIgnoreCase(name, "ALOG10") or
-        std.ascii.eqlIgnoreCase(name, "LOG") or
-        std.ascii.eqlIgnoreCase(name, "LOG10") or
-        std.ascii.eqlIgnoreCase(name, "SIN") or
-        std.ascii.eqlIgnoreCase(name, "COS") or
-        std.ascii.eqlIgnoreCase(name, "TAN") or
-        std.ascii.eqlIgnoreCase(name, "ASIN") or
-        std.ascii.eqlIgnoreCase(name, "ACOS") or
-        std.ascii.eqlIgnoreCase(name, "ATAN") or
-        std.ascii.eqlIgnoreCase(name, "ATAN2") or
-        std.ascii.eqlIgnoreCase(name, "SINH") or
-        std.ascii.eqlIgnoreCase(name, "COSH") or
-        std.ascii.eqlIgnoreCase(name, "TANH") or
-        std.ascii.eqlIgnoreCase(name, "ABS") or
-        std.ascii.eqlIgnoreCase(name, "SQRT"))
-    {
-        return .real;
-    }
-
     return current;
 }
 
-fn syntheticDims(self: *context.Context, rank: usize) ![]*ast.Expr {
-    if (rank == 0) return &.{};
-    const dims = try self.arena.alloc(*ast.Expr, rank);
-    for (dims) |*slot| {
-        const node = try self.arena.create(ast.Expr);
-        node.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
-        slot.* = node;
-    }
-    return dims;
+fn invalidateExprTypeCache(self: *context.Context, expr: *ast.Expr) void {
+    _ = self.expr_type_cache.remove(@intFromPtr(expr));
 }
