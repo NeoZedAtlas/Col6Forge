@@ -35,8 +35,8 @@ fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) 
     if (sym.type_kind != .character) return null;
     if (sym.kind == .parameter) {
         if (sym.const_value) |cv| switch (cv) {
-            .string => |lit| {
-                const len = utils.decodedStringLen(lit.text);
+            .string => |bytes| {
+                const len = bytes.len;
                 return try constI32(ctx, @intCast(len));
             },
             else => {},

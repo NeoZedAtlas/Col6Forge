@@ -22,7 +22,11 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
                 .integer => .{ .integer = try parseInt(lit.text) },
                 .real => .{ .real = try parseReal(lit.text) },
                 .logical => .{ .integer = try parseInt(lit.text) },
-                .string, .hollerith => .{ .string = lit },
+                .string, .hollerith => blk: {
+                    const allocator = if (resolver) |res| res.allocator orelse break :blk null else break :blk null;
+                    const bytes = (try decodeLiteralBytes(allocator, lit)) orelse break :blk null;
+                    break :blk .{ .string = bytes };
+                },
                 .assumed_size => null,
             };
         },
@@ -213,8 +217,8 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?
     if (op == .concat) {
         if (left != .string or right != .string) return null;
         const allocator = if (resolver) |res| res.allocator orelse return null else return null;
-        const joined = (try concatStringLiterals(allocator, left.string, right.string)) orelse return null;
-        return .{ .string = .{ .kind = .string, .text = joined } };
+        const joined = try concatStringLiterals(allocator, left.string, right.string);
+        return .{ .string = joined };
     }
     if (left == .string or right == .string) return null;
 
@@ -329,7 +333,7 @@ fn evalConstCharLen(expr: *const ast.Expr, resolver: ?ConstResolver) !?usize {
 
 fn constStringByteLen(value: ConstValue) ?usize {
     return switch (value) {
-        .string => |lit| literalByteLen(lit),
+        .string => |bytes| bytes.len,
         else => null,
     };
 }
@@ -367,19 +371,8 @@ fn hollerithByteLen(text: []const u8) ?usize {
     return text.len - (idx + 1);
 }
 
-fn concatStringLiterals(allocator: std.mem.Allocator, left: ast.Literal, right: ast.Literal) !?[]const u8 {
-    const left_bytes = (try decodeLiteralBytes(allocator, left)) orelse return null;
-    defer allocator.free(left_bytes);
-    const right_bytes = (try decodeLiteralBytes(allocator, right)) orelse return null;
-    defer allocator.free(right_bytes);
-
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
-    try out.append(allocator, '\'');
-    try appendEscaped(allocator, &out, left_bytes);
-    try appendEscaped(allocator, &out, right_bytes);
-    try out.append(allocator, '\'');
-    return @as(?[]const u8, try out.toOwnedSlice(allocator));
+fn concatStringLiterals(allocator: std.mem.Allocator, left: []const u8, right: []const u8) ![]const u8 {
+    return std.mem.concat(allocator, u8, &.{ left, right });
 }
 
 fn decodeLiteralBytes(allocator: std.mem.Allocator, lit: ast.Literal) !?[]u8 {
@@ -416,15 +409,4 @@ fn decodeHollerith(allocator: std.mem.Allocator, text: []const u8) ?[]u8 {
     const idx = std.mem.indexOfScalar(u8, text, 'H') orelse std.mem.indexOfScalar(u8, text, 'h') orelse return null;
     if (idx + 1 > text.len) return null;
     return allocator.dupe(u8, text[idx + 1 ..]) catch null;
-}
-
-fn appendEscaped(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) !void {
-    for (bytes) |ch| {
-        if (ch == '\'') {
-            try out.append(allocator, '\'');
-            try out.append(allocator, '\'');
-            continue;
-        }
-        try out.append(allocator, ch);
-    }
 }

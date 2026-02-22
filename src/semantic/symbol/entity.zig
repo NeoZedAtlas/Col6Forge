@@ -51,7 +51,8 @@ pub const ConstValue = union(enum) {
     integer: i64,
     real: f64,
     complex: ComplexConst,
-    string: ast.Literal,
+    // Decoded character bytes (without quotes/Hollerith prefix).
+    string: []const u8,
 };
 
 pub const ImplicitRule = struct {

@@ -745,10 +745,7 @@ test "semantic accepts PARAMETER string concatenation constant fold" {
         found = true;
         const cv = sym.const_value orelse return error.TestExpectedEqual;
         switch (cv) {
-            .string => |lit| {
-                try testing.expectEqual(ast.LiteralKind.string, lit.kind);
-                try testing.expectEqualStrings("'AB'", lit.text);
-            },
+            .string => |bytes| try testing.expectEqualStrings("AB", bytes),
             else => return error.TestExpectedEqual,
         }
     }

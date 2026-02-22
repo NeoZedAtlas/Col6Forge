@@ -81,11 +81,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
 
                 if (sym.type_kind == .character and sym.char_len == null) {
                     sym.char_len = switch (const_val) {
-                        .string => |lit| switch (lit.kind) {
-                            .string => decodedStringLen(lit.text),
-                            .hollerith => hollerithLen(lit.text) orelse 1,
-                            else => 1,
-                        },
+                        .string => |bytes| bytes.len,
                         else => null,
                     };
                 }
@@ -237,31 +233,6 @@ fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.Impl
             else => null,
         };
     }
-}
-
-fn decodedStringLen(text: []const u8) usize {
-    if (text.len < 2) return text.len;
-    const quote = text[0];
-    if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) return text.len;
-    var len: usize = 0;
-    var i: usize = 1;
-    const end = text.len - 1;
-    while (i < end) {
-        if (text[i] == quote and i + 1 < end and text[i + 1] == quote) {
-            len += 1;
-            i += 2;
-            continue;
-        }
-        len += 1;
-        i += 1;
-    }
-    return len;
-}
-
-fn hollerithLen(text: []const u8) ?usize {
-    const idx = std.mem.indexOfScalar(u8, text, 'H') orelse std.mem.indexOfScalar(u8, text, 'h') orelse return null;
-    if (idx + 1 > text.len) return null;
-    return text[idx + 1 ..].len;
 }
 
 fn equivalenceDesignatorName(self: *context.Context, expr_node: *ast.Expr) ![]const u8 {

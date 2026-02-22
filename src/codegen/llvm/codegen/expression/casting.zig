@@ -88,9 +88,8 @@ pub fn emitConstTyped(ctx: *Context, builder: anytype, value: sema.ConstValue, t
             const imag_ref = ValueRef{ .name = utils.formatFloatValue(ctx.allocator, v.imag, elem_ty), .ty = elem_ty, .is_ptr = false };
             break :blk complex.buildComplex(ctx, builder, real_ref, imag_ref, ty) catch .{ .name = "undef", .ty = ty, .is_ptr = false };
         },
-        .string => |lit| {
+        .string => |bytes| {
             // Character parameters should behave like string literals.
-            const bytes = utils.decodeStringLiteral(ctx.allocator, lit.text) catch return .{ .name = "0", .ty = ty, .is_ptr = false };
             return emitStringLiteral(ctx, builder, bytes) catch .{ .name = "0", .ty = ty, .is_ptr = false };
         },
     };
