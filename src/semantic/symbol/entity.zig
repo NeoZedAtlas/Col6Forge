@@ -24,6 +24,8 @@ pub const Symbol = struct {
     is_intrinsic: bool,
     const_value: ?ConstValue,
     type_explicit: bool,
+    is_host_associated: bool = false,
+    host_owner_name: ?[]const u8 = null,
 };
 
 pub const EntityKind = enum {

@@ -24,7 +24,7 @@ pub fn emitLiteral(ctx: *Context, builder: anytype, lit: Literal) !ValueRef {
             return .{ .name = normalized, .ty = .i32, .is_ptr = false };
         },
         .real => {
-            const ty: IRType = if (utils.hasDExponent(lit.text)) .f64 else .f32;
+            const ty: IRType = utils.realLiteralType(lit.text);
             const normalized = try utils.formatFloatLiteral(ctx.allocator, lit.text, ty);
             return .{ .name = normalized, .ty = ty, .is_ptr = false };
         },
@@ -172,7 +172,7 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
         },
         .literal => |lit| return switch (lit.kind) {
             .integer => .i32,
-            .real => if (utils.hasDExponent(lit.text)) .f64 else .f32,
+            .real => utils.realLiteralType(lit.text),
             .logical => .i1,
             .string, .hollerith => .ptr,
             else => return error.UnsupportedLiteral,

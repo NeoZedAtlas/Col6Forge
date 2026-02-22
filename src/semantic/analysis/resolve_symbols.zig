@@ -69,6 +69,8 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
         if (findKnownHostParameter(self, name)) |host_sym| {
             var imported = host_sym;
             imported.name = name;
+            imported.is_host_associated = true;
+            imported.host_owner_name = self.known_host_owner;
             return internSymbol(self, imported);
         }
     }

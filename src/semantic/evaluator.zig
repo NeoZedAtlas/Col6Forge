@@ -166,6 +166,7 @@ fn parseInt(text: []const u8) !i64 {
     var out: usize = 0;
     while (i < text.len) : (i += 1) {
         const ch = text[i];
+        if (ch == '_') break;
         if (ch == ' ' or ch == '\t') continue;
         buffer[out] = ch;
         out += 1;
@@ -185,6 +186,7 @@ fn parseReal(text: []const u8) !f64 {
     var out: usize = 0;
     while (i < text.len) : (i += 1) {
         const ch = text[i];
+        if (ch == '_') break;
         if (ch == ' ' or ch == '\t') continue;
         buffer[out] = if (ch == 'D' or ch == 'd') 'e' else ch;
         out += 1;

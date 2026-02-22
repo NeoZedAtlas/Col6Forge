@@ -26,6 +26,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     var save_info = try buildSaveInfo(ctx);
     defer save_info.deinit();
     const return_symbol_name = functionReturnSymbolName(ctx.unit);
+    const unit_has_contains = unitHasContains(ctx.unit);
     const uses_explicit_result_name = ctx.unit.kind == .function and !std.ascii.eqlIgnoreCase(return_symbol_name, ctx.unit.name);
 
     const func_name = utils.mangleName(ctx.allocator, ctx.unit.name) catch return error.OutOfMemory;
@@ -45,7 +46,9 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         return_ty = .i32;
     }
 
+    try installHostAssocGlobals(ctx, builder, return_symbol_name, unit_has_contains);
     try installSavedGlobals(ctx, builder, &save_info);
+    try installSavedInitGuardGlobal(ctx, builder, &save_info);
 
     if (return_ty) |ret_ty| {
         try builder.defineStartWithRet(ret_ty, func_name);
@@ -222,6 +225,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         }
         try applyEquivalences(ctx, builder, &orig_locals);
     }
+    try emitDeclaratorInitializers(ctx, builder, &save_info);
 
     const block_names = try ctx.buildBlockNames();
     defer {
@@ -265,18 +269,29 @@ fn buildSaveInfo(ctx: *Context) !SaveInfo {
     var names = std.StringHashMap(void).init(ctx.allocator);
     var save_all = false;
     for (ctx.unit.decls) |decl| {
-        if (decl != .save) continue;
-        if (decl.save.save_all) {
-            save_all = true;
-            continue;
-        }
-        for (decl.save.items) |item| {
-            switch (item) {
-                .name => |name| {
-                    try names.put(name, {});
-                },
-                .common => {},
-            }
+        switch (decl) {
+            .save => |save_decl| {
+                if (save_decl.save_all) {
+                    save_all = true;
+                    continue;
+                }
+                for (save_decl.items) |item| {
+                    switch (item) {
+                        .name => |name| {
+                            try names.put(name, {});
+                        },
+                        .common => {},
+                    }
+                }
+            },
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (type_decl.save or item.init != null) {
+                        try names.put(item.name, {});
+                    }
+                }
+            },
+            else => {},
         }
     }
     return .{ .save_all = save_all, .names = names };
@@ -287,9 +302,127 @@ fn isSaved(save_info: *const SaveInfo, name: []const u8) bool {
     return save_info.names.contains(name);
 }
 
+fn emitDeclaratorInitializers(ctx: *Context, builder: anytype, save_info: *const SaveInfo) EmitError!void {
+    var has_saved_init = false;
+    var has_local_init = false;
+
+    for (ctx.unit.decls) |decl| {
+        if (decl != .type_decl) continue;
+        for (decl.type_decl.items) |item| {
+            if (item.init == null) continue;
+            if (!ctx.locals.contains(item.name)) continue;
+            if (isSaved(save_info, item.name)) {
+                has_saved_init = true;
+            } else {
+                has_local_init = true;
+            }
+        }
+    }
+    if (!has_saved_init and !has_local_init) return;
+
+    if (has_saved_init) {
+        const guard_name = try savedInitGuardName(ctx);
+        const guard_ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{guard_name});
+        const guard_ptr = ValueRef{ .name = guard_ptr_name, .ty = .ptr, .is_ptr = true };
+        const guard_tmp = try ctx.nextTemp();
+        try builder.load(guard_tmp, .i8, guard_ptr);
+        const guard_is_zero_tmp = try ctx.nextTemp();
+        try builder.compare(
+            guard_is_zero_tmp,
+            "icmp",
+            "eq",
+            .i8,
+            .{ .name = guard_tmp, .ty = .i8, .is_ptr = false },
+            .{ .name = "0", .ty = .i8, .is_ptr = false },
+        );
+        const saved_init_then = try ctx.nextLabel("decl_init_saved_then");
+        const saved_init_done = try ctx.nextLabel("decl_init_saved_done");
+        try builder.brCond(
+            .{ .name = guard_is_zero_tmp, .ty = .i1, .is_ptr = false },
+            saved_init_then,
+            saved_init_done,
+        );
+        try builder.label(saved_init_then);
+        try emitDeclaratorInitializersByClass(ctx, builder, save_info, true);
+        try builder.store(.{ .name = "1", .ty = .i8, .is_ptr = false }, guard_ptr);
+        try builder.br(saved_init_done);
+        try builder.label(saved_init_done);
+    }
+
+    if (has_local_init) {
+        try emitDeclaratorInitializersByClass(ctx, builder, save_info, false);
+    }
+}
+
+fn emitDeclaratorInitializersByClass(
+    ctx: *Context,
+    builder: anytype,
+    save_info: *const SaveInfo,
+    saved_only: bool,
+) EmitError!void {
+    for (ctx.unit.decls) |decl| {
+        if (decl != .type_decl) continue;
+        for (decl.type_decl.items) |item| {
+            const init_expr = item.init orelse continue;
+            if (!ctx.locals.contains(item.name)) continue;
+            const is_saved_item = isSaved(save_info, item.name);
+            if (saved_only != is_saved_item) continue;
+            try emitDeclaratorInitializerAssign(ctx, builder, item.name, init_expr);
+        }
+    }
+}
+
+fn emitDeclaratorInitializerAssign(
+    ctx: *Context,
+    builder: anytype,
+    name: []const u8,
+    init_expr: *ast.Expr,
+) EmitError!void {
+    var target_expr = ast.Expr{ .identifier = name };
+    const assign = ast.Assignment{
+        .target = &target_expr,
+        .value = init_expr,
+    };
+    try execution.emitAssignment(ctx, builder, assign);
+}
+
+fn savedInitGuardName(ctx: *Context) ![]const u8 {
+    const unit_mangled = try utils.mangleName(ctx.allocator, ctx.unit.name);
+    return std.fmt.allocPrint(ctx.allocator, "save_init_guard_{s}", .{unit_mangled});
+}
+
+fn installSavedInitGuardGlobal(ctx: *Context, builder: anytype, save_info: *const SaveInfo) EmitError!void {
+    if (!unitHasSavedDeclaratorInit(ctx, save_info)) return;
+    const guard_name = try savedInitGuardName(ctx);
+    const marker = try std.fmt.allocPrint(ctx.allocator, "__save_init_guard__{s}", .{guard_name});
+    if (ctx.defined.contains(marker)) return;
+    try builder.commonGlobal(guard_name, 1, 1);
+    try ctx.defined.put(marker, {});
+}
+
+fn unitHasSavedDeclaratorInit(ctx: *Context, save_info: *const SaveInfo) bool {
+    for (ctx.unit.decls) |decl| {
+        if (decl != .type_decl) continue;
+        for (decl.type_decl.items) |item| {
+            if (item.init == null) continue;
+            if (isSaved(save_info, item.name)) return true;
+        }
+    }
+    return false;
+}
+
 fn unitHasCommonDecls(decls: []const ast.Decl) bool {
     for (decls) |decl| {
         if (decl == .common) return true;
+    }
+    return false;
+}
+
+fn unitHasContains(unit: ast.ProgramUnit) bool {
+    for (unit.stmts) |stmt| {
+        if (stmt.node != .cont) continue;
+        const text = std.mem.trim(u8, stmt.source_text, " \t");
+        if (std.ascii.eqlIgnoreCase(text, "contains")) return true;
     }
     return false;
 }
@@ -355,6 +488,75 @@ fn sizeAlignForType(ty: llvm_types.IRType) SizeAlign {
         .ptr => .{ .size = @sizeOf(usize), .alignment = @alignOf(usize) },
         .void => .{ .size = 1, .alignment = 1 },
     };
+}
+
+fn installHostAssocGlobals(
+    ctx: *Context,
+    builder: anytype,
+    return_symbol_name: []const u8,
+    unit_has_contains: bool,
+) EmitError!void {
+    for (ctx.sem.symbols) |sym| {
+        const owner_name = hostAssocOwnerName(ctx, sym, unit_has_contains) orelse continue;
+        if (!shouldUseHostAssocGlobal(ctx, sym, return_symbol_name)) continue;
+        if (ctx.locals.contains(sym.name)) continue;
+        if (symbolHasDeferredDims(sym)) continue;
+
+        var total_size: usize = 1;
+        var alignment: usize = 1;
+        if (sym.type_kind == .character) {
+            const char_len = sym.char_len orelse 1;
+            const elem_count = ctx.arrayElemCountForSymbol(sym) catch continue;
+            total_size = elem_count * char_len;
+            alignment = 1;
+        } else {
+            const ty = llvm_types.typeFromKind(sym.type_kind);
+            const sa = sizeAlignForType(ty);
+            const elem_count = ctx.arrayElemCountForSymbol(sym) catch continue;
+            total_size = sa.size * elem_count;
+            alignment = sa.alignment;
+        }
+        if (total_size == 0) total_size = 1;
+
+        const global_name = try utils.hostAssocGlobalName(ctx.allocator, owner_name, sym.name);
+        const marker = try std.fmt.allocPrint(ctx.allocator, "__host_global__{s}", .{global_name});
+        if (!ctx.defined.contains(marker)) {
+            try builder.commonGlobal(global_name, total_size, alignment);
+            try ctx.defined.put(marker, {});
+        }
+        const base_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{global_name});
+        try ctx.locals.put(sym.name, .{ .name = base_name, .ty = .ptr, .is_ptr = true });
+    }
+}
+
+fn shouldUseHostAssocGlobal(
+    ctx: *Context,
+    sym: sema.Symbol,
+    return_symbol_name: []const u8,
+) bool {
+    if (sym.is_external) return false;
+    if (sym.kind == .parameter or sym.kind == .subroutine) return false;
+
+    const is_function_name_symbol = ctx.unit.kind == .function and
+        sym.kind == .function and
+        std.ascii.eqlIgnoreCase(sym.name, ctx.unit.name);
+    const is_return_symbol = ctx.unit.kind == .function and
+        std.ascii.eqlIgnoreCase(sym.name, return_symbol_name);
+    if (is_function_name_symbol or is_return_symbol) return false;
+    if (sym.kind == .function and ctx.unit.kind != .function) return false;
+
+    if (!sym.is_host_associated and sym.storage != .local) return false;
+    return true;
+}
+
+fn hostAssocOwnerName(
+    ctx: *Context,
+    sym: sema.Symbol,
+    unit_has_contains: bool,
+) ?[]const u8 {
+    if (sym.is_host_associated) return sym.host_owner_name;
+    if (unit_has_contains and sym.storage == .local) return ctx.unit.name;
+    return null;
 }
 
 fn installSavedGlobals(ctx: *Context, builder: anytype, save_info: *const SaveInfo) EmitError!void {

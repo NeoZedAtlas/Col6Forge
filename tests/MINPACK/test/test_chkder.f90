@@ -36,6 +36,31 @@ program test_chkder
     real(wp), parameter :: solution_reltol = 1.0e-4_wp !! reltol for matching previously generated solutions
 
     integer,dimension(ncases),parameter :: info_original = 1 ! not used here
+    integer,dimension(ncases+1),parameter :: sol_start = [1,3,7,9,13,16,25,32,42,52,62,72,82,92,102]
+    real(wp),dimension(101),parameter :: sol_data = [ &
+        -0.1604855093262358E-07_wp,0.4763689633868751E-06_wp, &
+        0.2138763655068487E-06_wp,-0.2512328678427878E-07_wp,-0.3578105500778861E-07_wp,0.4754114257821129E-06_wp, &
+        0.3214806338291964E-04_wp,-0.7057517459330143E-08_wp, &
+        0.2322078535144101E-03_wp,0.5335169362297165E-04_wp,0.2089913541567512E-03_wp,0.4808346034224087E-04_wp, &
+        0.1832842144722235E-07_wp,-0.1319622122686326E-06_wp,0.1832842821958280E-08_wp, &
+        0.4515008482641747E-06_wp,0.8252608125758343E-06_wp,0.1047075926408070E-05_wp,0.1220878203866960E-05_wp,0.1363612746274612E-05_wp, &
+        0.1485299534920159E-05_wp,0.1592014982065848E-05_wp,0.1687697022134671E-05_wp,0.1775024010441939E-05_wp, &
+        0.1542483058641908E-07_wp,0.2060287401794980E-07_wp,0.2376945576476608E-07_wp,0.5349154558187408E-07_wp,0.9704076181504817E-07_wp, &
+        0.1576633008593120E-06_wp,0.2112184365188341E-06_wp, &
+        0.8012354335562577E-07_wp,0.8378922800034161E-07_wp,0.8012354335562577E-07_wp,0.8378922800034161E-07_wp,0.8012354335562577E-07_wp, &
+        0.8378922800034161E-07_wp,0.8012354335562577E-07_wp,0.8378922800034161E-07_wp,0.8012354335562577E-07_wp,0.1065043608861060E-09_wp, &
+        0.5774599409757997E-08_wp,-0.7078711450336783E-08_wp,0.7631400400498478E-08_wp,-0.7053519379685014E-08_wp,0.7658129463905539E-08_wp, &
+        -0.7038501670386665E-08_wp,0.7685261871337445E-08_wp,-0.7047089523037897E-08_wp,0.6495039228671118E-08_wp,-0.2818530409065545E-08_wp, &
+        0.3294705064327275E-08_wp,0.8148107188965525E-09_wp,0.5413627796047038E-08_wp,0.2381044444943470E-08_wp,0.6401980501280491E-08_wp, &
+        0.2764786941056308E-08_wp,0.6166095051218790E-08_wp,0.1882141179021524E-08_wp,0.4645276802106579E-08_wp,0.9133731548871538E-09_wp, &
+        0.3284536753689338E-08_wp,0.1864164600462459E-08_wp,0.3268772807984988E-08_wp,0.3333951337225471E-08_wp,0.3253008529213730E-08_wp, &
+        0.4803738740122299E-08_wp,0.3237243362264053E-08_wp,0.6273523034394657E-08_wp,0.3221478195314376E-08_wp,0.7743309993202274E-08_wp, &
+        0.2249654149636626E-02_wp,0.4499298869632185E-02_wp,0.6748936313670129E-02_wp,0.8998581033665687E-02_wp,0.1124821836128831E-01_wp, &
+        0.1349786319769919E-01_wp,0.1574750046711415E-01_wp,0.1799714541994035E-01_wp,0.2024678350426257E-01_wp,0.2249642740935087E-01_wp, &
+        0.9923452193305593E-07_wp,0.3484660204833290E-07_wp,0.8616620350565540E-07_wp,0.3484660204833290E-07_wp,0.8616620350565540E-07_wp, &
+        0.3484660204833290E-07_wp,0.8616620350565540E-07_wp,0.3484660204833290E-07_wp,0.8616620350565540E-07_wp,0.6831460996892247E-07_wp, &
+        0.3598775801805232E-06_wp,0.2186061109910042E-06_wp,0.3905816612359558E-06_wp,0.2493101911582585E-06_wp,0.4212857422913885E-06_wp, &
+        0.2800142722136911E-06_wp,0.4311392522993174E-06_wp,0.2800142722136911E-06_wp,0.4311392522993174E-06_wp,0.2591637029425442E-06_wp]
 
     cp = 1.23e-1_wp
 
@@ -94,7 +119,7 @@ program test_chkder
             write (nwrite, '(//5x, a//(5x, 5d15.7))') ' FIRST FUNCTION VECTOR   ', (fvec1(i), i=1, n)
             write (nwrite, '(//5x, a//(5x, 5d15.7))') ' FUNCTION DIFFERENCE VECTOR', (diff(i), i=1, n)
             write (nwrite, '(//5x, a//(5x, 5d15.7))') ' ERROR VECTOR', (err(i), i=1, n)
-            call compare_solutions(nprob, diff, solution_reltol, tol)
+            call compare_solutions(nprob, n, diff, solution_reltol, tol)
 
         end if
 
@@ -107,27 +132,34 @@ program test_chkder
 !>
 !  Compare with previously generated solutions.
 
-    subroutine compare_solutions(ic, x, reltol, abstol)
+    subroutine compare_solutions(ic, n, x, reltol, abstol)
 
     implicit none
 
     integer,intent(in) :: ic !! problem number (index is `solution` vector)
-    real(wp),dimension(:),intent(in) :: x !! computed `x` vector from the method
+    integer,intent(in) :: n
+    real(wp),dimension(n),intent(in) :: x !! computed `x` vector from the method
     real(wp),intent(in) :: reltol !! relative tolerance for `x` to pass
     real(wp),intent(in) :: abstol !! absolute tolerance for `x` to pass
 
-    real(wp),dimension(size(x)) :: diff, absdiff, reldiff
+    integer :: i
+    real(wp),dimension(n) :: expected, diff, absdiff, reldiff
+    do i = 1, n
+        expected(i) = solution_value(ic, i)
+    end do
 
     if (info_original(ic)<5) then    ! ignore any where the original minpack failed
-        diff = solution(ic) - x
-        absdiff = abs(diff)
+        do i = 1, n
+            diff(i) = expected(i) - x(i)
+            absdiff(i) = abs(diff(i))
+            reldiff(i) = absdiff(i)
+            if (expected(i) /= 0.0_wp) reldiff(i) = absdiff(i) / abs(expected(i))
+        end do
         if (any(absdiff>abstol)) then ! first do an absolute diff
-            ! also do a rel diff if the abs diff fails (also protect for divide by zero)
-            reldiff = absdiff
-            where (solution(ic) /= 0.0_wp) reldiff = absdiff / abs(solution(ic))
+            ! also do a rel diff if the abs diff fails
             if (any(reldiff > reltol)) then
                 write(nwrite,'(A)') 'Failed case'
-                write(nwrite, '(//5x, a//(5x, 5d15.7))') 'Expected x: ', solution(ic)
+                write(nwrite, '(//5x, a//(5x, 5d15.7))') 'Expected x: ', expected
                 write(nwrite, '(/5x, a//(5x, 5d15.7))')  'Computed x: ', x
                 write(nwrite, '(/5x, a//(5x, 5d15.7))')  'absdiff: ', absdiff
                 write(nwrite, '(/5x, a//(5x, 5d15.7))')  'reldiff: ', reldiff
@@ -155,60 +187,21 @@ program test_chkder
 !>
 !  Get expected `diff` vectors for each case.
 
-    pure function solution(nprob) result(x)
+    pure function solution_value(nprob, idx) result(v)
 
         implicit none
 
         integer,intent(in) :: nprob
-        real(wp),dimension(:),allocatable :: x
+        integer,intent(in) :: idx
+        integer :: offset
+        real(wp) :: v
 
-        select case (nprob)
-        case(1); x = [-0.1604855093262358E-07_wp,0.4763689633868751E-06_wp]
-        case(2); x = [0.2138763655068487E-06_wp,-0.2512328678427878E-07_wp,-0.3578105500778861E-07_wp,&
-                      0.4754114257821129E-06_wp]
-        case(3); x = [0.3214806338291964E-04_wp,-0.7057517459330143E-08_wp]
-        case(4); x = [0.2322078535144101E-03_wp,0.5335169362297165E-04_wp,0.2089913541567512E-03_wp,&
-                      0.4808346034224087E-04_wp]
-        case(5); x = [0.1832842144722235E-07_wp,-0.1319622122686326E-06_wp,0.1832842821958280E-08_wp]
-        case(6); x = [0.4515008482641747E-06_wp,0.8252608125758343E-06_wp,0.1047075926408070E-05_wp,&
-                      0.1220878203866960E-05_wp,0.1363612746274612E-05_wp,0.1485299534920159E-05_wp,&
-                      0.1592014982065848E-05_wp,0.1687697022134671E-05_wp,0.1775024010441939E-05_wp]
-        case(7); x = [0.1542483058641908E-07_wp,0.2060287401794980E-07_wp,0.2376945576476608E-07_wp,&
-                      0.5349154558187408E-07_wp,0.9704076181504817E-07_wp,0.1576633008593120E-06_wp,&
-                      0.2112184365188341E-06_wp]
-        case(8); x = [0.8012354335562577E-07_wp,0.8378922800034161E-07_wp,0.8012354335562577E-07_wp,&
-                      0.8378922800034161E-07_wp,0.8012354335562577E-07_wp,0.8378922800034161E-07_wp,&
-                      0.8012354335562577E-07_wp,0.8378922800034161E-07_wp,0.8012354335562577E-07_wp,&
-                      0.1065043608861060E-09_wp]
-        case(9); x = [0.5774599409757997E-08_wp,-0.7078711450336783E-08_wp,0.7631400400498478E-08_wp,&
-                      -0.7053519379685014E-08_wp,0.7658129463905539E-08_wp,-0.7038501670386665E-08_wp,&
-                      0.7685261871337445E-08_wp,-0.7047089523037897E-08_wp,0.6495039228671118E-08_wp,&
-                      -0.2818530409065545E-08_wp]
-        case(10);x = [0.3294705064327275E-08_wp,0.8148107188965525E-09_wp,0.5413627796047038E-08_wp,&
-                      0.2381044444943470E-08_wp,0.6401980501280491E-08_wp,0.2764786941056308E-08_wp,&
-                      0.6166095051218790E-08_wp,0.1882141179021524E-08_wp,0.4645276802106579E-08_wp,&
-                      0.9133731548871538E-09_wp]
-        case(11);x = [0.3284536753689338E-08_wp,0.1864164600462459E-08_wp,0.3268772807984988E-08_wp,&
-                      0.3333951337225471E-08_wp,0.3253008529213730E-08_wp,0.4803738740122299E-08_wp,&
-                      0.3237243362264053E-08_wp,0.6273523034394657E-08_wp,0.3221478195314376E-08_wp,&
-                      0.7743309993202274E-08_wp]
-        case(12);x = [0.2249654149636626E-02_wp,0.4499298869632185E-02_wp,0.6748936313670129E-02_wp,&
-                      0.8998581033665687E-02_wp,0.1124821836128831E-01_wp,0.1349786319769919E-01_wp,&
-                      0.1574750046711415E-01_wp,0.1799714541994035E-01_wp,0.2024678350426257E-01_wp,&
-                      0.2249642740935087E-01_wp]
-        case(13);x = [0.9923452193305593E-07_wp,0.3484660204833290E-07_wp,0.8616620350565540E-07_wp,&
-                      0.3484660204833290E-07_wp,0.8616620350565540E-07_wp,0.3484660204833290E-07_wp,&
-                      0.8616620350565540E-07_wp,0.3484660204833290E-07_wp,0.8616620350565540E-07_wp,&
-                      0.6831460996892247E-07_wp]
-        case(14);x = [0.3598775801805232E-06_wp,0.2186061109910042E-06_wp,0.3905816612359558E-06_wp,&
-                      0.2493101911582585E-06_wp,0.4212857422913885E-06_wp,0.2800142722136911E-06_wp,&
-                      0.4311392522993174E-06_wp,0.2800142722136911E-06_wp,0.4311392522993174E-06_wp,&
-                      0.2591637029425442E-06_wp]
-        case default
-            error stop 'invalid case'
-        end select
+        if (nprob < 1 .or. nprob > ncases) error stop 'invalid case'
+        if (idx < 1 .or. idx > ns(nprob)) error stop 'invalid index'
+        offset = sol_start(nprob) + idx - 1
+        v = sol_data(offset)
 
-    end function solution
+    end function solution_value
 !*****************************************************************************************
 
 !*****************************************************************************************

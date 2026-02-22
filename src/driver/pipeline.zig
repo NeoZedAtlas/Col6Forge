@@ -18,6 +18,8 @@ pub const PipelineOptions = struct {
     time_report: bool = false,
     coarse_source_map: bool = false,
     capture_profile: bool = false,
+    known_function_types: []const semantic.KnownFunctionType = &.{},
+    known_procedure_sigs: []const semantic.KnownProcedureSig = &.{},
 };
 
 pub const PipelineResult = struct {
@@ -393,7 +395,12 @@ fn emitLlvmModule(
     if (profile) |p| p.parse_ns = elapsedNs(parse_start);
 
     const semantic_start = nowNs();
-    const sem = semantic.analyzeProgram(arena.allocator(), program) catch |err| {
+    const sem = semantic.analyzeProgramWithKnown(
+        arena.allocator(),
+        program,
+        options.known_function_types,
+        options.known_procedure_sigs,
+    ) catch |err| {
         if (profile) |p| {
             p.semantic_ns = elapsedNs(semantic_start);
             p.markFailure(.semantic);
@@ -479,7 +486,12 @@ fn emitLlvmModuleToWriter(
     if (profile) |p| p.parse_ns = elapsedNs(parse_start);
 
     const semantic_start = nowNs();
-    const sem = semantic.analyzeProgram(arena.allocator(), program) catch |err| {
+    const sem = semantic.analyzeProgramWithKnown(
+        arena.allocator(),
+        program,
+        options.known_function_types,
+        options.known_procedure_sigs,
+    ) catch |err| {
         if (profile) |p| {
             p.semantic_ns = elapsedNs(semantic_start);
             p.markFailure(.semantic);

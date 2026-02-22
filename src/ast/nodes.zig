@@ -50,6 +50,7 @@ pub const Decl = union(enum) {
 pub const TypeDecl = struct {
     type_kind: TypeKind,
     items: []Declarator,
+    save: bool = false,
 };
 
 pub const DimensionDecl = struct {
@@ -111,6 +112,7 @@ pub const Declarator = struct {
     name: []const u8,
     dims: []*Expr,
     char_len: ?*Expr,
+    init: ?*Expr = null,
 };
 
 pub const Stmt = struct {

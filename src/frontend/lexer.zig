@@ -110,6 +110,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
             i += 1;
             while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
             i = scanExponent(text, i, true);
+            i = scanKindSuffix(text, i);
             const end = i;
             try tokens.append(makeToken(line, .real, start, end));
             continue;
@@ -151,6 +152,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
                 is_real = true;
                 i = exp_i;
             }
+            i = scanKindSuffix(text, i);
             const end = i;
             try tokens.append(makeToken(line, if (is_real) .real else .integer, start, end));
             continue;
@@ -276,9 +278,17 @@ fn scanExponent(text: []const u8, index: usize, allow_leading_space: bool) usize
     const exp_digits = scanDigitsAllowBlanks(text, i);
     if (!exp_digits.had_digit) return index;
     i = exp_digits.idx;
-    if (i < text.len and (std.ascii.isAlphabetic(text[i]) or std.ascii.isDigit(text[i]) or text[i] == '_')) {
+    if (i < text.len and (std.ascii.isAlphabetic(text[i]) or std.ascii.isDigit(text[i]))) {
         return index;
     }
+    return i;
+}
+
+fn scanKindSuffix(text: []const u8, index: usize) usize {
+    if (index >= text.len or text[index] != '_') return index;
+    var i = index + 1;
+    if (i >= text.len or !std.ascii.isAlphanumeric(text[i])) return index;
+    while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) : (i += 1) {}
     return i;
 }
 
@@ -421,6 +431,25 @@ test "lexLogicalLine rejects overflowing Hollerith length" {
     try testing.expect(diag_opt != null);
     const diag = diag_opt.?;
     try testing.expectEqualStrings("CF1003", diag.code);
+}
+
+test "lexLogicalLine keeps kind suffix as part of numeric literal" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A=1.0E-1_wp+2_wp\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+
+    const expected = [_]TokenKind{ .identifier, .equals, .real, .plus, .integer };
+    try testing.expectEqual(expected.len, tokens.len);
+    for (tokens, 0..) |tok, idx| {
+        try testing.expectEqual(expected[idx], tok.kind);
+    }
+    try testing.expectEqualStrings("1.0E-1_wp", lines[0].text[tokens[2].start..tokens[2].end]);
+    try testing.expectEqualStrings("2_wp", lines[0].text[tokens[4].start..tokens[4].end]);
 }
 
 test "lexLogicalLine tolerates semicolon and bracket delimiters" {

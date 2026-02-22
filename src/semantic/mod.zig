@@ -24,12 +24,43 @@ pub const Context = context.Context;
 pub const SemanticDiagnostic = diagnostic.SemanticDiagnostic;
 
 pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticProgram {
+    return analyzeProgramWithKnown(arena, program, &.{}, &.{});
+}
+
+pub const KnownFunctionType = struct {
+    name: []const u8,
+    type_kind: ast.TypeKind,
+};
+
+pub const KnownProcedureSig = struct {
+    name: []const u8,
+    kind: ast.ProgramUnitKind,
+    arg_count: usize,
+};
+
+pub fn analyzeProgramWithKnown(
+    arena: std.mem.Allocator,
+    program: ast.Program,
+    known_fn_types: []const KnownFunctionType,
+    known_proc_sigs: []const KnownProcedureSig,
+) !SemanticProgram {
     diagnostic.clear();
     const mutable_program = program;
     var known_function_types = std.StringHashMap(ast.TypeKind).init(arena);
     var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena);
     var known_host_symbols = std.StringHashMap(symbols.Symbol).init(arena);
     var host_symbols_active = false;
+    var active_host_owner: ?[]const u8 = null;
+    for (known_fn_types) |known| {
+        try known_function_types.put(known.name, known.type_kind);
+    }
+    for (known_proc_sigs) |known| {
+        try known_procedure_sigs.put(known.name, .{
+            .kind = known.kind,
+            .arg_count = known.arg_count,
+        });
+    }
+
     for (mutable_program.units) |unit| {
         if (unit.kind == .function) {
             try known_function_types.put(unit.name, inferFunctionType(unit));
@@ -48,6 +79,7 @@ pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticP
             &known_function_types,
             &known_procedure_sigs,
             &known_host_symbols,
+            active_host_owner,
         );
         const sem_unit = try unit_analyzer.analyze();
         try units.append(sem_unit);
@@ -55,16 +87,18 @@ pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticP
             known_host_symbols.clearRetainingCapacity();
             try collectHostSymbols(&known_host_symbols, sem_unit.symbols);
             host_symbols_active = true;
+            active_host_owner = unit.name;
         } else if (host_symbols_active and unit.*.kind == .program) {
             known_host_symbols.clearRetainingCapacity();
             host_symbols_active = false;
+            active_host_owner = null;
         }
     }
     try validateCommonBlocks(arena, mutable_program, units.items);
     return .{ .units = try units.toOwnedSlice() };
 }
 
-fn inferFunctionType(unit: ast.ProgramUnit) ast.TypeKind {
+pub fn inferFunctionType(unit: ast.ProgramUnit) ast.TypeKind {
     const explicit_result_name = if (unit.result_name) |name|
         if (!std.ascii.eqlIgnoreCase(name, unit.name)) name else null
     else

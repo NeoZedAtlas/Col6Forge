@@ -36,18 +36,31 @@ pub fn savedGlobalName(allocator: std.mem.Allocator, unit_name: []const u8, symb
     return std.fmt.allocPrint(allocator, "save_{s}{s}", .{ unit_mangled, sym_lower });
 }
 
+pub fn hostAssocGlobalName(allocator: std.mem.Allocator, owner_name: []const u8, symbol_name: []const u8) ![]const u8 {
+    const owner_mangled = try mangleName(allocator, owner_name);
+    const sym_lower = try lowerName(allocator, symbol_name);
+    return std.fmt.allocPrint(allocator, "host_{s}{s}", .{ owner_mangled, sym_lower });
+}
+
 pub fn normalizeFloatLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const kind_start = kindUnderscoreIndex(text) orelse text.len;
+    var core = std.array_list.Managed(u8).init(allocator);
+    defer core.deinit();
+    for (text[0..kind_start]) |ch| {
+        if (ch == ' ' or ch == '\t') continue;
+        try core.append(ch);
+    }
+
     var buffer = std.array_list.Managed(u8).init(allocator);
     var start: usize = 0;
-    if (text.len >= 1 and text[0] == '.') {
+    if (core.items.len >= 1 and core.items[0] == '.') {
         try buffer.append('0');
-    } else if (text.len >= 2 and (text[0] == '+' or text[0] == '-') and text[1] == '.') {
-        try buffer.append(text[0]);
+    } else if (core.items.len >= 2 and (core.items[0] == '+' or core.items[0] == '-') and core.items[1] == '.') {
+        try buffer.append(core.items[0]);
         try buffer.append('0');
         start = 1;
     }
-    for (text[start..]) |ch| {
-        if (ch == ' ' or ch == '\t') continue;
+    for (core.items[start..]) |ch| {
         const out = if (ch == 'D' or ch == 'd') 'E' else ch;
         try buffer.append(out);
     }
@@ -58,12 +71,50 @@ pub fn normalizeFloatLiteral(allocator: std.mem.Allocator, text: []const u8) ![]
 }
 
 pub fn hasDExponent(text: []const u8) bool {
-    return std.mem.indexOfAny(u8, text, "Dd") != null;
+    const end = kindUnderscoreIndex(text) orelse text.len;
+    return std.mem.indexOfAny(u8, text[0..end], "Dd") != null;
+}
+
+pub fn literalKindSuffix(text: []const u8) ?[]const u8 {
+    const kind_start = kindUnderscoreIndex(text) orelse return null;
+    var i = kind_start + 1;
+    while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) : (i += 1) {}
+    return text[kind_start + 1 .. i];
+}
+
+pub fn literalKindSuggestsF64(text: []const u8) bool {
+    const suffix = literalKindSuffix(text) orelse return false;
+    if (suffix.len == 0) return false;
+
+    var all_digits = true;
+    for (suffix) |ch| {
+        if (!std.ascii.isDigit(ch)) {
+            all_digits = false;
+            break;
+        }
+    }
+    if (all_digits) {
+        const kind_val = std.fmt.parseInt(i64, suffix, 10) catch return false;
+        return kind_val >= 8;
+    }
+
+    return std.ascii.eqlIgnoreCase(suffix, "wp") or
+        std.ascii.eqlIgnoreCase(suffix, "dp") or
+        std.ascii.eqlIgnoreCase(suffix, "real64") or
+        std.ascii.eqlIgnoreCase(suffix, "float64") or
+        std.ascii.eqlIgnoreCase(suffix, "rk8") or
+        std.ascii.eqlIgnoreCase(suffix, "k8");
+}
+
+pub fn realLiteralType(text: []const u8) IRType {
+    if (hasDExponent(text) or literalKindSuggestsF64(text)) return .f64;
+    return .f32;
 }
 
 pub fn normalizeIntLiteral(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const kind_start = kindUnderscoreIndex(text) orelse text.len;
     var buffer = std.array_list.Managed(u8).init(allocator);
-    for (text) |ch| {
+    for (text[0..kind_start]) |ch| {
         if (ch == ' ' or ch == '\t') continue;
         try buffer.append(ch);
     }
@@ -174,4 +225,32 @@ pub fn hollerithBytes(text: []const u8) ?[]const u8 {
     const idx = std.mem.indexOfScalar(u8, text, 'H') orelse std.mem.indexOfScalar(u8, text, 'h') orelse return null;
     if (idx + 1 > text.len) return null;
     return text[idx + 1 ..];
+}
+
+fn kindUnderscoreIndex(text: []const u8) ?usize {
+    var i: usize = 0;
+    while (i + 1 < text.len) : (i += 1) {
+        if (text[i] != '_') continue;
+        if (!std.ascii.isAlphanumeric(text[i + 1])) continue;
+        return i;
+    }
+    return null;
+}
+
+test "normalizeFloatLiteral strips kind suffix" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const normalized = try normalizeFloatLiteral(allocator, "1.0e-1_wp");
+    defer allocator.free(normalized);
+    try testing.expectEqualStrings("1.0e-1", normalized);
+}
+
+test "realLiteralType detects D exponent and kind suffix" {
+    const testing = std.testing;
+
+    try testing.expectEqual(IRType.f64, realLiteralType("1.0D0"));
+    try testing.expectEqual(IRType.f64, realLiteralType("1.0_wp"));
+    try testing.expectEqual(IRType.f64, realLiteralType("1.0_8"));
+    try testing.expectEqual(IRType.f32, realLiteralType("1.0_sp"));
 }

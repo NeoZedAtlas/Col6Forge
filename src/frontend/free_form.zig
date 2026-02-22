@@ -247,9 +247,17 @@ fn rewriteAndAppend(
                                 if (isArrayConstructor(value)) {
                                     const elems = std.mem.trim(u8, value[1 .. value.len - 1], " \t");
                                     const count = countTopLevelElements(elems);
-                                    const decl_text = try std.fmt.allocPrint(allocator, "{s} {s}({d})", .{ mapped, name, count });
+                                    const lparen_idx = std.mem.indexOfScalar(u8, name, '(');
+                                    const base_name = if (lparen_idx) |idx|
+                                        std.mem.trim(u8, name[0..idx], " \t")
+                                    else
+                                        name;
+                                    const decl_text = if (lparen_idx != null)
+                                        try std.fmt.allocPrint(allocator, "{s} {s}", .{ mapped, name })
+                                    else
+                                        try std.fmt.allocPrint(allocator, "{s} {s}({d})", .{ mapped, base_name, count });
                                     try appendLogicalLine(list, decl_text, start_line, end_line);
-                                    const data_text = try std.fmt.allocPrint(allocator, "DATA {s} /{s}/", .{ name, elems });
+                                    const data_text = try std.fmt.allocPrint(allocator, "DATA {s} /{s}/", .{ base_name, elems });
                                     try appendLogicalLine(list, data_text, start_line, end_line);
                                 } else {
                                     if (scalar_names.items.len > 0) try scalar_names.appendSlice(", ");
@@ -424,15 +432,6 @@ fn normalizeStmtText(allocator: std.mem.Allocator, text: []const u8) ![]const u8
             i += 1;
             continue;
         }
-        if (matchNoCaseAt(text, i, "._WP")) {
-            try out.appendSlice(".0");
-            i += 4;
-            continue;
-        }
-        if (matchNoCaseAt(text, i, "_WP")) {
-            i += 3;
-            continue;
-        }
         try out.append(text[i]);
         i += 1;
     }
@@ -538,11 +537,6 @@ fn indexOfDoubleColon(text: []const u8) ?usize {
         if (text[i] == ':' and text[i + 1] == ':') return i;
     }
     return null;
-}
-
-fn matchNoCaseAt(text: []const u8, start: usize, pattern: []const u8) bool {
-    if (start + pattern.len > text.len) return false;
-    return std.ascii.eqlIgnoreCase(text[start .. start + pattern.len], pattern);
 }
 
 test "normalizeFreeForm joins ampersand continuations" {
@@ -694,6 +688,19 @@ test "normalizeFreeForm rewrites PARAMETER array constructors to DATA init" {
     try testing.expectEqualStrings("DATA a /1,2,3/", lines[1].text);
 }
 
+test "normalizeFreeForm keeps declarator dims and data base name for PARAMETER array constructors" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "real, parameter :: y(3) = [1,2,3]\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expectEqualStrings("REAL y(3)", lines[0].text);
+    try testing.expectEqualStrings("DATA y /1,2,3/", lines[1].text);
+}
+
 test "normalizeFreeForm splits semicolon case assignment and keeps first array ctor element" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -717,7 +724,7 @@ test "normalizeFreeForm keeps REAL(WP) parameter type when WP kind is unknown" {
 
     try testing.expectEqual(@as(usize, 2), lines.len);
     try testing.expectEqualStrings("REAL(WP) one", lines[0].text);
-    try testing.expectEqualStrings("PARAMETER (one = 1.0)", lines[1].text);
+    try testing.expectEqualStrings("PARAMETER (one = 1.0_wp)", lines[1].text);
 }
 
 test "normalizeFreeForm infers WP kind from minpack_module use for parameter rewrite" {

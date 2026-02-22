@@ -17,8 +17,16 @@ pub const UnitAnalyzer = struct {
         known_function_types: *const std.StringHashMap(ast.TypeKind),
         known_procedure_sigs: *const std.StringHashMap(context.Context.ProcedureSig),
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
+        known_host_owner: ?[]const u8,
     ) UnitAnalyzer {
-        var ctx = context.Context.init(arena, unit.*, known_function_types, known_procedure_sigs, known_host_parameters);
+        var ctx = context.Context.init(
+            arena,
+            unit.*,
+            known_function_types,
+            known_procedure_sigs,
+            known_host_parameters,
+            known_host_owner,
+        );
         ctx.bindUnitBacking(unit);
         return .{
             .ctx = ctx,
@@ -114,7 +122,14 @@ test "semantic UnexpectedTypeDecl maps to CF3107 with declaration source" {
         .decl_sources = &.{},
         .stmts = &.{},
     };
-    var ctx = context.Context.init(testing.allocator, unit, &known_function_types, &known_procedure_sigs, &known_host_parameters);
+    var ctx = context.Context.init(
+        testing.allocator,
+        unit,
+        &known_function_types,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        null,
+    );
     ctx.current_decl_source = .{
         .line = 3,
         .column = 7,

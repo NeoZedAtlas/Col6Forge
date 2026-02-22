@@ -160,6 +160,8 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
         trackCharAssignment(ctx, assign.target, null);
         return;
     }
+    if (try emitContiguousSectionScalarAssignment(ctx, builder, assign)) return;
+    if (try emitWholeArrayScalarAssignment(ctx, builder, assign)) return;
     if (charLenForExpr(ctx, assign.target)) |char_len| {
         const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
         if (assign.value.* == .substring and charLenForExpr(ctx, assign.value) == null) {
@@ -177,6 +179,125 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
     const sym_ty = try expr.exprType(ctx, assign.target);
     const coerced = try expr.coerce(ctx, builder, value, sym_ty);
     try builder.store(coerced, target_ptr);
+}
+
+fn emitContiguousSectionScalarAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    if (assign.target.* != .call_or_subscript) return false;
+    const call = assign.target.call_or_subscript;
+    const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(assign.target))) orelse .unknown;
+    if (kind == .call) return false;
+
+    const sym = ctx.findSymbol(call.name) orelse return false;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return false;
+    if (sym.type_kind == .character) return false;
+
+    var total_count = ValueRef{ .name = "1", .ty = .i64, .is_ptr = false };
+    var has_range = false;
+    for (call.args) |arg| {
+        if (arg.* != .dim_range) return false;
+        const range = arg.dim_range;
+        has_range = true;
+        if (!rangeLowerIsOne(range)) return false;
+        if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return false;
+        var upper = try expr.emitExpr(ctx, builder, range.upper);
+        upper = try expr.coerce(ctx, builder, upper, .i64);
+        const extent_minus_one = try expr.emitSub(ctx, builder, upper, .{ .name = "1", .ty = .i64, .is_ptr = false });
+        const extent = try expr.emitAdd(ctx, builder, extent_minus_one, .{ .name = "1", .ty = .i64, .is_ptr = false });
+        total_count = try expr.emitMul(ctx, builder, total_count, extent);
+    }
+    if (!has_range) return false;
+
+    const base_ptr = ctx.locals.get(call.name) orelse return error.UnknownSymbol;
+    const elem_ty = llvm_types.typeFromKind(sym.type_kind);
+    const value = try expr.emitExpr(ctx, builder, assign.value);
+    const coerced = try expr.coerce(ctx, builder, value, elem_ty);
+    try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, total_count, coerced);
+    return true;
+}
+
+fn emitWholeArrayScalarAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    if (assign.target.* != .identifier) return false;
+    const name = assign.target.identifier;
+    const sym = ctx.findSymbol(name) orelse return false;
+    if (sym.dims.len == 0) return false;
+    if (sym.type_kind == .character) return false;
+
+    const base_ptr = ctx.locals.get(name) orelse return error.UnknownSymbol;
+    const elem_ty = llvm_types.typeFromKind(sym.type_kind);
+    const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
+        error.ArrayDimNotConstant => null,
+        else => return err,
+    };
+    const count_val = if (elem_count) |count|
+        ValueRef{ .name = try ctx.intLiteral(@intCast(count)), .ty = .i64, .is_ptr = false }
+    else
+        try emitDynamicElemCount(ctx, builder, sym);
+    const value = try expr.emitExpr(ctx, builder, assign.value);
+    const coerced = try expr.coerce(ctx, builder, value, elem_ty);
+    try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, count_val, coerced);
+    return true;
+}
+
+fn emitDynamicElemCount(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) EmitError!ValueRef {
+    var total = constI64(ctx, 1);
+    for (sym.dims) |dim| {
+        var extent = expr.emitDimValue(ctx, builder, dim) catch |err| switch (err) {
+            // Deferred-shape extents such as SIZE(x) are lowered conservatively.
+            error.UnknownSymbol => constI64(ctx, 1),
+            else => return err,
+        };
+        if (extent.ty != .i64) {
+            extent = try expr.coerce(ctx, builder, extent, .i64);
+        }
+        total = try expr.emitMul(ctx, builder, total, extent);
+    }
+    return total;
+}
+
+fn emitLinearFillLoop(
+    ctx: *Context,
+    builder: anytype,
+    base_ptr: ValueRef,
+    elem_ty: ir.IRType,
+    count: ValueRef,
+    value: ValueRef,
+) EmitError!void {
+    const idx_ptr = try ctx.nextTemp();
+    try builder.alloca(idx_ptr, .i64);
+    try builder.store(.{ .name = "0", .ty = .i64, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+
+    const loop_head = try ctx.nextLabel("arr_fill_head");
+    const loop_body = try ctx.nextLabel("arr_fill_body");
+    const loop_exit = try ctx.nextLabel("arr_fill_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const idx_tmp = try ctx.nextTemp();
+    try builder.load(idx_tmp, .i64, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    const idx_val = ValueRef{ .name = idx_tmp, .ty = .i64, .is_ptr = false };
+    const cond_tmp = try ctx.nextTemp();
+    try builder.compare(cond_tmp, "icmp", "slt", .i64, idx_val, count);
+    const cond_val = ValueRef{ .name = cond_tmp, .ty = .i1, .is_ptr = false };
+    try builder.brCond(cond_val, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(elem_ptr_name, elem_ty, base_ptr, idx_val);
+    try builder.store(value, .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true });
+    const next_tmp = try ctx.nextTemp();
+    try builder.binary(next_tmp, "add", .i64, idx_val, .{ .name = "1", .ty = .i64, .is_ptr = false });
+    try builder.store(.{ .name = next_tmp, .ty = .i64, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
+}
+
+fn rangeLowerIsOne(range: ast.DimRange) bool {
+    const lower = range.lower orelse return true;
+    return switch (lower.*) {
+        .literal => |lit| lit.kind == .integer and std.mem.eql(u8, lit.text, "1"),
+        else => false,
+    };
 }
 
 fn evalCharConst(ctx: *Context, value: *ast.Expr, target_len: usize) !?[]const u8 {

@@ -118,8 +118,9 @@ pub fn parseStatement(
         return .{ .label = label, .node = .{ .cont = {} } };
     }
     if (lp.isKeywordSplit("WHERE")) {
+        const stmt_node = try parseWhereAsIfSingle(arena, &lp);
         index.* += 1;
-        return .{ .label = label, .node = .{ .cont = {} } };
+        return .{ .label = label, .node = stmt_node };
     }
     if (lp.isKeywordSplit("PAUSE")) {
         index.* += 1;
@@ -319,9 +320,6 @@ pub fn parseStatement(
     _ = lp.expect(.equals) orelse return error.UnexpectedToken;
     const value = try expr.parseExpr(&lp, arena, 0);
     index.* += 1;
-    if (isSectionAssignmentTarget(target)) {
-        return .{ .label = label, .node = .{ .cont = {} } };
-    }
     return .{ .label = label, .node = .{ .assignment = .{ .target = target, .value = value } } };
 }
 
@@ -427,6 +425,21 @@ fn parseIfStatement(
     const stmt_node = try parseInlineStmtNode(lp, arena, do_ctx);
     index.* += 1;
     return .{ .label = label, .node = .{ .if_single = .{ .condition = cond, .stmt = stmt_node } } };
+}
+
+fn parseWhereAsIfSingle(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    if (!lp.consumeKeyword("WHERE")) return error.UnexpectedToken;
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    const cond = try expr.parseExpr(lp, arena, 0);
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+
+    const target = try expr.parseExpr(lp, arena, 0);
+    _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+    const value = try expr.parseExpr(lp, arena, 0);
+
+    const assign_node = try arena.create(StmtNode);
+    assign_node.* = .{ .assignment = .{ .target = target, .value = value } };
+    return .{ .if_single = .{ .condition = cond, .stmt = assign_node } };
 }
 
 const CaseClause = struct {
@@ -809,10 +822,15 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator, do_ctx: *DoCon
         node.* = .{ .pause = {} };
         return node;
     }
-    if (lp.isKeywordSplit("ALLOCATE") or lp.isKeywordSplit("DEALLOCATE") or lp.isKeywordSplit("WHERE")) {
-        // Minimal compatibility: accept modern allocation/masking inline forms.
+    if (lp.isKeywordSplit("ALLOCATE") or lp.isKeywordSplit("DEALLOCATE")) {
+        // Minimal compatibility: accept modern allocation inline forms.
         const node = try arena.create(StmtNode);
         node.* = .{ .cont = {} };
+        return node;
+    }
+    if (lp.isKeywordSplit("WHERE")) {
+        const node = try arena.create(StmtNode);
+        node.* = try parseWhereAsIfSingle(arena, lp);
         return node;
     }
     if (isErrorStopStart(lp.*)) {
@@ -902,25 +920,8 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator, do_ctx: *DoCon
     _ = lp.expect(.equals) orelse return error.UnexpectedToken;
     const value = try expr.parseExpr(lp, arena, 0);
     const node = try arena.create(StmtNode);
-    if (isSectionAssignmentTarget(target)) {
-        node.* = .{ .cont = {} };
-        return node;
-    }
     node.* = .{ .assignment = .{ .target = target, .value = value } };
     return node;
-}
-
-fn isSectionAssignmentTarget(target: *Expr) bool {
-    return switch (target.*) {
-        .call_or_subscript => |call| blk: {
-            for (call.args) |arg| {
-                if (arg.* == .dim_range) break :blk true;
-            }
-            break :blk false;
-        },
-        .substring => |sub| sub.args.len == 0 and sub.start != null and sub.end != null,
-        else => false,
-    };
 }
 
 test "parseStatement parses assignment" {
@@ -1424,7 +1425,7 @@ test "parseStatement accepts ALLOCATE as no-op" {
     try testing.expectEqual(@as(usize, 1), idx);
 }
 
-test "parseStatement accepts WHERE as no-op" {
+test "parseStatement parses WHERE as conditional assignment" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -1441,6 +1442,7 @@ test "parseStatement accepts WHERE as no-op" {
     var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
 
     const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
-    try testing.expect(stmt_node.node == .cont);
+    try testing.expect(stmt_node.node == .if_single);
+    try testing.expect(stmt_node.node.if_single.stmt.* == .assignment);
     try testing.expectEqual(@as(usize, 1), idx);
 }

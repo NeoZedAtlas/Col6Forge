@@ -44,6 +44,9 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
 
     const runtime_cfg = extractRuntimeBuildConfig(parsed.forward_args);
 
+    var known_symbols = try collectFortranKnownSymbols(allocator, parsed.fortran_inputs);
+    defer known_symbols.deinit(allocator);
+
     const work_rel = try makeWorkDir(allocator);
     defer allocator.free(work_rel);
 
@@ -54,6 +57,8 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
         parsed.bounds_check,
         parsed.pause_mode,
         parsed.time_report,
+        known_symbols.function_types,
+        &.{},
     );
     defer translated.deinit(allocator);
 
@@ -396,6 +401,130 @@ const TranslatedFortran = struct {
     }
 };
 
+const KnownFortranSymbols = struct {
+    function_types: []const Col6Forge.sema.KnownFunctionType,
+    procedure_sigs: []const Col6Forge.sema.KnownProcedureSig,
+
+    fn deinit(self: *KnownFortranSymbols, allocator: std.mem.Allocator) void {
+        for (self.function_types) |entry| {
+            allocator.free(entry.name);
+        }
+        allocator.free(self.function_types);
+
+        for (self.procedure_sigs) |entry| {
+            allocator.free(entry.name);
+        }
+        allocator.free(self.procedure_sigs);
+    }
+};
+
+fn collectFortranKnownSymbols(
+    allocator: std.mem.Allocator,
+    fortran_inputs: []const []const u8,
+) !KnownFortranSymbols {
+    var function_types: std.ArrayList(Col6Forge.sema.KnownFunctionType) = .empty;
+    errdefer {
+        for (function_types.items) |entry| allocator.free(entry.name);
+        function_types.deinit(allocator);
+    }
+
+    var procedure_sigs: std.ArrayList(Col6Forge.sema.KnownProcedureSig) = .empty;
+    errdefer {
+        for (procedure_sigs.items) |entry| allocator.free(entry.name);
+        procedure_sigs.deinit(allocator);
+    }
+
+    const max_size = 64 * 1024 * 1024;
+    for (fortran_inputs) |input_path| {
+        const contents = std.fs.cwd().readFileAlloc(allocator, input_path, max_size) catch continue;
+        defer allocator.free(contents);
+
+        const form = detectFortranSourceForm(input_path);
+        const logical_lines = Col6Forge.frontend.normalizeSourceForm(form, allocator, contents, true) catch continue;
+        defer Col6Forge.frontend.freeSourceFormLines(form, allocator, logical_lines);
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        const program = Col6Forge.parseProgram(arena.allocator(), logical_lines) catch continue;
+        for (program.units) |unit| {
+            if (unit.kind == .function) {
+                const fn_ty = Col6Forge.sema.inferFunctionType(unit);
+                try upsertKnownFunctionType(allocator, &function_types, unit.name, fn_ty);
+            }
+            if (unit.kind == .function or unit.kind == .subroutine) {
+                try upsertKnownProcedureSig(allocator, &procedure_sigs, unit.name, unit.kind, unit.args.len);
+            }
+        }
+    }
+
+    return .{
+        .function_types = try function_types.toOwnedSlice(allocator),
+        .procedure_sigs = try procedure_sigs.toOwnedSlice(allocator),
+    };
+}
+
+fn upsertKnownFunctionType(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList(Col6Forge.sema.KnownFunctionType),
+    name: []const u8,
+    type_kind: Col6Forge.ast.TypeKind,
+) !void {
+    if (indexOfKnownFunctionType(list.items, name)) |idx| {
+        list.items[idx].type_kind = type_kind;
+        return;
+    }
+    try list.append(allocator, .{
+        .name = try allocator.dupe(u8, name),
+        .type_kind = type_kind,
+    });
+}
+
+fn upsertKnownProcedureSig(
+    allocator: std.mem.Allocator,
+    list: *std.ArrayList(Col6Forge.sema.KnownProcedureSig),
+    name: []const u8,
+    kind: Col6Forge.ast.ProgramUnitKind,
+    arg_count: usize,
+) !void {
+    if (indexOfKnownProcedureSig(list.items, name)) |idx| {
+        list.items[idx].kind = kind;
+        list.items[idx].arg_count = arg_count;
+        return;
+    }
+    try list.append(allocator, .{
+        .name = try allocator.dupe(u8, name),
+        .kind = kind,
+        .arg_count = arg_count,
+    });
+}
+
+fn indexOfKnownFunctionType(list: []const Col6Forge.sema.KnownFunctionType, name: []const u8) ?usize {
+    for (list, 0..) |entry, idx| {
+        if (std.ascii.eqlIgnoreCase(entry.name, name)) return idx;
+    }
+    return null;
+}
+
+fn indexOfKnownProcedureSig(list: []const Col6Forge.sema.KnownProcedureSig, name: []const u8) ?usize {
+    for (list, 0..) |entry, idx| {
+        if (std.ascii.eqlIgnoreCase(entry.name, name)) return idx;
+    }
+    return null;
+}
+
+fn detectFortranSourceForm(input_path: []const u8) Col6Forge.frontend.SourceForm {
+    const ext = std.fs.path.extension(input_path);
+    if (std.ascii.eqlIgnoreCase(ext, ".f90") or
+        std.ascii.eqlIgnoreCase(ext, ".f95") or
+        std.ascii.eqlIgnoreCase(ext, ".f03") or
+        std.ascii.eqlIgnoreCase(ext, ".f08"))
+    {
+        return .free;
+    }
+    return .fixed;
+}
+
 fn translateFortranInputs(
     allocator: std.mem.Allocator,
     work_rel: []const u8,
@@ -403,6 +532,8 @@ fn translateFortranInputs(
     bounds_check: bool,
     pause_mode: Col6Forge.PauseMode,
     time_report: bool,
+    known_function_types: []const Col6Forge.sema.KnownFunctionType,
+    known_procedure_sigs: []const Col6Forge.sema.KnownProcedureSig,
 ) !TranslatedFortran {
     var ll_paths: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -423,6 +554,8 @@ fn translateFortranInputs(
             bounds_check,
             pause_mode,
             time_report,
+            known_function_types,
+            known_procedure_sigs,
         ) catch |err| {
             allocator.free(ll_path);
             try reportPipelineError(input_path, err);
@@ -673,6 +806,8 @@ fn emitPipelineToFile(
     bounds_check: bool,
     pause_mode: Col6Forge.PauseMode,
     time_report: bool,
+    known_function_types: []const Col6Forge.sema.KnownFunctionType,
+    known_procedure_sigs: []const Col6Forge.sema.KnownProcedureSig,
 ) !void {
     var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
     defer out_file.close();
@@ -688,6 +823,8 @@ fn emitPipelineToFile(
             .pause_mode = pause_mode,
             .time_report = time_report,
             .coarse_source_map = true,
+            .known_function_types = known_function_types,
+            .known_procedure_sigs = known_procedure_sigs,
         },
     );
     try out_writer.interface.flush();
