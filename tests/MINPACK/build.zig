@@ -30,6 +30,31 @@ pub fn build(b: *std.Build) void {
         "PAUSE strategy forwarded to col6forge-cc: auto|continue|stop",
     ) orelse "continue";
     const pause_arg = b.fmt("-fpause-mode={s}", .{pause_mode});
+    const summary_rtol = b.option(
+        f64,
+        "summary_rtol",
+        "Relative tolerance for MINPACK LMSTR summary FINAL L2 comparison",
+    ) orelse 1.0e-2;
+    const summary_atol = b.option(
+        f64,
+        "summary_atol",
+        "Absolute tolerance for MINPACK LMSTR summary FINAL L2 comparison",
+    ) orelse 1.0e-12;
+    const nfev_tol = b.option(
+        i64,
+        "nfev_tol",
+        "Allowed absolute NFEV delta in MINPACK LMSTR summary comparison",
+    ) orelse 0;
+    const njev_tol = b.option(
+        i64,
+        "njev_tol",
+        "Allowed absolute NJEV delta in MINPACK LMSTR summary comparison",
+    ) orelse 8;
+    const allow_info_23 = b.option(
+        bool,
+        "allow_info_23",
+        "Treat INFO=2 and INFO=3 as equivalent in MINPACK LMSTR summary comparison",
+    ) orelse true;
 
     const core_step = addCol6forgeStep(
         b,
@@ -77,4 +102,33 @@ pub fn build(b: *std.Build) void {
     all_step.dependOn(core_step);
     all_step.dependOn(example_step);
     all_step.dependOn(test_step);
+
+    const lmstr_tol_step = b.step(
+        "col6forge-lmstr-tol",
+        "Compile and run MINPACK test_lmstr with gfortran+col6forge, then compare summary under tolerance",
+    );
+    const lmstr_tol_run = b.addSystemCommand(&.{
+        "zig",
+        "run",
+        b.pathFromRoot("tools/minpack_tolerance_check.zig"),
+        "--",
+    });
+    const allow_info_23_arg = if (allow_info_23) "true" else "false";
+    lmstr_tol_run.addArgs(&.{
+        "--minpack-dir",
+        b.pathFromRoot("."),
+        "--pause-mode",
+        pause_mode,
+        "--rtol-final-norm",
+        b.fmt("{d}", .{summary_rtol}),
+        "--atol-final-norm",
+        b.fmt("{d}", .{summary_atol}),
+        "--nfev-tol",
+        b.fmt("{d}", .{nfev_tol}),
+        "--njev-tol",
+        b.fmt("{d}", .{njev_tol}),
+        "--allow-info-23",
+        allow_info_23_arg,
+    });
+    lmstr_tol_step.dependOn(&lmstr_tol_run.step);
 }
