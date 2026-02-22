@@ -930,6 +930,32 @@ fn emitAtan2(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef 
     return emitLibmBinaryFloatValue(ctx, builder, "atan2f", "atan2", left, right);
 }
 
+fn emitLogicalCast(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+    if (value.ty == .i1) return value;
+    if (isIntegerType(value.ty)) {
+        const tmp = try ctx.nextTemp();
+        try builder.compare(tmp, "icmp", "ne", value.ty, value, utils.zeroValue(value.ty));
+        return .{ .name = tmp, .ty = .i1, .is_ptr = false };
+    }
+    if (isRealType(value.ty)) {
+        const tmp = try ctx.nextTemp();
+        try builder.compare(tmp, "fcmp", "one", value.ty, value, utils.zeroValue(value.ty));
+        return .{ .name = tmp, .ty = .i1, .is_ptr = false };
+    }
+    return error.UnsupportedIntrinsicType;
+}
+
+fn emitIntrinsicAny(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    return emitLogicalCast(ctx, builder, value);
+}
+
+fn emitIntrinsicAllocated(args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    return .{ .name = "1", .ty = .i1, .is_ptr = false };
+}
+
 const IntrinsicTag = enum {
     sin,
     cos,
@@ -1011,6 +1037,8 @@ const IntrinsicTag = enum {
     datan,
     atan2,
     datan2,
+    any,
+    allocated,
     csin,
     ccos,
     cexp,
@@ -1103,6 +1131,8 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "datan", .datan },
     .{ "atan2", .atan2 },
     .{ "datan2", .datan2 },
+    .{ "any", .any },
+    .{ "allocated", .allocated },
     .{ "csin", .csin },
     .{ "ccos", .ccos },
     .{ "cexp", .cexp },
@@ -1226,6 +1256,8 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .datan => return emitDoubleUnaryLibm(ctx, builder, "atan", args),
         .atan2 => return emitAtan2(ctx, builder, args),
         .datan2 => return emitDoubleBinaryLibm(ctx, builder, "atan2", args),
+        .any => return emitIntrinsicAny(ctx, builder, args),
+        .allocated => return emitIntrinsicAllocated(args),
         .csin => return emitComplexCsin(ctx, builder, args),
         .ccos => return emitComplexCcos(ctx, builder, args),
         .cexp => return emitComplexCexp(ctx, builder, args),

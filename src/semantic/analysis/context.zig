@@ -26,6 +26,7 @@ pub const Context = struct {
     current_stmt: ?ast.Stmt,
     known_function_types: *const std.StringHashMap(ast.TypeKind),
     known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
+    known_host_parameters: *const std.StringHashMap(symbols.Symbol),
 
     pub const Owner = struct {
         name: []const u8,
@@ -37,6 +38,7 @@ pub const Context = struct {
         unit: ast.ProgramUnit,
         known_function_types: *const std.StringHashMap(ast.TypeKind),
         known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
+        known_host_parameters: *const std.StringHashMap(symbols.Symbol),
     ) Context {
         var ctx = Context{
             .arena = arena,
@@ -56,6 +58,7 @@ pub const Context = struct {
             .current_stmt = null,
             .known_function_types = known_function_types,
             .known_procedure_sigs = known_procedure_sigs,
+            .known_host_parameters = known_host_parameters,
         };
         ctx.current_unit = &ctx.unit;
         return ctx;

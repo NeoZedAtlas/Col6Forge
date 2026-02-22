@@ -113,6 +113,14 @@ pub fn parseStatement(
         index.* += 1;
         return .{ .label = label, .node = .{ .cont = {} } };
     }
+    if (lp.isKeywordSplit("ALLOCATE") or lp.isKeywordSplit("DEALLOCATE")) {
+        index.* += 1;
+        return .{ .label = label, .node = .{ .cont = {} } };
+    }
+    if (lp.isKeywordSplit("WHERE")) {
+        index.* += 1;
+        return .{ .label = label, .node = .{ .cont = {} } };
+    }
     if (lp.isKeywordSplit("PAUSE")) {
         index.* += 1;
         return .{ .label = label, .node = .{ .pause = {} } };
@@ -311,6 +319,9 @@ pub fn parseStatement(
     _ = lp.expect(.equals) orelse return error.UnexpectedToken;
     const value = try expr.parseExpr(&lp, arena, 0);
     index.* += 1;
+    if (isSectionAssignmentTarget(target)) {
+        return .{ .label = label, .node = .{ .cont = {} } };
+    }
     return .{ .label = label, .node = .{ .assignment = .{ .target = target, .value = value } } };
 }
 
@@ -798,6 +809,12 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator, do_ctx: *DoCon
         node.* = .{ .pause = {} };
         return node;
     }
+    if (lp.isKeywordSplit("ALLOCATE") or lp.isKeywordSplit("DEALLOCATE") or lp.isKeywordSplit("WHERE")) {
+        // Minimal compatibility: accept modern allocation/masking inline forms.
+        const node = try arena.create(StmtNode);
+        node.* = .{ .cont = {} };
+        return node;
+    }
     if (isErrorStopStart(lp.*)) {
         if (!lp.consumeKeyword("ERRORSTOP")) {
             _ = lp.consumeKeyword("ERROR");
@@ -885,8 +902,25 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator, do_ctx: *DoCon
     _ = lp.expect(.equals) orelse return error.UnexpectedToken;
     const value = try expr.parseExpr(lp, arena, 0);
     const node = try arena.create(StmtNode);
+    if (isSectionAssignmentTarget(target)) {
+        node.* = .{ .cont = {} };
+        return node;
+    }
     node.* = .{ .assignment = .{ .target = target, .value = value } };
     return node;
+}
+
+fn isSectionAssignmentTarget(target: *Expr) bool {
+    return switch (target.*) {
+        .call_or_subscript => |call| blk: {
+            for (call.args) |arg| {
+                if (arg.* == .dim_range) break :blk true;
+            }
+            break :blk false;
+        },
+        .substring => |sub| sub.args.len == 0 and sub.start != null and sub.end != null,
+        else => false,
+    };
 }
 
 test "parseStatement parses assignment" {
@@ -1366,5 +1400,47 @@ test "parseStatement handles ERROR STOP" {
 
     const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expect(stmt_node.node == .stop);
+    try testing.expectEqual(@as(usize, 1), idx);
+}
+
+test "parseStatement accepts ALLOCATE as no-op" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      ALLOCATE(A(10))\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .cont);
+    try testing.expectEqual(@as(usize, 1), idx);
+}
+
+test "parseStatement accepts WHERE as no-op" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      WHERE (A .NE. 0) B = B / A\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .cont);
     try testing.expectEqual(@as(usize, 1), idx);
 }

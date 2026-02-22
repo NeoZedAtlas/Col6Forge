@@ -209,6 +209,11 @@ fn rewriteAndAppend(
                 const decl_text = try std.fmt.allocPrint(allocator, "{s} {s}", .{ mapped, names });
                 try appendLogicalLine(list, decl_text, start_line, end_line);
             }
+            // Temporarily skip PARAMETER lowering for array-constructor values.
+            // The current parser/const-evaluator pipeline only supports scalar parameters.
+            if (std.mem.indexOfScalar(u8, simplified, '[') != null) {
+                return;
+            }
             const param_text = try std.fmt.allocPrint(allocator, "PARAMETER ({s})", .{simplified});
             try appendLogicalLine(list, param_text, start_line, end_line);
             return;
@@ -482,4 +487,16 @@ test "normalizeFreeForm strips ! comments outside strings" {
     try testing.expectEqual(@as(usize, 2), lines.len);
     try testing.expectEqualStrings("a = 1", lines[0].text);
     try testing.expectEqualStrings("b = '!'", lines[1].text);
+}
+
+test "normalizeFreeForm skips PARAMETER rewrite for array constructors" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "integer,dimension(3),parameter :: a = [1,2,3]\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 1), lines.len);
+    try testing.expectEqualStrings("integer,dimension a", lines[0].text);
 }

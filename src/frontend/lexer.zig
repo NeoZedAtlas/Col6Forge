@@ -182,6 +182,11 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
         }
 
         switch (ch) {
+            ';', '[', ']' => {
+                // Free-form statement separators and modern array-constructor
+                // delimiters are tolerated at lex time.
+                i += 1;
+            },
             '(' => {
                 try tokens.append(makeToken(line, .l_paren, i, i + 1));
                 i += 1;
@@ -416,4 +421,23 @@ test "lexLogicalLine rejects overflowing Hollerith length" {
     try testing.expect(diag_opt != null);
     const diag = diag_opt.?;
     try testing.expectEqualStrings("CF1003", diag.code);
+}
+
+test "lexLogicalLine tolerates semicolon and bracket delimiters" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CASE(1); X = [1,2]\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+
+    const expected = [_]TokenKind{
+        .identifier, .l_paren, .integer, .r_paren, .identifier, .equals, .integer, .comma, .integer,
+    };
+    try testing.expectEqual(expected.len, tokens.len);
+    for (tokens, 0..) |tok, idx| {
+        try testing.expectEqual(expected[idx], tok.kind);
+    }
 }

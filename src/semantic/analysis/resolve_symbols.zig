@@ -59,6 +59,13 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
     if (findSymbolIndex(self, name)) |idx| {
         return idx;
     }
+    if (self.current_decl_source == null) {
+        if (findKnownHostParameter(self, name)) |host_sym| {
+            var imported = host_sym;
+            imported.name = name;
+            return internSymbol(self, imported);
+        }
+    }
     const known_fn_type = findKnownFunctionType(self, name);
     const info = if (known_fn_type) |known_ty|
         ImplicitInfo{ .type_kind = known_ty, .char_len = null }
@@ -235,5 +242,17 @@ pub fn isIntrinsicName(name: []const u8) bool {
         std.ascii.eqlIgnoreCase(name, "CLOG") or
         std.ascii.eqlIgnoreCase(name, "CSQRT") or
         std.ascii.eqlIgnoreCase(name, "ATAN") or
-        std.ascii.eqlIgnoreCase(name, "ATAN2");
+        std.ascii.eqlIgnoreCase(name, "ATAN2") or
+        std.ascii.eqlIgnoreCase(name, "ANY") or
+        std.ascii.eqlIgnoreCase(name, "ALLOCATED");
+}
+
+fn findKnownHostParameter(self: *context.Context, name: []const u8) ?Symbol {
+    var it = self.known_host_parameters.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
+            return entry.value_ptr.*;
+        }
+    }
+    return null;
 }

@@ -129,19 +129,24 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             return binary.emitBinary(ctx, builder, bin.op, lhs, rhs);
         },
         .call_or_subscript => |call_or_sub| {
+            const sym = ctx.findSymbol(call_or_sub.name) orelse return error.UnknownSymbol;
+            if (sym.kind == .parameter) {
+                if (sym.const_value) |cv| {
+                    // Scalar PARAMETER values may appear with legacy subscript syntax
+                    // after free-form lowering; treat them as compile-time constants.
+                    return casting.emitConstTyped(ctx, builder, cv, sym.type_kind);
+                }
+            }
             var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
             if (kind == .unknown) {
-                if (ctx.findSymbol(call_or_sub.name)) |sym| {
-                    if (sym.dims.len > 0) {
-                        kind = .subscript;
-                    } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
-                        kind = .call;
-                    }
+                if (sym.dims.len > 0) {
+                    kind = .subscript;
+                } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                    kind = .call;
                 }
             }
             if (kind == .subscript) {
                 const ptr = try memory.emitSubscriptPtr(ctx, builder, call_or_sub);
-                const sym = ctx.findSymbol(call_or_sub.name) orelse return error.UnknownSymbol;
                 if (sym.type_kind == .character) {
                     return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
                 }
@@ -154,7 +159,6 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             if (ctx.getStatementFunction(call_or_sub.name)) |def| {
                 return emitStatementFunctionCall(ctx, builder, call_or_sub.name, def, call_or_sub.args);
             }
-            const sym = ctx.findSymbol(call_or_sub.name) orelse return error.UnknownSymbol;
             if (sym.is_intrinsic) {
                 return intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args);
             }

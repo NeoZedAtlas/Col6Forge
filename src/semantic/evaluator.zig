@@ -68,6 +68,17 @@ fn evalConstCall(call: ast.CallOrSubscript, resolver: ?ConstResolver) anyerror!?
         const arg = (try evalConst(call.args[0], resolver)) orelse return null;
         return .{ .real = std.math.log10(toReal(arg)) };
     }
+    if (std.ascii.eqlIgnoreCase(call.name, "ATAN") or std.ascii.eqlIgnoreCase(call.name, "DATAN")) {
+        if (call.args.len != 1) return null;
+        const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+        return .{ .real = std.math.atan(toReal(arg)) };
+    }
+    if (std.ascii.eqlIgnoreCase(call.name, "ATAN2") or std.ascii.eqlIgnoreCase(call.name, "DATAN2")) {
+        if (call.args.len != 2) return null;
+        const y = (try evalConst(call.args[0], resolver)) orelse return null;
+        const x = (try evalConst(call.args[1], resolver)) orelse return null;
+        return .{ .real = std.math.atan2(toReal(y), toReal(x)) };
+    }
     if (std.ascii.eqlIgnoreCase(call.name, "ABS")) {
         if (call.args.len != 1) return null;
         const arg = (try evalConst(call.args[0], resolver)) orelse return null;

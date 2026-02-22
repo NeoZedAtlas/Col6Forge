@@ -91,8 +91,11 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                 } else {
                     var args = std.array_list.Managed(*Expr).init(arena);
                     while (!lp.peekIs(.r_paren)) {
-                        const expr = try parseExprDepth(lp, arena, 0, depth + 1);
-                        try args.append(expr);
+                        const arg_expr = if (hasArgumentDimRange(lp.*))
+                            try parseDimExprDepth(lp, arena, depth + 1)
+                        else
+                            try parseExprDepth(lp, arena, 0, depth + 1);
+                        try args.append(arg_expr);
                         _ = lp.consume(.comma);
                     }
                     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
@@ -207,6 +210,30 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
 }
 
 fn hasSubstringRange(lp: LineParser) bool {
+    var depth: usize = 0;
+    var saw_colon = false;
+    var idx = lp.index;
+    while (idx < lp.tokens.len) : (idx += 1) {
+        const tok = lp.tokens[idx];
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => {
+                if (depth == 0) return saw_colon;
+                depth -= 1;
+            },
+            .comma => {
+                if (depth == 0) return false;
+            },
+            .colon => {
+                if (depth == 0) saw_colon = true;
+            },
+            else => {},
+        }
+    }
+    return saw_colon;
+}
+
+fn hasArgumentDimRange(lp: LineParser) bool {
     var depth: usize = 0;
     var idx = lp.index;
     while (idx < lp.tokens.len) : (idx += 1) {
@@ -391,6 +418,31 @@ test "parseExpr handles slash-equals relational operator" {
             try testing.expectEqual(BinaryOp.ne, bin.op);
             try testing.expect(bin.left.* == .identifier);
             try testing.expect(bin.right.* == .identifier);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles dim-range arguments in subscripts" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A(1:N, 2:M)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .call_or_subscript => |call| {
+            try testing.expectEqual(@as(usize, 2), call.args.len);
+            try testing.expect(call.args[0].* == .dim_range);
+            try testing.expect(call.args[1].* == .dim_range);
         },
         else => return error.UnexpectedToken,
     }

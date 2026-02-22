@@ -44,6 +44,12 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     kind = .subscript;
                 } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
                     kind = .call;
+                } else if (sym.type_explicit and call.args.len > 0) {
+                    kind = .subscript;
+                    // Keep explicitly declared variables addressable even when
+                    // modern declaration attributes dropped rank information.
+                    sym.dims = try syntheticDims(self, call.args.len);
+                    self.symbols.items[idx] = sym;
                 } else {
                     // Default to function call when nothing declares it as an array.
                     kind = .call;
@@ -63,7 +69,20 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             try self.refs.append(.{ .expr = expr, .name = call.name, .kind = kind });
         },
         .substring => |sub| {
-            _ = try symbols_mod.ensureSymbol(self, sub.name);
+            const idx = try symbols_mod.ensureSymbol(self, sub.name);
+            const sym = self.symbols.items[idx];
+            // Disambiguate `A(1:N)` style array sections from character substring syntax.
+            // If the base symbol is non-character and parser produced a bare substring node,
+            // reinterpret it as a subscript with a single dim-range argument.
+            if (sym.type_kind != .character and sub.args.len == 0 and sub.start != null and sub.end != null) {
+                const dim = try self.arena.create(ast.Expr);
+                dim.* = .{ .dim_range = .{ .lower = sub.start, .upper = sub.end.? } };
+                const args = try self.arena.alloc(*ast.Expr, 1);
+                args[0] = dim;
+                expr.* = .{ .call_or_subscript = .{ .name = sub.name, .args = args } };
+                try resolveExpr(self, expr);
+                return;
+            }
             for (sub.args) |arg| {
                 try resolveExpr(self, arg);
             }
@@ -247,6 +266,12 @@ fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
     }
     if (std.ascii.eqlIgnoreCase(name, "DCMPLX") or std.ascii.eqlIgnoreCase(name, "DCONJG")) return .complex_double;
 
+    if (std.ascii.eqlIgnoreCase(name, "ANY") or
+        std.ascii.eqlIgnoreCase(name, "ALLOCATED"))
+    {
+        return .logical;
+    }
+
     if (std.ascii.eqlIgnoreCase(name, "INT") or
         std.ascii.eqlIgnoreCase(name, "IFIX") or
         std.ascii.eqlIgnoreCase(name, "IDINT") or
@@ -340,4 +365,15 @@ fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
     }
 
     return current;
+}
+
+fn syntheticDims(self: *context.Context, rank: usize) ![]*ast.Expr {
+    if (rank == 0) return &.{};
+    const dims = try self.arena.alloc(*ast.Expr, rank);
+    for (dims) |*slot| {
+        const node = try self.arena.create(ast.Expr);
+        node.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+        slot.* = node;
+    }
+    return dims;
 }
