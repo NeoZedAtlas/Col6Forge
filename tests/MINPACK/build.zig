@@ -30,25 +30,65 @@ pub fn build(b: *std.Build) void {
         "PAUSE strategy forwarded to col6forge-cc: auto|continue|stop",
     ) orelse "continue";
     const pause_arg = b.fmt("-fpause-mode={s}", .{pause_mode});
+    const profile_mode = b.option(
+        []const u8,
+        "profile_mode",
+        "Tolerance policy mode: global|nprob-exceptions",
+    ) orelse "nprob-exceptions";
     const summary_rtol = b.option(
         f64,
         "summary_rtol",
-        "Relative tolerance for MINPACK LMSTR summary FINAL L2 comparison",
-    ) orelse 1.0e-2;
+        "Relative tolerance for MINPACK LMSTR summary FINAL L2 comparison (default profile)",
+    ) orelse 1.0e-4;
     const summary_atol = b.option(
         f64,
         "summary_atol",
-        "Absolute tolerance for MINPACK LMSTR summary FINAL L2 comparison",
+        "Absolute tolerance for MINPACK LMSTR summary FINAL L2 comparison (default profile)",
     ) orelse 1.0e-12;
     const nfev_tol = b.option(
         i64,
         "nfev_tol",
-        "Allowed absolute NFEV delta in MINPACK LMSTR summary comparison",
+        "Allowed absolute NFEV delta in MINPACK LMSTR summary comparison (default profile)",
     ) orelse 0;
     const njev_tol = b.option(
         i64,
         "njev_tol",
-        "Allowed absolute NJEV delta in MINPACK LMSTR summary comparison",
+        "Allowed absolute NJEV delta in MINPACK LMSTR summary comparison (default profile)",
+    ) orelse 0;
+    const nprob10_rtol = b.option(
+        f64,
+        "nprob10_rtol",
+        "Relative FINAL L2 tolerance override for NPROB=10",
+    ) orelse 1.0e-2;
+    const nprob10_atol = b.option(
+        f64,
+        "nprob10_atol",
+        "Absolute FINAL L2 tolerance override for NPROB=10",
+    ) orelse 1.0e-10;
+    const nprob10_njev_tol = b.option(
+        i64,
+        "nprob10_njev_tol",
+        "Allowed absolute NJEV delta override for NPROB=10",
+    ) orelse 8;
+    const nprob12_enabled = b.option(
+        bool,
+        "nprob12_enabled",
+        "Enable NPROB=12 tolerance override",
+    ) orelse false;
+    const nprob12_rtol = b.option(
+        f64,
+        "nprob12_rtol",
+        "Relative FINAL L2 tolerance override for NPROB=12",
+    ) orelse 1.0e-2;
+    const nprob12_atol = b.option(
+        f64,
+        "nprob12_atol",
+        "Absolute FINAL L2 tolerance override for NPROB=12",
+    ) orelse 1.0e-10;
+    const nprob12_njev_tol = b.option(
+        i64,
+        "nprob12_njev_tol",
+        "Allowed absolute NJEV delta override for NPROB=12",
     ) orelse 8;
     const allow_info_23 = b.option(
         bool,
@@ -114,11 +154,14 @@ pub fn build(b: *std.Build) void {
         "--",
     });
     const allow_info_23_arg = if (allow_info_23) "true" else "false";
+    const nprob12_enabled_arg = if (nprob12_enabled) "true" else "false";
     lmstr_tol_run.addArgs(&.{
         "--minpack-dir",
         b.pathFromRoot("."),
         "--pause-mode",
         pause_mode,
+        "--profile-mode",
+        profile_mode,
         "--rtol-final-norm",
         b.fmt("{d}", .{summary_rtol}),
         "--atol-final-norm",
@@ -127,6 +170,20 @@ pub fn build(b: *std.Build) void {
         b.fmt("{d}", .{nfev_tol}),
         "--njev-tol",
         b.fmt("{d}", .{njev_tol}),
+        "--nprob10-rtol-final-norm",
+        b.fmt("{d}", .{nprob10_rtol}),
+        "--nprob10-atol-final-norm",
+        b.fmt("{d}", .{nprob10_atol}),
+        "--nprob10-njev-tol",
+        b.fmt("{d}", .{nprob10_njev_tol}),
+        "--nprob12-enabled",
+        nprob12_enabled_arg,
+        "--nprob12-rtol-final-norm",
+        b.fmt("{d}", .{nprob12_rtol}),
+        "--nprob12-atol-final-norm",
+        b.fmt("{d}", .{nprob12_atol}),
+        "--nprob12-njev-tol",
+        b.fmt("{d}", .{nprob12_njev_tol}),
         "--allow-info-23",
         allow_info_23_arg,
     });

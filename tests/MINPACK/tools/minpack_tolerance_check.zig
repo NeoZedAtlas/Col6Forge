@@ -1,17 +1,37 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const ProfileMode = enum {
+    global,
+    nprob_exceptions,
+};
+
+const ToleranceProfile = struct {
+    rtol_final_norm: f64,
+    atol_final_norm: f64,
+    nfev_tol: i64,
+    njev_tol: i64,
+};
+
 const Options = struct {
     minpack_dir: []const u8 = ".",
     pause_mode: []const u8 = "continue",
-    rtol_final_norm: f64 = 1.0e-2,
+    profile_mode: ProfileMode = .nprob_exceptions,
+    rtol_final_norm: f64 = 1.0e-4,
     atol_final_norm: f64 = 1.0e-12,
     nfev_tol: i64 = 0,
+    njev_tol: i64 = 0,
+    nprob10_rtol_final_norm: f64 = 1.0e-2,
+    nprob10_atol_final_norm: f64 = 1.0e-10,
     // Observed LMSTR edge case:
     // For NPROB=10 (N=3, M=16), the second run can follow a neighboring trust-region
     // path and produce a stable NJEV delta versus gfortran (e.g. 353 vs 345) while still
     // remaining numerically valid. We therefore keep a bounded NJEV tolerance.
-    njev_tol: i64 = 8,
+    nprob10_njev_tol: i64 = 8,
+    nprob12_enabled: bool = false,
+    nprob12_rtol_final_norm: f64 = 1.0e-2,
+    nprob12_atol_final_norm: f64 = 1.0e-10,
+    nprob12_njev_tol: i64 = 8,
     // Numerical boundary note:
     // In the same NPROB=10 case (first run around NFEV=126, NJEV=116), `actred` can be
     // extremely close to zero and flip sign at machine precision scale. That sign flip
@@ -152,6 +172,16 @@ fn compareRows(file: std.fs.File, ref_rows: []const Row, test_rows: []const Row,
     var out_buf: [4096]u8 = undefined;
     var out = file.writer(&out_buf);
     var fail_count: usize = 0;
+    var max_rel_err: f64 = 0.0;
+    var max_abs_err: f64 = 0.0;
+    var max_rel_row: usize = 0;
+    var max_rel_nprob: i64 = 0;
+    var max_rel_ref: f64 = 0.0;
+    var max_rel_got: f64 = 0.0;
+    var max_nfev_abs_diff: i64 = 0;
+    var max_nfev_row: usize = 0;
+    var max_njev_abs_diff: i64 = 0;
+    var max_njev_row: usize = 0;
 
     if (ref_rows.len != test_rows.len) {
         try out.interface.print(
@@ -167,6 +197,7 @@ fn compareRows(file: std.fs.File, ref_rows: []const Row, test_rows: []const Row,
         const r = ref_rows[i];
         const t = test_rows[i];
         const row_idx = i + 1;
+        const profile = getExpectedTolerance(r.nprob, options);
         var row_failed = false;
 
         if (r.nprob != t.nprob or r.n != t.n or r.m != t.m) {
@@ -178,20 +209,28 @@ fn compareRows(file: std.fs.File, ref_rows: []const Row, test_rows: []const Row,
         }
 
         const nfev_diff = absI64(r.nfev - t.nfev);
-        if (nfev_diff > options.nfev_tol) {
+        if (nfev_diff > max_nfev_abs_diff) {
+            max_nfev_abs_diff = nfev_diff;
+            max_nfev_row = row_idx;
+        }
+        if (nfev_diff > profile.nfev_tol) {
             row_failed = true;
             try out.interface.print(
                 "row {d}: NFEV mismatch ref={d} got={d} (|diff|={d} > tol={d})\n",
-                .{ row_idx, r.nfev, t.nfev, nfev_diff, options.nfev_tol },
+                .{ row_idx, r.nfev, t.nfev, nfev_diff, profile.nfev_tol },
             );
         }
 
         const njev_diff = absI64(r.njev - t.njev);
-        if (njev_diff > options.njev_tol) {
+        if (njev_diff > max_njev_abs_diff) {
+            max_njev_abs_diff = njev_diff;
+            max_njev_row = row_idx;
+        }
+        if (njev_diff > profile.njev_tol) {
             row_failed = true;
             try out.interface.print(
                 "row {d}: NJEV mismatch ref={d} got={d} (|diff|={d} > tol={d})\n",
-                .{ row_idx, r.njev, t.njev, njev_diff, options.njev_tol },
+                .{ row_idx, r.njev, t.njev, njev_diff, profile.njev_tol },
             );
         }
 
@@ -203,29 +242,67 @@ fn compareRows(file: std.fs.File, ref_rows: []const Row, test_rows: []const Row,
             );
         }
 
-        if (!floatClose(r.final_norm, t.final_norm, options.atol_final_norm, options.rtol_final_norm)) {
+        const norm_diff = @abs(r.final_norm - t.final_norm);
+        const norm_scale = @max(@max(@abs(r.final_norm), @abs(t.final_norm)), 1.0);
+        const norm_rel = norm_diff / norm_scale;
+        if (norm_rel > max_rel_err) {
+            max_rel_err = norm_rel;
+            max_abs_err = norm_diff;
+            max_rel_row = row_idx;
+            max_rel_nprob = r.nprob;
+            max_rel_ref = r.final_norm;
+            max_rel_got = t.final_norm;
+        }
+
+        if (!floatClose(r.final_norm, t.final_norm, profile.atol_final_norm, profile.rtol_final_norm)) {
             row_failed = true;
-            const diff = @abs(r.final_norm - t.final_norm);
-            const scale = @max(@max(@abs(r.final_norm), @abs(t.final_norm)), 1.0);
-            const rel = diff / scale;
             try out.interface.print(
-                "row {d}: FINAL L2 mismatch ref={e:.10} got={e:.10} abs={e:.10} rel={e:.10}\n",
-                .{ row_idx, r.final_norm, t.final_norm, diff, rel },
+                "row {d}: FINAL L2 mismatch ref={e:.10} got={e:.10} abs={e:.10} rel={e:.10} (rtol={e:.3}, atol={e:.3})\n",
+                .{
+                    row_idx,
+                    r.final_norm,
+                    t.final_norm,
+                    norm_diff,
+                    norm_rel,
+                    profile.rtol_final_norm,
+                    profile.atol_final_norm,
+                },
             );
         }
 
         if (row_failed) fail_count += 1;
     }
 
+    try out.interface.print(
+        "summary stats: max_final_l2_rel_err={e:.10} max_final_l2_abs_err={e:.10} at row={d} (nprob={d}, ref={e:.10}, got={e:.10}); max_nfev_abs_diff={d} at row={d}; max_njev_abs_diff={d} at row={d}\n",
+        .{
+            max_rel_err,
+            max_abs_err,
+            max_rel_row,
+            max_rel_nprob,
+            max_rel_ref,
+            max_rel_got,
+            max_nfev_abs_diff,
+            max_nfev_row,
+            max_njev_abs_diff,
+            max_njev_row,
+        },
+    );
+
     if (fail_count == 0) {
         try out.interface.print(
-            "tolerance check passed: rows={d}, rtol={e:.3}, atol={e:.3}, nfev_tol={d}, njev_tol={d}, allow_info_23={}\n",
+            "tolerance check passed: rows={d}, profile_mode={s}, default(rtol={e:.3}, atol={e:.3}, nfev_tol={d}, njev_tol={d}), nprob10(rtol={e:.3}, atol={e:.3}, njev_tol={d}), nprob12_enabled={}, allow_info_23={}\n",
             .{
                 ref_rows.len,
+                profileModeName(options.profile_mode),
                 options.rtol_final_norm,
                 options.atol_final_norm,
                 options.nfev_tol,
                 options.njev_tol,
+                options.nprob10_rtol_final_norm,
+                options.nprob10_atol_final_norm,
+                options.nprob10_njev_tol,
+                options.nprob12_enabled,
                 options.allow_info_23,
             },
         );
@@ -302,6 +379,39 @@ fn floatClose(a: f64, b: f64, atol: f64, rtol: f64) bool {
     return diff <= rtol * scale;
 }
 
+// Pure function: the checker policy is entirely derived from problem id and explicit options.
+fn getExpectedTolerance(nprob: i64, options: Options) ToleranceProfile {
+    const default_profile: ToleranceProfile = .{
+        .rtol_final_norm = options.rtol_final_norm,
+        .atol_final_norm = options.atol_final_norm,
+        .nfev_tol = options.nfev_tol,
+        .njev_tol = options.njev_tol,
+    };
+    if (options.profile_mode == .global) return default_profile;
+    return switch (nprob) {
+        10 => .{
+            .rtol_final_norm = options.nprob10_rtol_final_norm,
+            .atol_final_norm = options.nprob10_atol_final_norm,
+            .nfev_tol = options.nfev_tol,
+            .njev_tol = options.nprob10_njev_tol,
+        },
+        12 => if (options.nprob12_enabled) .{
+            .rtol_final_norm = options.nprob12_rtol_final_norm,
+            .atol_final_norm = options.nprob12_atol_final_norm,
+            .nfev_tol = options.nfev_tol,
+            .njev_tol = options.nprob12_njev_tol,
+        } else default_profile,
+        else => default_profile,
+    };
+}
+
+fn profileModeName(mode: ProfileMode) []const u8 {
+    return switch (mode) {
+        .global => "global",
+        .nprob_exceptions => "nprob-exceptions",
+    };
+}
+
 fn infoEquivalent(ref_info: i64, got_info: i64, allow_info_23: bool) bool {
     // Branch-equivalence policy for LMSTR:
     // INFO=2 ("step bound criterion") and INFO=3 ("combined criterion") can diverge solely
@@ -334,6 +444,12 @@ fn parseArgs(args: []const []const u8) !Options {
             options.pause_mode = args[i];
             continue;
         }
+        if (std.mem.eql(u8, arg, "--profile-mode")) {
+            i += 1;
+            if (i >= args.len) return error.MissingProfileMode;
+            options.profile_mode = parseProfileMode(args[i]) orelse return error.InvalidProfileMode;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--rtol-final-norm")) {
             i += 1;
             if (i >= args.len) return error.MissingRtol;
@@ -364,6 +480,48 @@ fn parseArgs(args: []const []const u8) !Options {
             options.allow_info_23 = parseBool(args[i]) orelse return error.InvalidAllowInfo23;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--nprob10-rtol-final-norm")) {
+            i += 1;
+            if (i >= args.len) return error.MissingNprob10Rtol;
+            options.nprob10_rtol_final_norm = try std.fmt.parseFloat(f64, args[i]);
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--nprob10-atol-final-norm")) {
+            i += 1;
+            if (i >= args.len) return error.MissingNprob10Atol;
+            options.nprob10_atol_final_norm = try std.fmt.parseFloat(f64, args[i]);
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--nprob10-njev-tol")) {
+            i += 1;
+            if (i >= args.len) return error.MissingNprob10NjevTol;
+            options.nprob10_njev_tol = try std.fmt.parseInt(i64, args[i], 10);
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--nprob12-enabled")) {
+            i += 1;
+            if (i >= args.len) return error.MissingNprob12Enabled;
+            options.nprob12_enabled = parseBool(args[i]) orelse return error.InvalidNprob12Enabled;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--nprob12-rtol-final-norm")) {
+            i += 1;
+            if (i >= args.len) return error.MissingNprob12Rtol;
+            options.nprob12_rtol_final_norm = try std.fmt.parseFloat(f64, args[i]);
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--nprob12-atol-final-norm")) {
+            i += 1;
+            if (i >= args.len) return error.MissingNprob12Atol;
+            options.nprob12_atol_final_norm = try std.fmt.parseFloat(f64, args[i]);
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--nprob12-njev-tol")) {
+            i += 1;
+            if (i >= args.len) return error.MissingNprob12NjevTol;
+            options.nprob12_njev_tol = try std.fmt.parseInt(i64, args[i], 10);
+            continue;
+        }
         return error.UnknownFlag;
     }
     return options;
@@ -372,6 +530,12 @@ fn parseArgs(args: []const []const u8) !Options {
 fn parseBool(text: []const u8) ?bool {
     if (std.ascii.eqlIgnoreCase(text, "true")) return true;
     if (std.ascii.eqlIgnoreCase(text, "false")) return false;
+    return null;
+}
+
+fn parseProfileMode(text: []const u8) ?ProfileMode {
+    if (std.ascii.eqlIgnoreCase(text, "global")) return .global;
+    if (std.ascii.eqlIgnoreCase(text, "nprob-exceptions")) return .nprob_exceptions;
     return null;
 }
 
@@ -442,10 +606,18 @@ fn printUsage(file: std.fs.File) !void {
         \\Options:
         \\  --minpack-dir <path>      MINPACK project dir (default: .)
         \\  --pause-mode <mode>       auto|continue|stop (default: continue)
-        \\  --rtol-final-norm <f64>   Relative tolerance for FINAL L2 (default: 1e-2)
+        \\  --profile-mode <mode>     global|nprob-exceptions (default: nprob-exceptions)
+        \\  --rtol-final-norm <f64>   Relative tolerance for FINAL L2 default profile (default: 1e-4)
         \\  --atol-final-norm <f64>   Absolute tolerance for FINAL L2 (default: 1e-12)
-        \\  --nfev-tol <int>          Allowed absolute delta for NFEV (default: 0)
-        \\  --njev-tol <int>          Allowed absolute delta for NJEV (default: 8)
+        \\  --nfev-tol <int>          Allowed absolute delta for NFEV default profile (default: 0)
+        \\  --njev-tol <int>          Allowed absolute delta for NJEV default profile (default: 0)
+        \\  --nprob10-rtol-final-norm <f64>  Relative tolerance override for NPROB=10 (default: 1e-2)
+        \\  --nprob10-atol-final-norm <f64>  Absolute tolerance override for NPROB=10 (default: 1e-10)
+        \\  --nprob10-njev-tol <int>         NJEV tolerance override for NPROB=10 (default: 8)
+        \\  --nprob12-enabled <bool>         Enable NPROB=12 exception profile (default: false)
+        \\  --nprob12-rtol-final-norm <f64>  Relative tolerance override for NPROB=12 (default: 1e-2)
+        \\  --nprob12-atol-final-norm <f64>  Absolute tolerance override for NPROB=12 (default: 1e-10)
+        \\  --nprob12-njev-tol <int>         NJEV tolerance override for NPROB=12 (default: 8)
         \\  --allow-info-23 <bool>    Treat INFO 2/3 as equivalent (default: true)
         \\
     );
