@@ -7,6 +7,7 @@ const constants = @import("resolve_const.zig");
 const expressions = @import("resolve_expr.zig");
 const decls = @import("resolve_decls.zig");
 const check_const = @import("check_const.zig");
+const diag = @import("../diagnostic.zig");
 
 const ResolvedRefKind = symbols.ResolvedRefKind;
 
@@ -61,10 +62,21 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 var sym = &self.symbols.items[idx];
                 sym.kind = .parameter;
                 sym.storage = .local;
-                const const_val = try check_const.coerceParameterValue(
+                const assigned_value = check_const.checkParameterAssign(self, assign) catch |err| {
+                    if (err == error.ParameterNotConstant) {
+                        setParameterNotConstantDiagnostic(self, assign.name);
+                    }
+                    return err;
+                };
+                const const_val = check_const.coerceParameterValue(
                     sym.type_kind,
-                    try check_const.checkParameterAssign(self, assign),
-                );
+                    assigned_value,
+                ) catch |err| {
+                    if (err == error.ParameterTypeMismatch) {
+                        setParameterTypeMismatchDiagnostic(self, assign.name, sym.type_kind, assigned_value);
+                    }
+                    return err;
+                };
                 sym.const_value = const_val;
 
                 if (sym.type_kind == .character and sym.char_len == null) {
@@ -152,6 +164,65 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .type_decl => return error.UnexpectedTypeDecl,
     }
+}
+
+fn setParameterNotConstantDiagnostic(self: *context.Context, name: []const u8) void {
+    var message_buf: [256]u8 = undefined;
+    const message = std.fmt.bufPrint(
+        &message_buf,
+        "PARAMETER '{s}' value is not a constant expression",
+        .{name},
+    ) catch "PARAMETER value is not a constant expression";
+    const loc = currentDeclLocation(self);
+    diag.set(loc.line, loc.column, "CF3111", message, loc.text);
+}
+
+fn setParameterTypeMismatchDiagnostic(
+    self: *context.Context,
+    name: []const u8,
+    expected: ast.TypeKind,
+    actual: symbols.ConstValue,
+) void {
+    var message_buf: [256]u8 = undefined;
+    const message = std.fmt.bufPrint(
+        &message_buf,
+        "PARAMETER '{s}' expects {s} but got {s}",
+        .{ name, typeKindName(expected), constValueKindName(actual) },
+    ) catch "PARAMETER value type is incompatible with declaration";
+    const loc = currentDeclLocation(self);
+    diag.set(loc.line, loc.column, "CF3112", message, loc.text);
+}
+
+fn currentDeclLocation(self: *context.Context) struct { line: usize, column: usize, text: []const u8 } {
+    if (self.current_decl_source) |src| {
+        return .{
+            .line = if (src.line == 0) 1 else src.line,
+            .column = if (src.column == 0) 1 else src.column,
+            .text = src.text,
+        };
+    }
+    return .{ .line = 1, .column = 1, .text = "" };
+}
+
+fn typeKindName(kind: ast.TypeKind) []const u8 {
+    return switch (kind) {
+        .integer => "INTEGER",
+        .real => "REAL",
+        .double_precision => "DOUBLE PRECISION",
+        .complex => "COMPLEX",
+        .complex_double => "DOUBLE COMPLEX",
+        .logical => "LOGICAL",
+        .character => "CHARACTER",
+    };
+}
+
+fn constValueKindName(value: symbols.ConstValue) []const u8 {
+    return switch (value) {
+        .integer => "INTEGER",
+        .real => "REAL",
+        .complex => "COMPLEX",
+        .string => "CHARACTER",
+    };
 }
 
 fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.ImplicitRule) void {

@@ -57,6 +57,7 @@ pub const UnitAnalyzer = struct {
 };
 
 fn recordSemanticError(ctx: *context.Context, err: anyerror) void {
+    if (diag.has()) return;
     const info = semanticErrorInfo(err);
     if (ctx.current_decl_source) |decl_src| {
         const line = if (decl_src.line == 0) 1 else decl_src.line;

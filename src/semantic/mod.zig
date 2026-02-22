@@ -719,6 +719,82 @@ test "semantic coerces numeric PARAMETER to declared type" {
     try testing.expect(found);
 }
 
+test "semantic accepts PARAMETER string concatenation constant fold" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*2 C\n" ++
+        "      PARAMETER (C='A'//'B')\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+    try testing.expectEqual(@as(usize, 1), sem.units.len);
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "C")) continue;
+        found = true;
+        const cv = sym.const_value orelse return error.TestExpectedEqual;
+        switch (cv) {
+            .string => |lit| {
+                try testing.expectEqual(ast.LiteralKind.string, lit.kind);
+                try testing.expectEqualStrings("'AB'", lit.text);
+            },
+            else => return error.TestExpectedEqual,
+        }
+    }
+    try testing.expect(found);
+}
+
+test "semantic CF3112 diagnostic includes PARAMETER name and types" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER P\n" ++
+        "      PARAMETER (P='A')\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.ParameterTypeMismatch, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, diag.message, "PARAMETER 'P' expects INTEGER but got CHARACTER") != null);
+}
+
+test "semantic CF3111 diagnostic includes PARAMETER name" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER X,P\n" ++
+        "      PARAMETER (P=X)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.ParameterNotConstant, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, diag.message, "PARAMETER 'P' value is not a constant expression") != null);
+}
+
 test "semantic reports CF3113 for invalid EQUIVALENCE types" {
     const testing = std.testing;
     const allocator = testing.allocator;
