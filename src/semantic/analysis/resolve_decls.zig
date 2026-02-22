@@ -13,6 +13,9 @@ pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
     }
 }
 
+// applyDeclarator mutates the symbol table entry for `item.name` in-place.
+// It may set type, dimensions, storage class, and CHARACTER length depending
+// on declaration context.
 pub fn applyDeclarator(
     self: *context.Context,
     type_kind: ast.TypeKind,
@@ -31,6 +34,10 @@ pub fn applyDeclarator(
         self.symbols.items[idx].type_kind = type_kind;
     }
     if (item.dims.len > 0) {
+        if (self.symbols.items[idx].dims.len > 0) {
+            // Do not silently overwrite previously declared shape.
+            return error.DuplicateDeclaration;
+        }
         self.symbols.items[idx].dims = item.dims;
     }
     if (storage == .common) {
@@ -45,15 +52,24 @@ pub fn applyDeclarator(
                 self.symbols.items[idx].char_len = null;
                 return;
             }
-            const value = (try constants.evalConst(self, len_expr)) orelse return error.InvalidCharLen;
-            switch (value) {
-                .integer => |int_val| {
-                    if (int_val <= 0) return error.InvalidCharLen;
-                    length = @intCast(int_val);
-                },
-                .real => return error.InvalidCharLen,
-                .complex => return error.InvalidCharLen,
-                .string => return error.InvalidCharLen,
+            if (try constants.evalConst(self, len_expr)) |value| {
+                switch (value) {
+                    .integer => |int_val| {
+                        if (int_val <= 0) return error.InvalidCharLen;
+                        length = @intCast(int_val);
+                    },
+                    .real => return error.InvalidCharLen,
+                    .complex => return error.InvalidCharLen,
+                    .string => return error.InvalidCharLen,
+                }
+            } else {
+                // Keep deferred/assumed length only where the rest of the semantic
+                // pipeline already supports unknown CHARACTER size.
+                if (allowsDeferredCharacterLength(self.symbols.items[idx])) {
+                    self.symbols.items[idx].char_len = null;
+                    return;
+                }
+                return error.InvalidCharLen;
             }
         } else if (!explicit_type) {
             if (symbols_mod.implicitCharLen(self, item.name)) |implicit_len| {
@@ -62,4 +78,10 @@ pub fn applyDeclarator(
         }
         self.symbols.items[idx].char_len = length;
     }
+}
+
+fn allowsDeferredCharacterLength(sym: symbols.Symbol) bool {
+    if (sym.storage == .dummy) return true;
+    if (sym.kind == .function) return true;
+    return false;
 }

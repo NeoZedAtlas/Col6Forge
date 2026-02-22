@@ -1000,6 +1000,55 @@ test "semantic reports CF3116 for duplicate declaration" {
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
 }
 
+test "semantic reports CF3116 for conflicting DIMENSION redeclaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(10)\n" ++
+        "      DIMENSION A(20)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+}
+
+test "semantic accepts deferred CHARACTER length for dummy argument" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S(N,STR)\n" ++
+        "      INTEGER N\n" ++
+        "      CHARACTER*(N) STR\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "STR")) continue;
+        found = true;
+        try testing.expectEqual(ast.TypeKind.character, sym.type_kind);
+        try testing.expectEqual(symbols.StorageClass.dummy, sym.storage);
+        try testing.expect(sym.char_len == null);
+    }
+    try testing.expect(found);
+}
+
 test "semantic reports CF3117 for divide-by-zero in const expression" {
     const testing = std.testing;
     const allocator = testing.allocator;

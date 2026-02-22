@@ -53,6 +53,9 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         .dimension => |dim| {
             for (dim.items) |item| {
                 const idx = try symbols_mod.ensureSymbol(self, item.name);
+                if (item.dims.len > 0 and self.symbols.items[idx].dims.len > 0) {
+                    return error.DuplicateDeclaration;
+                }
                 self.symbols.items[idx].dims = item.dims;
             }
         },
