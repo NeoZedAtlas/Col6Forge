@@ -26,7 +26,7 @@ pub fn isDeclarationStart(lp: LineParser) bool {
             }
         }
     }
-    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE");
+    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE") or lp.isKeywordSplit("PROCEDURE");
 }
 
 pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
@@ -149,6 +149,15 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         }
         return .{ .save = .{ .items = try items.toOwnedSlice(), .save_all = save_all } };
     }
+    if (lp.isKeywordSplit("PROCEDURE")) {
+        _ = lp.consumeKeyword("PROCEDURE");
+        if (lp.consume(.l_paren)) {
+            try consumeBalancedParens(lp);
+        }
+        _ = try consumeDeclAttributes(lp);
+        const names = try parseNameList(lp, arena);
+        return .{ .external = .{ .names = names } };
+    }
 
     const type_kind = try parseTypeKind(lp);
     var default_char_len: ?*ast.Expr = null;
@@ -157,6 +166,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
             default_char_len = try parseCharacterLen(lp, arena);
         }
     }
+    _ = try consumeDeclAttributes(lp);
     const items = try parseDeclarators(lp, arena, default_char_len);
     return .{ .type_decl = .{ .type_kind = type_kind, .items = items } };
 }
@@ -181,11 +191,12 @@ fn parseImplicitTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ImplicitTyp
 fn parseTypeKind(lp: *LineParser) !TypeKind {
     if (lp.isKeywordSplit("INTEGER")) {
         _ = lp.consumeKeyword("INTEGER");
+        try consumeOptionalKindSelector(lp);
         return .integer;
     }
     if (lp.isKeywordSplit("REAL")) {
         _ = lp.consumeKeyword("REAL");
-        return .real;
+        return parseRealKindSuffix(lp);
     }
     if (lp.isKeywordSplit("COMPLEX")) {
         _ = lp.consumeKeyword("COMPLEX");
@@ -193,6 +204,7 @@ fn parseTypeKind(lp: *LineParser) !TypeKind {
     }
     if (lp.isKeywordSplit("LOGICAL")) {
         _ = lp.consumeKeyword("LOGICAL");
+        try consumeOptionalKindSelector(lp);
         return .logical;
     }
     if (lp.isKeywordSplit("CHARACTER")) {
@@ -206,6 +218,111 @@ fn parseTypeKind(lp: *LineParser) !TypeKind {
         return .double_precision;
     }
     return error.UnknownType;
+}
+
+const DeclAttributes = struct {
+    parameter: bool = false,
+};
+
+fn consumeDeclAttributes(lp: *LineParser) !DeclAttributes {
+    var attrs: DeclAttributes = .{};
+
+    if (lp.consume(.comma)) {
+        while (true) {
+            if (consumeDoubleColon(lp)) return attrs;
+            const tok = lp.peek() orelse return attrs;
+            if (tok.kind != .identifier) return attrs;
+
+            const attr_tok = lp.next();
+            if (context.eqNoCase(lp.tokenText(attr_tok), "PARAMETER")) {
+                attrs.parameter = true;
+            }
+
+            if (lp.consume(.l_paren)) {
+                try consumeBalancedParens(lp);
+            }
+            if (consumeDoubleColon(lp)) return attrs;
+            if (!lp.consume(.comma)) break;
+        }
+    }
+
+    _ = consumeDoubleColon(lp);
+    return attrs;
+}
+
+fn consumeDoubleColon(lp: *LineParser) bool {
+    if (lp.index + 1 >= lp.tokens.len) return false;
+    const first = lp.tokens[lp.index];
+    const second = lp.tokens[lp.index + 1];
+    if (first.kind != .colon or second.kind != .colon) return false;
+    _ = lp.next();
+    _ = lp.next();
+    return true;
+}
+
+fn consumeBalancedParens(lp: *LineParser) !void {
+    var depth: usize = 1;
+    while (depth > 0) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        _ = lp.next();
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => depth -= 1,
+            else => {},
+        }
+    }
+}
+
+fn consumeOptionalKindSelector(lp: *LineParser) !void {
+    if (lp.consume(.star)) {
+        if (lp.peek()) |tok| {
+            if (tok.kind == .integer or tok.kind == .identifier) _ = lp.next();
+        }
+        return;
+    }
+    if (!lp.consume(.l_paren)) return;
+    try consumeBalancedParens(lp);
+}
+
+fn parseRealKindSuffix(lp: *LineParser) !TypeKind {
+    if (lp.consume(.star)) {
+        const tok = lp.peek() orelse return .real;
+        if (tok.kind == .integer) {
+            _ = lp.next();
+            const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return .real;
+            if (kind_val >= 8) return .double_precision;
+        }
+        return .real;
+    }
+    if (!lp.consume(.l_paren)) return .real;
+
+    var depth: usize = 1;
+    var first_kind: ?[]const u8 = null;
+    while (depth > 0) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        _ = lp.next();
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => depth -= 1,
+            .identifier, .integer => {
+                if (first_kind == null) first_kind = lp.tokenText(tok);
+            },
+            else => {},
+        }
+    }
+
+    if (first_kind) |kind_text| {
+        if (context.eqNoCase(kind_text, "WP") or
+            context.eqNoCase(kind_text, "REAL64") or
+            context.eqNoCase(kind_text, "C_DOUBLE"))
+        {
+            return .double_precision;
+        }
+        if (std.fmt.parseInt(i64, kind_text, 10) catch 0 >= 8) {
+            return .double_precision;
+        }
+    }
+    return .real;
 }
 
 fn parseComplexKindSuffix(lp: *LineParser) !TypeKind {
@@ -329,6 +446,80 @@ test "parseDecl handles simple type declaration" {
             try testing.expectEqual(@as(usize, 2), td.items.len);
             try testing.expectEqualStrings("A", td.items[0].name);
             try testing.expectEqualStrings("B", td.items[1].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles modern declaration attributes and double-colon" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      INTEGER, INTENT(IN) :: N\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.integer, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("N", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles REAL kind selector in parentheses" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      REAL(WP), INTENT(IN) :: X\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.double_precision, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("X", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles PROCEDURE interface declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      PROCEDURE(FUNC) :: FCN\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .external => |ext| {
+            try testing.expectEqual(@as(usize, 1), ext.names.len);
+            try testing.expectEqualStrings("FCN", ext.names[0]);
         },
         else => return error.UnexpectedToken,
     }

@@ -26,6 +26,8 @@ pub fn build(b: *std.Build) void {
         "run_from_install",
         "Run `zig build run` from zig-out/bin via install step (default: false, runs from cache artifact)",
     ) orelse false;
+    const driver_build_options = b.addOptions();
+    driver_build_options.addOption([]const u8, "project_root", b.pathFromRoot("."));
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -92,6 +94,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    exe.root_module.addOptions("build_options", driver_build_options);
 
     // Standalone cc-like driver tool:
     // dependency("Col6Forge").artifact("col6forge-cc")
@@ -106,6 +109,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    cc_exe.root_module.addOptions("build_options", driver_build_options);
 
     // Runtime artifact for ecosystem consumers:
     // dependency("Col6Forge").artifact("col6forge_rt")

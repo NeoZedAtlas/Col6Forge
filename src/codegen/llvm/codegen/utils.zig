@@ -98,11 +98,20 @@ pub fn formatReal(allocator: std.mem.Allocator, value: f64) []const u8 {
 }
 
 pub fn formatFloatValue(allocator: std.mem.Allocator, value: f64, ty: IRType) []const u8 {
-    const fmt_value: f64 = switch (ty) {
+    var fmt_value: f64 = switch (ty) {
         .f32 => @as(f64, @floatCast(@as(f32, @floatCast(value)))),
         .f64 => value,
         else => return "0.0",
     };
+    if (std.math.isNan(fmt_value)) return "0.0";
+    if (!std.math.isFinite(fmt_value)) {
+        const finite_max: f64 = switch (ty) {
+            .f32 => @as(f64, std.math.floatMax(f32)),
+            .f64 => std.math.floatMax(f64),
+            else => 0.0,
+        };
+        fmt_value = if (std.math.signbit(fmt_value)) -finite_max else finite_max;
+    }
     if (fmt_value == 0.0) return "0.0";
     const raw = std.fmt.allocPrint(allocator, "{e}", .{fmt_value}) catch return "0.0";
     if (std.mem.indexOfScalar(u8, raw, '.') != null) return raw;

@@ -276,16 +276,17 @@ fn emitIntrinsicDcmplx(ctx: *Context, builder: anytype, args: []*Expr) EmitError
 }
 
 pub fn emitIntrinsicFloat(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len != 1) return error.InvalidIntrinsicCall;
+    if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
+    const target_ty: IRType = if (args.len == 2) .f64 else .f32;
     var value = try dispatch.emitExpr(ctx, builder, args[0]);
     if (complex.isComplexType(value.ty)) {
-        const target_ty: IRType = if (value.ty == .complex_f64) .complex_f64 else .complex_f32;
-        value = try complex.coerceToComplex(ctx, builder, value, target_ty);
+        const complex_ty: IRType = if (target_ty == .f64) .complex_f64 else .complex_f32;
+        value = try complex.coerceToComplex(ctx, builder, value, complex_ty);
         // REAL(complex) returns the real component with the complex element kind.
         return complex.extractComplex(ctx, builder, value, 0);
     }
     // REAL(non-complex) converts to default real kind.
-    return casting.coerce(ctx, builder, value, .f32);
+    return casting.coerce(ctx, builder, value, target_ty);
 }
 
 fn emitIntrinsicIchar(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
@@ -365,6 +366,32 @@ fn emitIntrinsicHuge(ctx: *Context, args: []*Expr) EmitError!ValueRef {
         .f64, .complex_f64 => constFloat(ctx, .f64, std.math.floatMax(f64)),
         .f32, .complex_f32 => constFloat(ctx, .f32, std.math.floatMax(f32)),
         .i32 => try constI32(ctx, std.math.maxInt(i32)),
+        else => error.UnsupportedIntrinsicType,
+    };
+}
+
+fn evalConstIntArg(ctx: *Context, arg: *Expr) ?i64 {
+    switch (arg.*) {
+        .literal => |lit| {
+            if (lit.kind != .integer) return null;
+            return std.fmt.parseInt(i64, lit.text, 10) catch null;
+        },
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return null;
+            const cv = sym.const_value orelse return null;
+            return if (cv == .integer) cv.integer else null;
+        },
+        else => return null,
+    }
+}
+
+fn emitIntrinsicDpmpar(ctx: *Context, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const idx = evalConstIntArg(ctx, args[0]) orelse return error.UnsupportedIntrinsicType;
+    return switch (idx) {
+        1 => constFloat(ctx, .f64, std.math.floatEps(f64)),
+        2 => constFloat(ctx, .f64, std.math.floatMin(f64)),
+        3 => constFloat(ctx, .f64, std.math.floatMax(f64)),
         else => error.UnsupportedIntrinsicType,
     };
 }
@@ -953,6 +980,7 @@ const IntrinsicTag = enum {
     ichar,
     achar,
     rand_,
+    dpmpar,
     epsilon,
     huge,
     len_,
@@ -1044,6 +1072,7 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "achar", .achar },
     .{ "char", .achar },
     .{ "rand", .rand_ },
+    .{ "dpmpar", .dpmpar },
     .{ "epsilon", .epsilon },
     .{ "huge", .huge },
     .{ "len", .len_ },
@@ -1166,6 +1195,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .ichar => return emitIntrinsicIchar(ctx, builder, args),
         .achar => return emitIntrinsicAchar(ctx, builder, args),
         .rand_ => return emitIntrinsicRand(ctx, builder, args),
+        .dpmpar => return emitIntrinsicDpmpar(ctx, args),
         .epsilon => return emitIntrinsicEpsilon(ctx, args),
         .huge => return emitIntrinsicHuge(ctx, args),
         .len_ => return emitIntrinsicLen(ctx, builder, args),

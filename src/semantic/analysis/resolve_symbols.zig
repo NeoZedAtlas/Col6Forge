@@ -205,6 +205,7 @@ pub fn isIntrinsicName(name: []const u8) bool {
         std.ascii.eqlIgnoreCase(name, "IACHAR") or
         std.ascii.eqlIgnoreCase(name, "ACHAR") or
         std.ascii.eqlIgnoreCase(name, "RAND") or
+        std.ascii.eqlIgnoreCase(name, "DPMPAR") or
         std.ascii.eqlIgnoreCase(name, "EPSILON") or
         std.ascii.eqlIgnoreCase(name, "HUGE") or
         std.ascii.eqlIgnoreCase(name, "EXP") or

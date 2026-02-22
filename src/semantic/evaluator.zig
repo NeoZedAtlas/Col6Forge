@@ -51,10 +51,101 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
             return .{ .complex = .{ .real = real.real, .imag = imag.real } };
         },
         .substring => return null,
-        .call_or_subscript => return null,
+        .call_or_subscript => |call| return evalConstCall(call, resolver),
         .dim_range => return null,
         .implied_do => return null,
     }
+}
+
+fn evalConstCall(call: ast.CallOrSubscript, resolver: ?ConstResolver) anyerror!?ConstValue {
+    if (std.ascii.eqlIgnoreCase(call.name, "SQRT")) {
+        if (call.args.len != 1) return null;
+        const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+        return .{ .real = std.math.sqrt(toReal(arg)) };
+    }
+    if (std.ascii.eqlIgnoreCase(call.name, "LOG10")) {
+        if (call.args.len != 1) return null;
+        const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+        return .{ .real = std.math.log10(toReal(arg)) };
+    }
+    if (std.ascii.eqlIgnoreCase(call.name, "ABS")) {
+        if (call.args.len != 1) return null;
+        const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+        return switch (arg) {
+            .integer => |v| .{ .integer = if (v < 0) -v else v },
+            .real => |v| .{ .real = @abs(v) },
+            else => null,
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(call.name, "EPSILON")) {
+        if (call.args.len != 1) return null;
+        _ = (try evalConst(call.args[0], resolver)) orelse return null;
+        return .{ .real = std.math.floatEps(f64) };
+    }
+    if (std.ascii.eqlIgnoreCase(call.name, "TINY")) {
+        if (call.args.len != 1) return null;
+        _ = (try evalConst(call.args[0], resolver)) orelse return null;
+        return .{ .real = std.math.floatMin(f64) };
+    }
+    if (std.ascii.eqlIgnoreCase(call.name, "HUGE")) {
+        if (call.args.len != 1) return null;
+        _ = (try evalConst(call.args[0], resolver)) orelse return null;
+        return .{ .real = std.math.floatMax(f64) };
+    }
+    if (std.ascii.eqlIgnoreCase(call.name, "DPMPAR")) {
+        if (call.args.len != 1) return null;
+        const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+        if (arg != .integer) return null;
+        return switch (arg.integer) {
+            1 => .{ .real = std.math.floatEps(f64) },
+            2 => .{ .real = std.math.floatMin(f64) },
+            3 => .{ .real = std.math.floatMax(f64) },
+            else => null,
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(call.name, "MIN") or std.ascii.eqlIgnoreCase(call.name, "MAX")) {
+        if (call.args.len < 2) return null;
+        var any_real = false;
+        var best_real: f64 = 0.0;
+        var best_int: i64 = 0;
+        var initialized = false;
+        for (call.args) |arg_expr| {
+            const value = (try evalConst(arg_expr, resolver)) orelse return null;
+            switch (value) {
+                .integer => |v| {
+                    if (!initialized) {
+                        best_int = v;
+                        best_real = @floatFromInt(v);
+                        initialized = true;
+                    } else {
+                        if (std.ascii.eqlIgnoreCase(call.name, "MIN")) {
+                            if (v < best_int) best_int = v;
+                            if (@as(f64, @floatFromInt(v)) < best_real) best_real = @floatFromInt(v);
+                        } else {
+                            if (v > best_int) best_int = v;
+                            if (@as(f64, @floatFromInt(v)) > best_real) best_real = @floatFromInt(v);
+                        }
+                    }
+                },
+                .real => |v| {
+                    if (!initialized) {
+                        best_real = v;
+                        best_int = @intFromFloat(v);
+                        initialized = true;
+                    } else if (std.ascii.eqlIgnoreCase(call.name, "MIN")) {
+                        if (v < best_real) best_real = v;
+                    } else {
+                        if (v > best_real) best_real = v;
+                    }
+                    any_real = true;
+                },
+                else => return null,
+            }
+        }
+        if (!initialized) return null;
+        return if (any_real) .{ .real = best_real } else .{ .integer = best_int };
+    }
+    return null;
 }
 
 fn parseInt(text: []const u8) !i64 {

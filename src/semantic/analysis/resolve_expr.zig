@@ -302,6 +302,7 @@ fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
 
     if (std.ascii.eqlIgnoreCase(name, "FLOAT") or
         std.ascii.eqlIgnoreCase(name, "REAL") or
+        std.ascii.eqlIgnoreCase(name, "DPMPAR") or
         std.ascii.eqlIgnoreCase(name, "SNGL") or
         std.ascii.eqlIgnoreCase(name, "RAND") or
         std.ascii.eqlIgnoreCase(name, "AINT") or

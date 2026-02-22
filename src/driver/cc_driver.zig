@@ -1,13 +1,17 @@
 ﻿const std = @import("std");
 const builtin = @import("builtin");
 const Col6Forge = @import("Col6Forge");
+const build_options = @import("build_options");
 const RUNTIME_CACHE_SCHEMA_VERSION: u32 = 1;
 
 pub fn runOrExit(allocator: std.mem.Allocator, args: []const []const u8) noreturn {
     run(allocator, args) catch |err| {
         switch (err) {
             error.InvalidArguments => std.process.exit(2),
-            else => std.process.exit(1),
+            else => {
+                std.debug.print("internal error: {s}\n", .{@errorName(err)});
+                std.process.exit(1);
+            },
         }
     };
     std.process.exit(0);
@@ -91,6 +95,7 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
             defer argv.deinit(allocator);
             try argv.appendSlice(allocator, &.{ "zig", "cc", "-c" });
             if (parsed.output_path) |path| {
+                try ensureParentDir(path);
                 try argv.appendSlice(allocator, &.{ "-o", path });
             }
             try argv.append(allocator, compile_units.items[0]);
@@ -120,6 +125,7 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
         return error.InvalidArguments;
     };
     defer if (parsed.output_path == null) allocator.free(output_path);
+    try ensureParentDir(output_path);
 
     var link_argv: std.ArrayList([]const u8) = .empty;
     defer link_argv.deinit(allocator);
@@ -488,6 +494,12 @@ fn fileStem(path: []const u8) []const u8 {
     return base[0..dot];
 }
 
+fn ensureParentDir(path: []const u8) !void {
+    const dir = std.fs.path.dirname(path) orelse return;
+    if (dir.len == 0) return;
+    try std.fs.cwd().makePath(dir);
+}
+
 fn isFortranSource(path: []const u8) bool {
     const exts = [_][]const u8{
         ".f",
@@ -543,7 +555,10 @@ fn fileExists(path: []const u8) bool {
 }
 
 fn hashFileXx64(path: []const u8) !u64 {
-    var file = try std.fs.cwd().openFile(path, .{});
+    var file = if (std.fs.path.isAbsolute(path))
+        try std.fs.openFileAbsolute(path, .{})
+    else
+        try std.fs.cwd().openFile(path, .{});
     defer file.close();
     var hasher = std.hash.XxHash64.init(0);
     var buf: [64 * 1024]u8 = undefined;
@@ -555,8 +570,18 @@ fn hashFileXx64(path: []const u8) !u64 {
     return hasher.final();
 }
 
+fn runtimeSourceDirPath(allocator: std.mem.Allocator) ![]const u8 {
+    return std.fs.path.join(allocator, &.{ build_options.project_root, "src", "runtime" });
+}
+
+fn runtimeRootSourcePath(allocator: std.mem.Allocator) ![]const u8 {
+    return std.fs.path.join(allocator, &.{ build_options.project_root, "src", "runtime", "col6forge_rt.zig" });
+}
+
 fn computeRuntimeSourceKey(allocator: std.mem.Allocator) ![]const u8 {
-    var dir = try std.fs.cwd().openDir("src/runtime", .{ .iterate = true });
+    const runtime_source_dir = try runtimeSourceDirPath(allocator);
+    defer allocator.free(runtime_source_dir);
+    var dir = try std.fs.cwd().openDir(runtime_source_dir, .{ .iterate = true });
     defer dir.close();
 
     var walker = try dir.walk(allocator);
@@ -582,7 +607,7 @@ fn computeRuntimeSourceKey(allocator: std.mem.Allocator) ![]const u8 {
     var hasher = std.hash.XxHash64.init(0);
     for (files.items) |rel_path| {
         hasher.update(rel_path);
-        const abs_rel = try std.fs.path.join(allocator, &.{ "src/runtime", rel_path });
+        const abs_rel = try std.fs.path.join(allocator, &.{ runtime_source_dir, rel_path });
         defer allocator.free(abs_rel);
         var digest = try hashFileXx64(abs_rel);
         hasher.update(std.mem.asBytes(&digest));
@@ -671,6 +696,8 @@ fn emitPipelineToFile(
 fn buildRuntimeObject(allocator: std.mem.Allocator, runtime_obj_path: []const u8, cfg: RuntimeBuildConfig) !void {
     const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{runtime_obj_path});
     defer allocator.free(emit_arg);
+    const runtime_source_path = try runtimeRootSourcePath(allocator);
+    defer allocator.free(runtime_source_path);
 
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
@@ -684,7 +711,7 @@ fn buildRuntimeObject(allocator: std.mem.Allocator, runtime_obj_path: []const u8
     if (cfg.ofmt) |ofmt| {
         try argv.appendSlice(allocator, &.{ "-ofmt", ofmt });
     }
-    try argv.append(allocator, "src/runtime/col6forge_rt.zig");
+    try argv.append(allocator, runtime_source_path);
     try runCheckedCommand(allocator, argv.items, "zig build-obj runtime");
 }
 

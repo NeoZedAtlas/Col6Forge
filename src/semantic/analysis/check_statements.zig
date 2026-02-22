@@ -311,6 +311,12 @@ fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Co
 }
 
 fn intrinsicArity(name: []const u8) ?Arity {
+    if (std.ascii.eqlIgnoreCase(name, "DPMPAR")) {
+        return .{ .min = 1, .max = 1 };
+    }
+    if (std.ascii.eqlIgnoreCase(name, "REAL")) {
+        return .{ .min = 1, .max = 2 };
+    }
     if (std.ascii.eqlIgnoreCase(name, "CMPLX") or std.ascii.eqlIgnoreCase(name, "DCMPLX")) return .{ .min = 1, .max = 2 };
     if (std.ascii.eqlIgnoreCase(name, "MIN") or
         std.ascii.eqlIgnoreCase(name, "MAX") or

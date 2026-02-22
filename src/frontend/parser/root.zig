@@ -46,10 +46,89 @@ const Parser = struct {
                 self.index += 1;
                 continue;
             }
+            if (isProgramUnitEndLine(self.arena, self.lines[self.index])) {
+                self.index += 1;
+                continue;
+            }
+            if (isModuleEndLine(self.arena, self.lines[self.index])) {
+                self.index += 1;
+                continue;
+            }
+            if (isModuleHeaderLine(self.arena, self.lines[self.index])) {
+                try self.parseModuleContainer(&units);
+                continue;
+            }
             const unit = try self.parseProgramUnit();
             try units.append(unit);
         }
         return .{ .units = try units.toOwnedSlice() };
+    }
+
+    fn parseModuleContainer(self: *Parser, units: *std.array_list.Managed(ProgramUnit)) !void {
+        // Parse the module declaration section conservatively, then parse
+        // contained procedures and prepend supported module declarations.
+        self.index += 1;
+        var module_decls = std.array_list.Managed(Decl).init(self.arena);
+        var module_decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
+        var saw_contains = false;
+        var in_interface = false;
+        while (self.index < self.lines.len) {
+            const line = self.lines[self.index];
+            if (isModuleEndLine(self.arena, line)) {
+                self.index += 1;
+                return;
+            }
+            if (isContainsLine(self.arena, line)) {
+                self.index += 1;
+                saw_contains = true;
+                break;
+            }
+            if (isInterfaceStartLine(self.arena, line)) {
+                in_interface = true;
+                self.index += 1;
+                continue;
+            }
+            if (in_interface) {
+                if (isInterfaceEndLine(self.arena, line)) {
+                    in_interface = false;
+                }
+                self.index += 1;
+                continue;
+            }
+            const tokens = lexer.lexLogicalLine(self.arena, line) catch {
+                self.index += 1;
+                continue;
+            };
+            defer self.arena.free(tokens);
+            var lp = LineParser.init(line, tokens);
+            if (decl.isDeclarationStart(lp)) {
+                const decl_node = decl.parseDecl(&lp, self.arena) catch {
+                    self.index += 1;
+                    continue;
+                };
+                try module_decls.append(decl_node);
+                try module_decl_sources.append(sourceFromLine(line));
+            }
+            self.index += 1;
+        }
+        if (!saw_contains) return;
+
+        while (self.index < self.lines.len) {
+            const line = self.lines[self.index];
+            if (isModuleEndLine(self.arena, line)) {
+                self.index += 1;
+                return;
+            }
+            if (isStandaloneEndLine(self.arena, line)) {
+                self.index += 1;
+                continue;
+            }
+            var unit = try self.parseProgramUnit();
+            if (module_decls.items.len != 0) {
+                unit = try prependDecls(self.arena, unit, module_decls.items, module_decl_sources.items);
+            }
+            try units.append(unit);
+        }
     }
 
     fn parseProgramUnit(self: *Parser) !ProgramUnit {
@@ -101,13 +180,15 @@ const Parser = struct {
                     continue;
                 }
             }
-            if (stmt_lp.isKeywordSplit("CONTAINS")) {
-                self.index += 1;
-                break;
-            }
-            if (stmt_lp.isKeywordSplit("END") and !isEndDoLine(stmt_lp) and !isEndIfLine(stmt_lp)) {
-                self.index += 1;
-                break;
+            if (!do_ctx.hasPending()) {
+                if (stmt_lp.isKeywordSplit("CONTAINS")) {
+                    self.index += 1;
+                    break;
+                }
+                if (stmt_lp.isKeywordSplit("END") and !isEndDoLine(stmt_lp) and !isEndIfLine(stmt_lp) and !isEndBlockLine(stmt_lp)) {
+                    self.index += 1;
+                    break;
+                }
             }
             if (decl.isDeclarationStart(stmt_lp)) {
                 const decl_node = decl.parseDecl(&stmt_lp, self.arena) catch |err| {
@@ -173,9 +254,8 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
     var type_info: ?TypeInfo = null;
     var allow_missing_name = false;
 
-    if (lp.isKeywordSplit("MODULE")) {
-        return error.UnsupportedModuleUnit;
-    }
+    consumeProcedurePrefixes(lp);
+
     if (lp.isKeywordSplit("PROGRAM")) {
         _ = lp.consumeKeyword("PROGRAM");
         kind = .program;
@@ -191,6 +271,7 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
         allow_missing_name = true;
     } else {
         type_info = try parseTypePrefix(arena, lp) orelse return error.ExpectedProgramUnit;
+        consumeProcedurePrefixes(lp);
         if (!lp.isKeywordSplit("FUNCTION")) return error.ExpectedProgramUnit;
         _ = lp.consumeKeyword("FUNCTION");
         kind = .function;
@@ -253,7 +334,7 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
     }
     if (lp.isKeywordSplit("REAL")) {
         _ = lp.consumeKeyword("REAL");
-        return .{ .type_kind = .real, .char_len = null };
+        return .{ .type_kind = try parseRealTypePrefixKind(lp), .char_len = null };
     }
     if (lp.isKeywordSplit("COMPLEX")) {
         _ = lp.consumeKeyword("COMPLEX");
@@ -278,6 +359,16 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
         return .{ .type_kind = .double_precision, .char_len = null };
     }
     return null;
+}
+
+fn consumeProcedurePrefixes(lp: *LineParser) void {
+    while (true) {
+        if (lp.consumeKeyword("PURE")) continue;
+        if (lp.consumeKeyword("ELEMENTAL")) continue;
+        if (lp.consumeKeyword("RECURSIVE")) continue;
+        if (lp.consumeKeyword("IMPURE")) continue;
+        break;
+    }
 }
 
 fn lineAtIndexOrLast(lines: []logical_line.LogicalLine, idx: usize, fallback: logical_line.LogicalLine) logical_line.LogicalLine {
@@ -377,6 +468,34 @@ fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
     return expr.parseExpr(lp, arena, 6);
 }
 
+fn prependDecls(
+    allocator: std.mem.Allocator,
+    unit: ProgramUnit,
+    prelude_decls: []const Decl,
+    prelude_sources: []const DeclSource,
+) !ProgramUnit {
+    if (prelude_decls.len == 0) return unit;
+
+    const total_decls = prelude_decls.len + unit.decls.len;
+    const decls = try allocator.alloc(Decl, total_decls);
+    std.mem.copyForwards(Decl, decls[0..prelude_decls.len], prelude_decls);
+    std.mem.copyForwards(Decl, decls[prelude_decls.len..], unit.decls);
+
+    const total_sources = prelude_sources.len + unit.decl_sources.len;
+    const decl_sources = try allocator.alloc(DeclSource, total_sources);
+    std.mem.copyForwards(DeclSource, decl_sources[0..prelude_sources.len], prelude_sources);
+    std.mem.copyForwards(DeclSource, decl_sources[prelude_sources.len..], unit.decl_sources);
+
+    return .{
+        .kind = unit.kind,
+        .name = unit.name,
+        .args = unit.args,
+        .decls = decls,
+        .decl_sources = decl_sources,
+        .stmts = unit.stmts,
+    };
+}
+
 fn isEndDoLine(lp: LineParser) bool {
     const end_span = lp.keywordSpan("END") orelse return false;
     const next_idx = lp.index + end_span;
@@ -393,6 +512,15 @@ fn isEndIfLine(lp: LineParser) bool {
     const next_tok = lp.tokens[next_idx];
     if (next_tok.kind != .identifier) return false;
     return context.eqNoCase(lp.tokenText(next_tok), "IF");
+}
+
+fn isEndBlockLine(lp: LineParser) bool {
+    const end_span = lp.keywordSpan("END") orelse return false;
+    const next_idx = lp.index + end_span;
+    if (next_idx >= lp.tokens.len) return false;
+    const next_tok = lp.tokens[next_idx];
+    if (next_tok.kind != .identifier) return false;
+    return context.eqNoCase(lp.tokenText(next_tok), "BLOCK");
 }
 
 fn recordParamInts(param_ints: *std.StringHashMap(i64), assigns: []ast.ParamAssign) !void {
@@ -711,6 +839,105 @@ test "parseProgram handles CONTAINS internal function blocks" {
     try testing.expectEqualStrings("SXVALS", program.units[1].name);
 }
 
+test "parseProgram skips END PROGRAM after internal procedures" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      PROGRAM MAIN\n" ++
+        "      CONTAINS\n" ++
+        "      SUBROUTINE FCN()\n" ++
+        "      RETURN\n" ++
+        "      END SUBROUTINE FCN\n" ++
+        "      END PROGRAM MAIN\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+    try testing.expectEqual(ProgramUnitKind.program, program.units[0].kind);
+    try testing.expectEqual(ProgramUnitKind.subroutine, program.units[1].kind);
+}
+
+test "parseProgram handles PURE REAL(kind) function header" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      PURE REAL(WP) FUNCTION ENORM(N, X)\n" ++
+        "      INTEGER N\n" ++
+        "      REAL X(N)\n" ++
+        "      ENORM = 0.0\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqualStrings("ENORM", unit.name);
+    try testing.expect(unit.kind == .function);
+    try testing.expectEqual(@as(usize, 2), unit.args.len);
+    try testing.expectEqual(@as(usize, 2), unit.decls.len);
+    try testing.expect(unit.decls[0] == .type_decl);
+    try testing.expectEqual(ast.TypeKind.double_precision, unit.decls[0].type_decl.type_kind);
+}
+
+test "parseProgram does not treat END BLOCK as unit terminator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE FOO()\n" ++
+        "      A = 0\n" ++
+        "      MAIN : BLOCK\n" ++
+        "      A = 1\n" ++
+        "      END BLOCK MAIN\n" ++
+        "      A = 2\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqualStrings("FOO", unit.name);
+    try testing.expectEqual(@as(usize, 5), unit.stmts.len);
+}
+
+test "parseProgram flushes pending synthesized labels before END" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE FOO()\n" ++
+        "      DO\n" ++
+        "      EXIT\n" ++
+        "      END DO\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqual(@as(usize, 4), unit.stmts.len);
+    try testing.expect(unit.stmts[2].node == .cont);
+    try testing.expect(unit.stmts[3].node == .cont);
+}
+
 test "parseProgram supports implicit main program header" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -734,18 +961,159 @@ test "parseProgram supports implicit main program header" {
     try testing.expectEqual(@as(usize, 1), unit.stmts.len);
 }
 
-test "parseProgram reports unsupported MODULE unit" {
+fn parseRealTypePrefixKind(lp: *LineParser) !ast.TypeKind {
+    if (lp.consume(.star)) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        if (tok.kind != .integer) return error.UnexpectedToken;
+        _ = lp.next();
+        const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return error.UnexpectedToken;
+        return if (kind_val >= 8) .double_precision else .real;
+    }
+
+    if (!lp.consume(.l_paren)) return .real;
+
+    var depth: usize = 1;
+    var kind: ast.TypeKind = .real;
+    while (depth > 0) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        switch (tok.kind) {
+            .l_paren => {
+                _ = lp.next();
+                depth += 1;
+            },
+            .r_paren => {
+                _ = lp.next();
+                depth -= 1;
+            },
+            .integer => {
+                if (depth == 1) {
+                    const value = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch 0;
+                    if (value >= 8) kind = .double_precision;
+                }
+                _ = lp.next();
+            },
+            .identifier => {
+                if (depth == 1 and isDoublePrecisionKindName(lp.tokenText(tok))) {
+                    kind = .double_precision;
+                }
+                _ = lp.next();
+            },
+            else => _ = lp.next(),
+        }
+    }
+    return kind;
+}
+
+fn isDoublePrecisionKindName(name: []const u8) bool {
+    return context.eqNoCase(name, "WP") or
+        context.eqNoCase(name, "REAL64") or
+        context.eqNoCase(name, "C_DOUBLE") or
+        context.eqNoCase(name, "DP") or
+        context.eqNoCase(name, "RK8") or
+        context.eqNoCase(name, "KIND8");
+}
+
+fn isModuleHeaderLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
+    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
+    defer arena.free(tokens);
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("MODULE")) return false;
+    const next = lp.peek() orelse return false;
+    if (next.kind != .identifier) return false;
+    if (context.eqNoCase(lp.tokenText(next), "PROCEDURE")) return false;
+    return true;
+}
+
+fn isModuleEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
+    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
+    defer arena.free(tokens);
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("END")) return false;
+    return lp.consumeKeyword("MODULE");
+}
+
+fn isContainsLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
+    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
+    defer arena.free(tokens);
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("CONTAINS")) return false;
+    return lp.peek() == null;
+}
+
+fn isProgramUnitEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
+    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
+    defer arena.free(tokens);
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("END")) return false;
+    return lp.isKeywordSplit("PROGRAM") or
+        lp.isKeywordSplit("SUBROUTINE") or
+        lp.isKeywordSplit("FUNCTION") or
+        lp.isKeywordSplit("BLOCKDATA");
+}
+
+fn isInterfaceStartLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
+    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
+    defer arena.free(tokens);
+    var lp = LineParser.init(line, tokens);
+    if (lp.consumeKeyword("ABSTRACT")) {
+        return lp.consumeKeyword("INTERFACE");
+    }
+    if (!lp.consumeKeyword("INTERFACE")) return false;
+    return true;
+}
+
+fn isInterfaceEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
+    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
+    defer arena.free(tokens);
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("END")) return false;
+    return lp.consumeKeyword("INTERFACE");
+}
+
+test "parseProgram handles MODULE container with contained procedure" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
     const source =
         "      MODULE MINPACK_MODULE\n" ++
+        "      CONTAINS\n" ++
+        "      SUBROUTINE FOO(X)\n" ++
+        "      REAL X\n" ++
+        "      X = 1.0\n" ++
+        "      END\n" ++
         "      END MODULE MINPACK_MODULE\n";
     const lines = try fixed_form.normalizeFixedForm(allocator, source);
     defer fixed_form.freeLogicalLines(allocator, lines);
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    try testing.expectEqualStrings("FOO", program.units[0].name);
+}
 
-    try testing.expectError(error.UnsupportedModuleUnit, parseProgram(arena.allocator(), lines));
+test "parseProgram prepends supported module declarations to contained procedures" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      MODULE M\n" ++
+        "      REAL, PARAMETER :: EPS = 1.0\n" ++
+        "      CONTAINS\n" ++
+        "      SUBROUTINE FOO()\n" ++
+        "      A = EPS\n" ++
+        "      END\n" ++
+        "      END MODULE M\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqualStrings("FOO", unit.name);
+    try testing.expectEqual(@as(usize, 1), unit.decls.len);
+    try testing.expect(unit.decls[0] == .parameter);
 }

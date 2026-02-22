@@ -12,13 +12,33 @@ const Expr = ast.Expr;
 const ParseStmtError = anyerror;
 
 pub const DoContext = struct {
-    stack: std.array_list.Managed([]const u8),
+    const DoFrame = struct {
+        cycle_label: []const u8,
+        exit_label: ?[]const u8,
+    };
+
+    const BlockFrame = struct {
+        name: ?[]const u8,
+        end_label: []const u8,
+    };
+
+    const NamedDoFrame = struct {
+        name: []const u8,
+        cycle_label: []const u8,
+        exit_label: ?[]const u8,
+    };
+
+    stack: std.array_list.Managed(DoFrame),
+    block_stack: std.array_list.Managed(BlockFrame),
+    named_do_stack: std.array_list.Managed(NamedDoFrame),
     counter: usize,
     pending: std.array_list.Managed(Stmt),
 
     pub fn init(arena: std.mem.Allocator) DoContext {
         return .{
-            .stack = std.array_list.Managed([]const u8).init(arena),
+            .stack = std.array_list.Managed(DoFrame).init(arena),
+            .block_stack = std.array_list.Managed(BlockFrame).init(arena),
+            .named_do_stack = std.array_list.Managed(NamedDoFrame).init(arena),
             .counter = 0,
             .pending = std.array_list.Managed(Stmt).init(arena),
         };
@@ -31,15 +51,115 @@ pub const DoContext = struct {
     }
 
     pub fn push(self: *DoContext, label: []const u8) !void {
-        try self.stack.append(label);
+        try self.stack.append(.{ .cycle_label = label, .exit_label = null });
     }
 
     pub fn pop(self: *DoContext) ?[]const u8 {
+        return if (self.popLoop()) |frame| frame.cycle_label else null;
+    }
+
+    pub fn popLoop(self: *DoContext) ?DoFrame {
         if (self.stack.items.len == 0) return null;
         const idx = self.stack.items.len - 1;
-        const label = self.stack.items[idx];
+        const frame = self.stack.items[idx];
         self.stack.shrinkRetainingCapacity(idx);
+        return frame;
+    }
+
+    pub fn peek(self: *const DoContext) ?[]const u8 {
+        if (self.stack.items.len == 0) return null;
+        return self.stack.items[self.stack.items.len - 1].cycle_label;
+    }
+
+    pub fn peekExitLabel(self: *const DoContext) ?[]const u8 {
+        if (self.stack.items.len == 0) return null;
+        const frame = self.stack.items[self.stack.items.len - 1];
+        return frame.exit_label orelse frame.cycle_label;
+    }
+
+    pub fn bindDoExitLabel(self: *DoContext, cycle_label: []const u8, exit_label: []const u8) void {
+        if (self.stack.items.len == 0) return;
+        const idx = self.stack.items.len - 1;
+        if (!std.mem.eql(u8, self.stack.items[idx].cycle_label, cycle_label)) return;
+        self.stack.items[idx].exit_label = exit_label;
+    }
+
+    pub fn nextLoopExitLabel(self: *DoContext, arena: std.mem.Allocator) ![]const u8 {
+        const label = try std.fmt.allocPrint(arena, "EXITDO{d}", .{self.counter});
+        self.counter += 1;
         return label;
+    }
+
+    pub fn nextBlockLabel(self: *DoContext, arena: std.mem.Allocator) ![]const u8 {
+        const label = try std.fmt.allocPrint(arena, "ENDBLOCK{d}", .{self.counter});
+        self.counter += 1;
+        return label;
+    }
+
+    pub fn pushBlock(self: *DoContext, name: ?[]const u8, end_label: []const u8) !void {
+        try self.block_stack.append(.{ .name = name, .end_label = end_label });
+    }
+
+    pub fn popBlock(self: *DoContext) ?BlockFrame {
+        if (self.block_stack.items.len == 0) return null;
+        const idx = self.block_stack.items.len - 1;
+        const frame = self.block_stack.items[idx];
+        self.block_stack.shrinkRetainingCapacity(idx);
+        return frame;
+    }
+
+    pub fn resolveBlockExit(self: *DoContext, name: ?[]const u8) ?[]const u8 {
+        if (self.block_stack.items.len == 0) return null;
+        if (name == null) {
+            return self.block_stack.items[self.block_stack.items.len - 1].end_label;
+        }
+        var i: usize = self.block_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            const frame = self.block_stack.items[i];
+            if (frame.name) |block_name| {
+                if (std.ascii.eqlIgnoreCase(block_name, name.?)) {
+                    return frame.end_label;
+                }
+            }
+        }
+        return null;
+    }
+
+    pub fn pushNamedDo(self: *DoContext, name: []const u8, cycle_label: []const u8, exit_label: ?[]const u8) !void {
+        try self.named_do_stack.append(.{
+            .name = name,
+            .cycle_label = cycle_label,
+            .exit_label = exit_label,
+        });
+    }
+
+    pub fn popNamedDoByLabel(self: *DoContext, cycle_label: []const u8) void {
+        if (self.named_do_stack.items.len == 0) return;
+        const idx = self.named_do_stack.items.len - 1;
+        if (std.mem.eql(u8, self.named_do_stack.items[idx].cycle_label, cycle_label)) {
+            self.named_do_stack.shrinkRetainingCapacity(idx);
+        }
+    }
+
+    pub fn resolveNamedDoExit(self: *DoContext, name: []const u8) ?[]const u8 {
+        var i: usize = self.named_do_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            const frame = self.named_do_stack.items[i];
+            if (std.ascii.eqlIgnoreCase(frame.name, name)) return frame.exit_label orelse frame.cycle_label;
+        }
+        return null;
+    }
+
+    pub fn resolveNamedDoCycle(self: *DoContext, name: []const u8) ?[]const u8 {
+        var i: usize = self.named_do_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            const frame = self.named_do_stack.items[i];
+            if (std.ascii.eqlIgnoreCase(frame.name, name)) return frame.cycle_label;
+        }
+        return null;
     }
 
     pub fn pushPending(self: *DoContext, stmt: Stmt) !void {
@@ -52,6 +172,10 @@ pub const DoContext = struct {
         const stmt = self.pending.items[idx];
         self.pending.shrinkRetainingCapacity(idx);
         return stmt;
+    }
+
+    pub fn hasPending(self: *const DoContext) bool {
+        return self.pending.items.len != 0;
     }
 };
 
@@ -66,6 +190,17 @@ pub fn parseDoStatement(arena: std.mem.Allocator, lp: *LineParser, do_ctx: *DoCo
         return .{ .do_while = .{
             .end_label = end_label,
             .condition = condition,
+        } };
+    }
+
+    if (lp.peek() == null) {
+        const end_label = try do_ctx.nextLabel(arena);
+        try do_ctx.push(end_label);
+        const cond = try arena.create(Expr);
+        cond.* = .{ .literal = .{ .kind = .logical, .text = "1" } };
+        return .{ .do_while = .{
+            .end_label = end_label,
+            .condition = cond,
         } };
     }
 
