@@ -15,6 +15,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {
         .implicit => |imp| {
             for (imp.rules) |rule| {
+                try ensureImplicitRuleNoOverlap(self, rule.start, rule.end);
                 var char_len: ?usize = null;
                 if (rule.type_kind == .character) {
                     char_len = 1;
@@ -155,7 +156,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                             _ = try symbols_mod.ensureSymbol(self, name);
                         },
                         .common => |block_name| {
-                            if (!hasCommonBlock(self.unit, block_name)) return error.UnknownCommonBlock;
+                            if (!(try hasCommonBlock(self, block_name))) return error.UnknownCommonBlock;
                         },
                     }
                 }
@@ -253,6 +254,7 @@ fn equivalenceDesignatorName(self: *context.Context, expr_node: *ast.Expr) ![]co
             const kind: ResolvedRefKind = resolvedKindFor(self, expr_node) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
             if (kind != .subscript) return error.InvalidEquivalence;
+            if (!isFirstElementSubscript(call.args)) return error.InvalidEquivalence;
             return call.name;
         },
         else => return error.InvalidEquivalence,
@@ -387,18 +389,69 @@ fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return out;
 }
 
-fn hasCommonBlock(unit: ast.ProgramUnit, target: ?[]const u8) bool {
-    for (unit.decls) |decl| {
-        if (decl != .common) continue;
-        for (decl.common.blocks) |block| {
-            if (optEqNoCase(block.name, target)) return true;
-        }
+fn hasCommonBlock(self: *context.Context, target: ?[]const u8) !bool {
+    try ensureCommonBlockIndex(self);
+    if (target == null) return self.common_block_names.contains(blankCommonKey());
+    var key_buf: [128]u8 = undefined;
+    const name = target.?;
+    if (name.len <= key_buf.len) {
+        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+        return self.common_block_names.contains(key_buf[0..name.len]);
+    }
+    var it = self.common_block_names.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return true;
     }
     return false;
 }
 
-fn optEqNoCase(a: ?[]const u8, b: ?[]const u8) bool {
-    if (a == null and b == null) return true;
-    if (a == null or b == null) return false;
-    return std.ascii.eqlIgnoreCase(a.?, b.?);
+fn ensureCommonBlockIndex(self: *context.Context) !void {
+    if (self.common_blocks_indexed) return;
+    for (self.unit.decls) |decl| {
+        if (decl != .common) continue;
+        for (decl.common.blocks) |block| {
+            const key = try commonBlockKeyDup(self.arena, block.name);
+            try self.common_block_names.put(key, {});
+        }
+    }
+    self.common_blocks_indexed = true;
+}
+
+fn commonBlockKeyDup(allocator: std.mem.Allocator, name: ?[]const u8) ![]const u8 {
+    if (name == null) return blankCommonKey();
+    return lowerDup(allocator, name.?);
+}
+
+fn blankCommonKey() []const u8 {
+    return "\x00";
+}
+
+fn ensureImplicitRuleNoOverlap(self: *context.Context, start: u8, end: u8) !void {
+    for (self.implicit.items) |existing| {
+        if (!rangesOverlap(start, end, existing.start, existing.end)) continue;
+        return error.InvalidImplicitRule;
+    }
+}
+
+fn rangesOverlap(a_start: u8, a_end: u8, b_start: u8, b_end: u8) bool {
+    return !(a_end < b_start or b_end < a_start);
+}
+
+fn isFirstElementSubscript(args: []*ast.Expr) bool {
+    if (args.len == 0) return false;
+    for (args) |arg| {
+        switch (arg.*) {
+            .literal => |lit| {
+                if (lit.kind != .integer) return false;
+                if (!isIntegerOne(lit.text)) return false;
+            },
+            else => return false,
+        }
+    }
+    return true;
+}
+
+fn isIntegerOne(text: []const u8) bool {
+    const trimmed = std.mem.trim(u8, text, " \t");
+    return std.mem.eql(u8, trimmed, "1");
 }

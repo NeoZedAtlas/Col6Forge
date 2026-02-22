@@ -583,6 +583,27 @@ test "semantic IMPLICIT rules are unit-local" {
     try testing.expect(found);
 }
 
+test "semantic reports CF3126 for overlapping IMPLICIT rules" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      IMPLICIT INTEGER (A-C)\n" ++
+        "      IMPLICIT REAL (B-D)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidImplicitRule, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3126"));
+}
+
 test "semantic reports CF3109 for invalid array subscript rank" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -916,6 +937,27 @@ test "semantic reports CF3113 for invalid EQUIVALENCE types" {
         "      INTEGER I\n" ++
         "      CHARACTER*1 C\n" ++
         "      EQUIVALENCE (I,C)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidEquivalence, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3113"));
+}
+
+test "semantic rejects EQUIVALENCE with non-leading subscript offsets" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(2),B(2)\n" ++
+        "      EQUIVALENCE (A(2),B(1))\n" ++
         "      END\n";
     const lines = try fixed_form.normalizeFixedForm(allocator, source);
     defer fixed_form.freeLogicalLines(allocator, lines);
