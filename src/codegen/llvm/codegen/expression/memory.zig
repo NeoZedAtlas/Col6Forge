@@ -100,11 +100,11 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
 pub fn emitDimValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     switch (expr.*) {
         .literal => |lit| {
-            if (lit.kind == .assumed_size) return error.AssumedSizeDimUnsupported;
+            if (lit.kind == .assumed_size) return oneIndexValue();
         },
         .dim_range => |range| {
             if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) {
-                return error.AssumedSizeDimUnsupported;
+                return oneIndexValue();
             }
             var upper = try dispatch.emitExpr(ctx, builder, range.upper);
             upper = try casting.coerce(ctx, builder, upper, index_ty);

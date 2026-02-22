@@ -57,6 +57,10 @@ fn parseDimExprDepth(lp: *LineParser, arena: std.mem.Allocator, depth: usize) Pa
             const assumed = try arena.create(Expr);
             assumed.* = .{ .literal = .{ .kind = .assumed_size, .text = lp.tokenText(tok) } };
             upper = assumed;
+        } else if (lp.peekIs(.r_paren) or lp.peekIs(.comma)) {
+            const assumed = try arena.create(Expr);
+            assumed.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
+            upper = assumed;
         } else {
             upper = try parseExprDepth(lp, arena, 0, depth + 1);
         }
@@ -467,6 +471,31 @@ test "parseDimExpr handles assumed size" {
         .literal => |lit| {
             try testing.expectEqual(ast.LiteralKind.assumed_size, lit.kind);
             try testing.expectEqualStrings("*", lit.text);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDimExpr handles deferred shape colon" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      :\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseDimExpr(&lp, arena.allocator());
+
+    switch (node.*) {
+        .dim_range => |range| {
+            try testing.expect(range.lower == null);
+            try testing.expect(range.upper.* == .literal);
+            try testing.expectEqual(ast.LiteralKind.assumed_size, range.upper.literal.kind);
         },
         else => return error.UnexpectedToken,
     }

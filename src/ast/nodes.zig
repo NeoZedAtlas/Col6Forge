@@ -12,6 +12,7 @@ pub const ProgramUnitKind = enum {
 pub const ProgramUnit = struct {
     kind: ProgramUnitKind,
     name: []const u8,
+    result_name: ?[]const u8 = null,
     args: []const []const u8,
     decls: []Decl,
     decl_sources: []DeclSource = &.{},

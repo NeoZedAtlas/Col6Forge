@@ -63,7 +63,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
     if (lp.isKeywordSplit("DIMENSION")) {
         _ = lp.consumeKeyword("DIMENSION");
-        const items = try parseDeclarators(lp, arena, null);
+        const items = try parseDeclarators(lp, arena, null, null);
         return .{ .dimension = .{ .items = items } };
     }
     if (lp.isKeywordSplit("PARAMETER")) {
@@ -154,7 +154,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         if (lp.consume(.l_paren)) {
             try consumeBalancedParens(lp);
         }
-        _ = try consumeDeclAttributes(lp);
+        _ = try consumeDeclAttributes(lp, arena);
         const names = try parseNameList(lp, arena);
         return .{ .external = .{ .names = names } };
     }
@@ -166,8 +166,8 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
             default_char_len = try parseCharacterLen(lp, arena);
         }
     }
-    _ = try consumeDeclAttributes(lp);
-    const items = try parseDeclarators(lp, arena, default_char_len);
+    const attrs = try consumeDeclAttributes(lp, arena);
+    const items = try parseDeclarators(lp, arena, default_char_len, attrs.dimension);
     return .{ .type_decl = .{ .type_kind = type_kind, .items = items } };
 }
 
@@ -222,9 +222,10 @@ fn parseTypeKind(lp: *LineParser) !TypeKind {
 
 const DeclAttributes = struct {
     parameter: bool = false,
+    dimension: ?[]*ast.Expr = null,
 };
 
-fn consumeDeclAttributes(lp: *LineParser) !DeclAttributes {
+fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAttributes {
     var attrs: DeclAttributes = .{};
 
     if (lp.consume(.comma)) {
@@ -234,13 +235,18 @@ fn consumeDeclAttributes(lp: *LineParser) !DeclAttributes {
             if (tok.kind != .identifier) return attrs;
 
             const attr_tok = lp.next();
-            if (context.eqNoCase(lp.tokenText(attr_tok), "PARAMETER")) {
+            const attr_name = lp.tokenText(attr_tok);
+            if (context.eqNoCase(attr_name, "PARAMETER")) {
                 attrs.parameter = true;
             }
-
-            if (lp.consume(.l_paren)) {
+            if (context.eqNoCase(attr_name, "DIMENSION")) {
+                if (lp.consume(.l_paren)) {
+                    attrs.dimension = try parseAttrDimensions(lp, arena);
+                }
+            } else if (lp.consume(.l_paren)) {
                 try consumeBalancedParens(lp);
             }
+
             if (consumeDoubleColon(lp)) return attrs;
             if (!lp.consume(.comma)) break;
         }
@@ -271,6 +277,17 @@ fn consumeBalancedParens(lp: *LineParser) !void {
             else => {},
         }
     }
+}
+
+fn parseAttrDimensions(lp: *LineParser, arena: std.mem.Allocator) ![]*ast.Expr {
+    var dims = std.array_list.Managed(*ast.Expr).init(arena);
+    while (!lp.peekIs(.r_paren)) {
+        const dim = try expr.parseDimExpr(lp, arena);
+        try dims.append(dim);
+        _ = lp.consume(.comma);
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return dims.toOwnedSlice();
 }
 
 fn consumeOptionalKindSelector(lp: *LineParser) !void {
@@ -336,7 +353,12 @@ fn parseComplexKindSuffix(lp: *LineParser) !TypeKind {
     return error.UnsupportedComplexKind;
 }
 
-fn parseDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_char_len: ?*ast.Expr) ![]Declarator {
+fn parseDeclarators(
+    lp: *LineParser,
+    arena: std.mem.Allocator,
+    default_char_len: ?*ast.Expr,
+    default_dims: ?[]*ast.Expr,
+) ![]Declarator {
     var items = std.array_list.Managed(Declarator).init(arena);
     while (lp.peek()) |_| {
         const name = lp.readName(arena) orelse return error.MissingName;
@@ -356,9 +378,13 @@ fn parseDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_char_len:
         if (lp.consume(.star)) {
             char_len = try parseCharacterLen(lp, arena);
         }
+        var dim_items = try dims.toOwnedSlice();
+        if (dim_items.len == 0 and default_dims != null) {
+            dim_items = default_dims.?;
+        }
         try items.append(.{
             .name = name,
-            .dims = try dims.toOwnedSlice(),
+            .dims = dim_items,
             .char_len = char_len,
         });
         if (!lp.consume(.comma)) break;
@@ -496,6 +522,32 @@ test "parseDecl handles REAL kind selector in parentheses" {
             try testing.expectEqual(TypeKind.double_precision, td.type_kind);
             try testing.expectEqual(@as(usize, 1), td.items.len);
             try testing.expectEqualStrings("X", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl applies DIMENSION attribute to declarators" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      REAL, DIMENSION(10,20), INTENT(IN) :: A, B\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.real, td.type_kind);
+            try testing.expectEqual(@as(usize, 2), td.items.len);
+            try testing.expectEqual(@as(usize, 2), td.items[0].dims.len);
+            try testing.expectEqual(@as(usize, 2), td.items[1].dims.len);
         },
         else => return error.UnexpectedToken,
     }

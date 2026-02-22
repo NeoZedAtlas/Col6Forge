@@ -218,6 +218,7 @@ const Parser = struct {
         return .{
             .kind = header.kind,
             .name = header.name,
+            .result_name = header.result_name,
             .args = header.args,
             .decls = try decls.toOwnedSlice(),
             .decl_sources = try decl_sources.toOwnedSlice(),
@@ -231,6 +232,7 @@ const Parser = struct {
         return .{
             .kind = .program,
             .name = name,
+            .result_name = null,
             .args = &.{},
             .type_decl = null,
         };
@@ -245,6 +247,7 @@ const TypeInfo = struct {
 const ProgramUnitHeader = struct {
     kind: ProgramUnitKind,
     name: []const u8,
+    result_name: ?[]const u8,
     args: []const []const u8,
     type_decl: ?Decl,
 };
@@ -296,6 +299,12 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
         }
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     }
+    var result_name: ?[]const u8 = null;
+    if (kind == .function and lp.consumeKeyword("RESULT")) {
+        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        result_name = lp.readName(arena) orelse return error.MissingName;
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    }
 
     var type_decl: ?Decl = null;
     if (type_info) |info| {
@@ -311,6 +320,7 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
     return .{
         .kind = kind,
         .name = name,
+        .result_name = result_name,
         .args = try args_list.toOwnedSlice(),
         .type_decl = type_decl,
     };
@@ -887,6 +897,31 @@ test "parseProgram handles PURE REAL(kind) function header" {
     try testing.expectEqual(@as(usize, 2), unit.decls.len);
     try testing.expect(unit.decls[0] == .type_decl);
     try testing.expectEqual(ast.TypeKind.double_precision, unit.decls[0].type_decl.type_kind);
+}
+
+test "parseProgram captures explicit RESULT variable name in function header" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      FUNCTION DFLOAT(I) RESULT(F)\n" ++
+        "      INTEGER I\n" ++
+        "      REAL F\n" ++
+        "      F = I\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expect(unit.kind == .function);
+    try testing.expectEqualStrings("DFLOAT", unit.name);
+    try testing.expect(unit.result_name != null);
+    try testing.expectEqualStrings("F", unit.result_name.?);
 }
 
 test "parseProgram does not treat END BLOCK as unit terminator" {

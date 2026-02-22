@@ -25,6 +25,8 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
 
     var save_info = try buildSaveInfo(ctx);
     defer save_info.deinit();
+    const return_symbol_name = functionReturnSymbolName(ctx.unit);
+    const uses_explicit_result_name = ctx.unit.kind == .function and !std.ascii.eqlIgnoreCase(return_symbol_name, ctx.unit.name);
 
     const func_name = utils.mangleName(ctx.allocator, ctx.unit.name) catch return error.OutOfMemory;
     const has_alt_return = ctx.unit.kind == .subroutine and execution.unitHasAltReturn(ctx.unit);
@@ -32,7 +34,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     var is_character_function = false;
     var is_complex_sret_function = false;
     if (ctx.unit.kind == .function) {
-        const sym = ctx.findSymbol(ctx.unit.name) orelse return error.UnknownSymbol;
+        const sym = ctx.findSymbol(return_symbol_name) orelse return error.UnknownSymbol;
         is_character_function = sym.type_kind == .character;
         is_complex_sret_function = sym.type_kind == .complex_double;
         if (!is_character_function) {
@@ -98,11 +100,19 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
 
     if (has_hidden_result_arg) {
         const result_ptr_name = ptr_arg_names.items[0];
-        try ctx.locals.put(ctx.unit.name, .{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true });
+        const result_ptr = ValueRef{ .name = result_ptr_name, .ty = .ptr, .is_ptr = true };
+        try ctx.locals.put(return_symbol_name, result_ptr);
+        if (!std.ascii.eqlIgnoreCase(return_symbol_name, ctx.unit.name)) {
+            try ctx.locals.put(ctx.unit.name, result_ptr);
+        }
     }
 
     if (result_len_arg_name) |len_name| {
-        try ctx.char_arg_lens.put(ctx.unit.name, .{ .name = len_name, .ty = .i32, .is_ptr = false });
+        const len_ref = ValueRef{ .name = len_name, .ty = .i32, .is_ptr = false };
+        try ctx.char_arg_lens.put(return_symbol_name, len_ref);
+        if (!std.ascii.eqlIgnoreCase(return_symbol_name, ctx.unit.name)) {
+            try ctx.char_arg_lens.put(ctx.unit.name, len_ref);
+        }
     }
     for (char_dummy_names.items, 0..) |formal_name, idx| {
         const len_name = char_dummy_len_args.items[idx];
@@ -122,39 +132,82 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
 
     for (ctx.sem.symbols) |sym| {
         if (sym.storage != .local) continue;
-        const is_return_symbol = ctx.unit.kind == .function and
+        const is_function_name_symbol = ctx.unit.kind == .function and
             sym.kind == .function and
-            std.mem.eql(u8, sym.name, ctx.unit.name);
+            std.ascii.eqlIgnoreCase(sym.name, ctx.unit.name);
+        const is_return_symbol = ctx.unit.kind == .function and
+            std.ascii.eqlIgnoreCase(sym.name, return_symbol_name);
+        if (uses_explicit_result_name and is_function_name_symbol) continue;
         if (sym.is_external) continue;
         if (sym.kind == .parameter or sym.kind == .subroutine) continue;
         if (sym.kind == .function and !is_return_symbol and ctx.unit.kind != .function) continue;
         if (is_return_symbol and (is_character_function or is_complex_sret_function)) continue;
         if (ctx.locals.contains(sym.name)) continue;
         if (isSaved(&save_info, sym.name) and !is_return_symbol) continue;
+        if (symbolHasDeferredDims(sym)) {
+            if (is_return_symbol and ctx.unit.kind == .function and !is_character_function and !is_complex_sret_function) {
+                const ty = llvm_types.typeFromKind(sym.type_kind);
+                const alloca_name = try ctx.nextTemp();
+                try builder.alloca(alloca_name, ty);
+                try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
+                continue;
+            }
+            try ctx.locals.put(sym.name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
+            continue;
+        }
         if (sym.type_kind == .character) {
             const char_len = sym.char_len orelse 1;
-            const elem_count = try ctx.arrayElemCountForSymbol(sym);
-            const total = elem_count * char_len;
             const alloca_name = try ctx.nextTemp();
-            if (total == 1) {
+            if (sym.dims.len > 0) {
+                const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
+                    error.ArrayDimNotConstant => null,
+                    else => return err,
+                };
+                if (elem_count) |count| {
+                    const total = count * char_len;
+                    if (total == 1) {
+                        try builder.alloca(alloca_name, .i8);
+                    } else {
+                        try builder.allocaArray(alloca_name, .i8, total);
+                    }
+                } else {
+                    var dyn_total = try emitDynamicElemCount(ctx, builder, sym);
+                    if (char_len != 1) {
+                        dyn_total = try expression.emitMul(ctx, builder, dyn_total, constI64(ctx, @intCast(char_len)));
+                    }
+                    try builder.allocaArrayValue(alloca_name, .i8, dyn_total);
+                }
+            } else if (char_len == 1) {
                 try builder.alloca(alloca_name, .i8);
             } else {
-                try builder.allocaArray(alloca_name, .i8, total);
+                try builder.allocaArray(alloca_name, .i8, char_len);
             }
             try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
             continue;
         }
         const ty = llvm_types.typeFromKind(sym.type_kind);
         if (sym.dims.len > 0) {
-            const elem_count = try ctx.arrayElemCountForSymbol(sym);
             const alloca_name = try ctx.nextTemp();
-            try builder.allocaArray(alloca_name, ty, elem_count);
+            const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
+                error.ArrayDimNotConstant => null,
+                else => return err,
+            };
+            if (elem_count) |count| {
+                try builder.allocaArray(alloca_name, ty, count);
+            } else {
+                const dyn_count = try emitDynamicElemCount(ctx, builder, sym);
+                try builder.allocaArrayValue(alloca_name, ty, dyn_count);
+            }
             try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
             continue;
         }
         const alloca_name = try ctx.nextTemp();
         try builder.alloca(alloca_name, ty);
         try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
+    }
+    if (uses_explicit_result_name) {
+        const result_ptr = ctx.locals.get(return_symbol_name) orelse return error.UnknownSymbol;
+        try ctx.locals.put(ctx.unit.name, result_ptr);
     }
 
     if (unitHasCommonDecls(ctx.unit.decls)) {
@@ -191,6 +244,12 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try builder.label("exit");
     try execution.emitDefaultReturn(ctx, builder);
     try builder.functionEnd();
+}
+
+fn functionReturnSymbolName(unit: ast.ProgramUnit) []const u8 {
+    if (unit.kind != .function) return unit.name;
+    if (unit.result_name) |name| return name;
+    return unit.name;
 }
 
 const SaveInfo = struct {
@@ -242,6 +301,42 @@ fn unitHasEquivalenceDecls(decls: []const ast.Decl) bool {
     return false;
 }
 
+fn emitDynamicElemCount(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) EmitError!ValueRef {
+    var total = constI64(ctx, 1);
+    for (sym.dims) |dim| {
+        var extent = expression.emitDimValue(ctx, builder, dim) catch |err| switch (err) {
+            // Deferred-shape extents such as SIZE(x) are lowered conservatively.
+            error.UnknownSymbol => constI64(ctx, 1),
+            else => return err,
+        };
+        if (extent.ty != .i64) {
+            extent = try expression.coerce(ctx, builder, extent, .i64);
+        }
+        total = try expression.emitMul(ctx, builder, total, extent);
+    }
+    return total;
+}
+
+fn constI64(ctx: *Context, value: i64) ValueRef {
+    return .{ .name = ctx.intLiteral(value) catch unreachable, .ty = .i64, .is_ptr = false };
+}
+
+fn symbolHasDeferredDims(sym: ast.sema.Symbol) bool {
+    if (sym.dims.len == 0) return false;
+    for (sym.dims) |dim| {
+        switch (dim.*) {
+            .literal => |lit| {
+                if (lit.kind == .assumed_size) return true;
+            },
+            .dim_range => |range| {
+                if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
 const SizeAlign = struct {
     size: usize,
     alignment: usize,
@@ -263,13 +358,13 @@ fn sizeAlignForType(ty: llvm_types.IRType) SizeAlign {
 }
 
 fn installSavedGlobals(ctx: *Context, builder: anytype, save_info: *const SaveInfo) EmitError!void {
+    const return_symbol_name = functionReturnSymbolName(ctx.unit);
     for (ctx.sem.symbols) |sym| {
         if (sym.storage != .local) continue;
         if (!isSaved(save_info, sym.name)) continue;
         if (sym.is_external) continue;
         const is_return_symbol = ctx.unit.kind == .function and
-            sym.kind == .function and
-            std.mem.eql(u8, sym.name, ctx.unit.name);
+            std.ascii.eqlIgnoreCase(sym.name, return_symbol_name);
         if (sym.kind == .parameter or sym.kind == .subroutine or is_return_symbol) continue;
         if (ctx.locals.contains(sym.name)) continue;
 

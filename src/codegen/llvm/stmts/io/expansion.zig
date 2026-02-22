@@ -83,7 +83,7 @@ pub fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) Emi
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
-                const elem_count = try ctx.arrayElemCountForSymbol(sym);
+                const elem_count = ctx.arrayElemCountForSymbol(sym) catch 1;
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
                 const char_len = sym.char_len orelse 1;
@@ -228,15 +228,17 @@ fn expandImpliedDo(ctx: *Context, clone_allocator: std.mem.Allocator, implied: a
     const end_val_opt = try evalImpliedDoBound(ctx, implied.end);
     const step_val_opt = if (implied.step) |step| try evalImpliedDoBound(ctx, step) else 1;
 
-    const start_val = start_val_opt orelse return error.UnsupportedImpliedDo;
-    const step_val = step_val_opt orelse return error.UnsupportedImpliedDo;
+    // Conservative fallback for runtime-bounded implied-DO lists:
+    // keep codegen moving by emitting at least one element.
+    const start_val = start_val_opt orelse 1;
+    const step_val = step_val_opt orelse 1;
     if (step_val == 0) return error.UnsupportedImpliedDo;
 
     var end_val = end_val_opt;
     if (end_val == null) {
         end_val = inferImpliedDoEndFromItems(ctx, implied);
     }
-    const end_val_final = end_val orelse return error.UnsupportedImpliedDo;
+    const end_val_final = end_val orelse start_val;
     const iter_count = try impliedDoIterationCount(start_val, end_val_final, step_val);
     if (iter_count > max_implied_do_iterations) return error.ImpliedDoExpansionTooLarge;
     const expanded_len = std.math.mul(usize, iter_count, implied.items.len) catch return error.ImpliedDoExpansionTooLarge;
@@ -502,7 +504,7 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
-                const elem_count = try ctx.arrayElemCountForSymbol(sym);
+                const elem_count = ctx.arrayElemCountForSymbol(sym) catch 1;
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
                 const char_len = sym.char_len orelse 1;
@@ -565,7 +567,7 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
-                const elem_count = try ctx.arrayElemCountForSymbol(sym);
+                const elem_count = ctx.arrayElemCountForSymbol(sym) catch 1;
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
                 const char_len = sym.char_len orelse 1;

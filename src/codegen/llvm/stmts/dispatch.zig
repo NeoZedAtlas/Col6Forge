@@ -135,7 +135,12 @@ fn emitStmtInner(
             try execution.emitReturnStmt(ctx, builder, ret);
             return true;
         },
-        .cont => {},
+        .cont => {
+            if (try execution.emitContinuationDirective(ctx, builder, stmt)) {
+                try builder.br(next_block);
+                return true;
+            }
+        },
         .entry => {},
         .if_single => |ifs| {
             return control.emitIfSingle(ctx, builder, ifs, next_block, local_label_map, emitStmt);

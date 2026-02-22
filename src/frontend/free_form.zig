@@ -183,6 +183,20 @@ fn rewriteAndAppend(
         return;
     }
 
+    if (semicolonOutsideStrings(stmt)) |semi_idx| {
+        const head = std.mem.trim(u8, stmt[0..semi_idx], " \t");
+        const tail_raw = std.mem.trim(u8, stmt[semi_idx + 1 ..], " \t");
+        if (head.len > 0) {
+            try appendLogicalLine(list, try allocator.dupe(u8, head), start_line, end_line);
+        }
+        if (tail_raw.len > 0) {
+            const tail = try collapseArrayCtorAssignToFirstElement(allocator, tail_raw);
+            defer allocator.free(tail);
+            try appendLogicalLine(list, try allocator.dupe(u8, tail), start_line, end_line);
+        }
+        return;
+    }
+
     if (indexOfDoubleColon(stmt)) |dcolon| {
         const left = std.mem.trim(u8, stmt[0..dcolon], " \t");
         const right = std.mem.trim(u8, stmt[dcolon + 2 ..], " \t");
@@ -203,25 +217,72 @@ fn rewriteAndAppend(
             defer allocator.free(mapped);
             const simplified = try simplifyParameterAssigns(allocator, right, kind_state.*);
             defer allocator.free(simplified);
+            if (std.mem.indexOfScalar(u8, simplified, '[') != null) {
+                var scalar_names = std.array_list.Managed(u8).init(allocator);
+                defer scalar_names.deinit();
+                var scalar_assigns = std.array_list.Managed(u8).init(allocator);
+                defer scalar_assigns.deinit();
+
+                var depth: i32 = 0;
+                var start: usize = 0;
+                var seg_i: usize = 0;
+                while (seg_i <= simplified.len) : (seg_i += 1) {
+                    const at_end = seg_i == simplified.len;
+                    const ch: u8 = if (at_end) 0 else simplified[seg_i];
+                    if (!at_end) {
+                        if (ch == '(' or ch == '[') depth += 1;
+                        if (ch == ')' or ch == ']') depth -= 1;
+                    }
+                    if (at_end or (ch == ',' and depth == 0)) {
+                        const seg = std.mem.trim(u8, simplified[start..seg_i], " \t");
+                        if (seg.len != 0) {
+                            if (std.mem.indexOfScalar(u8, seg, '=')) |eq_idx| {
+                                const name = std.mem.trim(u8, seg[0..eq_idx], " \t");
+                                const value = std.mem.trim(u8, seg[eq_idx + 1 ..], " \t");
+                                if (isArrayConstructor(value)) {
+                                    const elems = std.mem.trim(u8, value[1 .. value.len - 1], " \t");
+                                    const count = countTopLevelElements(elems);
+                                    const decl_text = try std.fmt.allocPrint(allocator, "{s} {s}({d})", .{ mapped, name, count });
+                                    try appendLogicalLine(list, decl_text, start_line, end_line);
+                                    const data_text = try std.fmt.allocPrint(allocator, "DATA {s} /{s}/", .{ name, elems });
+                                    try appendLogicalLine(list, data_text, start_line, end_line);
+                                } else {
+                                    if (scalar_names.items.len > 0) try scalar_names.appendSlice(", ");
+                                    try scalar_names.appendSlice(name);
+                                    if (scalar_assigns.items.len > 0) try scalar_assigns.appendSlice(", ");
+                                    try scalar_assigns.appendSlice(name);
+                                    try scalar_assigns.appendSlice(" = ");
+                                    try scalar_assigns.appendSlice(value);
+                                }
+                            }
+                        }
+                        start = seg_i + 1;
+                    }
+                }
+
+                if (scalar_names.items.len > 0) {
+                    const decl_text = try std.fmt.allocPrint(allocator, "{s} {s}", .{ mapped, scalar_names.items });
+                    try appendLogicalLine(list, decl_text, start_line, end_line);
+                }
+                if (scalar_assigns.items.len > 0) {
+                    const param_text = try std.fmt.allocPrint(allocator, "PARAMETER ({s})", .{scalar_assigns.items});
+                    try appendLogicalLine(list, param_text, start_line, end_line);
+                }
+                return;
+            }
             const names = try extractAssignNames(allocator, simplified);
             defer allocator.free(names);
             if (names.len > 0) {
                 const decl_text = try std.fmt.allocPrint(allocator, "{s} {s}", .{ mapped, names });
                 try appendLogicalLine(list, decl_text, start_line, end_line);
             }
-            // Temporarily skip PARAMETER lowering for array-constructor values.
-            // The current parser/const-evaluator pipeline only supports scalar parameters.
-            if (std.mem.indexOfScalar(u8, simplified, '[') != null) {
-                return;
-            }
             const param_text = try std.fmt.allocPrint(allocator, "PARAMETER ({s})", .{simplified});
             try appendLogicalLine(list, param_text, start_line, end_line);
             return;
         } else {
-            const mapped = try mapTypeSpec(allocator, left, kind_state.*);
-            defer allocator.free(mapped);
-            const decl_text = try std.fmt.allocPrint(allocator, "{s} {s}", .{ mapped, right });
-            try appendLogicalLine(list, decl_text, start_line, end_line);
+            // Preserve modern declaration attributes (`DIMENSION`, `ALLOCATABLE`,
+            // `INTENT`, etc.) so downstream parser/semantic can keep rank and shape.
+            try appendLogicalLine(list, try allocator.dupe(u8, stmt), start_line, end_line);
             return;
         }
     }
@@ -238,8 +299,8 @@ fn simplifyParameterAssigns(allocator: std.mem.Allocator, assigns: []const u8, k
         const at_end = i == assigns.len;
         const ch: u8 = if (at_end) 0 else assigns[i];
         if (!at_end) {
-            if (ch == '(') depth += 1;
-            if (ch == ')') depth -= 1;
+            if (ch == '(' or ch == '[') depth += 1;
+            if (ch == ')' or ch == ']') depth -= 1;
         }
         if (at_end or (ch == ',' and depth == 0)) {
             const seg = std.mem.trim(u8, assigns[start..i], " \t");
@@ -398,8 +459,8 @@ fn extractAssignNames(allocator: std.mem.Allocator, assigns: []const u8) ![]cons
         const at_end = i == assigns.len;
         const ch: u8 = if (at_end) 0 else assigns[i];
         if (!at_end) {
-            if (ch == '(') depth += 1;
-            if (ch == ')') depth -= 1;
+            if (ch == '(' or ch == '[') depth += 1;
+            if (ch == ')' or ch == ']') depth -= 1;
         }
         if (at_end or (ch == ',' and depth == 0)) {
             const seg = std.mem.trim(u8, assigns[start..i], " \t");
@@ -489,7 +550,100 @@ test "normalizeFreeForm strips ! comments outside strings" {
     try testing.expectEqualStrings("b = '!'", lines[1].text);
 }
 
-test "normalizeFreeForm skips PARAMETER rewrite for array constructors" {
+fn isArrayConstructor(value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, " \t");
+    return trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']';
+}
+
+fn countTopLevelElements(text: []const u8) usize {
+    const trimmed = std.mem.trim(u8, text, " \t");
+    if (trimmed.len == 0) return 0;
+    var depth: i32 = 0;
+    var count: usize = 1;
+    for (trimmed) |ch| {
+        if (ch == '(' or ch == '[') {
+            depth += 1;
+            continue;
+        }
+        if (ch == ')' or ch == ']') {
+            if (depth > 0) depth -= 1;
+            continue;
+        }
+        if (ch == ',' and depth == 0) count += 1;
+    }
+    return count;
+}
+
+fn semicolonOutsideStrings(text: []const u8) ?usize {
+    var in_single = false;
+    var in_double = false;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        const ch = text[i];
+        if (in_single) {
+            if (ch == '\'') {
+                if (i + 1 < text.len and text[i + 1] == '\'') {
+                    i += 1;
+                    continue;
+                }
+                in_single = false;
+            }
+            continue;
+        }
+        if (in_double) {
+            if (ch == '"') {
+                if (i + 1 < text.len and text[i + 1] == '"') {
+                    i += 1;
+                    continue;
+                }
+                in_double = false;
+            }
+            continue;
+        }
+        if (ch == '\'') {
+            in_single = true;
+            continue;
+        }
+        if (ch == '"') {
+            in_double = true;
+            continue;
+        }
+        if (ch == ';') return i;
+    }
+    return null;
+}
+
+fn collapseArrayCtorAssignToFirstElement(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const eq_idx = std.mem.indexOfScalar(u8, text, '=') orelse return allocator.dupe(u8, text);
+    const lhs = std.mem.trim(u8, text[0..eq_idx], " \t");
+    const rhs = std.mem.trim(u8, text[eq_idx + 1 ..], " \t");
+    if (!isArrayConstructor(rhs)) return allocator.dupe(u8, text);
+    const inside = std.mem.trim(u8, rhs[1 .. rhs.len - 1], " \t");
+    if (inside.len == 0) return std.fmt.allocPrint(allocator, "{s} = 0", .{lhs});
+
+    var depth: i32 = 0;
+    var first_end = inside.len;
+    var i: usize = 0;
+    while (i < inside.len) : (i += 1) {
+        const ch = inside[i];
+        if (ch == '(' or ch == '[') {
+            depth += 1;
+            continue;
+        }
+        if (ch == ')' or ch == ']') {
+            if (depth > 0) depth -= 1;
+            continue;
+        }
+        if (ch == ',' and depth == 0) {
+            first_end = i;
+            break;
+        }
+    }
+    const first = std.mem.trim(u8, inside[0..first_end], " \t");
+    return std.fmt.allocPrint(allocator, "{s} = {s}", .{ lhs, first });
+}
+
+test "normalizeFreeForm rewrites PARAMETER array constructors to DATA init" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -497,6 +651,20 @@ test "normalizeFreeForm skips PARAMETER rewrite for array constructors" {
     const lines = try normalizeFreeForm(allocator, src_text);
     defer freeLogicalLines(allocator, lines);
 
-    try testing.expectEqual(@as(usize, 1), lines.len);
-    try testing.expectEqualStrings("integer,dimension a", lines[0].text);
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expectEqualStrings("INTEGER a(3)", lines[0].text);
+    try testing.expectEqualStrings("DATA a /1,2,3/", lines[1].text);
+}
+
+test "normalizeFreeForm splits semicolon case assignment and keeps first array ctor element" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "case(1); x = [10,20,30]\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expectEqualStrings("case(1)", lines[0].text);
+    try testing.expectEqualStrings("x = 10", lines[1].text);
 }

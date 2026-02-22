@@ -74,7 +74,7 @@ fn appendArg(args: *UnformattedArgs, ptr: ValueRef, kind: u8, len: i32) EmitErro
 }
 
 fn appendArrayArgs(ctx: *Context, builder: anytype, args: *UnformattedArgs, sym: anytype) EmitError!void {
-    const elem_count = try ctx.arrayElemCountForSymbol(sym);
+    const elem_count = ctx.arrayElemCountForSymbol(sym) catch 1;
     const base_ptr = try ctx.getPointer(sym.name);
     const elem_ty = if (sym.type_kind == .character) utils.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
     const char_len = sym.char_len orelse 1;

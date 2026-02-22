@@ -23,6 +23,126 @@ pub fn emitPause(ctx: *Context, builder: anytype) EmitError!void {
     try builder.callTyped(null, .void, pause_name, &.{mode_val});
 }
 
+pub fn emitContinuationDirective(ctx: *Context, builder: anytype, stmt: ast.Stmt) EmitError!bool {
+    const text = std.mem.trim(u8, stmt.source_text, " \t");
+    if (startsWithNoCase(text, "allocate(") and text.len > "allocate(".len and text[text.len - 1] == ')') {
+        const body = text["allocate(".len .. text.len - 1];
+        try emitAllocateListFromText(ctx, builder, body);
+        return true;
+    }
+    if (startsWithNoCase(text, "deallocate(") and text.len > "deallocate(".len and text[text.len - 1] == ')') {
+        // Conservative behavior: ignore DEALLOCATE until ownership tracking is implemented.
+        return true;
+    }
+    return false;
+}
+
+fn emitAllocateListFromText(ctx: *Context, builder: anytype, text: []const u8) EmitError!void {
+    var depth: usize = 0;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i <= text.len) : (i += 1) {
+        const ch: u8 = if (i < text.len) text[i] else ',';
+        switch (ch) {
+            '(' => depth += 1,
+            ')' => {
+                if (depth > 0) depth -= 1;
+            },
+            ',' => {
+                if (depth == 0) {
+                    const spec = std.mem.trim(u8, text[start..i], " \t");
+                    if (spec.len > 0) try emitAllocateSpecFromText(ctx, builder, spec);
+                    start = i + 1;
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+fn emitAllocateSpecFromText(ctx: *Context, builder: anytype, spec: []const u8) EmitError!void {
+    const sym_lparen = std.mem.indexOfScalar(u8, spec, '(') orelse return error.UnsupportedAllocateSyntax;
+    const sym_rparen = std.mem.lastIndexOfScalar(u8, spec, ')') orelse return error.UnsupportedAllocateSyntax;
+    if (sym_rparen <= sym_lparen) return error.UnsupportedAllocateSyntax;
+
+    const name = std.mem.trim(u8, spec[0..sym_lparen], " \t");
+    const extents_text = spec[sym_lparen + 1 .. sym_rparen];
+    if (name.len == 0) return error.UnsupportedAllocateSyntax;
+
+    var extent_product = constI64(ctx, 1);
+    var depth: usize = 0;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i <= extents_text.len) : (i += 1) {
+        const ch: u8 = if (i < extents_text.len) extents_text[i] else ',';
+        switch (ch) {
+            '(' => depth += 1,
+            ')' => {
+                if (depth > 0) depth -= 1;
+            },
+            ',' => {
+                if (depth == 0) {
+                    const extent_text = std.mem.trim(u8, extents_text[start..i], " \t");
+                    if (extent_text.len > 0) {
+                        const extent = try emitExtentFromText(ctx, builder, extent_text);
+                        extent_product = try expr.emitMul(ctx, builder, extent_product, extent);
+                    }
+                    start = i + 1;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
+    const elem_size = constI64(ctx, @intCast(elementByteSize(sym)));
+    const total_bytes = try expr.emitMul(ctx, builder, extent_product, elem_size);
+    const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &.{.i64}, false);
+    const ptr_tmp = try ctx.nextTemp();
+    try builder.callTyped(ptr_tmp, .ptr, malloc_name, &.{total_bytes});
+    try ctx.locals.put(name, .{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true });
+}
+
+fn emitExtentFromText(ctx: *Context, builder: anytype, text: []const u8) EmitError!ValueRef {
+    const trimmed = std.mem.trim(u8, text, " \t");
+    if (trimmed.len == 0) return error.UnsupportedAllocateSyntax;
+
+    const int_value = std.fmt.parseInt(i64, trimmed, 10) catch null;
+    if (int_value) |v| return constI64(ctx, v);
+
+    const sym = ctx.findSymbol(trimmed) orelse return error.UnknownSymbol;
+    if (sym.kind == .parameter and sym.const_value != null) {
+        switch (sym.const_value.?) {
+            .integer => |v| return constI64(ctx, v),
+            else => return error.UnsupportedAllocateSyntax,
+        }
+    }
+
+    const ptr = try ctx.getPointer(trimmed);
+    const ty = llvm_types.typeFromKind(sym.type_kind);
+    const tmp = try ctx.nextTemp();
+    try builder.load(tmp, ty, ptr);
+    const loaded = ValueRef{ .name = tmp, .ty = ty, .is_ptr = false };
+    return expr.coerce(ctx, builder, loaded, .i64);
+}
+
+fn elementByteSize(sym: ast.sema.Symbol) usize {
+    return switch (sym.type_kind) {
+        .integer => 4,
+        .real => 4,
+        .double_precision => 8,
+        .complex => 8,
+        .complex_double => 16,
+        .logical => 4,
+        .character => sym.char_len orelse 1,
+    };
+}
+
+fn startsWithNoCase(text: []const u8, prefix: []const u8) bool {
+    if (text.len < prefix.len) return false;
+    return std.ascii.eqlIgnoreCase(text[0..prefix.len], prefix);
+}
+
 pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!void {
     if (assign.target.* == .call_or_subscript) {
         const target = assign.target.call_or_subscript;
@@ -318,19 +438,23 @@ pub fn emitReturnStmt(ctx: *Context, builder: anytype, ret: ast.ReturnStmt) Emit
 
 pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
     if (ctx.unit.kind == .function) {
-        const sym = ctx.findSymbol(ctx.unit.name) orelse return error.UnknownSymbol;
+        const return_symbol_name = functionReturnSymbolName(ctx.unit);
+        const sym = ctx.findSymbol(return_symbol_name) orelse return error.UnknownSymbol;
         if (sym.type_kind == .character) {
             try builder.retVoid();
             return;
         }
         const ret_ty = llvm_types.typeFromKind(sym.type_kind);
-        const ret_ptr = ctx.locals.get(ctx.unit.name) orelse return error.UnknownSymbol;
+        const ret_ptr = ctx.locals.get(return_symbol_name) orelse return error.UnknownSymbol;
         if (ret_ty == .complex_f64) {
             // COMPLEX*16 is returned via hidden sret pointer; function returns void.
             try builder.retVoid();
             return;
         }
-        const ret_val = try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
+        const ret_val = if (std.mem.eql(u8, ret_ptr.name, "null"))
+            utils.zeroValue(ret_ty)
+        else
+            try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
         if (ret_ty == .complex_f32) {
             // For COMPLEX*8 on x86_64 GNU ABI, return value is packed in i64.
             const pack_slot = try ctx.nextTemp();
@@ -350,6 +474,12 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
         return;
     }
     try builder.retVoid();
+}
+
+fn functionReturnSymbolName(unit: ast.ProgramUnit) []const u8 {
+    if (unit.kind != .function) return unit.name;
+    if (unit.result_name) |name| return name;
+    return unit.name;
 }
 
 pub fn unitHasAltReturn(unit: ast.ProgramUnit) bool {
@@ -511,6 +641,10 @@ fn emitCharLenValue(ctx: *Context, builder: anytype, value_expr: *ast.Expr) Emit
 
 fn constI32(ctx: *Context, value: i64) ValueRef {
     return ctx.constI32(value) catch unreachable;
+}
+
+fn constI64(ctx: *Context, value: i64) ValueRef {
+    return .{ .name = ctx.intLiteral(value) catch unreachable, .ty = .i64, .is_ptr = false };
 }
 
 fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {

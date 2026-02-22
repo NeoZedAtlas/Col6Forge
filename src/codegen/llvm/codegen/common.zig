@@ -246,12 +246,12 @@ fn arrayElementCountWithLookup(
 fn dimSizeValue(sem: *const input.sema.SemanticUnit, dim: *input.Expr, lookup: ?*const SymbolLookup) !?i64 {
     switch (dim.*) {
         .literal => |lit| {
-            if (lit.kind == .assumed_size) return error.AssumedSizeDimUnsupported;
+            if (lit.kind == .assumed_size) return null;
             return evalConstInt(sem, dim, lookup);
         },
         .dim_range => |range| {
             if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) {
-                return error.AssumedSizeDimUnsupported;
+                return null;
             }
             const upper = (try evalConstInt(sem, range.upper, lookup)) orelse return null;
             const lower = if (range.lower) |lower_expr|
