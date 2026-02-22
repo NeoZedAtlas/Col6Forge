@@ -182,6 +182,11 @@ fn rewriteAndAppend(
         kind_state.* = .single;
         return;
     }
+    if (std.mem.startsWith(u8, compact_stmt, "USEMINPACK_MODULE")) {
+        if (std.mem.indexOf(u8, compact_stmt, ":WP") != null) {
+            kind_state.* = .double;
+        }
+    }
 
     if (semicolonOutsideStrings(stmt)) |semi_idx| {
         const head = std.mem.trim(u8, stmt[0..semi_idx], " \t");
@@ -309,7 +314,10 @@ fn simplifyParameterAssigns(allocator: std.mem.Allocator, assigns: []const u8, k
                 if (std.mem.indexOfScalar(u8, seg, '=')) |eq_idx| {
                     const name = std.mem.trim(u8, seg[0..eq_idx], " \t");
                     const value = std.mem.trim(u8, seg[eq_idx + 1 ..], " \t");
-                    const repl = replacementForParam(name, kind_state) orelse value;
+                    const repl = if (kind_state == .unknown)
+                        value
+                    else
+                        replacementForParam(name, kind_state) orelse value;
                     try out.appendSlice(name);
                     try out.appendSlice(" = ");
                     try out.appendSlice(repl);
@@ -379,6 +387,13 @@ fn normalizeStmtText(allocator: std.mem.Allocator, text: []const u8) ![]const u8
     var out = std.array_list.Managed(u8).init(allocator);
     var i: usize = 0;
     while (i < text.len) {
+        if (i + 1 < text.len and text[i] == '=' and text[i + 1] == '>') {
+            // Lexer currently does not accept raw '>' token; keep legacy
+            // normalized marker and recover rename arrows later in semantic.
+            try out.appendSlice("=.GT.");
+            i += 2;
+            continue;
+        }
         if (i + 1 < text.len and text[i] == '<' and text[i + 1] == '=') {
             try out.appendSlice(".LE.");
             i += 2;
@@ -429,13 +444,24 @@ fn mapTypeSpec(allocator: std.mem.Allocator, spec_raw: []const u8, kind_state: K
     defer allocator.free(compact);
 
     if (std.mem.eql(u8, compact, "REAL(WP)")) {
-        return allocator.dupe(u8, if (kind_state == .double) "DOUBLE PRECISION" else "REAL");
+        return switch (kind_state) {
+            .double => allocator.dupe(u8, "DOUBLE PRECISION"),
+            .single => allocator.dupe(u8, "REAL"),
+            .unknown => allocator.dupe(u8, "REAL(WP)"),
+        };
     }
     if (std.mem.eql(u8, compact, "COMPLEX(WP)")) {
-        return allocator.dupe(u8, if (kind_state == .double) "COMPLEX*16" else "COMPLEX");
+        return switch (kind_state) {
+            .double => allocator.dupe(u8, "COMPLEX*16"),
+            .single => allocator.dupe(u8, "COMPLEX"),
+            .unknown => allocator.dupe(u8, "COMPLEX(WP)"),
+        };
     }
     if (std.mem.eql(u8, compact, "INTEGER(WP)")) {
-        return allocator.dupe(u8, "INTEGER");
+        return switch (kind_state) {
+            .unknown => allocator.dupe(u8, "INTEGER(WP)"),
+            else => allocator.dupe(u8, "INTEGER"),
+        };
     }
     if (std.mem.eql(u8, compact, "REAL")) return allocator.dupe(u8, "REAL");
     if (std.mem.eql(u8, compact, "COMPLEX")) return allocator.dupe(u8, "COMPLEX");
@@ -548,6 +574,18 @@ test "normalizeFreeForm strips ! comments outside strings" {
     try testing.expectEqual(@as(usize, 2), lines.len);
     try testing.expectEqualStrings("a = 1", lines[0].text);
     try testing.expectEqualStrings("b = '!'", lines[1].text);
+}
+
+test "normalizeFreeForm rewrites USE rename arrow to lexer-safe marker" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "use iso_fortran_env, only: nwrite => output_unit\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 1), lines.len);
+    try testing.expectEqualStrings("use iso_fortran_env, only: nwrite =.GT. output_unit", lines[0].text);
 }
 
 fn isArrayConstructor(value: []const u8) bool {
@@ -667,4 +705,33 @@ test "normalizeFreeForm splits semicolon case assignment and keeps first array c
     try testing.expectEqual(@as(usize, 2), lines.len);
     try testing.expectEqualStrings("case(1)", lines[0].text);
     try testing.expectEqualStrings("x = 10", lines[1].text);
+}
+
+test "normalizeFreeForm keeps REAL(WP) parameter type when WP kind is unknown" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "real(wp), parameter :: one = 1.0_wp\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expectEqualStrings("REAL(WP) one", lines[0].text);
+    try testing.expectEqualStrings("PARAMETER (one = 1.0)", lines[1].text);
+}
+
+test "normalizeFreeForm infers WP kind from minpack_module use for parameter rewrite" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text =
+        "use minpack_module, only: wp\n" ++
+        "real(wp), parameter :: one = 1.0_wp\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 3), lines.len);
+    try testing.expectEqualStrings("use minpack_module, only: wp", lines[0].text);
+    try testing.expectEqualStrings("DOUBLE PRECISION one", lines[1].text);
+    try testing.expectEqualStrings("PARAMETER (one = 1.0D0)", lines[2].text);
 }

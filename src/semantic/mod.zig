@@ -28,8 +28,8 @@ pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticP
     const mutable_program = program;
     var known_function_types = std.StringHashMap(ast.TypeKind).init(arena);
     var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena);
-    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena);
-    var host_params_active = false;
+    var known_host_symbols = std.StringHashMap(symbols.Symbol).init(arena);
+    var host_symbols_active = false;
     for (mutable_program.units) |unit| {
         if (unit.kind == .function) {
             try known_function_types.put(unit.name, inferFunctionType(unit));
@@ -47,17 +47,17 @@ pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticP
             &.{},
             &known_function_types,
             &known_procedure_sigs,
-            &known_host_parameters,
+            &known_host_symbols,
         );
         const sem_unit = try unit_analyzer.analyze();
         try units.append(sem_unit);
         if (unitHasContains(unit.*)) {
-            known_host_parameters.clearRetainingCapacity();
-            try collectHostParameters(&known_host_parameters, sem_unit.symbols);
-            host_params_active = true;
-        } else if (host_params_active and unit.*.kind == .program) {
-            known_host_parameters.clearRetainingCapacity();
-            host_params_active = false;
+            known_host_symbols.clearRetainingCapacity();
+            try collectHostSymbols(&known_host_symbols, sem_unit.symbols);
+            host_symbols_active = true;
+        } else if (host_symbols_active and unit.*.kind == .program) {
+            known_host_symbols.clearRetainingCapacity();
+            host_symbols_active = false;
         }
     }
     try validateCommonBlocks(arena, mutable_program, units.items);
@@ -97,14 +97,13 @@ fn unitHasContains(unit: ast.ProgramUnit) bool {
     return false;
 }
 
-fn collectHostParameters(
+fn collectHostSymbols(
     map: *std.StringHashMap(symbols.Symbol),
     sem_symbols: []const symbols.Symbol,
 ) !void {
     for (sem_symbols) |sym| {
-        if (sym.kind != .parameter) continue;
-        if (sym.const_value == null) continue;
-        if (findHostParameter(map, sym.name)) |key| {
+        if (sym.kind == .function or sym.kind == .subroutine) continue;
+        if (findHostSymbol(map, sym.name)) |key| {
             map.getPtr(key).?.* = sym;
             continue;
         }
@@ -112,7 +111,7 @@ fn collectHostParameters(
     }
 }
 
-fn findHostParameter(map: *const std.StringHashMap(symbols.Symbol), name: []const u8) ?[]const u8 {
+fn findHostSymbol(map: *const std.StringHashMap(symbols.Symbol), name: []const u8) ?[]const u8 {
     var it = map.iterator();
     while (it.next()) |entry| {
         if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.key_ptr.*;

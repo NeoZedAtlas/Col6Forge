@@ -139,6 +139,21 @@ fn parseFormatSequence(
             try appendRepeatedItems(&items, group.items, 1);
             continue;
         }
+        if (ch == '*') {
+            index.* += 1;
+            while (index.* < text.len and (text[index.*] == ' ' or text[index.*] == '\t')) : (index.* += 1) {}
+            if (index.* >= text.len or text[index.*] != '(') return error.UnexpectedToken;
+            index.* += 1;
+            const group_start = items.items.len;
+            const group = try parseFormatSequence(arena, text, index, true);
+            if (group.has_descriptor) {
+                has_descriptor = true;
+                const inner_offset = group.reversion_offset orelse 0;
+                reversion_offset = group_start + inner_offset;
+            }
+            try appendRepeatedItems(&items, group.items, 1);
+            continue;
+        }
 
         if (ch == '/') {
             index.* += 1;
@@ -482,4 +497,34 @@ fn parseDecimal(text: []const u8) usize {
         value = value * 10 + @as(usize, ch - '0');
     }
     return value;
+}
+
+test "parseFormatItems accepts unlimited repeat group after slash" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const items = try parseFormatItems(allocator, "(5X,A//,*(5X,5D15.7/))");
+    var has_anchor = false;
+    for (items) |item| {
+        if (item == .reversion_anchor) {
+            has_anchor = true;
+            break;
+        }
+    }
+    try testing.expect(has_anchor);
+}
+
+test "parseFormatItems accepts unlimited repeat group without comma" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const items = try parseFormatItems(allocator, "(5X,A//*(5X,5D15.7/))");
+    var has_anchor = false;
+    for (items) |item| {
+        if (item == .reversion_anchor) {
+            has_anchor = true;
+            break;
+        }
+    }
+    try testing.expect(has_anchor);
 }

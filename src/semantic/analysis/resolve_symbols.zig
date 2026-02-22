@@ -19,7 +19,13 @@ pub fn installUnitSymbol(self: *context.Context) !void {
         .function => .function,
         .block_data => .subroutine,
     };
-    const info = implicitInfo(self, self.unit.name);
+    const info = if (self.unit.kind == .function)
+        ImplicitInfo{
+            .type_kind = findKnownFunctionType(self, self.unit.name) orelse implicitInfo(self, self.unit.name).type_kind,
+            .char_len = null,
+        }
+    else
+        implicitInfo(self, self.unit.name);
     const symbol = Symbol{
         .name = self.unit.name,
         .type_kind = info.type_kind,
@@ -65,6 +71,29 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
             imported.name = name;
             return internSymbol(self, imported);
         }
+    }
+    if (findKnownProcedureSig(self, name)) |sig| {
+        const proc_kind: SymbolKind = switch (sig.kind) {
+            .function => .function,
+            else => .subroutine,
+        };
+        const proc_type = if (proc_kind == .function)
+            findKnownFunctionType(self, name) orelse implicitInfo(self, name).type_kind
+        else
+            ast.TypeKind.real;
+        const symbol = Symbol{
+            .name = name,
+            .type_kind = proc_type,
+            .dims = &.{},
+            .char_len = null,
+            .kind = proc_kind,
+            .storage = .local,
+            .is_external = true,
+            .is_intrinsic = false,
+            .const_value = null,
+            .type_explicit = false,
+        };
+        return internSymbol(self, symbol);
     }
     const known_fn_type = findKnownFunctionType(self, name);
     const info = if (known_fn_type) |known_ty|
@@ -249,6 +278,16 @@ pub fn isIntrinsicName(name: []const u8) bool {
 
 fn findKnownHostParameter(self: *context.Context, name: []const u8) ?Symbol {
     var it = self.known_host_parameters.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
+            return entry.value_ptr.*;
+        }
+    }
+    return null;
+}
+
+fn findKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+    var it = self.known_procedure_sigs.iterator();
     while (it.next()) |entry| {
         if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
             return entry.value_ptr.*;

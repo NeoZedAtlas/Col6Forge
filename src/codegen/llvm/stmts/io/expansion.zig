@@ -496,6 +496,76 @@ fn cloneExprListWithSubst(
     }
     return cloned;
 }
+
+fn makeIntegerLiteralExpr(ctx: *Context, value: i64) EmitError!*ast.Expr {
+    const node = try ctx.allocator.create(ast.Expr);
+    node.* = .{
+        .literal = .{
+            .kind = .integer,
+            .text = try ctx.intLiteral(value),
+        },
+    };
+    return node;
+}
+
+fn collapseRangeArgForIo(
+    ctx: *Context,
+    declared_dim: *ast.Expr,
+    arg: *ast.Expr,
+    owned_literals: *std.array_list.Managed(*ast.Expr),
+) EmitError!*ast.Expr {
+    if (arg.* != .dim_range) return arg;
+    const range = arg.dim_range;
+    if (range.lower) |lower| return lower;
+    if (declared_dim.* == .dim_range) {
+        if (declared_dim.dim_range.lower) |lower| return lower;
+    }
+    const fallback_one = try makeIntegerLiteralExpr(ctx, 1);
+    try owned_literals.append(fallback_one);
+    return fallback_one;
+}
+
+fn emitCollapsedRangeSubscriptValue(
+    ctx: *Context,
+    builder: anytype,
+    call: ast.CallOrSubscript,
+) EmitError!?ValueRef {
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.dims.len == 0) return null;
+    if (call.args.len != sym.dims.len) return null;
+
+    var has_range = false;
+    for (call.args) |arg| {
+        if (arg.* == .dim_range) {
+            has_range = true;
+            break;
+        }
+    }
+    if (!has_range) return null;
+
+    var owned_literals = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
+    defer {
+        for (owned_literals.items) |node| {
+            ctx.allocator.destroy(node);
+        }
+        owned_literals.deinit();
+    }
+
+    const lowered_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
+    defer ctx.allocator.free(lowered_args);
+    for (call.args, 0..) |arg, idx| {
+        lowered_args[idx] = try collapseRangeArgForIo(ctx, sym.dims[idx], arg, &owned_literals);
+    }
+
+    var lowered_expr = ast.Expr{
+        .call_or_subscript = .{
+            .name = call.name,
+            .args = lowered_args,
+        },
+    };
+    return try expr.emitExpr(ctx, builder, &lowered_expr);
+}
+
 pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedWriteValues {
     var expanded = ExpandedWriteValues.init(ctx.allocator);
     var flat_args = try expandIoArgs(ctx, args);
@@ -539,6 +609,23 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
                             try expanded.char_lens.append(0);
                         }
                     }
+                }
+                continue;
+            }
+        }
+        if (arg.* == .call_or_subscript) {
+            if (try emitCollapsedRangeSubscriptValue(ctx, builder, arg.call_or_subscript)) |value| {
+                if (complex.isComplexType(value.ty)) {
+                    const real = try complex.extractComplex(ctx, builder, value, 0);
+                    const imag = try complex.extractComplex(ctx, builder, value, 1);
+                    try expanded.values.append(real);
+                    try expanded.char_lens.append(0);
+                    try expanded.values.append(imag);
+                    try expanded.char_lens.append(0);
+                } else {
+                    const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
+                    try expanded.values.append(value);
+                    try expanded.char_lens.append(len);
                 }
                 continue;
             }
@@ -588,6 +675,14 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
                         try expanded.char_lens.append(0);
                     }
                 }
+                continue;
+            }
+        }
+        if (arg.* == .call_or_subscript) {
+            if (try emitCollapsedRangeSubscriptValue(ctx, builder, arg.call_or_subscript)) |value| {
+                const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
+                try expanded.values.append(value);
+                try expanded.char_lens.append(len);
                 continue;
             }
         }

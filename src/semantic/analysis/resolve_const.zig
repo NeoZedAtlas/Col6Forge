@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const evaluator = @import("../evaluator.zig");
@@ -18,6 +19,15 @@ fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?ConstValue {
     const self: *context.Context = @ptrCast(@alignCast(ctx));
     if (symbols_mod.findSymbolIndex(self, name)) |idx| {
         return self.symbols.items[idx].const_value;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "OUTPUT_UNIT")) {
+        return .{ .integer = 6 };
+    }
+    if (std.ascii.eqlIgnoreCase(name, "INPUT_UNIT")) {
+        return .{ .integer = 5 };
+    }
+    if (std.ascii.eqlIgnoreCase(name, "ERROR_UNIT")) {
+        return .{ .integer = 0 };
     }
     return null;
 }
