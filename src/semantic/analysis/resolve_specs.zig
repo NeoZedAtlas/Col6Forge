@@ -61,8 +61,10 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 var sym = &self.symbols.items[idx];
                 sym.kind = .parameter;
                 sym.storage = .local;
-                const const_val = try check_const.checkParameterAssign(self, assign);
-                try check_const.checkParameterType(sym.type_kind, const_val);
+                const const_val = try check_const.coerceParameterValue(
+                    sym.type_kind,
+                    try check_const.checkParameterAssign(self, assign),
+                );
                 sym.const_value = const_val;
 
                 if (sym.type_kind == .character and sym.char_len == null) {

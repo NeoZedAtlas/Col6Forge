@@ -667,6 +667,58 @@ test "semantic reports CF3112 for PARAMETER type mismatch" {
     try testing.expect(std.mem.eql(u8, diag.code, "CF3112"));
 }
 
+test "semantic reports CF3112 for COMPLEX to INTEGER PARAMETER mismatch" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER P\n" ++
+        "      PARAMETER (P=(1.0,2.0))\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.ParameterTypeMismatch, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3112"));
+}
+
+test "semantic coerces numeric PARAMETER to declared type" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      REAL R\n" ++
+        "      PARAMETER (R=2)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+    try testing.expectEqual(@as(usize, 1), sem.units.len);
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "R")) continue;
+        found = true;
+        const cv = sym.const_value orelse return error.TestExpectedEqual;
+        switch (cv) {
+            .real => |v| try testing.expectApproxEqAbs(@as(f64, 2.0), v, 1.0e-12),
+            else => return error.TestExpectedEqual,
+        }
+    }
+    try testing.expect(found);
+}
+
 test "semantic reports CF3113 for invalid EQUIVALENCE types" {
     const testing = std.testing;
     const allocator = testing.allocator;
