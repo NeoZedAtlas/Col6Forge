@@ -250,6 +250,13 @@ fn countCallExprArgs(args: []ast.CallArg) usize {
 }
 
 fn checkKnownProcedureCallArity(self: *context.Context, name: []const u8, got: usize, is_call_stmt: bool) CheckError!void {
+    if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
+        const sym = self.symbols.items[idx];
+        // Dummy procedure arguments (e.g. callback `fcn`) are context-dependent and
+        // must not be constrained by global cross-file signature hints.
+        if (sym.storage == .dummy) return;
+    }
+
     if (lookupKnownProcedureSig(self, name)) |sig| {
         if (is_call_stmt and sig.kind != .subroutine) return error.InvalidArgumentCount;
         if (!is_call_stmt and sig.kind != .function) return error.InvalidArgumentCount;

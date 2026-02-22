@@ -2,6 +2,7 @@
 const ast = @import("../../input.zig");
 const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
+const expr_call = @import("../codegen/expression/call.zig");
 const utils = @import("../codegen/utils.zig");
 const cfg = @import("cfg.zig");
 const ir = @import("../../ir.zig");
@@ -430,7 +431,7 @@ pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!v
         _ = try expr.emitIndirectCall(ctx, builder, fn_ptr, .void, args, true);
         return;
     }
-    const fn_name = try ctx.ensureDecl(call.name, .void);
+    const fn_name = try ensureTypedExternalDeclForCall(ctx, call.name, .void, args);
     _ = try expr.emitCall(ctx, builder, fn_name, .void, args, true);
 }
 
@@ -441,8 +442,64 @@ pub fn emitCallValue(ctx: *Context, builder: anytype, call: ast.CallStmt, ret_ty
         const fn_ptr = try ctx.getPointer(call.name);
         return expr.emitIndirectCall(ctx, builder, fn_ptr, ret_ty, args, false);
     }
-    const fn_name = try ctx.ensureDecl(call.name, ret_ty);
+    const fn_name = try ensureTypedExternalDeclForCall(ctx, call.name, ret_ty, args);
     return expr.emitCall(ctx, builder, fn_name, ret_ty, args, false);
+}
+
+fn ensureTypedExternalDeclForCall(
+    ctx: *Context,
+    name: []const u8,
+    ret_ty: ir.IRType,
+    args: []*ast.Expr,
+) EmitError![]const u8 {
+    const mangled = try utils.mangleName(ctx.allocator, name);
+    if (ctx.defined.contains(mangled)) return mangled;
+
+    const param_types = try buildSubroutineAbiParamTypes(ctx, args);
+
+    if (ctx.decls.get(mangled)) |existing| {
+        if (!existing.varargs) return mangled;
+        try ctx.decls.put(mangled, .{
+            .ret_type = context.fortranAbiReturnType(ret_ty),
+            .sig = try formatParamSig(ctx, param_types),
+            .varargs = false,
+        });
+        return mangled;
+    }
+
+    return ctx.ensureDeclRaw(
+        mangled,
+        context.fortranAbiReturnType(ret_ty),
+        param_types,
+        false,
+    );
+}
+
+fn buildSubroutineAbiParamTypes(
+    ctx: *Context,
+    args: []*ast.Expr,
+) EmitError![]const llvm_types.IRType {
+    var tys = std.array_list.Managed(llvm_types.IRType).init(ctx.allocator);
+    defer tys.deinit();
+
+    for (args) |_| try tys.append(.ptr);
+    for (args) |arg| {
+        if (expr_call.isCharacterActualArg(ctx, arg)) {
+            try tys.append(.i32);
+        }
+    }
+    return tys.toOwnedSlice();
+}
+
+fn formatParamSig(ctx: *Context, param_types: []const llvm_types.IRType) EmitError![]const u8 {
+    if (param_types.len == 0) return "";
+    var text = std.array_list.Managed(u8).init(ctx.allocator);
+    defer text.deinit();
+    for (param_types, 0..) |param_ty, idx| {
+        if (idx != 0) try text.appendSlice(", ");
+        try text.appendSlice(llvm_types.irTypeText(param_ty));
+    }
+    return text.toOwnedSlice();
 }
 
 pub fn emitCallWithAlternateReturns(

@@ -127,7 +127,7 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
             }
         },
         .cont => {
-            try installIsoFortranEnvAliases(self, stmt.source_text);
+            try installUseImports(self, stmt.source_text);
         },
         .entry => |entry| {
             const entry_idx = try symbols_mod.ensureSymbol(self, entry.name);
@@ -260,7 +260,11 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
                 try expressions.resolveExpr(self, value);
             }
         },
-        .cont => {},
+        .cont => {
+            if (self.current_stmt) |stmt| {
+                try installUseImports(self, stmt.source_text);
+            }
+        },
         .entry => |entry| {
             const entry_idx = try symbols_mod.ensureSymbol(self, entry.name);
             self.symbols.items[entry_idx].kind = switch (self.unit.kind) {
@@ -276,31 +280,120 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
     }
 }
 
-fn installIsoFortranEnvAliases(self: *context.Context, text: []const u8) ResolveError!void {
+fn installUseImports(self: *context.Context, text: []const u8) ResolveError!void {
     const trimmed = std.mem.trim(u8, text, " \t");
     if (trimmed.len == 0) return;
     if (!startsWithNoCase(trimmed, "use")) return;
-    if (!containsNoCase(trimmed, "iso_fortran_env")) return;
 
-    var parts = std.mem.splitScalar(u8, trimmed, ',');
+    const module_name = parseUseModuleName(trimmed) orelse "";
+    const only_idx = indexOfNoCase(trimmed, "only:") orelse return;
+    const only_clause = trimmed[only_idx + "only:".len ..];
+
+    var parts = std.mem.splitScalar(u8, only_clause, ',');
     while (parts.next()) |raw_part| {
         const part = std.mem.trim(u8, raw_part, " \t");
         if (part.len == 0) continue;
-        const arrow = findRenameArrow(part) orelse continue;
+        const item = parseUseOnlyItem(part) orelse continue;
+
+        if (std.ascii.eqlIgnoreCase(module_name, "iso_fortran_env") and std.ascii.eqlIgnoreCase(item.remote_name, "output_unit")) {
+            const idx = try symbols_mod.ensureSymbol(self, item.local_name);
+            self.symbols.items[idx].name = item.local_name;
+            self.symbols.items[idx].type_kind = .integer;
+            self.symbols.items[idx].dims = &.{};
+            self.symbols.items[idx].char_len = null;
+            self.symbols.items[idx].kind = .parameter;
+            self.symbols.items[idx].storage = .local;
+            self.symbols.items[idx].const_value = .{ .integer = 6 };
+            self.symbols.items[idx].type_explicit = true;
+            continue;
+        }
+
+        try bindKnownUseImport(self, item.local_name, item.remote_name);
+    }
+}
+
+const UseOnlyItem = struct {
+    local_name: []const u8,
+    remote_name: []const u8,
+};
+
+fn parseUseOnlyItem(part: []const u8) ?UseOnlyItem {
+    if (findRenameArrow(part)) |arrow| {
         const lhs = std.mem.trim(u8, part[0..arrow.idx], " \t");
         const rhs = std.mem.trim(u8, part[arrow.idx + arrow.len ..], " \t");
-        if (!std.ascii.eqlIgnoreCase(rhs, "output_unit")) continue;
-        const alias = trailingIdentifier(lhs) orelse continue;
-        const idx = try symbols_mod.ensureSymbol(self, alias);
-        self.symbols.items[idx].name = alias;
-        self.symbols.items[idx].type_kind = .integer;
-        self.symbols.items[idx].dims = &.{};
-        self.symbols.items[idx].char_len = null;
-        self.symbols.items[idx].kind = .parameter;
-        self.symbols.items[idx].storage = .local;
-        self.symbols.items[idx].const_value = .{ .integer = 6 };
-        self.symbols.items[idx].type_explicit = true;
+        const local_name = trailingIdentifier(lhs) orelse return null;
+        const remote_name = trailingIdentifier(rhs) orelse return null;
+        return .{ .local_name = local_name, .remote_name = remote_name };
     }
+    const name = trailingIdentifier(part) orelse return null;
+    return .{ .local_name = name, .remote_name = name };
+}
+
+fn parseUseModuleName(trimmed: []const u8) ?[]const u8 {
+    if (!startsWithNoCase(trimmed, "use")) return null;
+    var rest = std.mem.trimLeft(u8, trimmed["use".len..], " \t");
+    if (rest.len == 0) return null;
+
+    if (startsWithNoCase(rest, "::")) {
+        rest = std.mem.trimLeft(u8, rest[2..], " \t");
+    } else if (rest[0] == ',') {
+        const dcolon = indexOfNoCase(rest, "::") orelse return null;
+        rest = std.mem.trimLeft(u8, rest[dcolon + 2 ..], " \t");
+    }
+
+    if (rest.len == 0) return null;
+    var end: usize = 0;
+    while (end < rest.len) : (end += 1) {
+        const ch = rest[end];
+        if (ch == ',' or ch == ' ' or ch == '\t') break;
+    }
+    if (end == 0) return null;
+    return rest[0..end];
+}
+
+fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_name: []const u8) ResolveError!void {
+    const idx = try symbols_mod.ensureSymbol(self, local_name);
+    const sym = &self.symbols.items[idx];
+    sym.name = local_name;
+
+    if (lookupKnownProcedureSig(self, remote_name)) |sig| {
+        sym.is_external = true;
+        sym.kind = switch (sig.kind) {
+            .function => .function,
+            .subroutine => .subroutine,
+            else => sym.kind,
+        };
+        if (sig.kind == .function) {
+            if (lookupKnownFunctionType(self, remote_name)) |type_kind| {
+                sym.type_kind = type_kind;
+                sym.type_explicit = true;
+            }
+        }
+        return;
+    }
+
+    if (lookupKnownFunctionType(self, remote_name)) |type_kind| {
+        sym.is_external = true;
+        sym.kind = .function;
+        sym.type_kind = type_kind;
+        sym.type_explicit = true;
+    }
+}
+
+fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
+    var it = self.known_function_types.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+    }
+    return null;
+}
+
+fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+    var it = self.known_procedure_sigs.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+    }
+    return null;
 }
 
 fn startsWithNoCase(text: []const u8, prefix: []const u8) bool {
@@ -316,6 +409,16 @@ fn containsNoCase(text: []const u8, needle: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(text[i .. i + needle.len], needle)) return true;
     }
     return false;
+}
+
+fn indexOfNoCase(text: []const u8, needle: []const u8) ?usize {
+    if (needle.len == 0) return 0;
+    if (text.len < needle.len) return null;
+    var i: usize = 0;
+    while (i + needle.len <= text.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(text[i .. i + needle.len], needle)) return i;
+    }
+    return null;
 }
 
 fn trailingIdentifier(text: []const u8) ?[]const u8 {

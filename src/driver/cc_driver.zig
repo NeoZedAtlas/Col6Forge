@@ -58,7 +58,7 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
         parsed.pause_mode,
         parsed.time_report,
         known_symbols.function_types,
-        &.{},
+        known_symbols.procedure_sigs,
     );
     defer translated.deinit(allocator);
 

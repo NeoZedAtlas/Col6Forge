@@ -121,6 +121,29 @@ fn formatSpecialFloat(out: *[COL6FORGE_FMT_BUFFER_LEN]u8, width: c_int, sign_plu
     return true;
 }
 
+const NormalizedMantissa = struct {
+    mantissa: f64,
+    exponent: c_int,
+};
+
+fn normalizeFortranMantissa(value: f64) NormalizedMantissa {
+    if (value == 0.0) return .{ .mantissa = 0.0, .exponent = 0 };
+    var mantissa = value;
+    var exponent: c_int = 0;
+    var abs_mantissa = @abs(mantissa);
+    while (abs_mantissa >= 1.0) {
+        mantissa /= 10.0;
+        exponent += 1;
+        abs_mantissa /= 10.0;
+    }
+    while (abs_mantissa < 0.1) {
+        mantissa *= 10.0;
+        exponent -= 1;
+        abs_mantissa *= 10.0;
+    }
+    return .{ .mantissa = mantissa, .exponent = exponent };
+}
+
 fn col6forgePadExp(buf: *[COL6FORGE_FMT_BUFFER_LEN]u8, exp_digits: usize) void {
     var exp_idx_opt = findByte(buf[0..], 'E');
     if (exp_idx_opt == null) {
@@ -294,15 +317,9 @@ pub export fn col6forge_fmt_e(width: c_int, precision: c_int, exp_width: c_int, 
         return asConstCStr(out);
     }
 
-    const abs_val = @abs(value);
-    var exp_val: c_int = 0;
-    if (abs_val != 0.0) {
-        exp_val = @as(c_int, @intFromFloat(@floor(std.math.log10(abs_val)))) + 1;
-    }
-
-    const scale = std.math.pow(f64, 10.0, @as(f64, @floatFromInt(exp_val)));
-    var mantissa = if (scale != 0.0) value / scale else 0.0;
-    var exp_out = exp_val;
+    const normalized = normalizeFortranMantissa(value);
+    var mantissa = normalized.mantissa;
+    var exp_out = normalized.exponent;
     if (scale_factor != 0) {
         mantissa *= std.math.pow(f64, 10.0, @as(f64, @floatFromInt(scale_factor)));
         exp_out -= scale_factor;
@@ -317,6 +334,20 @@ pub export fn col6forge_fmt_e(width: c_int, precision: c_int, exp_width: c_int, 
         _ = snprintf(&tmp[0], tmp.len, "%+.*f", eff_prec, mantissa);
     } else {
         _ = snprintf(&tmp[0], tmp.len, "%.*f", eff_prec, mantissa);
+    }
+    if (scale_factor == 0 and mantissa != 0.0) {
+        const tmp_len_before = cstrlenRaw(tmp[0..]);
+        const rounded = std.fmt.parseFloat(f64, tmp[0..tmp_len_before]) catch mantissa;
+        const abs_rounded = @abs(rounded);
+        if (abs_rounded >= 1.0 or (abs_rounded > 0.0 and abs_rounded < 0.1)) {
+            mantissa = if (abs_rounded >= 1.0) rounded / 10.0 else rounded * 10.0;
+            exp_out += if (abs_rounded >= 1.0) 1 else -1;
+            if (sign_plus != 0) {
+                _ = snprintf(&tmp[0], tmp.len, "%+.*f", eff_prec, mantissa);
+            } else {
+                _ = snprintf(&tmp[0], tmp.len, "%.*f", eff_prec, mantissa);
+            }
+        }
     }
     _ = snprintf(&exp_buf[0], exp_buf.len, "E%+0*d", ew + 1, exp_out);
 
@@ -519,4 +550,14 @@ test "col6forge_fmt_e handles infinities and nan without panic" {
 test "col6forge_fmt_g avoids log10 overflow for infinities" {
     const out = col6forge_fmt_g(12, 5, 2, 0, 1, std.math.inf(f64));
     try std.testing.expect(std.mem.indexOf(u8, std.mem.sliceTo(out, 0), "Inf") != null);
+}
+
+test "col6forge_fmt_d uses Fortran mantissa form for -1" {
+    const out = col6forge_fmt_d(0, 7, 0, 0, 0, -1.0);
+    try std.testing.expectEqualStrings("-0.1000000D+01", std.mem.sliceTo(out, 0));
+}
+
+test "col6forge_fmt_d normalizes near-1 rounding boundary" {
+    const out = col6forge_fmt_d(0, 7, 0, 0, 0, -0.9999999999999999);
+    try std.testing.expectEqualStrings("-0.1000000D+01", std.mem.sliceTo(out, 0));
 }

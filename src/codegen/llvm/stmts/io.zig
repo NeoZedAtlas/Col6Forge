@@ -43,6 +43,7 @@ const emitIoStatusBranches = io_utils.emitIoStatusBranches;
 const findReversionStart = io_utils.findReversionStart;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
+const countFormatDescriptors = io_utils.countFormatDescriptors;
 
 pub const emitOpen = file_control.emitOpen;
 pub const emitInquire = file_control.emitInquire;
@@ -90,6 +91,9 @@ pub fn emitWrite(
     switch (write.format) {
         .label => |label| {
             if (ctx.formats.get(label)) |fmt_info| {
+                if (try emitTrailingDVectorFormattedWrite(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items)) {
+                    return false;
+                }
                 if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, unit_i32, is_internal, fmt_info.items)) {
                     return false;
                 }
@@ -111,6 +115,9 @@ pub fn emitWrite(
             return error.MissingFormatLabel;
         },
         .inline_items => |items| {
+            if (try emitTrailingDVectorFormattedWrite(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items)) {
+                return false;
+            }
             if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, unit_i32, is_internal, items)) {
                 return false;
             }
@@ -124,6 +131,166 @@ pub fn emitWrite(
         .none => unreachable,
         .list_directed => unreachable,
     }
+}
+
+const DReversionPlan = struct {
+    indent: usize,
+    per_line: usize,
+    width: usize,
+    precision: usize,
+};
+
+fn emitTrailingDVectorFormattedWrite(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    fmt_items: []const ast.FormatItem,
+) EmitError!bool {
+    if (is_internal) return false;
+    if (write.args.len < 2) return false;
+
+    const vector_source = try resolveDVectorSource(ctx, builder, write.args[write.args.len - 1]) orelse return false;
+    const reversion_start = findReversionStart(fmt_items);
+    if (reversion_start == 0 or reversion_start >= fmt_items.len) return false;
+
+    const prefix_desc_count = countFormatDescriptors(fmt_items[0..reversion_start]);
+    if (prefix_desc_count != write.args.len - 1) return false;
+
+    const plan = parseDReversionPlan(fmt_items[reversion_start..]) orelse return false;
+    const prefix_fmt_items = try cloneTrimmedPrefixFormatForSplitWrite(ctx, fmt_items[0..reversion_start]);
+    defer if (prefix_fmt_items) |items| ctx.allocator.free(items);
+    const prefix_fmt = if (prefix_fmt_items) |items| items else fmt_items[0..reversion_start];
+
+    var prefix_write = write;
+    prefix_write.args = write.args[0 .. write.args.len - 1];
+    var prefix_expanded = try expandWriteArgs(ctx, builder, prefix_write.args);
+    defer prefix_expanded.deinit();
+    try emitWriteFormatted(
+        ctx,
+        builder,
+        prefix_write,
+        unit_value,
+        unit_char_len,
+        unit_record_count,
+        is_internal,
+        unit_i32,
+        prefix_fmt,
+        &prefix_expanded,
+    );
+
+    const decl = try ctx.ensureDeclRaw(
+        "col6forge_write_fmt_d_implied",
+        .i32,
+        &[_]llvm_types.IRType{
+            .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .i32, .i32, .ptr, .i32, .i32, .i32, .i32,
+        },
+        false,
+    );
+    try builder.callTyped(
+        null,
+        .i32,
+        decl,
+        &.{
+            unit_i32,
+            .{ .name = "null", .ty = .ptr, .is_ptr = false },
+            try ctx.constI32(0),
+            .{ .name = "null", .ty = .ptr, .is_ptr = false },
+            try ctx.constI32(0),
+            .{ .name = "null", .ty = .ptr, .is_ptr = false },
+            try ctx.constI32(0),
+            vector_source.count,
+            vector_source.stride,
+            vector_source.base_ptr,
+            try ctx.constI32(@intCast(plan.indent)),
+            try ctx.constI32(@intCast(plan.per_line)),
+            try ctx.constI32(@intCast(plan.width)),
+            try ctx.constI32(@intCast(plan.precision)),
+        },
+    );
+    return true;
+}
+
+fn cloneTrimmedPrefixFormatForSplitWrite(
+    ctx: *Context,
+    prefix_items: []const ast.FormatItem,
+) EmitError!?[]ast.FormatItem {
+    if (prefix_items.len == 0) return null;
+    var idx = prefix_items.len;
+    while (idx > 0) {
+        idx -= 1;
+        switch (prefix_items[idx]) {
+            .literal => |lit| {
+                if (lit.len == 0) continue;
+                for (lit) |ch| {
+                    if (ch != '\n') return null;
+                }
+                const cloned = try ctx.allocator.dupe(ast.FormatItem, prefix_items);
+                if (lit.len == 1) {
+                    if (idx == 0) return cloned[0..0];
+                    return cloned[0..idx];
+                }
+                cloned[idx] = .{ .literal = lit[0 .. lit.len - 1] };
+                return cloned;
+            },
+            .spaces => continue,
+            else => return null,
+        }
+    }
+    return null;
+}
+
+fn parseDReversionPlan(items: []const ast.FormatItem) ?DReversionPlan {
+    var indent: usize = 0;
+    var seen_descriptor = false;
+    var per_line: usize = 0;
+    var width: usize = 0;
+    var precision: usize = 0;
+
+    for (items) |item| {
+        switch (item) {
+            .reversion_anchor => {},
+            .spaces => |count| {
+                if (seen_descriptor) return null;
+                indent += count;
+            },
+            .literal => |lit| {
+                if (seen_descriptor) {
+                    for (lit) |ch| {
+                        if (ch != '\n') return null;
+                    }
+                } else {
+                    for (lit) |ch| {
+                        if (ch != ' ') return null;
+                    }
+                    indent += lit.len;
+                }
+            },
+            .real => |spec| {
+                if (spec.kind != .d) return null;
+                if (!seen_descriptor) {
+                    width = spec.width;
+                    precision = spec.precision;
+                    seen_descriptor = true;
+                } else if (spec.width != width or spec.precision != precision) {
+                    return null;
+                }
+                per_line += 1;
+            },
+            else => return null,
+        }
+    }
+    if (!seen_descriptor or per_line == 0 or width == 0) return null;
+    return .{
+        .indent = indent,
+        .per_line = per_line,
+        .width = width,
+        .precision = precision,
+    };
 }
 
 const DynamicDImpliedFormatPlan = struct {
@@ -145,65 +312,13 @@ fn emitDynamicImpliedDoFormattedWrite(
 ) EmitError!bool {
     if (is_internal) return false;
     if (write.args.len != 2) return false;
-    if (write.args[1].* != .implied_do) return false;
-
-    const implied = write.args[1].implied_do;
-    if (implied.items.len != 1) return false;
-    if (implied.items[0].* != .call_or_subscript) return false;
-
-    const step_val: i64 = if (implied.step) |step_expr|
-        (try evalConstIntSem(ctx, step_expr)) orelse intLiteralValue(step_expr) orelse return false
-    else
-        1;
-    if (step_val != 1) return false;
+    const vector_source = try resolveDVectorSource(ctx, builder, write.args[1]) orelse return false;
 
     const plan = parseDynamicDImpliedFormat(ctx, fmt_items) orelse return false;
     defer {
         ctx.allocator.free(plan.pre);
         ctx.allocator.free(plan.post);
     }
-
-    const call = implied.items[0].call_or_subscript;
-    const sym = ctx.findSymbol(call.name) orelse return false;
-    if (sym.type_kind != .double_precision) return false;
-    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return false;
-
-    const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return false;
-    const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return false;
-
-    var start_val = try expr.emitExpr(ctx, builder, implied.start);
-    start_val = try expr.coerce(ctx, builder, start_val, .i32);
-    var end_val = try expr.emitExpr(ctx, builder, implied.end);
-    end_val = try expr.coerce(ctx, builder, end_val, .i32);
-
-    const diff_tmp = try ctx.nextTemp();
-    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
-    const diff = ValueRef{ .name = diff_tmp, .ty = .i32, .is_ptr = false };
-    const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-    const count_tmp = try ctx.nextTemp();
-    try builder.binary(count_tmp, "add", .i32, diff, one);
-    const count_raw = ValueRef{ .name = count_tmp, .ty = .i32, .is_ptr = false };
-    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
-    const nonpos_tmp = try ctx.nextTemp();
-    try builder.compare(nonpos_tmp, "icmp", "sle", .i32, count_raw, zero);
-    const nonpos = ValueRef{ .name = nonpos_tmp, .ty = .i1, .is_ptr = false };
-    const final_count_tmp = try ctx.nextTemp();
-    try builder.select(final_count_tmp, .i32, nonpos, zero, count_raw);
-    const final_count = ValueRef{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
-
-    const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
-    defer ctx.allocator.free(base_args);
-    for (call.args, 0..) |arg, idx| {
-        base_args[idx] = arg;
-    }
-    base_args[loop_dim] = implied.start;
-    var base_expr = ast.Expr{
-        .call_or_subscript = .{
-            .name = call.name,
-            .args = base_args,
-        },
-    };
-    const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
 
     const title_arg = write.args[0];
     const title_ptr = try expr.emitExpr(ctx, builder, title_arg);
@@ -233,9 +348,9 @@ fn emitDynamicImpliedDoFormattedWrite(
             try ctx.constI32(@intCast(title_len)),
             post_ptr,
             try ctx.constI32(@intCast(plan.post.len)),
-            final_count,
-            stride,
-            base_ptr,
+            vector_source.count,
+            vector_source.stride,
+            vector_source.base_ptr,
             try ctx.constI32(@intCast(plan.indent)),
             try ctx.constI32(@intCast(plan.per_line)),
             try ctx.constI32(@intCast(plan.width)),
@@ -243,6 +358,131 @@ fn emitDynamicImpliedDoFormattedWrite(
         },
     );
     return true;
+}
+
+const DVectorSource = struct {
+    base_ptr: ValueRef,
+    stride: ValueRef,
+    count: ValueRef,
+};
+
+fn resolveDVectorSource(
+    ctx: *Context,
+    builder: anytype,
+    node: *ast.Expr,
+) EmitError!?DVectorSource {
+    return switch (node.*) {
+        .implied_do => |implied| try resolveDVectorFromImpliedDo(ctx, builder, implied),
+        .call_or_subscript => |call| try resolveDVectorFromRangeSection(ctx, builder, call),
+        else => null,
+    };
+}
+
+fn resolveDVectorFromImpliedDo(
+    ctx: *Context,
+    builder: anytype,
+    implied: ast.ImpliedDo,
+) EmitError!?DVectorSource {
+    if (implied.items.len != 1) return null;
+    if (implied.items[0].* != .call_or_subscript) return null;
+
+    const step_val: i64 = if (implied.step) |step_expr|
+        (try evalConstIntSem(ctx, step_expr)) orelse intLiteralValue(step_expr) orelse return null
+    else
+        1;
+    if (step_val != 1) return null;
+
+    const call = implied.items[0].call_or_subscript;
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.type_kind != .double_precision) return null;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
+
+    const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return null;
+    const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return null;
+    const count = try emitRangeCount(ctx, builder, implied.start, implied.end);
+
+    const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
+    defer ctx.allocator.free(base_args);
+    for (call.args, 0..) |arg, idx| {
+        base_args[idx] = arg;
+    }
+    base_args[loop_dim] = implied.start;
+    var base_expr = ast.Expr{
+        .call_or_subscript = .{
+            .name = call.name,
+            .args = base_args,
+        },
+    };
+    const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
+    return .{ .base_ptr = base_ptr, .stride = stride, .count = count };
+}
+
+fn resolveDVectorFromRangeSection(
+    ctx: *Context,
+    builder: anytype,
+    call: ast.CallOrSubscript,
+) EmitError!?DVectorSource {
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.type_kind != .double_precision) return null;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
+
+    var loop_dim: ?usize = null;
+    for (call.args, 0..) |arg, idx| {
+        if (arg.* != .dim_range) continue;
+        if (loop_dim != null) return null;
+        const range = arg.dim_range;
+        if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return null;
+        loop_dim = idx;
+    }
+    const dim = loop_dim orelse return null;
+    const range = call.args[dim].dim_range;
+    const start_expr = range.lower orelse blk: {
+        const one = try ctx.allocator.create(ast.Expr);
+        one.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+        break :blk one;
+    };
+    defer if (range.lower == null) ctx.allocator.destroy(start_expr);
+    const end_expr = range.upper;
+
+    const stride = impliedStrideForDim(ctx, builder, sym.dims, dim) catch return null;
+    const count = try emitRangeCount(ctx, builder, start_expr, end_expr);
+
+    const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
+    defer ctx.allocator.free(base_args);
+    for (call.args, 0..) |arg, idx| {
+        base_args[idx] = arg;
+    }
+    base_args[dim] = start_expr;
+    var base_expr = ast.Expr{
+        .call_or_subscript = .{
+            .name = call.name,
+            .args = base_args,
+        },
+    };
+    const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
+    return .{ .base_ptr = base_ptr, .stride = stride, .count = count };
+}
+
+fn emitRangeCount(ctx: *Context, builder: anytype, start_expr: *ast.Expr, end_expr: *ast.Expr) EmitError!ValueRef {
+    var start_val = try expr.emitExpr(ctx, builder, start_expr);
+    start_val = try expr.coerce(ctx, builder, start_val, .i32);
+    var end_val = try expr.emitExpr(ctx, builder, end_expr);
+    end_val = try expr.coerce(ctx, builder, end_val, .i32);
+
+    const diff_tmp = try ctx.nextTemp();
+    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
+    const diff = ValueRef{ .name = diff_tmp, .ty = .i32, .is_ptr = false };
+    const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+    const count_tmp = try ctx.nextTemp();
+    try builder.binary(count_tmp, "add", .i32, diff, one);
+    const count_raw = ValueRef{ .name = count_tmp, .ty = .i32, .is_ptr = false };
+    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+    const nonpos_tmp = try ctx.nextTemp();
+    try builder.compare(nonpos_tmp, "icmp", "sle", .i32, count_raw, zero);
+    const nonpos = ValueRef{ .name = nonpos_tmp, .ty = .i1, .is_ptr = false };
+    const final_count_tmp = try ctx.nextTemp();
+    try builder.select(final_count_tmp, .i32, nonpos, zero, count_raw);
+    return .{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
 }
 
 fn parseDynamicDImpliedFormat(ctx: *Context, fmt_items: []const ast.FormatItem) ?DynamicDImpliedFormatPlan {

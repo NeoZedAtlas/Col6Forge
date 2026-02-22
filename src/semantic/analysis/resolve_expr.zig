@@ -32,7 +32,13 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     self.symbols.items[idx] = sym;
                 }
             } else {
-                if (!sym.is_intrinsic and symbols_mod.isIntrinsicName(call.name)) {
+                if (!sym.is_intrinsic and
+                    !sym.type_explicit and
+                    !sym.is_external and
+                    sym.kind == .variable and
+                    sym.dims.len == 0 and
+                    symbols_mod.isIntrinsicName(call.name))
+                {
                     sym.is_intrinsic = true;
                     self.symbols.items[idx] = sym;
                 }
