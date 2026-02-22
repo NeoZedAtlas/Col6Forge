@@ -3,6 +3,7 @@ const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const decls = @import("resolve_decls.zig");
 const specs = @import("resolve_specs.zig");
+const statements = @import("resolve_statements.zig");
 const symbols_mod = @import("resolve_symbols.zig");
 const scope = @import("../scope.zig");
 
@@ -22,11 +23,13 @@ pub const Resolver = struct {
         try ctx.initScopeTree();
         _ = try ctx.pushScopeWithOwner(unitScopeKind(ctx.unit.kind), ctx.unit.name, ctx.unit.kind);
         try symbols_mod.initImplicitDefaults(ctx);
+        try symbols_mod.installBuiltinConstants(ctx);
         for (self.initial_implicit) |rule| {
             try ctx.implicit.append(rule);
         }
         try symbols_mod.installUnitSymbol(ctx);
         try symbols_mod.installDummyArgs(ctx);
+        try statements.preinstallUseImports(ctx);
         for (ctx.unit.decls, 0..) |decl, decl_idx| {
             if (decl_idx < ctx.unit.decl_sources.len) {
                 ctx.current_decl_source = ctx.unit.decl_sources[decl_idx];

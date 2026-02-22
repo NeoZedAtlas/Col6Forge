@@ -9,6 +9,12 @@ pub const Context = struct {
         arg_count: usize,
     };
 
+    pub const BuiltinConstant = struct {
+        module_name: []const u8,
+        type_kind: ast.TypeKind,
+        value: symbols.ConstValue,
+    };
+
     arena: std.mem.Allocator,
     unit: ast.ProgramUnit,
     unit_backing: ?*ast.ProgramUnit,
@@ -16,6 +22,7 @@ pub const Context = struct {
     symbols: std.array_list.Managed(symbols.Symbol),
     implicit: std.array_list.Managed(symbols.ImplicitRule),
     refs: std.array_list.Managed(symbols.ResolvedRef),
+    builtin_constants: std.StringHashMap(BuiltinConstant),
     equivalence_nodes: std.StringHashMap(usize),
     equivalence_parent: std.array_list.Managed(usize),
     equivalence_rank: std.array_list.Managed(u8),
@@ -50,6 +57,7 @@ pub const Context = struct {
             .symbols = std.array_list.Managed(symbols.Symbol).init(arena),
             .implicit = std.array_list.Managed(symbols.ImplicitRule).init(arena),
             .refs = std.array_list.Managed(symbols.ResolvedRef).init(arena),
+            .builtin_constants = std.StringHashMap(BuiltinConstant).init(arena),
             .equivalence_nodes = std.StringHashMap(usize).init(arena),
             .equivalence_parent = std.array_list.Managed(usize).init(arena),
             .equivalence_rank = std.array_list.Managed(u8).init(arena),

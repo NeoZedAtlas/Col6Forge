@@ -6,6 +6,13 @@ const symbols_mod = @import("resolve_symbols.zig");
 
 const ResolveError = expressions.ResolveError;
 
+pub fn preinstallUseImports(self: *context.Context) ResolveError!void {
+    for (self.unit.stmts) |stmt| {
+        if (stmt.node != .cont) continue;
+        try installUseImports(self, stmt.source_text);
+    }
+}
+
 pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
     const prev_stmt = self.current_stmt;
     self.setCurrentStmt(stmt);
@@ -295,16 +302,8 @@ fn installUseImports(self: *context.Context, text: []const u8) ResolveError!void
         if (part.len == 0) continue;
         const item = parseUseOnlyItem(part) orelse continue;
 
-        if (std.ascii.eqlIgnoreCase(module_name, "iso_fortran_env") and std.ascii.eqlIgnoreCase(item.remote_name, "output_unit")) {
-            const idx = try symbols_mod.ensureSymbol(self, item.local_name);
-            self.symbols.items[idx].name = item.local_name;
-            self.symbols.items[idx].type_kind = .integer;
-            self.symbols.items[idx].dims = &.{};
-            self.symbols.items[idx].char_len = null;
-            self.symbols.items[idx].kind = .parameter;
-            self.symbols.items[idx].storage = .local;
-            self.symbols.items[idx].const_value = .{ .integer = 6 };
-            self.symbols.items[idx].type_explicit = true;
+        if (symbols_mod.findBuiltinModuleConstant(self, module_name, item.remote_name)) |builtin| {
+            try bindBuiltinUseImport(self, item.local_name, builtin);
             continue;
         }
 
@@ -378,6 +377,23 @@ fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_nam
         sym.type_kind = type_kind;
         sym.type_explicit = true;
     }
+}
+
+fn bindBuiltinUseImport(
+    self: *context.Context,
+    local_name: []const u8,
+    builtin: context.Context.BuiltinConstant,
+) ResolveError!void {
+    const idx = try symbols_mod.ensureSymbol(self, local_name);
+    const sym = &self.symbols.items[idx];
+    sym.name = local_name;
+    sym.type_kind = builtin.type_kind;
+    sym.dims = &.{};
+    sym.char_len = null;
+    sym.kind = .parameter;
+    sym.storage = .local;
+    sym.const_value = builtin.value;
+    sym.type_explicit = true;
 }
 
 fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {

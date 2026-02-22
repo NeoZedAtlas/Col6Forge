@@ -783,6 +783,67 @@ test "semantic folds LEN over concatenated PARAMETER string" {
     try testing.expect(found);
 }
 
+test "semantic resolves builtin OUTPUT_UNIT in constant expression" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER N\n" ++
+        "      PARAMETER (N=OUTPUT_UNIT)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "N")) continue;
+        found = true;
+        const cv = sym.const_value orelse return error.TestExpectedEqual;
+        switch (cv) {
+            .integer => |v| try testing.expectEqual(@as(i64, 6), v),
+            else => return error.TestExpectedEqual,
+        }
+    }
+    try testing.expect(found);
+}
+
+test "semantic resolves ISO_FORTRAN_ENV use-only rename for OUTPUT_UNIT" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      USE ISO_FORTRAN_ENV, ONLY: NWRITE =.GT. OUTPUT_UNIT\n" ++
+        "      INTEGER N\n" ++
+        "      PARAMETER (N=NWRITE)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "N")) continue;
+        found = true;
+        const cv = sym.const_value orelse return error.TestExpectedEqual;
+        switch (cv) {
+            .integer => |v| try testing.expectEqual(@as(i64, 6), v),
+            else => return error.TestExpectedEqual,
+        }
+    }
+    try testing.expect(found);
+}
+
 test "semantic CF3112 diagnostic includes PARAMETER name and types" {
     const testing = std.testing;
     const allocator = testing.allocator;

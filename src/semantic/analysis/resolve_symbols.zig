@@ -13,6 +13,36 @@ pub fn initImplicitDefaults(self: *context.Context) !void {
     try self.implicit.append(.{ .start = 'O', .end = 'Z', .type_kind = .real, .char_len = null });
 }
 
+pub fn installBuiltinConstants(self: *context.Context) !void {
+    if (self.builtin_constants.count() != 0) return;
+    try putBuiltinConstant(self, "iso_fortran_env", "output_unit", .integer, .{ .integer = 6 });
+    try putBuiltinConstant(self, "iso_fortran_env", "input_unit", .integer, .{ .integer = 5 });
+    try putBuiltinConstant(self, "iso_fortran_env", "error_unit", .integer, .{ .integer = 0 });
+}
+
+pub fn findBuiltinConstant(self: *context.Context, name: []const u8) ?context.Context.BuiltinConstant {
+    var key_buf: [128]u8 = undefined;
+    if (name.len <= key_buf.len) {
+        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+        if (self.builtin_constants.get(key_buf[0..name.len])) |constant| return constant;
+    }
+    var it = self.builtin_constants.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+    }
+    return null;
+}
+
+pub fn findBuiltinModuleConstant(
+    self: *context.Context,
+    module_name: []const u8,
+    name: []const u8,
+) ?context.Context.BuiltinConstant {
+    const constant = findBuiltinConstant(self, name) orelse return null;
+    if (!std.ascii.eqlIgnoreCase(module_name, constant.module_name)) return null;
+    return constant;
+}
+
 pub fn installUnitSymbol(self: *context.Context) !void {
     const kind: SymbolKind = switch (self.unit.kind) {
         .program => .subroutine,
@@ -198,6 +228,27 @@ fn findKnownHostParameter(self: *context.Context, name: []const u8) ?Symbol {
         }
     }
     return null;
+}
+
+fn putBuiltinConstant(
+    self: *context.Context,
+    module_name: []const u8,
+    name: []const u8,
+    type_kind: ast.TypeKind,
+    value: symbols.ConstValue,
+) !void {
+    const key = try lowerDup(self.arena, name);
+    try self.builtin_constants.put(key, .{
+        .module_name = module_name,
+        .type_kind = type_kind,
+        .value = value,
+    });
+}
+
+fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const out = try allocator.alloc(u8, text.len);
+    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
+    return out;
 }
 
 fn findKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
