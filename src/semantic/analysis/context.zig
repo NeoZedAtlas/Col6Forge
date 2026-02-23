@@ -45,6 +45,7 @@ pub const Context = struct {
     known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
     known_host_parameters: *const std.StringHashMap(symbols.Symbol),
     known_host_owner: ?[]const u8,
+    use_imports_preinstalled: bool,
 
     pub const Owner = struct {
         name: []const u8,
@@ -90,6 +91,7 @@ pub const Context = struct {
             .known_procedure_sigs = known_procedure_sigs,
             .known_host_parameters = known_host_parameters,
             .known_host_owner = known_host_owner,
+            .use_imports_preinstalled = false,
         };
         ctx.current_unit = &ctx.unit;
         return ctx;

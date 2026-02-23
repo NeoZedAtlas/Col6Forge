@@ -7,10 +7,12 @@ const symbols_mod = @import("resolve_symbols.zig");
 const ResolveError = expressions.ResolveError;
 
 pub fn preinstallUseImports(self: *context.Context) ResolveError!void {
+    if (self.use_imports_preinstalled) return;
     for (self.unit.stmts) |stmt| {
         if (stmt.node != .cont) continue;
         try installUseImports(self, stmt.source_text);
     }
+    self.use_imports_preinstalled = true;
 }
 
 pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
@@ -134,7 +136,9 @@ pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
             }
         },
         .cont => {
-            try installUseImports(self, stmt.source_text);
+            if (!self.use_imports_preinstalled) {
+                try installUseImports(self, stmt.source_text);
+            }
         },
         .entry => |entry| {
             const entry_idx = try symbols_mod.ensureSymbol(self, entry.name);
@@ -268,7 +272,7 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             }
         },
         .cont => {
-            if (self.current_stmt) |stmt| {
+            if (!self.use_imports_preinstalled and self.current_stmt) |stmt| {
                 try installUseImports(self, stmt.source_text);
             }
         },
@@ -409,25 +413,34 @@ fn bindBuiltinUseImport(
 
 fn startsWithNoCase(text: []const u8, prefix: []const u8) bool {
     if (text.len < prefix.len) return false;
-    return std.ascii.eqlIgnoreCase(text[0..prefix.len], prefix);
-}
-
-fn containsNoCase(text: []const u8, needle: []const u8) bool {
-    if (needle.len == 0) return true;
-    if (text.len < needle.len) return false;
     var i: usize = 0;
-    while (i + needle.len <= text.len) : (i += 1) {
-        if (std.ascii.eqlIgnoreCase(text[i .. i + needle.len], needle)) return true;
+    while (i < prefix.len) : (i += 1) {
+        if (std.ascii.toLower(text[i]) != std.ascii.toLower(prefix[i])) return false;
     }
-    return false;
+    return true;
 }
 
 fn indexOfNoCase(text: []const u8, needle: []const u8) ?usize {
     if (needle.len == 0) return 0;
     if (text.len < needle.len) return null;
+    var lower_buf: [64]u8 = undefined;
+    const lower_needle: []const u8 = blk: {
+        if (needle.len <= lower_buf.len) {
+            for (needle, 0..) |ch, i| lower_buf[i] = std.ascii.toLower(ch);
+            break :blk lower_buf[0..needle.len];
+        }
+        break :blk needle;
+    };
+    const first = if (needle.len <= lower_buf.len) lower_needle[0] else std.ascii.toLower(needle[0]);
     var i: usize = 0;
     while (i + needle.len <= text.len) : (i += 1) {
-        if (std.ascii.eqlIgnoreCase(text[i .. i + needle.len], needle)) return i;
+        if (std.ascii.toLower(text[i]) != first) continue;
+        var j: usize = 1;
+        while (j < needle.len) : (j += 1) {
+            const want = if (needle.len <= lower_buf.len) lower_needle[j] else std.ascii.toLower(needle[j]);
+            if (std.ascii.toLower(text[i + j]) != want) break;
+        }
+        if (j == needle.len) return i;
     }
     return null;
 }
@@ -448,14 +461,8 @@ fn findRenameArrow(part: []const u8) ?struct { idx: usize, len: usize } {
     if (std.mem.indexOf(u8, part, "=>")) |idx| {
         return .{ .idx = idx, .len = 2 };
     }
-    const lowered = "=.gt.";
-    if (part.len >= lowered.len) {
-        var i: usize = 0;
-        while (i + lowered.len <= part.len) : (i += 1) {
-            if (std.ascii.eqlIgnoreCase(part[i .. i + lowered.len], lowered)) {
-                return .{ .idx = i, .len = lowered.len };
-            }
-        }
+    if (indexOfNoCase(part, "=.gt.")) |idx| {
+        return .{ .idx = idx, .len = "=.gt.".len };
     }
     return null;
 }

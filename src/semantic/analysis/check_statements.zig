@@ -296,6 +296,15 @@ fn controlLiteralText(expr_node: *ast.Expr) ?[]const u8 {
 }
 
 fn textInSet(text: []const u8, allowed: []const []const u8) bool {
+    var upper_buf: [256]u8 = undefined;
+    if (text.len <= upper_buf.len) {
+        for (text, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
+        const upper = upper_buf[0..text.len];
+        for (allowed) |candidate| {
+            if (std.mem.eql(u8, upper, candidate)) return true;
+        }
+        return false;
+    }
     for (allowed) |candidate| {
         if (std.ascii.eqlIgnoreCase(text, candidate)) return true;
     }
