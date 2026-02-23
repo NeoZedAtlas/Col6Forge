@@ -856,7 +856,7 @@ test "semantic resolves builtin OUTPUT_UNIT in constant expression" {
     try testing.expect(found);
 }
 
-test "semantic resolves ISO_FORTRAN_ENV use-only rename for OUTPUT_UNIT" {
+test "semantic rejects legacy ISO_FORTRAN_ENV rename marker syntax" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -871,20 +871,7 @@ test "semantic resolves ISO_FORTRAN_ENV use-only rename for OUTPUT_UNIT" {
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const program = try parser.parseProgram(arena.allocator(), lines);
-    const sem = try analyzeProgram(arena.allocator(), program);
-
-    var found = false;
-    for (sem.units[0].symbols) |sym| {
-        if (!std.ascii.eqlIgnoreCase(sym.name, "N")) continue;
-        found = true;
-        const cv = sym.const_value orelse return error.TestExpectedEqual;
-        switch (cv) {
-            .integer => |v| try testing.expectEqual(@as(i64, 6), v),
-            else => return error.TestExpectedEqual,
-        }
-    }
-    try testing.expect(found);
+    try testing.expectError(error.UnexpectedToken, parser.parseProgram(arena.allocator(), lines));
 }
 
 test "semantic resolves ISO_FORTRAN_ENV use-only rename arrow for OUTPUT_UNIT" {

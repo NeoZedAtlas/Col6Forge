@@ -466,12 +466,17 @@ fn parseUseStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!S
                 var remote_name = local_name;
                 if (consumeUseRenameArrow(lp)) {
                     remote_name = lp.readName(arena) orelse return error.MissingName;
+                } else if (lp.peekIs(.equals)) {
+                    // Reject malformed rename spellings (e.g. legacy `=.GT.` marker).
+                    return error.UnexpectedToken;
                 }
                 try only_items.append(.{
                     .local_name = local_name,
                     .remote_name = remote_name,
                 });
-                if (!lp.consume(.comma)) break;
+                if (lp.consume(.comma)) continue;
+                if (lp.peek() != null) return error.UnexpectedToken;
+                break;
             }
         }
     }
@@ -495,20 +500,9 @@ fn consumeDoubleColon(lp: *LineParser) bool {
 fn consumeUseRenameArrow(lp: *LineParser) bool {
     var scan = lp.*;
     if (!scan.consume(.equals)) return false;
-
-    if (scan.consume(.greater)) {
-        lp.* = scan;
-        return true;
-    }
-
-    const marker = scan.peek() orelse return false;
-    if (marker.kind == .dot_op and context.eqNoCase(scan.tokenText(marker), ".GT.")) {
-        _ = scan.next();
-        lp.* = scan;
-        return true;
-    }
-
-    return false;
+    if (!scan.consume(.greater)) return false;
+    lp.* = scan;
+    return true;
 }
 
 const CaseClause = struct {
@@ -1117,7 +1111,7 @@ test "parseStatement parses USE ONLY statement" {
     try testing.expectEqual(@as(usize, 1), idx);
 }
 
-test "parseStatement parses USE ONLY rename marker" {
+test "parseStatement rejects legacy USE rename marker" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -1133,13 +1127,7 @@ test "parseStatement parses USE ONLY rename marker" {
     var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
     var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
 
-    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
-    try testing.expect(stmt_node.node == .use_stmt);
-    try testing.expectEqualStrings("ISO_FORTRAN_ENV", stmt_node.node.use_stmt.module_name);
-    try testing.expectEqual(@as(usize, 1), stmt_node.node.use_stmt.only_items.len);
-    try testing.expectEqualStrings("NWRITE", stmt_node.node.use_stmt.only_items[0].local_name);
-    try testing.expectEqualStrings("OUTPUT_UNIT", stmt_node.node.use_stmt.only_items[0].remote_name);
-    try testing.expectEqual(@as(usize, 1), idx);
+    try testing.expectError(error.UnexpectedToken, parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names));
 }
 
 test "parseStatement parses USE ONLY rename arrow token" {
