@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const COL6FORGE_MAX_UNITS = 256;
 
 const DirectUnit = extern struct {
@@ -10,6 +10,7 @@ const DirectUnit = extern struct {
 
 extern var direct_units: [COL6FORGE_MAX_UNITS]DirectUnit;
 
+extern fn col6forge_open_direct(unit: c_int, recl: c_int) void;
 extern fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
 extern fn col6forge_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
 extern fn col6forge_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
@@ -17,6 +18,8 @@ extern fn col6forge_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out
 extern fn col6forge_unformatted_begin_write_len(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn col6forge_unformatted_begin_read_len(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn col6forge_rewind(unit: c_int) void;
+
+var direct_io_mutex: std.Thread.Mutex = .{};
 
 fn runtimeArgCount(arg_count: c_int) usize {
     return @intCast(@max(arg_count, 0));
@@ -77,10 +80,7 @@ fn complexOffsetIndex(i: c_int, stride: c_int) ?usize {
 }
 
 fn copyRawBytes(dst: [*]u8, src: [*]const u8, n: usize) void {
-    var i: usize = 0;
-    while (i < n) : (i += 1) {
-        dst[i] = src[i];
-    }
+    @memcpy(dst[0..n], src[0..n]);
 }
 
 pub export fn col6forge_write_direct_typed(
@@ -92,9 +92,15 @@ pub export fn col6forge_write_direct_typed(
     arg_count: c_int,
 ) callconv(.c) void {
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return;
+    direct_io_mutex.lock();
+    defer direct_io_mutex.unlock();
+
     const idx: usize = @intCast(unit);
     const du = &direct_units[idx];
     const total_args = runtimeArgCount(arg_count);
+
+    if (du.recl <= 0) return;
+    const recl: usize = @intCast(du.recl);
 
     var record_size: usize = 0;
     var i: usize = 0;
@@ -104,30 +110,23 @@ pub export fn col6forge_write_direct_typed(
         const field_size = typedFieldSize(kind, len) orelse return;
         record_size = checkedAdd(record_size, field_size) orelse return;
     }
-
-    if (du.recl == 0) {
-        if (record_size > @as(usize, @intCast(std.math.maxInt(c_int)))) return;
-        du.recl = @intCast(record_size);
-    }
-    if (du.recl <= 0) return;
+    if (record_size > recl) return;
 
     const record = col6forge_direct_record_ptr(unit, rec, du.recl) orelse return;
-    const recl: usize = @intCast(du.recl);
     var z: usize = 0;
     while (z < recl) : (z += 1) record[z] = 0;
 
     var pos: usize = 0;
     i = 0;
-    while (i < total_args and pos < recl) : (i += 1) {
+    while (i < total_args) : (i += 1) {
         const kind = runtimeArgKindAt(arg_kinds, i, total_args);
         const len = runtimeArgLenAt(arg_lens, i, total_args);
         const field_size = typedFieldSize(kind, len) orelse return;
+        if (pos + field_size > recl) return;
         const arg_any = runtimeArgPtrAt(arg_ptrs, i, total_args);
-        if (arg_any != null and pos < recl) {
+        if (arg_any != null) {
             const src: [*]const u8 = @ptrCast(arg_any.?);
-            const remaining = recl - pos;
-            const copy_n = if (field_size < remaining) field_size else remaining;
-            copyRawBytes(record + pos, src, copy_n);
+            copyRawBytes(record + pos, src, field_size);
         }
         pos += field_size;
     }
@@ -143,9 +142,15 @@ pub export fn col6forge_read_direct_typed(
     arg_count: c_int,
 ) callconv(.c) c_int {
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
+    direct_io_mutex.lock();
+    defer direct_io_mutex.unlock();
+
     const idx: usize = @intCast(unit);
     const du = &direct_units[idx];
     const total_args = runtimeArgCount(arg_count);
+
+    if (du.recl <= 0) return 0;
+    const recl: usize = @intCast(du.recl);
 
     var expected_size: usize = 0;
     var i: usize = 0;
@@ -155,9 +160,7 @@ pub export fn col6forge_read_direct_typed(
         const field_size = typedFieldSize(kind, len) orelse return 0;
         expected_size = checkedAdd(expected_size, field_size) orelse return 0;
     }
-
-    const recl: usize = if (du.recl > 0) @intCast(du.recl) else expected_size;
-    if (recl == 0) return 0;
+    if (expected_size > recl) return 0;
     if (recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
     const recl_i32: c_int = @intCast(recl);
     const record = col6forge_direct_record_ptr_ro(unit, rec, recl_i32) orelse return 0;
@@ -165,12 +168,13 @@ pub export fn col6forge_read_direct_typed(
     var pos: usize = 0;
     var assigned: c_int = 0;
     i = 0;
-    while (i < total_args and pos < recl) : (i += 1) {
+    while (i < total_args) : (i += 1) {
         const kind = runtimeArgKindAt(arg_kinds, i, total_args);
         const len = runtimeArgLenAt(arg_lens, i, total_args);
         const field_size = typedFieldSize(kind, len) orelse return 0;
+        if (pos + field_size > recl) return 0;
         const arg_any = runtimeArgPtrAt(arg_ptrs, i, total_args);
-        if (arg_any != null and pos + field_size <= recl) {
+        if (arg_any != null) {
             const dst: [*]u8 = @ptrCast(arg_any.?);
             copyRawBytes(dst, record + pos, field_size);
             assigned += 1;
@@ -266,6 +270,8 @@ fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 1;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 1;
+    direct_io_mutex.lock();
+    defer direct_io_mutex.unlock();
 
     const idx_unit: usize = @intCast(unit);
     const du = &direct_units[idx_unit];
@@ -273,26 +279,22 @@ fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
     const field_size = @sizeOf(T);
     const record_size = checkedMul(count_u, field_size) orelse return 1;
 
-    if (du.recl == 0) {
-        if (record_size > @as(usize, @intCast(std.math.maxInt(c_int)))) return 1;
-        du.recl = @intCast(record_size);
-    }
     if (du.recl <= 0) return 1;
+    const recl: usize = @intCast(du.recl);
+    if (record_size > recl) return 1;
 
     const record = col6forge_direct_record_ptr(unit, rec, du.recl) orelse return 1;
-    const recl: usize = @intCast(du.recl);
     var z: usize = 0;
     while (z < recl) : (z += 1) record[z] = 0;
 
     const src_data = base.?;
     var pos: usize = 0;
     var i: c_int = 0;
-    while (i < count and pos < recl) : (i += 1) {
+    while (i < count) : (i += 1) {
         const elem_idx = offsetIndex(i, stride) orelse return 1;
         const src: [*]const u8 = @ptrCast(&src_data[elem_idx]);
-        const remaining = recl - pos;
-        const copy_n = if (field_size < remaining) field_size else remaining;
-        copyRawBytes(record + pos, src, copy_n);
+        if (pos + field_size > recl) return 1;
+        copyRawBytes(record + pos, src, field_size);
         pos += field_size;
     }
     du.nextrec = rec + 1;
@@ -303,27 +305,30 @@ fn directReadScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, st
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 0;
+    direct_io_mutex.lock();
+    defer direct_io_mutex.unlock();
 
     const idx_unit: usize = @intCast(unit);
     const du = &direct_units[idx_unit];
     const count_u: usize = @intCast(count);
     const field_size = @sizeOf(T);
     const expected_size = checkedMul(count_u, field_size) orelse return 0;
-    const recl: usize = if (du.recl > 0) @intCast(du.recl) else expected_size;
-    if (recl == 0 or recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
+    if (du.recl <= 0) return 0;
+    const recl: usize = @intCast(du.recl);
+    if (expected_size > recl) return 0;
+    if (recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
 
     const record = col6forge_direct_record_ptr_ro(unit, rec, @intCast(recl)) orelse return 0;
     const dst_data = base.?;
     var assigned: c_int = 0;
     var pos: usize = 0;
     var i: c_int = 0;
-    while (i < count and pos < recl) : (i += 1) {
+    while (i < count) : (i += 1) {
         const elem_idx = offsetIndex(i, stride) orelse return 0;
-        if (pos + field_size <= recl) {
-            const dst: [*]u8 = @ptrCast(&dst_data[elem_idx]);
-            copyRawBytes(dst, record + pos, field_size);
-            assigned += 1;
-        }
+        if (pos + field_size > recl) return 0;
+        const dst: [*]u8 = @ptrCast(&dst_data[elem_idx]);
+        copyRawBytes(dst, record + pos, field_size);
+        assigned += 1;
         pos += field_size;
     }
     du.nextrec = rec + 1;
@@ -334,6 +339,8 @@ fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, 
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 1;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 1;
+    direct_io_mutex.lock();
+    defer direct_io_mutex.unlock();
 
     const idx_unit: usize = @intCast(unit);
     const du = &direct_units[idx_unit];
@@ -341,26 +348,22 @@ fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, 
     const field_size = checkedMul(@sizeOf(T), 2) orelse return 1;
     const record_size = checkedMul(count_u, field_size) orelse return 1;
 
-    if (du.recl == 0) {
-        if (record_size > @as(usize, @intCast(std.math.maxInt(c_int)))) return 1;
-        du.recl = @intCast(record_size);
-    }
     if (du.recl <= 0) return 1;
+    const recl: usize = @intCast(du.recl);
+    if (record_size > recl) return 1;
 
     const record = col6forge_direct_record_ptr(unit, rec, du.recl) orelse return 1;
-    const recl: usize = @intCast(du.recl);
     var z: usize = 0;
     while (z < recl) : (z += 1) record[z] = 0;
 
     const src_data = base.?;
     var pos: usize = 0;
     var i: c_int = 0;
-    while (i < count and pos < recl) : (i += 1) {
+    while (i < count) : (i += 1) {
         const elem_idx = complexOffsetIndex(i, stride) orelse return 1;
         const src: [*]const u8 = @ptrCast(&src_data[elem_idx]);
-        const remaining = recl - pos;
-        const copy_n = if (field_size < remaining) field_size else remaining;
-        copyRawBytes(record + pos, src, copy_n);
+        if (pos + field_size > recl) return 1;
+        copyRawBytes(record + pos, src, field_size);
         pos += field_size;
     }
     du.nextrec = rec + 1;
@@ -371,27 +374,30 @@ fn directReadComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 0;
+    direct_io_mutex.lock();
+    defer direct_io_mutex.unlock();
 
     const idx_unit: usize = @intCast(unit);
     const du = &direct_units[idx_unit];
     const count_u: usize = @intCast(count);
     const field_size = checkedMul(@sizeOf(T), 2) orelse return 0;
     const expected_size = checkedMul(count_u, field_size) orelse return 0;
-    const recl: usize = if (du.recl > 0) @intCast(du.recl) else expected_size;
-    if (recl == 0 or recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
+    if (du.recl <= 0) return 0;
+    const recl: usize = @intCast(du.recl);
+    if (expected_size > recl) return 0;
+    if (recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
 
     const record = col6forge_direct_record_ptr_ro(unit, rec, @intCast(recl)) orelse return 0;
     const dst_data = base.?;
     var assigned: c_int = 0;
     var pos: usize = 0;
     var i: c_int = 0;
-    while (i < count and pos < recl) : (i += 1) {
+    while (i < count) : (i += 1) {
         const elem_idx = complexOffsetIndex(i, stride) orelse return 0;
-        if (pos + field_size <= recl) {
-            const dst: [*]u8 = @ptrCast(&dst_data[elem_idx]);
-            copyRawBytes(dst, record + pos, field_size);
-            assigned += 1;
-        }
+        if (pos + field_size > recl) return 0;
+        const dst: [*]u8 = @ptrCast(&dst_data[elem_idx]);
+        copyRawBytes(dst, record + pos, field_size);
+        assigned += 1;
         pos += field_size;
     }
     du.nextrec = rec + 1;
@@ -607,6 +613,7 @@ pub export fn col6forge_read_unformatted_l_n(unit: c_int, count: c_int, stride: 
 test "typed direct io roundtrip handles integer, complex and character" {
     const unit: c_int = 37;
     const rec: c_int = 1;
+    col6forge_open_direct(unit, 16);
 
     var int_in: c_int = 12345;
     var complex_in: [2]f32 = .{ 1.25, -2.5 };
@@ -635,6 +642,32 @@ test "typed direct io roundtrip handles integer, complex and character" {
     try std.testing.expectEqual(complex_in[0], complex_out[0]);
     try std.testing.expectEqual(complex_in[1], complex_out[1]);
     try std.testing.expectEqualSlices(u8, char_in[0..], char_out[0..]);
+}
+
+test "typed direct io requires explicit RECL" {
+    const unit: c_int = 57;
+    const rec: c_int = 1;
+
+    var int_in: c_int = 7;
+    var write_args: [1]?*anyopaque = .{@ptrCast(&int_in)};
+    const write_kinds: [1]u8 = .{'i'};
+    const write_lens: [1]c_int = .{0};
+    col6forge_write_direct_typed(unit, rec, &write_args, &write_kinds, &write_lens, 1);
+
+    var int_out: c_int = 0;
+    var read_args: [1]?*anyopaque = .{@ptrCast(&int_out)};
+    const status = col6forge_read_direct_typed(unit, rec, &read_args, &write_kinds, &write_lens, 1);
+    try std.testing.expectEqual(@as(c_int, 0), status);
+}
+
+test "direct scalar write fails when payload exceeds RECL" {
+    const unit: c_int = 58;
+    const rec: c_int = 1;
+    col6forge_open_direct(unit, 4);
+
+    var values: [2]c_int = .{ 10, 20 };
+    const status = col6forge_write_direct_i32_n(unit, rec, 2, 1, &values);
+    try std.testing.expectEqual(@as(c_int, 1), status);
 }
 
 test "typed unformatted io roundtrip handles character, complex*16 and logical" {
