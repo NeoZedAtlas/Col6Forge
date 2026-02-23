@@ -293,6 +293,7 @@ fn installUseImports(self: *context.Context, text: []const u8) ResolveError!void
     if (!startsWithNoCase(trimmed, "use")) return;
 
     const module_name = parseUseModuleName(trimmed) orelse "";
+    const may_have_builtin_consts = isIsoFortranEnvModule(module_name);
     const only_idx = indexOfNoCase(trimmed, "only:") orelse return;
     const only_clause = trimmed[only_idx + "only:".len ..];
 
@@ -302,13 +303,23 @@ fn installUseImports(self: *context.Context, text: []const u8) ResolveError!void
         if (part.len == 0) continue;
         const item = parseUseOnlyItem(part) orelse continue;
 
-        if (symbols_mod.findBuiltinModuleConstant(self, module_name, item.remote_name)) |builtin| {
-            try bindBuiltinUseImport(self, item.local_name, builtin);
-            continue;
+        if (may_have_builtin_consts) {
+            if (symbols_mod.findBuiltinModuleConstant(self, module_name, item.remote_name)) |builtin| {
+                try bindBuiltinUseImport(self, item.local_name, builtin);
+                continue;
+            }
         }
 
         try bindKnownUseImport(self, item.local_name, item.remote_name);
     }
+}
+
+fn isIsoFortranEnvModule(module_name: []const u8) bool {
+    const target = "iso_fortran_env";
+    if (module_name.len != target.len) return false;
+    var buf: [32]u8 = undefined;
+    for (module_name, 0..) |ch, i| buf[i] = std.ascii.toLower(ch);
+    return std.mem.eql(u8, buf[0..module_name.len], target);
 }
 
 const UseOnlyItem = struct {

@@ -21,16 +21,13 @@ pub fn installBuiltinConstants(self: *context.Context) !void {
 }
 
 pub fn findBuiltinConstant(self: *context.Context, name: []const u8) ?context.Context.BuiltinConstant {
-    var key_buf: [128]u8 = undefined;
+    var key_buf: [512]u8 = undefined;
     if (name.len <= key_buf.len) {
         for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-        if (self.builtin_constants.get(key_buf[0..name.len])) |constant| return constant;
+        return self.builtin_constants.get(key_buf[0..name.len]);
     }
-    var it = self.builtin_constants.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
-    }
-    return null;
+    const key = lowerDup(self.arena, name) catch return null;
+    return self.builtin_constants.get(key);
 }
 
 pub fn findBuiltinModuleConstant(
@@ -39,8 +36,18 @@ pub fn findBuiltinModuleConstant(
     name: []const u8,
 ) ?context.Context.BuiltinConstant {
     const constant = findBuiltinConstant(self, name) orelse return null;
-    if (!std.ascii.eqlIgnoreCase(module_name, constant.module_name)) return null;
+    if (!moduleNameMatches(self, module_name, constant.module_name)) return null;
     return constant;
+}
+
+fn moduleNameMatches(self: *context.Context, module_name: []const u8, normalized: []const u8) bool {
+    var key_buf: [128]u8 = undefined;
+    if (module_name.len <= key_buf.len) {
+        for (module_name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+        return std.mem.eql(u8, key_buf[0..module_name.len], normalized);
+    }
+    const lowered = lowerDup(self.arena, module_name) catch return false;
+    return std.mem.eql(u8, lowered, normalized);
 }
 
 pub fn installUnitSymbol(self: *context.Context) !void {
