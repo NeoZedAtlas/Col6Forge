@@ -417,9 +417,18 @@ fn blankCommonKey() []const u8 {
 
 fn ensureImplicitRuleNoOverlap(self: *context.Context, start: u8, end: u8) !void {
     for (self.implicit.items) |existing| {
+        if (isDefaultImplicitRule(existing)) continue;
         if (!rangesOverlap(start, end, existing.start, existing.end)) continue;
         return error.InvalidImplicitRule;
     }
+}
+
+fn isDefaultImplicitRule(rule: symbols.ImplicitRule) bool {
+    if (rule.char_len != null) return false;
+    if (rule.start == 'I' and rule.end == 'N' and rule.type_kind == .integer) return true;
+    if (rule.start == 'A' and rule.end == 'H' and rule.type_kind == .real) return true;
+    if (rule.start == 'O' and rule.end == 'Z' and rule.type_kind == .real) return true;
+    return false;
 }
 
 fn rangesOverlap(a_start: u8, a_end: u8, b_start: u8, b_end: u8) bool {

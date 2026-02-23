@@ -647,6 +647,26 @@ test "semantic reports CF3109 when scalar is used as array" {
     try testing.expect(std.mem.eql(u8, diag.code, "CF3109"));
 }
 
+test "semantic accepts statement function definition target" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      REAL F, X\n" ++
+        "      F(X)=X*X\n" ++
+        "      Y=F(2.0)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+}
+
 test "semantic reports CF3110 for procedure argument count mismatch" {
     const testing = std.testing;
     const allocator = testing.allocator;

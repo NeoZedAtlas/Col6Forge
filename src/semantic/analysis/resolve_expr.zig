@@ -36,10 +36,10 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                 }
             } else {
                 if (!sym.is_intrinsic and
-                    !sym.type_explicit and
                     !sym.is_external and
                     sym.kind == .variable and
                     sym.dims.len == 0 and
+                    call.args.len > 0 and
                     symbols_mod.isIntrinsicName(call.name))
                 {
                     sym.is_intrinsic = true;
@@ -54,8 +54,19 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                 } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
                     kind = .call;
                 } else if (sym.type_explicit and call.args.len > 0) {
-                    // Explicitly declared scalars cannot be used as arrays.
-                    return error.InvalidSubscript;
+                    // Statement function definitions are spelled like an
+                    // assignment to a function designator in specification
+                    // part: F(X)=...
+                    if (isStatementFunctionDefinitionTarget(self, expr, call.args)) {
+                        kind = .call;
+                        if (sym.kind == .variable) {
+                            sym.kind = .function;
+                        }
+                        self.symbols.items[idx] = sym;
+                    } else {
+                        // Explicitly declared scalars cannot be used as arrays.
+                        return error.InvalidSubscript;
+                    }
                 } else {
                     // Default to function call when nothing declares it as an array.
                     kind = .call;
@@ -155,6 +166,21 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             try cacheExprType(self, expr, ty);
         },
     }
+}
+
+fn isStatementFunctionDefinitionTarget(
+    self: *context.Context,
+    expr: *ast.Expr,
+    args: []*ast.Expr,
+) bool {
+    const stmt = self.current_stmt orelse return false;
+    if (stmt.node != .assignment) return false;
+    if (stmt.node.assignment.target != expr) return false;
+    if (args.len == 0) return false;
+    for (args) |arg| {
+        if (arg.* != .identifier) return false;
+    }
+    return true;
 }
 
 pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {

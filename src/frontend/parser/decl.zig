@@ -117,11 +117,13 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
     if (lp.isKeywordSplit("EXTERNAL")) {
         _ = lp.consumeKeyword("EXTERNAL");
+        _ = consumeDoubleColon(lp);
         const names = try parseNameList(lp, arena);
         return .{ .external = .{ .names = names } };
     }
     if (lp.isKeywordSplit("INTRINSIC")) {
         _ = lp.consumeKeyword("INTRINSIC");
+        _ = consumeDoubleColon(lp);
         const names = try parseNameList(lp, arena);
         return .{ .intrinsic = .{ .names = names } };
     }
@@ -180,12 +182,64 @@ fn parseImplicitTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ImplicitTyp
     if (lp.isKeywordSplit("CHARACTER")) {
         _ = lp.consumeKeyword("CHARACTER");
         var char_len: ?*ast.Expr = null;
-        if (lp.consume(.star) or lp.peekIs(.l_paren)) {
+        // In IMPLICIT statements, the parenthesized group after type is the
+        // letter range list, not a CHARACTER length selector.
+        if (lp.consume(.star)) {
             char_len = try parseCharacterLen(lp, arena);
         }
         return .{ .type_kind = .character, .char_len = char_len };
     }
-    return .{ .type_kind = try parseTypeKind(lp), .char_len = null };
+    if (lp.isKeywordSplit("INTEGER")) {
+        _ = lp.consumeKeyword("INTEGER");
+        if (lp.consume(.star)) {
+            if (lp.peek()) |tok| {
+                if (tok.kind == .integer or tok.kind == .identifier) _ = lp.next();
+            }
+        }
+        return .{ .type_kind = .integer, .char_len = null };
+    }
+    if (lp.isKeywordSplit("REAL")) {
+        _ = lp.consumeKeyword("REAL");
+        if (lp.consume(.star)) {
+            if (lp.peek()) |tok| {
+                if (tok.kind == .integer) {
+                    _ = lp.next();
+                    const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return .{ .type_kind = .real, .char_len = null };
+                    if (kind_val >= 8) return .{ .type_kind = .double_precision, .char_len = null };
+                }
+            }
+        }
+        return .{ .type_kind = .real, .char_len = null };
+    }
+    if (lp.isKeywordSplit("COMPLEX")) {
+        _ = lp.consumeKeyword("COMPLEX");
+        if (lp.consume(.star)) {
+            if (lp.peek()) |tok| {
+                if (tok.kind == .integer) {
+                    _ = lp.next();
+                    const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return .{ .type_kind = .complex, .char_len = null };
+                    if (kind_val == 16) return .{ .type_kind = .complex_double, .char_len = null };
+                }
+            }
+        }
+        return .{ .type_kind = .complex, .char_len = null };
+    }
+    if (lp.isKeywordSplit("LOGICAL")) {
+        _ = lp.consumeKeyword("LOGICAL");
+        if (lp.consume(.star)) {
+            if (lp.peek()) |tok| {
+                if (tok.kind == .integer or tok.kind == .identifier) _ = lp.next();
+            }
+        }
+        return .{ .type_kind = .logical, .char_len = null };
+    }
+    if (lp.isKeywordSplit("DOUBLE")) {
+        _ = lp.consumeKeyword("DOUBLE");
+        if (!lp.isKeywordSplit("PRECISION")) return error.ExpectedPrecision;
+        _ = lp.consumeKeyword("PRECISION");
+        return .{ .type_kind = .double_precision, .char_len = null };
+    }
+    return error.UnknownType;
 }
 
 fn parseTypeKind(lp: *LineParser) !TypeKind {
@@ -347,14 +401,44 @@ fn parseRealKindSuffix(lp: *LineParser) !TypeKind {
 }
 
 fn parseComplexKindSuffix(lp: *LineParser) !TypeKind {
-    if (!lp.consume(.star)) return .complex;
-    const tok = lp.peek() orelse return error.UnexpectedToken;
-    if (tok.kind != .integer) return error.UnsupportedComplexKind;
-    _ = lp.next();
-    const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return error.UnsupportedComplexKind;
-    if (kind_val == 16) return .complex_double;
-    if (kind_val == 8) return .complex;
-    return error.UnsupportedComplexKind;
+    if (lp.consume(.star)) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        if (tok.kind != .integer) return error.UnsupportedComplexKind;
+        _ = lp.next();
+        const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return error.UnsupportedComplexKind;
+        if (kind_val == 16) return .complex_double;
+        if (kind_val == 8) return .complex;
+        return error.UnsupportedComplexKind;
+    }
+    if (!lp.consume(.l_paren)) return .complex;
+
+    var depth: usize = 1;
+    var first_kind: ?[]const u8 = null;
+    while (depth > 0) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        _ = lp.next();
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => depth -= 1,
+            .identifier, .integer => {
+                if (first_kind == null) first_kind = lp.tokenText(tok);
+            },
+            else => {},
+        }
+    }
+
+    if (first_kind) |kind_text| {
+        if (context.eqNoCase(kind_text, "REAL64") or
+            context.eqNoCase(kind_text, "C_DOUBLE") or
+            std.mem.endsWith(u8, kind_text, "64"))
+        {
+            return .complex_double;
+        }
+        if (std.fmt.parseInt(i64, kind_text, 10) catch 0 >= 16) {
+            return .complex_double;
+        }
+    }
+    return .complex;
 }
 
 fn parseDeclarators(
@@ -822,6 +906,109 @@ test "parseDecl accepts IMPLICIT NONE" {
     switch (decl_node) {
         .implicit => |imp| {
             try testing.expectEqual(@as(usize, 0), imp.rules.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles INTRINSIC declaration with double-colon" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      INTRINSIC :: ABS, SQRT\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .intrinsic => |intr| {
+            try testing.expectEqual(@as(usize, 2), intr.names.len);
+            try testing.expectEqualStrings("ABS", intr.names[0]);
+            try testing.expectEqualStrings("SQRT", intr.names[1]);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles IMPLICIT LOGICAL rule list" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      IMPLICIT LOGICAL (L)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .implicit => |imp| {
+            try testing.expectEqual(@as(usize, 1), imp.rules.len);
+            try testing.expectEqual(@as(u8, 'L'), imp.rules[0].start);
+            try testing.expectEqual(@as(u8, 'L'), imp.rules[0].end);
+            try testing.expectEqual(TypeKind.logical, imp.rules[0].type_kind);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles IMPLICIT mixed type rules" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      IMPLICIT DOUBLE PRECISION (D), COMPLEX (Z), LOGICAL (L)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .implicit => |imp| {
+            try testing.expectEqual(@as(usize, 3), imp.rules.len);
+            try testing.expectEqual(TypeKind.double_precision, imp.rules[0].type_kind);
+            try testing.expectEqual(TypeKind.complex, imp.rules[1].type_kind);
+            try testing.expectEqual(TypeKind.logical, imp.rules[2].type_kind);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles COMPLEX kind selector in parentheses" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      COMPLEX(WP) :: X(*)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.complex, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("X", td.items[0].name);
+            try testing.expectEqual(@as(usize, 1), td.items[0].dims.len);
         },
         else => return error.UnexpectedToken,
     }

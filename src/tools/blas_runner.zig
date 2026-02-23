@@ -363,7 +363,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var runtime_backend: RuntimeBackend = .c;
     var timeout_ms: u64 = 120_000;
     var keep_workdir = false;
-    var translate_f90 = true;
+    var translate_f90 = false;
     var translate_driver = false;
     var show_help = false;
     var emit: Col6Forge.EmitKind = .llvm;
@@ -496,8 +496,8 @@ fn printUsage(file: std.fs.File) !void {
         \\  --runtime-backend    Runtime backend: c (default) or zig (experimental)
         \\  --timeout <ms>       Per-command timeout in milliseconds (default: 120000)
         \\  --keep-workdir       Keep zig-cache/blas-verify/<case> even on success
-        \\  --translate-f90      Translate BLAS .f90 sources (default)
-        \\  --no-translate-f90   Keep BLAS .f90 sources on gfortran fallback side
+        \\  --translate-f90      Translate BLAS .f90 sources (experimental, opt-in)
+        \\  --no-translate-f90   Keep BLAS .f90 sources on gfortran fallback side (default)
         \\  --translate-driver   Translate BLAS test driver source (experimental)
         \\  --no-translate-driver
         \\                       Keep BLAS test driver on gfortran side (default)
@@ -875,11 +875,7 @@ fn isSupportedTranslatedF90(base: []const u8) bool {
     return std.ascii.eqlIgnoreCase(base, "snrm2.f90") or
         std.ascii.eqlIgnoreCase(base, "dnrm2.f90") or
         std.ascii.eqlIgnoreCase(base, "scnrm2.f90") or
-        std.ascii.eqlIgnoreCase(base, "dznrm2.f90") or
-        std.ascii.eqlIgnoreCase(base, "srotg.f90") or
-        std.ascii.eqlIgnoreCase(base, "drotg.f90") or
-        std.ascii.eqlIgnoreCase(base, "crotg.f90") or
-        std.ascii.eqlIgnoreCase(base, "zrotg.f90");
+        std.ascii.eqlIgnoreCase(base, "dznrm2.f90");
 }
 
 fn sourceInList(list: []const []const u8, path: []const u8) bool {
