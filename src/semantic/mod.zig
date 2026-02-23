@@ -950,7 +950,7 @@ test "semantic reports CF3113 for invalid EQUIVALENCE types" {
     try testing.expect(std.mem.eql(u8, diag.code, "CF3113"));
 }
 
-test "semantic rejects EQUIVALENCE with non-leading subscript offsets" {
+test "semantic accepts EQUIVALENCE with constant subscript offsets" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -958,6 +958,26 @@ test "semantic rejects EQUIVALENCE with non-leading subscript offsets" {
         "      SUBROUTINE S\n" ++
         "      INTEGER A(2),B(2)\n" ++
         "      EQUIVALENCE (A(2),B(1))\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+    try testing.expect(takeDiagnostic() == null);
+}
+
+test "semantic reports CF3113 for contradictory EQUIVALENCE offsets" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(2)\n" ++
+        "      EQUIVALENCE (A(1),A(2))\n" ++
         "      END\n";
     const lines = try fixed_form.normalizeFixedForm(allocator, source);
     defer fixed_form.freeLogicalLines(allocator, lines);

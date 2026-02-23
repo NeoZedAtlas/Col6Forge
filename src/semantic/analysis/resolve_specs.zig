@@ -10,6 +10,11 @@ const check_const = @import("check_const.zig");
 const diag = @import("../diagnostic.zig");
 
 const ResolvedRefKind = symbols.ResolvedRefKind;
+const EquivalenceDesignator = struct {
+    name: []const u8,
+    type_kind: ast.TypeKind,
+    byte_offset: i64,
+};
 
 pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {
@@ -100,8 +105,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .equivalence => |eqv| {
             for (eqv.groups) |group| {
-                var root_name: ?[]const u8 = null;
-                var root_type: ?ast.TypeKind = null;
+                var root: ?EquivalenceDesignator = null;
                 for (group.items, 0..) |expr_node, idx| {
                     try expressions.resolveExpr(self, expr_node);
 
@@ -112,26 +116,23 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                         }
                     }
 
-                    const name = try equivalenceDesignatorName(self, expr_node);
-                    const sym_idx = symbols_mod.findSymbolIndex(self, name) orelse return error.InvalidEquivalence;
+                    const designator = try equivalenceDesignator(self, expr_node);
+                    const sym_idx = symbols_mod.findSymbolIndex(self, designator.name) orelse return error.InvalidEquivalence;
                     const sym = self.symbols.items[sym_idx];
                     if (sym.kind == .parameter or sym.kind == .function or sym.is_intrinsic) {
                         return error.InvalidEquivalence;
                     }
 
-                    if (root_type) |base_type| {
-                        if (!equivalenceTypeCompatible(base_type, sym.type_kind)) {
+                    if (root) |base| {
+                        if (!equivalenceTypeCompatible(base.type_kind, designator.type_kind)) {
                             return error.InvalidEquivalence;
                         }
-                    } else {
-                        root_type = sym.type_kind;
-                    }
-
-                    if (root_name) |root| {
-                        const merged = try unionEquivalence(self, root, name);
+                        const relation = subNoOverflow(base.byte_offset, designator.byte_offset) orelse
+                            return error.InvalidEquivalence;
+                        const merged = try unionEquivalence(self, base.name, designator.name, relation);
                         if (!merged) return error.EquivalenceCycle;
                     } else {
-                        root_name = name;
+                        root = designator;
                     }
                 }
             }
@@ -239,14 +240,29 @@ fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.Impl
     }
 }
 
-fn equivalenceDesignatorName(self: *context.Context, expr_node: *ast.Expr) ![]const u8 {
+fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !EquivalenceDesignator {
     switch (expr_node.*) {
-        .identifier => |name| return name,
+        .identifier => |name| {
+            const idx = symbols_mod.findSymbolIndex(self, name) orelse return error.InvalidEquivalence;
+            const sym = self.symbols.items[idx];
+            return .{
+                .name = name,
+                .type_kind = sym.type_kind,
+                .byte_offset = 0,
+            };
+        },
         .substring => |sub| {
             const idx = symbols_mod.findSymbolIndex(self, sub.name) orelse return error.InvalidEquivalence;
             const sym = self.symbols.items[idx];
             if (sym.type_kind != .character) return error.InvalidEquivalence;
-            return sub.name;
+            const base_offset = (try designatorArrayByteOffset(self, sym, sub.args)) orelse return error.InvalidEquivalence;
+            const substring_offset = (try substringStartByteOffset(self, sym, sub.start, sub.end)) orelse return error.InvalidEquivalence;
+            const total_offset = addNoOverflow(base_offset, substring_offset) orelse return error.InvalidEquivalence;
+            return .{
+                .name = sub.name,
+                .type_kind = sym.type_kind,
+                .byte_offset = total_offset,
+            };
         },
         .call_or_subscript => |call| {
             const idx = symbols_mod.findSymbolIndex(self, call.name) orelse return error.InvalidEquivalence;
@@ -254,8 +270,12 @@ fn equivalenceDesignatorName(self: *context.Context, expr_node: *ast.Expr) ![]co
             const kind: ResolvedRefKind = resolvedKindFor(self, expr_node) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
             if (kind != .subscript) return error.InvalidEquivalence;
-            if (!isFirstElementSubscript(call.args)) return error.InvalidEquivalence;
-            return call.name;
+            const byte_offset = (try designatorArrayByteOffset(self, sym, call.args)) orelse return error.InvalidEquivalence;
+            return .{
+                .name = call.name,
+                .type_kind = sym.type_kind,
+                .byte_offset = byte_offset,
+            };
         },
         else => return error.InvalidEquivalence,
     }
@@ -328,22 +348,24 @@ fn optionalEquivalenceExprEqual(a: ?*ast.Expr, b: ?*ast.Expr) bool {
     return equivalenceExprEqual(a.?, b.?);
 }
 
-fn unionEquivalence(self: *context.Context, a_name: []const u8, b_name: []const u8) !bool {
+fn unionEquivalence(self: *context.Context, a_name: []const u8, b_name: []const u8, b_minus_a: i64) !bool {
     const a_idx = try ensureEquivalenceNode(self, a_name);
     const b_idx = try ensureEquivalenceNode(self, b_name);
-    var a_root = findEquivalenceRoot(self, a_idx);
-    var b_root = findEquivalenceRoot(self, b_idx);
-    if (a_root == b_root) return false;
+    const a_root = try findEquivalenceRoot(self, a_idx);
+    const b_root = try findEquivalenceRoot(self, b_idx);
+    const a_to_root = self.equivalence_delta.items[a_idx];
+    const b_to_root = self.equivalence_delta.items[b_idx];
 
-    const a_rank = self.equivalence_rank.items[a_root];
-    const b_rank = self.equivalence_rank.items[b_root];
-    if (a_rank < b_rank) {
-        const tmp = a_root;
-        a_root = b_root;
-        b_root = tmp;
+    if (a_root == b_root) {
+        const current = subNoOverflow(b_to_root, a_to_root) orelse return error.InvalidEquivalence;
+        if (current != b_minus_a) return error.InvalidEquivalence;
+        return false;
     }
+
+    const root_delta = addNoOverflow(subNoOverflow(b_minus_a, b_to_root) orelse return error.InvalidEquivalence, a_to_root) orelse
+        return error.InvalidEquivalence;
     self.equivalence_parent.items[b_root] = a_root;
-    if (a_rank == b_rank) self.equivalence_rank.items[a_root] = a_rank + 1;
+    self.equivalence_delta.items[b_root] = root_delta;
     return true;
 }
 
@@ -351,6 +373,7 @@ fn ensureEquivalenceNode(self: *context.Context, name: []const u8) !usize {
     if (findEquivalenceNode(self, name)) |idx| return idx;
     const idx = self.equivalence_parent.items.len;
     try self.equivalence_parent.append(idx);
+    try self.equivalence_delta.append(0);
     try self.equivalence_rank.append(0);
     const key = try lowerDup(self.arena, name);
     try self.equivalence_nodes.put(key, idx);
@@ -367,10 +390,13 @@ fn findEquivalenceNode(self: *const context.Context, name: []const u8) ?usize {
     return findEquivalenceNodeSlow(self, name);
 }
 
-fn findEquivalenceRoot(self: *context.Context, idx: usize) usize {
+fn findEquivalenceRoot(self: *context.Context, idx: usize) !usize {
     const parent = self.equivalence_parent.items[idx];
     if (parent == idx) return idx;
-    const root = findEquivalenceRoot(self, parent);
+    const root = try findEquivalenceRoot(self, parent);
+    const sum = addNoOverflow(self.equivalence_delta.items[idx], self.equivalence_delta.items[parent]) orelse
+        return error.InvalidEquivalence;
+    self.equivalence_delta.items[idx] = sum;
     self.equivalence_parent.items[idx] = root;
     return root;
 }
@@ -437,21 +463,110 @@ fn rangesOverlap(a_start: u8, a_end: u8, b_start: u8, b_end: u8) bool {
     return !(a_end < b_start or b_end < a_start);
 }
 
-fn isFirstElementSubscript(args: []*ast.Expr) bool {
-    if (args.len == 0) return false;
-    for (args) |arg| {
-        switch (arg.*) {
-            .literal => |lit| {
-                if (lit.kind != .integer) return false;
-                if (!isIntegerOne(lit.text)) return false;
-            },
-            else => return false,
-        }
+fn designatorArrayByteOffset(self: *context.Context, sym: symbols.Symbol, args: []*ast.Expr) !?i64 {
+    if (sym.dims.len == 0) {
+        if (args.len != 0) return null;
+        return 0;
     }
-    return true;
+    const linear = (try linearSubscriptOffset(self, sym, args)) orelse return null;
+    const elem_size = symbolElemByteSize(sym) orelse return null;
+    return mulNoOverflow(linear, elem_size);
 }
 
-fn isIntegerOne(text: []const u8) bool {
-    const trimmed = std.mem.trim(u8, text, " \t");
-    return std.mem.eql(u8, trimmed, "1");
+fn substringStartByteOffset(
+    self: *context.Context,
+    sym: symbols.Symbol,
+    start_expr: ?*ast.Expr,
+    end_expr: ?*ast.Expr,
+) !?i64 {
+    if (sym.type_kind != .character) return null;
+    const char_len_i64: i64 = @intCast(sym.char_len orelse 1);
+    const start = if (start_expr) |expr| (try constIntegerValue(self, expr)) orelse return null else 1;
+    const end = if (end_expr) |expr| (try constIntegerValue(self, expr)) orelse return null else char_len_i64;
+    if (start < 1 or end < start or end > char_len_i64) return null;
+    return start - 1;
+}
+
+fn linearSubscriptOffset(self: *context.Context, sym: symbols.Symbol, args: []*ast.Expr) !?i64 {
+    if (args.len == 0) return null;
+    if (args.len != sym.dims.len) return null;
+
+    var offset: i64 = 0;
+    var stride: i64 = 1;
+    var idx: usize = 0;
+    while (idx < args.len) : (idx += 1) {
+        const index_value = (try constIntegerValue(self, args[idx])) orelse return null;
+        const lower = (try dimensionLowerBound(self, sym.dims[idx])) orelse return null;
+        const extent = (try dimensionExtent(self, sym.dims[idx])) orelse return null;
+        if (extent <= 0) return null;
+
+        const relative = subNoOverflow(index_value, lower) orelse return null;
+        if (relative < 0 or relative >= extent) return null;
+        const step = mulNoOverflow(relative, stride) orelse return null;
+        offset = addNoOverflow(offset, step) orelse return null;
+
+        if (idx + 1 < args.len) {
+            stride = mulNoOverflow(stride, extent) orelse return null;
+        }
+    }
+    return offset;
+}
+
+fn dimensionExtent(self: *context.Context, dim: *ast.Expr) !?i64 {
+    if (dim.* == .dim_range) {
+        const range = dim.dim_range;
+        if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return null;
+        const upper = (try constIntegerValue(self, range.upper)) orelse return null;
+        const lower = if (range.lower) |lower_expr| (try constIntegerValue(self, lower_expr)) orelse return null else 1;
+        const extent = subNoOverflow(upper, lower) orelse return null;
+        return addNoOverflow(extent, 1) orelse null;
+    }
+    return try constIntegerValue(self, dim);
+}
+
+fn dimensionLowerBound(self: *context.Context, dim: *ast.Expr) !?i64 {
+    if (dim.* == .dim_range) {
+        const range = dim.dim_range;
+        if (range.lower) |lower_expr| return try constIntegerValue(self, lower_expr);
+        return 1;
+    }
+    return 1;
+}
+
+fn constIntegerValue(self: *context.Context, expr: *ast.Expr) !?i64 {
+    const folded = (try constants.evalConst(self, expr)) orelse return null;
+    return switch (folded) {
+        .integer => |value| value,
+        else => null,
+    };
+}
+
+fn symbolElemByteSize(sym: symbols.Symbol) ?i64 {
+    return switch (sym.type_kind) {
+        .integer => 4,
+        .real => 4,
+        .double_precision => 8,
+        .complex => 8,
+        .complex_double => 16,
+        .logical => 1,
+        .character => @intCast(sym.char_len orelse 1),
+    };
+}
+
+fn addNoOverflow(a: i64, b: i64) ?i64 {
+    const result = @addWithOverflow(a, b);
+    if (result[1] != 0) return null;
+    return result[0];
+}
+
+fn subNoOverflow(a: i64, b: i64) ?i64 {
+    const result = @subWithOverflow(a, b);
+    if (result[1] != 0) return null;
+    return result[0];
+}
+
+fn mulNoOverflow(a: i64, b: i64) ?i64 {
+    const result = @mulWithOverflow(a, b);
+    if (result[1] != 0) return null;
+    return result[0];
 }
