@@ -20,11 +20,9 @@ pub fn checkStmt(self: *context.Context, stmt: ast.Stmt) CheckError!void {
 pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void {
     switch (node) {
         .assignment => |assign| {
-            try checkExpr(self, assign.target);
-            try checkExpr(self, assign.value);
+            const target_ty = try checkExprType(self, assign.target);
+            const value_ty = try checkExprType(self, assign.value);
             if (!isAssignmentTarget(self, assign.target)) return error.AssignmentTypeMismatch;
-            const target_ty = try resolve_expr.exprType(self, assign.target);
-            const value_ty = try resolve_expr.exprType(self, assign.value);
             if (!isAssignmentCompatible(target_ty, value_ty)) return error.AssignmentTypeMismatch;
         },
         .call => |call| {
@@ -139,41 +137,46 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
 }
 
 fn checkExpr(self: *context.Context, expr: *ast.Expr) CheckError!void {
+    _ = try checkExprType(self, expr);
+}
+
+fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKind {
     switch (expr.*) {
-        .identifier, .literal => {},
-        .unary => |un| try checkExpr(self, un.expr),
+        .identifier, .literal => return try resolve_expr.exprType(self, expr),
+        .unary => |un| {
+            _ = try checkExprType(self, un.expr);
+            return try resolve_expr.exprType(self, expr);
+        },
         .binary => |bin| {
-            try checkExpr(self, bin.left);
-            try checkExpr(self, bin.right);
+            _ = try checkExprType(self, bin.left);
+            _ = try checkExprType(self, bin.right);
+            return try resolve_expr.exprType(self, expr);
         },
         .complex_literal => |lit| {
-            try checkExpr(self, lit.real);
-            try checkExpr(self, lit.imag);
+            _ = try checkExprType(self, lit.real);
+            _ = try checkExprType(self, lit.imag);
+            return try resolve_expr.exprType(self, expr);
         },
         .dim_range => |range| {
             if (range.lower) |lower| {
-                try checkExpr(self, lower);
-                const lower_ty = try resolve_expr.exprType(self, lower);
+                const lower_ty = try checkExprType(self, lower);
                 if (!isIntegerLike(lower_ty)) return error.InvalidSubscript;
             }
-            try checkExpr(self, range.upper);
-            const upper_ty = try resolve_expr.exprType(self, range.upper);
+            const upper_ty = try checkExprType(self, range.upper);
             if (!isIntegerLike(upper_ty)) return error.InvalidSubscript;
+            return .integer;
         },
         .substring => |sub| {
-            for (sub.args) |arg| try checkExpr(self, arg);
+            for (sub.args) |arg| _ = try checkExprType(self, arg);
             if (sub.start) |start| {
-                try checkExpr(self, start);
-                if (!isIntegerLike(try resolve_expr.exprType(self, start))) return error.InvalidSubscript;
+                if (!isIntegerLike(try checkExprType(self, start))) return error.InvalidSubscript;
             }
             if (sub.end) |end_expr| {
-                try checkExpr(self, end_expr);
-                if (!isIntegerLike(try resolve_expr.exprType(self, end_expr))) return error.InvalidSubscript;
+                if (!isIntegerLike(try checkExprType(self, end_expr))) return error.InvalidSubscript;
             }
+            return .character;
         },
         .call_or_subscript => |call| {
-            for (call.args) |arg| try checkExpr(self, arg);
-
             const idx = resolve_symbols.findSymbolIndex(self, call.name) orelse return error.MissingScope;
             const sym = self.symbols.items[idx];
             const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
@@ -182,23 +185,27 @@ fn checkExpr(self: *context.Context, expr: *ast.Expr) CheckError!void {
                 if (sym.dims.len == 0) return error.InvalidSubscript;
                 if (call.args.len != sym.dims.len) return error.InvalidSubscript;
                 for (call.args) |arg| {
-                    const arg_ty = try resolve_expr.exprType(self, arg);
+                    const arg_ty = try checkExprType(self, arg);
                     if (!isIntegerLike(arg_ty)) return error.InvalidSubscript;
                 }
             } else {
+                for (call.args) |arg| _ = try checkExprType(self, arg);
                 try checkKnownProcedureCallArity(self, call.name, call.args.len, false);
             }
+            return sym.type_kind;
         },
         .implied_do => |implied| {
-            try checkExpr(self, implied.start);
-            try checkExpr(self, implied.end);
-            if (implied.step) |step| try checkExpr(self, step);
-            for (implied.items) |item| try checkExpr(self, item);
+            _ = try checkExprType(self, implied.start);
+            _ = try checkExprType(self, implied.end);
+            if (implied.step) |step| _ = try checkExprType(self, step);
+            for (implied.items) |item| _ = try checkExprType(self, item);
+            return .integer;
         },
     }
 }
 
 fn resolvedKindFor(self: *const context.Context, expr: *ast.Expr) ?ResolvedRefKind {
+    if (self.ref_kind_index.get(@intFromPtr(expr))) |kind| return kind;
     for (self.refs.items) |ref| {
         if (ref.expr == expr) return ref.kind;
     }
@@ -308,10 +315,12 @@ fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Co
         for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
         if (self.known_procedure_sigs.get(key_buf[0..name.len])) |sig| return sig;
     }
-    // Compatibility fallback for oversized names or non-normalized preexisting keys.
-    var it = self.known_procedure_sigs.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
-    }
-    return null;
+    const key = lowerDup(self.arena, name) catch return null;
+    return self.known_procedure_sigs.get(key);
+}
+
+fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const out = try allocator.alloc(u8, text.len);
+    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
+    return out;
 }

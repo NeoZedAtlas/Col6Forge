@@ -397,19 +397,23 @@ fn bindBuiltinUseImport(
 }
 
 fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
-    var it = self.known_function_types.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+    var key_buf: [128]u8 = undefined;
+    if (name.len <= key_buf.len) {
+        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+        return self.known_function_types.get(key_buf[0..name.len]);
     }
-    return null;
+    const key = lowerDup(self.arena, name) catch return null;
+    return self.known_function_types.get(key);
 }
 
 fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
-    var it = self.known_procedure_sigs.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+    var key_buf: [128]u8 = undefined;
+    if (name.len <= key_buf.len) {
+        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+        return self.known_procedure_sigs.get(key_buf[0..name.len]);
     }
-    return null;
+    const key = lowerDup(self.arena, name) catch return null;
+    return self.known_procedure_sigs.get(key);
 }
 
 fn startsWithNoCase(text: []const u8, prefix: []const u8) bool {
@@ -471,4 +475,10 @@ fn isIdentStart(ch: u8) bool {
 
 fn isIdentChar(ch: u8) bool {
     return isIdentStart(ch) or (ch >= '0' and ch <= '9') or ch == '_';
+}
+
+fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const out = try allocator.alloc(u8, text.len);
+    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
+    return out;
 }

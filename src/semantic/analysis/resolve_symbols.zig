@@ -179,13 +179,13 @@ pub fn findSymbolIndex(self: *context.Context, name: []const u8) ?usize {
 }
 
 fn findKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
-    var it = self.known_function_types.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
-            return entry.value_ptr.*;
-        }
+    var key_buf: [128]u8 = undefined;
+    if (name.len <= key_buf.len) {
+        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+        return self.known_function_types.get(key_buf[0..name.len]);
     }
-    return null;
+    const key = lowerDup(self.arena, name) catch return null;
+    return self.known_function_types.get(key);
 }
 
 const ImplicitInfo = struct {
@@ -257,10 +257,6 @@ fn findKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Cont
         for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
         if (self.known_procedure_sigs.get(key_buf[0..name.len])) |sig| return sig;
     }
-    // Compatibility fallback for oversized names or non-normalized preexisting keys.
-    var it = self.known_procedure_sigs.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
-    }
-    return null;
+    const key = lowerDup(self.arena, name) catch return null;
+    return self.known_procedure_sigs.get(key);
 }

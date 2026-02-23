@@ -70,7 +70,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     if (arg_ty != .integer) return error.InvalidSubscript;
                 }
             }
-            try self.refs.append(.{ .expr = expr, .name = call.name, .kind = kind });
+            try recordResolvedRef(self, expr, call.name, kind);
         },
         .substring => |sub| {
             const idx = try symbols_mod.ensureSymbol(self, sub.name);
@@ -371,4 +371,14 @@ fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
 
 fn invalidateExprTypeCache(self: *context.Context, expr: *ast.Expr) void {
     _ = self.expr_type_cache.remove(@intFromPtr(expr));
+}
+
+fn recordResolvedRef(
+    self: *context.Context,
+    expr: *ast.Expr,
+    name: []const u8,
+    kind: ResolvedRefKind,
+) !void {
+    try self.refs.append(.{ .expr = expr, .name = name, .kind = kind });
+    try self.ref_kind_index.put(@intFromPtr(expr), kind);
 }

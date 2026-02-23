@@ -52,7 +52,8 @@ pub fn analyzeProgramWithKnown(
     var host_symbols_active = false;
     var active_host_owner: ?[]const u8 = null;
     for (known_fn_types) |known| {
-        try known_function_types.put(known.name, known.type_kind);
+        const key = try lowerDup(arena, known.name);
+        try known_function_types.put(key, known.type_kind);
     }
     for (known_proc_sigs) |known| {
         const key = try lowerDup(arena, known.name);
@@ -64,7 +65,8 @@ pub fn analyzeProgramWithKnown(
 
     for (mutable_program.units) |unit| {
         if (unit.kind == .function) {
-            try known_function_types.put(unit.name, inferFunctionType(unit));
+            const key = try lowerDup(arena, unit.name);
+            try known_function_types.put(key, inferFunctionType(unit));
         }
         if (unit.kind == .function or unit.kind == .subroutine) {
             const key = try lowerDup(arena, unit.name);

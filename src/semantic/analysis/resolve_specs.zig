@@ -282,6 +282,7 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
 }
 
 fn resolvedKindFor(self: *const context.Context, expr_node: *ast.Expr) ?ResolvedRefKind {
+    if (self.ref_kind_index.get(@intFromPtr(expr_node))) |kind| return kind;
     for (self.refs.items) |ref| {
         if (ref.expr == expr_node) return ref.kind;
     }
