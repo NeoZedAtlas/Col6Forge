@@ -13,6 +13,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
     switch (expr.*) {
         .identifier => |name| {
             const idx = try symbols_mod.ensureSymbol(self, name);
+            try self.ref_symbol_index.put(@intFromPtr(expr), idx);
             try cacheExprType(self, expr, self.symbols.items[idx].type_kind);
         },
         .call_or_subscript => |call| {
@@ -76,6 +77,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         },
         .substring => |sub| {
             const idx = try symbols_mod.ensureSymbol(self, sub.name);
+            try self.ref_symbol_index.put(@intFromPtr(expr), idx);
             const sym = self.symbols.items[idx];
             // Disambiguate `A(1:N)` style array sections from character substring syntax.
             // If the base symbol is non-character and parser produced a bare substring node,
@@ -170,10 +172,16 @@ fn exprTypeCached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.Type
 fn exprTypeUncached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
     switch (expr.*) {
         .identifier => |name| {
+            if (self.ref_symbol_index.get(@intFromPtr(expr))) |idx| {
+                return self.symbols.items[idx].type_kind;
+            }
             const idx = try symbols_mod.ensureSymbol(self, name);
             return self.symbols.items[idx].type_kind;
         },
         .call_or_subscript => |call| {
+            if (self.ref_symbol_index.get(@intFromPtr(expr))) |idx| {
+                return self.symbols.items[idx].type_kind;
+            }
             const idx = try symbols_mod.ensureSymbol(self, call.name);
             return self.symbols.items[idx].type_kind;
         },

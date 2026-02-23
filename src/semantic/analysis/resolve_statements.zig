@@ -294,11 +294,13 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
 fn installUseImports(self: *context.Context, text: []const u8) ResolveError!void {
     const trimmed = std.mem.trim(u8, text, " \t");
     if (trimmed.len == 0) return;
-    if (!startsWithNoCase(trimmed, "use")) return;
+    var lower_buf: [512]u8 = undefined;
+    const lowered = try lowercaseView(self.arena, trimmed, &lower_buf);
+    if (!std.mem.startsWith(u8, lowered, "use")) return;
 
-    const module_name = parseUseModuleName(trimmed) orelse "";
+    const module_name = parseUseModuleName(trimmed, lowered) orelse "";
     const may_have_builtin_consts = isIsoFortranEnvModule(module_name);
-    const only_idx = indexOfNoCase(trimmed, "only:") orelse return;
+    const only_idx = std.mem.indexOf(u8, lowered, "only:") orelse return;
     const only_clause = trimmed[only_idx + "only:".len ..];
 
     var parts = std.mem.splitScalar(u8, only_clause, ',');
@@ -343,26 +345,29 @@ fn parseUseOnlyItem(part: []const u8) ?UseOnlyItem {
     return .{ .local_name = name, .remote_name = name };
 }
 
-fn parseUseModuleName(trimmed: []const u8) ?[]const u8 {
-    if (!startsWithNoCase(trimmed, "use")) return null;
-    var rest = std.mem.trimLeft(u8, trimmed["use".len..], " \t");
-    if (rest.len == 0) return null;
+fn parseUseModuleName(trimmed: []const u8, lowered: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, lowered, "use")) return null;
+    var offset: usize = "use".len;
+    while (offset < trimmed.len and (trimmed[offset] == ' ' or trimmed[offset] == '\t')) : (offset += 1) {}
+    if (offset == trimmed.len) return null;
 
-    if (startsWithNoCase(rest, "::")) {
-        rest = std.mem.trimLeft(u8, rest[2..], " \t");
-    } else if (rest[0] == ',') {
-        const dcolon = indexOfNoCase(rest, "::") orelse return null;
-        rest = std.mem.trimLeft(u8, rest[dcolon + 2 ..], " \t");
+    if (std.mem.startsWith(u8, lowered[offset..], "::")) {
+        offset += 2;
+        while (offset < trimmed.len and (trimmed[offset] == ' ' or trimmed[offset] == '\t')) : (offset += 1) {}
+    } else if (trimmed[offset] == ',') {
+        const rel = std.mem.indexOf(u8, lowered[offset..], "::") orelse return null;
+        offset += rel + 2;
+        while (offset < trimmed.len and (trimmed[offset] == ' ' or trimmed[offset] == '\t')) : (offset += 1) {}
     }
 
-    if (rest.len == 0) return null;
-    var end: usize = 0;
-    while (end < rest.len) : (end += 1) {
-        const ch = rest[end];
+    if (offset == trimmed.len) return null;
+    var end = offset;
+    while (end < trimmed.len) : (end += 1) {
+        const ch = trimmed[end];
         if (ch == ',' or ch == ' ' or ch == '\t') break;
     }
-    if (end == 0) return null;
-    return rest[0..end];
+    if (end == offset) return null;
+    return trimmed[offset..end];
 }
 
 fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_name: []const u8) ResolveError!void {
@@ -409,15 +414,6 @@ fn bindBuiltinUseImport(
     sym.storage = .local;
     sym.const_value = builtin.value;
     sym.type_explicit = true;
-}
-
-fn startsWithNoCase(text: []const u8, prefix: []const u8) bool {
-    if (text.len < prefix.len) return false;
-    var i: usize = 0;
-    while (i < prefix.len) : (i += 1) {
-        if (std.ascii.toLower(text[i]) != std.ascii.toLower(prefix[i])) return false;
-    }
-    return true;
 }
 
 fn indexOfNoCase(text: []const u8, needle: []const u8) ?usize {
@@ -473,4 +469,14 @@ fn isIdentStart(ch: u8) bool {
 
 fn isIdentChar(ch: u8) bool {
     return isIdentStart(ch) or (ch >= '0' and ch <= '9') or ch == '_';
+}
+
+fn lowercaseView(arena: std.mem.Allocator, text: []const u8, stack_buf: []u8) ![]const u8 {
+    if (text.len <= stack_buf.len) {
+        for (text, 0..) |ch, i| stack_buf[i] = std.ascii.toLower(ch);
+        return stack_buf[0..text.len];
+    }
+    const owned = try arena.alloc(u8, text.len);
+    for (text, 0..) |ch, i| owned[i] = std.ascii.toLower(ch);
+    return owned;
 }

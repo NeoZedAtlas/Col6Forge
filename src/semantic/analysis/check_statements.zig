@@ -26,7 +26,8 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             if (!isAssignmentCompatible(target_ty, value_ty)) return error.AssignmentTypeMismatch;
         },
         .call => |call| {
-            try checkKnownProcedureCallArity(self, call.name, countCallExprArgs(call.args), true);
+            const call_idx = resolve_symbols.findSymbolIndex(self, call.name);
+            try checkKnownProcedureCallArity(self, call.name, countCallExprArgs(call.args), true, call_idx);
             for (call.args) |arg| {
                 switch (arg) {
                     .expr => |expr_node| try checkExpr(self, expr_node),
@@ -66,8 +67,8 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             for (inq.controls) |ctrl| try checkExpr(self, ctrl.value);
         },
         .close => |cls| {
-            for (cls.controls) |ctrl| try checkExpr(self, ctrl.value);
             for (cls.controls) |ctrl| {
+                try checkExpr(self, ctrl.value);
                 if (ctrl.name) |name| {
                     if (std.ascii.eqlIgnoreCase(name, "STATUS")) {
                         try checkCharControlExpr(self, ctrl.value);
@@ -188,7 +189,7 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                 }
             } else {
                 for (call.args) |arg| _ = try checkExprType(self, arg);
-                try checkKnownProcedureCallArity(self, call.name, call.args.len, false);
+                try checkKnownProcedureCallArity(self, call.name, call.args.len, false, idx);
             }
             return sym.type_kind;
         },
@@ -251,8 +252,14 @@ fn countCallExprArgs(args: []ast.CallArg) usize {
     return count;
 }
 
-fn checkKnownProcedureCallArity(self: *context.Context, name: []const u8, got: usize, is_call_stmt: bool) CheckError!void {
-    if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
+fn checkKnownProcedureCallArity(
+    self: *context.Context,
+    name: []const u8,
+    got: usize,
+    is_call_stmt: bool,
+    symbol_idx: ?usize,
+) CheckError!void {
+    if (symbol_idx orelse resolve_symbols.findSymbolIndex(self, name)) |idx| {
         const sym = self.symbols.items[idx];
         // Dummy procedure arguments (e.g. callback `fcn`) are context-dependent and
         // must not be constrained by global cross-file signature hints.

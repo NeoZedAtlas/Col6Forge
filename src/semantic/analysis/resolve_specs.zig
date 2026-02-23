@@ -17,6 +17,11 @@ const EquivalenceDesignator = struct {
     byte_offset: i64,
 };
 
+const EquivalenceDesignatorKey = struct {
+    symbol_idx: usize,
+    byte_offset: i64,
+};
+
 pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {
         .implicit => |imp| {
@@ -107,21 +112,21 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         .equivalence => |eqv| {
             for (eqv.groups) |group| {
                 var root: ?EquivalenceDesignator = null;
-                for (group.items, 0..) |expr_node, idx| {
+                var seen = std.AutoHashMap(EquivalenceDesignatorKey, void).init(self.arena);
+                for (group.items) |expr_node| {
                     try expressions.resolveExpr(self, expr_node);
-
-                    var prev_i: usize = 0;
-                    while (prev_i < idx) : (prev_i += 1) {
-                        if (equivalenceExprEqual(group.items[prev_i], expr_node)) {
-                            return error.InvalidEquivalence;
-                        }
-                    }
 
                     const designator = try equivalenceDesignator(self, expr_node);
                     const sym = self.symbols.items[designator.symbol_idx];
                     if (sym.kind == .parameter or sym.kind == .function or sym.is_intrinsic) {
                         return error.InvalidEquivalence;
                     }
+                    const designator_key = EquivalenceDesignatorKey{
+                        .symbol_idx = designator.symbol_idx,
+                        .byte_offset = designator.byte_offset,
+                    };
+                    if (seen.contains(designator_key)) return error.InvalidEquivalence;
+                    try seen.put(designator_key, {});
 
                     if (root) |base| {
                         if (!equivalenceTypeCompatible(base.type_kind, designator.type_kind)) {
@@ -243,7 +248,8 @@ fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.Impl
 fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !EquivalenceDesignator {
     switch (expr_node.*) {
         .identifier => |name| {
-            const idx = symbols_mod.findSymbolIndex(self, name) orelse return error.InvalidEquivalence;
+            const idx = symbolIndexForResolvedExpr(self, expr_node) orelse
+                (symbols_mod.findSymbolIndex(self, name) orelse return error.InvalidEquivalence);
             const sym = self.symbols.items[idx];
             return .{
                 .name = name,
@@ -253,7 +259,8 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
             };
         },
         .substring => |sub| {
-            const idx = symbols_mod.findSymbolIndex(self, sub.name) orelse return error.InvalidEquivalence;
+            const idx = symbolIndexForResolvedExpr(self, expr_node) orelse
+                (symbols_mod.findSymbolIndex(self, sub.name) orelse return error.InvalidEquivalence);
             const sym = self.symbols.items[idx];
             if (sym.type_kind != .character) return error.InvalidEquivalence;
             const base_offset = (try designatorArrayByteOffset(self, sym, sub.args)) orelse return error.InvalidEquivalence;
@@ -267,7 +274,8 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
             };
         },
         .call_or_subscript => |call| {
-            const idx = symbols_mod.findSymbolIndex(self, call.name) orelse return error.InvalidEquivalence;
+            const idx = symbolIndexForResolvedExpr(self, expr_node) orelse
+                (symbols_mod.findSymbolIndex(self, call.name) orelse return error.InvalidEquivalence);
             const sym = self.symbols.items[idx];
             const kind: ResolvedRefKind = resolvedKindFor(self, expr_node) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
@@ -288,6 +296,10 @@ fn resolvedKindFor(self: *const context.Context, expr_node: *ast.Expr) ?Resolved
     return self.ref_kind_index.get(@intFromPtr(expr_node));
 }
 
+fn symbolIndexForResolvedExpr(self: *const context.Context, expr_node: *ast.Expr) ?usize {
+    return self.ref_symbol_index.get(@intFromPtr(expr_node));
+}
+
 fn equivalenceTypeCompatible(a: ast.TypeKind, b: ast.TypeKind) bool {
     if (a == b) return true;
     if (isNumeric(a) and isNumeric(b)) return true;
@@ -299,53 +311,6 @@ fn isNumeric(kind: ast.TypeKind) bool {
         .integer, .real, .double_precision, .complex, .complex_double => true,
         else => false,
     };
-}
-
-fn equivalenceExprEqual(a: *ast.Expr, b: *ast.Expr) bool {
-    if (a == b) return true;
-    return switch (a.*) {
-        .identifier => |name_a| switch (b.*) {
-            .identifier => |name_b| std.ascii.eqlIgnoreCase(name_a, name_b),
-            else => false,
-        },
-        .substring => |sub_a| switch (b.*) {
-            .substring => |sub_b| blk: {
-                if (!std.ascii.eqlIgnoreCase(sub_a.name, sub_b.name)) break :blk false;
-                if (sub_a.args.len != sub_b.args.len) break :blk false;
-                var i: usize = 0;
-                while (i < sub_a.args.len) : (i += 1) {
-                    if (!equivalenceExprEqual(sub_a.args[i], sub_b.args[i])) break :blk false;
-                }
-                if (!optionalEquivalenceExprEqual(sub_a.start, sub_b.start)) break :blk false;
-                if (!optionalEquivalenceExprEqual(sub_a.end, sub_b.end)) break :blk false;
-                break :blk true;
-            },
-            else => false,
-        },
-        .call_or_subscript => |call_a| switch (b.*) {
-            .call_or_subscript => |call_b| blk: {
-                if (!std.ascii.eqlIgnoreCase(call_a.name, call_b.name)) break :blk false;
-                if (call_a.args.len != call_b.args.len) break :blk false;
-                var i: usize = 0;
-                while (i < call_a.args.len) : (i += 1) {
-                    if (!equivalenceExprEqual(call_a.args[i], call_b.args[i])) break :blk false;
-                }
-                break :blk true;
-            },
-            else => false,
-        },
-        .literal => |lit_a| switch (b.*) {
-            .literal => |lit_b| lit_a.kind == lit_b.kind and std.mem.eql(u8, lit_a.text, lit_b.text),
-            else => false,
-        },
-        else => false,
-    };
-}
-
-fn optionalEquivalenceExprEqual(a: ?*ast.Expr, b: ?*ast.Expr) bool {
-    if (a == null and b == null) return true;
-    if (a == null or b == null) return false;
-    return equivalenceExprEqual(a.?, b.?);
 }
 
 fn unionEquivalence(self: *context.Context, a_name: []const u8, b_name: []const u8, b_minus_a: i64) !bool {
