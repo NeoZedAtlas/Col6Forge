@@ -170,18 +170,37 @@ pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
     const idx = self.symbols.items.len;
     try self.symbols.append(symbol);
     try self.scopes.items[scope_id.index].symbols.put(key, idx);
+    self.invalidateSymbolLookupCache();
     return idx;
 }
 
 pub fn findSymbolIndex(self: *context.Context, name: []const u8) ?usize {
+    const current_scope = self.current_scope orelse return null;
+    if (self.symbol_lookup_cache_scope == null or self.symbol_lookup_cache_scope.?.index != current_scope.index) {
+        self.symbol_lookup_cache_scope = current_scope;
+        self.symbol_lookup_cache.clearRetainingCapacity();
+    }
+
     var key_buf: [512]u8 = undefined;
+    var key_owned: ?[]const u8 = null;
     const key: []const u8 = blk: {
         if (name.len <= key_buf.len) {
             for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
             break :blk key_buf[0..name.len];
         }
-        break :blk (lowerDup(self.arena, name) catch return null);
+        const owned = lowerDup(self.arena, name) catch return null;
+        key_owned = owned;
+        break :blk owned;
     };
+    if (self.symbol_lookup_cache.get(key)) |cached| return cached;
+
+    const resolved = findSymbolIndexNoCache(self, key);
+    const cache_key = key_owned orelse (lowerDup(self.arena, name) catch return resolved);
+    self.symbol_lookup_cache.put(cache_key, resolved) catch {};
+    return resolved;
+}
+
+fn findSymbolIndexNoCache(self: *context.Context, key: []const u8) ?usize {
     var scope_id = self.current_scope;
     while (scope_id) |id| {
         if (self.scopes.items[id.index].symbols.get(key)) |idx| return idx;

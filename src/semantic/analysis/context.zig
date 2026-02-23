@@ -23,6 +23,8 @@ pub const Context = struct {
     implicit: std.array_list.Managed(symbols.ImplicitRule),
     refs: std.array_list.Managed(symbols.ResolvedRef),
     ref_kind_index: std.AutoHashMap(usize, symbols.ResolvedRefKind),
+    symbol_lookup_cache: std.StringHashMap(?usize),
+    symbol_lookup_cache_scope: ?scope.ScopeId,
     builtin_constants: std.StringHashMap(BuiltinConstant),
     const_eval_cache: std.AutoHashMap(usize, symbols.ConstValue),
     expr_type_cache: std.AutoHashMap(usize, ast.TypeKind),
@@ -64,6 +66,8 @@ pub const Context = struct {
             .implicit = std.array_list.Managed(symbols.ImplicitRule).init(arena),
             .refs = std.array_list.Managed(symbols.ResolvedRef).init(arena),
             .ref_kind_index = std.AutoHashMap(usize, symbols.ResolvedRefKind).init(arena),
+            .symbol_lookup_cache = std.StringHashMap(?usize).init(arena),
+            .symbol_lookup_cache_scope = null,
             .builtin_constants = std.StringHashMap(BuiltinConstant).init(arena),
             .const_eval_cache = std.AutoHashMap(usize, symbols.ConstValue).init(arena),
             .expr_type_cache = std.AutoHashMap(usize, ast.TypeKind).init(arena),
@@ -111,6 +115,7 @@ pub const Context = struct {
             .owner_kind = null,
         });
         self.current_scope = id;
+        self.invalidateSymbolLookupCache();
         self.updateCurrentOwner();
     }
 
@@ -135,6 +140,7 @@ pub const Context = struct {
             .owner_kind = owner_kind,
         });
         self.current_scope = id;
+        self.invalidateSymbolLookupCache();
         self.updateCurrentOwner();
         return id;
     }
@@ -143,11 +149,13 @@ pub const Context = struct {
         if (self.current_scope == null) return;
         const current = self.scopes.items[self.current_scope.?.index];
         self.current_scope = current.parent;
+        self.invalidateSymbolLookupCache();
         self.updateCurrentOwner();
     }
 
     pub fn setCurrentScope(self: *Context, id: scope.ScopeId) void {
         self.current_scope = id;
+        self.invalidateSymbolLookupCache();
         self.updateCurrentOwner();
     }
 
@@ -191,5 +199,10 @@ pub const Context = struct {
 
     pub fn clearCurrentStmt(self: *Context) void {
         self.current_stmt = null;
+    }
+
+    pub fn invalidateSymbolLookupCache(self: *Context) void {
+        self.symbol_lookup_cache_scope = null;
+        self.symbol_lookup_cache.clearRetainingCapacity();
     }
 };

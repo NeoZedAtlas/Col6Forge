@@ -1110,6 +1110,26 @@ test "semantic reports CF3116 for conflicting DIMENSION redeclaration" {
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
 }
 
+test "semantic reuses implicit symbol across repeated references" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      X=1\n" ++
+        "      X=X+1\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+    try testing.expect(takeDiagnostic() == null);
+}
+
 test "semantic accepts deferred CHARACTER length for dummy argument" {
     const testing = std.testing;
     const allocator = testing.allocator;
