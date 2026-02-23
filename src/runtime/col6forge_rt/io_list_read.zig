@@ -1,4 +1,3 @@
-const COL6FORGE_MAX_UNITS = 256;
 const COL6FORGE_FILENAME_MAX = 4096;
 
 const FILE = opaque {};
@@ -12,13 +11,13 @@ extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
 extern fn strtod(nptr: [*:0]const u8, endptr: ?*?[*:0]u8) f64;
 extern fn exit(status: c_int) noreturn;
 
-extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
-
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn col6forge_rt_stdin() ?*FILE;
 extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
+extern fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) c_int;
+extern fn col6forge_unit_pos_set(unit: c_int, pos: c_long) void;
 
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
@@ -102,11 +101,10 @@ fn col6forgeOpenListInput(unit: c_int, is_stdin: *bool) ?*FILE {
     var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     unit_filename(unit, &name, name.len);
     const file = fopen(asConstCStr(&name), "r") orelse return null;
-    if (unit >= 0 and unit < COL6FORGE_MAX_UNITS) {
-        const idx: usize = @intCast(unit);
-        if (unit_pos[idx] != 0) {
-            _ = fseek(file, unit_pos[idx], 0);
-        }
+    var pos: c_long = 0;
+    _ = col6forge_unit_pos_get(unit, &pos);
+    if (pos != 0) {
+        _ = fseek(file, pos, 0);
     }
     return file;
 }
@@ -114,9 +112,7 @@ fn col6forgeOpenListInput(unit: c_int, is_stdin: *bool) ?*FILE {
 fn col6forgeCloseListInput(unit: c_int, is_stdin: bool, file: ?*FILE) void {
     if (file == null or is_stdin) return;
     const stream = file.?;
-    if (unit >= 0 and unit < COL6FORGE_MAX_UNITS) {
-        unit_pos[@as(usize, @intCast(unit))] = ftell(stream);
-    }
+    col6forge_unit_pos_set(unit, ftell(stream));
     _ = fclose(stream);
 }
 

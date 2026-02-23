@@ -1,4 +1,3 @@
-const COL6FORGE_MAX_UNITS = 256;
 const COL6FORGE_FILENAME_MAX = 4096;
 
 const FILE = opaque {};
@@ -9,11 +8,11 @@ extern fn ftell(stream: *FILE) c_long;
 extern fn fwrite(ptr: ?*const anyopaque, size: usize, nmemb: usize, stream: *FILE) usize;
 extern fn fflush(stream: *FILE) c_int;
 
-extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
-
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn col6forge_rt_stdout() ?*FILE;
 extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
+extern fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) c_int;
+extern fn col6forge_unit_pos_set(unit: c_int, pos: c_long) void;
 
 fn cstrlen(text: [*:0]const u8) usize {
     var i: usize = 0;
@@ -42,16 +41,14 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
         return 0;
     }
 
-    const has_pos_slot = unit >= 0 and unit < COL6FORGE_MAX_UNITS;
-    const idx: usize = if (has_pos_slot) @intCast(unit) else 0;
     var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     unit_filename(unit, &name, name.len);
 
+    var pos: c_long = 0;
+    _ = col6forge_unit_pos_get(unit, &pos);
     var file: ?*FILE = null;
-    if (has_pos_slot and unit_pos[idx] == 0) {
+    if (pos == 0) {
         file = fopen(asConstCStr(&name), "w");
-    } else if (!has_pos_slot) {
-        file = fopen(asConstCStr(&name), "ab");
     } else {
         file = fopen(asConstCStr(&name), "r+");
         if (file == null) {
@@ -62,14 +59,14 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
     const stream = file.?;
     defer _ = fclose(stream);
 
-    if (has_pos_slot and unit_pos[idx] != 0) {
-        _ = fseek(stream, unit_pos[idx], 0);
+    if (pos != 0) {
+        _ = fseek(stream, pos, 0);
     }
     _ = fwrite(@ptrCast(src), 1, src_len, stream);
     if (src_len == 0 or src[src_len - 1] != '\n') {
         const nl: [1]u8 = .{'\n'};
         _ = fwrite(@ptrCast(&nl), 1, 1, stream);
     }
-    if (has_pos_slot) unit_pos[idx] = ftell(stream);
+    col6forge_unit_pos_set(unit, ftell(stream));
     return 0;
 }

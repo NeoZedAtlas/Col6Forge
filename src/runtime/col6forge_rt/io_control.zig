@@ -46,6 +46,16 @@ var extra_open_units: ?[*]ExtraOpenUnit = null;
 var extra_open_count: usize = 0;
 var extra_open_cap: usize = 0;
 
+const ExtraUnitPos = extern struct {
+    unit: c_int,
+    pos: c_long,
+};
+
+var pos_state_mutex: std.Thread.Mutex = .{};
+var extra_unit_pos: ?[*]ExtraUnitPos = null;
+var extra_unit_pos_count: usize = 0;
+var extra_unit_pos_cap: usize = 0;
+
 fn isArrayUnit(unit: c_int) bool {
     return unit >= 0 and unit < COL6FORGE_MAX_UNITS;
 }
@@ -57,6 +67,36 @@ fn findExtraOpenIndexLocked(unit: c_int) ?usize {
         if (extra_open_units.?[i].unit == unit) return i;
     }
     return null;
+}
+
+fn findExtraUnitPosIndexLocked(unit: c_int) ?usize {
+    if (extra_unit_pos == null) return null;
+    var i: usize = 0;
+    while (i < extra_unit_pos_count) : (i += 1) {
+        if (extra_unit_pos.?[i].unit == unit) return i;
+    }
+    return null;
+}
+
+fn ensureExtraUnitPosLocked(unit: c_int) ?*ExtraUnitPos {
+    if (findExtraUnitPosIndexLocked(unit)) |idx| return &extra_unit_pos.?[idx];
+
+    if (extra_unit_pos_count >= extra_unit_pos_cap) {
+        var new_cap: usize = if (extra_unit_pos_cap == 0) 8 else extra_unit_pos_cap * 2;
+        while (new_cap <= extra_unit_pos_count) : (new_cap *= 2) {}
+        const prev: ?*anyopaque = if (extra_unit_pos) |items| @ptrCast(items) else null;
+        const new_raw = realloc(prev, new_cap * @sizeOf(ExtraUnitPos)) orelse return null;
+        const aligned: *align(@alignOf(ExtraUnitPos)) anyopaque = @alignCast(new_raw);
+        const items: [*]ExtraUnitPos = @ptrCast(aligned);
+        extra_unit_pos = items;
+        extra_unit_pos_cap = new_cap;
+    }
+
+    const idx = extra_unit_pos_count;
+    extra_unit_pos.?[idx].unit = unit;
+    extra_unit_pos.?[idx].pos = 0;
+    extra_unit_pos_count += 1;
+    return &extra_unit_pos.?[idx];
 }
 
 fn ensureExtraOpenUnitLocked(unit: c_int) ?*ExtraOpenUnit {
@@ -157,6 +197,40 @@ pub export fn col6forge_open_unit_blank_code(unit: c_int) callconv(.c) c_int {
         return if (eu.opened != 0) eu.blank else 0;
     }
     return 0;
+}
+
+pub export fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) callconv(.c) c_int {
+    if (out == null) return 0;
+    const out_ptr = out.?;
+    pos_state_mutex.lock();
+    defer pos_state_mutex.unlock();
+
+    if (isArrayUnit(unit)) {
+        out_ptr.* = unit_pos[@as(usize, @intCast(unit))];
+        return 1;
+    }
+    if (findExtraUnitPosIndexLocked(unit)) |idx| {
+        out_ptr.* = extra_unit_pos.?[idx].pos;
+        return 1;
+    }
+    out_ptr.* = 0;
+    return 0;
+}
+
+pub export fn col6forge_unit_pos_set(unit: c_int, pos: c_long) callconv(.c) void {
+    pos_state_mutex.lock();
+    defer pos_state_mutex.unlock();
+
+    if (isArrayUnit(unit)) {
+        unit_pos[@as(usize, @intCast(unit))] = pos;
+        return;
+    }
+    const entry = ensureExtraUnitPosLocked(unit) orelse return;
+    entry.pos = pos;
+}
+
+pub export fn col6forge_unit_pos_clear(unit: c_int) callconv(.c) void {
+    col6forge_unit_pos_set(unit, 0);
 }
 
 fn asConstCStr(buf: anytype) [*:0]const u8 {
@@ -496,19 +570,15 @@ pub export fn col6forge_inquire_file(
 
 pub export fn col6forge_rewind(unit: c_int) callconv(.c) void {
     if (col6forge_unformatted_rewind(unit) != 0) return;
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return;
-    const idx: usize = @intCast(unit);
-    unit_pos[idx] = 0;
+    col6forge_unit_pos_clear(unit);
 }
 
 pub export fn col6forge_backspace(unit: c_int) callconv(.c) void {
     if (col6forge_unformatted_backspace(unit) != 0) return;
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return;
-    const idx: usize = @intCast(unit);
-
-    var pos = unit_pos[idx];
+    var pos: c_long = 0;
+    _ = col6forge_unit_pos_get(unit, &pos);
     if (pos <= 0) {
-        unit_pos[idx] = 0;
+        col6forge_unit_pos_clear(unit);
         return;
     }
 
@@ -535,7 +605,7 @@ pub export fn col6forge_backspace(unit: c_int) callconv(.c) void {
     } else {
         pos = 0;
     }
-    unit_pos[idx] = pos;
+    col6forge_unit_pos_set(unit, pos);
 }
 
 pub export fn col6forge_endfile(unit: c_int) callconv(.c) void {
@@ -579,4 +649,26 @@ test "open state supports negative and large unit numbers" {
     col6forge_close(big_unit, 0);
     try std.testing.expectEqual(@as(c_int, 0), col6forge_open_unit_is_open(neg_unit));
     try std.testing.expectEqual(@as(c_int, 0), col6forge_open_unit_is_open(big_unit));
+}
+
+test "unit position supports negative and large unit numbers" {
+    const neg_unit: c_int = -23;
+    const big_unit: c_int = 1007;
+
+    col6forge_unit_pos_set(neg_unit, 11);
+    col6forge_unit_pos_set(big_unit, 29);
+
+    var pos_neg: c_long = 0;
+    var pos_big: c_long = 0;
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_unit_pos_get(neg_unit, &pos_neg));
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_unit_pos_get(big_unit, &pos_big));
+    try std.testing.expectEqual(@as(c_long, 11), pos_neg);
+    try std.testing.expectEqual(@as(c_long, 29), pos_big);
+
+    col6forge_unit_pos_clear(neg_unit);
+    col6forge_unit_pos_clear(big_unit);
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_unit_pos_get(neg_unit, &pos_neg));
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_unit_pos_get(big_unit, &pos_big));
+    try std.testing.expectEqual(@as(c_long, 0), pos_neg);
+    try std.testing.expectEqual(@as(c_long, 0), pos_big);
 }
