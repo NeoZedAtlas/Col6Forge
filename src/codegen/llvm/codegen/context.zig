@@ -135,6 +135,7 @@ pub const Context = struct {
     char_array_values: std.StringHashMap([]const u8),
     char_arg_lens: CaseInsensitiveStringHashMap(ValueRef),
     int_literal_cache: std.AutoHashMap(i64, []const u8),
+    heap_temps_to_free: std.array_list.Managed(ValueRef),
     options: CodegenOptions,
     current_stmt: ?input.Stmt,
 
@@ -177,6 +178,7 @@ pub const Context = struct {
             .char_array_values = std.StringHashMap([]const u8).init(allocator),
             .char_arg_lens = CaseInsensitiveStringHashMap(ValueRef).initContext(allocator, .{}),
             .int_literal_cache = std.AutoHashMap(i64, []const u8).init(allocator),
+            .heap_temps_to_free = std.array_list.Managed(ValueRef).init(allocator),
             .options = options,
             .current_stmt = null,
         };
@@ -225,6 +227,19 @@ pub const Context = struct {
         self.char_array_values.deinit();
         self.char_arg_lens.deinit();
         self.int_literal_cache.deinit();
+        self.heap_temps_to_free.deinit();
+    }
+
+    pub fn registerHeapTempToFree(self: *Context, ptr: ValueRef) !void {
+        try self.heap_temps_to_free.append(ptr);
+    }
+
+    pub fn emitHeapTempFrees(self: *Context, builder: anytype) !void {
+        if (self.heap_temps_to_free.items.len == 0) return;
+        const free_name = try self.ensureDeclRaw("free", .void, &[_]IRType{.ptr}, false);
+        for (self.heap_temps_to_free.items) |ptr| {
+            try builder.callTyped(null, .void, free_name, &.{ptr});
+        }
     }
 
     pub fn buildBlockNames(self: *Context) ![][]const u8 {

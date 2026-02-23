@@ -190,6 +190,25 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         }
         const ty = llvm_types.typeFromKind(sym.type_kind);
         if (sym.dims.len > 0) {
+            if (isGeneratedConversionArrayName(sym.name)) {
+                const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
+                    error.ArrayDimNotConstant => null,
+                    else => return err,
+                };
+                const count_val = if (elem_count) |count|
+                    constI64(ctx, @intCast(count))
+                else
+                    try emitDynamicElemCount(ctx, builder, sym);
+                const elem_size = constI64(ctx, @intCast(sizeAlignForType(ty).size));
+                const total_bytes = try expression.emitMul(ctx, builder, count_val, elem_size);
+                const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &[_]llvm_types.IRType{.i64}, false);
+                const heap_ptr_name = try ctx.nextTemp();
+                try builder.callTyped(heap_ptr_name, .ptr, malloc_name, &.{total_bytes});
+                const heap_ptr = ValueRef{ .name = heap_ptr_name, .ty = .ptr, .is_ptr = true };
+                try ctx.locals.put(sym.name, heap_ptr);
+                try ctx.registerHeapTempToFree(heap_ptr);
+                continue;
+            }
             const alloca_name = try ctx.nextTemp();
             const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
                 error.ArrayDimNotConstant => null,
@@ -425,6 +444,10 @@ fn unitHasContains(unit: ast.ProgramUnit) bool {
         if (std.ascii.eqlIgnoreCase(text, "contains")) return true;
     }
     return false;
+}
+
+fn isGeneratedConversionArrayName(name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "__cf_conv_arr_");
 }
 
 fn unitHasEquivalenceDecls(decls: []const ast.Decl) bool {

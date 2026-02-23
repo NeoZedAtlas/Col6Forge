@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const ast = @import("../../input.zig");
 const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
@@ -607,6 +607,7 @@ pub fn emitReturnStmt(ctx: *Context, builder: anytype, ret: ast.ReturnStmt) Emit
         if (ctx.unit.kind == .subroutine) {
             const raw = try expr.emitExpr(ctx, builder, value);
             const coerced = try expr.coerce(ctx, builder, raw, .i32);
+            try ctx.emitHeapTempFrees(builder);
             try builder.retValue(.i32, coerced.name);
             return;
         }
@@ -619,6 +620,7 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
         const return_symbol_name = functionReturnSymbolName(ctx.unit);
         const sym = ctx.findSymbol(return_symbol_name) orelse return error.UnknownSymbol;
         if (sym.type_kind == .character) {
+            try ctx.emitHeapTempFrees(builder);
             try builder.retVoid();
             return;
         }
@@ -626,6 +628,7 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
         const ret_ptr = ctx.locals.get(return_symbol_name) orelse return error.UnknownSymbol;
         if (ret_ty == .complex_f64) {
             // COMPLEX*16 is returned via hidden sret pointer; function returns void.
+            try ctx.emitHeapTempFrees(builder);
             try builder.retVoid();
             return;
         }
@@ -641,16 +644,20 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
             try builder.store(ret_val, pack_ptr);
             const packed_tmp = try ctx.nextTemp();
             try builder.load(packed_tmp, .i64, pack_ptr);
+            try ctx.emitHeapTempFrees(builder);
             try builder.retValue(.i64, packed_tmp);
             return;
         }
+        try ctx.emitHeapTempFrees(builder);
         try builder.retValue(ret_ty, ret_val.name);
         return;
     }
     if (ctx.unit.kind == .subroutine and unitHasAltReturn(ctx.unit)) {
+        try ctx.emitHeapTempFrees(builder);
         try builder.retValue(.i32, "0");
         return;
     }
+    try ctx.emitHeapTempFrees(builder);
     try builder.retVoid();
 }
 
