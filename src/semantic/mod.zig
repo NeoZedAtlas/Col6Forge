@@ -311,13 +311,6 @@ fn setCommonMismatchDiagnostic(source: ast.DeclSource) void {
     diagnostic.set(line, col, "CF3115", "COMMON block layout mismatch across program units", source.text);
 }
 
-fn findSemanticSymbolSlow(sem_unit: *const SemanticUnit, name: []const u8) ?Symbol {
-    for (sem_unit.symbols) |sym| {
-        if (std.ascii.eqlIgnoreCase(sym.name, name)) return sym;
-    }
-    return null;
-}
-
 fn buildSemanticSymbolIndex(arena: std.mem.Allocator, sem_unit: *const SemanticUnit) !std.StringHashMap(usize) {
     var map = std.StringHashMap(usize).init(arena);
     for (sem_unit.symbols, 0..) |sym, idx| {
@@ -332,14 +325,16 @@ fn lookupSemanticSymbol(
     symbol_index: *const std.StringHashMap(usize),
     name: []const u8,
 ) ?Symbol {
-    var key_buf: [128]u8 = undefined;
+    var key_buf: [512]u8 = undefined;
     if (name.len <= key_buf.len) {
         var i: usize = 0;
         while (i < name.len) : (i += 1) key_buf[i] = std.ascii.toLower(name[i]);
         if (symbol_index.get(key_buf[0..name.len])) |idx| return sem_unit.symbols[idx];
         return null;
     }
-    return findSemanticSymbolSlow(sem_unit, name);
+    const key = lowerDup(symbol_index.allocator, name) catch return null;
+    if (symbol_index.get(key)) |idx| return sem_unit.symbols[idx];
+    return null;
 }
 
 fn commonItemSize(sem_unit: *const SemanticUnit, sym: Symbol) !usize {
@@ -1312,6 +1307,26 @@ test "semantic reports CF3120 for ENTRY in PROGRAM" {
     const source =
         "      PROGRAM P\n" ++
         "      ENTRY E(X)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidEntryStatement, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3120"));
+}
+
+test "semantic reports CF3120 for duplicate ENTRY arguments" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      ENTRY E(X,X)\n" ++
         "      END\n";
     const lines = try fixed_form.normalizeFixedForm(allocator, source);
     defer fixed_form.freeLogicalLines(allocator, lines);

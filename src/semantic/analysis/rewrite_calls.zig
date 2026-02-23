@@ -298,15 +298,21 @@ fn buildArrayConversion(
 }
 
 fn intrinsicConversionTarget(name: []const u8) ?ast.TypeKind {
-    if (std.ascii.eqlIgnoreCase(name, "REAL")) return .real;
-    if (std.ascii.eqlIgnoreCase(name, "FLOAT")) return .real;
-    if (std.ascii.eqlIgnoreCase(name, "SNGL")) return .real;
-    if (std.ascii.eqlIgnoreCase(name, "DBLE")) return .double_precision;
-    if (std.ascii.eqlIgnoreCase(name, "INT")) return .integer;
-    if (std.ascii.eqlIgnoreCase(name, "IFIX")) return .integer;
-    if (std.ascii.eqlIgnoreCase(name, "IDINT")) return .integer;
-    return null;
+    var upper_buf: [64]u8 = undefined;
+    if (name.len > upper_buf.len) return null;
+    for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
+    return IntrinsicConversionMap.get(upper_buf[0..name.len]);
 }
+
+const IntrinsicConversionMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
+    .{ "REAL", .real },
+    .{ "FLOAT", .real },
+    .{ "SNGL", .real },
+    .{ "DBLE", .double_precision },
+    .{ "INT", .integer },
+    .{ "IFIX", .integer },
+    .{ "IDINT", .integer },
+});
 
 fn isNumericArrayType(kind: ast.TypeKind) bool {
     return switch (kind) {

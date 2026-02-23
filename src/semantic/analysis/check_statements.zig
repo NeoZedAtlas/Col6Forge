@@ -123,14 +123,11 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             if (self.unit.kind != .function and self.unit.kind != .subroutine) {
                 return error.InvalidEntryStatement;
             }
-            var i: usize = 0;
-            while (i < entry.args.len) : (i += 1) {
-                var j: usize = i + 1;
-                while (j < entry.args.len) : (j += 1) {
-                    if (std.ascii.eqlIgnoreCase(entry.args[i], entry.args[j])) {
-                        return error.InvalidEntryStatement;
-                    }
-                }
+            var seen = std.StringHashMap(void).init(self.arena);
+            for (entry.args) |arg_name| {
+                const key = try lowerDup(self.arena, arg_name);
+                if (seen.contains(key)) return error.InvalidEntryStatement;
+                try seen.put(key, {});
             }
         },
     }
@@ -303,4 +300,10 @@ fn textInSet(text: []const u8, allowed: []const []const u8) bool {
         if (std.ascii.eqlIgnoreCase(text, candidate)) return true;
     }
     return false;
+}
+
+fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const out = try allocator.alloc(u8, text.len);
+    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
+    return out;
 }
