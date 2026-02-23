@@ -256,7 +256,7 @@ fn checkKnownProcedureCallArity(self: *context.Context, name: []const u8, got: u
         if (sym.storage == .dummy) return;
     }
 
-    if (lookupKnownProcedureSig(self, name)) |sig| {
+    if (resolve_symbols.lookupKnownProcedureSig(self, name)) |sig| {
         if (is_call_stmt and sig.kind != .subroutine) return error.InvalidArgumentCount;
         if (!is_call_stmt and sig.kind != .function) return error.InvalidArgumentCount;
         if (got != sig.arg_count) return error.InvalidArgumentCount;
@@ -303,20 +303,4 @@ fn textInSet(text: []const u8, allowed: []const []const u8) bool {
         if (std.ascii.eqlIgnoreCase(text, candidate)) return true;
     }
     return false;
-}
-
-fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
-    var key_buf: [512]u8 = undefined;
-    if (name.len <= key_buf.len) {
-        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-        if (self.known_procedure_sigs.get(key_buf[0..name.len])) |sig| return sig;
-    }
-    const key = lowerDup(self.arena, name) catch return null;
-    return self.known_procedure_sigs.get(key);
-}
-
-fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    const out = try allocator.alloc(u8, text.len);
-    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
-    return out;
 }

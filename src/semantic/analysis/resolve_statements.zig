@@ -366,7 +366,7 @@ fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_nam
     const sym = &self.symbols.items[idx];
     sym.name = local_name;
 
-    if (lookupKnownProcedureSig(self, remote_name)) |sig| {
+    if (symbols_mod.lookupKnownProcedureSig(self, remote_name)) |sig| {
         sym.is_external = true;
         sym.kind = switch (sig.kind) {
             .function => .function,
@@ -374,7 +374,7 @@ fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_nam
             else => sym.kind,
         };
         if (sig.kind == .function) {
-            if (lookupKnownFunctionType(self, remote_name)) |type_kind| {
+            if (symbols_mod.lookupKnownFunctionType(self, remote_name)) |type_kind| {
                 sym.type_kind = type_kind;
                 sym.type_explicit = true;
             }
@@ -382,7 +382,7 @@ fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_nam
         return;
     }
 
-    if (lookupKnownFunctionType(self, remote_name)) |type_kind| {
+    if (symbols_mod.lookupKnownFunctionType(self, remote_name)) |type_kind| {
         sym.is_external = true;
         sym.kind = .function;
         sym.type_kind = type_kind;
@@ -405,26 +405,6 @@ fn bindBuiltinUseImport(
     sym.storage = .local;
     sym.const_value = builtin.value;
     sym.type_explicit = true;
-}
-
-fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
-    var key_buf: [512]u8 = undefined;
-    if (name.len <= key_buf.len) {
-        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-        return self.known_function_types.get(key_buf[0..name.len]);
-    }
-    const key = lowerDup(self.arena, name) catch return null;
-    return self.known_function_types.get(key);
-}
-
-fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
-    var key_buf: [512]u8 = undefined;
-    if (name.len <= key_buf.len) {
-        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-        return self.known_procedure_sigs.get(key_buf[0..name.len]);
-    }
-    const key = lowerDup(self.arena, name) catch return null;
-    return self.known_procedure_sigs.get(key);
 }
 
 fn startsWithNoCase(text: []const u8, prefix: []const u8) bool {
@@ -486,10 +466,4 @@ fn isIdentStart(ch: u8) bool {
 
 fn isIdentChar(ch: u8) bool {
     return isIdentStart(ch) or (ch >= '0' and ch <= '9') or ch == '_';
-}
-
-fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    const out = try allocator.alloc(u8, text.len);
-    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
-    return out;
 }

@@ -59,7 +59,7 @@ pub fn installUnitSymbol(self: *context.Context) !void {
     };
     const info = if (self.unit.kind == .function)
         ImplicitInfo{
-            .type_kind = findKnownFunctionType(self, self.unit.name) orelse implicitInfo(self, self.unit.name).type_kind,
+            .type_kind = lookupKnownFunctionType(self, self.unit.name) orelse implicitInfo(self, self.unit.name).type_kind,
             .char_len = null,
         }
     else
@@ -112,13 +112,13 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
             return internSymbol(self, imported);
         }
     }
-    if (findKnownProcedureSig(self, name)) |sig| {
+    if (lookupKnownProcedureSig(self, name)) |sig| {
         const proc_kind: SymbolKind = switch (sig.kind) {
             .function => .function,
             else => .subroutine,
         };
         const proc_type = if (proc_kind == .function)
-            findKnownFunctionType(self, name) orelse implicitInfo(self, name).type_kind
+            lookupKnownFunctionType(self, name) orelse implicitInfo(self, name).type_kind
         else
             ast.TypeKind.real;
         const symbol = Symbol{
@@ -135,7 +135,7 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
         };
         return internSymbol(self, symbol);
     }
-    const known_fn_type = findKnownFunctionType(self, name);
+    const known_fn_type = lookupKnownFunctionType(self, name);
     const info = if (known_fn_type) |known_ty|
         ImplicitInfo{ .type_kind = known_ty, .char_len = null }
     else
@@ -216,16 +216,6 @@ fn findSymbolIndexNoCache(self: *context.Context, key: []const u8) ?usize {
     return null;
 }
 
-fn findKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
-    var key_buf: [512]u8 = undefined;
-    if (name.len <= key_buf.len) {
-        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-        return self.known_function_types.get(key_buf[0..name.len]);
-    }
-    const key = lowerDup(self.arena, name) catch return null;
-    return self.known_function_types.get(key);
-}
-
 const ImplicitInfo = struct {
     type_kind: ast.TypeKind,
     char_len: ?usize,
@@ -289,12 +279,40 @@ fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return out;
 }
 
-fn findKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+pub fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
     var key_buf: [512]u8 = undefined;
-    if (name.len <= key_buf.len) {
-        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-        if (self.known_procedure_sigs.get(key_buf[0..name.len])) |sig| return sig;
-    }
-    const key = lowerDup(self.arena, name) catch return null;
-    return self.known_procedure_sigs.get(key);
+    var key_owned: ?[]const u8 = null;
+    const key: []const u8 = blk: {
+        if (name.len <= key_buf.len) {
+            for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+            break :blk key_buf[0..name.len];
+        }
+        const owned = lowerDup(self.arena, name) catch return null;
+        key_owned = owned;
+        break :blk owned;
+    };
+    if (self.known_function_type_cache.get(key)) |cached| return cached;
+    const resolved = self.known_function_types.get(key);
+    const cache_key = key_owned orelse (lowerDup(self.arena, name) catch return resolved);
+    self.known_function_type_cache.put(cache_key, resolved) catch {};
+    return resolved;
+}
+
+pub fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+    var key_buf: [512]u8 = undefined;
+    var key_owned: ?[]const u8 = null;
+    const key: []const u8 = blk: {
+        if (name.len <= key_buf.len) {
+            for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+            break :blk key_buf[0..name.len];
+        }
+        const owned = lowerDup(self.arena, name) catch return null;
+        key_owned = owned;
+        break :blk owned;
+    };
+    if (self.known_procedure_sig_cache.get(key)) |cached| return cached;
+    const resolved = self.known_procedure_sigs.get(key);
+    const cache_key = key_owned orelse (lowerDup(self.arena, name) catch return resolved);
+    self.known_procedure_sig_cache.put(cache_key, resolved) catch {};
+    return resolved;
 }
