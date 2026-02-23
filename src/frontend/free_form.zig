@@ -396,9 +396,8 @@ fn normalizeStmtText(allocator: std.mem.Allocator, text: []const u8) ![]const u8
     var i: usize = 0;
     while (i < text.len) {
         if (i + 1 < text.len and text[i] == '=' and text[i + 1] == '>') {
-            // Lexer currently does not accept raw '>' token; keep legacy
-            // normalized marker and recover rename arrows in statement parsing.
-            try out.appendSlice("=.GT.");
+            // Preserve USE rename arrows and let parser consume `=>` directly.
+            try out.appendSlice("=>");
             i += 2;
             continue;
         }
@@ -570,7 +569,7 @@ test "normalizeFreeForm strips ! comments outside strings" {
     try testing.expectEqualStrings("b = '!'", lines[1].text);
 }
 
-test "normalizeFreeForm rewrites USE rename arrow to lexer-safe marker" {
+test "normalizeFreeForm keeps USE rename arrow" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -579,7 +578,7 @@ test "normalizeFreeForm rewrites USE rename arrow to lexer-safe marker" {
     defer freeLogicalLines(allocator, lines);
 
     try testing.expectEqual(@as(usize, 1), lines.len);
-    try testing.expectEqualStrings("use iso_fortran_env, only: nwrite =.GT. output_unit", lines[0].text);
+    try testing.expectEqualStrings("use iso_fortran_env, only: nwrite => output_unit", lines[0].text);
 }
 
 fn isArrayConstructor(value: []const u8) bool {

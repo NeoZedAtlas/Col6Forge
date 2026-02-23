@@ -496,6 +496,11 @@ fn consumeUseRenameArrow(lp: *LineParser) bool {
     var scan = lp.*;
     if (!scan.consume(.equals)) return false;
 
+    if (scan.consume(.greater)) {
+        lp.* = scan;
+        return true;
+    }
+
     const marker = scan.peek() orelse return false;
     if (marker.kind == .dot_op and context.eqNoCase(scan.tokenText(marker), ".GT.")) {
         _ = scan.next();
@@ -1117,6 +1122,31 @@ test "parseStatement parses USE ONLY rename marker" {
     const allocator = testing.allocator;
 
     const source = "      USE ISO_FORTRAN_ENV, ONLY: NWRITE =.GT. OUTPUT_UNIT\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .use_stmt);
+    try testing.expectEqualStrings("ISO_FORTRAN_ENV", stmt_node.node.use_stmt.module_name);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.use_stmt.only_items.len);
+    try testing.expectEqualStrings("NWRITE", stmt_node.node.use_stmt.only_items[0].local_name);
+    try testing.expectEqualStrings("OUTPUT_UNIT", stmt_node.node.use_stmt.only_items[0].remote_name);
+    try testing.expectEqual(@as(usize, 1), idx);
+}
+
+test "parseStatement parses USE ONLY rename arrow token" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      USE ISO_FORTRAN_ENV, ONLY: NWRITE => OUTPUT_UNIT\n";
     const lines = try fixed_form.normalizeFixedForm(allocator, source);
     defer fixed_form.freeLogicalLines(allocator, lines);
 

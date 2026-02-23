@@ -16,6 +16,7 @@ pub const TokenKind = enum {
     comma,
     colon,
     equals,
+    greater,
     plus,
     minus,
     star,
@@ -67,6 +68,7 @@ pub fn tokenKindName(kind: TokenKind) []const u8 {
         .comma => "comma",
         .colon => "colon",
         .equals => "equals",
+        .greater => "greater",
         .plus => "plus",
         .minus => "minus",
         .star => "star",
@@ -207,6 +209,10 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
             },
             '=' => {
                 try tokens.append(makeToken(line, .equals, i, i + 1));
+                i += 1;
+            },
+            '>' => {
+                try tokens.append(makeToken(line, .greater, i, i + 1));
                 i += 1;
             },
             '+' => {
@@ -464,6 +470,26 @@ test "lexLogicalLine tolerates semicolon and bracket delimiters" {
 
     const expected = [_]TokenKind{
         .identifier, .l_paren, .integer, .r_paren, .identifier, .equals, .integer, .comma, .integer,
+    };
+    try testing.expectEqual(expected.len, tokens.len);
+    for (tokens, 0..) |tok, idx| {
+        try testing.expectEqual(expected[idx], tok.kind);
+    }
+}
+
+test "lexLogicalLine tokenizes USE rename arrow as equals + greater" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      USE ISO_FORTRAN_ENV, ONLY: NWRITE => OUTPUT_UNIT\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+
+    const expected = [_]TokenKind{
+        .identifier, .identifier, .comma, .identifier, .colon,
+        .identifier, .equals, .greater, .identifier,
     };
     try testing.expectEqual(expected.len, tokens.len);
     for (tokens, 0..) |tok, idx| {
