@@ -3,7 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const TimeoutConfig = struct {
-    suite_timeout_ms: u64 = 300_000,
+    suite_timeout_ms: u64 = 0,
     test_timeout_ms: u64 = 30_000,
 };
 
@@ -370,9 +370,19 @@ fn runSuite(
         return false;
     }
     if (!isZeroExit(result.term)) {
+        try logSuiteTermFailure(suite.name, result.term);
         return false;
     }
     return true;
+}
+
+fn logSuiteTermFailure(suite_name: []const u8, term: std.process.Child.Term) !void {
+    switch (term) {
+        .Exited => |code| try logStderr("suite failed: {s} (exit {d})\n", .{ suite_name, code }),
+        .Signal => |sig| try logStderr("suite failed: {s} (signal {d})\n", .{ suite_name, sig }),
+        .Stopped => |sig| try logStderr("suite failed: {s} (stopped {d})\n", .{ suite_name, sig }),
+        .Unknown => |code| try logStderr("suite failed: {s} (status {d})\n", .{ suite_name, code }),
+    }
 }
 
 fn runSuiteParallel(
@@ -446,7 +456,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  -emit-llvm          Emit LLVM IR (default for suites)
         \\  --keep-going        Continue running suites after failures
         \\  --timeout <ms>      Per-test timeout passed to suite runners
-        \\  --suite-timeout <ms> Suite timeout for each runner
+        \\  --suite-timeout <ms> Suite timeout for each runner (0 disables, default: 0)
         \\  --verbose           Print command lines and suite names
         \\  -h, --help          Show this help
         \\
@@ -478,6 +488,7 @@ fn runChildWithTimeoutStreaming(
     timeout_ms: u64,
     output: *OutputMux,
 ) !RunResult {
+    const started_ms: i64 = std.time.milliTimestamp();
     var child = std.process.Child.init(argv, allocator);
     child.cwd = cwd;
     child.stdin_behavior = .Inherit;
@@ -485,13 +496,6 @@ fn runChildWithTimeoutStreaming(
     child.stderr_behavior = .Pipe;
 
     try child.spawn();
-
-    var done = std.atomic.Value(bool).init(false);
-    var timed_out = std.atomic.Value(bool).init(false);
-    var monitor: ?std.Thread = null;
-    if (timeout_ms > 0) {
-        monitor = try std.Thread.spawn(.{}, timeoutMonitor, .{ &child, &done, &timed_out, timeout_ms });
-    }
 
     const stdout_thread = try std.Thread.spawn(.{}, streamPipeTo, .{
         child.stdout.?,
@@ -505,31 +509,16 @@ fn runChildWithTimeoutStreaming(
     });
 
     const term = try child.wait();
-    done.store(true, .seq_cst);
-    if (monitor) |thread| thread.join();
     stdout_thread.join();
     stderr_thread.join();
 
+    const finished_ms: i64 = std.time.milliTimestamp();
+    const elapsed_ms: u64 = if (finished_ms > started_ms) @intCast(finished_ms - started_ms) else 0;
+
     return .{
         .term = term,
-        .timed_out = timed_out.load(.seq_cst),
+        .timed_out = timeout_ms > 0 and elapsed_ms > timeout_ms,
     };
-}
-
-fn timeoutMonitor(
-    child: *std.process.Child,
-    done: *std.atomic.Value(bool),
-    timed_out: *std.atomic.Value(bool),
-    timeout_ms: u64,
-) void {
-    std.Thread.sleep(timeout_ms * std.time.ns_per_ms);
-    if (done.load(.seq_cst)) return;
-    timed_out.store(true, .seq_cst);
-    terminateChild(child);
-}
-
-fn terminateChild(child: *std.process.Child) void {
-    _ = child.kill() catch {};
 }
 
 fn isZeroExit(term: std.process.Child.Term) bool {
