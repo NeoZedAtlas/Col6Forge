@@ -1,16 +1,15 @@
-﻿const std = @import("std");
+const std = @import("std");
 
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
-extern fn malloc(size: usize) ?*anyopaque;
-extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
-extern fn free(ptr: ?*anyopaque) void;
 
 const COL6FORGE_FMT_BUFFER_LEN: usize = 64;
+const COL6FORGE_FMT_RING_SLOTS: usize = 512;
 
-var fmt_fallback: [COL6FORGE_FMT_BUFFER_LEN]u8 = [_]u8{0} ** COL6FORGE_FMT_BUFFER_LEN;
-var fmt_allocs: ?[*]?*anyopaque = null;
-var fmt_alloc_count: usize = 0;
-var fmt_alloc_cap: usize = 0;
+const FmtThreadState = struct {
+    next_slot: usize = 0,
+    buffers: [COL6FORGE_FMT_RING_SLOTS][COL6FORGE_FMT_BUFFER_LEN]u8 = [_][COL6FORGE_FMT_BUFFER_LEN]u8{[_]u8{0} ** COL6FORGE_FMT_BUFFER_LEN} ** COL6FORGE_FMT_RING_SLOTS,
+};
+threadlocal var fmt_thread_state: FmtThreadState = .{};
 
 fn cstrlenRaw(text: []const u8) usize {
     var i: usize = 0;
@@ -18,48 +17,16 @@ fn cstrlenRaw(text: []const u8) usize {
     return i;
 }
 
-fn trackFmtAlloc(ptr: ?*anyopaque) bool {
-    if (fmt_alloc_count == fmt_alloc_cap) {
-        var new_cap: usize = if (fmt_alloc_cap == 0) 64 else fmt_alloc_cap;
-        while (new_cap <= fmt_alloc_count) {
-            const doubled = @mulWithOverflow(new_cap, 2);
-            if (doubled[1] != 0) return false;
-            new_cap = doubled[0];
-        }
-        const bytes_mul = @mulWithOverflow(new_cap, @sizeOf(?*anyopaque));
-        if (bytes_mul[1] != 0) return false;
-        const old_raw: ?*anyopaque = if (fmt_allocs) |arr| @ptrCast(arr) else null;
-        const new_raw = realloc(old_raw, bytes_mul[0]) orelse return false;
-        fmt_allocs = @ptrCast(@alignCast(new_raw));
-        fmt_alloc_cap = new_cap;
-    }
-    fmt_allocs.?[fmt_alloc_count] = ptr;
-    fmt_alloc_count += 1;
-    return true;
-}
-
 fn nextFmtBuffer() *[COL6FORGE_FMT_BUFFER_LEN]u8 {
-    const raw = malloc(COL6FORGE_FMT_BUFFER_LEN) orelse return &fmt_fallback;
-    if (!trackFmtAlloc(raw)) {
-        free(raw);
-        return &fmt_fallback;
-    }
-    const out: *[COL6FORGE_FMT_BUFFER_LEN]u8 = @ptrCast(@alignCast(raw));
+    const idx = fmt_thread_state.next_slot;
+    fmt_thread_state.next_slot = (fmt_thread_state.next_slot + 1) % COL6FORGE_FMT_RING_SLOTS;
+    const out = &fmt_thread_state.buffers[idx];
     out[0] = 0;
     return out;
 }
 
 pub export fn col6forge_fmt_release_all() callconv(.c) void {
-    if (fmt_allocs) |arr| {
-        var i: usize = 0;
-        while (i < fmt_alloc_count) : (i += 1) {
-            free(arr[i]);
-        }
-        free(@ptrCast(arr));
-    }
-    fmt_allocs = null;
-    fmt_alloc_count = 0;
-    fmt_alloc_cap = 0;
+    fmt_thread_state.next_slot = 0;
 }
 
 fn asConstCStr(buf: anytype) [*:0]const u8 {
@@ -128,6 +95,33 @@ const NormalizedMantissa = struct {
 
 fn normalizeFortranMantissa(value: f64) NormalizedMantissa {
     if (value == 0.0) return .{ .mantissa = 0.0, .exponent = 0 };
+    const abs_value = @abs(value);
+    const e10_floor: i32 = @intFromFloat(@floor(std.math.log10(abs_value)));
+
+    // Fast path avoids repeated divide/multiply-by-10 loops for typical values.
+    if (e10_floor >= -323) {
+        var mantissa_std = value / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(e10_floor)));
+        var exponent_std: c_int = @intCast(e10_floor);
+        var abs_mantissa_std = @abs(mantissa_std);
+
+        while (abs_mantissa_std >= 10.0) {
+            mantissa_std /= 10.0;
+            exponent_std += 1;
+            abs_mantissa_std /= 10.0;
+        }
+        while (abs_mantissa_std > 0.0 and abs_mantissa_std < 1.0) {
+            mantissa_std *= 10.0;
+            exponent_std -= 1;
+            abs_mantissa_std *= 10.0;
+        }
+
+        return .{
+            .mantissa = mantissa_std / 10.0,
+            .exponent = exponent_std + 1,
+        };
+    }
+
+    // Fallback for extreme denormals where pow(10, e10_floor) underflows.
     var mantissa = value;
     var exponent: c_int = 0;
     var abs_mantissa = @abs(mantissa);
@@ -260,25 +254,17 @@ pub export fn col6forge_fmt_f(width: c_int, precision: c_int, sign_plus: c_int, 
 
     if (width <= 0) {
         if (sign_plus != 0) {
-            _ = snprintf(&out[0], out.len, "%+.*f", p, value);
+            _ = snprintf(&out[0], out.len, "%+#.*f", p, value);
         } else {
-            _ = snprintf(&out[0], out.len, "%.*f", p, value);
+            _ = snprintf(&out[0], out.len, "%#.*f", p, value);
         }
         return asConstCStr(out);
     }
 
     if (sign_plus != 0) {
-        _ = snprintf(&tmp[0], tmp.len, "%+.*f", p, value);
+        _ = snprintf(&tmp[0], tmp.len, "%+#*.*f", width, p, value);
     } else {
-        _ = snprintf(&tmp[0], tmp.len, "%.*f", p, value);
-    }
-
-    if (p == 0 and findByte(tmp[0..], '.') == null) {
-        const tmp_len = cstrlenRaw(tmp[0..]);
-        if (tmp_len + 1 < tmp.len) {
-            tmp[tmp_len] = '.';
-            tmp[tmp_len + 1] = 0;
-        }
+        _ = snprintf(&tmp[0], tmp.len, "%#*.*f", width, p, value);
     }
 
     const len = cstrlenRaw(tmp[0..]);
@@ -287,18 +273,12 @@ pub export fn col6forge_fmt_f(width: c_int, precision: c_int, sign_plus: c_int, 
         return asConstCStr(out);
     }
 
-    var pad: usize = @intCast(width - @as(c_int, @intCast(len)));
-    if (pad > out.len - 1) pad = out.len - 1;
+    const copy_len = @min(len, out.len - 1);
     var i: usize = 0;
-    while (i < pad) : (i += 1) {
-        out[i] = ' ';
-    }
-    const copy_len = @min(len, (out.len - 1) - pad);
-    i = 0;
     while (i < copy_len) : (i += 1) {
-        out[pad + i] = tmp[i];
+        out[i] = tmp[i];
     }
-    out[pad + copy_len] = 0;
+    out[copy_len] = 0;
     return asConstCStr(out);
 }
 
