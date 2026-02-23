@@ -89,7 +89,7 @@ pub fn analyzeProgramWithKnown(
         try units.append(sem_unit);
         if (unitHasContains(unit.*)) {
             known_host_symbols.clearRetainingCapacity();
-            try collectHostSymbols(&known_host_symbols, sem_unit.symbols);
+            try collectHostSymbols(&known_host_symbols, arena, sem_unit.symbols);
             host_symbols_active = true;
             active_host_owner = unit.name;
         } else if (host_symbols_active and unit.*.kind == .program) {
@@ -137,24 +137,28 @@ fn unitHasContains(unit: ast.ProgramUnit) bool {
 
 fn collectHostSymbols(
     map: *std.StringHashMap(symbols.Symbol),
+    arena: std.mem.Allocator,
     sem_symbols: []const symbols.Symbol,
 ) !void {
     for (sem_symbols) |sym| {
         if (sym.kind == .function or sym.kind == .subroutine) continue;
-        if (findHostSymbol(map, sym.name)) |key| {
-            map.getPtr(key).?.* = sym;
-            continue;
+        var key_buf: [128]u8 = undefined;
+        if (sym.name.len <= key_buf.len) {
+            for (sym.name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+            if (map.getPtr(key_buf[0..sym.name.len])) |ptr| {
+                ptr.* = sym;
+                continue;
+            }
+        } else {
+            const lookup_key = try lowerDup(arena, sym.name);
+            if (map.getPtr(lookup_key)) |ptr| {
+                ptr.* = sym;
+                continue;
+            }
         }
-        try map.put(sym.name, sym);
+        const key = try lowerDup(arena, sym.name);
+        try map.put(key, sym);
     }
-}
-
-fn findHostSymbol(map: *const std.StringHashMap(symbols.Symbol), name: []const u8) ?[]const u8 {
-    var it = map.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.key_ptr.*;
-    }
-    return null;
 }
 
 const CommonItemSig = struct {

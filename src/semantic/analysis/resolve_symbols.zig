@@ -152,27 +152,39 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
 pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
     if (self.current_scope == null) return error.MissingScope;
     const scope_id = self.current_scope.?;
-    var it = self.scopes.items[scope_id.index].symbols.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, symbol.name)) {
+    var key_owned: ?[]const u8 = null;
+    var key_buf: [128]u8 = undefined;
+    if (symbol.name.len <= key_buf.len) {
+        for (symbol.name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+        if (self.scopes.items[scope_id.index].symbols.contains(key_buf[0..symbol.name.len])) {
+            return error.DuplicateDeclaration;
+        }
+    } else {
+        const lookup_key = try lowerDup(self.arena, symbol.name);
+        key_owned = lookup_key;
+        if (self.scopes.items[scope_id.index].symbols.contains(lookup_key)) {
             return error.DuplicateDeclaration;
         }
     }
+    const key = key_owned orelse try lowerDup(self.arena, symbol.name);
     const idx = self.symbols.items.len;
     try self.symbols.append(symbol);
-    try self.scopes.items[scope_id.index].symbols.put(symbol.name, idx);
+    try self.scopes.items[scope_id.index].symbols.put(key, idx);
     return idx;
 }
 
 pub fn findSymbolIndex(self: *context.Context, name: []const u8) ?usize {
+    var key_buf: [128]u8 = undefined;
+    const key: []const u8 = blk: {
+        if (name.len <= key_buf.len) {
+            for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+            break :blk key_buf[0..name.len];
+        }
+        break :blk (lowerDup(self.arena, name) catch return null);
+    };
     var scope_id = self.current_scope;
     while (scope_id) |id| {
-        var it = self.scopes.items[id.index].symbols.iterator();
-        while (it.next()) |entry| {
-            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
-                return entry.value_ptr.*;
-            }
-        }
+        if (self.scopes.items[id.index].symbols.get(key)) |idx| return idx;
         scope_id = self.scopes.items[id.index].parent;
     }
     return null;
@@ -221,13 +233,13 @@ pub fn isIntrinsicName(name: []const u8) bool {
 }
 
 fn findKnownHostParameter(self: *context.Context, name: []const u8) ?Symbol {
-    var it = self.known_host_parameters.iterator();
-    while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
-            return entry.value_ptr.*;
-        }
+    var key_buf: [128]u8 = undefined;
+    if (name.len <= key_buf.len) {
+        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+        return self.known_host_parameters.get(key_buf[0..name.len]);
     }
-    return null;
+    const key = lowerDup(self.arena, name) catch return null;
+    return self.known_host_parameters.get(key);
 }
 
 fn putBuiltinConstant(
