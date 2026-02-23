@@ -359,10 +359,18 @@ fn unionEquivalence(self: *context.Context, a_name: []const u8, b_name: []const 
         return false;
     }
 
-    const root_delta = addNoOverflow(subNoOverflow(b_minus_a, b_to_root) orelse return error.InvalidEquivalence, a_to_root) orelse
+    const b_root_minus_a_root = addNoOverflow(subNoOverflow(b_minus_a, b_to_root) orelse return error.InvalidEquivalence, a_to_root) orelse
         return error.InvalidEquivalence;
+    const a_rank = self.equivalence_rank.items[a_root];
+    const b_rank = self.equivalence_rank.items[b_root];
+    if (a_rank < b_rank) {
+        self.equivalence_parent.items[a_root] = b_root;
+        self.equivalence_delta.items[a_root] = subNoOverflow(0, b_root_minus_a_root) orelse return error.InvalidEquivalence;
+        return true;
+    }
     self.equivalence_parent.items[b_root] = a_root;
-    self.equivalence_delta.items[b_root] = root_delta;
+    self.equivalence_delta.items[b_root] = b_root_minus_a_root;
+    if (a_rank == b_rank) self.equivalence_rank.items[a_root] = a_rank + 1;
     return true;
 }
 
