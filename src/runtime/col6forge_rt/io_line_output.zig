@@ -1,4 +1,5 @@
-﻿const COL6FORGE_MAX_UNITS = 256;
+const COL6FORGE_MAX_UNITS = 256;
+const COL6FORGE_FILENAME_MAX = 4096;
 
 const FILE = opaque {};
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
@@ -10,7 +11,7 @@ extern fn fflush(stream: *FILE) c_int;
 
 const OpenUnit = extern struct {
     opened: c_int,
-    filename: [256]u8,
+    filename: [COL6FORGE_FILENAME_MAX]u8,
     access: c_int,
     form: c_int,
     blank: c_int,
@@ -83,4 +84,3 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
     unit_pos[idx] = ftell(stream);
     return 0;
 }
-

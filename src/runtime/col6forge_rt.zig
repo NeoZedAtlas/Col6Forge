@@ -1,4 +1,5 @@
-﻿pub const COL6FORGE_MAX_UNITS = 256;
+pub const COL6FORGE_MAX_UNITS = 256;
+pub const COL6FORGE_FILENAME_MAX = 4096;
 
 pub const DirectUnit = extern struct {
     recl: c_int,
@@ -23,7 +24,7 @@ pub const UnformattedUnit = extern struct {
 
 pub const OpenUnit = extern struct {
     opened: c_int,
-    filename: [256]u8,
+    filename: [COL6FORGE_FILENAME_MAX]u8,
     access: c_int,
     form: c_int,
     blank: c_int,
@@ -59,7 +60,7 @@ const unformatted_zero = UnformattedUnit{
 };
 const open_zero = OpenUnit{
     .opened = 0,
-    .filename = [_]u8{0} ** 256,
+    .filename = [_]u8{0} ** COL6FORGE_FILENAME_MAX,
     .access = 0,
     .form = 0,
     .blank = 0,

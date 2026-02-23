@@ -1,4 +1,5 @@
-﻿const COL6FORGE_MAX_UNITS = 256;
+const COL6FORGE_MAX_UNITS = 256;
+const COL6FORGE_FILENAME_MAX = 4096;
 
 const FILE = opaque {};
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
@@ -12,7 +13,7 @@ extern fn exit(status: c_int) noreturn;
 
 const OpenUnit = extern struct {
     opened: c_int,
-    filename: [256]u8,
+    filename: [COL6FORGE_FILENAME_MAX]u8,
     access: c_int,
     form: c_int,
     blank: c_int,
@@ -358,4 +359,3 @@ test "runtimeArgPtrAt handles missing and null entries" {
     try std.testing.expect(null_entry.available);
     try std.testing.expect(null_entry.ptr == null);
 }
-

@@ -1,10 +1,12 @@
-﻿const COL6FORGE_MAX_UNITS = 256;
+const std = @import("std");
+const COL6FORGE_MAX_UNITS = 256;
+const COL6FORGE_FILENAME_MAX = 4096;
 
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 
 const OpenUnit = extern struct {
     opened: c_int,
-    filename: [256]u8,
+    filename: [COL6FORGE_FILENAME_MAX]u8,
     access: c_int,
     form: c_int,
     blank: c_int,
@@ -28,17 +30,10 @@ fn asCStr(buf: anytype) [*:0]u8 {
 
 fn copyCharField(dst: ?[*]u8, len: c_int, src: [*:0]const u8) void {
     if (dst == null or len <= 0) return;
-    const out = dst.?;
-    var i: usize = 0;
-    while (i < @as(usize, @intCast(len))) : (i += 1) {
-        out[i] = ' ';
-    }
-    const n = cstrlen(src);
-    const limit = @min(n, @as(usize, @intCast(len)));
-    i = 0;
-    while (i < limit) : (i += 1) {
-        out[i] = src[i];
-    }
+    const out = dst.?[0..@as(usize, @intCast(len))];
+    const limit = @min(cstrlen(src), out.len);
+    @memcpy(out[0..limit], src[0..limit]);
+    @memset(out[limit..], ' ');
 }
 
 pub export fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) callconv(.c) void {
@@ -90,9 +85,12 @@ pub export fn col6forge_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode:
     const used_ptr = used.?;
     const used_n = @as(usize, @intCast(@max(used_ptr.*, 0)));
     if (blank_mode != 0) {
+        // For BLANK='ZERO', leading blanks are still ignored by numeric parsing.
+        // Convert only blanks that are part of the significant field body.
         var i: usize = 0;
+        while (i < used_n and (out[i] == ' ' or out[i] == '\t')) : (i += 1) {}
         while (i < used_n) : (i += 1) {
-            if (out[i] == ' ') out[i] = '0';
+            if (out[i] == ' ' or out[i] == '\t') out[i] = '0';
         }
         return;
     }
@@ -129,4 +127,19 @@ pub export fn col6forge_trim_filename(file: ?[*]const u8, file_len: c_int, out: 
         dst[i] = src[start + i];
     }
     dst[copy_len] = 0;
+}
+
+test "blank mode ZERO keeps leading blanks and converts interior blanks" {
+    var buf: [8]u8 = .{ ' ', ' ', '-', '1', ' ', '2', ' ', 0 };
+    var used: c_int = 7;
+    col6forge_apply_blank_mode(&buf, &used, 1);
+
+    try std.testing.expectEqualSlices(u8, "  -1020", buf[0..7]);
+    try std.testing.expectEqual(@as(c_int, 7), used);
+}
+
+test "store char copies text and pads with spaces" {
+    var out: [6]u8 = undefined;
+    col6forge_store_char(&out, 6, "AB");
+    try std.testing.expectEqualSlices(u8, "AB    ", out[0..]);
 }

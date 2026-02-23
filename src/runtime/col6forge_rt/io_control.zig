@@ -1,4 +1,5 @@
 const COL6FORGE_MAX_UNITS = 256;
+const COL6FORGE_FILENAME_MAX = 4096;
 
 extern fn remove(pathname: [*:0]const u8) c_int;
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
@@ -26,7 +27,7 @@ const UnformattedUnit = extern struct {
 
 const OpenUnit = extern struct {
     opened: c_int,
-    filename: [256]u8,
+    filename: [COL6FORGE_FILENAME_MAX]u8,
     access: c_int,
     form: c_int,
     blank: c_int,
@@ -324,7 +325,7 @@ pub export fn col6forge_inquire_file(
 ) callconv(.c) void {
     if (iostat) |v| v.* = 0;
 
-    var name: [256]u8 = [_]u8{0} ** 256;
+    var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     col6forge_trim_filename(file, file_len, &name, name.len);
 
     var found_unit: c_int = -1;
