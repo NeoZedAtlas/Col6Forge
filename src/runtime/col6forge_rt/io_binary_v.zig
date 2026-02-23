@@ -1,25 +1,16 @@
 const std = @import("std");
 const COL6FORGE_MAX_UNITS = 256;
 
-const DirectUnit = extern struct {
-    recl: c_int,
-    nextrec: c_int,
-    data: ?[*]u8,
-    size: usize,
-};
-
-extern var direct_units: [COL6FORGE_MAX_UNITS]DirectUnit;
-
 extern fn col6forge_open_direct(unit: c_int, recl: c_int) void;
+extern fn col6forge_direct_get_recl(unit: c_int) c_int;
 extern fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
 extern fn col6forge_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
+extern fn col6forge_direct_record_commit(unit: c_int, rec: c_int) void;
 extern fn col6forge_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn col6forge_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn col6forge_unformatted_begin_write_len(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn col6forge_unformatted_begin_read_len(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn col6forge_rewind(unit: c_int) void;
-
-var direct_io_mutex: std.Thread.Mutex = .{};
 
 fn runtimeArgCount(arg_count: c_int) usize {
     return @intCast(@max(arg_count, 0));
@@ -92,15 +83,10 @@ pub export fn col6forge_write_direct_typed(
     arg_count: c_int,
 ) callconv(.c) void {
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return;
-    direct_io_mutex.lock();
-    defer direct_io_mutex.unlock();
-
-    const idx: usize = @intCast(unit);
-    const du = &direct_units[idx];
     const total_args = runtimeArgCount(arg_count);
-
-    if (du.recl <= 0) return;
-    const recl: usize = @intCast(du.recl);
+    const recl_i32 = col6forge_direct_get_recl(unit);
+    if (recl_i32 <= 0) return;
+    const recl: usize = @intCast(recl_i32);
 
     var record_size: usize = 0;
     var i: usize = 0;
@@ -112,7 +98,7 @@ pub export fn col6forge_write_direct_typed(
     }
     if (record_size > recl) return;
 
-    const record = col6forge_direct_record_ptr(unit, rec, du.recl) orelse return;
+    const record = col6forge_direct_record_ptr(unit, rec, recl_i32) orelse return;
     var z: usize = 0;
     while (z < recl) : (z += 1) record[z] = 0;
 
@@ -130,7 +116,7 @@ pub export fn col6forge_write_direct_typed(
         }
         pos += field_size;
     }
-    du.nextrec = rec + 1;
+    col6forge_direct_record_commit(unit, rec);
 }
 
 pub export fn col6forge_read_direct_typed(
@@ -142,15 +128,10 @@ pub export fn col6forge_read_direct_typed(
     arg_count: c_int,
 ) callconv(.c) c_int {
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
-    direct_io_mutex.lock();
-    defer direct_io_mutex.unlock();
-
-    const idx: usize = @intCast(unit);
-    const du = &direct_units[idx];
     const total_args = runtimeArgCount(arg_count);
-
-    if (du.recl <= 0) return 0;
-    const recl: usize = @intCast(du.recl);
+    const recl_i32 = col6forge_direct_get_recl(unit);
+    if (recl_i32 <= 0) return 0;
+    const recl: usize = @intCast(recl_i32);
 
     var expected_size: usize = 0;
     var i: usize = 0;
@@ -162,7 +143,6 @@ pub export fn col6forge_read_direct_typed(
     }
     if (expected_size > recl) return 0;
     if (recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
-    const recl_i32: c_int = @intCast(recl);
     const record = col6forge_direct_record_ptr_ro(unit, rec, recl_i32) orelse return 0;
 
     var pos: usize = 0;
@@ -182,7 +162,7 @@ pub export fn col6forge_read_direct_typed(
         pos += field_size;
     }
 
-    du.nextrec = rec + 1;
+    col6forge_direct_record_commit(unit, rec);
     return assigned;
 }
 
@@ -270,20 +250,16 @@ fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 1;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 1;
-    direct_io_mutex.lock();
-    defer direct_io_mutex.unlock();
-
-    const idx_unit: usize = @intCast(unit);
-    const du = &direct_units[idx_unit];
     const count_u: usize = @intCast(count);
     const field_size = @sizeOf(T);
     const record_size = checkedMul(count_u, field_size) orelse return 1;
 
-    if (du.recl <= 0) return 1;
-    const recl: usize = @intCast(du.recl);
+    const recl_i32 = col6forge_direct_get_recl(unit);
+    if (recl_i32 <= 0) return 1;
+    const recl: usize = @intCast(recl_i32);
     if (record_size > recl) return 1;
 
-    const record = col6forge_direct_record_ptr(unit, rec, du.recl) orelse return 1;
+    const record = col6forge_direct_record_ptr(unit, rec, recl_i32) orelse return 1;
     var z: usize = 0;
     while (z < recl) : (z += 1) record[z] = 0;
 
@@ -297,7 +273,7 @@ fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
         copyRawBytes(record + pos, src, field_size);
         pos += field_size;
     }
-    du.nextrec = rec + 1;
+    col6forge_direct_record_commit(unit, rec);
     return 0;
 }
 
@@ -305,20 +281,16 @@ fn directReadScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, st
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 0;
-    direct_io_mutex.lock();
-    defer direct_io_mutex.unlock();
-
-    const idx_unit: usize = @intCast(unit);
-    const du = &direct_units[idx_unit];
     const count_u: usize = @intCast(count);
     const field_size = @sizeOf(T);
     const expected_size = checkedMul(count_u, field_size) orelse return 0;
-    if (du.recl <= 0) return 0;
-    const recl: usize = @intCast(du.recl);
+    const recl_i32 = col6forge_direct_get_recl(unit);
+    if (recl_i32 <= 0) return 0;
+    const recl: usize = @intCast(recl_i32);
     if (expected_size > recl) return 0;
     if (recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
 
-    const record = col6forge_direct_record_ptr_ro(unit, rec, @intCast(recl)) orelse return 0;
+    const record = col6forge_direct_record_ptr_ro(unit, rec, recl_i32) orelse return 0;
     const dst_data = base.?;
     var assigned: c_int = 0;
     var pos: usize = 0;
@@ -331,7 +303,7 @@ fn directReadScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, st
         assigned += 1;
         pos += field_size;
     }
-    du.nextrec = rec + 1;
+    col6forge_direct_record_commit(unit, rec);
     return assigned;
 }
 
@@ -339,20 +311,16 @@ fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, 
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 1;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 1;
-    direct_io_mutex.lock();
-    defer direct_io_mutex.unlock();
-
-    const idx_unit: usize = @intCast(unit);
-    const du = &direct_units[idx_unit];
     const count_u: usize = @intCast(count);
     const field_size = checkedMul(@sizeOf(T), 2) orelse return 1;
     const record_size = checkedMul(count_u, field_size) orelse return 1;
 
-    if (du.recl <= 0) return 1;
-    const recl: usize = @intCast(du.recl);
+    const recl_i32 = col6forge_direct_get_recl(unit);
+    if (recl_i32 <= 0) return 1;
+    const recl: usize = @intCast(recl_i32);
     if (record_size > recl) return 1;
 
-    const record = col6forge_direct_record_ptr(unit, rec, du.recl) orelse return 1;
+    const record = col6forge_direct_record_ptr(unit, rec, recl_i32) orelse return 1;
     var z: usize = 0;
     while (z < recl) : (z += 1) record[z] = 0;
 
@@ -366,7 +334,7 @@ fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, 
         copyRawBytes(record + pos, src, field_size);
         pos += field_size;
     }
-    du.nextrec = rec + 1;
+    col6forge_direct_record_commit(unit, rec);
     return 0;
 }
 
@@ -374,20 +342,16 @@ fn directReadComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 0;
-    direct_io_mutex.lock();
-    defer direct_io_mutex.unlock();
-
-    const idx_unit: usize = @intCast(unit);
-    const du = &direct_units[idx_unit];
     const count_u: usize = @intCast(count);
     const field_size = checkedMul(@sizeOf(T), 2) orelse return 0;
     const expected_size = checkedMul(count_u, field_size) orelse return 0;
-    if (du.recl <= 0) return 0;
-    const recl: usize = @intCast(du.recl);
+    const recl_i32 = col6forge_direct_get_recl(unit);
+    if (recl_i32 <= 0) return 0;
+    const recl: usize = @intCast(recl_i32);
     if (expected_size > recl) return 0;
     if (recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
 
-    const record = col6forge_direct_record_ptr_ro(unit, rec, @intCast(recl)) orelse return 0;
+    const record = col6forge_direct_record_ptr_ro(unit, rec, recl_i32) orelse return 0;
     const dst_data = base.?;
     var assigned: c_int = 0;
     var pos: usize = 0;
@@ -400,7 +364,7 @@ fn directReadComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
         assigned += 1;
         pos += field_size;
     }
-    du.nextrec = rec + 1;
+    col6forge_direct_record_commit(unit, rec);
     return assigned;
 }
 

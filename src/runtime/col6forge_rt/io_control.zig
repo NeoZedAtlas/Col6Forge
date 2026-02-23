@@ -1,4 +1,4 @@
-﻿const COL6FORGE_MAX_UNITS = 256;
+const COL6FORGE_MAX_UNITS = 256;
 
 extern fn remove(pathname: [*:0]const u8) c_int;
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
@@ -9,13 +9,6 @@ extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 
 const FILE = opaque {};
-
-const DirectUnit = extern struct {
-    recl: c_int,
-    nextrec: c_int,
-    data: ?[*]u8,
-    size: usize,
-};
 
 const UnformattedRecord = extern struct {
     data: ?[*]u8,
@@ -40,7 +33,6 @@ const OpenUnit = extern struct {
 };
 
 extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
-extern var direct_units: [COL6FORGE_MAX_UNITS]DirectUnit;
 extern var unformatted_units: [COL6FORGE_MAX_UNITS]UnformattedUnit;
 extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
 
@@ -49,6 +41,7 @@ extern fn col6forge_trim_filename(file: ?[*]const u8, file_len: c_int, out: ?[*]
 extern fn col6forge_store_char(dst: ?[*]u8, len: c_int, src: [*:0]const u8) void;
 extern fn unformatted_truncate(unit: ?*UnformattedUnit, new_count: usize) void;
 extern fn col6forge_open_direct(unit: c_int, recl: c_int) void;
+extern fn col6forge_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_int) void;
 
 fn asConstCStr(buf: anytype) [*:0]const u8 {
     return @ptrCast(buf);
@@ -293,8 +286,16 @@ pub export fn col6forge_inquire_unit(
     col6forge_store_char(unformatted, unformatted_len, unf_str);
     col6forge_store_char(blank, blank_len, blank_str);
 
-    if (recl) |v| v.* = if (ou.access == 1) direct_units[idx].recl else 0;
-    if (nextrec) |v| v.* = if (ou.access == 1) (if (direct_units[idx].nextrec > 0) direct_units[idx].nextrec else 1) else 0;
+    if (ou.access == 1) {
+        var recl_local: c_int = 0;
+        var nextrec_local: c_int = 1;
+        col6forge_inquire_direct(unit, &recl_local, &nextrec_local);
+        if (recl) |v| v.* = recl_local;
+        if (nextrec) |v| v.* = nextrec_local;
+    } else {
+        if (recl) |v| v.* = 0;
+        if (nextrec) |v| v.* = 0;
+    }
 }
 
 pub export fn col6forge_inquire_file(
