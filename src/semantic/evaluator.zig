@@ -63,110 +63,154 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
 }
 
 fn evalConstCall(call: ast.CallOrSubscript, resolver: ?ConstResolver) anyerror!?ConstValue {
-    if (std.ascii.eqlIgnoreCase(call.name, "LEN")) {
-        if (call.args.len != 1) return null;
-        const len = (try evalConstCharLen(call.args[0], resolver)) orelse return null;
-        return .{ .integer = std.math.cast(i64, len) orelse return error.NumberTooLong };
+    const kind = constCallKind(call.name) orelse return null;
+    switch (kind) {
+        .len => {
+            if (call.args.len != 1) return null;
+            const len = (try evalConstCharLen(call.args[0], resolver)) orelse return null;
+            return .{ .integer = std.math.cast(i64, len) orelse return error.NumberTooLong };
+        },
+        .sqrt => {
+            if (call.args.len != 1) return null;
+            const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+            return .{ .real = std.math.sqrt(toReal(arg)) };
+        },
+        .log10 => {
+            if (call.args.len != 1) return null;
+            const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+            return .{ .real = std.math.log10(toReal(arg)) };
+        },
+        .atan => {
+            if (call.args.len != 1) return null;
+            const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+            return .{ .real = std.math.atan(toReal(arg)) };
+        },
+        .atan2 => {
+            if (call.args.len != 2) return null;
+            const y = (try evalConst(call.args[0], resolver)) orelse return null;
+            const x = (try evalConst(call.args[1], resolver)) orelse return null;
+            return .{ .real = std.math.atan2(toReal(y), toReal(x)) };
+        },
+        .abs => {
+            if (call.args.len != 1) return null;
+            const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+            return switch (arg) {
+                .integer => |v| .{ .integer = if (v < 0) -v else v },
+                .real => |v| .{ .real = @abs(v) },
+                else => null,
+            };
+        },
+        .epsilon => {
+            if (call.args.len != 1) return null;
+            _ = (try evalConst(call.args[0], resolver)) orelse return null;
+            return .{ .real = std.math.floatEps(f64) };
+        },
+        .tiny => {
+            if (call.args.len != 1) return null;
+            _ = (try evalConst(call.args[0], resolver)) orelse return null;
+            return .{ .real = std.math.floatMin(f64) };
+        },
+        .huge => {
+            if (call.args.len != 1) return null;
+            _ = (try evalConst(call.args[0], resolver)) orelse return null;
+            return .{ .real = std.math.floatMax(f64) };
+        },
+        .dpmpar => {
+            if (call.args.len != 1) return null;
+            const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+            if (arg != .integer) return null;
+            return switch (arg.integer) {
+                1 => .{ .real = std.math.floatEps(f64) },
+                2 => .{ .real = std.math.floatMin(f64) },
+                3 => .{ .real = std.math.floatMax(f64) },
+                else => null,
+            };
+        },
+        .min => return evalConstMinMax(call.args, resolver, true),
+        .max => return evalConstMinMax(call.args, resolver, false),
     }
-    if (std.ascii.eqlIgnoreCase(call.name, "SQRT")) {
-        if (call.args.len != 1) return null;
-        const arg = (try evalConst(call.args[0], resolver)) orelse return null;
-        return .{ .real = std.math.sqrt(toReal(arg)) };
-    }
-    if (std.ascii.eqlIgnoreCase(call.name, "LOG10")) {
-        if (call.args.len != 1) return null;
-        const arg = (try evalConst(call.args[0], resolver)) orelse return null;
-        return .{ .real = std.math.log10(toReal(arg)) };
-    }
-    if (std.ascii.eqlIgnoreCase(call.name, "ATAN") or std.ascii.eqlIgnoreCase(call.name, "DATAN")) {
-        if (call.args.len != 1) return null;
-        const arg = (try evalConst(call.args[0], resolver)) orelse return null;
-        return .{ .real = std.math.atan(toReal(arg)) };
-    }
-    if (std.ascii.eqlIgnoreCase(call.name, "ATAN2") or std.ascii.eqlIgnoreCase(call.name, "DATAN2")) {
-        if (call.args.len != 2) return null;
-        const y = (try evalConst(call.args[0], resolver)) orelse return null;
-        const x = (try evalConst(call.args[1], resolver)) orelse return null;
-        return .{ .real = std.math.atan2(toReal(y), toReal(x)) };
-    }
-    if (std.ascii.eqlIgnoreCase(call.name, "ABS")) {
-        if (call.args.len != 1) return null;
-        const arg = (try evalConst(call.args[0], resolver)) orelse return null;
-        return switch (arg) {
-            .integer => |v| .{ .integer = if (v < 0) -v else v },
-            .real => |v| .{ .real = @abs(v) },
-            else => null,
-        };
-    }
-    if (std.ascii.eqlIgnoreCase(call.name, "EPSILON")) {
-        if (call.args.len != 1) return null;
-        _ = (try evalConst(call.args[0], resolver)) orelse return null;
-        return .{ .real = std.math.floatEps(f64) };
-    }
-    if (std.ascii.eqlIgnoreCase(call.name, "TINY")) {
-        if (call.args.len != 1) return null;
-        _ = (try evalConst(call.args[0], resolver)) orelse return null;
-        return .{ .real = std.math.floatMin(f64) };
-    }
-    if (std.ascii.eqlIgnoreCase(call.name, "HUGE")) {
-        if (call.args.len != 1) return null;
-        _ = (try evalConst(call.args[0], resolver)) orelse return null;
-        return .{ .real = std.math.floatMax(f64) };
-    }
-    if (std.ascii.eqlIgnoreCase(call.name, "DPMPAR")) {
-        if (call.args.len != 1) return null;
-        const arg = (try evalConst(call.args[0], resolver)) orelse return null;
-        if (arg != .integer) return null;
-        return switch (arg.integer) {
-            1 => .{ .real = std.math.floatEps(f64) },
-            2 => .{ .real = std.math.floatMin(f64) },
-            3 => .{ .real = std.math.floatMax(f64) },
-            else => null,
-        };
-    }
-    if (std.ascii.eqlIgnoreCase(call.name, "MIN") or std.ascii.eqlIgnoreCase(call.name, "MAX")) {
-        if (call.args.len < 2) return null;
-        var any_real = false;
-        var best_real: f64 = 0.0;
-        var best_int: i64 = 0;
-        var initialized = false;
-        for (call.args) |arg_expr| {
-            const value = (try evalConst(arg_expr, resolver)) orelse return null;
-            switch (value) {
-                .integer => |v| {
-                    if (!initialized) {
-                        best_int = v;
-                        best_real = @floatFromInt(v);
-                        initialized = true;
+}
+
+const ConstCallKind = enum {
+    len,
+    sqrt,
+    log10,
+    atan,
+    atan2,
+    abs,
+    epsilon,
+    tiny,
+    huge,
+    dpmpar,
+    min,
+    max,
+};
+
+const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
+    .{ "LEN", .len },
+    .{ "SQRT", .sqrt },
+    .{ "LOG10", .log10 },
+    .{ "ATAN", .atan },
+    .{ "DATAN", .atan },
+    .{ "ATAN2", .atan2 },
+    .{ "DATAN2", .atan2 },
+    .{ "ABS", .abs },
+    .{ "EPSILON", .epsilon },
+    .{ "TINY", .tiny },
+    .{ "HUGE", .huge },
+    .{ "DPMPAR", .dpmpar },
+    .{ "MIN", .min },
+    .{ "MAX", .max },
+});
+
+fn constCallKind(name: []const u8) ?ConstCallKind {
+    var upper_buf: [64]u8 = undefined;
+    if (name.len > upper_buf.len) return null;
+    for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
+    return ConstCallMap.get(upper_buf[0..name.len]);
+}
+
+fn evalConstMinMax(args: []const *ast.Expr, resolver: ?ConstResolver, is_min: bool) anyerror!?ConstValue {
+    if (args.len < 2) return null;
+    var any_real = false;
+    var best_real: f64 = 0.0;
+    var best_int: i64 = 0;
+    var initialized = false;
+    for (args) |arg_expr| {
+        const value = (try evalConst(arg_expr, resolver)) orelse return null;
+        switch (value) {
+            .integer => |v| {
+                if (!initialized) {
+                    best_int = v;
+                    best_real = @floatFromInt(v);
+                    initialized = true;
+                } else {
+                    if (is_min) {
+                        if (v < best_int) best_int = v;
+                        if (@as(f64, @floatFromInt(v)) < best_real) best_real = @floatFromInt(v);
                     } else {
-                        if (std.ascii.eqlIgnoreCase(call.name, "MIN")) {
-                            if (v < best_int) best_int = v;
-                            if (@as(f64, @floatFromInt(v)) < best_real) best_real = @floatFromInt(v);
-                        } else {
-                            if (v > best_int) best_int = v;
-                            if (@as(f64, @floatFromInt(v)) > best_real) best_real = @floatFromInt(v);
-                        }
+                        if (v > best_int) best_int = v;
+                        if (@as(f64, @floatFromInt(v)) > best_real) best_real = @floatFromInt(v);
                     }
-                },
-                .real => |v| {
-                    if (!initialized) {
-                        best_real = v;
-                        best_int = @intFromFloat(v);
-                        initialized = true;
-                    } else if (std.ascii.eqlIgnoreCase(call.name, "MIN")) {
-                        if (v < best_real) best_real = v;
-                    } else {
-                        if (v > best_real) best_real = v;
-                    }
-                    any_real = true;
-                },
-                else => return null,
-            }
+                }
+            },
+            .real => |v| {
+                if (!initialized) {
+                    best_real = v;
+                    best_int = @intFromFloat(v);
+                    initialized = true;
+                } else if (is_min) {
+                    if (v < best_real) best_real = v;
+                } else {
+                    if (v > best_real) best_real = v;
+                }
+                any_real = true;
+            },
+            else => return null,
         }
-        if (!initialized) return null;
-        return if (any_real) .{ .real = best_real } else .{ .integer = best_int };
     }
-    return null;
+    if (!initialized) return null;
+    return if (any_real) .{ .real = best_real } else .{ .integer = best_int };
 }
 
 fn parseInt(text: []const u8) !i64 {
@@ -283,9 +327,12 @@ fn intPow(base: i64, exp: i64) !i64 {
     if (exp < 0) return error.NegativeIntegerExponent;
     if (exp == 0) return 1;
     var result: i64 = 1;
-    var i: i64 = 0;
-    while (i < exp) : (i += 1) {
-        result *= base;
+    var factor = base;
+    var rem: u64 = @intCast(exp);
+    while (rem != 0) {
+        if ((rem & 1) != 0) result *= factor;
+        rem >>= 1;
+        if (rem != 0) factor *= factor;
     }
     return result;
 }
@@ -409,4 +456,85 @@ fn decodeHollerith(allocator: std.mem.Allocator, text: []const u8) ?[]u8 {
     const idx = std.mem.indexOfScalar(u8, text, 'H') orelse std.mem.indexOfScalar(u8, text, 'h') orelse return null;
     if (idx + 1 > text.len) return null;
     return allocator.dupe(u8, text[idx + 1 ..]) catch null;
+}
+
+test "const call dispatch recognizes DATAN alias" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const arg = try a.create(ast.Expr);
+    arg.* = .{ .literal = .{ .kind = .real, .text = "1.0" } };
+    const args = try a.alloc(*ast.Expr, 1);
+    args[0] = arg;
+
+    const call = try a.create(ast.Expr);
+    call.* = .{ .call_or_subscript = .{ .name = "datan", .args = args } };
+
+    const value = (try evalConst(call, null)) orelse return error.TestExpectedEqual;
+    switch (value) {
+        .real => |v| try testing.expectApproxEqAbs(@as(f64, std.math.pi / 4.0), v, 1e-12),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "const call dispatch handles MIN/MAX" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const expr_three = try a.create(ast.Expr);
+    expr_three.* = .{ .literal = .{ .kind = .integer, .text = "3" } };
+    const expr_one = try a.create(ast.Expr);
+    expr_one.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+    const expr_two = try a.create(ast.Expr);
+    expr_two.* = .{ .literal = .{ .kind = .integer, .text = "2" } };
+
+    const min_args = try a.alloc(*ast.Expr, 3);
+    min_args[0] = expr_three;
+    min_args[1] = expr_one;
+    min_args[2] = expr_two;
+
+    const min_call = try a.create(ast.Expr);
+    min_call.* = .{ .call_or_subscript = .{ .name = "min", .args = min_args } };
+
+    const min_val = (try evalConst(min_call, null)) orelse return error.TestExpectedEqual;
+    switch (min_val) {
+        .integer => |v| try testing.expectEqual(@as(i64, 1), v),
+        else => return error.TestExpectedEqual,
+    }
+
+    const max_call = try a.create(ast.Expr);
+    max_call.* = .{ .call_or_subscript = .{ .name = "MAX", .args = min_args } };
+    const max_val = (try evalConst(max_call, null)) orelse return error.TestExpectedEqual;
+    switch (max_val) {
+        .integer => |v| try testing.expectEqual(@as(i64, 3), v),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "integer POWER const eval uses fast exponentiation" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const left = try a.create(ast.Expr);
+    left.* = .{ .literal = .{ .kind = .integer, .text = "2" } };
+    const right = try a.create(ast.Expr);
+    right.* = .{ .literal = .{ .kind = .integer, .text = "10" } };
+    const expr = try a.create(ast.Expr);
+    expr.* = .{ .binary = .{
+        .op = .power,
+        .left = left,
+        .right = right,
+    } };
+
+    const value = (try evalConst(expr, null)) orelse return error.TestExpectedEqual;
+    switch (value) {
+        .integer => |v| try testing.expectEqual(@as(i64, 1024), v),
+        else => return error.TestExpectedEqual,
+    }
 }
