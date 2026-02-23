@@ -1478,7 +1478,10 @@ test "semantic rejects CHARACTER*(*) for non-dummy declaration" {
 
     try testing.expectError(error.InvalidCharLen, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expectEqual(@as(usize, 7), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3103"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "CHARACTER*(*) A"));
 }
 
 test "semantic lowers intrinsic array conversion actual argument into temporary loop copy" {

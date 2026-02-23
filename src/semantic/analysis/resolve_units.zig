@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
@@ -5,6 +6,7 @@ const decls = @import("resolve_decls.zig");
 const specs = @import("resolve_specs.zig");
 const statements = @import("resolve_statements.zig");
 const symbols_mod = @import("resolve_symbols.zig");
+const rewrite_calls = @import("rewrite_calls.zig");
 const scope = @import("../scope.zig");
 
 pub const Resolver = struct {
@@ -30,6 +32,9 @@ pub const Resolver = struct {
         try symbols_mod.installUnitSymbol(ctx);
         try symbols_mod.installDummyArgs(ctx);
         try statements.preinstallUseImports(ctx);
+        if (ctx.unit.decl_sources.len != 0) {
+            std.debug.assert(ctx.unit.decl_sources.len == ctx.unit.decls.len);
+        }
         for (ctx.unit.decls, 0..) |decl, decl_idx| {
             if (decl_idx < ctx.unit.decl_sources.len) {
                 ctx.current_decl_source = ctx.unit.decl_sources[decl_idx];
@@ -43,22 +48,13 @@ pub const Resolver = struct {
             ctx.current_decl_source = null;
         }
         try validateAssumedCharacterLengths(ctx);
+        try rewrite_calls.lowerIntrinsicArrayConversions(ctx);
         for (ctx.unit.stmts) |stmt| {
-            try resolveStmtScope(ctx, stmt);
+            try statements.resolveStmt(ctx, stmt);
         }
         ctx.popScope();
     }
 };
-
-fn validateAssumedCharacterLengths(ctx: *context.Context) !void {
-    for (ctx.symbols.items) |sym| {
-        if (sym.type_kind != .character or sym.char_len != null) continue;
-        if (sym.storage == .dummy) continue;
-        if (sym.kind == .parameter) continue;
-        if (sym.kind == .function) continue;
-        return error.InvalidCharLen;
-    }
-}
 
 fn unitScopeKind(kind: ast.ProgramUnitKind) scope.ScopeKind {
     return switch (kind) {
@@ -66,34 +62,28 @@ fn unitScopeKind(kind: ast.ProgramUnitKind) scope.ScopeKind {
     };
 }
 
-const ResolveScopeError = error{OutOfMemory};
-
-fn resolveStmtScope(ctx: *context.Context, stmt: ast.Stmt) ResolveScopeError!void {
-    switch (stmt.node) {
-        .if_single => |ifs| {
-            try resolveStmtNodeScope(ctx, ifs.stmt.*);
-        },
-        .if_block => |ifb| {
-            _ = try ctx.pushScope(.block);
-            for (ifb.then_stmts) |inner| try resolveStmtScope(ctx, inner);
-            for (ifb.else_stmts) |inner| try resolveStmtScope(ctx, inner);
-            ctx.popScope();
-        },
-        else => {},
+fn validateAssumedCharacterLengths(ctx: *context.Context) !void {
+    for (ctx.symbols.items) |sym| {
+        if (sym.type_kind != .character or sym.char_len != null) continue;
+        if (sym.storage == .dummy) continue;
+        if (sym.kind == .parameter) continue;
+        if (sym.kind == .function) continue;
+        ctx.current_decl_source = findTypeDeclSource(ctx, sym.name);
+        return error.InvalidCharLen;
     }
 }
 
-fn resolveStmtNodeScope(ctx: *context.Context, node: ast.StmtNode) ResolveScopeError!void {
-    switch (node) {
-        .if_single => |ifs| {
-            try resolveStmtNodeScope(ctx, ifs.stmt.*);
-        },
-        .if_block => |ifb| {
-            _ = try ctx.pushScope(.block);
-            for (ifb.then_stmts) |inner| try resolveStmtScope(ctx, inner);
-            for (ifb.else_stmts) |inner| try resolveStmtScope(ctx, inner);
-            ctx.popScope();
-        },
-        else => {},
+fn findTypeDeclSource(ctx: *context.Context, target_name: []const u8) ?ast.DeclSource {
+    for (ctx.unit.decls, 0..) |decl, decl_idx| {
+        if (decl != .type_decl) continue;
+        const type_decl = decl.type_decl;
+        for (type_decl.items) |item| {
+            if (!std.ascii.eqlIgnoreCase(item.name, target_name)) continue;
+            if (decl_idx < ctx.unit.decl_sources.len) {
+                return ctx.unit.decl_sources[decl_idx];
+            }
+            return null;
+        }
     }
+    return null;
 }

@@ -1,7 +1,5 @@
 const context = @import("context.zig");
-const resolve_statements = @import("resolve_statements.zig");
 const check_statements = @import("check_statements.zig");
-const rewrite_calls = @import("rewrite_calls.zig");
 
 pub const Checker = struct {
     ctx: *context.Context,
@@ -13,9 +11,7 @@ pub const Checker = struct {
     pub fn run(self: *Checker) !void {
         const ctx = self.ctx;
         if (!ctx.enterUnitScope()) return error.MissingUnitScope;
-        try rewrite_calls.lowerIntrinsicArrayConversions(ctx);
         for (ctx.unit.stmts) |stmt| {
-            try resolve_statements.resolveStmt(ctx, stmt);
             try check_statements.checkStmt(ctx, stmt);
         }
     }
