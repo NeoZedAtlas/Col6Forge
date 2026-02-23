@@ -1,3 +1,4 @@
+const std = @import("std");
 const COL6FORGE_MAX_UNITS = 256;
 const COL6FORGE_FILENAME_MAX = 4096;
 
@@ -6,6 +7,7 @@ extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
 extern fn fclose(stream: *FILE) c_int;
 extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
 extern fn fgetc(stream: *FILE) c_int;
+extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 
@@ -43,6 +45,133 @@ extern fn col6forge_store_char(dst: ?[*]u8, len: c_int, src: [*:0]const u8) void
 extern fn unformatted_truncate(unit: ?*UnformattedUnit, new_count: usize) void;
 extern fn col6forge_open_direct(unit: c_int, recl: c_int) void;
 extern fn col6forge_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_int) void;
+
+const ExtraOpenUnit = extern struct {
+    unit: c_int,
+    opened: c_int,
+    filename: [COL6FORGE_FILENAME_MAX]u8,
+    access: c_int,
+    form: c_int,
+    blank: c_int,
+};
+
+var open_state_mutex: std.Thread.Mutex = .{};
+var extra_open_units: ?[*]ExtraOpenUnit = null;
+var extra_open_count: usize = 0;
+var extra_open_cap: usize = 0;
+
+fn isArrayUnit(unit: c_int) bool {
+    return unit >= 0 and unit < COL6FORGE_MAX_UNITS;
+}
+
+fn findExtraOpenIndexLocked(unit: c_int) ?usize {
+    if (extra_open_units == null) return null;
+    var i: usize = 0;
+    while (i < extra_open_count) : (i += 1) {
+        if (extra_open_units.?[i].unit == unit) return i;
+    }
+    return null;
+}
+
+fn ensureExtraOpenUnitLocked(unit: c_int) ?*ExtraOpenUnit {
+    if (findExtraOpenIndexLocked(unit)) |idx| return &extra_open_units.?[idx];
+
+    if (extra_open_count >= extra_open_cap) {
+        var new_cap: usize = if (extra_open_cap == 0) 8 else extra_open_cap * 2;
+        while (new_cap <= extra_open_count) : (new_cap *= 2) {}
+        const prev: ?*anyopaque = if (extra_open_units) |items| @ptrCast(items) else null;
+        const new_raw = realloc(prev, new_cap * @sizeOf(ExtraOpenUnit)) orelse return null;
+        const aligned: *align(@alignOf(ExtraOpenUnit)) anyopaque = @alignCast(new_raw);
+        const items: [*]ExtraOpenUnit = @ptrCast(aligned);
+        extra_open_units = items;
+        extra_open_cap = new_cap;
+    }
+
+    const idx = extra_open_count;
+    const entry = &extra_open_units.?[idx];
+    entry.unit = unit;
+    entry.opened = 0;
+    entry.filename[0] = 0;
+    entry.access = 0;
+    entry.form = 0;
+    entry.blank = 0;
+    extra_open_count += 1;
+    return entry;
+}
+
+fn writeOpenUnitLocked(ou: anytype, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int) void {
+    ou.opened = 1;
+    ou.access = access;
+    ou.form = form;
+    ou.blank = blank;
+    if (file != null and file_len > 0) {
+        col6forge_trim_filename(file, file_len, @ptrCast(&ou.filename), ou.filename.len);
+    } else {
+        ou.filename[0] = 0;
+    }
+}
+
+fn copyOpenFilenameLocked(unit: c_int, out: [*]u8, len: usize) c_int {
+    if (len == 0) return 0;
+
+    if (isArrayUnit(unit)) {
+        const idx: usize = @intCast(unit);
+        const ou = &open_units[idx];
+        if (ou.opened != 0 and ou.filename[0] != 0) {
+            var i: usize = 0;
+            while (i + 1 < len and ou.filename[i] != 0) : (i += 1) out[i] = ou.filename[i];
+            out[i] = 0;
+            return 1;
+        }
+        return 0;
+    }
+
+    if (findExtraOpenIndexLocked(unit)) |idx| {
+        const eu = &extra_open_units.?[idx];
+        if (eu.opened != 0 and eu.filename[0] != 0) {
+            var i: usize = 0;
+            while (i + 1 < len and eu.filename[i] != 0) : (i += 1) out[i] = eu.filename[i];
+            out[i] = 0;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+pub export fn col6forge_open_unit_copy_filename(unit: c_int, out: ?[*]u8, len: usize) callconv(.c) c_int {
+    if (out == null or len == 0) return 0;
+    open_state_mutex.lock();
+    defer open_state_mutex.unlock();
+    return copyOpenFilenameLocked(unit, out.?, len);
+}
+
+pub export fn col6forge_open_unit_is_open(unit: c_int) callconv(.c) c_int {
+    open_state_mutex.lock();
+    defer open_state_mutex.unlock();
+
+    if (isArrayUnit(unit)) {
+        return if (open_units[@as(usize, @intCast(unit))].opened != 0) 1 else 0;
+    }
+    if (findExtraOpenIndexLocked(unit)) |idx| {
+        return if (extra_open_units.?[idx].opened != 0) 1 else 0;
+    }
+    return 0;
+}
+
+pub export fn col6forge_open_unit_blank_code(unit: c_int) callconv(.c) c_int {
+    open_state_mutex.lock();
+    defer open_state_mutex.unlock();
+
+    if (isArrayUnit(unit)) {
+        const ou = &open_units[@as(usize, @intCast(unit))];
+        return if (ou.opened != 0) ou.blank else 0;
+    }
+    if (findExtraOpenIndexLocked(unit)) |idx| {
+        const eu = &extra_open_units.?[idx];
+        return if (eu.opened != 0) eu.blank else 0;
+    }
+    return 0;
+}
 
 fn asConstCStr(buf: anytype) [*:0]const u8 {
     return @ptrCast(buf);
@@ -153,18 +282,17 @@ fn unformattedEnsureCapacityLocal(unit: *UnformattedUnit, needed: usize) void {
 
 pub export fn col6forge_open(unit: c_int, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int, status: c_int) callconv(.c) void {
     _ = status;
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return;
-    const idx: usize = @intCast(unit);
-    const ou = &open_units[idx];
-    ou.opened = 1;
-    ou.access = access;
-    ou.form = form;
-    ou.blank = blank;
-    if (file != null and file_len > 0) {
-        col6forge_trim_filename(file, file_len, @ptrCast(&ou.filename), ou.filename.len);
-    } else {
-        ou.filename[0] = 0;
+    open_state_mutex.lock();
+    defer open_state_mutex.unlock();
+
+    if (isArrayUnit(unit)) {
+        const idx: usize = @intCast(unit);
+        writeOpenUnitLocked(&open_units[idx], file, file_len, access, form, blank);
+        return;
     }
+
+    const ou = ensureExtraOpenUnitLocked(unit) orelse return;
+    writeOpenUnitLocked(ou, file, file_len, access, form, blank);
 }
 
 pub export fn col6forge_open_ex(
@@ -194,20 +322,45 @@ pub export fn col6forge_open_ex(
 }
 
 pub export fn col6forge_close(unit: c_int, status: c_int) callconv(.c) void {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return;
-    const idx: usize = @intCast(unit);
-    const ou = &open_units[idx];
-    if (status == 2) {
-        var name: [32]u8 = [_]u8{0} ** 32;
-        if (ou.opened != 0 and ou.filename[0] != 0) {
-            _ = remove(asConstCStr(&ou.filename));
-        } else {
-            unit_filename(unit, &name, name.len);
-            _ = remove(asConstCStr(&name));
+    var delete_name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
+    var delete_ready = false;
+
+    open_state_mutex.lock();
+    if (isArrayUnit(unit)) {
+        const idx: usize = @intCast(unit);
+        const ou = &open_units[idx];
+        if (status == 2) {
+            delete_ready = copyOpenFilenameLocked(unit, &delete_name, delete_name.len) != 0;
+            if (!delete_ready) {
+                _ = snprintf(&delete_name, delete_name.len, "fort.%d", unit);
+                delete_name[delete_name.len - 1] = 0;
+                delete_ready = true;
+            }
         }
+        ou.opened = 0;
+        ou.filename[0] = 0;
+    } else if (findExtraOpenIndexLocked(unit)) |extra_idx| {
+        const ou = &extra_open_units.?[extra_idx];
+        if (status == 2) {
+            delete_ready = copyOpenFilenameLocked(unit, &delete_name, delete_name.len) != 0;
+            if (!delete_ready) {
+                _ = snprintf(&delete_name, delete_name.len, "fort.%d", unit);
+                delete_name[delete_name.len - 1] = 0;
+                delete_ready = true;
+            }
+        }
+        ou.opened = 0;
+        ou.filename[0] = 0;
+    } else if (status == 2) {
+        _ = snprintf(&delete_name, delete_name.len, "fort.%d", unit);
+        delete_name[delete_name.len - 1] = 0;
+        delete_ready = true;
     }
-    ou.opened = 0;
-    ou.filename[0] = 0;
+    open_state_mutex.unlock();
+
+    if (status == 2 and delete_ready and delete_name[0] != 0) {
+        _ = remove(asConstCStr(&delete_name));
+    }
 }
 
 pub export fn col6forge_close_ex(unit: c_int, status: ?[*]const u8, status_len: c_int) callconv(.c) void {
@@ -239,32 +392,37 @@ pub export fn col6forge_inquire_unit(
     nextrec: ?*c_int,
 ) callconv(.c) void {
     if (iostat) |v| v.* = 0;
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) {
-        if (exist) |v| v.* = 0;
-        if (opened) |v| v.* = 0;
-        if (number) |v| v.* = 0;
-        col6forge_store_char(access, access_len, "UNKNOWN");
-        col6forge_store_char(sequential, sequential_len, "UNKNOWN");
-        col6forge_store_char(direct, direct_len, "UNKNOWN");
-        col6forge_store_char(form, form_len, "UNKNOWN");
-        col6forge_store_char(formatted, formatted_len, "UNKNOWN");
-        col6forge_store_char(unformatted, unformatted_len, "UNKNOWN");
-        col6forge_store_char(blank, blank_len, "UNKNOWN");
-        if (recl) |v| v.* = 0;
-        if (nextrec) |v| v.* = 0;
-        return;
-    }
+    var is_open = false;
+    var access_code: c_int = 0;
+    var form_code: c_int = 0;
+    var blank_code: c_int = 0;
+    var filename: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
 
-    const idx: usize = @intCast(unit);
-    const ou = &open_units[idx];
-    const is_open = ou.opened != 0;
+    open_state_mutex.lock();
+    if (isArrayUnit(unit)) {
+        const ou = &open_units[@as(usize, @intCast(unit))];
+        is_open = ou.opened != 0;
+        access_code = ou.access;
+        form_code = ou.form;
+        blank_code = ou.blank;
+        _ = copyOpenFilenameLocked(unit, &filename, filename.len);
+    } else if (findExtraOpenIndexLocked(unit)) |extra_idx| {
+        const ou = &extra_open_units.?[extra_idx];
+        is_open = ou.opened != 0;
+        access_code = ou.access;
+        form_code = ou.form;
+        blank_code = ou.blank;
+        _ = copyOpenFilenameLocked(unit, &filename, filename.len);
+    }
+    open_state_mutex.unlock();
+
     if (exist) |v| {
         if (is_open) {
             v.* = 1;
-        } else if (ou.filename[0] != 0) {
-            v.* = if (col6forgeFileExists(asConstCStr(&ou.filename))) 1 else 0;
+        } else if (filename[0] != 0) {
+            v.* = if (col6forgeFileExists(asConstCStr(&filename))) 1 else 0;
         } else {
-            var name: [32]u8 = [_]u8{0} ** 32;
+            var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
             unit_filename(unit, &name, name.len);
             v.* = if (col6forgeFileExists(asConstCStr(&name))) 1 else 0;
         }
@@ -272,13 +430,13 @@ pub export fn col6forge_inquire_unit(
     if (opened) |v| v.* = if (is_open) 1 else 0;
     if (number) |v| v.* = unit;
 
-    const access_str: [*:0]const u8 = if (is_open) (if (ou.access == 1) "DIRECT" else "SEQUENTIAL") else "UNKNOWN";
-    const seq_str: [*:0]const u8 = if (is_open) (if (ou.access == 1) "NO" else "YES") else "UNKNOWN";
-    const dir_str: [*:0]const u8 = if (is_open) (if (ou.access == 1) "YES" else "NO") else "UNKNOWN";
-    const form_str: [*:0]const u8 = if (is_open) (if (ou.form == 1) "UNFORMATTED" else "FORMATTED") else "UNKNOWN";
-    const fmt_str: [*:0]const u8 = if (is_open) (if (ou.form == 1) "NO" else "YES") else "UNKNOWN";
-    const unf_str: [*:0]const u8 = if (is_open) (if (ou.form == 1) "YES" else "NO") else "UNKNOWN";
-    const blank_str: [*:0]const u8 = if (is_open) (if (ou.blank == 2) "ZERO" else "NULL") else "UNKNOWN";
+    const access_str: [*:0]const u8 = if (is_open) (if (access_code == 1) "DIRECT" else "SEQUENTIAL") else "UNKNOWN";
+    const seq_str: [*:0]const u8 = if (is_open) (if (access_code == 1) "NO" else "YES") else "UNKNOWN";
+    const dir_str: [*:0]const u8 = if (is_open) (if (access_code == 1) "YES" else "NO") else "UNKNOWN";
+    const form_str: [*:0]const u8 = if (is_open) (if (form_code == 1) "UNFORMATTED" else "FORMATTED") else "UNKNOWN";
+    const fmt_str: [*:0]const u8 = if (is_open) (if (form_code == 1) "NO" else "YES") else "UNKNOWN";
+    const unf_str: [*:0]const u8 = if (is_open) (if (form_code == 1) "YES" else "NO") else "UNKNOWN";
+    const blank_str: [*:0]const u8 = if (is_open) (if (blank_code == 2) "ZERO" else "NULL") else "UNKNOWN";
     col6forge_store_char(access, access_len, access_str);
     col6forge_store_char(sequential, sequential_len, seq_str);
     col6forge_store_char(direct, direct_len, dir_str);
@@ -287,7 +445,7 @@ pub export fn col6forge_inquire_unit(
     col6forge_store_char(unformatted, unformatted_len, unf_str);
     col6forge_store_char(blank, blank_len, blank_str);
 
-    if (ou.access == 1) {
+    if (is_open and access_code == 1) {
         var recl_local: c_int = 0;
         var nextrec_local: c_int = 1;
         col6forge_inquire_direct(unit, &recl_local, &nextrec_local);
@@ -329,13 +487,28 @@ pub export fn col6forge_inquire_file(
     col6forge_trim_filename(file, file_len, &name, name.len);
 
     var found_unit: c_int = -1;
-    var i: usize = 0;
-    while (i < COL6FORGE_MAX_UNITS) : (i += 1) {
-        if (open_units[i].opened != 0 and open_units[i].filename[0] != 0 and cstrEq(asConstCStr(&open_units[i].filename), asConstCStr(&name))) {
-            found_unit = @intCast(i);
-            break;
+    open_state_mutex.lock();
+    {
+        var i: usize = 0;
+        while (i < COL6FORGE_MAX_UNITS) : (i += 1) {
+            if (open_units[i].opened != 0 and open_units[i].filename[0] != 0 and cstrEq(asConstCStr(&open_units[i].filename), asConstCStr(&name))) {
+                found_unit = @intCast(i);
+                break;
+            }
+        }
+        if (found_unit < 0 and extra_open_units != null) {
+            i = 0;
+            while (i < extra_open_count) : (i += 1) {
+                const entry = &extra_open_units.?[i];
+                if (entry.opened != 0 and entry.filename[0] != 0 and cstrEq(asConstCStr(&entry.filename), asConstCStr(&name))) {
+                    found_unit = entry.unit;
+                    break;
+                }
+            }
         }
     }
+    open_state_mutex.unlock();
+
     if (found_unit >= 0) {
         col6forge_inquire_unit(found_unit, iostat, exist, opened, number, access, access_len, sequential, sequential_len, direct, direct_len, form, form_len, formatted, formatted_len, unformatted, unformatted_len, blank, blank_len, recl, nextrec);
         return;
@@ -382,7 +555,7 @@ pub export fn col6forge_backspace(unit: c_int) callconv(.c) void {
         return;
     }
 
-    var name: [32]u8 = [_]u8{0} ** 32;
+    var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     unit_filename(unit, &name, name.len);
     const file = fopen(asConstCStr(&name), "r") orelse return;
     defer _ = fclose(file);
@@ -430,4 +603,43 @@ pub export fn col6forge_endfile(unit: c_int) callconv(.c) void {
     records[uu.pos].is_endfile = 1;
     uu.count = uu.pos + 1;
     uu.pos = uu.count;
+}
+
+fn zLen(buf: []const u8) usize {
+    var i: usize = 0;
+    while (i < buf.len and buf[i] != 0) : (i += 1) {}
+    return i;
+}
+
+test "open state supports negative and large unit numbers" {
+    const neg_unit: c_int = -17;
+    const big_unit: c_int = 1000;
+    const neg_name = "neg_unit_runtime.tmp";
+    const big_name = "big_unit_runtime.tmp";
+
+    col6forge_open(neg_unit, neg_name.ptr, @intCast(neg_name.len), 0, 0, 0, 0);
+    col6forge_open(big_unit, big_name.ptr, @intCast(big_name.len), 0, 0, 2, 0);
+
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_open_unit_is_open(neg_unit));
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_open_unit_is_open(big_unit));
+    try std.testing.expectEqual(@as(c_int, 2), col6forge_open_unit_blank_code(big_unit));
+
+    var copy_neg: [64]u8 = [_]u8{0} ** 64;
+    var copy_big: [64]u8 = [_]u8{0} ** 64;
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_open_unit_copy_filename(neg_unit, &copy_neg, copy_neg.len));
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_open_unit_copy_filename(big_unit, &copy_big, copy_big.len));
+    try std.testing.expectEqualStrings(neg_name, copy_neg[0..zLen(&copy_neg)]);
+    try std.testing.expectEqualStrings(big_name, copy_big[0..zLen(&copy_big)]);
+
+    var resolved_neg: [64]u8 = [_]u8{0} ** 64;
+    var resolved_big: [64]u8 = [_]u8{0} ** 64;
+    unit_filename(neg_unit, &resolved_neg, resolved_neg.len);
+    unit_filename(big_unit, &resolved_big, resolved_big.len);
+    try std.testing.expectEqualStrings(neg_name, resolved_neg[0..zLen(&resolved_neg)]);
+    try std.testing.expectEqualStrings(big_name, resolved_big[0..zLen(&resolved_big)]);
+
+    col6forge_close(neg_unit, 0);
+    col6forge_close(big_unit, 0);
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_open_unit_is_open(neg_unit));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_open_unit_is_open(big_unit));
 }

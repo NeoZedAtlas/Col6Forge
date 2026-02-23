@@ -1,18 +1,8 @@
 const std = @import("std");
-const COL6FORGE_MAX_UNITS = 256;
 const COL6FORGE_FILENAME_MAX = 4096;
 
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
-
-const OpenUnit = extern struct {
-    opened: c_int,
-    filename: [COL6FORGE_FILENAME_MAX]u8,
-    access: c_int,
-    form: c_int,
-    blank: c_int,
-};
-
-extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
+extern fn col6forge_open_unit_copy_filename(unit: c_int, out: ?[*]u8, len: usize) c_int;
 
 fn cstrlen(text: [*:0]const u8) usize {
     var i: usize = 0;
@@ -39,17 +29,9 @@ fn copyCharField(dst: ?[*]u8, len: c_int, src: [*:0]const u8) void {
 pub export fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) callconv(.c) void {
     if (buf == null or len == 0) return;
     const out = buf.?;
-    if (unit >= 0 and unit < COL6FORGE_MAX_UNITS) {
-        const idx: usize = @intCast(unit);
-        if (open_units[idx].opened != 0 and open_units[idx].filename[0] != 0) {
-            const name = &open_units[idx].filename;
-            var i: usize = 0;
-            while (i + 1 < len and name[i] != 0) : (i += 1) {
-                out[i] = name[i];
-            }
-            out[i] = 0;
-            return;
-        }
+    if (col6forge_open_unit_copy_filename(unit, out, len) != 0) {
+        out[len - 1] = 0;
+        return;
     }
     _ = snprintf(out, len, "fort.%d", unit);
     out[len - 1] = 0;

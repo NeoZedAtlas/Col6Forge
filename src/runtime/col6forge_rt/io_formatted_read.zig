@@ -11,22 +11,15 @@ extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
 extern fn strtod(nptr: [*:0]const u8, endptr: ?*?[*:0]u8) f64;
 extern fn exit(status: c_int) noreturn;
 
-const OpenUnit = extern struct {
-    opened: c_int,
-    filename: [COL6FORGE_FILENAME_MAX]u8,
-    access: c_int,
-    form: c_int,
-    blank: c_int,
-};
-
 extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
-extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
 
 extern fn col6forge_rt_stdin() ?*FILE;
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 extern fn col6forge_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
+extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
+extern fn col6forge_open_unit_blank_code(unit: c_int) c_int;
 
 fn asCStr(buf: anytype) [*:0]u8 {
     return @ptrCast(buf);
@@ -127,10 +120,7 @@ pub export fn col6forge_formatted_read_core(
     const fmt_c = fmt.?;
     const total_args: usize = @intCast(@max(arg_count, 0));
 
-    const unit_opened = if (unit >= 0 and unit < COL6FORGE_MAX_UNITS)
-        open_units[@as(usize, @intCast(unit))].opened != 0
-    else
-        false;
+    const unit_opened = col6forge_open_unit_is_open(unit) != 0;
 
     var is_stdin = false;
     var file: ?*FILE = null;
@@ -138,19 +128,18 @@ pub export fn col6forge_formatted_read_core(
         is_stdin = true;
         file = col6forge_rt_stdin();
     } else {
-        if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) {
-            return if (status_mode != 0) 1 else -1;
-        }
-        var name: [32]u8 = [_]u8{0} ** 32;
+        var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
         unit_filename(unit, &name, name.len);
         file = fopen(asConstCStr(&name), "r");
         if (file == null) {
             if (status_mode != 0) return 1;
             exit(2);
         }
-        const idx: usize = @intCast(unit);
-        if (unit_pos[idx] != 0) {
-            _ = fseek(file.?, unit_pos[idx], 0);
+        if (unit >= 0 and unit < COL6FORGE_MAX_UNITS) {
+            const idx: usize = @intCast(unit);
+            if (unit_pos[idx] != 0) {
+                _ = fseek(file.?, unit_pos[idx], 0);
+            }
         }
     }
 
@@ -160,8 +149,10 @@ pub export fn col6forge_formatted_read_core(
     };
     defer {
         if (!is_stdin) {
-            const idx: usize = @intCast(unit);
-            unit_pos[idx] = ftell(stream);
+            if (unit >= 0 and unit < COL6FORGE_MAX_UNITS) {
+                const idx: usize = @intCast(unit);
+                unit_pos[idx] = ftell(stream);
+            }
             _ = fclose(stream);
         }
     }
@@ -173,10 +164,7 @@ pub export fn col6forge_formatted_read_core(
         exit(2);
     }
 
-    var blank_mode: c_int = 0;
-    if (unit >= 0 and unit < COL6FORGE_MAX_UNITS and open_units[@as(usize, @intCast(unit))].opened != 0 and open_units[@as(usize, @intCast(unit))].blank == 2) {
-        blank_mode = 1;
-    }
+    var blank_mode: c_int = if (col6forge_open_unit_blank_code(unit) == 2) 1 else 0;
 
     var p: usize = 0;
     var idx: usize = 0;

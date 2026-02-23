@@ -12,21 +12,13 @@ extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
 extern fn strtod(nptr: [*:0]const u8, endptr: ?*?[*:0]u8) f64;
 extern fn exit(status: c_int) noreturn;
 
-const OpenUnit = extern struct {
-    opened: c_int,
-    filename: [COL6FORGE_FILENAME_MAX]u8,
-    access: c_int,
-    form: c_int,
-    blank: c_int,
-};
-
 extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
-extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
 
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn col6forge_rt_stdin() ?*FILE;
 extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
+extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
 
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
@@ -101,22 +93,20 @@ fn listDelim(ch: c_int) bool {
 
 fn col6forgeOpenListInput(unit: c_int, is_stdin: *bool) ?*FILE {
     is_stdin.* = false;
-    const unit_opened = if (unit >= 0 and unit < COL6FORGE_MAX_UNITS)
-        open_units[@as(usize, @intCast(unit))].opened != 0
-    else
-        false;
+    const unit_opened = col6forge_open_unit_is_open(unit) != 0;
     if ((unit == 5 or unit == 0) and !unit_opened) {
         is_stdin.* = true;
         return col6forge_rt_stdin();
     }
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return null;
 
-    var name: [32]u8 = [_]u8{0} ** 32;
+    var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     unit_filename(unit, &name, name.len);
     const file = fopen(asConstCStr(&name), "r") orelse return null;
-    const idx: usize = @intCast(unit);
-    if (unit_pos[idx] != 0) {
-        _ = fseek(file, unit_pos[idx], 0);
+    if (unit >= 0 and unit < COL6FORGE_MAX_UNITS) {
+        const idx: usize = @intCast(unit);
+        if (unit_pos[idx] != 0) {
+            _ = fseek(file, unit_pos[idx], 0);
+        }
     }
     return file;
 }

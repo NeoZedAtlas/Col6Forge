@@ -1,5 +1,6 @@
 const std = @import("std");
 const COL6FORGE_MAX_UNITS = 256;
+const COL6FORGE_FILENAME_MAX = 4096;
 
 const FILE = opaque {};
 
@@ -144,7 +145,7 @@ fn directEnsureCapacity(unit: c_int, needed: usize) void {
 }
 
 fn unformattedFileHasData(unit: c_int) bool {
-    var name: [32]u8 = [_]u8{0} ** 32;
+    var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     unit_filename(unit, &name, name.len);
     const file = fopen(asConstCStr(&name), "rb") orelse return false;
     defer _ = fclose(file);
@@ -164,6 +165,12 @@ pub export fn col6forge_open_direct(unit: c_int, recl: c_int) callconv(.c) void 
     direct_units[idx].nextrec = 1;
 }
 
+fn resolvedDirectRecl(du: *DirectUnit, requested_recl: c_int) ?c_int {
+    if (du.recl <= 0) return null;
+    if (requested_recl > 0 and requested_recl != du.recl) return null;
+    return du.recl;
+}
+
 pub export fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) callconv(.c) ?[*]u8 {
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return null;
     direct_store_mutex.lock();
@@ -171,9 +178,7 @@ pub export fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) 
 
     const idx: usize = @intCast(unit);
     const du = &direct_units[idx];
-    const recl_local: c_int = if (du.recl > 0) du.recl else recl;
-    if (recl_local <= 0) return null;
-    du.recl = recl_local;
+    const recl_local = resolvedDirectRecl(du, recl) orelse return null;
 
     const recl_size: usize = @intCast(recl_local);
     const range = directRecordRange(rec, recl_size) orelse return null;
@@ -195,9 +200,8 @@ pub export fn col6forge_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_in
 
     const idx: usize = @intCast(unit);
     const du = &direct_units[idx];
-    const recl_local: c_int = if (du.recl > 0) du.recl else recl;
-    if (recl_local <= 0 or du.data == null) return null;
-    du.recl = recl_local;
+    const recl_local = resolvedDirectRecl(du, recl) orelse return null;
+    if (du.data == null) return null;
 
     const recl_size: usize = @intCast(recl_local);
     const range = directRecordRange(rec, recl_size) orelse return null;
@@ -397,4 +401,26 @@ test "directRecordRange validates record offsets safely" {
 
     try std.testing.expect(directRecordRange(2, std.math.maxInt(usize)) == null);
     try std.testing.expect(directRecordRange(std.math.maxInt(c_int), std.math.maxInt(usize)) == null);
+}
+
+test "direct record access requires explicit RECL and rejects mismatch" {
+    const unit: c_int = 201;
+    const idx: usize = @intCast(unit);
+
+    direct_store_mutex.lock();
+    if (direct_units[idx].data) |data| free(@ptrCast(data));
+    direct_units[idx].data = null;
+    direct_units[idx].size = 0;
+    direct_units[idx].recl = 0;
+    direct_units[idx].nextrec = 1;
+    direct_store_mutex.unlock();
+
+    try std.testing.expect(col6forge_direct_record_ptr(unit, 1, 16) == null);
+    try std.testing.expect(col6forge_direct_record_ptr_ro(unit, 1, 16) == null);
+
+    col6forge_open_direct(unit, 16);
+    try std.testing.expect(col6forge_direct_record_ptr(unit, 1, 16) != null);
+    try std.testing.expect(col6forge_direct_record_ptr(unit, 2, 8) == null);
+    try std.testing.expect(col6forge_direct_record_ptr_ro(unit, 1, 8) == null);
+    try std.testing.expect(col6forge_direct_record_ptr_ro(unit, 1, 16) != null);
 }

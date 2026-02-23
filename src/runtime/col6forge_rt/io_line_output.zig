@@ -9,19 +9,11 @@ extern fn ftell(stream: *FILE) c_long;
 extern fn fwrite(ptr: ?*const anyopaque, size: usize, nmemb: usize, stream: *FILE) usize;
 extern fn fflush(stream: *FILE) c_int;
 
-const OpenUnit = extern struct {
-    opened: c_int,
-    filename: [COL6FORGE_FILENAME_MAX]u8,
-    access: c_int,
-    form: c_int,
-    blank: c_int,
-};
-
 extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
-extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
 
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn col6forge_rt_stdout() ?*FILE;
+extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
 
 fn cstrlen(text: [*:0]const u8) usize {
     var i: usize = 0;
@@ -37,10 +29,7 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
     if (text == null) return if (strict_status != 0) 1 else 0;
     const src = text.?;
     const src_len = cstrlen(src);
-    const unit_opened = if (unit >= 0 and unit < COL6FORGE_MAX_UNITS)
-        open_units[@as(usize, @intCast(unit))].opened != 0
-    else
-        false;
+    const unit_opened = col6forge_open_unit_is_open(unit) != 0;
 
     if ((unit == 6 or unit == 0) and !unit_opened) {
         const out = col6forge_rt_stdout() orelse return if (strict_status != 0) 1 else 0;
@@ -53,16 +42,16 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
         return 0;
     }
 
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) {
-        return if (strict_status != 0) 1 else 0;
-    }
-    const idx: usize = @intCast(unit);
-    var name: [32]u8 = [_]u8{0} ** 32;
+    const has_pos_slot = unit >= 0 and unit < COL6FORGE_MAX_UNITS;
+    const idx: usize = if (has_pos_slot) @intCast(unit) else 0;
+    var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     unit_filename(unit, &name, name.len);
 
     var file: ?*FILE = null;
-    if (unit_pos[idx] == 0) {
+    if (has_pos_slot and unit_pos[idx] == 0) {
         file = fopen(asConstCStr(&name), "w");
+    } else if (!has_pos_slot) {
+        file = fopen(asConstCStr(&name), "ab");
     } else {
         file = fopen(asConstCStr(&name), "r+");
         if (file == null) {
@@ -73,7 +62,7 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
     const stream = file.?;
     defer _ = fclose(stream);
 
-    if (unit_pos[idx] != 0) {
+    if (has_pos_slot and unit_pos[idx] != 0) {
         _ = fseek(stream, unit_pos[idx], 0);
     }
     _ = fwrite(@ptrCast(src), 1, src_len, stream);
@@ -81,6 +70,6 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
         const nl: [1]u8 = .{'\n'};
         _ = fwrite(@ptrCast(&nl), 1, 1, stream);
     }
-    unit_pos[idx] = ftell(stream);
+    if (has_pos_slot) unit_pos[idx] = ftell(stream);
     return 0;
 }
