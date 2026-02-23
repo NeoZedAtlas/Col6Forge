@@ -397,7 +397,7 @@ fn bindBuiltinUseImport(
 }
 
 fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
-    var key_buf: [128]u8 = undefined;
+    var key_buf: [512]u8 = undefined;
     if (name.len <= key_buf.len) {
         for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
         return self.known_function_types.get(key_buf[0..name.len]);
@@ -407,7 +407,7 @@ fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKi
 }
 
 fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
-    var key_buf: [128]u8 = undefined;
+    var key_buf: [512]u8 = undefined;
     if (name.len <= key_buf.len) {
         for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
         return self.known_procedure_sigs.get(key_buf[0..name.len]);

@@ -12,7 +12,8 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
     invalidateExprTypeCache(self, expr);
     switch (expr.*) {
         .identifier => |name| {
-            _ = try symbols_mod.ensureSymbol(self, name);
+            const idx = try symbols_mod.ensureSymbol(self, name);
+            try cacheExprType(self, expr, self.symbols.items[idx].type_kind);
         },
         .call_or_subscript => |call| {
             for (call.args) |arg| {
@@ -71,6 +72,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                 }
             }
             try recordResolvedRef(self, expr, call.name, kind);
+            try cacheExprType(self, expr, sym.type_kind);
         },
         .substring => |sub| {
             const idx = try symbols_mod.ensureSymbol(self, sub.name);
@@ -92,14 +94,23 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             }
             if (sub.start) |start| try resolveExpr(self, start);
             if (sub.end) |end| try resolveExpr(self, end);
+            try cacheExprType(self, expr, .character);
         },
         .dim_range => |range| {
             if (range.lower) |lower| try resolveExpr(self, lower);
             try resolveExpr(self, range.upper);
+            try cacheExprType(self, expr, .integer);
         },
         .complex_literal => |lit| {
             try resolveExpr(self, lit.real);
             try resolveExpr(self, lit.imag);
+            const real_kind = try exprType(self, lit.real);
+            const imag_kind = try exprType(self, lit.imag);
+            if (real_kind == .double_precision or imag_kind == .double_precision or real_kind == .complex_double or imag_kind == .complex_double) {
+                try cacheExprType(self, expr, .complex_double);
+            } else {
+                try cacheExprType(self, expr, .complex);
+            }
         },
         .implied_do => |implied| {
             _ = try symbols_mod.ensureSymbol(self, implied.var_name);
@@ -110,15 +121,37 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                 try resolveExpr(self, item);
             }
         },
-        .unary => |un| try resolveExpr(self, un.expr),
+        .unary => |un| {
+            try resolveExpr(self, un.expr);
+            const ty = switch (un.op) {
+                .not => ast.TypeKind.logical,
+                .plus, .minus => try exprType(self, un.expr),
+            };
+            try cacheExprType(self, expr, ty);
+        },
         .binary => |bin| {
             try resolveExpr(self, bin.left);
             try resolveExpr(self, bin.right);
             const left_kind = try exprType(self, bin.left);
             const right_kind = try exprType(self, bin.right);
             try validateBinaryOperands(bin.op, left_kind, right_kind);
+            const ty = switch (bin.op) {
+                .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => ast.TypeKind.logical,
+                .concat => ast.TypeKind.character,
+                else => promoteNumericType(left_kind, right_kind),
+            };
+            try cacheExprType(self, expr, ty);
         },
-        .literal => {},
+        .literal => |lit| {
+            const ty: ast.TypeKind = switch (lit.kind) {
+                .integer => .integer,
+                .real => .real,
+                .logical => .logical,
+                .string, .hollerith => .character,
+                .assumed_size => .integer,
+            };
+            try cacheExprType(self, expr, ty);
+        },
     }
 }
 
@@ -381,4 +414,8 @@ fn recordResolvedRef(
 ) !void {
     try self.refs.append(.{ .expr = expr, .name = name, .kind = kind });
     try self.ref_kind_index.put(@intFromPtr(expr), kind);
+}
+
+fn cacheExprType(self: *context.Context, expr: *ast.Expr, ty: ast.TypeKind) !void {
+    try self.expr_type_cache.put(@intFromPtr(expr), ty);
 }

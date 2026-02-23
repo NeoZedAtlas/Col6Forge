@@ -174,7 +174,7 @@ pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
 }
 
 pub fn findSymbolIndex(self: *context.Context, name: []const u8) ?usize {
-    var key_buf: [128]u8 = undefined;
+    var key_buf: [512]u8 = undefined;
     const key: []const u8 = blk: {
         if (name.len <= key_buf.len) {
             for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
@@ -191,7 +191,7 @@ pub fn findSymbolIndex(self: *context.Context, name: []const u8) ?usize {
 }
 
 fn findKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
-    var key_buf: [128]u8 = undefined;
+    var key_buf: [512]u8 = undefined;
     if (name.len <= key_buf.len) {
         for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
         return self.known_function_types.get(key_buf[0..name.len]);
@@ -233,7 +233,7 @@ pub fn isIntrinsicName(name: []const u8) bool {
 }
 
 fn findKnownHostParameter(self: *context.Context, name: []const u8) ?Symbol {
-    var key_buf: [128]u8 = undefined;
+    var key_buf: [512]u8 = undefined;
     if (name.len <= key_buf.len) {
         for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
         return self.known_host_parameters.get(key_buf[0..name.len]);
@@ -264,7 +264,7 @@ fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
 }
 
 fn findKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
-    var key_buf: [128]u8 = undefined;
+    var key_buf: [512]u8 = undefined;
     if (name.len <= key_buf.len) {
         for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
         if (self.known_procedure_sigs.get(key_buf[0..name.len])) |sig| return sig;

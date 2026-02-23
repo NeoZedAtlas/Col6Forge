@@ -205,11 +205,7 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
 }
 
 fn resolvedKindFor(self: *const context.Context, expr: *ast.Expr) ?ResolvedRefKind {
-    if (self.ref_kind_index.get(@intFromPtr(expr))) |kind| return kind;
-    for (self.refs.items) |ref| {
-        if (ref.expr == expr) return ref.kind;
-    }
-    return null;
+    return self.ref_kind_index.get(@intFromPtr(expr));
 }
 
 fn isAssignmentTarget(self: *context.Context, expr: *ast.Expr) bool {
@@ -310,7 +306,7 @@ fn textInSet(text: []const u8, allowed: []const []const u8) bool {
 }
 
 fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
-    var key_buf: [128]u8 = undefined;
+    var key_buf: [512]u8 = undefined;
     if (name.len <= key_buf.len) {
         for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
         if (self.known_procedure_sigs.get(key_buf[0..name.len])) |sig| return sig;
