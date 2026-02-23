@@ -41,6 +41,10 @@ fn emitStmtInner(
             try builder.br(next_block);
             return true;
         },
+        .use_stmt => {
+            try builder.br(next_block);
+            return true;
+        },
         .call => |call| {
             if (execution.callHasAltReturns(call)) {
                 try execution.emitCallWithAlternateReturns(ctx, builder, call, next_block, local_label_map);

@@ -62,6 +62,7 @@ fn rewriteStmt(
             changed = (try rewriteExpr(ctx, state, assign.target, stmt.*, prelude)) or changed;
             changed = (try rewriteExpr(ctx, state, assign.value, stmt.*, prelude)) or changed;
         },
+        .use_stmt => {},
         .call => |*call| {
             for (call.args) |*arg| {
                 switch (arg.*) {

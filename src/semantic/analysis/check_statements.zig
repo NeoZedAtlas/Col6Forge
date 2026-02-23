@@ -25,6 +25,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             if (!isAssignmentTarget(self, assign.target)) return error.AssignmentTypeMismatch;
             if (!isAssignmentCompatible(target_ty, value_ty)) return error.AssignmentTypeMismatch;
         },
+        .use_stmt => {},
         .call => |call| {
             const call_idx = resolve_symbols.findSymbolIndex(self, call.name);
             try checkKnownProcedureCallArity(self, call.name, countCallExprArgs(call.args), true, call_idx);

@@ -18,6 +18,7 @@ const Stmt = ast.Stmt;
 const StmtNode = ast.StmtNode;
 const Expr = ast.Expr;
 const CallArg = ast.CallArg;
+const UseOnlyItem = ast.UseOnlyItem;
 
 const ParseStmtError = anyerror;
 
@@ -110,8 +111,9 @@ pub fn parseStatement(
         return .{ .label = label, .node = stmt_node };
     }
     if (lp.isKeywordSplit("USE")) {
+        const stmt_node = try parseUseStatement(arena, &lp);
         index.* += 1;
-        return .{ .label = label, .node = .{ .cont = {} } };
+        return .{ .label = label, .node = stmt_node };
     }
     if (lp.isKeywordSplit("ALLOCATE") or lp.isKeywordSplit("DEALLOCATE")) {
         index.* += 1;
@@ -440,6 +442,68 @@ fn parseWhereAsIfSingle(arena: std.mem.Allocator, lp: *LineParser) ParseStmtErro
     const assign_node = try arena.create(StmtNode);
     assign_node.* = .{ .assignment = .{ .target = target, .value = value } };
     return .{ .if_single = .{ .condition = cond, .stmt = assign_node } };
+}
+
+fn parseUseStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    if (!lp.consumeKeyword("USE")) return error.UnexpectedToken;
+
+    if (lp.consume(.comma)) {
+        while (!consumeDoubleColon(lp)) {
+            if (lp.peek() == null) return error.UnexpectedToken;
+            _ = lp.next();
+        }
+    }
+    _ = consumeDoubleColon(lp);
+
+    const module_name = lp.readName(arena) orelse return error.MissingName;
+    var only_items = std.array_list.Managed(UseOnlyItem).init(arena);
+
+    if (lp.consume(.comma)) {
+        if (lp.consumeKeyword("ONLY")) {
+            _ = lp.expect(.colon) orelse return error.UnexpectedToken;
+            while (lp.peek() != null) {
+                const local_name = lp.readName(arena) orelse return error.MissingName;
+                var remote_name = local_name;
+                if (consumeUseRenameArrow(lp)) {
+                    remote_name = lp.readName(arena) orelse return error.MissingName;
+                }
+                try only_items.append(.{
+                    .local_name = local_name,
+                    .remote_name = remote_name,
+                });
+                if (!lp.consume(.comma)) break;
+            }
+        }
+    }
+
+    return .{
+        .use_stmt = .{
+            .module_name = module_name,
+            .only_items = try only_items.toOwnedSlice(),
+        },
+    };
+}
+
+fn consumeDoubleColon(lp: *LineParser) bool {
+    var scan = lp.*;
+    if (!scan.consume(.colon)) return false;
+    if (!scan.consume(.colon)) return false;
+    lp.* = scan;
+    return true;
+}
+
+fn consumeUseRenameArrow(lp: *LineParser) bool {
+    var scan = lp.*;
+    if (!scan.consume(.equals)) return false;
+
+    const marker = scan.peek() orelse return false;
+    if (marker.kind == .dot_op and context.eqNoCase(scan.tokenText(marker), ".GT.")) {
+        _ = scan.next();
+        lp.* = scan;
+        return true;
+    }
+
+    return false;
 }
 
 const CaseClause = struct {
@@ -1023,7 +1087,7 @@ test "parseStatement handles PRINT statement" {
     try testing.expectEqual(@as(usize, 1), write_stmt.args.len);
 }
 
-test "parseStatement accepts USE statement as no-op" {
+test "parseStatement parses USE ONLY statement" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -1040,7 +1104,61 @@ test "parseStatement accepts USE statement as no-op" {
     var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
 
     const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
-    try testing.expect(stmt_node.node == .cont);
+    try testing.expect(stmt_node.node == .use_stmt);
+    try testing.expectEqualStrings("MINPACK_MODULE", stmt_node.node.use_stmt.module_name);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.use_stmt.only_items.len);
+    try testing.expectEqualStrings("WP", stmt_node.node.use_stmt.only_items[0].local_name);
+    try testing.expectEqualStrings("WP", stmt_node.node.use_stmt.only_items[0].remote_name);
+    try testing.expectEqual(@as(usize, 1), idx);
+}
+
+test "parseStatement parses USE ONLY rename marker" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      USE ISO_FORTRAN_ENV, ONLY: NWRITE =.GT. OUTPUT_UNIT\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .use_stmt);
+    try testing.expectEqualStrings("ISO_FORTRAN_ENV", stmt_node.node.use_stmt.module_name);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.use_stmt.only_items.len);
+    try testing.expectEqualStrings("NWRITE", stmt_node.node.use_stmt.only_items[0].local_name);
+    try testing.expectEqualStrings("OUTPUT_UNIT", stmt_node.node.use_stmt.only_items[0].remote_name);
+    try testing.expectEqual(@as(usize, 1), idx);
+}
+
+test "parseStatement parses USE double-colon form" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      USE :: ISO_FORTRAN_ENV, ONLY: OUTPUT_UNIT\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .use_stmt);
+    try testing.expectEqualStrings("ISO_FORTRAN_ENV", stmt_node.node.use_stmt.module_name);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.use_stmt.only_items.len);
+    try testing.expectEqualStrings("OUTPUT_UNIT", stmt_node.node.use_stmt.only_items[0].local_name);
+    try testing.expectEqualStrings("OUTPUT_UNIT", stmt_node.node.use_stmt.only_items[0].remote_name);
     try testing.expectEqual(@as(usize, 1), idx);
 }
 

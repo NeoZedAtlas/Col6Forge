@@ -397,7 +397,7 @@ fn normalizeStmtText(allocator: std.mem.Allocator, text: []const u8) ![]const u8
     while (i < text.len) {
         if (i + 1 < text.len and text[i] == '=' and text[i + 1] == '>') {
             // Lexer currently does not accept raw '>' token; keep legacy
-            // normalized marker and recover rename arrows later in semantic.
+            // normalized marker and recover rename arrows in statement parsing.
             try out.appendSlice("=.GT.");
             i += 2;
             continue;

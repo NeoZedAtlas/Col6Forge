@@ -125,6 +125,7 @@ pub const Stmt = struct {
 
 pub const StmtNode = union(enum) {
     assignment: Assignment,
+    use_stmt: UseStmt,
     call: CallStmt,
     goto: GotoStmt,
     computed_goto: ComputedGotoStmt,
@@ -154,6 +155,16 @@ pub const StmtNode = union(enum) {
 pub const Assignment = struct {
     target: *Expr,
     value: *Expr,
+};
+
+pub const UseStmt = struct {
+    module_name: []const u8,
+    only_items: []const UseOnlyItem,
+};
+
+pub const UseOnlyItem = struct {
+    local_name: []const u8,
+    remote_name: []const u8,
 };
 
 pub const CallStmt = struct {
