@@ -102,6 +102,7 @@ fn semanticErrorInfo(err: anyerror) struct { code: []const u8, message: []const 
         error.InvalidIoControlType => .{ .code = "CF3124", .message = "I/O control specifier requires CHARACTER expression" },
         error.InvalidIoControlValue => .{ .code = "CF3125", .message = "invalid literal value for I/O control specifier" },
         error.InvalidImplicitRule => .{ .code = "CF3126", .message = "overlapping IMPLICIT letter ranges in the same scope" },
+        error.UnsupportedIntrinsicType => .{ .code = "CF3127", .message = "unsupported intrinsic argument or array conversion shape in semantic lowering" },
         else => .{ .code = "CF3199", .message = "semantic analysis failed" },
     };
 }

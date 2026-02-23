@@ -8,7 +8,7 @@ const Symbol = symbols.Symbol;
 
 pub fn lowerIntrinsicArrayConversions(ctx: *context.Context) !void {
     var state = RewriteState{};
-    const rewritten = try rewriteStmtList(ctx, &state, ctx.unit.stmts);
+    const rewritten = try rewriteStmtList(ctx, &state, ctx.unit.stmts, true);
     if (rewritten.changed) {
         ctx.replaceUnitStmts(rewritten.stmts);
     }
@@ -25,7 +25,12 @@ const RewriteResult = struct {
     changed: bool,
 };
 
-fn rewriteStmtList(ctx: *context.Context, state: *RewriteState, stmts: []ast.Stmt) anyerror!RewriteResult {
+fn rewriteStmtList(
+    ctx: *context.Context,
+    state: *RewriteState,
+    stmts: []ast.Stmt,
+    allow_prelude: bool,
+) anyerror!RewriteResult {
     var out = std.array_list.Managed(ast.Stmt).init(ctx.arena);
     errdefer out.deinit();
 
@@ -35,7 +40,7 @@ fn rewriteStmtList(ctx: *context.Context, state: *RewriteState, stmts: []ast.Stm
         var prelude = std.array_list.Managed(ast.Stmt).init(ctx.arena);
         defer prelude.deinit();
 
-        const stmt_changed = try rewriteStmt(ctx, state, &stmt_copy, &prelude);
+        const stmt_changed = try rewriteStmt(ctx, state, &stmt_copy, &prelude, allow_prelude);
         if (prelude.items.len > 0) {
             try out.appendSlice(prelude.items);
             changed = true;
@@ -55,91 +60,92 @@ fn rewriteStmt(
     state: *RewriteState,
     stmt: *ast.Stmt,
     prelude: *std.array_list.Managed(ast.Stmt),
+    allow_prelude: bool,
 ) !bool {
     var changed = false;
     switch (stmt.node) {
         .assignment => |*assign| {
-            changed = (try rewriteExpr(ctx, state, assign.target, stmt.*, prelude)) or changed;
-            changed = (try rewriteExpr(ctx, state, assign.value, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, assign.target, stmt.*, prelude, allow_prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, assign.value, stmt.*, prelude, allow_prelude)) or changed;
         },
         .use_stmt => {},
         .call => |*call| {
             for (call.args) |*arg| {
                 switch (arg.*) {
                     .expr => |expr_node| {
-                        changed = (try rewriteExpr(ctx, state, expr_node, stmt.*, prelude)) or changed;
+                        changed = (try rewriteExpr(ctx, state, expr_node, stmt.*, prelude, allow_prelude)) or changed;
                     },
                     .alt_return => {},
                 }
             }
         },
         .write => |*write| {
-            changed = (try rewriteExpr(ctx, state, write.unit, stmt.*, prelude)) or changed;
-            if (write.rec) |rec| changed = (try rewriteExpr(ctx, state, rec, stmt.*, prelude)) or changed;
-            for (write.args) |arg| changed = (try rewriteExpr(ctx, state, arg, stmt.*, prelude)) or changed;
-            if (write.iostat) |io| changed = (try rewriteExpr(ctx, state, io, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, write.unit, stmt.*, prelude, allow_prelude)) or changed;
+            if (write.rec) |rec| changed = (try rewriteExpr(ctx, state, rec, stmt.*, prelude, allow_prelude)) or changed;
+            for (write.args) |arg| changed = (try rewriteExpr(ctx, state, arg, stmt.*, prelude, allow_prelude)) or changed;
+            if (write.iostat) |io| changed = (try rewriteExpr(ctx, state, io, stmt.*, prelude, allow_prelude)) or changed;
         },
         .read => |*read| {
-            changed = (try rewriteExpr(ctx, state, read.unit, stmt.*, prelude)) or changed;
-            if (read.rec) |rec| changed = (try rewriteExpr(ctx, state, rec, stmt.*, prelude)) or changed;
-            for (read.args) |arg| changed = (try rewriteExpr(ctx, state, arg, stmt.*, prelude)) or changed;
-            if (read.iostat) |io| changed = (try rewriteExpr(ctx, state, io, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, read.unit, stmt.*, prelude, allow_prelude)) or changed;
+            if (read.rec) |rec| changed = (try rewriteExpr(ctx, state, rec, stmt.*, prelude, allow_prelude)) or changed;
+            for (read.args) |arg| changed = (try rewriteExpr(ctx, state, arg, stmt.*, prelude, allow_prelude)) or changed;
+            if (read.iostat) |io| changed = (try rewriteExpr(ctx, state, io, stmt.*, prelude, allow_prelude)) or changed;
         },
         .rewind => |*rewind| {
-            changed = (try rewriteExpr(ctx, state, rewind.unit, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, rewind.unit, stmt.*, prelude, allow_prelude)) or changed;
         },
         .backspace => |*backspace| {
-            changed = (try rewriteExpr(ctx, state, backspace.unit, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, backspace.unit, stmt.*, prelude, allow_prelude)) or changed;
         },
         .endfile => |*endfile| {
-            changed = (try rewriteExpr(ctx, state, endfile.unit, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, endfile.unit, stmt.*, prelude, allow_prelude)) or changed;
         },
         .open => |*open_stmt| {
-            changed = (try rewriteExpr(ctx, state, open_stmt.unit, stmt.*, prelude)) or changed;
-            if (open_stmt.recl) |recl| changed = (try rewriteExpr(ctx, state, recl, stmt.*, prelude)) or changed;
-            if (open_stmt.file) |file_expr| changed = (try rewriteExpr(ctx, state, file_expr, stmt.*, prelude)) or changed;
-            if (open_stmt.access) |access| changed = (try rewriteExpr(ctx, state, access, stmt.*, prelude)) or changed;
-            if (open_stmt.form) |form| changed = (try rewriteExpr(ctx, state, form, stmt.*, prelude)) or changed;
-            if (open_stmt.blank) |blank| changed = (try rewriteExpr(ctx, state, blank, stmt.*, prelude)) or changed;
-            if (open_stmt.status) |status| changed = (try rewriteExpr(ctx, state, status, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, open_stmt.unit, stmt.*, prelude, allow_prelude)) or changed;
+            if (open_stmt.recl) |recl| changed = (try rewriteExpr(ctx, state, recl, stmt.*, prelude, allow_prelude)) or changed;
+            if (open_stmt.file) |file_expr| changed = (try rewriteExpr(ctx, state, file_expr, stmt.*, prelude, allow_prelude)) or changed;
+            if (open_stmt.access) |access| changed = (try rewriteExpr(ctx, state, access, stmt.*, prelude, allow_prelude)) or changed;
+            if (open_stmt.form) |form| changed = (try rewriteExpr(ctx, state, form, stmt.*, prelude, allow_prelude)) or changed;
+            if (open_stmt.blank) |blank| changed = (try rewriteExpr(ctx, state, blank, stmt.*, prelude, allow_prelude)) or changed;
+            if (open_stmt.status) |status| changed = (try rewriteExpr(ctx, state, status, stmt.*, prelude, allow_prelude)) or changed;
         },
         .inquire => |*inq| {
             for (inq.controls) |*ctrl| {
-                changed = (try rewriteExpr(ctx, state, ctrl.value, stmt.*, prelude)) or changed;
+                changed = (try rewriteExpr(ctx, state, ctrl.value, stmt.*, prelude, allow_prelude)) or changed;
             }
         },
         .close => |*cls| {
             for (cls.controls) |*ctrl| {
-                changed = (try rewriteExpr(ctx, state, ctrl.value, stmt.*, prelude)) or changed;
+                changed = (try rewriteExpr(ctx, state, ctrl.value, stmt.*, prelude, allow_prelude)) or changed;
             }
         },
         .data => |*data| {
             for (data.inits) |*init| {
-                changed = (try rewriteExpr(ctx, state, init.target, stmt.*, prelude)) or changed;
-                changed = (try rewriteExpr(ctx, state, init.value, stmt.*, prelude)) or changed;
+                changed = (try rewriteExpr(ctx, state, init.target, stmt.*, prelude, allow_prelude)) or changed;
+                changed = (try rewriteExpr(ctx, state, init.value, stmt.*, prelude, allow_prelude)) or changed;
             }
         },
         .format => {},
         .arith_if => |*arith| {
-            changed = (try rewriteExpr(ctx, state, arith.condition, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, arith.condition, stmt.*, prelude, allow_prelude)) or changed;
         },
         .pause => {},
         .stop => {},
         .do_loop => |*loop| {
-            changed = (try rewriteExpr(ctx, state, loop.start, stmt.*, prelude)) or changed;
-            changed = (try rewriteExpr(ctx, state, loop.end, stmt.*, prelude)) or changed;
-            if (loop.step) |step| changed = (try rewriteExpr(ctx, state, step, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, loop.start, stmt.*, prelude, allow_prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, loop.end, stmt.*, prelude, allow_prelude)) or changed;
+            if (loop.step) |step| changed = (try rewriteExpr(ctx, state, step, stmt.*, prelude, allow_prelude)) or changed;
         },
         .do_while => |*loop| {
-            changed = (try rewriteExpr(ctx, state, loop.condition, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, loop.condition, stmt.*, prelude, allow_prelude)) or changed;
         },
         .goto => {},
         .computed_goto => |*gt| {
-            changed = (try rewriteExpr(ctx, state, gt.selector, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, gt.selector, stmt.*, prelude, allow_prelude)) or changed;
         },
         .assigned_goto => {},
         .if_single => |*ifs| {
-            changed = (try rewriteExpr(ctx, state, ifs.condition, stmt.*, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, ifs.condition, stmt.*, prelude, allow_prelude)) or changed;
 
             var inner_stmt = ast.Stmt{
                 .label = null,
@@ -151,18 +157,9 @@ fn rewriteStmt(
             var inner_prelude = std.array_list.Managed(ast.Stmt).init(ctx.arena);
             defer inner_prelude.deinit();
 
-            const inner_changed = try rewriteStmt(ctx, state, &inner_stmt, &inner_prelude);
-            if (inner_prelude.items.len > 0) {
-                const then_stmts = try prependAndAppendStmt(ctx, inner_prelude.items, inner_stmt);
-                stmt.node = .{
-                    .if_block = .{
-                        .condition = ifs.condition,
-                        .then_stmts = then_stmts,
-                        .else_stmts = &.{},
-                    },
-                };
-                changed = true;
-            } else if (inner_changed) {
+            // Fortran LOGICAL IF is not block IF; avoid AST kind mutation that can alter control-flow semantics.
+            const inner_changed = try rewriteStmt(ctx, state, &inner_stmt, &inner_prelude, false);
+            if (inner_prelude.items.len == 0 and inner_changed) {
                 const node_ptr = try ctx.arena.create(ast.StmtNode);
                 node_ptr.* = inner_stmt.node;
                 ifs.stmt = node_ptr;
@@ -170,9 +167,9 @@ fn rewriteStmt(
             }
         },
         .if_block => |*ifb| {
-            changed = (try rewriteExpr(ctx, state, ifb.condition, stmt.*, prelude)) or changed;
-            const then_result = try rewriteStmtList(ctx, state, ifb.then_stmts);
-            const else_result = try rewriteStmtList(ctx, state, ifb.else_stmts);
+            changed = (try rewriteExpr(ctx, state, ifb.condition, stmt.*, prelude, allow_prelude)) or changed;
+            const then_result = try rewriteStmtList(ctx, state, ifb.then_stmts, allow_prelude);
+            const else_result = try rewriteStmtList(ctx, state, ifb.else_stmts, allow_prelude);
             if (then_result.changed or else_result.changed) {
                 ifb.then_stmts = then_result.stmts;
                 ifb.else_stmts = else_result.stmts;
@@ -180,7 +177,7 @@ fn rewriteStmt(
             }
         },
         .ret => |*ret| {
-            if (ret.value) |value| changed = (try rewriteExpr(ctx, state, value, stmt.*, prelude)) or changed;
+            if (ret.value) |value| changed = (try rewriteExpr(ctx, state, value, stmt.*, prelude, allow_prelude)) or changed;
         },
         .cont => {},
         .entry => {},
@@ -194,44 +191,47 @@ fn rewriteExpr(
     expr: *ast.Expr,
     source_stmt: ast.Stmt,
     prelude: *std.array_list.Managed(ast.Stmt),
+    allow_prelude: bool,
 ) !bool {
     var changed = false;
     switch (expr.*) {
         .identifier, .literal => {},
         .unary => |*un| {
-            changed = (try rewriteExpr(ctx, state, un.expr, source_stmt, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, un.expr, source_stmt, prelude, allow_prelude)) or changed;
         },
         .binary => |*bin| {
-            changed = (try rewriteExpr(ctx, state, bin.left, source_stmt, prelude)) or changed;
-            changed = (try rewriteExpr(ctx, state, bin.right, source_stmt, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, bin.left, source_stmt, prelude, allow_prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, bin.right, source_stmt, prelude, allow_prelude)) or changed;
         },
         .complex_literal => |*lit| {
-            changed = (try rewriteExpr(ctx, state, lit.real, source_stmt, prelude)) or changed;
-            changed = (try rewriteExpr(ctx, state, lit.imag, source_stmt, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, lit.real, source_stmt, prelude, allow_prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, lit.imag, source_stmt, prelude, allow_prelude)) or changed;
         },
         .dim_range => |*range| {
-            if (range.lower) |lower| changed = (try rewriteExpr(ctx, state, lower, source_stmt, prelude)) or changed;
-            changed = (try rewriteExpr(ctx, state, range.upper, source_stmt, prelude)) or changed;
+            if (range.lower) |lower| changed = (try rewriteExpr(ctx, state, lower, source_stmt, prelude, allow_prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, range.upper, source_stmt, prelude, allow_prelude)) or changed;
         },
         .substring => |*sub| {
-            for (sub.args) |arg| changed = (try rewriteExpr(ctx, state, arg, source_stmt, prelude)) or changed;
-            if (sub.start) |start| changed = (try rewriteExpr(ctx, state, start, source_stmt, prelude)) or changed;
-            if (sub.end) |end_expr| changed = (try rewriteExpr(ctx, state, end_expr, source_stmt, prelude)) or changed;
+            for (sub.args) |arg| changed = (try rewriteExpr(ctx, state, arg, source_stmt, prelude, allow_prelude)) or changed;
+            if (sub.start) |start| changed = (try rewriteExpr(ctx, state, start, source_stmt, prelude, allow_prelude)) or changed;
+            if (sub.end) |end_expr| changed = (try rewriteExpr(ctx, state, end_expr, source_stmt, prelude, allow_prelude)) or changed;
         },
         .implied_do => |*implied| {
-            changed = (try rewriteExpr(ctx, state, implied.start, source_stmt, prelude)) or changed;
-            changed = (try rewriteExpr(ctx, state, implied.end, source_stmt, prelude)) or changed;
-            if (implied.step) |step| changed = (try rewriteExpr(ctx, state, step, source_stmt, prelude)) or changed;
-            for (implied.items) |item| changed = (try rewriteExpr(ctx, state, item, source_stmt, prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, implied.start, source_stmt, prelude, allow_prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, implied.end, source_stmt, prelude, allow_prelude)) or changed;
+            if (implied.step) |step| changed = (try rewriteExpr(ctx, state, step, source_stmt, prelude, allow_prelude)) or changed;
+            for (implied.items) |item| changed = (try rewriteExpr(ctx, state, item, source_stmt, prelude, allow_prelude)) or changed;
         },
         .call_or_subscript => |*call| {
             var i: usize = 0;
             while (i < call.args.len) : (i += 1) {
-                changed = (try rewriteExpr(ctx, state, call.args[i], source_stmt, prelude)) or changed;
-                if (try buildArrayConversion(ctx, state, call.args[i], source_stmt)) |conv| {
-                    call.args[i] = conv.replacement_arg;
-                    try prelude.appendSlice(conv.prelude_stmts);
-                    changed = true;
+                changed = (try rewriteExpr(ctx, state, call.args[i], source_stmt, prelude, allow_prelude)) or changed;
+                if (allow_prelude) {
+                    if (try buildArrayConversion(ctx, state, call.args[i], source_stmt)) |conv| {
+                        call.args[i] = conv.replacement_arg;
+                        try prelude.appendSlice(conv.prelude_stmts);
+                        changed = true;
+                    }
                 }
             }
         },
@@ -255,6 +255,12 @@ fn buildArrayConversion(
     if (conv_call.args.len != 1) return null;
 
     const target_kind = intrinsicConversionTarget(conv_call.name) orelse return null;
+    if (!isIntrinsicConversionCallee(ctx, conv_call.name)) return null;
+    if (isArrayValuedExpr(ctx, conv_call.args[0])) {
+        // Keep lowering strict: only REAL(A) style whole-array conversion is currently supported.
+        // Reject richer array expressions (e.g. REAL(A+B), REAL(A(:))) to avoid silent miscompiles.
+        if (conv_call.args[0].* != .identifier) return error.UnsupportedIntrinsicType;
+    }
     const src_name = switch (conv_call.args[0].*) {
         .identifier => |name| name,
         else => return null,
@@ -296,6 +302,62 @@ fn buildArrayConversion(
         .replacement_arg = replacement,
         .prelude_stmts = prelude_stmts,
     };
+}
+
+fn isIntrinsicConversionCallee(ctx: *context.Context, name: []const u8) bool {
+    // User-defined procedures shadow intrinsic names and must never be rewritten.
+    if (resolve_symbols.lookupKnownProcedureSig(ctx, name) != null) return false;
+    if (resolve_symbols.lookupKnownFunctionType(ctx, name) != null) return false;
+
+    if (resolve_symbols.findSymbolIndex(ctx, name)) |idx| {
+        return ctx.symbols.items[idx].is_intrinsic;
+    }
+
+    return resolve_symbols.isIntrinsicName(name);
+}
+
+fn isArrayValuedExpr(ctx: *context.Context, expr: *ast.Expr) bool {
+    switch (expr.*) {
+        .identifier => |name| {
+            const idx = resolve_symbols.findSymbolIndex(ctx, name) orelse return false;
+            return ctx.symbols.items[idx].dims.len > 0;
+        },
+        .literal => return false,
+        .unary => |un| return isArrayValuedExpr(ctx, un.expr),
+        .binary => |bin| return isArrayValuedExpr(ctx, bin.left) or isArrayValuedExpr(ctx, bin.right),
+        .complex_literal => |lit| return isArrayValuedExpr(ctx, lit.real) or isArrayValuedExpr(ctx, lit.imag),
+        .dim_range => return true,
+        .substring => |sub| {
+            for (sub.args) |arg| {
+                if (isArrayValuedExpr(ctx, arg)) return true;
+            }
+            if (sub.start) |start| {
+                if (isArrayValuedExpr(ctx, start)) return true;
+            }
+            if (sub.end) |end_expr| {
+                if (isArrayValuedExpr(ctx, end_expr)) return true;
+            }
+            return false;
+        },
+        .implied_do => return true,
+        .call_or_subscript => |call| {
+            if (resolve_symbols.findSymbolIndex(ctx, call.name)) |idx| {
+                const sym = ctx.symbols.items[idx];
+                if (sym.dims.len > 0) {
+                    if (call.args.len == 0) return true;
+                    for (call.args) |arg| {
+                        if (arg.* == .dim_range) return true;
+                        if (isArrayValuedExpr(ctx, arg)) return true;
+                    }
+                    return call.args.len != sym.dims.len;
+                }
+            }
+            for (call.args) |arg| {
+                if (isArrayValuedExpr(ctx, arg)) return true;
+            }
+            return false;
+        },
+    }
 }
 
 fn intrinsicConversionTarget(name: []const u8) ?ast.TypeKind {

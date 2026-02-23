@@ -303,13 +303,10 @@ fn i32Const(ctx: *Context, value: i64) !ValueRef {
 
 fn isIntrinsicArrayConversionArg(ctx: *Context, call: ast.CallOrSubscript) bool {
     if (call.args.len != 1) return false;
+    const callee = ctx.findSymbol(call.name) orelse return false;
+    if (!callee.is_intrinsic) return false;
     if (!isIntrinsicArrayConversionName(call.name)) return false;
-    const src_name = switch (call.args[0].*) {
-        .identifier => |name| name,
-        else => return false,
-    };
-    const src_sym = ctx.findSymbol(src_name) orelse return false;
-    return src_sym.dims.len > 0;
+    return isArrayValuedExpr(ctx, call.args[0]);
 }
 
 fn isIntrinsicArrayConversionName(name: []const u8) bool {
@@ -320,6 +317,60 @@ fn isIntrinsicArrayConversionName(name: []const u8) bool {
         std.ascii.eqlIgnoreCase(name, "INT") or
         std.ascii.eqlIgnoreCase(name, "IFIX") or
         std.ascii.eqlIgnoreCase(name, "IDINT");
+}
+
+fn isArrayValuedExpr(ctx: *Context, expr: *Expr) bool {
+    switch (expr.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return false;
+            return sym.dims.len > 0;
+        },
+        .literal => return false,
+        .unary => |un| return isArrayValuedExpr(ctx, un.expr),
+        .binary => |bin| return isArrayValuedExpr(ctx, bin.left) or isArrayValuedExpr(ctx, bin.right),
+        .complex_literal => |lit| return isArrayValuedExpr(ctx, lit.real) or isArrayValuedExpr(ctx, lit.imag),
+        .dim_range => return true,
+        .substring => |sub| {
+            for (sub.args) |arg| {
+                if (isArrayValuedExpr(ctx, arg)) return true;
+            }
+            if (sub.start) |start| {
+                if (isArrayValuedExpr(ctx, start)) return true;
+            }
+            if (sub.end) |end_expr| {
+                if (isArrayValuedExpr(ctx, end_expr)) return true;
+            }
+            return false;
+        },
+        .implied_do => return true,
+        .call_or_subscript => |call_or_sub| {
+            var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            if (kind == .unknown) {
+                if (ctx.findSymbol(call_or_sub.name)) |sym| {
+                    if (sym.dims.len > 0) {
+                        kind = .subscript;
+                    } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                        kind = .call;
+                    }
+                }
+            }
+
+            if (kind == .subscript) {
+                const sym = ctx.findSymbol(call_or_sub.name) orelse return false;
+                if (call_or_sub.args.len == 0) return true;
+                for (call_or_sub.args) |arg| {
+                    if (arg.* == .dim_range) return true;
+                    if (isArrayValuedExpr(ctx, arg)) return true;
+                }
+                return call_or_sub.args.len != sym.dims.len;
+            }
+
+            for (call_or_sub.args) |arg| {
+                if (isArrayValuedExpr(ctx, arg)) return true;
+            }
+            return false;
+        },
+    }
 }
 
 fn unpackComplexF32Return(ctx: *Context, builder: anytype, packed_name: []const u8) !ValueRef {
