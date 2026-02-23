@@ -67,11 +67,11 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             if (kind == .subscript) {
                 if (sym.dims.len == 0 or call.args.len != sym.dims.len) return error.InvalidSubscript;
                 for (call.args) |arg| {
-                    const arg_ty = try exprType(self, arg);
+                    const arg_ty = try resolvedExprType(self, arg);
                     if (arg_ty != .integer) return error.InvalidSubscript;
                 }
             }
-            try recordResolvedRef(self, expr, call.name, kind);
+            try recordResolvedRef(self, expr, call.name, kind, idx);
             try cacheExprType(self, expr, sym.type_kind);
         },
         .substring => |sub| {
@@ -104,8 +104,8 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         .complex_literal => |lit| {
             try resolveExpr(self, lit.real);
             try resolveExpr(self, lit.imag);
-            const real_kind = try exprType(self, lit.real);
-            const imag_kind = try exprType(self, lit.imag);
+            const real_kind = try resolvedExprType(self, lit.real);
+            const imag_kind = try resolvedExprType(self, lit.imag);
             if (real_kind == .double_precision or imag_kind == .double_precision or real_kind == .complex_double or imag_kind == .complex_double) {
                 try cacheExprType(self, expr, .complex_double);
             } else {
@@ -125,15 +125,15 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             try resolveExpr(self, un.expr);
             const ty = switch (un.op) {
                 .not => ast.TypeKind.logical,
-                .plus, .minus => try exprType(self, un.expr),
+                .plus, .minus => try resolvedExprType(self, un.expr),
             };
             try cacheExprType(self, expr, ty);
         },
         .binary => |bin| {
             try resolveExpr(self, bin.left);
             try resolveExpr(self, bin.right);
-            const left_kind = try exprType(self, bin.left);
-            const right_kind = try exprType(self, bin.right);
+            const left_kind = try resolvedExprType(self, bin.left);
+            const right_kind = try resolvedExprType(self, bin.right);
             try validateBinaryOperands(bin.op, left_kind, right_kind);
             const ty = switch (bin.op) {
                 .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => ast.TypeKind.logical,
@@ -411,11 +411,22 @@ fn recordResolvedRef(
     expr: *ast.Expr,
     name: []const u8,
     kind: ResolvedRefKind,
+    symbol_idx: usize,
 ) !void {
     try self.refs.append(.{ .expr = expr, .name = name, .kind = kind });
     try self.ref_kind_index.put(@intFromPtr(expr), kind);
+    try self.ref_symbol_index.put(@intFromPtr(expr), symbol_idx);
 }
 
 fn cacheExprType(self: *context.Context, expr: *ast.Expr, ty: ast.TypeKind) !void {
-    try self.expr_type_cache.put(@intFromPtr(expr), ty);
+    const key = @intFromPtr(expr);
+    if (self.expr_type_cache.get(key)) |current| {
+        if (current == ty) return;
+    }
+    try self.expr_type_cache.put(key, ty);
+}
+
+fn resolvedExprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
+    if (self.expr_type_cache.get(@intFromPtr(expr))) |cached| return cached;
+    return exprType(self, expr);
 }

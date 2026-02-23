@@ -12,6 +12,7 @@ const diag = @import("../diagnostic.zig");
 const ResolvedRefKind = symbols.ResolvedRefKind;
 const EquivalenceDesignator = struct {
     name: []const u8,
+    symbol_idx: usize,
     type_kind: ast.TypeKind,
     byte_offset: i64,
 };
@@ -117,8 +118,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                     }
 
                     const designator = try equivalenceDesignator(self, expr_node);
-                    const sym_idx = symbols_mod.findSymbolIndex(self, designator.name) orelse return error.InvalidEquivalence;
-                    const sym = self.symbols.items[sym_idx];
+                    const sym = self.symbols.items[designator.symbol_idx];
                     if (sym.kind == .parameter or sym.kind == .function or sym.is_intrinsic) {
                         return error.InvalidEquivalence;
                     }
@@ -247,6 +247,7 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
             const sym = self.symbols.items[idx];
             return .{
                 .name = name,
+                .symbol_idx = idx,
                 .type_kind = sym.type_kind,
                 .byte_offset = 0,
             };
@@ -260,6 +261,7 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
             const total_offset = addNoOverflow(base_offset, substring_offset) orelse return error.InvalidEquivalence;
             return .{
                 .name = sub.name,
+                .symbol_idx = idx,
                 .type_kind = sym.type_kind,
                 .byte_offset = total_offset,
             };
@@ -273,6 +275,7 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
             const byte_offset = (try designatorArrayByteOffset(self, sym, call.args)) orelse return error.InvalidEquivalence;
             return .{
                 .name = call.name,
+                .symbol_idx = idx,
                 .type_kind = sym.type_kind,
                 .byte_offset = byte_offset,
             };

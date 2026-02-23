@@ -174,7 +174,8 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
             return .character;
         },
         .call_or_subscript => |call| {
-            const idx = resolve_symbols.findSymbolIndex(self, call.name) orelse return error.MissingScope;
+            const idx = symbolIndexForResolvedCall(self, expr) orelse
+                (resolve_symbols.findSymbolIndex(self, call.name) orelse return error.MissingScope);
             const sym = self.symbols.items[idx];
             const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
@@ -205,12 +206,17 @@ fn resolvedKindFor(self: *const context.Context, expr: *ast.Expr) ?ResolvedRefKi
     return self.ref_kind_index.get(@intFromPtr(expr));
 }
 
+fn symbolIndexForResolvedCall(self: *const context.Context, expr: *ast.Expr) ?usize {
+    return self.ref_symbol_index.get(@intFromPtr(expr));
+}
+
 fn isAssignmentTarget(self: *context.Context, expr: *ast.Expr) bool {
     return switch (expr.*) {
         .identifier => true,
         .substring => true,
         .call_or_subscript => |call| blk: {
-            const idx = resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false;
+            const idx = symbolIndexForResolvedCall(self, expr) orelse
+                (resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false);
             const sym = self.symbols.items[idx];
             const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
@@ -260,7 +266,7 @@ fn checkKnownProcedureCallArity(self: *context.Context, name: []const u8, got: u
         return;
     }
 
-    if (intrinsics.arity(name)) |arity| {
+    if (lookupIntrinsicArity(self, name)) |arity| {
         if (got < arity.min) return error.InvalidArgumentCount;
         if (arity.max) |max| {
             if (got > max) return error.InvalidArgumentCount;
@@ -315,4 +321,23 @@ fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     const out = try allocator.alloc(u8, text.len);
     for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
     return out;
+}
+
+fn lookupIntrinsicArity(self: *context.Context, name: []const u8) ?intrinsics.Arity {
+    var key_buf: [128]u8 = undefined;
+    var key_owned: ?[]const u8 = null;
+    const key: []const u8 = blk: {
+        if (name.len <= key_buf.len) {
+            for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+            break :blk key_buf[0..name.len];
+        }
+        const owned = lowerDup(self.arena, name) catch return intrinsics.arity(name);
+        key_owned = owned;
+        break :blk owned;
+    };
+    if (self.intrinsic_arity_cache.get(key)) |cached| return cached;
+    const resolved = intrinsics.arity(name);
+    const cache_key = key_owned orelse (lowerDup(self.arena, name) catch return resolved);
+    self.intrinsic_arity_cache.put(cache_key, resolved) catch {};
+    return resolved;
 }

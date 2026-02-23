@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const scope = @import("../scope.zig");
+const intrinsics = @import("intrinsics.zig");
 
 pub const Context = struct {
     pub const ProcedureSig = struct {
@@ -23,10 +24,12 @@ pub const Context = struct {
     implicit: std.array_list.Managed(symbols.ImplicitRule),
     refs: std.array_list.Managed(symbols.ResolvedRef),
     ref_kind_index: std.AutoHashMap(usize, symbols.ResolvedRefKind),
+    ref_symbol_index: std.AutoHashMap(usize, usize),
     symbol_lookup_cache: std.StringHashMap(?usize),
     symbol_lookup_cache_scope: ?scope.ScopeId,
     known_function_type_cache: std.StringHashMap(?ast.TypeKind),
     known_procedure_sig_cache: std.StringHashMap(?ProcedureSig),
+    intrinsic_arity_cache: std.StringHashMap(?intrinsics.Arity),
     builtin_constants: std.StringHashMap(BuiltinConstant),
     const_eval_cache: std.AutoHashMap(usize, symbols.ConstValue),
     expr_type_cache: std.AutoHashMap(usize, ast.TypeKind),
@@ -69,10 +72,12 @@ pub const Context = struct {
             .implicit = std.array_list.Managed(symbols.ImplicitRule).init(arena),
             .refs = std.array_list.Managed(symbols.ResolvedRef).init(arena),
             .ref_kind_index = std.AutoHashMap(usize, symbols.ResolvedRefKind).init(arena),
+            .ref_symbol_index = std.AutoHashMap(usize, usize).init(arena),
             .symbol_lookup_cache = std.StringHashMap(?usize).init(arena),
             .symbol_lookup_cache_scope = null,
             .known_function_type_cache = std.StringHashMap(?ast.TypeKind).init(arena),
             .known_procedure_sig_cache = std.StringHashMap(?ProcedureSig).init(arena),
+            .intrinsic_arity_cache = std.StringHashMap(?intrinsics.Arity).init(arena),
             .builtin_constants = std.StringHashMap(BuiltinConstant).init(arena),
             .const_eval_cache = std.AutoHashMap(usize, symbols.ConstValue).init(arena),
             .expr_type_cache = std.AutoHashMap(usize, ast.TypeKind).init(arena),
