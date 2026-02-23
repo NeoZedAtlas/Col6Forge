@@ -1,5 +1,4 @@
 const std = @import("std");
-const COL6FORGE_MAX_UNITS = 256;
 
 extern fn col6forge_open_direct(unit: c_int, recl: c_int) void;
 extern fn col6forge_direct_get_recl(unit: c_int) c_int;
@@ -82,7 +81,7 @@ pub export fn col6forge_write_direct_typed(
     arg_lens: ?[*]const c_int,
     arg_count: c_int,
 ) callconv(.c) void {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return;
+    if (rec <= 0) return;
     const total_args = runtimeArgCount(arg_count);
     const recl_i32 = col6forge_direct_get_recl(unit);
     if (recl_i32 <= 0) return;
@@ -127,7 +126,7 @@ pub export fn col6forge_read_direct_typed(
     arg_lens: ?[*]const c_int,
     arg_count: c_int,
 ) callconv(.c) c_int {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
+    if (rec <= 0) return 0;
     const total_args = runtimeArgCount(arg_count);
     const recl_i32 = col6forge_direct_get_recl(unit);
     if (recl_i32 <= 0) return 0;
@@ -247,7 +246,7 @@ pub export fn col6forge_read_unformatted_typed(
 }
 
 fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const T) c_int {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 1;
+    if (rec <= 0) return 1;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 1;
     const count_u: usize = @intCast(count);
@@ -278,7 +277,7 @@ fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
 }
 
 fn directReadScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]T) c_int {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
+    if (rec <= 0) return 0;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 0;
     const count_u: usize = @intCast(count);
@@ -308,7 +307,7 @@ fn directReadScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, st
 }
 
 fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const T) c_int {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 1;
+    if (rec <= 0) return 1;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 1;
     const count_u: usize = @intCast(count);
@@ -339,7 +338,7 @@ fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, 
 }
 
 fn directReadComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]T) c_int {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return 0;
+    if (rec <= 0) return 0;
     if (count <= 0) return 0;
     if (base == null or stride <= 0) return 0;
     const count_u: usize = @intCast(count);

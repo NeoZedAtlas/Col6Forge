@@ -8,24 +8,9 @@ extern fn fclose(stream: *FILE) c_int;
 extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
 extern fn fgetc(stream: *FILE) c_int;
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
-extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 
 const FILE = opaque {};
-
-const UnformattedRecord = extern struct {
-    data: ?[*]u8,
-    len: usize,
-    is_endfile: u8,
-};
-
-const UnformattedUnit = extern struct {
-    records: ?[*]UnformattedRecord,
-    count: usize,
-    capacity: usize,
-    pos: usize,
-    used: u8,
-};
 
 const OpenUnit = extern struct {
     opened: c_int,
@@ -36,15 +21,16 @@ const OpenUnit = extern struct {
 };
 
 extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
-extern var unformatted_units: [COL6FORGE_MAX_UNITS]UnformattedUnit;
 extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
 
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn col6forge_trim_filename(file: ?[*]const u8, file_len: c_int, out: ?[*]u8, out_len: usize) void;
 extern fn col6forge_store_char(dst: ?[*]u8, len: c_int, src: [*:0]const u8) void;
-extern fn unformatted_truncate(unit: ?*UnformattedUnit, new_count: usize) void;
 extern fn col6forge_open_direct(unit: c_int, recl: c_int) void;
 extern fn col6forge_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_int) void;
+extern fn col6forge_unformatted_rewind(unit: c_int) c_int;
+extern fn col6forge_unformatted_backspace(unit: c_int) c_int;
+extern fn col6forge_unformatted_endfile(unit: c_int) c_int;
 
 const ExtraOpenUnit = extern struct {
     unit: c_int,
@@ -257,27 +243,6 @@ fn decodeCloseStatus(text: ?[*]const u8, len: c_int, default: c_int) c_int {
     if (controlEqIgnoreCase(text, len, "KEEP")) return 1;
     if (controlEqIgnoreCase(text, len, "DELETE")) return 2;
     return default;
-}
-
-fn unformattedEnsureCapacityLocal(unit: *UnformattedUnit, needed: usize) void {
-    if (unit.capacity >= needed) return;
-    var new_cap: usize = if (unit.capacity == 0) 8 else unit.capacity;
-    while (new_cap < needed) {
-        new_cap *= 2;
-    }
-    const prev: ?*anyopaque = if (unit.records) |records| @ptrCast(records) else null;
-    const new_records_raw = realloc(prev, new_cap * @sizeOf(UnformattedRecord));
-    if (new_records_raw == null) return;
-    const aligned: *align(@alignOf(UnformattedRecord)) anyopaque = @alignCast(new_records_raw.?);
-    const new_records: [*]UnformattedRecord = @ptrCast(aligned);
-    var i = unit.capacity;
-    while (i < new_cap) : (i += 1) {
-        new_records[i].data = null;
-        new_records[i].len = 0;
-        new_records[i].is_endfile = 0;
-    }
-    unit.records = new_records;
-    unit.capacity = new_cap;
 }
 
 pub export fn col6forge_open(unit: c_int, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int, status: c_int) callconv(.c) void {
@@ -530,24 +495,16 @@ pub export fn col6forge_inquire_file(
 }
 
 pub export fn col6forge_rewind(unit: c_int) callconv(.c) void {
+    if (col6forge_unformatted_rewind(unit) != 0) return;
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return;
     const idx: usize = @intCast(unit);
-    const uu = &unformatted_units[idx];
-    if (uu.used != 0 and (uu.count > 0 or uu.pos > 0)) {
-        uu.pos = 0;
-        return;
-    }
     unit_pos[idx] = 0;
 }
 
 pub export fn col6forge_backspace(unit: c_int) callconv(.c) void {
+    if (col6forge_unformatted_backspace(unit) != 0) return;
     if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return;
     const idx: usize = @intCast(unit);
-    const uu = &unformatted_units[idx];
-    if (uu.used != 0 and (uu.count > 0 or uu.pos > 0)) {
-        if (uu.pos > 0) uu.pos -= 1;
-        return;
-    }
 
     var pos = unit_pos[idx];
     if (pos <= 0) {
@@ -582,27 +539,7 @@ pub export fn col6forge_backspace(unit: c_int) callconv(.c) void {
 }
 
 pub export fn col6forge_endfile(unit: c_int) callconv(.c) void {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return;
-    const idx: usize = @intCast(unit);
-    const uu = &unformatted_units[idx];
-    if (uu.used == 0) return;
-
-    if (uu.count > 0 or uu.pos > 0) {
-        unformatted_truncate(uu, uu.pos);
-    }
-    unformattedEnsureCapacityLocal(uu, uu.pos + 1);
-    if (uu.records == null) return;
-    const records = uu.records.?;
-    if (uu.pos < uu.count) {
-        if (records[uu.pos].data) |data| {
-            free(@ptrCast(data));
-        }
-    }
-    records[uu.pos].data = null;
-    records[uu.pos].len = 0;
-    records[uu.pos].is_endfile = 1;
-    uu.count = uu.pos + 1;
-    uu.pos = uu.count;
+    _ = col6forge_unformatted_endfile(unit);
 }
 
 fn zLen(buf: []const u8) usize {

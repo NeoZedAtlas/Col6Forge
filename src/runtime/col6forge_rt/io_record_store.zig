@@ -39,6 +39,127 @@ extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 
 var direct_store_mutex: std.Thread.Mutex = .{};
 
+const ExtraDirectUnit = struct {
+    unit: c_int,
+    state: DirectUnit,
+};
+
+const ExtraUnformattedUnit = struct {
+    unit: c_int,
+    state: UnformattedUnit,
+};
+
+var extra_direct_units: ?[*]ExtraDirectUnit = null;
+var extra_direct_count: usize = 0;
+var extra_direct_cap: usize = 0;
+
+var extra_unformatted_units: ?[*]ExtraUnformattedUnit = null;
+var extra_unformatted_count: usize = 0;
+var extra_unformatted_cap: usize = 0;
+
+fn zeroDirectUnit() DirectUnit {
+    return .{
+        .recl = 0,
+        .nextrec = 0,
+        .data = null,
+        .size = 0,
+    };
+}
+
+fn zeroUnformattedUnit() UnformattedUnit {
+    return .{
+        .records = null,
+        .count = 0,
+        .capacity = 0,
+        .pos = 0,
+        .used = 0,
+    };
+}
+
+fn isArrayUnit(unit: c_int) bool {
+    return unit >= 0 and unit < COL6FORGE_MAX_UNITS;
+}
+
+fn findExtraDirectIndexLocked(unit: c_int) ?usize {
+    if (extra_direct_units == null) return null;
+    var i: usize = 0;
+    while (i < extra_direct_count) : (i += 1) {
+        if (extra_direct_units.?[i].unit == unit) return i;
+    }
+    return null;
+}
+
+fn findExtraUnformattedIndexLocked(unit: c_int) ?usize {
+    if (extra_unformatted_units == null) return null;
+    var i: usize = 0;
+    while (i < extra_unformatted_count) : (i += 1) {
+        if (extra_unformatted_units.?[i].unit == unit) return i;
+    }
+    return null;
+}
+
+fn ensureExtraDirectUnitLocked(unit: c_int) ?*DirectUnit {
+    if (findExtraDirectIndexLocked(unit)) |idx| return &extra_direct_units.?[idx].state;
+
+    if (extra_direct_count >= extra_direct_cap) {
+        var new_cap: usize = if (extra_direct_cap == 0) 8 else extra_direct_cap * 2;
+        while (new_cap <= extra_direct_count) : (new_cap *= 2) {}
+        const prev: ?*anyopaque = if (extra_direct_units) |items| @ptrCast(items) else null;
+        const new_raw = realloc(prev, new_cap * @sizeOf(ExtraDirectUnit)) orelse return null;
+        const aligned: *align(@alignOf(ExtraDirectUnit)) anyopaque = @alignCast(new_raw);
+        const items: [*]ExtraDirectUnit = @ptrCast(aligned);
+        extra_direct_units = items;
+        extra_direct_cap = new_cap;
+    }
+
+    const idx = extra_direct_count;
+    extra_direct_units.?[idx].unit = unit;
+    extra_direct_units.?[idx].state = zeroDirectUnit();
+    extra_direct_count += 1;
+    return &extra_direct_units.?[idx].state;
+}
+
+fn ensureExtraUnformattedUnitLocked(unit: c_int) ?*UnformattedUnit {
+    if (findExtraUnformattedIndexLocked(unit)) |idx| return &extra_unformatted_units.?[idx].state;
+
+    if (extra_unformatted_count >= extra_unformatted_cap) {
+        var new_cap: usize = if (extra_unformatted_cap == 0) 8 else extra_unformatted_cap * 2;
+        while (new_cap <= extra_unformatted_count) : (new_cap *= 2) {}
+        const prev: ?*anyopaque = if (extra_unformatted_units) |items| @ptrCast(items) else null;
+        const new_raw = realloc(prev, new_cap * @sizeOf(ExtraUnformattedUnit)) orelse return null;
+        const aligned: *align(@alignOf(ExtraUnformattedUnit)) anyopaque = @alignCast(new_raw);
+        const items: [*]ExtraUnformattedUnit = @ptrCast(aligned);
+        extra_unformatted_units = items;
+        extra_unformatted_cap = new_cap;
+    }
+
+    const idx = extra_unformatted_count;
+    extra_unformatted_units.?[idx].unit = unit;
+    extra_unformatted_units.?[idx].state = zeroUnformattedUnit();
+    extra_unformatted_count += 1;
+    return &extra_unformatted_units.?[idx].state;
+}
+
+fn getDirectUnitLocked(unit: c_int, create_if_missing: bool) ?*DirectUnit {
+    if (isArrayUnit(unit)) {
+        const idx: usize = @intCast(unit);
+        return &direct_units[idx];
+    }
+    if (create_if_missing) return ensureExtraDirectUnitLocked(unit);
+    if (findExtraDirectIndexLocked(unit)) |idx| return &extra_direct_units.?[idx].state;
+    return null;
+}
+
+fn getUnformattedUnitLocked(unit: c_int, create_if_missing: bool) ?*UnformattedUnit {
+    if (isArrayUnit(unit)) {
+        const idx: usize = @intCast(unit);
+        return &unformatted_units[idx];
+    }
+    if (create_if_missing) return ensureExtraUnformattedUnitLocked(unit);
+    if (findExtraUnformattedIndexLocked(unit)) |idx| return &extra_unformatted_units.?[idx].state;
+    return null;
+}
+
 fn asConstCStr(buf: anytype) [*:0]const u8 {
     return @ptrCast(buf);
 }
@@ -58,7 +179,7 @@ fn directRecordRange(rec: c_int, recl_size: usize) ?RecordRange {
     return .{ .offset = offset_res[0], .end = end_res[0] };
 }
 
-pub export fn unformatted_truncate(unit: ?*UnformattedUnit, new_count: usize) callconv(.c) void {
+fn unformattedTruncateLocal(unit: ?*UnformattedUnit, new_count: usize) void {
     if (unit == null) return;
     const u = unit.?;
     if (new_count >= u.count) {
@@ -125,9 +246,7 @@ fn unformattedEnsureCapacityLocal(unit: *UnformattedUnit, needed: usize) void {
     unit.capacity = new_cap;
 }
 
-fn directEnsureCapacity(unit: c_int, needed: usize) void {
-    const idx: usize = @intCast(unit);
-    const du = &direct_units[idx];
+fn directEnsureCapacity(du: *DirectUnit, needed: usize) void {
     if (du.size >= needed) return;
 
     const prev: ?*anyopaque = if (du.data) |data| @ptrCast(data) else null;
@@ -155,14 +274,13 @@ fn unformattedFileHasData(unit: c_int) bool {
 }
 
 pub export fn col6forge_open_direct(unit: c_int, recl: c_int) callconv(.c) void {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return;
     if (recl <= 0) return;
     direct_store_mutex.lock();
     defer direct_store_mutex.unlock();
 
-    const idx: usize = @intCast(unit);
-    direct_units[idx].recl = recl;
-    direct_units[idx].nextrec = 1;
+    const du = getDirectUnitLocked(unit, true) orelse return;
+    du.recl = recl;
+    du.nextrec = 1;
 }
 
 fn resolvedDirectRecl(du: *DirectUnit, requested_recl: c_int) ?c_int {
@@ -172,17 +290,16 @@ fn resolvedDirectRecl(du: *DirectUnit, requested_recl: c_int) ?c_int {
 }
 
 pub export fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) callconv(.c) ?[*]u8 {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return null;
+    if (rec <= 0) return null;
     direct_store_mutex.lock();
     defer direct_store_mutex.unlock();
 
-    const idx: usize = @intCast(unit);
-    const du = &direct_units[idx];
+    const du = getDirectUnitLocked(unit, false) orelse return null;
     const recl_local = resolvedDirectRecl(du, recl) orelse return null;
 
     const recl_size: usize = @intCast(recl_local);
     const range = directRecordRange(rec, recl_size) orelse return null;
-    directEnsureCapacity(unit, range.end);
+    directEnsureCapacity(du, range.end);
     if (du.data == null or du.size < range.end) return null;
 
     const record = du.data.? + range.offset;
@@ -194,12 +311,11 @@ pub export fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) 
 }
 
 pub export fn col6forge_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) callconv(.c) ?[*]u8 {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return null;
+    if (rec <= 0) return null;
     direct_store_mutex.lock();
     defer direct_store_mutex.unlock();
 
-    const idx: usize = @intCast(unit);
-    const du = &direct_units[idx];
+    const du = getDirectUnitLocked(unit, false) orelse return null;
     const recl_local = resolvedDirectRecl(du, recl) orelse return null;
     if (du.data == null) return null;
 
@@ -231,12 +347,11 @@ pub export fn col6forge_direct_record_span_ptr_ro(unit: c_int, rec: c_int, recl:
 }
 
 pub export fn col6forge_direct_record_commit(unit: c_int, rec: c_int) callconv(.c) void {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS or rec <= 0) return;
+    if (rec <= 0) return;
     direct_store_mutex.lock();
     defer direct_store_mutex.unlock();
 
-    const idx: usize = @intCast(unit);
-    const du = &direct_units[idx];
+    const du = getDirectUnitLocked(unit, false) orelse return;
     du.nextrec = rec + 1;
 }
 
@@ -247,13 +362,11 @@ pub export fn col6forge_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_
 
     const recl_ptr = recl.?;
     const nextrec_ptr = nextrec.?;
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) {
+    const du = getDirectUnitLocked(unit, false) orelse {
         recl_ptr.* = 0;
         nextrec_ptr.* = 1;
         return;
-    }
-    const idx: usize = @intCast(unit);
-    const du = &direct_units[idx];
+    };
     const r = du.recl;
     recl_ptr.* = r;
     if (du.nextrec > 0) {
@@ -271,18 +384,15 @@ pub export fn col6forge_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_
 }
 
 pub export fn col6forge_direct_get_recl(unit: c_int) callconv(.c) c_int {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return 0;
     direct_store_mutex.lock();
     defer direct_store_mutex.unlock();
 
-    const idx: usize = @intCast(unit);
-    return direct_units[idx].recl;
+    const du = getDirectUnitLocked(unit, false) orelse return 0;
+    return du.recl;
 }
 
-fn unformattedBeginWriteSized(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return 0;
-    const idx: usize = @intCast(unit);
-    const uu = &unformatted_units[idx];
+fn unformattedBeginWriteSizedLocked(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int {
+    const uu = getUnformattedUnitLocked(unit, true) orelse return 0;
     uu.used = 1;
 
     var record: ?[*]u8 = null;
@@ -306,7 +416,7 @@ fn unformattedBeginWriteSized(unit: c_int, record_size: usize, out_record: ?*?[*
         records[uu.pos].len = record_size;
         records[uu.pos].is_endfile = 0;
         uu.pos += 1;
-        unformatted_truncate(uu, uu.pos);
+        unformattedTruncateLocal(uu, uu.pos);
         if (out_record) |p| p.* = records[uu.pos - 1].data;
         if (out_len) |p| p.* = record_size;
         return 1;
@@ -328,10 +438,8 @@ fn unformattedBeginWriteSized(unit: c_int, record_size: usize, out_record: ?*?[*
     return 1;
 }
 
-fn unformattedBeginReadSized(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int {
-    if (unit < 0 or unit >= COL6FORGE_MAX_UNITS) return 1;
-    const idx: usize = @intCast(unit);
-    const uu = &unformatted_units[idx];
+fn unformattedBeginReadSizedLocked(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int {
+    const uu = getUnformattedUnitLocked(unit, true) orelse return 1;
     uu.used = 1;
 
     if (uu.count == 0 and uu.pos == 0 and unformattedFileHasData(unit)) {
@@ -372,20 +480,78 @@ fn unformattedBeginReadSized(unit: c_int, record_size_hint: usize, out_record: ?
 
 pub export fn col6forge_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
     if (sig == null) return 0;
-    return unformattedBeginWriteSized(unit, direct_signature_size(sig.?), out_record, out_len);
+    direct_store_mutex.lock();
+    defer direct_store_mutex.unlock();
+    return unformattedBeginWriteSizedLocked(unit, direct_signature_size(sig.?), out_record, out_len);
 }
 
 pub export fn col6forge_unformatted_begin_write_len(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
-    return unformattedBeginWriteSized(unit, record_size, out_record, out_len);
+    direct_store_mutex.lock();
+    defer direct_store_mutex.unlock();
+    return unformattedBeginWriteSizedLocked(unit, record_size, out_record, out_len);
 }
 
 pub export fn col6forge_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
     if (sig == null) return 1;
-    return unformattedBeginReadSized(unit, direct_signature_size(sig.?), out_record, out_len);
+    direct_store_mutex.lock();
+    defer direct_store_mutex.unlock();
+    return unformattedBeginReadSizedLocked(unit, direct_signature_size(sig.?), out_record, out_len);
 }
 
 pub export fn col6forge_unformatted_begin_read_len(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) callconv(.c) c_int {
-    return unformattedBeginReadSized(unit, record_size_hint, out_record, out_len);
+    direct_store_mutex.lock();
+    defer direct_store_mutex.unlock();
+    return unformattedBeginReadSizedLocked(unit, record_size_hint, out_record, out_len);
+}
+
+pub export fn col6forge_unformatted_rewind(unit: c_int) callconv(.c) c_int {
+    direct_store_mutex.lock();
+    defer direct_store_mutex.unlock();
+
+    const uu = getUnformattedUnitLocked(unit, false) orelse return 0;
+    if (uu.used != 0 and (uu.count > 0 or uu.pos > 0)) {
+        uu.pos = 0;
+        return 1;
+    }
+    return 0;
+}
+
+pub export fn col6forge_unformatted_backspace(unit: c_int) callconv(.c) c_int {
+    direct_store_mutex.lock();
+    defer direct_store_mutex.unlock();
+
+    const uu = getUnformattedUnitLocked(unit, false) orelse return 0;
+    if (uu.used != 0 and (uu.count > 0 or uu.pos > 0)) {
+        if (uu.pos > 0) uu.pos -= 1;
+        return 1;
+    }
+    return 0;
+}
+
+pub export fn col6forge_unformatted_endfile(unit: c_int) callconv(.c) c_int {
+    direct_store_mutex.lock();
+    defer direct_store_mutex.unlock();
+
+    const uu = getUnformattedUnitLocked(unit, false) orelse return 0;
+    if (uu.used == 0) return 0;
+
+    if (uu.count > 0 or uu.pos > 0) {
+        unformattedTruncateLocal(uu, uu.pos);
+    }
+    unformattedEnsureCapacityLocal(uu, uu.pos + 1);
+    if (uu.records == null) return 0;
+    const records = uu.records.?;
+    if (uu.pos < uu.count) {
+        if (records[uu.pos].data) |data| {
+            free(@ptrCast(data));
+        }
+    }
+    records[uu.pos].data = null;
+    records[uu.pos].len = 0;
+    records[uu.pos].is_endfile = 1;
+    uu.count = uu.pos + 1;
+    uu.pos = uu.count;
+    return 1;
 }
 
 test "directRecordRange validates record offsets safely" {
@@ -423,4 +589,43 @@ test "direct record access requires explicit RECL and rejects mismatch" {
     try std.testing.expect(col6forge_direct_record_ptr(unit, 2, 8) == null);
     try std.testing.expect(col6forge_direct_record_ptr_ro(unit, 1, 8) == null);
     try std.testing.expect(col6forge_direct_record_ptr_ro(unit, 1, 16) != null);
+}
+
+test "direct and unformatted storage support non-array unit numbers" {
+    const direct_unit: c_int = -31;
+    const unformatted_unit: c_int = 1000;
+
+    col6forge_open_direct(direct_unit, 8);
+    const dst_opt = col6forge_direct_record_ptr(direct_unit, 1, 8);
+    try std.testing.expect(dst_opt != null);
+    const dst = dst_opt.?;
+    dst[0] = 0x12;
+    dst[1] = 0x34;
+    dst[2] = 0x56;
+    dst[3] = 0x78;
+    col6forge_direct_record_commit(direct_unit, 1);
+    const src_opt = col6forge_direct_record_ptr_ro(direct_unit, 1, 8);
+    try std.testing.expect(src_opt != null);
+    const src = src_opt.?;
+    try std.testing.expectEqual(@as(u8, 0x12), src[0]);
+    try std.testing.expectEqual(@as(u8, 0x78), src[3]);
+
+    var write_rec: ?[*]u8 = null;
+    var write_len: usize = 0;
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_unformatted_begin_write_len(unformatted_unit, 4, &write_rec, &write_len));
+    try std.testing.expect(write_rec != null);
+    try std.testing.expectEqual(@as(usize, 4), write_len);
+    write_rec.?[0] = 9;
+    write_rec.?[1] = 8;
+    write_rec.?[2] = 7;
+    write_rec.?[3] = 6;
+
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_unformatted_rewind(unformatted_unit));
+    var read_rec: ?[*]u8 = null;
+    var read_len: usize = 0;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_unformatted_begin_read_len(unformatted_unit, 4, &read_rec, &read_len));
+    try std.testing.expect(read_rec != null);
+    try std.testing.expectEqual(@as(usize, 4), read_len);
+    try std.testing.expectEqual(@as(u8, 9), read_rec.?[0]);
+    try std.testing.expectEqual(@as(u8, 6), read_rec.?[3]);
 }
