@@ -467,7 +467,7 @@ fn parseUseStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!S
                 if (consumeUseRenameArrow(lp)) {
                     remote_name = lp.readName(arena) orelse return error.MissingName;
                 } else if (lp.peekIs(.equals)) {
-                    // Reject malformed rename spellings (e.g. legacy `=.GT.` marker).
+                    // Reject malformed legacy rename-marker spellings.
                     return error.UnexpectedToken;
                 }
                 try only_items.append(.{
