@@ -6,6 +6,7 @@ const intrinsics = @import("intrinsics.zig");
 
 const SymbolKind = symbols.SymbolKind;
 const Symbol = symbols.Symbol;
+const MAX_IDENT_LEN: usize = 64;
 
 pub fn initImplicitDefaults(self: *context.Context) !void {
     try self.implicit.append(.{ .start = 'I', .end = 'N', .type_kind = .integer, .char_len = null });
@@ -21,13 +22,7 @@ pub fn installBuiltinConstants(self: *context.Context) !void {
 }
 
 pub fn findBuiltinConstant(self: *context.Context, name: []const u8) ?context.Context.BuiltinConstant {
-    var key_buf: [512]u8 = undefined;
-    if (name.len <= key_buf.len) {
-        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-        return self.builtin_constants.get(key_buf[0..name.len]);
-    }
-    const key = lowerDup(self.arena, name) catch return null;
-    return self.builtin_constants.get(key);
+    return getLowercaseMapValue(context.Context.BuiltinConstant, &self.builtin_constants, name);
 }
 
 pub fn findBuiltinModuleConstant(
@@ -36,18 +31,18 @@ pub fn findBuiltinModuleConstant(
     name: []const u8,
 ) ?context.Context.BuiltinConstant {
     const constant = findBuiltinConstant(self, name) orelse return null;
-    if (!moduleNameMatches(self, module_name, constant.module_name)) return null;
+    if (!moduleNameMatches(module_name, constant.module_name)) return null;
     return constant;
 }
 
-fn moduleNameMatches(self: *context.Context, module_name: []const u8, normalized: []const u8) bool {
-    var key_buf: [128]u8 = undefined;
+fn moduleNameMatches(module_name: []const u8, normalized: []const u8) bool {
+    if (module_name.len != normalized.len) return false;
+    var key_buf: [MAX_IDENT_LEN]u8 = undefined;
     if (module_name.len <= key_buf.len) {
-        for (module_name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-        return std.mem.eql(u8, key_buf[0..module_name.len], normalized);
+        const lowered = toLowerInBuffer(module_name, &key_buf);
+        return std.mem.eql(u8, lowered, normalized);
     }
-    const lowered = lowerDup(self.arena, module_name) catch return false;
-    return std.mem.eql(u8, lowered, normalized);
+    return std.ascii.eqlIgnoreCase(module_name, normalized);
 }
 
 pub fn installUnitSymbol(self: *context.Context) !void {
@@ -103,14 +98,12 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
     if (findSymbolIndex(self, name)) |idx| {
         return idx;
     }
-    if (self.current_decl_source == null) {
-        if (findKnownHostParameter(self, name)) |host_sym| {
-            var imported = host_sym;
-            imported.name = name;
-            imported.is_host_associated = true;
-            imported.host_owner_name = self.known_host_owner;
-            return internSymbol(self, imported);
-        }
+    if (findKnownHostParameter(self, name)) |host_sym| {
+        var imported = host_sym;
+        imported.name = name;
+        imported.is_host_associated = true;
+        imported.host_owner_name = self.known_host_owner;
+        return internSymbol(self, imported);
     }
     if (lookupKnownProcedureSig(self, name)) |sig| {
         const proc_kind: SymbolKind = switch (sig.kind) {
@@ -160,10 +153,10 @@ pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
     if (self.current_scope == null) return error.MissingScope;
     const scope_id = self.current_scope.?;
     var key_owned: ?[]const u8 = null;
-    var key_buf: [128]u8 = undefined;
+    var key_buf: [MAX_IDENT_LEN]u8 = undefined;
     if (symbol.name.len <= key_buf.len) {
-        for (symbol.name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-        if (self.scopes.items[scope_id.index].symbols.contains(key_buf[0..symbol.name.len])) {
+        const key = toLowerInBuffer(symbol.name, &key_buf);
+        if (self.scopes.items[scope_id.index].symbols.contains(key)) {
             return error.DuplicateDeclaration;
         }
     } else {
@@ -182,35 +175,14 @@ pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
 }
 
 pub fn findSymbolIndex(self: *context.Context, name: []const u8) ?usize {
-    const current_scope = self.current_scope orelse return null;
-    if (self.symbol_lookup_cache_scope == null or self.symbol_lookup_cache_scope.?.index != current_scope.index) {
-        self.symbol_lookup_cache_scope = current_scope;
-        self.symbol_lookup_cache.clearRetainingCapacity();
-    }
-
-    var key_buf: [512]u8 = undefined;
-    var key_owned: ?[]const u8 = null;
-    const key: []const u8 = blk: {
-        if (name.len <= key_buf.len) {
-            for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-            break :blk key_buf[0..name.len];
-        }
-        const owned = lowerDup(self.arena, name) catch return null;
-        key_owned = owned;
-        break :blk owned;
-    };
-    if (self.symbol_lookup_cache.get(key)) |cached| return cached;
-
-    const resolved = findSymbolIndexNoCache(self, key);
-    const cache_key = key_owned orelse (lowerDup(self.arena, name) catch return resolved);
-    self.symbol_lookup_cache.put(cache_key, resolved) catch {};
-    return resolved;
+    if (self.current_scope == null) return null;
+    return findSymbolIndexNoCache(self, name);
 }
 
-fn findSymbolIndexNoCache(self: *context.Context, key: []const u8) ?usize {
+fn findSymbolIndexNoCache(self: *context.Context, name: []const u8) ?usize {
     var scope_id = self.current_scope;
     while (scope_id) |id| {
-        if (self.scopes.items[id.index].symbols.get(key)) |idx| return idx;
+        if (getLowercaseMapValue(usize, &self.scopes.items[id.index].symbols, name)) |idx| return idx;
         scope_id = self.scopes.items[id.index].parent;
     }
     return null;
@@ -249,13 +221,7 @@ pub fn isIntrinsicName(name: []const u8) bool {
 }
 
 fn findKnownHostParameter(self: *context.Context, name: []const u8) ?Symbol {
-    var key_buf: [512]u8 = undefined;
-    if (name.len <= key_buf.len) {
-        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-        return self.known_host_parameters.get(key_buf[0..name.len]);
-    }
-    const key = lowerDup(self.arena, name) catch return null;
-    return self.known_host_parameters.get(key);
+    return getLowercaseMapValue(Symbol, self.known_host_parameters, name);
 }
 
 fn putBuiltinConstant(
@@ -280,39 +246,36 @@ fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
 }
 
 pub fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
-    var key_buf: [512]u8 = undefined;
-    var key_owned: ?[]const u8 = null;
-    const key: []const u8 = blk: {
-        if (name.len <= key_buf.len) {
-            for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-            break :blk key_buf[0..name.len];
-        }
-        const owned = lowerDup(self.arena, name) catch return null;
-        key_owned = owned;
-        break :blk owned;
-    };
-    if (self.known_function_type_cache.get(key)) |cached| return cached;
-    const resolved = self.known_function_types.get(key);
-    const cache_key = key_owned orelse (lowerDup(self.arena, name) catch return resolved);
-    self.known_function_type_cache.put(cache_key, resolved) catch {};
-    return resolved;
+    return getLowercaseMapValue(ast.TypeKind, self.known_function_types, name);
 }
 
 pub fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
-    var key_buf: [512]u8 = undefined;
-    var key_owned: ?[]const u8 = null;
-    const key: []const u8 = blk: {
-        if (name.len <= key_buf.len) {
-            for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-            break :blk key_buf[0..name.len];
-        }
-        const owned = lowerDup(self.arena, name) catch return null;
-        key_owned = owned;
-        break :blk owned;
-    };
-    if (self.known_procedure_sig_cache.get(key)) |cached| return cached;
-    const resolved = self.known_procedure_sigs.get(key);
-    const cache_key = key_owned orelse (lowerDup(self.arena, name) catch return resolved);
-    self.known_procedure_sig_cache.put(cache_key, resolved) catch {};
-    return resolved;
+    return getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, name);
+}
+
+fn toLowerInBuffer(text: []const u8, buf: *[MAX_IDENT_LEN]u8) []const u8 {
+    std.debug.assert(text.len <= buf.len);
+    for (text, 0..) |ch, i| buf[i] = std.ascii.toLower(ch);
+    return buf[0..text.len];
+}
+
+fn getLowercaseMapValue(
+    comptime T: type,
+    map: *const std.StringHashMap(T),
+    name: []const u8,
+) ?T {
+    var key_buf: [MAX_IDENT_LEN]u8 = undefined;
+    if (name.len <= key_buf.len) {
+        const key = toLowerInBuffer(name, &key_buf);
+        return map.get(key);
+    }
+
+    // Long identifiers are rare; avoid arena allocation by scanning map keys.
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        if (key.len != name.len) continue;
+        if (std.ascii.eqlIgnoreCase(key, name)) return entry.value_ptr.*;
+    }
+    return null;
 }

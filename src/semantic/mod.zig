@@ -584,6 +584,49 @@ test "semantic IMPLICIT rules are unit-local" {
     try testing.expect(found);
 }
 
+test "semantic resolves host PARAMETER in declaration context" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE OUTER\n" ++
+        "      INTEGER N\n" ++
+        "      PARAMETER (N=3)\n" ++
+        "      CONTAINS\n" ++
+        "      SUBROUTINE INNER\n" ++
+        "      REAL A(N)\n" ++
+        "      END\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found_inner_a = false;
+    var found_host_n = false;
+    for (sem.units) |unit| {
+        if (!std.ascii.eqlIgnoreCase(unit.name, "INNER")) continue;
+        for (unit.symbols) |sym| {
+            if (std.ascii.eqlIgnoreCase(sym.name, "A")) {
+                found_inner_a = true;
+                try testing.expectEqual(@as(usize, 1), sym.dims.len);
+            }
+            if (std.ascii.eqlIgnoreCase(sym.name, "N")) {
+                found_host_n = true;
+                try testing.expect(sym.is_host_associated);
+                try testing.expect(sym.host_owner_name != null);
+                try testing.expect(std.ascii.eqlIgnoreCase(sym.host_owner_name.?, "OUTER"));
+                try testing.expectEqual(symbols.SymbolKind.parameter, sym.kind);
+            }
+        }
+    }
+    try testing.expect(found_inner_a);
+    try testing.expect(found_host_n);
+}
+
 test "semantic reports CF3126 for overlapping IMPLICIT rules" {
     const testing = std.testing;
     const allocator = testing.allocator;
