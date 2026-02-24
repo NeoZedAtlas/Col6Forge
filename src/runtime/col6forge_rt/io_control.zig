@@ -31,6 +31,8 @@ extern fn col6forge_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_int)
 extern fn col6forge_unformatted_rewind(unit: c_int) c_int;
 extern fn col6forge_unformatted_backspace(unit: c_int) c_int;
 extern fn col6forge_unformatted_endfile(unit: c_int) c_int;
+extern fn col6forge_record_store_reset(unit: c_int) void;
+extern fn col6forge_record_store_close(unit: c_int, status: c_int) void;
 extern fn col6forge_line_output_release_cached(unit: c_int) void;
 extern fn col6forge_unit_stream_invalidate(unit: c_int) void;
 
@@ -360,6 +362,7 @@ pub export fn col6forge_open(unit: c_int, file: ?[*]const u8, file_len: c_int, a
     // Reopening a unit must drop any cached read/write stream handles.
     col6forge_line_output_release_cached(unit);
     col6forge_unit_stream_invalidate(unit);
+    col6forge_record_store_reset(unit);
 
     open_state_mutex.lock();
     defer open_state_mutex.unlock();
@@ -407,6 +410,7 @@ pub export fn col6forge_close(unit: c_int, status: c_int) callconv(.c) void {
     // Closing a unit must invalidate shared stream handles first.
     col6forge_line_output_release_cached(unit);
     col6forge_unit_stream_invalidate(unit);
+    col6forge_record_store_close(unit, status);
 
     open_state_mutex.lock();
     if (isArrayUnit(unit)) {

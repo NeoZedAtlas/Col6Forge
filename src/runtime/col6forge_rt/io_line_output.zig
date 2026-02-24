@@ -29,6 +29,7 @@ fn asConstCStr(buf: anytype) [*:0]const u8 {
 var cached_unit: c_int = std.math.minInt(c_int);
 var cached_stream: ?*FILE = null;
 var cached_name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
+var line_output_mutex: std.Thread.Mutex = .{};
 
 fn cstrEq(a: [*:0]const u8, b: [*:0]const u8) bool {
     var i: usize = 0;
@@ -94,6 +95,8 @@ fn writeLineWithOptionalNl(stream: *FILE, src: [*:0]const u8, src_len: usize) bo
 }
 
 pub export fn col6forge_line_output_release_cached(unit: c_int) callconv(.c) void {
+    line_output_mutex.lock();
+    defer line_output_mutex.unlock();
     if (cached_stream == null) return;
     if (unit < 0 or cached_unit == unit) closeCachedStream();
 }
@@ -106,6 +109,8 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
 
     if ((unit == 6 or unit == 0) and !unit_opened) {
         const out = col6forge_rt_stdout() orelse return if (strict_status != 0) 1 else 0;
+        line_output_mutex.lock();
+        defer line_output_mutex.unlock();
         if (!writeLineWithOptionalNl(out, src, src_len)) return if (strict_status != 0) 1 else 0;
         _ = fflush(out);
         return 0;
@@ -118,6 +123,10 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
     _ = col6forge_unit_pos_get(unit, &pos);
     // Force-close shared read stream handles before write opens.
     col6forge_unit_stream_invalidate(unit);
+
+    line_output_mutex.lock();
+    defer line_output_mutex.unlock();
+
     const stream = ensureUnitStream(unit, asConstCStr(&name), pos) orelse return if (strict_status != 0) 1 else 0;
 
     if (fseek(stream, pos, 0) != 0) {

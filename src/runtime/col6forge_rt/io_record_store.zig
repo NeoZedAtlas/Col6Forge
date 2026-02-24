@@ -1,5 +1,6 @@
 const std = @import("std");
 const COL6FORGE_MAX_UNITS = 256;
+const COL6FORGE_FILENAME_MAX = 4096;
 const COL6FORGE_UNFORMATTED_MAX_RECORDS: usize = std.math.maxInt(usize);
 const COL6FORGE_UNFORMATTED_MAX_RECORD_BYTES: usize = std.math.maxInt(usize);
 const COL6FORGE_UNFORMATTED_MAX_TOTAL_BYTES: usize = std.math.maxInt(usize);
@@ -7,6 +8,15 @@ const COL6FORGE_STORE_LOCK_STRIPES: usize = 256;
 
 extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
+extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
+extern fn fclose(stream: *FILE) c_int;
+extern fn fread(ptr: ?*anyopaque, size: usize, nitems: usize, stream: *FILE) usize;
+extern fn fwrite(ptr: ?*const anyopaque, size: usize, nitems: usize, stream: *FILE) usize;
+extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
+extern fn ftell(stream: *FILE) c_long;
+extern fn fflush(stream: *FILE) c_int;
+
+const FILE = opaque {};
 
 const DirectUnit = extern struct {
     recl: c_int,
@@ -31,6 +41,7 @@ const UnformattedUnit = extern struct {
 
 extern var direct_units: [COL6FORGE_MAX_UNITS]DirectUnit;
 extern var unformatted_units: [COL6FORGE_MAX_UNITS]UnformattedUnit;
+extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 
 var store_registry_mutex: std.Thread.Mutex = .{};
 var store_unit_locks: [COL6FORGE_STORE_LOCK_STRIPES]std.Thread.Mutex = [_]std.Thread.Mutex{.{}} ** COL6FORGE_STORE_LOCK_STRIPES;
@@ -52,6 +63,10 @@ var extra_direct_cap: usize = 0;
 var extra_unformatted_units: ?[*]ExtraUnformattedUnit = null;
 var extra_unformatted_count: usize = 0;
 var extra_unformatted_cap: usize = 0;
+
+const UNFORMATTED_FILE_MAGIC = "C6UF1";
+const UNFORMATTED_ENTRY_RECORD: u8 = 0;
+const UNFORMATTED_ENTRY_ENDFILE: u8 = 1;
 
 fn zeroDirectUnit() DirectUnit {
     return .{
@@ -183,6 +198,192 @@ fn getUnformattedUnit(unit: c_int, create_if_missing: bool) ?*UnformattedUnit {
     store_registry_mutex.lock();
     defer store_registry_mutex.unlock();
     return getUnformattedUnitLocked(unit, create_if_missing);
+}
+
+fn unitFilePath(unit: c_int, out: *[COL6FORGE_FILENAME_MAX]u8) [*:0]const u8 {
+    out.* = [_]u8{0} ** out.len;
+    unit_filename(unit, out, out.len);
+    return @ptrCast(out);
+}
+
+fn freeDirectStorage(du: *DirectUnit) void {
+    if (du.data) |data| free(@ptrCast(data));
+    du.data = null;
+    du.size = 0;
+    du.nextrec = 0;
+}
+
+fn freeUnformattedStorage(uu: *UnformattedUnit) void {
+    if (uu.records) |records| {
+        var i: usize = 0;
+        while (i < uu.count) : (i += 1) {
+            if (records[i].data) |data| free(@ptrCast(data));
+        }
+        free(@ptrCast(records));
+    }
+    uu.records = null;
+    uu.count = 0;
+    uu.capacity = 0;
+    uu.pos = 0;
+    uu.used = 0;
+}
+
+fn writeExact(stream: *FILE, src: [*]const u8, n: usize) bool {
+    if (n == 0) return true;
+    return fwrite(@ptrCast(src), 1, n, stream) == n;
+}
+
+fn readExact(stream: *FILE, dst: [*]u8, n: usize) bool {
+    if (n == 0) return true;
+    return fread(@ptrCast(dst), 1, n, stream) == n;
+}
+
+fn writeU64LE(stream: *FILE, value: u64) bool {
+    var buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &buf, value, .little);
+    return writeExact(stream, &buf, buf.len);
+}
+
+fn readU64LE(stream: *FILE, out: *u64) bool {
+    var buf: [8]u8 = undefined;
+    if (!readExact(stream, &buf, buf.len)) return false;
+    out.* = std.mem.readInt(u64, &buf, .little);
+    return true;
+}
+
+fn loadDirectFromFile(unit: c_int, du: *DirectUnit) void {
+    if (du.data != null) return;
+    var path: [COL6FORGE_FILENAME_MAX]u8 = undefined;
+    const file = fopen(unitFilePath(unit, &path), "rb") orelse return;
+    defer _ = fclose(file);
+    if (fseek(file, 0, 2) != 0) return;
+    const size_pos = ftell(file);
+    if (size_pos <= 0) return;
+    if (fseek(file, 0, 0) != 0) return;
+
+    const size: usize = @intCast(size_pos);
+    const raw = realloc(null, size) orelse return;
+    const data: [*]u8 = @ptrCast(raw);
+    if (!readExact(file, data, size)) {
+        free(raw);
+        return;
+    }
+    du.data = data;
+    du.size = size;
+    if (du.recl > 0) {
+        const recl: usize = @intCast(du.recl);
+        const recs = size / recl;
+        du.nextrec = @intCast(recs + 1);
+    } else {
+        du.nextrec = 1;
+    }
+}
+
+fn flushDirectToFile(unit: c_int, du: *DirectUnit) void {
+    if (du.data == null) return;
+    var path: [COL6FORGE_FILENAME_MAX]u8 = undefined;
+    const file = fopen(unitFilePath(unit, &path), "wb") orelse return;
+    defer _ = fclose(file);
+    _ = writeExact(file, du.data.?, du.size);
+    _ = fflush(file);
+}
+
+fn loadUnformattedFromFile(unit: c_int, uu: *UnformattedUnit) void {
+    if (uu.count != 0 or uu.records != null) return;
+
+    var path: [COL6FORGE_FILENAME_MAX]u8 = undefined;
+    const file = fopen(unitFilePath(unit, &path), "rb") orelse return;
+    defer _ = fclose(file);
+
+    var magic: [UNFORMATTED_FILE_MAGIC.len]u8 = undefined;
+    if (!readExact(file, &magic, magic.len)) return;
+    if (!std.mem.eql(u8, magic[0..], UNFORMATTED_FILE_MAGIC)) return;
+
+    while (true) {
+        var tag: [1]u8 = .{0};
+        const got = fread(&tag, 1, 1, file);
+        if (got == 0) break;
+        if (tag[0] == UNFORMATTED_ENTRY_RECORD) {
+            var len_u64: u64 = 0;
+            if (!readU64LE(file, &len_u64)) {
+                freeUnformattedStorage(uu);
+                return;
+            }
+            const len: usize = @intCast(len_u64);
+            if (!unformattedEnsureCapacityLocal(uu, uu.count + 1)) {
+                freeUnformattedStorage(uu);
+                return;
+            }
+            if (uu.records == null) {
+                freeUnformattedStorage(uu);
+                return;
+            }
+            var data: ?[*]u8 = null;
+            if (len > 0) {
+                const raw = realloc(null, len) orelse {
+                    freeUnformattedStorage(uu);
+                    return;
+                };
+                data = @ptrCast(raw);
+                if (!readExact(file, data.?, len)) {
+                    free(raw);
+                    freeUnformattedStorage(uu);
+                    return;
+                }
+            }
+            const rec = &uu.records.?[uu.count];
+            rec.data = data;
+            rec.len = len;
+            rec.is_endfile = 0;
+            uu.count += 1;
+        } else if (tag[0] == UNFORMATTED_ENTRY_ENDFILE) {
+            if (!unformattedEnsureCapacityLocal(uu, uu.count + 1)) {
+                freeUnformattedStorage(uu);
+                return;
+            }
+            if (uu.records == null) {
+                freeUnformattedStorage(uu);
+                return;
+            }
+            const rec = &uu.records.?[uu.count];
+            rec.data = null;
+            rec.len = 0;
+            rec.is_endfile = 1;
+            uu.count += 1;
+        } else {
+            freeUnformattedStorage(uu);
+            return;
+        }
+    }
+    uu.pos = 0;
+    uu.used = if (uu.count > 0) 1 else 0;
+}
+
+fn flushUnformattedToFile(unit: c_int, uu: *UnformattedUnit) void {
+    if (uu.count == 0 or uu.records == null) return;
+
+    var path: [COL6FORGE_FILENAME_MAX]u8 = undefined;
+    const file = fopen(unitFilePath(unit, &path), "wb") orelse return;
+    defer _ = fclose(file);
+
+    if (!writeExact(file, UNFORMATTED_FILE_MAGIC.ptr, UNFORMATTED_FILE_MAGIC.len)) return;
+    const records = uu.records.?;
+    var i: usize = 0;
+    while (i < uu.count) : (i += 1) {
+        const rec = records[i];
+        if (rec.is_endfile != 0) {
+            var tag: [1]u8 = .{UNFORMATTED_ENTRY_ENDFILE};
+            if (!writeExact(file, &tag, 1)) return;
+            continue;
+        }
+        var tag: [1]u8 = .{UNFORMATTED_ENTRY_RECORD};
+        if (!writeExact(file, &tag, 1)) return;
+        if (!writeU64LE(file, @intCast(rec.len))) return;
+        if (rec.len > 0 and rec.data != null) {
+            if (!writeExact(file, rec.data.?, rec.len)) return;
+        }
+    }
+    _ = fflush(file);
 }
 
 const RecordRange = struct {
@@ -337,6 +538,7 @@ pub export fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) 
 
     const du = getDirectUnit(unit, false) orelse return null;
     const recl_local = resolvedDirectRecl(du, recl) orelse return null;
+    loadDirectFromFile(unit, du);
 
     const recl_size: usize = @intCast(recl_local);
     const range = directRecordRange(rec, recl_size) orelse return null;
@@ -359,6 +561,7 @@ pub export fn col6forge_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_in
 
     const du = getDirectUnit(unit, false) orelse return null;
     const recl_local = resolvedDirectRecl(du, recl) orelse return null;
+    loadDirectFromFile(unit, du);
     if (du.data == null) return null;
 
     const recl_size: usize = @intCast(recl_local);
@@ -411,6 +614,7 @@ pub export fn col6forge_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_
         nextrec_ptr.* = 1;
         return;
     };
+    loadDirectFromFile(unit, du);
     const r = du.recl;
     recl_ptr.* = r;
     if (du.nextrec > 0) {
@@ -433,6 +637,7 @@ pub export fn col6forge_direct_get_recl(unit: c_int) callconv(.c) c_int {
     defer lock.unlock();
 
     const du = getDirectUnit(unit, false) orelse return 0;
+    loadDirectFromFile(unit, du);
     return du.recl;
 }
 
@@ -515,6 +720,7 @@ fn unformattedBeginWriteSizedLocked(unit: c_int, record_size: usize, out_record:
 fn unformattedBeginReadSizedLocked(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int {
     _ = record_size_hint;
     const uu = getUnformattedUnit(unit, true) orelse return 1;
+    loadUnformattedFromFile(unit, uu);
     uu.used = 1;
 
     if (uu.pos >= uu.count) return -1;
@@ -612,6 +818,49 @@ pub export fn col6forge_unformatted_endfile(unit: c_int) callconv(.c) c_int {
     uu.count = uu.pos + 1;
     uu.pos = uu.count;
     return 1;
+}
+
+pub export fn col6forge_record_store_reset(unit: c_int) callconv(.c) void {
+    const lock = unitLock(unit);
+    lock.lock();
+    defer lock.unlock();
+
+    if (getDirectUnit(unit, false)) |du| {
+        freeDirectStorage(du);
+        du.recl = 0;
+    }
+    if (getUnformattedUnit(unit, false)) |uu| {
+        freeUnformattedStorage(uu);
+    }
+}
+
+pub export fn col6forge_record_store_close(unit: c_int, status: c_int) callconv(.c) void {
+    const lock = unitLock(unit);
+    lock.lock();
+    defer lock.unlock();
+
+    const du = getDirectUnit(unit, false);
+    const uu = getUnformattedUnit(unit, false);
+
+    if (status != 2) {
+        if (uu) |u| {
+            if (u.count > 0 or u.used != 0) {
+                flushUnformattedToFile(unit, u);
+            } else if (du) |d| {
+                flushDirectToFile(unit, d);
+            }
+        } else if (du) |d| {
+            flushDirectToFile(unit, d);
+        }
+    }
+
+    if (du) |d| {
+        freeDirectStorage(d);
+        d.recl = 0;
+    }
+    if (uu) |u| {
+        freeUnformattedStorage(u);
+    }
 }
 
 test "directRecordRange validates record offsets safely" {
