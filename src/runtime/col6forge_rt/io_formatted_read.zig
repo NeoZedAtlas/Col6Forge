@@ -19,6 +19,7 @@ extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
 extern fn col6forge_open_unit_blank_code(unit: c_int) c_int;
 extern fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) c_int;
 extern fn col6forge_unit_pos_set(unit: c_int, pos: c_long) void;
+extern fn col6forge_line_output_release_cached(unit: c_int) void;
 
 fn asCStr(buf: anytype) [*:0]u8 {
     return @ptrCast(buf);
@@ -153,6 +154,8 @@ pub export fn col6forge_formatted_read_core(
     } else {
         var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
         unit_filename(unit, &name, name.len);
+        // Release cached writer handle for this unit before opening for read.
+        col6forge_line_output_release_cached(unit);
         file = fopen(asConstCStr(&name), "r");
         if (file == null) {
             if (status_mode != 0) return 1;

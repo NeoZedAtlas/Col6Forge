@@ -18,6 +18,7 @@ extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
 extern fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) c_int;
 extern fn col6forge_unit_pos_set(unit: c_int, pos: c_long) void;
+extern fn col6forge_line_output_release_cached(unit: c_int) void;
 
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
@@ -100,6 +101,8 @@ fn col6forgeOpenListInput(unit: c_int, is_stdin: *bool) ?*FILE {
 
     var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     unit_filename(unit, &name, name.len);
+    // Release cached writer handle for this unit before opening for read.
+    col6forge_line_output_release_cached(unit);
     const file = fopen(asConstCStr(&name), "r") orelse return null;
     var pos: c_long = 0;
     _ = col6forge_unit_pos_get(unit, &pos);
