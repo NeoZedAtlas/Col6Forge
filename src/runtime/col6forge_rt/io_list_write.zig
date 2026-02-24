@@ -1,67 +1,50 @@
-﻿extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
-extern fn free(ptr: ?*anyopaque) void;
-extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
-
+extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) c_int;
 
-const LineBuffer = struct {
-    data: ?[*]u8 = null,
+const COL6FORGE_LIST_WRAP: usize = 132;
+
+const ListWriter = struct {
+    unit: c_int,
+    strict_status: c_int,
+    line: [COL6FORGE_LIST_WRAP + 1]u8 = [_]u8{0} ** (COL6FORGE_LIST_WRAP + 1),
     len: usize = 0,
-    cap: usize = 0,
 
-    fn deinit(self: *LineBuffer) void {
-        if (self.data) |ptr| {
-            free(@ptrCast(ptr));
-        }
-        self.* = .{};
+    fn init(unit: c_int, strict_status: c_int) ListWriter {
+        return .{ .unit = unit, .strict_status = strict_status };
     }
 
-    fn ensure(self: *LineBuffer, extra: usize) bool {
-        const needed = self.len + extra + 1;
-        if (needed <= self.cap) return true;
-        var new_cap: usize = if (self.cap == 0) 64 else self.cap;
-        while (new_cap < needed) {
-            const doubled = @mulWithOverflow(new_cap, 2);
-            if (doubled[1] != 0) return false;
-            new_cap = doubled[0];
-        }
-        const prev: ?*anyopaque = if (self.data) |ptr| @ptrCast(ptr) else null;
-        const new_raw = realloc(prev, new_cap) orelse return false;
-        self.data = @ptrCast(new_raw);
-        self.cap = new_cap;
+    fn flush(self: *ListWriter) bool {
+        self.line[self.len] = 0;
+        if (col6forge_write_rendered_line(self.unit, @ptrCast(&self.line), self.strict_status) != 0) return false;
+        self.len = 0;
+        self.line[0] = 0;
         return true;
     }
 
-    fn appendByte(self: *LineBuffer, ch: u8) bool {
-        if (!self.ensure(1)) return false;
-        self.data.?[self.len] = ch;
-        self.len += 1;
-        return true;
-    }
-
-    fn appendSlice(self: *LineBuffer, text: []const u8) bool {
-        if (text.len == 0) return true;
-        if (!self.ensure(text.len)) return false;
-        var i: usize = 0;
-        while (i < text.len) : (i += 1) {
-            self.data.?[self.len + i] = text[i];
+    fn appendToken(self: *ListWriter, token: []const u8, with_separator: bool) bool {
+        if (with_separator and self.len != 0) {
+            if (self.len >= COL6FORGE_LIST_WRAP and !self.flush()) return false;
+            if (self.len != 0) {
+                self.line[self.len] = ' ';
+                self.len += 1;
+            }
         }
-        self.len += text.len;
-        return true;
-    }
 
-    fn terminate(self: *LineBuffer) bool {
-        if (!self.ensure(0)) return false;
-        self.data.?[self.len] = 0;
+        if (token.len == 0) return true;
+        var start: usize = 0;
+        while (start < token.len) {
+            if (self.len >= COL6FORGE_LIST_WRAP and !self.flush()) return false;
+            const avail = COL6FORGE_LIST_WRAP - self.len;
+            const remain = token.len - start;
+            const take = if (remain < avail) remain else avail;
+            @memcpy(self.line[self.len .. self.len + take], token[start .. start + take]);
+            self.len += take;
+            start += take;
+            if (start < token.len and !self.flush()) return false;
+        }
         return true;
     }
 };
-
-fn cstrlenRaw(text: []const u8) usize {
-    var i: usize = 0;
-    while (i < text.len and text[i] != 0) : (i += 1) {}
-    return i;
-}
 
 fn runtimeArgCount(arg_count: c_int) usize {
     return @intCast(@max(arg_count, 0));
@@ -80,6 +63,16 @@ fn runtimeArgKindAt(arg_kinds: ?[*]const u8, idx: usize, total: usize) u8 {
 fn runtimeArgLenAt(arg_lens: ?[*]const c_int, idx: usize, total: usize) c_int {
     if (idx >= total or arg_lens == null) return 0;
     return arg_lens.?[idx];
+}
+
+fn statusError(strict_status: c_int) c_int {
+    return if (strict_status != 0) 1 else 0;
+}
+
+fn snprintfCount(written: c_int, cap: usize) ?usize {
+    if (written < 0) return null;
+    const n: usize = @intCast(written);
+    return if (n < cap) n else cap - 1;
 }
 
 fn checkedMul(lhs: usize, rhs: usize) ?usize {
@@ -105,39 +98,29 @@ fn complexOffsetIndex(i: c_int, stride: c_int) ?usize {
     return checkedMul(idx, 2);
 }
 
-fn appendI32(out: *LineBuffer, value: c_int) bool {
-    var tmp: [64]u8 = [_]u8{0} ** 64;
-    _ = snprintf(&tmp[0], tmp.len, "%d", value);
-    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+fn formatI32(value: c_int, tmp: *[64]u8) ?[]const u8 {
+    const n = snprintfCount(snprintf(&tmp[0], tmp.len, "%d", value), tmp.len) orelse return null;
+    return tmp[0..n];
 }
 
-fn appendF32(out: *LineBuffer, value: f32) bool {
-    var tmp: [96]u8 = [_]u8{0} ** 96;
-    _ = snprintf(&tmp[0], tmp.len, "%.9g", @as(f64, @floatCast(value)));
-    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+fn formatF32(value: f32, tmp: *[96]u8) ?[]const u8 {
+    const n = snprintfCount(snprintf(&tmp[0], tmp.len, "%.9g", @as(f64, @floatCast(value))), tmp.len) orelse return null;
+    return tmp[0..n];
 }
 
-fn appendF64(out: *LineBuffer, value: f64) bool {
-    var tmp: [128]u8 = [_]u8{0} ** 128;
-    _ = snprintf(&tmp[0], tmp.len, "%.17g", value);
-    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+fn formatF64(value: f64, tmp: *[128]u8) ?[]const u8 {
+    const n = snprintfCount(snprintf(&tmp[0], tmp.len, "%.17g", value), tmp.len) orelse return null;
+    return tmp[0..n];
 }
 
-fn appendC32(out: *LineBuffer, real: f32, imag: f32) bool {
-    var tmp: [192]u8 = [_]u8{0} ** 192;
-    _ = snprintf(&tmp[0], tmp.len, "(%.9g,%.9g)", @as(f64, @floatCast(real)), @as(f64, @floatCast(imag)));
-    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+fn formatC32(real: f32, imag: f32, tmp: *[192]u8) ?[]const u8 {
+    const n = snprintfCount(snprintf(&tmp[0], tmp.len, "(%.9g,%.9g)", @as(f64, @floatCast(real)), @as(f64, @floatCast(imag))), tmp.len) orelse return null;
+    return tmp[0..n];
 }
 
-fn appendC64(out: *LineBuffer, real: f64, imag: f64) bool {
-    var tmp: [256]u8 = [_]u8{0} ** 256;
-    _ = snprintf(&tmp[0], tmp.len, "(%.17g,%.17g)", real, imag);
-    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
-}
-
-fn writeBufferLine(unit: c_int, out: *LineBuffer, strict_status: c_int) c_int {
-    if (!out.terminate()) return 1;
-    return col6forge_write_rendered_line(unit, @ptrCast(out.data.?), strict_status);
+fn formatC64(real: f64, imag: f64, tmp: *[256]u8) ?[]const u8 {
+    const n = snprintfCount(snprintf(&tmp[0], tmp.len, "(%.17g,%.17g)", real, imag), tmp.len) orelse return null;
+    return tmp[0..n];
 }
 
 fn writeEmptyLine(unit: c_int, strict_status: c_int) c_int {
@@ -145,102 +128,121 @@ fn writeEmptyLine(unit: c_int, strict_status: c_int) c_int {
     return col6forge_write_rendered_line(unit, @ptrCast(&empty), strict_status);
 }
 
+fn writeTokenI32(writer: *ListWriter, value: c_int, with_separator: bool) bool {
+    var tmp: [64]u8 = [_]u8{0} ** 64;
+    const token = formatI32(value, &tmp) orelse return false;
+    return writer.appendToken(token, with_separator);
+}
+
+fn writeTokenF32(writer: *ListWriter, value: f32, with_separator: bool) bool {
+    var tmp: [96]u8 = [_]u8{0} ** 96;
+    const token = formatF32(value, &tmp) orelse return false;
+    return writer.appendToken(token, with_separator);
+}
+
+fn writeTokenF64(writer: *ListWriter, value: f64, with_separator: bool) bool {
+    var tmp: [128]u8 = [_]u8{0} ** 128;
+    const token = formatF64(value, &tmp) orelse return false;
+    return writer.appendToken(token, with_separator);
+}
+
+fn writeTokenC32(writer: *ListWriter, real: f32, imag: f32, with_separator: bool) bool {
+    var tmp: [192]u8 = [_]u8{0} ** 192;
+    const token = formatC32(real, imag, &tmp) orelse return false;
+    return writer.appendToken(token, with_separator);
+}
+
+fn writeTokenC64(writer: *ListWriter, real: f64, imag: f64, with_separator: bool) bool {
+    var tmp: [256]u8 = [_]u8{0} ** 256;
+    const token = formatC64(real, imag, &tmp) orelse return false;
+    return writer.appendToken(token, with_separator);
+}
+
 pub export fn col6forge_write_list_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
-    var out: LineBuffer = .{};
-    defer out.deinit();
+    var writer = ListWriter.init(unit, 1);
     const data = base.?;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (i != 0 and !out.appendByte(' ')) return 1;
         const idx = offsetIndex(i, stride) orelse return 1;
-        if (!appendI32(&out, data[idx])) return 1;
+        if (!writeTokenI32(&writer, data[idx], i != 0)) return 1;
     }
-    return writeBufferLine(unit, &out, 1);
+    return if (writer.flush()) 0 else 1;
 }
 
 pub export fn col6forge_write_list_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
-    var out: LineBuffer = .{};
-    defer out.deinit();
+    var writer = ListWriter.init(unit, 1);
     const data = base.?;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (i != 0 and !out.appendByte(' ')) return 1;
         const idx = offsetIndex(i, stride) orelse return 1;
-        if (!appendF32(&out, data[idx])) return 1;
+        if (!writeTokenF32(&writer, data[idx], i != 0)) return 1;
     }
-    return writeBufferLine(unit, &out, 1);
+    return if (writer.flush()) 0 else 1;
 }
 
 pub export fn col6forge_write_list_f64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
-    var out: LineBuffer = .{};
-    defer out.deinit();
+    var writer = ListWriter.init(unit, 1);
     const data = base.?;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (i != 0 and !out.appendByte(' ')) return 1;
         const idx = offsetIndex(i, stride) orelse return 1;
-        if (!appendF64(&out, data[idx])) return 1;
+        if (!writeTokenF64(&writer, data[idx], i != 0)) return 1;
     }
-    return writeBufferLine(unit, &out, 1);
+    return if (writer.flush()) 0 else 1;
 }
 
 pub export fn col6forge_write_list_c32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
-    var out: LineBuffer = .{};
-    defer out.deinit();
+    var writer = ListWriter.init(unit, 1);
     const data = base.?;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (i != 0 and !out.appendByte(' ')) return 1;
         const elem_idx = complexOffsetIndex(i, stride) orelse return 1;
         const imag_idx = checkedAdd(elem_idx, 1) orelse return 1;
-        if (!appendC32(&out, data[elem_idx], data[imag_idx])) return 1;
+        if (!writeTokenC32(&writer, data[elem_idx], data[imag_idx], i != 0)) return 1;
     }
-    return writeBufferLine(unit, &out, 1);
+    return if (writer.flush()) 0 else 1;
 }
 
 pub export fn col6forge_write_list_c64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f64) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
-    var out: LineBuffer = .{};
-    defer out.deinit();
+    var writer = ListWriter.init(unit, 1);
     const data = base.?;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (i != 0 and !out.appendByte(' ')) return 1;
         const elem_idx = complexOffsetIndex(i, stride) orelse return 1;
         const imag_idx = checkedAdd(elem_idx, 1) orelse return 1;
-        if (!appendC64(&out, data[elem_idx], data[imag_idx])) return 1;
+        if (!writeTokenC64(&writer, data[elem_idx], data[imag_idx], i != 0)) return 1;
     }
-    return writeBufferLine(unit, &out, 1);
+    return if (writer.flush()) 0 else 1;
 }
 
 pub export fn col6forge_write_list_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const u8) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
 
-    var out: LineBuffer = .{};
-    defer out.deinit();
+    var writer = ListWriter.init(unit, 1);
     const data = base.?;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        if (i != 0 and !out.appendByte(' ')) return 1;
         const idx = offsetIndex(i, stride) orelse return 1;
-        if (!out.appendByte(if (data[idx] != 0) 'T' else 'F')) return 1;
+        var token: [1]u8 = .{if (data[idx] != 0) 'T' else 'F'};
+        if (!writer.appendToken(token[0..], i != 0)) return 1;
     }
-    return writeBufferLine(unit, &out, 1);
+    return if (writer.flush()) 0 else 1;
 }
 
 pub export fn col6forge_write_list_v(
@@ -254,52 +256,52 @@ pub export fn col6forge_write_list_v(
     const total = runtimeArgCount(arg_count);
     if (total == 0) return writeEmptyLine(unit, strict_status);
 
-    var out: LineBuffer = .{};
-    defer out.deinit();
+    var writer = ListWriter.init(unit, strict_status);
 
     var i: usize = 0;
     while (i < total) : (i += 1) {
         const kind = runtimeArgKindAt(arg_kinds, i, total);
-        const arg = runtimeArgPtrAt(arg_ptrs, i, total) orelse return if (strict_status != 0) 1 else 0;
-
-        if (i != 0 and !out.appendByte(' ')) return if (strict_status != 0) 1 else 0;
+        const arg = runtimeArgPtrAt(arg_ptrs, i, total) orelse return statusError(strict_status);
 
         switch (kind) {
             'i' => {
                 const ptr: *const c_int = @ptrCast(@alignCast(arg));
-                if (!appendI32(&out, ptr.*)) return if (strict_status != 0) 1 else 0;
+                if (!writeTokenI32(&writer, ptr.*, i != 0)) return statusError(strict_status);
             },
             'f' => {
                 const ptr: *const f32 = @ptrCast(@alignCast(arg));
-                if (!appendF32(&out, ptr.*)) return if (strict_status != 0) 1 else 0;
+                if (!writeTokenF32(&writer, ptr.*, i != 0)) return statusError(strict_status);
             },
             'd' => {
                 const ptr: *const f64 = @ptrCast(@alignCast(arg));
-                if (!appendF64(&out, ptr.*)) return if (strict_status != 0) 1 else 0;
+                if (!writeTokenF64(&writer, ptr.*, i != 0)) return statusError(strict_status);
             },
             'l' => {
                 const ptr: *const u8 = @ptrCast(@alignCast(arg));
-                if (!out.appendByte(if (ptr.* != 0) 'T' else 'F')) return if (strict_status != 0) 1 else 0;
+                var token: [1]u8 = .{if (ptr.* != 0) 'T' else 'F'};
+                if (!writer.appendToken(token[0..], i != 0)) return statusError(strict_status);
             },
             's' => {
                 const len_raw = runtimeArgLenAt(arg_lens, i, total);
                 const len: usize = @intCast(@max(len_raw, 0));
                 if (len != 0) {
                     const text: [*]const u8 = @ptrCast(arg);
-                    if (!out.appendSlice(text[0..len])) return if (strict_status != 0) 1 else 0;
+                    if (!writer.appendToken(text[0..len], i != 0)) return statusError(strict_status);
+                } else if (i != 0) {
+                    if (!writer.appendToken(&[_]u8{}, true)) return statusError(strict_status);
                 }
             },
             'c' => {
                 const ptr: [*]const f32 = @ptrCast(@alignCast(arg));
-                if (!appendC32(&out, ptr[0], ptr[1])) return if (strict_status != 0) 1 else 0;
+                if (!writeTokenC32(&writer, ptr[0], ptr[1], i != 0)) return statusError(strict_status);
             },
             'z' => {
                 const ptr: [*]const f64 = @ptrCast(@alignCast(arg));
-                if (!appendC64(&out, ptr[0], ptr[1])) return if (strict_status != 0) 1 else 0;
+                if (!writeTokenC64(&writer, ptr[0], ptr[1], i != 0)) return statusError(strict_status);
             },
-            else => return if (strict_status != 0) 1 else 0,
+            else => return statusError(strict_status),
         }
     }
 
-    return writeBufferLine(unit, &out, strict_status);
+    return if (writer.flush()) 0 else statusError(strict_status);
 }
