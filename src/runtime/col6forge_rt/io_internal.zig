@@ -25,7 +25,6 @@ fn checkedAdd(lhs: usize, rhs: usize) ?usize {
 }
 
 extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
-extern fn strtod(nptr: [*:0]const u8, endptr: ?*?[*:0]u8) f64;
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
@@ -39,6 +38,25 @@ fn cstrlenRaw(text: []const u8) usize {
     var i: usize = 0;
     while (i < text.len and text[i] != 0) : (i += 1) {}
     return i;
+}
+
+fn trimAsciiSpace(text: []const u8) []const u8 {
+    var start: usize = 0;
+    var end: usize = text.len;
+    while (start < end and isSpace(text[start])) : (start += 1) {}
+    while (end > start and isSpace(text[end - 1])) : (end -= 1) {}
+    return text[start..end];
+}
+
+fn parseFloatSlice(text: []const u8) ?f64 {
+    const trimmed = trimAsciiSpace(text);
+    if (trimmed.len == 0) return null;
+    return std.fmt.parseFloat(f64, trimmed) catch null;
+}
+
+fn parseFloatCString(text: []const u8) ?f64 {
+    const n = cstrlenRaw(text);
+    return parseFloatSlice(text[0..n]);
 }
 
 fn runtimeArgCount(arg_count: c_int) usize {
@@ -147,7 +165,7 @@ fn isListDelim(ch: u8) bool {
     return isSpace(ch) or ch == ',' or ch == '(' or ch == ')';
 }
 
-fn parseListToken(record: []const u8, idx: *usize, out: *[256]u8) c_int {
+fn parseListToken(record: []const u8, idx: *usize, out: []u8) c_int {
     var i = idx.*;
     while (i < record.len and isListDelim(record[i])) : (i += 1) {}
     if (i >= record.len) {
@@ -201,7 +219,7 @@ fn nextInternalListToken(
     record_count: usize,
     rec_index: *usize,
     idx: *usize,
-    token: *[256]u8,
+    token: []u8,
 ) bool {
     while (true) {
         const used = parseListToken(record[0..rec_len], idx, token);
@@ -331,7 +349,7 @@ pub export fn col6forge_read_internal_list_v(
     loadInternalRecord(&record, src, rec_len);
 
     const total = runtimeArgCount(arg_count);
-    var token: [256]u8 = [_]u8{0} ** 256;
+    var token: [4096]u8 = [_]u8{0} ** 4096;
     var arg_idx: usize = 0;
     while (arg_idx < total) : (arg_idx += 1) {
         const kind = runtimeArgKindAt(arg_kinds, arg_idx, total);
@@ -339,30 +357,30 @@ pub export fn col6forge_read_internal_list_v(
 
         switch (kind) {
             'i' => {
-                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 const out: *c_int = @ptrCast(@alignCast(arg));
                 out.* = @intCast(strtol(asConstCStr(&token), null, 10));
             },
             'f' => {
-                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
                 const out: *f32 = @ptrCast(@alignCast(arg));
-                out.* = @floatCast(strtod(asConstCStr(&token), null));
+                out.* = @floatCast(parseFloatCString(token[0..]) orelse 0.0);
             },
             'd' => {
-                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
                 const out: *f64 = @ptrCast(@alignCast(arg));
-                out.* = strtod(asConstCStr(&token), null);
+                out.* = parseFloatCString(token[0..]) orelse 0.0;
             },
             'l' => {
-                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
@@ -370,7 +388,7 @@ pub export fn col6forge_read_internal_list_v(
                 out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
             },
             's' => {
-                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 const out: [*]u8 = @ptrCast(arg);
@@ -388,31 +406,31 @@ pub export fn col6forge_read_internal_list_v(
                 }
             },
             'c' => {
-                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const real = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
-                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                const real = @as(f32, @floatCast(parseFloatCString(token[0..]) orelse 0.0));
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const imag = @as(f32, @floatCast(strtod(asConstCStr(&token), null)));
+                const imag = @as(f32, @floatCast(parseFloatCString(token[0..]) orelse 0.0));
                 const out: [*]f32 = @ptrCast(@alignCast(arg));
                 out[0] = real;
                 out[1] = imag;
             },
             'z' => {
-                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const real = strtod(asConstCStr(&token), null);
-                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, &token)) {
+                const real = parseFloatCString(token[0..]) orelse 0.0;
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const imag = strtod(asConstCStr(&token), null);
+                const imag = parseFloatCString(token[0..]) orelse 0.0;
                 const out: [*]f64 = @ptrCast(@alignCast(arg));
                 out[0] = real;
                 out[1] = imag;
@@ -511,7 +529,7 @@ pub export fn col6forge_read_internal_core(
             continue;
         }
 
-        var field: [128]u8 = [_]u8{0} ** 128;
+        var field: [4096]u8 = [_]u8{0} ** 4096;
         var used: c_int = 0;
         if (width <= 0) {
             while (idx < rec_len and isSpace(record[idx])) : (idx += 1) {}
@@ -555,16 +573,24 @@ pub export fn col6forge_read_internal_core(
             col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f64 = @ptrCast(@alignCast(arg_any));
-            out.* = strtod(asConstCStr(&field), null);
+            out.* = parseFloatSlice(field[0..@intCast(@max(used, 0))]) orelse 0.0;
             assigned += 1;
         } else if (conv == 'f' and !is_long and kind == 'f') {
             col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f32 = @ptrCast(@alignCast(arg_any));
-            out.* = @floatCast(strtod(asConstCStr(&field), null));
+            out.* = @floatCast(parseFloatSlice(field[0..@intCast(@max(used, 0))]) orelse 0.0);
             assigned += 1;
         } else if (conv == 'c' and kind == 'c') {
             const out: [*]u8 = @ptrCast(arg_any);
+            if (width > 0) {
+                const w: usize = @intCast(width);
+                var i: usize = 0;
+                while (i < w) : (i += 1) {
+                    out[i] = ' ';
+                }
+                if (used > width) used = width;
+            }
             if (used > 0) {
                 const n: usize = @intCast(used);
                 var i: usize = 0;
@@ -606,7 +632,7 @@ pub export fn col6forge_read_direct_internal_core(
     var record_idx: usize = 0;
     while (record_idx < record_count) : (record_idx += 1) {
         const rec_num = addRecordOffset(rec, record_idx) orelse return if (status_mode != 0) 1 else 0;
-        const src = col6forge_direct_record_ptr_ro(unit, rec_num, recl) orelse return -1;
+        const src = col6forge_direct_record_ptr_ro(unit, rec_num, recl) orelse return if (status_mode != 0) -1 else 0;
         const offset = checkedMul(record_idx, recl_usize) orelse return if (status_mode != 0) 1 else 0;
         var i: usize = 0;
         while (i < recl_usize) : (i += 1) {
@@ -630,6 +656,45 @@ pub export fn col6forge_read_direct_internal_core(
     return assigned;
 }
 
+const InternalTabMarker = struct {
+    next: usize,
+    kind: u8,
+    value: usize,
+};
+
+fn parseInternalTabMarker(src: []const u8, start: usize) ?InternalTabMarker {
+    if (start >= src.len or src[start] != 0x01) return null;
+    if (start + 3 > src.len) return null;
+
+    const kind = src[start + 1];
+    if (kind != 'T' and kind != 'R' and kind != 'L') return null;
+
+    var i: usize = start + 2;
+    var value: usize = 0;
+    var saw_digit = false;
+    while (i < src.len and src[i] != 0x02) : (i += 1) {
+        const ch = src[i];
+        if (ch < '0' or ch > '9') return null;
+        saw_digit = true;
+        const mul_value = @mulWithOverflow(value, 10);
+        if (mul_value[1] != 0) {
+            value = ~@as(usize, 0);
+            continue;
+        }
+        const digit = @as(usize, ch - '0');
+        const next_value = @addWithOverflow(mul_value[0], digit);
+        if (next_value[1] != 0) {
+            value = ~@as(usize, 0);
+            continue;
+        }
+        value = next_value[0];
+    }
+
+    if (!saw_digit) return null;
+    if (i >= src.len or src[i] != 0x02) return null;
+    return .{ .next = i + 1, .kind = kind, .value = value };
+}
+
 fn writeInternalMarkedSlice(dst: [*]u8, len: usize, src: []const u8) void {
     var i: usize = 0;
     while (i < len) : (i += 1) {
@@ -641,47 +706,23 @@ fn writeInternalMarkedSlice(dst: [*]u8, len: usize, src: []const u8) void {
     while (i < src.len) {
         const ch = src[i];
         if (ch == 0x01) {
-            i += 1;
-            if (i >= src.len) break;
-            const kind = src[i];
-            i += 1;
-
-            var value: usize = 0;
-            while (i < src.len and src[i] != 0x02) : (i += 1) {
-                if (src[i] >= '0' and src[i] <= '9') {
-                    const mul_value = @mulWithOverflow(value, 10);
-                    if (mul_value[1] != 0) {
-                        value = ~@as(usize, 0);
-                    } else {
-                        const digit = @as(usize, src[i] - '0');
-                        const next_value = @addWithOverflow(mul_value[0], digit);
-                        if (next_value[1] != 0) {
-                            value = ~@as(usize, 0);
+            if (parseInternalTabMarker(src, i)) |marker| {
+                switch (marker.kind) {
+                    'T' => col = if (marker.value > 0) marker.value - 1 else 0,
+                    'R' => col = checkedAdd(col, marker.value) orelse len,
+                    'L' => {
+                        if (col > marker.value) {
+                            col -= marker.value;
                         } else {
-                            value = next_value[0];
+                            col = 0;
                         }
-                    }
+                    },
+                    else => {},
                 }
+                i = marker.next;
+                continue;
             }
-            if (i < src.len and src[i] == 0x02) {
-                i += 1;
-            }
-
-            switch (kind) {
-                'T' => col = if (value > 0) value - 1 else 0,
-                'R' => col = checkedAdd(col, value) orelse len,
-                'L' => {
-                    if (col > value) {
-                        col -= value;
-                    } else {
-                        col = 0;
-                    }
-                },
-                else => {},
-            }
-            continue;
         }
-
         if (col < len) {
             if (ch != ' ' or dst[col] == ' ') {
                 dst[col] = ch;
@@ -690,6 +731,25 @@ fn writeInternalMarkedSlice(dst: [*]u8, len: usize, src: []const u8) void {
         col += 1;
         i += 1;
     }
+}
+
+test "writeInternalMarkedSlice treats invalid marker as literal data" {
+    var out: [6]u8 = undefined;
+    const src = "\x01A12\x02X";
+    writeInternalMarkedSlice(&out, out.len, src);
+    try std.testing.expectEqual(@as(u8, 0x01), out[0]);
+    try std.testing.expectEqual(@as(u8, 'A'), out[1]);
+    try std.testing.expectEqual(@as(u8, '1'), out[2]);
+    try std.testing.expectEqual(@as(u8, '2'), out[3]);
+    try std.testing.expectEqual(@as(u8, 0x02), out[4]);
+    try std.testing.expectEqual(@as(u8, 'X'), out[5]);
+}
+
+test "writeInternalMarkedSlice ignores oversized relative tab" {
+    var out: [4]u8 = undefined;
+    const src = "\x01R184467440737095516161844674407370955161\x02X";
+    writeInternalMarkedSlice(&out, out.len, src);
+    try std.testing.expectEqualSlices(u8, "    ", out[0..]);
 }
 
 pub export fn col6forge_write_internal_core(buf: ?[*]u8, len: c_int, src: ?[*:0]const u8) callconv(.c) void {
@@ -754,9 +814,3 @@ test "internal io helpers detect overflow" {
     try std.testing.expect(checkedAdd(std.math.maxInt(usize), 1) == null);
 }
 
-test "writeInternalMarkedSlice ignores oversized relative tab" {
-    var out: [4]u8 = undefined;
-    const src = "\x01R184467440737095516161844674407370955161\x02X";
-    writeInternalMarkedSlice(&out, out.len, src);
-    try std.testing.expectEqualSlices(u8, "    ", out[0..]);
-}
