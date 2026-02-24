@@ -115,11 +115,43 @@ fn parseFloatField(field: []const u8) ?f64 {
     return std.fmt.parseFloat(f64, trimmed) catch null;
 }
 
+fn parseIntegerField(field: []const u8) ?c_int {
+    const trimmed = trimAsciiSpace(field);
+    if (trimmed.len == 0) return null;
+    const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return null;
+    if (parsed < std.math.minInt(c_int) or parsed > std.math.maxInt(c_int)) return null;
+    return @intCast(parsed);
+}
+
+fn isAllAsterisksField(field: []const u8) bool {
+    const trimmed = trimAsciiSpace(field);
+    if (trimmed.len == 0) return false;
+    for (trimmed) |ch| {
+        if (ch != '*') return false;
+    }
+    return true;
+}
+
 fn abortReadFatal(unit: c_int, is_stdin: bool, managed_read_stream: bool, stream: ?*FILE, start_pos: c_long) noreturn {
     if (!is_stdin and managed_read_stream and stream != null) {
         col6forge_unit_stream_release_read(unit, @ptrCast(stream.?), start_pos, 0);
     }
     exit(2);
+}
+
+fn failRead(
+    unit: c_int,
+    status_mode: c_int,
+    code: c_int,
+    is_stdin: bool,
+    managed_read_stream: bool,
+    stream: ?*FILE,
+    start_pos: c_long,
+    commit_stream_pos: *bool,
+) c_int {
+    commit_stream_pos.* = false;
+    if (status_mode != 0) return code;
+    abortReadFatal(unit, is_stdin, managed_read_stream, stream, start_pos);
 }
 
 pub export fn col6forge_formatted_read_core(
@@ -166,9 +198,7 @@ pub export fn col6forge_formatted_read_core(
     var record: [4096]u8 = [_]u8{0} ** 4096;
     var record_len: usize = 0;
     if (!readRecordLine(stream, &record, &record_len)) {
-        if (status_mode != 0) return -1;
-        commit_stream_pos = false;
-        abortReadFatal(unit, is_stdin, managed_read_stream, stream, start_pos);
+        return failRead(unit, status_mode, -1, is_stdin, managed_read_stream, stream, start_pos, &commit_stream_pos);
     }
 
     var blank_mode: c_int = if (col6forge_open_unit_blank_code(unit) == 2) 1 else 0;
@@ -234,27 +264,45 @@ pub export fn col6forge_formatted_read_core(
 
         var field: [4096]u8 = [_]u8{0} ** 4096;
         var used: c_int = 0;
+        var field_overflow = false;
         if (conv != 'S') {
             if (width <= 0) {
                 while (idx < record_len and (isSpace(record[idx]) or record[idx] == ',' or record[idx] == '(' or record[idx] == ')')) : (idx += 1) {}
-                while (idx < record_len and !isSpace(record[idx]) and record[idx] != ',' and record[idx] != '(' and record[idx] != ')' and used < @as(c_int, @intCast(field.len - 1))) {
-                    field[@intCast(used)] = record[idx];
-                    used += 1;
+                while (idx < record_len and !isSpace(record[idx]) and record[idx] != ',' and record[idx] != '(' and record[idx] != ')') {
+                    if (used < @as(c_int, @intCast(field.len - 1))) {
+                        field[@intCast(used)] = record[idx];
+                        used += 1;
+                    } else {
+                        field_overflow = true;
+                    }
                     idx += 1;
                 }
             } else {
-                if (width >= @as(c_int, @intCast(field.len))) width = @as(c_int, @intCast(field.len - 1));
+                const requested_width = width;
                 var i: c_int = 0;
-                while (i < width) : (i += 1) {
+                while (i < requested_width) : (i += 1) {
+                    const can_store = used < @as(c_int, @intCast(field.len - 1));
                     if (idx < record_len) {
-                        field[@intCast(used)] = record[idx];
+                        if (can_store) {
+                            field[@intCast(used)] = record[idx];
+                            used += 1;
+                        } else {
+                            field_overflow = true;
+                        }
                         idx += 1;
                     } else {
-                        field[@intCast(used)] = ' ';
+                        if (can_store) {
+                            field[@intCast(used)] = ' ';
+                            used += 1;
+                        } else {
+                            field_overflow = true;
+                        }
                     }
-                    used += 1;
                 }
             }
+        }
+        if (field_overflow) {
+            return failRead(unit, status_mode, 1, is_stdin, managed_read_stream, stream, start_pos, &commit_stream_pos);
         }
         field[@intCast(used)] = 0;
 
@@ -272,21 +320,40 @@ pub export fn col6forge_formatted_read_core(
         if (conv == 'd' and kind == 'd') {
             col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             const out: *c_int = @ptrCast(@alignCast(arg));
-            out.* = @intCast(strtol(asConstCStr(&field), null, 10));
+            const view = field[0..@intCast(@max(used, 0))];
+            if (parseIntegerField(view)) |parsed| {
+                out.* = parsed;
+            } else if (isAllAsterisksField(view)) {
+                out.* = 0;
+            } else {
+                return failRead(unit, status_mode, 1, is_stdin, managed_read_stream, stream, start_pos, &commit_stream_pos);
+            }
             assigned += 1;
         } else if (conv == 'f' and is_long and kind == 'D') {
             col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f64 = @ptrCast(@alignCast(arg));
-            const parsed = parseFloatField(field[0..@intCast(@max(used, 0))]) orelse 0.0;
-            out.* = parsed;
+            const view = field[0..@intCast(@max(used, 0))];
+            if (parseFloatField(view)) |parsed| {
+                out.* = parsed;
+            } else if (isAllAsterisksField(view)) {
+                out.* = 0.0;
+            } else {
+                return failRead(unit, status_mode, 1, is_stdin, managed_read_stream, stream, start_pos, &commit_stream_pos);
+            }
             assigned += 1;
         } else if (conv == 'f' and !is_long and kind == 'f') {
             col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f32 = @ptrCast(@alignCast(arg));
-            const parsed = parseFloatField(field[0..@intCast(@max(used, 0))]) orelse 0.0;
-            out.* = @floatCast(parsed);
+            const view = field[0..@intCast(@max(used, 0))];
+            if (parseFloatField(view)) |parsed| {
+                out.* = @floatCast(parsed);
+            } else if (isAllAsterisksField(view)) {
+                out.* = 0.0;
+            } else {
+                return failRead(unit, status_mode, 1, is_stdin, managed_read_stream, stream, start_pos, &commit_stream_pos);
+            }
             assigned += 1;
         } else if (conv == 'S' and kind == 'S') {
             const out: [*]u8 = @ptrCast(arg);
