@@ -1,6 +1,9 @@
 const std = @import("std");
 const COL6FORGE_MAX_UNITS = 256;
 const COL6FORGE_FILENAME_MAX = 4096;
+const COL6FORGE_UNFORMATTED_MAX_RECORDS: usize = 1_000_000;
+const COL6FORGE_UNFORMATTED_MAX_RECORD_BYTES: usize = 64 * 1024 * 1024;
+const COL6FORGE_UNFORMATTED_MAX_TOTAL_BYTES: usize = 1024 * 1024 * 1024;
 
 const FILE = opaque {};
 
@@ -225,16 +228,30 @@ pub export fn direct_signature_size(sig: [*:0]const u8) callconv(.c) usize {
     return total;
 }
 
-fn unformattedEnsureCapacityLocal(unit: *UnformattedUnit, needed: usize) void {
-    if (unit.capacity >= needed) return;
+fn unformattedEnsureCapacityLocal(unit: *UnformattedUnit, needed: usize) bool {
+    if (needed > COL6FORGE_UNFORMATTED_MAX_RECORDS) return false;
+    if (unit.capacity >= needed) return true;
+
     var new_cap: usize = if (unit.capacity == 0) 8 else unit.capacity;
     while (new_cap < needed) {
-        new_cap *= 2;
+        if (new_cap >= COL6FORGE_UNFORMATTED_MAX_RECORDS) {
+            new_cap = COL6FORGE_UNFORMATTED_MAX_RECORDS;
+            break;
+        }
+        const doubled = @mulWithOverflow(new_cap, @as(usize, 2));
+        if (doubled[1] != 0) {
+            new_cap = COL6FORGE_UNFORMATTED_MAX_RECORDS;
+            break;
+        }
+        new_cap = @min(doubled[0], COL6FORGE_UNFORMATTED_MAX_RECORDS);
     }
+    if (new_cap < needed) return false;
+
+    const bytes_mul = @mulWithOverflow(new_cap, @as(usize, @sizeOf(UnformattedRecord)));
+    if (bytes_mul[1] != 0) return false;
     const prev: ?*anyopaque = if (unit.records) |records| @ptrCast(records) else null;
-    const new_records_raw = realloc(prev, new_cap * @sizeOf(UnformattedRecord));
-    if (new_records_raw == null) return;
-    const aligned: *align(@alignOf(UnformattedRecord)) anyopaque = @alignCast(new_records_raw.?);
+    const new_records_raw = realloc(prev, bytes_mul[0]) orelse return false;
+    const aligned: *align(@alignOf(UnformattedRecord)) anyopaque = @alignCast(new_records_raw);
     const new_records: [*]UnformattedRecord = @ptrCast(aligned);
     var i = unit.capacity;
     while (i < new_cap) : (i += 1) {
@@ -244,6 +261,7 @@ fn unformattedEnsureCapacityLocal(unit: *UnformattedUnit, needed: usize) void {
     }
     unit.records = new_records;
     unit.capacity = new_cap;
+    return true;
 }
 
 fn directEnsureCapacity(du: *DirectUnit, needed: usize) void {
@@ -261,6 +279,19 @@ fn directEnsureCapacity(du: *DirectUnit, needed: usize) void {
     }
     du.data = new_data;
     du.size = needed;
+}
+
+fn unformattedTotalBytes(unit: *const UnformattedUnit) usize {
+    if (unit.records == null or unit.count == 0) return 0;
+    const records = unit.records.?;
+    var total: usize = 0;
+    var i: usize = 0;
+    while (i < unit.count) : (i += 1) {
+        const added = @addWithOverflow(total, records[i].len);
+        if (added[1] != 0) return std.math.maxInt(usize);
+        total = added[0];
+    }
+    return total;
 }
 
 fn unformattedFileHasData(unit: c_int) bool {
@@ -395,6 +426,17 @@ fn unformattedBeginWriteSizedLocked(unit: c_int, record_size: usize, out_record:
     const uu = getUnformattedUnitLocked(unit, true) orelse return 0;
     uu.used = 1;
 
+    if (record_size > COL6FORGE_UNFORMATTED_MAX_RECORD_BYTES) return 0;
+    if (uu.pos >= uu.count and uu.count >= COL6FORGE_UNFORMATTED_MAX_RECORDS) return 0;
+
+    const old_len: usize = if (uu.pos < uu.count and uu.records != null) uu.records.?[uu.pos].len else 0;
+    const current_total = unformattedTotalBytes(uu);
+    if (current_total == std.math.maxInt(usize)) return 0;
+    if (current_total < old_len) return 0;
+    const without_old = current_total - old_len;
+    const projected = @addWithOverflow(without_old, record_size);
+    if (projected[1] != 0 or projected[0] > COL6FORGE_UNFORMATTED_MAX_TOTAL_BYTES) return 0;
+
     var record: ?[*]u8 = null;
     if (record_size > 0) {
         const record_raw = realloc(null, record_size) orelse return 0;
@@ -422,7 +464,10 @@ fn unformattedBeginWriteSizedLocked(unit: c_int, record_size: usize, out_record:
         return 1;
     }
 
-    unformattedEnsureCapacityLocal(uu, uu.count + 1);
+    if (!unformattedEnsureCapacityLocal(uu, uu.count + 1)) {
+        if (record) |ptr| free(@ptrCast(ptr));
+        return 0;
+    }
     if (uu.records == null) {
         if (record) |ptr| free(@ptrCast(ptr));
         return 0;
@@ -444,7 +489,7 @@ fn unformattedBeginReadSizedLocked(unit: c_int, record_size_hint: usize, out_rec
 
     if (uu.count == 0 and uu.pos == 0 and unformattedFileHasData(unit)) {
         const record_size = record_size_hint;
-        unformattedEnsureCapacityLocal(uu, 1);
+        if (!unformattedEnsureCapacityLocal(uu, 1)) return -1;
         if (uu.records) |records| {
             var record: ?[*]u8 = null;
             if (record_size > 0) {
@@ -538,7 +583,7 @@ pub export fn col6forge_unformatted_endfile(unit: c_int) callconv(.c) c_int {
     if (uu.count > 0 or uu.pos > 0) {
         unformattedTruncateLocal(uu, uu.pos);
     }
-    unformattedEnsureCapacityLocal(uu, uu.pos + 1);
+    if (!unformattedEnsureCapacityLocal(uu, uu.pos + 1)) return 0;
     if (uu.records == null) return 0;
     const records = uu.records.?;
     if (uu.pos < uu.count) {

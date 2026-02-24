@@ -6,7 +6,7 @@ extern fn remove(pathname: [*:0]const u8) c_int;
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
 extern fn fclose(stream: *FILE) c_int;
 extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
-extern fn fgetc(stream: *FILE) c_int;
+extern fn fread(ptr: ?*anyopaque, size: usize, nitems: usize, stream: *FILE) usize;
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 
@@ -239,6 +239,48 @@ fn asConstCStr(buf: anytype) [*:0]const u8 {
 
 fn cstrSlice(value: [*:0]const u8) []const u8 {
     return std.mem.span(value);
+}
+
+const BACKSPACE_SCAN_BLOCK_BYTES: usize = 4096;
+
+fn isLineSep(ch: u8) bool {
+    return ch == '\n' or ch == '\r';
+}
+
+fn scanBackspaceTarget(file: *FILE, start_pos: c_long) ?c_long {
+    if (start_pos <= 0) return 0;
+
+    const max_c_long: usize = @intCast(std.math.maxInt(c_long));
+    var cursor: usize = @intCast(start_pos);
+    var block: [BACKSPACE_SCAN_BLOCK_BYTES]u8 = undefined;
+    var trim_line_end = true;
+
+    while (cursor > 0) {
+        const chunk_start: usize = if (cursor > block.len) cursor - block.len else 0;
+        const chunk_len: usize = cursor - chunk_start;
+        if (chunk_start > max_c_long) return null;
+        if (fseek(file, @intCast(chunk_start), 0) != 0) return null;
+        const read_n = fread(&block, 1, chunk_len, file);
+        if (read_n != chunk_len) return null;
+
+        var j = read_n;
+        while (j > 0) {
+            j -= 1;
+            const ch = block[j];
+            if (trim_line_end) {
+                if (isLineSep(ch)) continue;
+                trim_line_end = false;
+            }
+            if (isLineSep(ch)) {
+                const target = chunk_start + j + 1;
+                if (target > max_c_long) return null;
+                return @intCast(target);
+            }
+        }
+        cursor = chunk_start;
+    }
+
+    return 0;
 }
 
 fn col6forgeFileExists(name: [*:0]const u8) bool {
@@ -516,13 +558,14 @@ pub export fn col6forge_inquire_file(
 
     var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     col6forge_trim_filename(file, file_len, &name, name.len);
+    const wanted_name = cstrSlice(asConstCStr(&name));
 
     var found_unit: c_int = -1;
     open_state_mutex.lock();
     {
         var i: usize = 0;
         while (i < COL6FORGE_MAX_UNITS) : (i += 1) {
-            if (open_units[i].opened != 0 and open_units[i].filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&open_units[i].filename)), cstrSlice(asConstCStr(&name)))) {
+            if (open_units[i].opened != 0 and open_units[i].filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&open_units[i].filename)), wanted_name)) {
                 found_unit = @intCast(i);
                 break;
             }
@@ -531,7 +574,7 @@ pub export fn col6forge_inquire_file(
             i = 0;
             while (i < extra_open_count) : (i += 1) {
                 const entry = &extra_open_units.?[i];
-                if (entry.opened != 0 and entry.filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&entry.filename)), cstrSlice(asConstCStr(&name)))) {
+                if (entry.opened != 0 and entry.filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&entry.filename)), wanted_name)) {
                     found_unit = entry.unit;
                     break;
                 }
@@ -576,28 +619,10 @@ pub export fn col6forge_backspace(unit: c_int) callconv(.c) void {
 
     var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     unit_filename(unit, &name, name.len);
-    const file = fopen(asConstCStr(&name), "r") orelse return;
+    const file = fopen(asConstCStr(&name), "rb") orelse return;
     defer _ = fclose(file);
-
-    pos -= 1;
-    if (fseek(file, pos, 0) != 0) return;
-    var ch = fgetc(file);
-    while (pos > 0 and ch == '\n') {
-        pos -= 1;
-        if (fseek(file, pos, 0) != 0) return;
-        ch = fgetc(file);
-    }
-    while (pos > 0 and ch != '\n') {
-        pos -= 1;
-        if (fseek(file, pos, 0) != 0) return;
-        ch = fgetc(file);
-    }
-    if (ch == '\n') {
-        pos += 1;
-    } else {
-        pos = 0;
-    }
-    col6forge_unit_pos_set(unit, pos);
+    const target = scanBackspaceTarget(file, pos) orelse return;
+    col6forge_unit_pos_set(unit, target);
 }
 
 pub export fn col6forge_endfile(unit: c_int) callconv(.c) void {
