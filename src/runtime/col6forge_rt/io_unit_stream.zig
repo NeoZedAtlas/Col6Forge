@@ -12,11 +12,17 @@ extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) c_int;
 extern fn col6forge_unit_pos_set(unit: c_int, pos: c_long) void;
-extern fn col6forge_line_output_release_cached(unit: c_int) void;
+
+const StreamMode = enum(u8) {
+    none,
+    read_only,
+    read_write,
+};
 
 const StreamEntry = struct {
     unit: c_int,
     stream: ?*FILE,
+    mode: StreamMode,
     lock: std.Thread.Mutex = .{},
     held: bool = false,
 };
@@ -64,6 +70,7 @@ fn ensureEntryLocked(unit: c_int) ?*StreamEntry {
     entry.* = .{
         .unit = unit,
         .stream = null,
+        .mode = .none,
         .lock = .{},
         .held = false,
     };
@@ -79,9 +86,42 @@ fn closeEntryStream(entry: *StreamEntry) void {
         _ = fclose(stream);
     }
     entry.stream = null;
+    entry.mode = .none;
 }
 
-pub export fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long) callconv(.c) c_int {
+fn reopenEntryStream(entry: *StreamEntry, unit: c_int, mode: [*:0]const u8, mode_kind: StreamMode) bool {
+    var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
+    unit_filename(unit, &name, name.len);
+    closeEntryStream(entry);
+    entry.stream = fopen(asConstCStr(&name), mode) orelse return false;
+    entry.mode = mode_kind;
+    return true;
+}
+
+fn ensureReadable(entry: *StreamEntry, unit: c_int) bool {
+    if (entry.stream != null) return true;
+    return reopenEntryStream(entry, unit, "r", .read_only);
+}
+
+fn ensureWritable(entry: *StreamEntry, unit: c_int, start_pos: c_long) bool {
+    const start_at_zero = start_pos == 0;
+
+    if (entry.stream == null) {
+        return reopenEntryStream(entry, unit, if (start_at_zero) "w+" else "r+", .read_write);
+    }
+
+    if (start_at_zero) {
+        return reopenEntryStream(entry, unit, "w+", .read_write);
+    }
+
+    if (entry.mode == .read_only) {
+        return reopenEntryStream(entry, unit, "r+", .read_write);
+    }
+
+    return true;
+}
+
+fn acquireStream(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long, want_write: bool) c_int {
     if (out_stream == null) return 0;
 
     stream_state_mutex.lock();
@@ -91,7 +131,7 @@ pub export fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*an
     };
     stream_state_mutex.unlock();
 
-    // Lock stays held across acquire->release to serialize read-side unit access.
+    // Lock stays held across acquire->release to serialize per-unit stream usage.
     entry.lock.lock();
     var unlock_on_return = true;
     defer if (unlock_on_return) {
@@ -104,14 +144,11 @@ pub export fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*an
     var start_pos: c_long = 0;
     _ = col6forge_unit_pos_get(unit, &start_pos);
 
-    if (entry.stream == null) {
-        var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
-        unit_filename(unit, &name, name.len);
-        // Keep read-side stream coherent with writer-side cached handle.
-        col6forge_line_output_release_cached(unit);
-        entry.stream = fopen(asConstCStr(&name), "r");
-        if (entry.stream == null) return 0;
-    }
+    const ready = if (want_write)
+        ensureWritable(entry, unit, start_pos)
+    else
+        ensureReadable(entry, unit);
+    if (!ready) return 0;
 
     const stream = entry.stream.?;
     if (fseek(stream, start_pos, 0) != 0) {
@@ -126,7 +163,7 @@ pub export fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*an
     return 1;
 }
 
-pub export fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) callconv(.c) void {
+fn releaseStream(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) void {
     _ = stream;
 
     stream_state_mutex.lock();
@@ -151,6 +188,22 @@ pub export fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaqu
 
     entry.held = false;
     entry.lock.unlock();
+}
+
+pub export fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long) callconv(.c) c_int {
+    return acquireStream(unit, out_stream, out_start_pos, false);
+}
+
+pub export fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) callconv(.c) void {
+    releaseStream(unit, stream, start_pos, commit_pos);
+}
+
+pub export fn col6forge_unit_stream_acquire_write(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long) callconv(.c) c_int {
+    return acquireStream(unit, out_stream, out_start_pos, true);
+}
+
+pub export fn col6forge_unit_stream_release_write(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) callconv(.c) void {
+    releaseStream(unit, stream, start_pos, commit_pos);
 }
 
 pub export fn col6forge_unit_stream_invalidate(unit: c_int) callconv(.c) void {
