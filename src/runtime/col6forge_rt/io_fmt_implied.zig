@@ -48,10 +48,25 @@ const LineBuffer = struct {
         return true;
     }
 
+    fn appendRepeat(self: *LineBuffer, ch: u8, count: usize) bool {
+        if (count == 0) return true;
+        if (!self.ensure(count)) return false;
+        @memset(self.data.?[self.len .. self.len + count], ch);
+        self.len += count;
+        return true;
+    }
+
     fn terminate(self: *LineBuffer) bool {
         if (!self.ensure(0)) return false;
         self.data.?[self.len] = 0;
         return true;
+    }
+
+    fn clearKeepingCapacity(self: *LineBuffer) void {
+        self.len = 0;
+        if (self.data) |ptr| {
+            ptr[0] = 0;
+        }
     }
 };
 
@@ -71,6 +86,11 @@ fn checkedMul(a: usize, b: usize) ?usize {
     const out = @mulWithOverflow(a, b);
     if (out[1] != 0) return null;
     return out[0];
+}
+
+fn flushLine(unit: c_int, out: *LineBuffer) c_int {
+    if (!out.terminate()) return 1;
+    return col6forge_write_rendered_line(unit, @ptrCast(out.data.?), 0);
 }
 
 pub export fn col6forge_write_fmt_d_implied(
@@ -98,34 +118,37 @@ pub export fn col6forge_write_fmt_d_implied(
     if (!appendLenSlice(&out, title_ptr, title_len)) return 1;
     if (!appendLenSlice(&out, post_ptr, post_len)) return 1;
 
-    if (count > 0) {
-        if (base == null or stride <= 0 or per_line <= 0) return 1;
-        const n: usize = @intCast(count);
-        const stride_u: usize = @intCast(stride);
-        const per_line_u: usize = @intCast(per_line);
-        const indent_u: usize = @intCast(@max(indent, 0));
-        const data = base.?;
+    if (count <= 0) {
+        return flushLine(unit, &out);
+    }
 
-        var i: usize = 0;
-        while (i < n) : (i += 1) {
-            if ((i % per_line_u) == 0) {
-                var s: usize = 0;
-                while (s < indent_u) : (s += 1) {
-                    if (!out.appendByte(' ')) return 1;
-                }
+    if (base == null or stride <= 0 or per_line <= 0) return 1;
+    const n: usize = @intCast(count);
+    const stride_u: usize = @intCast(stride);
+    const per_line_u: usize = @intCast(per_line);
+    const indent_u: usize = @intCast(@max(indent, 0));
+    const data = base.?;
+
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if ((i % per_line_u) == 0) {
+            if (i != 0) {
+                if (flushLine(unit, &out) != 0) return 1;
+                out.clearKeepingCapacity();
             }
+            if (!out.appendRepeat(' ', indent_u)) return 1;
+        }
 
-            const idx = checkedMul(i, stride_u) orelse return 1;
-            const txt = col6forge_fmt_d(width, precision, 0, 0, 0, data[idx]) orelse return 1;
-            if (!out.appendSlice(txt[0..cstrlen(txt)])) return 1;
+        const idx = checkedMul(i, stride_u) orelse return 1;
+        const txt = col6forge_fmt_d(width, precision, 0, 0, 0, data[idx]) orelse return 1;
+        if (!out.appendSlice(txt[0..cstrlen(txt)])) return 1;
 
-            const line_end = ((i + 1) % per_line_u) == 0 or (i + 1) == n;
-            if (line_end) {
-                if (!out.appendByte('\n')) return 1;
-            }
+        const line_end = ((i + 1) % per_line_u) == 0 or (i + 1) == n;
+        if (line_end) {
+            if (flushLine(unit, &out) != 0) return 1;
+            out.clearKeepingCapacity();
         }
     }
 
-    if (!out.terminate()) return 1;
-    return col6forge_write_rendered_line(unit, @ptrCast(out.data.?), 0);
+    return 0;
 }
