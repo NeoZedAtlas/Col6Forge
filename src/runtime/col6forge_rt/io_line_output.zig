@@ -11,6 +11,7 @@ extern fn fflush(stream: *FILE) c_int;
 
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn col6forge_rt_stdout() ?*FILE;
+extern fn col6forge_rt_stderr() ?*FILE;
 extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
 extern fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) c_int;
 extern fn col6forge_unit_pos_set(unit: c_int, pos: c_long) void;
@@ -108,7 +109,10 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
     const unit_opened = col6forge_open_unit_is_open(unit) != 0;
 
     if ((unit == 6 or unit == 0) and !unit_opened) {
-        const out = col6forge_rt_stdout() orelse return if (strict_status != 0) 1 else 0;
+        const out = if (unit == 0)
+            (col6forge_rt_stderr() orelse return if (strict_status != 0) 1 else 0)
+        else
+            (col6forge_rt_stdout() orelse return if (strict_status != 0) 1 else 0);
         line_output_mutex.lock();
         defer line_output_mutex.unlock();
         if (!writeLineWithOptionalNl(out, src, src_len)) return if (strict_status != 0) 1 else 0;
