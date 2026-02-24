@@ -14,6 +14,7 @@ extern fn col6forge_rt_stdout() ?*FILE;
 extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
 extern fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) c_int;
 extern fn col6forge_unit_pos_set(unit: c_int, pos: c_long) void;
+extern fn col6forge_unit_stream_invalidate(unit: c_int) void;
 
 fn cstrlen(text: [*:0]const u8) usize {
     var i: usize = 0;
@@ -115,6 +116,8 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
 
     var pos: c_long = 0;
     _ = col6forge_unit_pos_get(unit, &pos);
+    // Force-close shared read stream handles before write opens.
+    col6forge_unit_stream_invalidate(unit);
     const stream = ensureUnitStream(unit, asConstCStr(&name), pos) orelse return if (strict_status != 0) 1 else 0;
 
     if (fseek(stream, pos, 0) != 0) {

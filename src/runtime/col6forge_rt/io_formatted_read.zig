@@ -1,25 +1,18 @@
 const std = @import("std");
-const COL6FORGE_FILENAME_MAX = 4096;
 
 const FILE = opaque {};
-extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
-extern fn fclose(stream: *FILE) c_int;
-extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
-extern fn ftell(stream: *FILE) c_long;
 extern fn fgetc(stream: *FILE) c_int;
 extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
 extern fn exit(status: c_int) noreturn;
 
 extern fn col6forge_rt_stdin() ?*FILE;
-extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 extern fn col6forge_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
 extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
 extern fn col6forge_open_unit_blank_code(unit: c_int) c_int;
-extern fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) c_int;
-extern fn col6forge_unit_pos_set(unit: c_int, pos: c_long) void;
-extern fn col6forge_line_output_release_cached(unit: c_int) void;
+extern fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long) c_int;
+extern fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) void;
 
 fn asCStr(buf: anytype) [*:0]u8 {
     return @ptrCast(buf);
@@ -122,12 +115,9 @@ fn parseFloatField(field: []const u8) ?f64 {
     return std.fmt.parseFloat(f64, trimmed) catch null;
 }
 
-fn abortReadFatal(unit: c_int, is_stdin: bool, stream: ?*FILE) noreturn {
-    if (stream) |s| {
-        if (!is_stdin) {
-            col6forge_unit_pos_set(unit, ftell(s));
-            _ = fclose(s);
-        }
+fn abortReadFatal(unit: c_int, is_stdin: bool, managed_read_stream: bool, stream: ?*FILE, start_pos: c_long) noreturn {
+    if (!is_stdin and managed_read_stream and stream != null) {
+        col6forge_unit_stream_release_read(unit, @ptrCast(stream.?), start_pos, 0);
     }
     exit(2);
 }
@@ -147,35 +137,29 @@ pub export fn col6forge_formatted_read_core(
     const unit_opened = col6forge_open_unit_is_open(unit) != 0;
 
     var is_stdin = false;
-    var file: ?*FILE = null;
+    var managed_read_stream = false;
+    var start_pos: c_long = 0;
+    var stream: *FILE = undefined;
     if ((unit == 5 or unit == 0) and !unit_opened) {
         is_stdin = true;
-        file = col6forge_rt_stdin();
-    } else {
-        var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
-        unit_filename(unit, &name, name.len);
-        // Release cached writer handle for this unit before opening for read.
-        col6forge_line_output_release_cached(unit);
-        file = fopen(asConstCStr(&name), "r");
-        if (file == null) {
+        stream = col6forge_rt_stdin() orelse {
             if (status_mode != 0) return 1;
-            abortReadFatal(unit, is_stdin, null);
+            abortReadFatal(unit, true, false, null, 0);
+        };
+    } else {
+        var raw: ?*anyopaque = null;
+        if (col6forge_unit_stream_acquire_read(unit, &raw, &start_pos) == 0) {
+            if (status_mode != 0) return 1;
+            abortReadFatal(unit, false, false, null, 0);
         }
-        var pos: c_long = 0;
-        _ = col6forge_unit_pos_get(unit, &pos);
-        if (pos != 0) {
-            _ = fseek(file.?, pos, 0);
-        }
+        stream = @ptrCast(@alignCast(raw.?));
+        managed_read_stream = true;
     }
 
-    const stream = file orelse {
-        if (status_mode != 0) return 1;
-        abortReadFatal(unit, is_stdin, null);
-    };
+    var commit_stream_pos = true;
     defer {
-        if (!is_stdin) {
-            col6forge_unit_pos_set(unit, ftell(stream));
-            _ = fclose(stream);
+        if (!is_stdin and managed_read_stream) {
+            col6forge_unit_stream_release_read(unit, @ptrCast(stream), start_pos, if (commit_stream_pos) 1 else 0);
         }
     }
 
@@ -183,7 +167,8 @@ pub export fn col6forge_formatted_read_core(
     var record_len: usize = 0;
     if (!readRecordLine(stream, &record, &record_len)) {
         if (status_mode != 0) return -1;
-        abortReadFatal(unit, is_stdin, stream);
+        commit_stream_pos = false;
+        abortReadFatal(unit, is_stdin, managed_read_stream, stream, start_pos);
     }
 
     var blank_mode: c_int = if (col6forge_open_unit_blank_code(unit) == 2) 1 else 0;

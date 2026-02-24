@@ -83,6 +83,7 @@ const runtime_io_list_write = @import("col6forge_rt/io_list_write.zig");
 const runtime_io_fmt_implied = @import("col6forge_rt/io_fmt_implied.zig");
 const runtime_io_internal = @import("col6forge_rt/io_internal.zig");
 const runtime_io_line_output = @import("col6forge_rt/io_line_output.zig");
+const runtime_io_unit_stream = @import("col6forge_rt/io_unit_stream.zig");
 const runtime_io_common = @import("col6forge_rt/io_common.zig");
 const runtime_io_stdio = @import("col6forge_rt/io_stdio.zig");
 const runtime_io_dynamic_format = @import("col6forge_rt/io_dynamic_format.zig");
@@ -101,6 +102,7 @@ comptime {
     _ = runtime_io_fmt_implied;
     _ = runtime_io_internal;
     _ = runtime_io_line_output;
+    _ = runtime_io_unit_stream;
     _ = runtime_io_common;
     _ = runtime_io_stdio;
     _ = runtime_io_dynamic_format;

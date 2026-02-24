@@ -31,6 +31,8 @@ extern fn col6forge_inquire_direct(unit: c_int, recl: ?*c_int, nextrec: ?*c_int)
 extern fn col6forge_unformatted_rewind(unit: c_int) c_int;
 extern fn col6forge_unformatted_backspace(unit: c_int) c_int;
 extern fn col6forge_unformatted_endfile(unit: c_int) c_int;
+extern fn col6forge_line_output_release_cached(unit: c_int) void;
+extern fn col6forge_unit_stream_invalidate(unit: c_int) void;
 
 const ExtraOpenUnit = extern struct {
     unit: c_int,
@@ -355,6 +357,10 @@ fn decodeCloseStatus(text: ?[*]const u8, len: c_int, default: c_int) c_int {
 
 pub export fn col6forge_open(unit: c_int, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int, status: c_int) callconv(.c) void {
     _ = status;
+    // Reopening a unit must drop any cached read/write stream handles.
+    col6forge_line_output_release_cached(unit);
+    col6forge_unit_stream_invalidate(unit);
+
     open_state_mutex.lock();
     defer open_state_mutex.unlock();
 
@@ -397,6 +403,10 @@ pub export fn col6forge_open_ex(
 pub export fn col6forge_close(unit: c_int, status: c_int) callconv(.c) void {
     var delete_name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     var delete_ready = false;
+
+    // Closing a unit must invalidate shared stream handles first.
+    col6forge_line_output_release_cached(unit);
+    col6forge_unit_stream_invalidate(unit);
 
     open_state_mutex.lock();
     if (isArrayUnit(unit)) {

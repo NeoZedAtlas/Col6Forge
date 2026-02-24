@@ -1,25 +1,17 @@
 const std = @import("std");
-
-const COL6FORGE_FILENAME_MAX = 4096;
 const COL6FORGE_LIST_TOKEN_MAX = 4096;
 
 const FILE = opaque {};
-extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
-extern fn fclose(stream: *FILE) c_int;
-extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
-extern fn ftell(stream: *FILE) c_long;
 extern fn fgetc(stream: *FILE) c_int;
 extern fn ungetc(c: c_int, stream: *FILE) c_int;
 extern fn exit(status: c_int) noreturn;
 
-extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn col6forge_rt_stdin() ?*FILE;
 extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
-extern fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) c_int;
-extern fn col6forge_unit_pos_set(unit: c_int, pos: c_long) void;
-extern fn col6forge_line_output_release_cached(unit: c_int) void;
+extern fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long) c_int;
+extern fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) void;
 
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
@@ -91,6 +83,7 @@ const ListInput = struct {
     file: *FILE,
     is_stdin: bool,
     start_pos: c_long,
+    managed: bool,
 };
 
 fn listReadFail(status_mode: c_int, code: c_int) c_int {
@@ -139,34 +132,22 @@ fn col6forgeOpenListInput(unit: c_int) ?ListInput {
     const unit_opened = col6forge_open_unit_is_open(unit) != 0;
     if ((unit == 5 or unit == 0) and !unit_opened) {
         const stdin = col6forge_rt_stdin() orelse return null;
-        return .{ .file = stdin, .is_stdin = true, .start_pos = 0 };
+        return .{ .file = stdin, .is_stdin = true, .start_pos = 0, .managed = false };
     }
 
-    var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
-    unit_filename(unit, &name, name.len);
-    // Release cached writer handle for this unit before opening for read.
-    col6forge_line_output_release_cached(unit);
-    const file = fopen(asConstCStr(&name), "r") orelse return null;
-    var pos: c_long = 0;
-    _ = col6forge_unit_pos_get(unit, &pos);
-    if (pos != 0) {
-        if (fseek(file, pos, 0) != 0) {
-            _ = fclose(file);
-            return null;
-        }
-    }
-    return .{ .file = file, .is_stdin = false, .start_pos = pos };
+    var raw: ?*anyopaque = null;
+    var start_pos: c_long = 0;
+    if (col6forge_unit_stream_acquire_read(unit, &raw, &start_pos) == 0) return null;
+    const file: *FILE = @ptrCast(@alignCast(raw.?));
+    return .{ .file = file, .is_stdin = false, .start_pos = start_pos, .managed = true };
 }
 
 fn col6forgeCloseListInput(unit: c_int, input: ListInput, commit_pos: bool) void {
     if (input.is_stdin) return;
-    const stream = input.file;
-    if (commit_pos) {
-        col6forge_unit_pos_set(unit, ftell(stream));
-    } else {
-        col6forge_unit_pos_set(unit, input.start_pos);
+    if (input.managed) {
+        col6forge_unit_stream_release_read(unit, @ptrCast(input.file), input.start_pos, if (commit_pos) 1 else 0);
+        return;
     }
-    _ = fclose(stream);
 }
 
 fn col6forgeReadListTokenStream(file: *FILE, out: []u8) ReadTokenResult {
