@@ -6,7 +6,7 @@ extern fn remove(pathname: [*:0]const u8) c_int;
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
 extern fn fclose(stream: *FILE) c_int;
 extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
-extern fn fread(ptr: ?*anyopaque, size: usize, nmemb: usize, stream: *FILE) usize;
+extern fn fgetc(stream: *FILE) c_int;
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 
@@ -245,46 +245,6 @@ fn col6forgeFileExists(name: [*:0]const u8) bool {
     if (name[0] == 0) return false;
     std.fs.cwd().access(cstrSlice(name), .{}) catch return false;
     return true;
-}
-
-fn readByteAt(stream: *FILE, pos: usize) ?u8 {
-    const offset: c_long = @intCast(pos);
-    if (fseek(stream, offset, 0) != 0) return null;
-    var ch: [1]u8 = undefined;
-    if (fread(@ptrCast(&ch), 1, 1, stream) != 1) return null;
-    return ch[0];
-}
-
-fn findPreviousRecordStart(stream: *FILE, pos: c_long) c_long {
-    if (pos <= 0) return 0;
-
-    var scan_end: usize = @intCast(pos);
-    while (scan_end > 0) {
-        const ch = readByteAt(stream, scan_end - 1) orelse return 0;
-        if (ch != '\n') break;
-        scan_end -= 1;
-    }
-    if (scan_end == 0) return 0;
-
-    var buf: [4096]u8 = undefined;
-    while (scan_end > 0) {
-        const chunk_len = @min(scan_end, buf.len);
-        const chunk_start = scan_end - chunk_len;
-        const chunk_offset: c_long = @intCast(chunk_start);
-        if (fseek(stream, chunk_offset, 0) != 0) return 0;
-        if (fread(@ptrCast(&buf), 1, chunk_len, stream) != chunk_len) return 0;
-
-        var i = chunk_len;
-        while (i > 0) {
-            i -= 1;
-            if (buf[i] == '\n') {
-                const new_pos: usize = chunk_start + i + 1;
-                return @intCast(new_pos);
-            }
-        }
-        scan_end = chunk_start;
-    }
-    return 0;
 }
 
 fn toUpperAscii(ch: u8) u8 {
@@ -609,15 +569,35 @@ pub export fn col6forge_backspace(unit: c_int) callconv(.c) void {
     if (col6forge_unformatted_backspace(unit) != 0) return;
     var pos: c_long = 0;
     _ = col6forge_unit_pos_get(unit, &pos);
-    if (pos <= 0) return;
+    if (pos <= 0) {
+        col6forge_unit_pos_clear(unit);
+        return;
+    }
 
     var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     unit_filename(unit, &name, name.len);
     const file = fopen(asConstCStr(&name), "r") orelse return;
     defer _ = fclose(file);
 
-    const new_pos = findPreviousRecordStart(file, pos);
-    col6forge_unit_pos_set(unit, new_pos);
+    pos -= 1;
+    if (fseek(file, pos, 0) != 0) return;
+    var ch = fgetc(file);
+    while (pos > 0 and ch == '\n') {
+        pos -= 1;
+        if (fseek(file, pos, 0) != 0) return;
+        ch = fgetc(file);
+    }
+    while (pos > 0 and ch != '\n') {
+        pos -= 1;
+        if (fseek(file, pos, 0) != 0) return;
+        ch = fgetc(file);
+    }
+    if (ch == '\n') {
+        pos += 1;
+    } else {
+        pos = 0;
+    }
+    col6forge_unit_pos_set(unit, pos);
 }
 
 pub export fn col6forge_endfile(unit: c_int) callconv(.c) void {
