@@ -1,3 +1,4 @@
+const std = @import("std");
 const COL6FORGE_FILENAME_MAX = 4096;
 
 const FILE = opaque {};
@@ -7,7 +8,6 @@ extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
 extern fn ftell(stream: *FILE) c_long;
 extern fn fgetc(stream: *FILE) c_int;
 extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
-extern fn strtod(nptr: [*:0]const u8, endptr: ?*?[*:0]u8) f64;
 extern fn exit(status: c_int) noreturn;
 
 extern fn col6forge_rt_stdin() ?*FILE;
@@ -66,7 +66,7 @@ fn readRecordLine(stream: *FILE, record: *[4096]u8, out_len: *usize) bool {
     return true;
 }
 
-fn parseListCharRecord(record: []const u8, idx: *usize, out: *[128]u8) c_int {
+fn parseListCharRecord(record: []const u8, idx: *usize, out: []u8) c_int {
     var i = idx.*;
     while (i < record.len and (isSpace(record[i]) or record[i] == ',')) : (i += 1) {}
 
@@ -107,6 +107,30 @@ fn parseListCharRecord(record: []const u8, idx: *usize, out: *[128]u8) c_int {
     return @intCast(used);
 }
 
+fn trimAsciiSpace(text: []const u8) []const u8 {
+    var start: usize = 0;
+    var end: usize = text.len;
+    while (start < end and isSpace(text[start])) : (start += 1) {}
+    while (end > start and isSpace(text[end - 1])) : (end -= 1) {}
+    return text[start..end];
+}
+
+fn parseFloatField(field: []const u8) ?f64 {
+    const trimmed = trimAsciiSpace(field);
+    if (trimmed.len == 0) return null;
+    return std.fmt.parseFloat(f64, trimmed) catch null;
+}
+
+fn abortReadFatal(unit: c_int, is_stdin: bool, stream: ?*FILE) noreturn {
+    if (stream) |s| {
+        if (!is_stdin) {
+            col6forge_unit_pos_set(unit, ftell(s));
+            _ = fclose(s);
+        }
+    }
+    exit(2);
+}
+
 pub export fn col6forge_formatted_read_core(
     unit: c_int,
     fmt: ?[*:0]const u8,
@@ -132,7 +156,7 @@ pub export fn col6forge_formatted_read_core(
         file = fopen(asConstCStr(&name), "r");
         if (file == null) {
             if (status_mode != 0) return 1;
-            exit(2);
+            abortReadFatal(unit, is_stdin, null);
         }
         var pos: c_long = 0;
         _ = col6forge_unit_pos_get(unit, &pos);
@@ -143,7 +167,7 @@ pub export fn col6forge_formatted_read_core(
 
     const stream = file orelse {
         if (status_mode != 0) return 1;
-        exit(2);
+        abortReadFatal(unit, is_stdin, null);
     };
     defer {
         if (!is_stdin) {
@@ -156,7 +180,7 @@ pub export fn col6forge_formatted_read_core(
     var record_len: usize = 0;
     if (!readRecordLine(stream, &record, &record_len)) {
         if (status_mode != 0) return -1;
-        exit(2);
+        abortReadFatal(unit, is_stdin, stream);
     }
 
     var blank_mode: c_int = if (col6forge_open_unit_blank_code(unit) == 2) 1 else 0;
@@ -220,7 +244,7 @@ pub export fn col6forge_formatted_read_core(
             continue;
         }
 
-        var field: [128]u8 = [_]u8{0} ** 128;
+        var field: [4096]u8 = [_]u8{0} ** 4096;
         var used: c_int = 0;
         if (conv != 'S') {
             if (width <= 0) {
@@ -266,17 +290,19 @@ pub export fn col6forge_formatted_read_core(
             col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f64 = @ptrCast(@alignCast(arg));
-            out.* = strtod(asConstCStr(&field), null);
+            const parsed = parseFloatField(field[0..@intCast(@max(used, 0))]) orelse 0.0;
+            out.* = parsed;
             assigned += 1;
         } else if (conv == 'f' and !is_long and kind == 'f') {
             col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f32 = @ptrCast(@alignCast(arg));
-            out.* = @floatCast(strtod(asConstCStr(&field), null));
+            const parsed = parseFloatField(field[0..@intCast(@max(used, 0))]) orelse 0.0;
+            out.* = @floatCast(parsed);
             assigned += 1;
         } else if (conv == 'S' and kind == 'S') {
             const out: [*]u8 = @ptrCast(arg);
-            var parsed = parseListCharRecord(record[0..record_len], &idx, &field);
+            var parsed = parseListCharRecord(record[0..record_len], &idx, field[0..]);
             if (width > 0) {
                 var i: c_int = 0;
                 while (i < width) : (i += 1) {
@@ -300,6 +326,14 @@ pub export fn col6forge_formatted_read_core(
             assigned += 1;
         } else if (conv == 'c' and kind == 'c') {
             const out: [*]u8 = @ptrCast(arg);
+            if (width > 0) {
+                const w: usize = @intCast(width);
+                var i: usize = 0;
+                while (i < w) : (i += 1) {
+                    out[i] = ' ';
+                }
+                if (used > width) used = width;
+            }
             if (used > 0) {
                 const n: usize = @intCast(used);
                 var i: usize = 0;
@@ -320,8 +354,6 @@ pub export fn col6forge_formatted_read_core(
 }
 
 test "runtimeArgPtrAt handles missing and null entries" {
-    const std = @import("std");
-
     var value: u8 = 1;
     var ptrs = [_]?*anyopaque{ @ptrCast(&value), null };
     const raw: [*]?*anyopaque = &ptrs;
