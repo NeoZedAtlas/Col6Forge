@@ -26,8 +26,6 @@ fn checkedAdd(lhs: usize, rhs: usize) ?usize {
 
 extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
-extern fn free(ptr: ?*anyopaque) void;
-extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn col6forge_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
 extern fn col6forge_direct_record_commit(unit: c_int, rec: c_int) void;
 extern fn col6forge_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
@@ -78,87 +76,73 @@ fn runtimeArgLenAt(arg_lens: ?[*]const c_int, idx: usize, total: usize) c_int {
     return arg_lens.?[idx];
 }
 
-const ListLineBuffer = struct {
-    data: ?[*]u8 = null,
-    len: usize = 0,
-    cap: usize = 0,
+const InternalListWriter = struct {
+    dst: [*]u8,
+    width: usize,
+    record_count: usize,
+    rec_index: usize = 0,
+    col: usize = 0,
 
-    fn deinit(self: *ListLineBuffer) void {
-        if (self.data) |ptr| {
-            free(@ptrCast(ptr));
-        }
-        self.* = .{};
-    }
-
-    fn ensure(self: *ListLineBuffer, extra: usize) bool {
-        const needed = self.len + extra + 1;
-        if (needed <= self.cap) return true;
-        var new_cap: usize = if (self.cap == 0) 64 else self.cap;
-        while (new_cap < needed) {
-            const doubled = @mulWithOverflow(new_cap, 2);
-            if (doubled[1] != 0) return false;
-            new_cap = doubled[0];
-        }
-        const prev: ?*anyopaque = if (self.data) |ptr| @ptrCast(ptr) else null;
-        const new_raw = realloc(prev, new_cap) orelse return false;
-        self.data = @ptrCast(new_raw);
-        self.cap = new_cap;
-        return true;
-    }
-
-    fn appendByte(self: *ListLineBuffer, ch: u8) bool {
-        if (!self.ensure(1)) return false;
-        self.data.?[self.len] = ch;
-        self.len += 1;
-        return true;
-    }
-
-    fn appendSlice(self: *ListLineBuffer, text: []const u8) bool {
-        if (text.len == 0) return true;
-        if (!self.ensure(text.len)) return false;
+    fn init(dst: [*]u8, width: usize, record_count: usize) InternalListWriter {
+        const total = checkedMul(width, record_count) orelse 0;
         var i: usize = 0;
-        while (i < text.len) : (i += 1) {
-            self.data.?[self.len + i] = text[i];
+        while (i < total) : (i += 1) {
+            dst[i] = ' ';
         }
-        self.len += text.len;
-        return true;
+        return .{ .dst = dst, .width = width, .record_count = record_count };
     }
 
-    fn terminate(self: *ListLineBuffer) bool {
-        if (!self.ensure(0)) return false;
-        self.data.?[self.len] = 0;
-        return true;
+    fn writeByte(self: *InternalListWriter, ch: u8) void {
+        if (ch == '\n') {
+            if (self.rec_index + 1 < self.record_count) {
+                self.rec_index += 1;
+            }
+            self.col = 0;
+            return;
+        }
+
+        if (self.rec_index >= self.record_count) return;
+        if (self.col < self.width) {
+            const base = checkedMul(self.rec_index, self.width) orelse return;
+            const off = checkedAdd(base, self.col) orelse return;
+            self.dst[off] = ch;
+        }
+        self.col += 1;
+    }
+
+    fn writeSlice(self: *InternalListWriter, text: []const u8) void {
+        for (text) |ch| self.writeByte(ch);
     }
 };
 
-fn appendListI32(out: *ListLineBuffer, value: c_int) bool {
+fn appendListI32(out: *InternalListWriter, value: c_int) void {
     var tmp: [64]u8 = [_]u8{0} ** 64;
     _ = snprintf(&tmp[0], tmp.len, "%d", value);
-    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+    out.writeSlice(tmp[0..cstrlenRaw(tmp[0..])]);
 }
 
-fn appendListF32(out: *ListLineBuffer, value: f32) bool {
+fn appendListF32(out: *InternalListWriter, value: f32) void {
     var tmp: [96]u8 = [_]u8{0} ** 96;
     _ = snprintf(&tmp[0], tmp.len, "%.9g", @as(f64, @floatCast(value)));
-    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+    out.writeSlice(tmp[0..cstrlenRaw(tmp[0..])]);
 }
 
-fn appendListF64(out: *ListLineBuffer, value: f64) bool {
+fn appendListF64(out: *InternalListWriter, value: f64) void {
     var tmp: [128]u8 = [_]u8{0} ** 128;
     _ = snprintf(&tmp[0], tmp.len, "%.17g", value);
-    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+    out.writeSlice(tmp[0..cstrlenRaw(tmp[0..])]);
 }
 
-fn appendListC32(out: *ListLineBuffer, real: f32, imag: f32) bool {
+fn appendListC32(out: *InternalListWriter, real: f32, imag: f32) void {
     var tmp: [192]u8 = [_]u8{0} ** 192;
     _ = snprintf(&tmp[0], tmp.len, "(%.9g,%.9g)", @as(f64, @floatCast(real)), @as(f64, @floatCast(imag)));
-    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+    out.writeSlice(tmp[0..cstrlenRaw(tmp[0..])]);
 }
 
-fn appendListC64(out: *ListLineBuffer, real: f64, imag: f64) bool {
+fn appendListC64(out: *InternalListWriter, real: f64, imag: f64) void {
     var tmp: [256]u8 = [_]u8{0} ** 256;
     _ = snprintf(&tmp[0], tmp.len, "(%.17g,%.17g)", real, imag);
-    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+    out.writeSlice(tmp[0..cstrlenRaw(tmp[0..])]);
 }
 
 fn isListDelim(ch: u8) bool {
@@ -275,55 +259,54 @@ pub export fn col6forge_write_internal_list_v(
 ) callconv(.c) void {
     if (buf == null or len <= 0 or count <= 0) return;
 
-    const total = runtimeArgCount(arg_count);
-    var rendered: ListLineBuffer = .{};
-    defer rendered.deinit();
+    const dst = buf.?;
+    const width: usize = @intCast(len);
+    const record_count: usize = @intCast(count);
+    var writer = InternalListWriter.init(dst, width, record_count);
 
+    const total = runtimeArgCount(arg_count);
     var i: usize = 0;
     while (i < total) : (i += 1) {
-        if (i != 0 and !rendered.appendByte(' ')) return;
+        if (i != 0) writer.writeByte(' ');
         const kind = runtimeArgKindAt(arg_kinds, i, total);
         const arg = runtimeArgPtrAt(arg_ptrs, i, total) orelse return;
 
         switch (kind) {
             'i' => {
                 const ptr: *const c_int = @ptrCast(@alignCast(arg));
-                if (!appendListI32(&rendered, ptr.*)) return;
+                appendListI32(&writer, ptr.*);
             },
             'f' => {
                 const ptr: *const f32 = @ptrCast(@alignCast(arg));
-                if (!appendListF32(&rendered, ptr.*)) return;
+                appendListF32(&writer, ptr.*);
             },
             'd' => {
                 const ptr: *const f64 = @ptrCast(@alignCast(arg));
-                if (!appendListF64(&rendered, ptr.*)) return;
+                appendListF64(&writer, ptr.*);
             },
             'l' => {
                 const ptr: *const u8 = @ptrCast(@alignCast(arg));
-                if (!rendered.appendByte(if (ptr.* != 0) 'T' else 'F')) return;
+                writer.writeByte(if (ptr.* != 0) 'T' else 'F');
             },
             's' => {
                 const len_raw = runtimeArgLenAt(arg_lens, i, total);
                 const n: usize = @intCast(@max(len_raw, 0));
                 if (n != 0) {
                     const text: [*]const u8 = @ptrCast(arg);
-                    if (!rendered.appendSlice(text[0..n])) return;
+                    writer.writeSlice(text[0..n]);
                 }
             },
             'c' => {
                 const ptr: [*]const f32 = @ptrCast(@alignCast(arg));
-                if (!appendListC32(&rendered, ptr[0], ptr[1])) return;
+                appendListC32(&writer, ptr[0], ptr[1]);
             },
             'z' => {
                 const ptr: [*]const f64 = @ptrCast(@alignCast(arg));
-                if (!appendListC64(&rendered, ptr[0], ptr[1])) return;
+                appendListC64(&writer, ptr[0], ptr[1]);
             },
             else => return,
         }
     }
-
-    if (!rendered.terminate()) return;
-    col6forge_write_internal_n_core(buf, len, count, @ptrCast(rendered.data.?));
 }
 
 pub export fn col6forge_read_internal_list_v(
@@ -442,42 +425,67 @@ pub export fn col6forge_read_internal_list_v(
     return 0;
 }
 
-pub export fn col6forge_read_internal_core(
-    buf: ?[*]const u8,
-    len: c_int,
-    count: c_int,
-    fmt: ?[*:0]const u8,
+const InternalRecordProvider = union(enum) {
+    internal: struct {
+        src: [*]const u8,
+        rec_stride: usize,
+    },
+    direct: struct {
+        unit: c_int,
+        first_rec: c_int,
+        recl: c_int,
+    },
+};
+
+fn loadRecordForProvider(
+    provider: *const InternalRecordProvider,
+    rec_index: usize,
+    rec_count: usize,
+    rec_len: usize,
+    record: *[4096]u8,
+) bool {
+    if (rec_index >= rec_count) return false;
+    switch (provider.*) {
+        .internal => |state| {
+            const rec_offset = checkedMul(rec_index, state.rec_stride) orelse return false;
+            loadInternalRecord(record, state.src + rec_offset, rec_len);
+            return true;
+        },
+        .direct => |state| {
+            const rec_num = addRecordOffset(state.first_rec, rec_index) orelse return false;
+            const src = col6forge_direct_record_ptr_ro(state.unit, rec_num, state.recl) orelse return false;
+            loadInternalRecord(record, src, rec_len);
+            return true;
+        },
+    }
+}
+
+fn readInternalCoreWithProvider(
+    provider: *const InternalRecordProvider,
+    rec_len: usize,
+    rec_count: usize,
+    fmt_c: [*:0]const u8,
     arg_ptrs: ?[*]?*anyopaque,
     arg_kinds: ?[*]const u8,
     arg_count: c_int,
-) callconv(.c) c_int {
-    if (buf == null or len <= 0 or count <= 0 or fmt == null) return 0;
-
-    const src = buf.?;
-    const fmt_c = fmt.?;
-    const rec_len: usize = @min(@as(usize, @intCast(len)), 4095);
-    const rec_stride: usize = @intCast(len);
-    const args = arg_ptrs;
-    const kinds = arg_kinds;
-    const total_args: usize = @intCast(@max(arg_count, 0));
-
+) ?c_int {
     var record: [4096]u8 = [_]u8{0} ** 4096;
-    var rec_index: usize = 0;
-    loadInternalRecord(&record, src, rec_len);
+    if (!loadRecordForProvider(provider, 0, rec_count, rec_len, &record)) return null;
 
+    const total_args: usize = @intCast(@max(arg_count, 0));
     var fmt_i: usize = 0;
     var idx: usize = 0;
     var assigned: c_int = 0;
     var blank_mode: c_int = 0;
     var arg_index: usize = 0;
+    var rec_index: usize = 0;
+
     while (fmt_c[fmt_i] != 0) {
         if (fmt_c[fmt_i] != '%') {
             if (fmt_c[fmt_i] == '\n') {
                 rec_index += 1;
-                if (rec_index >= @as(usize, @intCast(count))) break;
-                const rec_offset = checkedMul(rec_index, rec_stride) orelse break;
-                const rec_ptr = src + rec_offset;
-                loadInternalRecord(&record, rec_ptr, rec_len);
+                if (rec_index >= rec_count) break;
+                if (!loadRecordForProvider(provider, rec_index, rec_count, rec_len, &record)) return null;
                 idx = 0;
                 fmt_i += 1;
                 continue;
@@ -555,13 +563,13 @@ pub export fn col6forge_read_internal_core(
 
         const consumes_arg = conv == 'd' or conv == 'f' or conv == 'c' or conv == 'L';
         if (!consumes_arg) continue;
-        if (arg_index >= total_args or args == null) break;
+        if (arg_index >= total_args or arg_ptrs == null) break;
 
-        const arg_any = args.?[arg_index] orelse {
+        const arg_any = arg_ptrs.?[arg_index] orelse {
             arg_index += 1;
             continue;
         };
-        const kind: u8 = if (kinds != null) kinds.?[arg_index] else 0;
+        const kind: u8 = if (arg_kinds != null) arg_kinds.?[arg_index] else 0;
         arg_index += 1;
 
         if (conv == 'd' and kind == 'd') {
@@ -605,7 +613,30 @@ pub export fn col6forge_read_internal_core(
             assigned += 1;
         }
     }
+
     return assigned;
+}
+
+pub export fn col6forge_read_internal_core(
+    buf: ?[*]const u8,
+    len: c_int,
+    count: c_int,
+    fmt: ?[*:0]const u8,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_count: c_int,
+) callconv(.c) c_int {
+    if (buf == null or len <= 0 or count <= 0 or fmt == null) return 0;
+
+    const rec_len: usize = @min(@as(usize, @intCast(len)), 4095);
+    const rec_count: usize = @intCast(count);
+    const provider = InternalRecordProvider{
+        .internal = .{
+            .src = buf.?,
+            .rec_stride = @intCast(len),
+        },
+    };
+    return readInternalCoreWithProvider(&provider, rec_len, rec_count, fmt.?, arg_ptrs, arg_kinds, arg_count) orelse 0;
 }
 
 pub export fn col6forge_read_direct_internal_core(
@@ -622,33 +653,24 @@ pub export fn col6forge_read_direct_internal_core(
 
     const fmt_c = fmt.?;
     const record_count = countFormatRecords(fmt_c);
-    const recl_usize: usize = @intCast(recl);
-    const total_bytes = checkedMul(record_count, recl_usize) orelse return if (status_mode != 0) 1 else 0;
+    const provider = InternalRecordProvider{
+        .direct = .{
+            .unit = unit,
+            .first_rec = rec,
+            .recl = recl,
+        },
+    };
+    const rec_len: usize = @min(@as(usize, @intCast(recl)), 4095);
 
-    const buffer_raw = realloc(null, total_bytes) orelse return if (status_mode != 0) 1 else 0;
-    defer free(buffer_raw);
-    const buffer: [*]u8 = @ptrCast(buffer_raw);
-
-    var record_idx: usize = 0;
-    while (record_idx < record_count) : (record_idx += 1) {
-        const rec_num = addRecordOffset(rec, record_idx) orelse return if (status_mode != 0) 1 else 0;
-        const src = col6forge_direct_record_ptr_ro(unit, rec_num, recl) orelse return if (status_mode != 0) -1 else 0;
-        const offset = checkedMul(record_idx, recl_usize) orelse return if (status_mode != 0) 1 else 0;
-        var i: usize = 0;
-        while (i < recl_usize) : (i += 1) {
-            buffer[offset + i] = src[i];
-        }
-    }
-
-    const assigned = col6forge_read_internal_core(
-        buffer,
-        recl,
-        @intCast(record_count),
+    const assigned = readInternalCoreWithProvider(
+        &provider,
+        rec_len,
+        record_count,
         fmt_c,
         arg_ptrs,
         arg_kinds,
         arg_count,
-    );
+    ) orelse return if (status_mode != 0) -1 else 0;
 
     const last_rec = addRecordOffset(rec, record_count - 1) orelse return if (status_mode != 0) 1 else 0;
     col6forge_direct_record_commit(unit, last_rec);
