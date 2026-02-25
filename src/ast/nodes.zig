@@ -49,6 +49,7 @@ pub const Decl = union(enum) {
 
 pub const TypeDecl = struct {
     type_kind: TypeKind,
+    kind_selector: ?*Expr = null,
     items: []Declarator,
     save: bool = false,
 };
@@ -91,6 +92,7 @@ pub const ImplicitRule = struct {
     start: u8,
     end: u8,
     type_kind: TypeKind,
+    kind_selector: ?*Expr = null,
     char_len: ?*Expr,
 };
 

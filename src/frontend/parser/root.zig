@@ -241,6 +241,7 @@ const Parser = struct {
 
 const TypeInfo = struct {
     type_kind: ast.TypeKind,
+    kind_selector: ?*ast.Expr = null,
     char_len: ?*ast.Expr,
 };
 
@@ -314,7 +315,11 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
             .dims = &.{},
             .char_len = info.char_len,
         };
-        type_decl = .{ .type_decl = .{ .type_kind = info.type_kind, .items = decl_items } };
+        type_decl = .{ .type_decl = .{
+            .type_kind = info.type_kind,
+            .kind_selector = info.kind_selector,
+            .items = decl_items,
+        } };
     }
 
     return .{
@@ -340,19 +345,27 @@ fn isDuplicateProgramUnitLine(arena: std.mem.Allocator, line: logical_line.Logic
 fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
     if (lp.isKeywordSplit("INTEGER")) {
         _ = lp.consumeKeyword("INTEGER");
-        return .{ .type_kind = .integer, .char_len = null };
+        return .{
+            .type_kind = .integer,
+            .kind_selector = try parseTypePrefixOptionalKindSelector(lp, arena),
+            .char_len = null,
+        };
     }
     if (lp.isKeywordSplit("REAL")) {
         _ = lp.consumeKeyword("REAL");
-        return .{ .type_kind = try parseRealTypePrefixKind(lp), .char_len = null };
+        return try parseRealTypePrefixSpec(lp, arena);
     }
     if (lp.isKeywordSplit("COMPLEX")) {
         _ = lp.consumeKeyword("COMPLEX");
-        return .{ .type_kind = try parseComplexTypePrefixKind(lp), .char_len = null };
+        return try parseComplexTypePrefixSpec(lp, arena);
     }
     if (lp.isKeywordSplit("LOGICAL")) {
         _ = lp.consumeKeyword("LOGICAL");
-        return .{ .type_kind = .logical, .char_len = null };
+        return .{
+            .type_kind = .logical,
+            .kind_selector = try parseTypePrefixOptionalKindSelector(lp, arena),
+            .char_len = null,
+        };
     }
     if (lp.isKeywordSplit("CHARACTER")) {
         _ = lp.consumeKeyword("CHARACTER");
@@ -360,13 +373,13 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
         if (lp.consume(.star) or lp.peekIs(.l_paren)) {
             char_len = try parseCharacterLen(lp, arena);
         }
-        return .{ .type_kind = .character, .char_len = char_len };
+        return .{ .type_kind = .character, .kind_selector = null, .char_len = char_len };
     }
     if (lp.isKeywordSplit("DOUBLE")) {
         _ = lp.consumeKeyword("DOUBLE");
         if (!lp.isKeywordSplit("PRECISION")) return error.ExpectedPrecision;
         _ = lp.consumeKeyword("PRECISION");
-        return .{ .type_kind = .double_precision, .char_len = null };
+        return .{ .type_kind = .double_precision, .kind_selector = null, .char_len = null };
     }
     return null;
 }
@@ -459,24 +472,51 @@ fn isStandaloneEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine)
     return lp.peek() == null;
 }
 
-fn parseComplexTypePrefixKind(lp: *LineParser) !ast.TypeKind {
+fn parseComplexTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeInfo {
     if (lp.consume(.star)) {
-        const tok = lp.peek() orelse return error.UnexpectedToken;
-        if (tok.kind != .integer) return error.UnsupportedComplexKind;
-        _ = lp.next();
-        const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return error.UnsupportedComplexKind;
-        if (kind_val == 16) return .complex_double;
-        if (kind_val == 8) return .complex;
-        return error.UnsupportedComplexKind;
+        const selector = try expr.parseExpr(lp, arena, 6);
+        const kind_val = typePrefixSelectorAsInteger(selector) orelse return error.UnsupportedComplexKind;
+        if (kind_val != 8 and kind_val != 16) return error.UnsupportedComplexKind;
+        return .{
+            .type_kind = if (kind_val == 16) .complex_double else .complex,
+            .kind_selector = selector,
+            .char_len = null,
+        };
     }
-    if (!lp.consume(.l_paren)) return .complex;
+    if (!lp.peekIs(.l_paren)) return .{ .type_kind = .complex, .kind_selector = null, .char_len = null };
 
-    const selector = try parseTypePrefixKindSelector(lp);
-    if (selector) |kind_text| {
-        if (isComplexDoubleKindName(kind_text)) return .complex_double;
-        if ((std.fmt.parseInt(i64, kind_text, 10) catch 0) == 16) return .complex_double;
+    const selector = try parseTypePrefixKindSelectorExpr(lp, arena);
+    return .{
+        .type_kind = if (selector) |sel|
+            if (isComplexDoubleKindSelectorExpr(sel)) .complex_double else .complex
+        else
+            .complex,
+        .kind_selector = selector,
+        .char_len = null,
+    };
+}
+
+fn parseRealTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeInfo {
+    if (lp.consume(.star)) {
+        const selector = try expr.parseExpr(lp, arena, 6);
+        const kind_val = typePrefixSelectorAsInteger(selector) orelse return error.UnexpectedToken;
+        return .{
+            .type_kind = if (kind_val == 8) .double_precision else .real,
+            .kind_selector = selector,
+            .char_len = null,
+        };
     }
-    return .complex;
+    if (!lp.peekIs(.l_paren)) return .{ .type_kind = .real, .kind_selector = null, .char_len = null };
+
+    const selector = try parseTypePrefixKindSelectorExpr(lp, arena);
+    return .{
+        .type_kind = if (selector) |sel|
+            if (isDoublePrecisionKindSelectorExpr(sel)) .double_precision else .real
+        else
+            .real,
+        .kind_selector = selector,
+        .char_len = null,
+    };
 }
 
 fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
@@ -902,6 +942,11 @@ test "parseProgram handles PURE REAL(kind) function header" {
     try testing.expectEqual(@as(usize, 2), unit.decls.len);
     try testing.expect(unit.decls[0] == .type_decl);
     try testing.expectEqual(ast.TypeKind.double_precision, unit.decls[0].type_decl.type_kind);
+    try testing.expect(unit.decls[0].type_decl.kind_selector != null);
+    switch (unit.decls[0].type_decl.kind_selector.?.*) {
+        .identifier => |name| try testing.expectEqualStrings("WP", name),
+        else => return error.UnexpectedToken,
+    }
 }
 
 test "parseProgram handles COMPLEX(KIND=16) function header" {
@@ -926,6 +971,11 @@ test "parseProgram handles COMPLEX(KIND=16) function header" {
     try testing.expect(unit.kind == .function);
     try testing.expect(unit.decls[0] == .type_decl);
     try testing.expectEqual(ast.TypeKind.complex_double, unit.decls[0].type_decl.type_kind);
+    try testing.expect(unit.decls[0].type_decl.kind_selector != null);
+    switch (unit.decls[0].type_decl.kind_selector.?.*) {
+        .literal => |lit| try testing.expectEqualStrings("16", lit.text),
+        else => return error.UnexpectedToken,
+    }
 }
 
 test "parseProgram captures explicit RESULT variable name in function header" {
@@ -1025,69 +1075,69 @@ test "parseProgram supports implicit main program header" {
     try testing.expectEqual(@as(usize, 1), unit.stmts.len);
 }
 
-fn parseRealTypePrefixKind(lp: *LineParser) !ast.TypeKind {
+fn parseTypePrefixOptionalKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
     if (lp.consume(.star)) {
-        const tok = lp.peek() orelse return error.UnexpectedToken;
-        if (tok.kind != .integer) return error.UnexpectedToken;
-        _ = lp.next();
-        const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return error.UnexpectedToken;
-        // Keep legacy compatibility for REAL*8 only; avoid widening
-        // arbitrary numeric selectors during parsing.
-        return if (kind_val == 8) .double_precision else .real;
+        return expr.parseExpr(lp, arena, 6);
     }
-
-    if (!lp.consume(.l_paren)) return .real;
-
-    const selector = try parseTypePrefixKindSelector(lp);
-    if (selector) |kind_text| {
-        if (isDoublePrecisionKindName(kind_text)) return .double_precision;
-        if ((std.fmt.parseInt(i64, kind_text, 10) catch 0) == 8) return .double_precision;
-    }
-    return .real;
+    if (!lp.peekIs(.l_paren)) return null;
+    return parseTypePrefixKindSelectorExpr(lp, arena);
 }
 
-fn parseTypePrefixKindSelector(lp: *LineParser) !?[]const u8 {
-    var depth: usize = 1;
-    var selector: ?[]const u8 = null;
-    var expect_kind_value = false;
-    while (depth > 0) {
-        const tok = lp.peek() orelse return error.UnexpectedToken;
-        switch (tok.kind) {
-            .l_paren => {
+fn parseTypePrefixKindSelectorExpr(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    var selector: ?*ast.Expr = null;
+    while (!lp.peekIs(.r_paren)) {
+        if (lp.peek()) |tok| {
+            if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "KIND")) {
                 _ = lp.next();
-                depth += 1;
-            },
-            .r_paren => {
+                _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+                selector = try expr.parseExpr(lp, arena, 0);
+                _ = lp.consume(.comma);
+                continue;
+            }
+            if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "LEN")) {
                 _ = lp.next();
-                depth -= 1;
-            },
-            .identifier => {
-                const text = lp.tokenText(tok);
-                _ = lp.next();
-                if (depth == 1 and context.eqNoCase(text, "KIND")) {
-                    expect_kind_value = true;
-                    continue;
-                }
-                if (depth == 1 and selector == null and (expect_kind_value or !context.eqNoCase(text, "LEN"))) {
-                    selector = text;
-                    expect_kind_value = false;
-                }
-            },
-            .equals => {
-                _ = lp.next();
-            },
-            .integer => {
-                const text = lp.tokenText(tok);
-                _ = lp.next();
-                if (depth == 1 and selector == null) {
-                    selector = text;
-                    expect_kind_value = false;
-                }
-            },
-            else => _ = lp.next(),
+                _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+                _ = try expr.parseExpr(lp, arena, 0);
+                _ = lp.consume(.comma);
+                continue;
+            }
         }
+        const parsed = try expr.parseExpr(lp, arena, 0);
+        if (selector == null) selector = parsed;
+        _ = lp.consume(.comma);
     }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     return selector;
+}
+
+fn typePrefixSelectorAsInteger(selector: *ast.Expr) ?i64 {
+    return switch (selector.*) {
+        .literal => |lit| switch (lit.kind) {
+            .integer => std.fmt.parseInt(i64, lit.text, 10) catch null,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn typePrefixSelectorAsIdentifier(selector: *ast.Expr) ?[]const u8 {
+    return switch (selector.*) {
+        .identifier => |name| name,
+        else => null,
+    };
+}
+
+fn isDoublePrecisionKindSelectorExpr(selector: *ast.Expr) bool {
+    if (typePrefixSelectorAsInteger(selector)) |value| return value == 8;
+    if (typePrefixSelectorAsIdentifier(selector)) |name| return isDoublePrecisionKindName(name);
+    return false;
+}
+
+fn isComplexDoubleKindSelectorExpr(selector: *ast.Expr) bool {
+    if (typePrefixSelectorAsInteger(selector)) |value| return value == 16;
+    if (typePrefixSelectorAsIdentifier(selector)) |name| return isComplexDoubleKindName(name);
+    return false;
 }
 
 fn isDoublePrecisionKindName(name: []const u8) bool {
