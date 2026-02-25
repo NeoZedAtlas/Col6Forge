@@ -7,6 +7,7 @@ const specs = @import("resolve_specs.zig");
 const statements = @import("resolve_statements.zig");
 const symbols_mod = @import("resolve_symbols.zig");
 const rewrite_calls = @import("rewrite_calls.zig");
+const resolve_data = @import("resolve_data.zig");
 const scope = @import("../scope.zig");
 
 pub const Resolver = struct {
@@ -48,6 +49,7 @@ pub const Resolver = struct {
             ctx.current_decl_source = null;
         }
         try validateAssumedCharacterLengths(ctx);
+        try resolve_data.lowerDataStatements(ctx);
         rewrite_calls.lowerIntrinsicArrayConversions(ctx) catch |err| switch (err) {
             // Array-conversion lowering is an optimization/rewrite pass.
             // If shape analysis is inconclusive, keep original AST and continue.

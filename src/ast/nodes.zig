@@ -246,8 +246,19 @@ pub const DataInit = struct {
     value: *Expr,
 };
 
+pub const DataValueSpec = struct {
+    value: *Expr,
+    repeat: ?*Expr = null,
+};
+
+pub const DataGroup = struct {
+    targets: []*Expr,
+    values: []DataValueSpec,
+};
+
 pub const DataStmt = struct {
-    inits: []DataInit,
+    inits: []DataInit = &.{},
+    groups: []DataGroup = &.{},
 };
 
 pub const FormatStmt = struct {

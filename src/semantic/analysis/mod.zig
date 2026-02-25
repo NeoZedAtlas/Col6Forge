@@ -103,6 +103,8 @@ fn semanticErrorInfo(err: anyerror) struct { code: []const u8, message: []const 
         error.InvalidIoControlValue => .{ .code = "CF3125", .message = "invalid literal value for I/O control specifier" },
         error.InvalidImplicitRule => .{ .code = "CF3126", .message = "overlapping IMPLICIT letter ranges in the same scope" },
         error.UnsupportedIntrinsicType => .{ .code = "CF3127", .message = "unsupported intrinsic argument or array conversion shape in semantic lowering" },
+        error.DataValueCountMismatch => .{ .code = "CF3128", .message = "DATA statement target/value count mismatch" },
+        error.DataExpansionTooLarge => .{ .code = "CF3129", .message = "DATA statement expansion exceeds semantic safety limit" },
         else => .{ .code = "CF3199", .message = "semantic analysis failed" },
     };
 }

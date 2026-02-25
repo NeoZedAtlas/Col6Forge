@@ -107,7 +107,7 @@ pub fn parseStatement(
         return .{ .label = label, .node = .{ .format = .{ .items = items } } };
     }
     if (lp.isKeywordSplit("DATA")) {
-        const stmt_node = try data_stmt.parseDataStatement(arena, &lp, param_ints, param_strings, array_names);
+        const stmt_node = try data_stmt.parseDataStatement(arena, &lp);
         index.* += 1;
         return .{ .label = label, .node = stmt_node };
     }
