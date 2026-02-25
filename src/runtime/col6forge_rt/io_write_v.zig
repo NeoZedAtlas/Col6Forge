@@ -175,6 +175,30 @@ fn appendPaddedString(out: *RenderBuffer, text: [*:0]const u8, width_in: c_int, 
     return true;
 }
 
+fn callSnprintfNumeric(
+    dst: [*c]u8,
+    dst_len: usize,
+    spec: [*:0]const u8,
+    is_int_like: bool,
+    width_set: bool,
+    precision_set: bool,
+    width_val: c_int,
+    precision_val: c_int,
+    i_val: c_int,
+    f_val: f64,
+) c_int {
+    if (is_int_like) {
+        if (width_set and precision_set) return snprintf(dst, dst_len, spec, width_val, precision_val, i_val);
+        if (width_set) return snprintf(dst, dst_len, spec, width_val, i_val);
+        if (precision_set) return snprintf(dst, dst_len, spec, precision_val, i_val);
+        return snprintf(dst, dst_len, spec, i_val);
+    }
+    if (width_set and precision_set) return snprintf(dst, dst_len, spec, width_val, precision_val, f_val);
+    if (width_set) return snprintf(dst, dst_len, spec, width_val, f_val);
+    if (precision_set) return snprintf(dst, dst_len, spec, precision_val, f_val);
+    return snprintf(dst, dst_len, spec, f_val);
+}
+
 fn appendFormattedNumeric(
     out: *RenderBuffer,
     conv: u8,
@@ -187,6 +211,9 @@ fn appendFormattedNumeric(
     i_val: c_int,
     f_val: f64,
 ) bool {
+    const is_int_like = conv == 'd' or conv == 'c';
+    if (!is_int_like and conv != 'f') return true;
+
     var spec: [64]u8 = [_]u8{0} ** 64;
     var sp: usize = 0;
     spec[sp] = '%';
@@ -214,30 +241,18 @@ fn appendFormattedNumeric(
     spec[sp] = 0;
 
     var tmp: [256]u8 = [_]u8{0} ** 256;
-    var written: c_int = -1;
-    if (conv == 'd' or conv == 'c') {
-        if (width_set and precision_set) {
-            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, precision_val, i_val);
-        } else if (width_set) {
-            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, i_val);
-        } else if (precision_set) {
-            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), precision_val, i_val);
-        } else {
-            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), i_val);
-        }
-    } else if (conv == 'f') {
-        if (width_set and precision_set) {
-            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, precision_val, f_val);
-        } else if (width_set) {
-            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, f_val);
-        } else if (precision_set) {
-            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), precision_val, f_val);
-        } else {
-            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), f_val);
-        }
-    } else {
-        return true;
-    }
+    const written = callSnprintfNumeric(
+        &tmp[0],
+        tmp.len,
+        asConstCStr(&spec),
+        is_int_like,
+        width_set,
+        precision_set,
+        width_val,
+        precision_val,
+        i_val,
+        f_val,
+    );
     if (written < 0) return false;
     const need: usize = @intCast(written);
     if (need < tmp.len) {
@@ -247,28 +262,18 @@ fn appendFormattedNumeric(
     const raw = realloc(null, need + 1) orelse return false;
     defer free(raw);
     const heap_buf: [*]u8 = @ptrCast(raw);
-
-    if (conv == 'd' or conv == 'c') {
-        if (width_set and precision_set) {
-            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), width_val, precision_val, i_val);
-        } else if (width_set) {
-            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), width_val, i_val);
-        } else if (precision_set) {
-            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), precision_val, i_val);
-        } else {
-            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), i_val);
-        }
-    } else {
-        if (width_set and precision_set) {
-            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), width_val, precision_val, f_val);
-        } else if (width_set) {
-            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), width_val, f_val);
-        } else if (precision_set) {
-            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), precision_val, f_val);
-        } else {
-            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), f_val);
-        }
-    }
+    if (callSnprintfNumeric(
+        @ptrCast(heap_buf),
+        need + 1,
+        asConstCStr(&spec),
+        is_int_like,
+        width_set,
+        precision_set,
+        width_val,
+        precision_val,
+        i_val,
+        f_val,
+    ) < 0) return false;
     return out.appendSlice(heap_buf[0..need]);
 }
 
@@ -386,6 +391,32 @@ test "renderWriteFormatted uses precision-bounded scan for %*.*s" {
     defer free(@ptrCast(rendered));
 
     try std.testing.expectEqualStrings("ABC", std.mem.sliceTo(rendered, 0));
+}
+
+test "renderWriteFormatted supports dynamic width precision for float" {
+    var width: c_int = 8;
+    var precision: c_int = 3;
+    var value: f64 = 1.25;
+    var args: [3]?*anyopaque = .{
+        @ptrCast(&width),
+        @ptrCast(&precision),
+        @ptrCast(&value),
+    };
+    var kinds: [3]u8 = .{ 'i', 'i', 'f' };
+    const rendered = renderWriteFormatted("%*.*f", &args, &kinds, 3) orelse return error.OutOfMemory;
+    defer free(@ptrCast(rendered));
+
+    try std.testing.expectEqualStrings("   1.250", std.mem.sliceTo(rendered, 0));
+}
+
+test "renderWriteFormatted accepts D kind for float arguments" {
+    var value: f64 = 1.25;
+    var args: [1]?*anyopaque = .{@ptrCast(&value)};
+    var kinds: [1]u8 = .{'D'};
+    const rendered = renderWriteFormatted("%8.3f", &args, &kinds, 1) orelse return error.OutOfMemory;
+    defer free(@ptrCast(rendered));
+
+    try std.testing.expectEqualStrings("   1.250", std.mem.sliceTo(rendered, 0));
 }
 
 pub export fn col6forge_write_v(
