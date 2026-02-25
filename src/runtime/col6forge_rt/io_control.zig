@@ -3,8 +3,6 @@ const COL6FORGE_MAX_UNITS = 256;
 const COL6FORGE_FILENAME_MAX = 4096;
 
 extern fn remove(pathname: [*:0]const u8) c_int;
-extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
-extern fn fclose(stream: *FILE) c_int;
 extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
 extern fn fread(ptr: ?*anyopaque, size: usize, nitems: usize, stream: *FILE) usize;
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
@@ -35,6 +33,10 @@ extern fn col6forge_record_store_reset(unit: c_int) void;
 extern fn col6forge_record_store_close(unit: c_int, status: c_int) void;
 extern fn col6forge_line_output_release_cached(unit: c_int) void;
 extern fn col6forge_unit_stream_invalidate(unit: c_int) void;
+extern fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long) c_int;
+extern fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) void;
+extern fn col6forge_unit_stream_set_pos(unit: c_int, pos: c_long) c_int;
+extern fn col6forge_unit_stream_get_pos(unit: c_int, out: ?*c_long) c_int;
 
 const ExtraOpenUnit = extern struct {
     unit: c_int,
@@ -362,6 +364,7 @@ pub export fn col6forge_open(unit: c_int, file: ?[*]const u8, file_len: c_int, a
     // Reopening a unit must drop any cached read/write stream handles.
     col6forge_line_output_release_cached(unit);
     col6forge_unit_stream_invalidate(unit);
+    _ = col6forge_unit_stream_set_pos(unit, 0);
     col6forge_record_store_reset(unit);
 
     open_state_mutex.lock();
@@ -410,6 +413,7 @@ pub export fn col6forge_close(unit: c_int, status: c_int) callconv(.c) void {
     // Closing a unit must invalidate shared stream handles first.
     col6forge_line_output_release_cached(unit);
     col6forge_unit_stream_invalidate(unit);
+    _ = col6forge_unit_stream_set_pos(unit, 0);
     col6forge_record_store_close(unit, status);
 
     open_state_mutex.lock();
@@ -619,24 +623,28 @@ pub export fn col6forge_inquire_file(
 
 pub export fn col6forge_rewind(unit: c_int) callconv(.c) void {
     if (col6forge_unformatted_rewind(unit) != 0) return;
-    col6forge_unit_pos_clear(unit);
+    if (col6forge_unit_stream_set_pos(unit, 0) == 0) {
+        col6forge_unit_pos_clear(unit);
+    }
 }
 
 pub export fn col6forge_backspace(unit: c_int) callconv(.c) void {
     if (col6forge_unformatted_backspace(unit) != 0) return;
-    var pos: c_long = 0;
-    _ = col6forge_unit_pos_get(unit, &pos);
-    if (pos <= 0) {
-        col6forge_unit_pos_clear(unit);
+    var raw: ?*anyopaque = null;
+    var start_pos: c_long = 0;
+    if (col6forge_unit_stream_acquire_read(unit, &raw, &start_pos) == 0) {
+        var pos: c_long = 0;
+        _ = col6forge_unit_stream_get_pos(unit, &pos);
+        if (pos <= 0) col6forge_unit_pos_clear(unit);
         return;
     }
 
-    var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
-    unit_filename(unit, &name, name.len);
-    const file = fopen(asConstCStr(&name), "rb") orelse return;
-    defer _ = fclose(file);
-    const target = scanBackspaceTarget(file, pos) orelse return;
-    col6forge_unit_pos_set(unit, target);
+    const stream: *FILE = @ptrCast(@alignCast(raw.?));
+    const target = scanBackspaceTarget(stream, start_pos) orelse {
+        col6forge_unit_stream_release_read(unit, @ptrCast(stream), start_pos, 0);
+        return;
+    };
+    col6forge_unit_stream_release_read(unit, @ptrCast(stream), target, 0);
 }
 
 pub export fn col6forge_endfile(unit: c_int) callconv(.c) void {

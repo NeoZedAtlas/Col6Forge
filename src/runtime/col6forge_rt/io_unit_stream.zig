@@ -23,6 +23,8 @@ const StreamEntry = struct {
     unit: c_int,
     stream: ?*FILE,
     mode: StreamMode,
+    cursor: c_long,
+    has_cursor: bool,
     lock: std.Thread.Mutex = .{},
     held: bool = false,
 };
@@ -71,6 +73,8 @@ fn ensureEntryLocked(unit: c_int) ?*StreamEntry {
         .unit = unit,
         .stream = null,
         .mode = .none,
+        .cursor = 0,
+        .has_cursor = false,
         .lock = .{},
         .held = false,
     };
@@ -83,6 +87,11 @@ fn ensureEntryLocked(unit: c_int) ?*StreamEntry {
 
 fn closeEntryStream(entry: *StreamEntry) void {
     if (entry.stream) |stream| {
+        const pos = ftell(stream);
+        if (pos >= 0) {
+            entry.cursor = pos;
+            entry.has_cursor = true;
+        }
         _ = fclose(stream);
     }
     entry.stream = null;
@@ -100,22 +109,22 @@ fn reopenEntryStream(entry: *StreamEntry, unit: c_int, mode: [*:0]const u8, mode
 
 fn ensureReadable(entry: *StreamEntry, unit: c_int) bool {
     if (entry.stream != null) return true;
-    return reopenEntryStream(entry, unit, "r", .read_only);
+    return reopenEntryStream(entry, unit, "rb", .read_only);
 }
 
 fn ensureWritable(entry: *StreamEntry, unit: c_int, start_pos: c_long) bool {
     const start_at_zero = start_pos == 0;
 
     if (entry.stream == null) {
-        return reopenEntryStream(entry, unit, if (start_at_zero) "w+" else "r+", .read_write);
+        return reopenEntryStream(entry, unit, if (start_at_zero) "wb+" else "rb+", .read_write);
     }
 
     if (start_at_zero) {
-        return reopenEntryStream(entry, unit, "w+", .read_write);
+        return reopenEntryStream(entry, unit, "wb+", .read_write);
     }
 
     if (entry.mode == .read_only) {
-        return reopenEntryStream(entry, unit, "r+", .read_write);
+        return reopenEntryStream(entry, unit, "rb+", .read_write);
     }
 
     return true;
@@ -142,7 +151,11 @@ fn acquireStream(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long
     entry.held = true;
 
     var start_pos: c_long = 0;
-    _ = col6forge_unit_pos_get(unit, &start_pos);
+    if (entry.has_cursor) {
+        start_pos = entry.cursor;
+    } else {
+        _ = col6forge_unit_pos_get(unit, &start_pos);
+    }
 
     const ready = if (want_write)
         ensureWritable(entry, unit, start_pos)
@@ -155,6 +168,9 @@ fn acquireStream(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long
         closeEntryStream(entry);
         return 0;
     }
+
+    entry.cursor = start_pos;
+    entry.has_cursor = true;
 
     out_stream.?.* = @ptrCast(stream);
     if (out_start_pos) |start_ptr| start_ptr.* = start_pos;
@@ -177,12 +193,24 @@ fn releaseStream(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos
 
     if (entry.stream) |s| {
         if (commit_pos != 0) {
-            col6forge_unit_pos_set(unit, ftell(s));
+            const pos = ftell(s);
+            const final_pos = if (pos >= 0) pos else start_pos;
+            entry.cursor = final_pos;
+            entry.has_cursor = true;
+            col6forge_unit_pos_set(unit, final_pos);
         } else {
             _ = fseek(s, start_pos, 0);
+            entry.cursor = start_pos;
+            entry.has_cursor = true;
             col6forge_unit_pos_set(unit, start_pos);
         }
     } else if (commit_pos == 0) {
+        entry.cursor = start_pos;
+        entry.has_cursor = true;
+        col6forge_unit_pos_set(unit, start_pos);
+    } else if (entry.has_cursor) {
+        col6forge_unit_pos_set(unit, entry.cursor);
+    } else {
         col6forge_unit_pos_set(unit, start_pos);
     }
 
@@ -204,6 +232,57 @@ pub export fn col6forge_unit_stream_acquire_write(unit: c_int, out_stream: ?*?*a
 
 pub export fn col6forge_unit_stream_release_write(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) callconv(.c) void {
     releaseStream(unit, stream, start_pos, commit_pos);
+}
+
+pub export fn col6forge_unit_stream_set_pos(unit: c_int, pos: c_long) callconv(.c) c_int {
+    stream_state_mutex.lock();
+    const entry = ensureEntryLocked(unit) orelse {
+        stream_state_mutex.unlock();
+        return 0;
+    };
+    stream_state_mutex.unlock();
+
+    entry.lock.lock();
+    defer entry.lock.unlock();
+
+    if (entry.stream) |stream| {
+        if (fseek(stream, pos, 0) != 0) return 0;
+    }
+
+    entry.cursor = pos;
+    entry.has_cursor = true;
+    col6forge_unit_pos_set(unit, pos);
+    return 1;
+}
+
+pub export fn col6forge_unit_stream_get_pos(unit: c_int, out: ?*c_long) callconv(.c) c_int {
+    if (out == null) return 0;
+
+    stream_state_mutex.lock();
+    const entry = findEntryLocked(unit);
+    stream_state_mutex.unlock();
+
+    if (entry) |e| {
+        e.lock.lock();
+        defer e.lock.unlock();
+
+        if (e.stream) |stream| {
+            const pos = ftell(stream);
+            if (pos >= 0) {
+                e.cursor = pos;
+                e.has_cursor = true;
+                out.?.* = pos;
+                return 1;
+            }
+        }
+
+        if (e.has_cursor) {
+            out.?.* = e.cursor;
+            return 1;
+        }
+    }
+
+    return col6forge_unit_pos_get(unit, out);
 }
 
 pub export fn col6forge_unit_stream_invalidate(unit: c_int) callconv(.c) void {
