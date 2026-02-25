@@ -445,6 +445,7 @@ fn parseErrorInfo(err: anyerror) struct { code: []const u8, message: []const u8 
         error.ExpressionDepthExceeded => .{ .code = "CF2011", .message = "expression nesting exceeds parser limit" },
         error.UnsupportedModuleUnit => .{ .code = "CF2012", .message = "MODULE program units are not supported yet" },
         error.DataExpansionTooLarge => .{ .code = "CF2013", .message = "DATA statement expansion exceeds parser safety limit" },
+        error.FormatExpansionTooLarge => .{ .code = "CF2014", .message = "FORMAT statement expansion exceeds parser safety limit" },
         else => .{ .code = "CF2099", .message = "parser failed to understand source" },
     };
 }
