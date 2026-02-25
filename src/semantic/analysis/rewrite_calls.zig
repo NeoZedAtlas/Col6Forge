@@ -71,6 +71,7 @@ fn rewriteStmt(
             changed = (try rewriteExpr(ctx, state, assign.target, stmt.*, prelude, allow_prelude)) or changed;
             changed = (try rewriteExpr(ctx, state, assign.value, stmt.*, prelude, allow_prelude)) or changed;
         },
+        .assign_label => {},
         .use_stmt => {},
         .call => |*call| {
             for (call.args) |*arg| {

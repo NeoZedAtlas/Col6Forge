@@ -28,6 +28,9 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             try expressions.resolveExpr(self, assign.target);
             try expressions.resolveExpr(self, assign.value);
         },
+        .assign_label => |assign| {
+            _ = try symbols_mod.ensureSymbol(self, assign.target);
+        },
         .use_stmt => |use_stmt| {
             if (!self.use_imports_preinstalled) {
                 try installUseImports(self, use_stmt);

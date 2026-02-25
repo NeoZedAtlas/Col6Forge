@@ -390,6 +390,12 @@ fn collectFormatsAndInlineFromNode(
                 .source_label = lit.text,
             });
         },
+        .assign_label => |assign| {
+            try assigned_aliases.append(.{
+                .target_name = assign.target,
+                .source_label = assign.label,
+            });
+        },
         .write => |write| {
             if (write.format != .inline_items) return;
             const items = write.format.inline_items;

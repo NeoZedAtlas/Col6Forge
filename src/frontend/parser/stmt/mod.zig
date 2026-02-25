@@ -1724,3 +1724,54 @@ test "parseStatement preserves PAUSE integer payload text" {
     try testing.expectEqual(ast.LiteralKind.integer, payload.literal.kind);
     try testing.expectEqualStrings("00000", payload.literal.text);
 }
+
+test "parseStatement keeps ASSIGN and assigned GOTO forms distinct" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      ASSIGN 10 TO N\n" ++
+        "      GO TO N, (10, 20)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const assign_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(assign_stmt.node == .assign_label);
+    try testing.expectEqualStrings("10", assign_stmt.node.assign_label.label);
+    try testing.expectEqualStrings("N", assign_stmt.node.assign_label.target);
+
+    const goto_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(goto_stmt.node == .assigned_goto);
+    try testing.expectEqualStrings("N", goto_stmt.node.assigned_goto.var_name);
+    try testing.expectEqual(@as(usize, 2), goto_stmt.node.assigned_goto.labels.len);
+    try testing.expectEqualStrings("10", goto_stmt.node.assigned_goto.labels[0]);
+    try testing.expectEqualStrings("20", goto_stmt.node.assigned_goto.labels[1]);
+}
+
+test "parseStatement accepts fixed-form exponent blanks in assignment RHS" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      RVCOMP = (RVON01 + 3.491 E10) - (4 E17 + RADN11(IVON01))\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt.node == .assignment);
+}

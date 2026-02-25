@@ -6,9 +6,7 @@ const context = @import("../context.zig");
 const expr = @import("../expr.zig");
 
 pub const LineParser = context.LineParser;
-const Segment = logical_line.Segment;
 const StmtNode = ast.StmtNode;
-const Expr = ast.Expr;
 
 const ParseStmtError = anyerror;
 
@@ -123,26 +121,45 @@ pub fn tryParseBlankInsensitiveAssignment(arena: std.mem.Allocator, line: logica
     const target_name = name_buf.toOwnedSlice() catch return null;
     if (target_name.len == 0) return null;
 
-    var rhs_buf = std.array_list.Managed(u8).init(arena);
-    for (lp.tokens[idx + 1 ..]) |tok| {
-        appendSansBlanks(&rhs_buf, lp.tokenText(tok), tok.kind) catch return null;
+    const rhs_tokens = lp.tokens[idx + 1 ..];
+    if (rhs_tokens.len == 0) return null;
+
+    var value_expr: *ast.Expr = undefined;
+    var parsed_rhs = false;
+
+    var rhs_lp = LineParser.init(line, rhs_tokens);
+    if (expr.parseExpr(&rhs_lp, arena, 0) catch null) |parsed| {
+        if (rhs_lp.peek() == null) {
+            value_expr = parsed;
+            parsed_rhs = true;
+        }
     }
-    const rhs_text = rhs_buf.toOwnedSlice() catch return null;
-    if (rhs_text.len == 0) return null;
 
-    const segs = arena.alloc(Segment, 1) catch return null;
-    segs[0] = .{ .line = line.span.start_line, .column = 7, .length = rhs_text.len };
-    const tmp_line = logical_line.LogicalLine{
-        .label = null,
-        .text = rhs_text,
-        .span = line.span,
-        .segments = segs,
-    };
-    const rhs_tokens = lexer.lexLogicalLine(arena, tmp_line) catch return null;
-    var rhs_lp = LineParser.init(tmp_line, rhs_tokens);
-    const value_expr = expr.parseExpr(&rhs_lp, arena, 0) catch return null;
+    if (!parsed_rhs) {
+        // Compatibility fallback for fixed-form numeric exponent splits such as
+        // "3.491 E10". Keep this path narrow and only use it when direct
+        // token parsing fails.
+        var rhs_buf = std.array_list.Managed(u8).init(arena);
+        for (rhs_tokens) |tok| {
+            appendSansBlanks(&rhs_buf, lp.tokenText(tok), tok.kind) catch return null;
+        }
+        const rhs_text = rhs_buf.toOwnedSlice() catch return null;
+        if (rhs_text.len == 0) return null;
 
-    const target_expr = arena.create(Expr) catch return null;
+        const rhs_line = logical_line.LogicalLine{
+            .label = null,
+            .text = rhs_text,
+            .span = line.span,
+            .segments = &.{},
+        };
+        const reparsed_tokens = lexer.lexLogicalLine(arena, rhs_line) catch return null;
+        if (reparsed_tokens.len == 0) return null;
+        var reparsed_lp = LineParser.init(rhs_line, reparsed_tokens);
+        value_expr = expr.parseExpr(&reparsed_lp, arena, 0) catch return null;
+        if (reparsed_lp.peek() != null) return null;
+    }
+
+    const target_expr = arena.create(ast.Expr) catch return null;
     target_expr.* = .{ .identifier = target_name };
     return .{ .assignment = .{ .target = target_expr, .value = value_expr } };
 }
@@ -162,16 +179,18 @@ fn appendSansBlanks(buf: *std.array_list.Managed(u8), text: []const u8, kind: le
 
 pub fn isArithmeticIf(lp: LineParser) bool {
     var scan = lp;
-    const first = scan.peek() orelse return false;
-    if (first.kind != .integer and first.kind != .identifier) return false;
-    _ = scan.next();
+    if (!consumeArithIfLabel(&scan)) return false;
     if (!scan.consume(.comma)) return false;
-    const second = scan.peek() orelse return false;
-    if (second.kind != .integer and second.kind != .identifier) return false;
-    _ = scan.next();
+    if (!consumeArithIfLabel(&scan)) return false;
     if (!scan.consume(.comma)) return false;
-    const third = scan.peek() orelse return false;
-    if (third.kind != .integer and third.kind != .identifier) return false;
+    if (!consumeArithIfLabel(&scan)) return false;
+    return scan.peek() == null;
+}
+
+fn consumeArithIfLabel(lp: *LineParser) bool {
+    const tok = lp.peek() orelse return false;
+    if (tok.kind != .integer and tok.kind != .identifier) return false;
+    _ = lp.next();
     return true;
 }
 
@@ -206,12 +225,10 @@ pub fn parseAssignStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmt
     if (!lp.isKeywordSplit("TO")) return error.UnexpectedToken;
     _ = lp.consumeKeyword("TO");
     const name = lp.readName(arena) orelse return error.MissingName;
-
-    const value_expr = try arena.create(Expr);
-    value_expr.* = .{ .literal = .{ .kind = .integer, .text = lp.tokenText(label_tok) } };
-    const target_expr = try arena.create(Expr);
-    target_expr.* = .{ .identifier = name };
-    return .{ .assignment = .{ .target = target_expr, .value = value_expr } };
+    return .{ .assign_label = .{
+        .label = lp.tokenText(label_tok),
+        .target = name,
+    } };
 }
 
 pub fn parseGotoStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {

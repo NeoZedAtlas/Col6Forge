@@ -65,6 +65,9 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         .assignment => {
             try writer.print(";   stmt label={s} assignment\n", .{label_text});
         },
+        .assign_label => |assign| {
+            try writer.print(";   stmt label={s} assign {s} to {s}\n", .{ label_text, assign.label, assign.target });
+        },
         .use_stmt => |use_stmt| {
             try writer.print(";   stmt label={s} use {s} only({d})\n", .{ label_text, use_stmt.module_name, use_stmt.only_items.len });
         },

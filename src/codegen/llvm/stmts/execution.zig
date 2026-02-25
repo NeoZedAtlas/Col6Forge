@@ -215,6 +215,18 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
     try builder.store(coerced, target_ptr);
 }
 
+pub fn emitAssignLabel(ctx: *Context, builder: anytype, assign: ast.AssignLabelStmt) EmitError!void {
+    const target_ptr = try ctx.getPointer(assign.target);
+    const sym = ctx.findSymbol(assign.target) orelse return error.UnknownSymbol;
+    const target_ty = llvm_types.typeFromKind(sym.type_kind);
+    _ = std.fmt.parseInt(i64, assign.label, 10) catch return error.InvalidAssignedLabel;
+    var value = ValueRef{ .name = assign.label, .ty = .i32, .is_ptr = false };
+    if (target_ty != value.ty) {
+        value = try expr.coerce(ctx, builder, value, target_ty);
+    }
+    try builder.store(value, target_ptr);
+}
+
 fn emitContiguousSectionScalarAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
     if (assign.target.* != .call_or_subscript) return false;
     const call = assign.target.call_or_subscript;

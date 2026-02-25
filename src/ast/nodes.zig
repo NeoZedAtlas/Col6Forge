@@ -125,6 +125,7 @@ pub const Stmt = struct {
 
 pub const StmtNode = union(enum) {
     assignment: Assignment,
+    assign_label: AssignLabelStmt,
     use_stmt: UseStmt,
     call: CallStmt,
     goto: GotoStmt,
@@ -156,6 +157,11 @@ pub const StmtNode = union(enum) {
 pub const Assignment = struct {
     target: *Expr,
     value: *Expr,
+};
+
+pub const AssignLabelStmt = struct {
+    label: []const u8,
+    target: []const u8,
 };
 
 pub const UseStmt = struct {

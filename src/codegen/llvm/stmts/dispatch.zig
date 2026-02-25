@@ -41,6 +41,11 @@ fn emitStmtInner(
             try builder.br(next_block);
             return true;
         },
+        .assign_label => |assign| {
+            try execution.emitAssignLabel(ctx, builder, assign);
+            try builder.br(next_block);
+            return true;
+        },
         .use_stmt => {
             try builder.br(next_block);
             return true;
