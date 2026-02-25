@@ -83,6 +83,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     if (lp.isKeywordSplit("COMMON")) {
         _ = lp.consumeKeyword("COMMON");
         var blocks = std.array_list.Managed(CommonBlock).init(arena);
+        var parsed_any = false;
         while (lp.peek()) |_| {
             var block_name: ?[]const u8 = null;
             if (lp.consume(.slash)) {
@@ -92,11 +93,14 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
                 _ = lp.expect(.slash) orelse return error.UnexpectedToken;
             }
             const items = try parseCommonDeclarators(lp, arena, null);
+            if (items.len == 0) return error.MissingName;
             try blocks.append(.{ .name = block_name, .items = items });
+            parsed_any = true;
             if (lp.peekIs(.slash)) continue;
             if (lp.consume(.comma)) continue;
             break;
         }
+        if (!parsed_any) return error.MissingName;
         return .{ .common = .{ .blocks = try blocks.toOwnedSlice() } };
     }
     if (lp.isKeywordSplit("EQUIVALENCE")) {
@@ -110,6 +114,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
                 _ = lp.consume(.comma);
             }
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            if (items.items.len < 2) return error.InvalidEquivalenceGroup;
             try groups.append(.{ .items = try items.toOwnedSlice() });
             if (!lp.consume(.comma)) break;
         }
@@ -205,7 +210,7 @@ fn parseImplicitTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ImplicitTyp
                 if (tok.kind == .integer) {
                     _ = lp.next();
                     const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return .{ .type_kind = .real, .char_len = null };
-                    if (kind_val >= 8) return .{ .type_kind = .double_precision, .char_len = null };
+                    if (kind_val == 8) return .{ .type_kind = .double_precision, .char_len = null };
                 }
             }
         }
@@ -365,37 +370,16 @@ fn parseRealKindSuffix(lp: *LineParser) !TypeKind {
         if (tok.kind == .integer) {
             _ = lp.next();
             const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return .real;
-            if (kind_val >= 8) return .double_precision;
+            // F77 extension compatibility: REAL*8 is treated as DOUBLE PRECISION.
+            // Avoid widening on arbitrary values (e.g. REAL*16) at parse time.
+            if (kind_val == 8) return .double_precision;
         }
         return .real;
     }
     if (!lp.consume(.l_paren)) return .real;
-
-    var depth: usize = 1;
-    var first_kind: ?[]const u8 = null;
-    while (depth > 0) {
-        const tok = lp.peek() orelse return error.UnexpectedToken;
-        _ = lp.next();
-        switch (tok.kind) {
-            .l_paren => depth += 1,
-            .r_paren => depth -= 1,
-            .identifier, .integer => {
-                if (first_kind == null) first_kind = lp.tokenText(tok);
-            },
-            else => {},
-        }
-    }
-
-    if (first_kind) |kind_text| {
-        if (context.eqNoCase(kind_text, "WP") or
-            context.eqNoCase(kind_text, "REAL64") or
-            context.eqNoCase(kind_text, "C_DOUBLE"))
-        {
-            return .double_precision;
-        }
-        if (std.fmt.parseInt(i64, kind_text, 10) catch 0 >= 8) {
-            return .double_precision;
-        }
+    const selector = try parseKindSelectorTokenText(lp);
+    if (selector) |text| {
+        return classifyRealKindSelector(text);
     }
     return .real;
 }
@@ -411,32 +395,85 @@ fn parseComplexKindSuffix(lp: *LineParser) !TypeKind {
         return error.UnsupportedComplexKind;
     }
     if (!lp.consume(.l_paren)) return .complex;
+    const selector = try parseKindSelectorTokenText(lp);
+    if (selector) |text| {
+        return classifyComplexKindSelector(text);
+    }
+    return .complex;
+}
 
+fn parseKindSelectorTokenText(lp: *LineParser) !?[]const u8 {
     var depth: usize = 1;
-    var first_kind: ?[]const u8 = null;
+    var selector: ?[]const u8 = null;
+    var expect_kind_value = false;
     while (depth > 0) {
         const tok = lp.peek() orelse return error.UnexpectedToken;
-        _ = lp.next();
         switch (tok.kind) {
-            .l_paren => depth += 1,
-            .r_paren => depth -= 1,
-            .identifier, .integer => {
-                if (first_kind == null) first_kind = lp.tokenText(tok);
+            .l_paren => {
+                _ = lp.next();
+                depth += 1;
             },
-            else => {},
+            .r_paren => {
+                _ = lp.next();
+                depth -= 1;
+            },
+            .identifier => {
+                const text = lp.tokenText(tok);
+                _ = lp.next();
+                if (depth == 1 and context.eqNoCase(text, "KIND")) {
+                    expect_kind_value = true;
+                    continue;
+                }
+                if (depth == 1 and selector == null and (expect_kind_value or !context.eqNoCase(text, "LEN"))) {
+                    selector = text;
+                    expect_kind_value = false;
+                }
+            },
+            .equals => {
+                _ = lp.next();
+            },
+            .integer => {
+                const text = lp.tokenText(tok);
+                _ = lp.next();
+                if (depth == 1 and selector == null) {
+                    selector = text;
+                    expect_kind_value = false;
+                }
+            },
+            else => {
+                _ = lp.next();
+            },
         }
     }
+    return selector;
+}
 
-    if (first_kind) |kind_text| {
-        if (context.eqNoCase(kind_text, "REAL64") or
-            context.eqNoCase(kind_text, "C_DOUBLE") or
-            std.mem.endsWith(u8, kind_text, "64"))
-        {
-            return .complex_double;
-        }
-        if (std.fmt.parseInt(i64, kind_text, 10) catch 0 >= 16) {
-            return .complex_double;
-        }
+fn classifyRealKindSelector(text: []const u8) TypeKind {
+    if (context.eqNoCase(text, "WP") or
+        context.eqNoCase(text, "REAL64") or
+        context.eqNoCase(text, "C_DOUBLE") or
+        context.eqNoCase(text, "DP") or
+        context.eqNoCase(text, "RK8") or
+        context.eqNoCase(text, "KIND8"))
+    {
+        return .double_precision;
+    }
+    if ((std.fmt.parseInt(i64, text, 10) catch 0) == 8) {
+        return .double_precision;
+    }
+    return .real;
+}
+
+fn classifyComplexKindSelector(text: []const u8) TypeKind {
+    if (context.eqNoCase(text, "REAL64") or
+        context.eqNoCase(text, "C_DOUBLE") or
+        context.eqNoCase(text, "C_DOUBLE_COMPLEX") or
+        context.eqNoCase(text, "KIND16"))
+    {
+        return .complex_double;
+    }
+    if ((std.fmt.parseInt(i64, text, 10) catch 0) == 16) {
+        return .complex_double;
     }
     return .complex;
 }
@@ -517,7 +554,7 @@ fn parseCommonDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_cha
     return items.toOwnedSlice();
 }
 
-fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
+pub fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
     if (lp.consume(.l_paren)) {
         if (lp.consume(.star)) {
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
@@ -525,11 +562,37 @@ fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
             node.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
             return node;
         }
-        // Support CHARACTER*(expr) in addition to CHARACTER*(*) by
-        // delegating to the normal expression parser within parentheses.
-        const inner = try expr.parseExpr(lp, arena, 0);
+        var len_expr: ?*ast.Expr = null;
+        while (!lp.peekIs(.r_paren)) {
+            if (lp.peek()) |tok| {
+                if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "LEN")) {
+                    _ = lp.next();
+                    _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+                    len_expr = try expr.parseExpr(lp, arena, 0);
+                    _ = lp.consume(.comma);
+                    continue;
+                }
+                if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "KIND")) {
+                    _ = lp.next();
+                    _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+                    _ = try expr.parseExpr(lp, arena, 0);
+                    _ = lp.consume(.comma);
+                    continue;
+                }
+            }
+            // Positional CHARACTER(n) form.
+            if (len_expr == null) {
+                len_expr = try expr.parseExpr(lp, arena, 0);
+            } else {
+                _ = try expr.parseExpr(lp, arena, 0);
+            }
+            _ = lp.consume(.comma);
+        }
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-        return inner;
+        if (len_expr) |parsed| return parsed;
+        const default_len = try arena.create(ast.Expr);
+        default_len.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+        return default_len;
     }
     return expr.parseExpr(lp, arena, 6);
 }
@@ -676,6 +739,89 @@ test "parseDecl handles REAL kind selector in parentheses" {
             try testing.expectEqual(TypeKind.double_precision, td.type_kind);
             try testing.expectEqual(@as(usize, 1), td.items.len);
             try testing.expectEqualStrings("X", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl keeps REAL*16 as REAL" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      REAL*16 Q\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.real, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("Q", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles CHARACTER LEN= selector" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CHARACTER(LEN=10) :: S\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.character, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expect(td.items[0].char_len != null);
+            switch (td.items[0].char_len.?.*) {
+                .literal => |lit| try testing.expectEqualStrings("10", lit.text),
+                else => return error.UnexpectedToken,
+            }
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles CHARACTER KIND and LEN selectors" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CHARACTER(KIND=1, LEN=5) :: S\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.character, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expect(td.items[0].char_len != null);
+            switch (td.items[0].char_len.?.*) {
+                .literal => |lit| try testing.expectEqualStrings("5", lit.text),
+                else => return error.UnexpectedToken,
+            }
         },
         else => return error.UnexpectedToken,
     }
@@ -911,6 +1057,76 @@ test "parseDecl accepts IMPLICIT NONE" {
     }
 }
 
+test "parseDecl handles COMMON blocks without comma separator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      COMMON /BLK1/ A, B /BLK2/ C, D\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .common => |common_decl| {
+            try testing.expectEqual(@as(usize, 2), common_decl.blocks.len);
+            try testing.expectEqualStrings("BLK1", common_decl.blocks[0].name.?);
+            try testing.expectEqualStrings("BLK2", common_decl.blocks[1].name.?);
+            try testing.expectEqual(@as(usize, 2), common_decl.blocks[0].items.len);
+            try testing.expectEqual(@as(usize, 2), common_decl.blocks[1].items.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles blank COMMON then named block" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      COMMON X, Y /BLK1/ Z\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .common => |common_decl| {
+            try testing.expectEqual(@as(usize, 2), common_decl.blocks.len);
+            try testing.expect(common_decl.blocks[0].name == null);
+            try testing.expectEqual(@as(usize, 2), common_decl.blocks[0].items.len);
+            try testing.expectEqualStrings("BLK1", common_decl.blocks[1].name.?);
+            try testing.expectEqual(@as(usize, 1), common_decl.blocks[1].items.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl rejects EQUIVALENCE group with single designator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      EQUIVALENCE (A)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    try testing.expectError(error.InvalidEquivalenceGroup, parseDecl(&lp, arena.allocator()));
+}
+
 test "parseDecl handles INTRINSIC declaration with double-colon" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1009,6 +1225,31 @@ test "parseDecl handles COMPLEX kind selector in parentheses" {
             try testing.expectEqual(@as(usize, 1), td.items.len);
             try testing.expectEqualStrings("X", td.items[0].name);
             try testing.expectEqual(@as(usize, 1), td.items[0].dims.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles COMPLEX KIND=16 selector" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      COMPLEX(KIND=16) :: Z\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.complex_double, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("Z", td.items[0].name);
         },
         else => return error.UnexpectedToken,
     }

@@ -357,7 +357,7 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
     if (lp.isKeywordSplit("CHARACTER")) {
         _ = lp.consumeKeyword("CHARACTER");
         var char_len: ?*ast.Expr = null;
-        if (lp.consume(.star)) {
+        if (lp.consume(.star) or lp.peekIs(.l_paren)) {
             char_len = try parseCharacterLen(lp, arena);
         }
         return .{ .type_kind = .character, .char_len = char_len };
@@ -446,6 +446,7 @@ fn parseErrorInfo(err: anyerror) struct { code: []const u8, message: []const u8 
         error.UnsupportedModuleUnit => .{ .code = "CF2012", .message = "MODULE program units are not supported yet" },
         error.DataExpansionTooLarge => .{ .code = "CF2013", .message = "DATA statement expansion exceeds parser safety limit" },
         error.FormatExpansionTooLarge => .{ .code = "CF2014", .message = "FORMAT statement expansion exceeds parser safety limit" },
+        error.InvalidEquivalenceGroup => .{ .code = "CF2015", .message = "EQUIVALENCE group must contain at least two designators" },
         else => .{ .code = "CF2099", .message = "parser failed to understand source" },
     };
 }
@@ -459,25 +460,27 @@ fn isStandaloneEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine)
 }
 
 fn parseComplexTypePrefixKind(lp: *LineParser) !ast.TypeKind {
-    if (!lp.consume(.star)) return .complex;
-    const tok = lp.peek() orelse return error.UnexpectedToken;
-    if (tok.kind != .integer) return error.UnsupportedComplexKind;
-    _ = lp.next();
-    const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return error.UnsupportedComplexKind;
-    if (kind_val == 16) return .complex_double;
-    if (kind_val == 8) return .complex;
-    return error.UnsupportedComplexKind;
+    if (lp.consume(.star)) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        if (tok.kind != .integer) return error.UnsupportedComplexKind;
+        _ = lp.next();
+        const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return error.UnsupportedComplexKind;
+        if (kind_val == 16) return .complex_double;
+        if (kind_val == 8) return .complex;
+        return error.UnsupportedComplexKind;
+    }
+    if (!lp.consume(.l_paren)) return .complex;
+
+    const selector = try parseTypePrefixKindSelector(lp);
+    if (selector) |kind_text| {
+        if (isComplexDoubleKindName(kind_text)) return .complex_double;
+        if ((std.fmt.parseInt(i64, kind_text, 10) catch 0) == 16) return .complex_double;
+    }
+    return .complex;
 }
 
 fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
-    if (lp.consume(.l_paren)) {
-        if (!lp.consume(.star)) return error.UnexpectedToken;
-        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-        const node = try arena.create(ast.Expr);
-        node.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
-        return node;
-    }
-    return expr.parseExpr(lp, arena, 6);
+    return decl.parseCharacterLen(lp, arena);
 }
 
 fn prependDecls(
@@ -901,6 +904,30 @@ test "parseProgram handles PURE REAL(kind) function header" {
     try testing.expectEqual(ast.TypeKind.double_precision, unit.decls[0].type_decl.type_kind);
 }
 
+test "parseProgram handles COMPLEX(KIND=16) function header" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      COMPLEX(KIND=16) FUNCTION ZF(X)\n" ++
+        "      COMPLEX*16 X\n" ++
+        "      ZF = X\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqualStrings("ZF", unit.name);
+    try testing.expect(unit.kind == .function);
+    try testing.expect(unit.decls[0] == .type_decl);
+    try testing.expectEqual(ast.TypeKind.complex_double, unit.decls[0].type_decl.type_kind);
+}
+
 test "parseProgram captures explicit RESULT variable name in function header" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1004,13 +1031,25 @@ fn parseRealTypePrefixKind(lp: *LineParser) !ast.TypeKind {
         if (tok.kind != .integer) return error.UnexpectedToken;
         _ = lp.next();
         const kind_val = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch return error.UnexpectedToken;
-        return if (kind_val >= 8) .double_precision else .real;
+        // Keep legacy compatibility for REAL*8 only; avoid widening
+        // arbitrary numeric selectors during parsing.
+        return if (kind_val == 8) .double_precision else .real;
     }
 
     if (!lp.consume(.l_paren)) return .real;
 
+    const selector = try parseTypePrefixKindSelector(lp);
+    if (selector) |kind_text| {
+        if (isDoublePrecisionKindName(kind_text)) return .double_precision;
+        if ((std.fmt.parseInt(i64, kind_text, 10) catch 0) == 8) return .double_precision;
+    }
+    return .real;
+}
+
+fn parseTypePrefixKindSelector(lp: *LineParser) !?[]const u8 {
     var depth: usize = 1;
-    var kind: ast.TypeKind = .real;
+    var selector: ?[]const u8 = null;
+    var expect_kind_value = false;
     while (depth > 0) {
         const tok = lp.peek() orelse return error.UnexpectedToken;
         switch (tok.kind) {
@@ -1022,23 +1061,33 @@ fn parseRealTypePrefixKind(lp: *LineParser) !ast.TypeKind {
                 _ = lp.next();
                 depth -= 1;
             },
-            .integer => {
-                if (depth == 1) {
-                    const value = std.fmt.parseInt(i64, lp.tokenText(tok), 10) catch 0;
-                    if (value >= 8) kind = .double_precision;
+            .identifier => {
+                const text = lp.tokenText(tok);
+                _ = lp.next();
+                if (depth == 1 and context.eqNoCase(text, "KIND")) {
+                    expect_kind_value = true;
+                    continue;
                 }
+                if (depth == 1 and selector == null and (expect_kind_value or !context.eqNoCase(text, "LEN"))) {
+                    selector = text;
+                    expect_kind_value = false;
+                }
+            },
+            .equals => {
                 _ = lp.next();
             },
-            .identifier => {
-                if (depth == 1 and isDoublePrecisionKindName(lp.tokenText(tok))) {
-                    kind = .double_precision;
-                }
+            .integer => {
+                const text = lp.tokenText(tok);
                 _ = lp.next();
+                if (depth == 1 and selector == null) {
+                    selector = text;
+                    expect_kind_value = false;
+                }
             },
             else => _ = lp.next(),
         }
     }
-    return kind;
+    return selector;
 }
 
 fn isDoublePrecisionKindName(name: []const u8) bool {
@@ -1048,6 +1097,13 @@ fn isDoublePrecisionKindName(name: []const u8) bool {
         context.eqNoCase(name, "DP") or
         context.eqNoCase(name, "RK8") or
         context.eqNoCase(name, "KIND8");
+}
+
+fn isComplexDoubleKindName(name: []const u8) bool {
+    return context.eqNoCase(name, "REAL64") or
+        context.eqNoCase(name, "C_DOUBLE") or
+        context.eqNoCase(name, "C_DOUBLE_COMPLEX") or
+        context.eqNoCase(name, "KIND16");
 }
 
 fn isModuleHeaderLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
