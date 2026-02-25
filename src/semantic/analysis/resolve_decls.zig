@@ -4,12 +4,14 @@ const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const symbols_mod = @import("resolve_symbols.zig");
 const constants = @import("resolve_const.zig");
+const type_kind_selector = @import("../type_kind_selector.zig");
 
 const StorageClass = symbols.StorageClass;
 
 pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
+    const resolved_type_kind = try resolvedDeclTypeKind(self, decl.type_kind, decl.kind_selector);
     for (decl.items) |item| {
-        try applyDeclarator(self, decl.type_kind, item, .local, true);
+        try applyDeclarator(self, resolved_type_kind, item, .local, true);
     }
 }
 
@@ -84,4 +86,14 @@ fn allowsDeferredCharacterLength(sym: symbols.Symbol) bool {
     if (sym.storage == .dummy) return true;
     if (sym.kind == .function) return true;
     return false;
+}
+
+fn resolvedDeclTypeKind(
+    self: *context.Context,
+    base_type_kind: ast.TypeKind,
+    kind_selector: ?*ast.Expr,
+) !ast.TypeKind {
+    if (kind_selector == null) return base_type_kind;
+    const selector_value = try constants.evalConst(self, kind_selector.?);
+    return type_kind_selector.resolveWithConst(base_type_kind, kind_selector, selector_value);
 }

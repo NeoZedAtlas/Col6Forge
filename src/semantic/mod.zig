@@ -3,6 +3,7 @@ const ast = @import("../ast/nodes.zig");
 const fixed_form = @import("../frontend/fixed_form.zig");
 const parser = @import("../frontend/parser/mod.zig");
 const symbols = @import("symbol/mod.zig");
+const type_kind_selector = @import("type_kind_selector.zig");
 
 pub const analyzer = @import("analysis/mod.zig");
 pub const evaluator = @import("evaluator.zig");
@@ -112,9 +113,13 @@ pub fn inferFunctionType(unit: ast.ProgramUnit) ast.TypeKind {
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
                     if (explicit_result_name) |result_name| {
-                        if (std.ascii.eqlIgnoreCase(item.name, result_name)) return type_decl.type_kind;
+                        if (std.ascii.eqlIgnoreCase(item.name, result_name)) {
+                            return type_kind_selector.resolve(type_decl.type_kind, type_decl.kind_selector);
+                        }
                     }
-                    if (std.ascii.eqlIgnoreCase(item.name, unit.name)) return type_decl.type_kind;
+                    if (std.ascii.eqlIgnoreCase(item.name, unit.name)) {
+                        return type_kind_selector.resolve(type_decl.type_kind, type_decl.kind_selector);
+                    }
                 }
             },
             else => {},
@@ -124,6 +129,66 @@ pub fn inferFunctionType(unit: ast.ProgramUnit) ast.TypeKind {
     const first = std.ascii.toUpper(unit.name[0]);
     if (first >= 'I' and first <= 'N') return .integer;
     return .real;
+}
+
+test "inferFunctionType resolves REAL kind selector from declaration" {
+    const testing = std.testing;
+
+    var selector = ast.Expr{ .identifier = "WP" };
+    const items = [_]ast.Declarator{
+        .{
+            .name = "F",
+            .dims = &.{},
+            .char_len = null,
+        },
+    };
+    const decls = [_]ast.Decl{
+        .{ .type_decl = .{
+            .type_kind = .real,
+            .kind_selector = &selector,
+            .items = &items,
+        } },
+    };
+    const unit = ast.ProgramUnit{
+        .kind = .function,
+        .name = "F",
+        .args = &.{},
+        .decls = &decls,
+        .decl_sources = &.{},
+        .stmts = &.{},
+    };
+
+    try testing.expectEqual(ast.TypeKind.double_precision, inferFunctionType(unit));
+}
+
+test "inferFunctionType resolves COMPLEX kind selector from declaration" {
+    const testing = std.testing;
+
+    var selector = ast.Expr{ .literal = .{ .kind = .integer, .text = "16" } };
+    const items = [_]ast.Declarator{
+        .{
+            .name = "ZF",
+            .dims = &.{},
+            .char_len = null,
+        },
+    };
+    const decls = [_]ast.Decl{
+        .{ .type_decl = .{
+            .type_kind = .complex,
+            .kind_selector = &selector,
+            .items = &items,
+        } },
+    };
+    const unit = ast.ProgramUnit{
+        .kind = .function,
+        .name = "ZF",
+        .args = &.{},
+        .decls = &decls,
+        .decl_sources = &.{},
+        .stmts = &.{},
+    };
+
+    try testing.expectEqual(ast.TypeKind.complex_double, inferFunctionType(unit));
 }
 
 fn unitHasContains(unit: ast.ProgramUnit) bool {

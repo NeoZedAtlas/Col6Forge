@@ -475,10 +475,8 @@ fn isStandaloneEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine)
 fn parseComplexTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeInfo {
     if (lp.consume(.star)) {
         const selector = try expr.parseExpr(lp, arena, 6);
-        const kind_val = typePrefixSelectorAsInteger(selector) orelse return error.UnsupportedComplexKind;
-        if (kind_val != 8 and kind_val != 16) return error.UnsupportedComplexKind;
         return .{
-            .type_kind = if (kind_val == 16) .complex_double else .complex,
+            .type_kind = .complex,
             .kind_selector = selector,
             .char_len = null,
         };
@@ -487,10 +485,7 @@ fn parseComplexTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeIn
 
     const selector = try parseTypePrefixKindSelectorExpr(lp, arena);
     return .{
-        .type_kind = if (selector) |sel|
-            if (isComplexDoubleKindSelectorExpr(sel)) .complex_double else .complex
-        else
-            .complex,
+        .type_kind = .complex,
         .kind_selector = selector,
         .char_len = null,
     };
@@ -499,9 +494,8 @@ fn parseComplexTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeIn
 fn parseRealTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeInfo {
     if (lp.consume(.star)) {
         const selector = try expr.parseExpr(lp, arena, 6);
-        const kind_val = typePrefixSelectorAsInteger(selector) orelse return error.UnexpectedToken;
         return .{
-            .type_kind = if (kind_val == 8) .double_precision else .real,
+            .type_kind = .real,
             .kind_selector = selector,
             .char_len = null,
         };
@@ -510,10 +504,7 @@ fn parseRealTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeInfo 
 
     const selector = try parseTypePrefixKindSelectorExpr(lp, arena);
     return .{
-        .type_kind = if (selector) |sel|
-            if (isDoublePrecisionKindSelectorExpr(sel)) .double_precision else .real
-        else
-            .real,
+        .type_kind = .real,
         .kind_selector = selector,
         .char_len = null,
     };
@@ -941,7 +932,7 @@ test "parseProgram handles PURE REAL(kind) function header" {
     try testing.expectEqual(@as(usize, 2), unit.args.len);
     try testing.expectEqual(@as(usize, 2), unit.decls.len);
     try testing.expect(unit.decls[0] == .type_decl);
-    try testing.expectEqual(ast.TypeKind.double_precision, unit.decls[0].type_decl.type_kind);
+    try testing.expectEqual(ast.TypeKind.real, unit.decls[0].type_decl.type_kind);
     try testing.expect(unit.decls[0].type_decl.kind_selector != null);
     switch (unit.decls[0].type_decl.kind_selector.?.*) {
         .identifier => |name| try testing.expectEqualStrings("WP", name),
@@ -970,7 +961,7 @@ test "parseProgram handles COMPLEX(KIND=16) function header" {
     try testing.expectEqualStrings("ZF", unit.name);
     try testing.expect(unit.kind == .function);
     try testing.expect(unit.decls[0] == .type_decl);
-    try testing.expectEqual(ast.TypeKind.complex_double, unit.decls[0].type_decl.type_kind);
+    try testing.expectEqual(ast.TypeKind.complex, unit.decls[0].type_decl.type_kind);
     try testing.expect(unit.decls[0].type_decl.kind_selector != null);
     switch (unit.decls[0].type_decl.kind_selector.?.*) {
         .literal => |lit| try testing.expectEqualStrings("16", lit.text),
@@ -1109,51 +1100,6 @@ fn parseTypePrefixKindSelectorExpr(lp: *LineParser, arena: std.mem.Allocator) !?
     }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     return selector;
-}
-
-fn typePrefixSelectorAsInteger(selector: *ast.Expr) ?i64 {
-    return switch (selector.*) {
-        .literal => |lit| switch (lit.kind) {
-            .integer => std.fmt.parseInt(i64, lit.text, 10) catch null,
-            else => null,
-        },
-        else => null,
-    };
-}
-
-fn typePrefixSelectorAsIdentifier(selector: *ast.Expr) ?[]const u8 {
-    return switch (selector.*) {
-        .identifier => |name| name,
-        else => null,
-    };
-}
-
-fn isDoublePrecisionKindSelectorExpr(selector: *ast.Expr) bool {
-    if (typePrefixSelectorAsInteger(selector)) |value| return value == 8;
-    if (typePrefixSelectorAsIdentifier(selector)) |name| return isDoublePrecisionKindName(name);
-    return false;
-}
-
-fn isComplexDoubleKindSelectorExpr(selector: *ast.Expr) bool {
-    if (typePrefixSelectorAsInteger(selector)) |value| return value == 16;
-    if (typePrefixSelectorAsIdentifier(selector)) |name| return isComplexDoubleKindName(name);
-    return false;
-}
-
-fn isDoublePrecisionKindName(name: []const u8) bool {
-    return context.eqNoCase(name, "WP") or
-        context.eqNoCase(name, "REAL64") or
-        context.eqNoCase(name, "C_DOUBLE") or
-        context.eqNoCase(name, "DP") or
-        context.eqNoCase(name, "RK8") or
-        context.eqNoCase(name, "KIND8");
-}
-
-fn isComplexDoubleKindName(name: []const u8) bool {
-    return context.eqNoCase(name, "REAL64") or
-        context.eqNoCase(name, "C_DOUBLE") or
-        context.eqNoCase(name, "C_DOUBLE_COMPLEX") or
-        context.eqNoCase(name, "KIND16");
 }
 
 fn isModuleHeaderLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {

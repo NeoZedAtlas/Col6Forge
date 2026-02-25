@@ -8,6 +8,7 @@ const expressions = @import("resolve_expr.zig");
 const decls = @import("resolve_decls.zig");
 const check_const = @import("check_const.zig");
 const diag = @import("../diagnostic.zig");
+const type_kind_selector = @import("../type_kind_selector.zig");
 
 const ResolvedRefKind = symbols.ResolvedRefKind;
 const EquivalenceDesignator = struct {
@@ -26,9 +27,10 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {
         .implicit => |imp| {
             for (imp.rules) |rule| {
+                const resolved_rule_kind = try resolvedDeclTypeKind(self, rule.type_kind, rule.kind_selector);
                 try ensureImplicitRuleNoOverlap(self, rule.start, rule.end);
                 var char_len: ?usize = null;
-                if (rule.type_kind == .character) {
+                if (resolved_rule_kind == .character) {
                     char_len = 1;
                     if (rule.char_len) |len_expr| {
                         if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) {
@@ -51,13 +53,13 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 try self.implicit.append(.{
                     .start = rule.start,
                     .end = rule.end,
-                    .type_kind = rule.type_kind,
+                    .type_kind = resolved_rule_kind,
                     .char_len = char_len,
                 });
                 applyImplicitRuleToExistingSymbols(self, .{
                     .start = rule.start,
                     .end = rule.end,
-                    .type_kind = rule.type_kind,
+                    .type_kind = resolved_rule_kind,
                     .char_len = char_len,
                 });
             }
@@ -229,6 +231,16 @@ fn constValueKindName(value: symbols.ConstValue) []const u8 {
         .complex => "COMPLEX",
         .string => "CHARACTER",
     };
+}
+
+fn resolvedDeclTypeKind(
+    self: *context.Context,
+    base_type_kind: ast.TypeKind,
+    kind_selector: ?*ast.Expr,
+) !ast.TypeKind {
+    if (kind_selector == null) return base_type_kind;
+    const selector_value = try constants.evalConst(self, kind_selector.?);
+    return type_kind_selector.resolveWithConst(base_type_kind, kind_selector, selector_value);
 }
 
 fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.ImplicitRule) void {
