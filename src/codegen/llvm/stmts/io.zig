@@ -16,6 +16,7 @@ const unformatted = @import("io/unformatted.zig");
 const expansion = @import("io/expansion.zig");
 const io_utils = @import("io/utils.zig");
 const file_control = @import("io/file_control.zig");
+const format_items = @import("../../../format/items.zig");
 
 const emitWriteFormatted = formatted.emitWriteFormatted;
 const emitWriteDynamicFormat = formatted.emitWriteDynamicFormat;
@@ -153,18 +154,20 @@ fn emitTrailingDVectorFormattedWrite(
 ) EmitError!bool {
     if (is_internal) return false;
     if (write.args.len < 2) return false;
+    const flat_fmt_items = try format_items.flattenWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    defer ctx.allocator.free(flat_fmt_items);
 
     const vector_source = try resolveDVectorSource(ctx, builder, write.args[write.args.len - 1]) orelse return false;
-    const reversion_start = findReversionStart(fmt_items);
-    if (reversion_start == 0 or reversion_start >= fmt_items.len) return false;
+    const reversion_start = findReversionStart(flat_fmt_items);
+    if (reversion_start == 0 or reversion_start >= flat_fmt_items.len) return false;
 
-    const prefix_desc_count = countFormatDescriptors(fmt_items[0..reversion_start]);
+    const prefix_desc_count = countFormatDescriptors(flat_fmt_items[0..reversion_start]);
     if (prefix_desc_count != write.args.len - 1) return false;
 
-    const plan = parseDReversionPlan(fmt_items[reversion_start..]) orelse return false;
-    const prefix_fmt_items = try cloneTrimmedPrefixFormatForSplitWrite(ctx, fmt_items[0..reversion_start]);
+    const plan = parseDReversionPlan(flat_fmt_items[reversion_start..]) orelse return false;
+    const prefix_fmt_items = try cloneTrimmedPrefixFormatForSplitWrite(ctx, flat_fmt_items[0..reversion_start]);
     defer if (prefix_fmt_items) |items| ctx.allocator.free(items);
-    const prefix_fmt = if (prefix_fmt_items) |items| items else fmt_items[0..reversion_start];
+    const prefix_fmt = if (prefix_fmt_items) |items| items else flat_fmt_items[0..reversion_start];
 
     var prefix_write = write;
     prefix_write.args = write.args[0 .. write.args.len - 1];
@@ -312,9 +315,11 @@ fn emitDynamicImpliedDoFormattedWrite(
 ) EmitError!bool {
     if (is_internal) return false;
     if (write.args.len != 2) return false;
+    const flat_fmt_items = try format_items.flattenWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    defer ctx.allocator.free(flat_fmt_items);
     const vector_source = try resolveDVectorSource(ctx, builder, write.args[1]) orelse return false;
 
-    const plan = parseDynamicDImpliedFormat(ctx, fmt_items) orelse return false;
+    const plan = parseDynamicDImpliedFormat(ctx, flat_fmt_items) orelse return false;
     defer {
         ctx.allocator.free(plan.pre);
         ctx.allocator.free(plan.post);
