@@ -4,6 +4,7 @@ const context = @import("../context.zig");
 const expr = @import("../expr.zig");
 const format = @import("format.zig");
 const helpers = @import("helpers.zig");
+const lexer = @import("../../lexer.zig");
 
 const LineParser = context.LineParser;
 const StmtNode = ast.StmtNode;
@@ -39,40 +40,10 @@ pub fn parseWriteStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtE
             unit_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }
-        if (!saw_format) {
-            if (tok.kind == .star and !helpers.nextTokenIs(lp.*, .equals)) {
-                _ = lp.next();
-                format_spec = .{ .list_directed = {} };
-                saw_format = true;
-                continue;
-            }
-            if ((tok.kind == .integer) and !helpers.nextTokenIs(lp.*, .equals)) {
-                _ = lp.next();
-                format_spec = .{ .label = normalizeLabelText(lp.tokenText(tok)) };
-                saw_format = true;
-                continue;
-            }
-            if (tok.kind == .identifier and !helpers.nextTokenIs(lp.*, .equals)) {
-                const fmt_expr = try expr.parseExpr(lp, arena, 0);
-                format_spec = .{ .expr = fmt_expr };
-                saw_format = true;
-                continue;
-            }
-            if (tok.kind == .string or tok.kind == .hollerith) {
-                // If this is part of a concatenation expression, parse the full
-                // expression instead of treating it as a static format.
-                if (lp.index + 2 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .slash and lp.tokens[lp.index + 2].kind == .slash) {
-                    const fmt_expr = try expr.parseExpr(lp, arena, 0);
-                    format_spec = .{ .expr = fmt_expr };
-                    saw_format = true;
-                    continue;
-                }
-                _ = lp.next();
-                const items = try format.parseInlineFormatSpec(arena, lp.tokenText(tok), tok.kind);
-                format_spec = .{ .inline_items = items };
-                saw_format = true;
-                continue;
-            }
+        if (!saw_format and !(tok.kind == .identifier and helpers.nextTokenIs(lp.*, .equals))) {
+            format_spec = try parseFormatValue(arena, lp);
+            saw_format = true;
+            continue;
         }
         const name_tok = lp.expectIdentifier() orelse return error.UnexpectedToken;
         _ = lp.expect(.equals) orelse return error.UnexpectedToken;
@@ -88,38 +59,9 @@ pub fn parseWriteStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtE
             continue;
         }
         if (context.eqNoCase(name, "FMT")) {
-            const fmt_tok = lp.peek() orelse return error.UnexpectedToken;
-            if (fmt_tok.kind == .star) {
-                _ = lp.next();
-                format_spec = .{ .list_directed = {} };
-                saw_format = true;
-                continue;
-            }
-            if (fmt_tok.kind == .integer and !helpers.nextTokenIs(lp.*, .equals)) {
-                _ = lp.next();
-                format_spec = .{ .label = normalizeLabelText(lp.tokenText(fmt_tok)) };
-                saw_format = true;
-                continue;
-            }
-            if (fmt_tok.kind == .identifier and !helpers.nextTokenIs(lp.*, .equals)) {
-                const fmt_expr = try expr.parseExpr(lp, arena, 0);
-                format_spec = .{ .expr = fmt_expr };
-                saw_format = true;
-                continue;
-            }
-            if (fmt_tok.kind == .string or fmt_tok.kind == .hollerith) {
-                if (lp.index + 2 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .slash and lp.tokens[lp.index + 2].kind == .slash) {
-                    const fmt_expr = try expr.parseExpr(lp, arena, 0);
-                    format_spec = .{ .expr = fmt_expr };
-                    saw_format = true;
-                    continue;
-                }
-                _ = lp.next();
-                const items = try format.parseInlineFormatSpec(arena, lp.tokenText(fmt_tok), fmt_tok.kind);
-                format_spec = .{ .inline_items = items };
-                saw_format = true;
-                continue;
-            }
+            format_spec = try parseFormatValue(arena, lp);
+            saw_format = true;
+            continue;
         }
         if (context.eqNoCase(name, "ERR")) {
             const err_tok = lp.peek() orelse return error.UnexpectedToken;
@@ -174,38 +116,10 @@ pub fn parseReadStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
             unit_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }
-        if (!saw_format) {
-            if (tok.kind == .star and !helpers.nextTokenIs(lp.*, .equals)) {
-                _ = lp.next();
-                format_spec = .{ .list_directed = {} };
-                saw_format = true;
-                continue;
-            }
-            if ((tok.kind == .integer) and !helpers.nextTokenIs(lp.*, .equals)) {
-                _ = lp.next();
-                format_spec = .{ .label = normalizeLabelText(lp.tokenText(tok)) };
-                saw_format = true;
-                continue;
-            }
-            if (tok.kind == .identifier and !helpers.nextTokenIs(lp.*, .equals)) {
-                const fmt_expr = try expr.parseExpr(lp, arena, 0);
-                format_spec = .{ .expr = fmt_expr };
-                saw_format = true;
-                continue;
-            }
-            if (tok.kind == .string or tok.kind == .hollerith) {
-                if (lp.index + 2 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .slash and lp.tokens[lp.index + 2].kind == .slash) {
-                    const fmt_expr = try expr.parseExpr(lp, arena, 0);
-                    format_spec = .{ .expr = fmt_expr };
-                    saw_format = true;
-                    continue;
-                }
-                _ = lp.next();
-                const items = try format.parseInlineFormatSpec(arena, lp.tokenText(tok), tok.kind);
-                format_spec = .{ .inline_items = items };
-                saw_format = true;
-                continue;
-            }
+        if (!saw_format and !(tok.kind == .identifier and helpers.nextTokenIs(lp.*, .equals))) {
+            format_spec = try parseFormatValue(arena, lp);
+            saw_format = true;
+            continue;
         }
         const name_tok = lp.expectIdentifier() orelse return error.UnexpectedToken;
         _ = lp.expect(.equals) orelse return error.UnexpectedToken;
@@ -221,38 +135,9 @@ pub fn parseReadStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
             continue;
         }
         if (context.eqNoCase(name, "FMT")) {
-            const fmt_tok = lp.peek() orelse return error.UnexpectedToken;
-            if (fmt_tok.kind == .star) {
-                _ = lp.next();
-                format_spec = .{ .list_directed = {} };
-                saw_format = true;
-                continue;
-            }
-            if (fmt_tok.kind == .integer and !helpers.nextTokenIs(lp.*, .equals)) {
-                _ = lp.next();
-                format_spec = .{ .label = normalizeLabelText(lp.tokenText(fmt_tok)) };
-                saw_format = true;
-                continue;
-            }
-            if (fmt_tok.kind == .identifier and !helpers.nextTokenIs(lp.*, .equals)) {
-                const fmt_expr = try expr.parseExpr(lp, arena, 0);
-                format_spec = .{ .expr = fmt_expr };
-                saw_format = true;
-                continue;
-            }
-            if (fmt_tok.kind == .string or fmt_tok.kind == .hollerith) {
-                if (lp.index + 2 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .slash and lp.tokens[lp.index + 2].kind == .slash) {
-                    const fmt_expr = try expr.parseExpr(lp, arena, 0);
-                    format_spec = .{ .expr = fmt_expr };
-                    saw_format = true;
-                    continue;
-                }
-                _ = lp.next();
-                const items = try format.parseInlineFormatSpec(arena, lp.tokenText(fmt_tok), fmt_tok.kind);
-                format_spec = .{ .inline_items = items };
-                saw_format = true;
-                continue;
-            }
+            format_spec = try parseFormatValue(arena, lp);
+            saw_format = true;
+            continue;
         }
         if (context.eqNoCase(name, "ERR")) {
             const err_tok = lp.peek() orelse return error.UnexpectedToken;
@@ -292,30 +177,7 @@ pub fn parseReadStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
 
 pub fn parsePrintStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
     _ = lp.consumeKeyword("PRINT");
-    const fmt_tok = lp.peek() orelse return error.UnexpectedToken;
-    var format_spec: ast.FormatSpec = .{ .none = {} };
-
-    if (fmt_tok.kind == .star) {
-        _ = lp.next();
-        format_spec = .{ .list_directed = {} };
-    } else if (fmt_tok.kind == .integer and !helpers.nextTokenIs(lp.*, .equals)) {
-        _ = lp.next();
-        format_spec = .{ .label = normalizeLabelText(lp.tokenText(fmt_tok)) };
-    } else if (fmt_tok.kind == .identifier and !helpers.nextTokenIs(lp.*, .equals)) {
-        const fmt_expr = try expr.parseExpr(lp, arena, 0);
-        format_spec = .{ .expr = fmt_expr };
-    } else if (fmt_tok.kind == .string or fmt_tok.kind == .hollerith) {
-        if (lp.index + 2 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .slash and lp.tokens[lp.index + 2].kind == .slash) {
-            const fmt_expr = try expr.parseExpr(lp, arena, 0);
-            format_spec = .{ .expr = fmt_expr };
-        } else {
-            _ = lp.next();
-            const items = try format.parseInlineFormatSpec(arena, lp.tokenText(fmt_tok), fmt_tok.kind);
-            format_spec = .{ .inline_items = items };
-        }
-    } else {
-        return error.UnexpectedToken;
-    }
+    const format_spec = try parseFormatValue(arena, lp);
 
     var args: []*Expr = &.{};
     if (lp.consume(.comma)) {
@@ -419,6 +281,33 @@ fn normalizeLabelText(text: []const u8) []const u8 {
     return if (start == text.len) "0" else text[start..];
 }
 
+fn parseFormatValue(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!ast.FormatSpec {
+    const tok = lp.peek() orelse return error.UnexpectedToken;
+
+    if (tok.kind == .star and !helpers.nextTokenIs(lp.*, .equals)) {
+        _ = lp.next();
+        return .{ .list_directed = {} };
+    }
+    if (tok.kind == .integer and !helpers.nextTokenIs(lp.*, .equals)) {
+        _ = lp.next();
+        return .{ .label = normalizeLabelText(lp.tokenText(tok)) };
+    }
+
+    const fmt_expr = try expr.parseExpr(lp, arena, 0);
+    if (fmt_expr.* == .literal) {
+        const lit = fmt_expr.literal;
+        if (lit.kind == .string) {
+            const items = try format.parseInlineFormatSpec(arena, lit.text, lexer.TokenKind.string);
+            return .{ .inline_items = items };
+        }
+        if (lit.kind == .hollerith) {
+            const items = try format.parseInlineFormatSpec(arena, lit.text, lexer.TokenKind.hollerith);
+            return .{ .inline_items = items };
+        }
+    }
+    return .{ .expr = fmt_expr };
+}
+
 pub fn parseRewindStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
     _ = lp.consumeKeyword("REWIND");
     const unit_expr = try parseUnitStatementControl(arena, lp);
@@ -442,6 +331,9 @@ fn parseUnitStatementControl(arena: std.mem.Allocator, lp: *LineParser) ParseStm
     // REWIND 10
     // REWIND(UNIT=10)
     if (!lp.peekIs(.l_paren)) {
+        if (lp.peekIs(.identifier) and helpers.nextTokenIs(lp.*, .equals)) {
+            return error.UnsupportedIoControlClause;
+        }
         return expr.parseExpr(lp, arena, 0);
     }
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
@@ -459,6 +351,9 @@ fn parseUnitStatementControl(arena: std.mem.Allocator, lp: *LineParser) ParseStm
             const name = lp.tokenText(name_tok);
             if (context.eqNoCase(name, "UNIT")) {
                 unit_expr = value;
+            } else {
+                // Do not silently drop controls such as IOSTAT= or ERR=.
+                return error.UnsupportedIoControlClause;
             }
             continue;
         }
@@ -467,8 +362,7 @@ fn parseUnitStatementControl(arena: std.mem.Allocator, lp: *LineParser) ParseStm
             unit_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }
-        // Consume and ignore any other controls we do not yet model.
-        _ = try expr.parseExpr(lp, arena, 0);
+        return error.UnsupportedIoControlClause;
     }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     return unit_expr orelse error.UnexpectedToken;
@@ -588,77 +482,9 @@ fn parseImpliedDoExpr(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!
     return node;
 }
 
-fn evalImpliedDoBound(node: *Expr) ?i64 {
-    return switch (node.*) {
-        .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
-        .unary => |un| {
-            const value = evalImpliedDoBound(un.expr) orelse return null;
-            return switch (un.op) {
-                .plus => value,
-                .minus => -value,
-                else => null,
-            };
-        },
-        .dim_range => null,
-        else => null,
-    };
-}
-
 fn makeIntegerLiteral(arena: std.mem.Allocator, value: i64) !*Expr {
     const text = try std.fmt.allocPrint(arena, "{d}", .{value});
     const node = try arena.create(Expr);
     node.* = .{ .literal = .{ .kind = .integer, .text = text } };
     return node;
-}
-
-fn cloneExprWithSubst(arena: std.mem.Allocator, node: *Expr, name: []const u8, replacement: *Expr) !*Expr {
-    const cloned = try arena.create(Expr);
-    switch (node.*) {
-        .identifier => |ident| {
-            if (context.eqNoCase(ident, name)) {
-                cloned.* = replacement.*;
-                return cloned;
-            }
-            cloned.* = .{ .identifier = ident };
-        },
-        .literal => |lit| {
-            cloned.* = .{ .literal = lit };
-        },
-        .unary => |un| {
-            const expr_node = try cloneExprWithSubst(arena, un.expr, name, replacement);
-            cloned.* = .{ .unary = .{ .op = un.op, .expr = expr_node } };
-        },
-        .binary => |bin| {
-            const left = try cloneExprWithSubst(arena, bin.left, name, replacement);
-            const right = try cloneExprWithSubst(arena, bin.right, name, replacement);
-            cloned.* = .{ .binary = .{ .op = bin.op, .left = left, .right = right } };
-        },
-        .complex_literal => |lit| {
-            const real = try cloneExprWithSubst(arena, lit.real, name, replacement);
-            const imag = try cloneExprWithSubst(arena, lit.imag, name, replacement);
-            cloned.* = .{ .complex_literal = .{ .real = real, .imag = imag } };
-        },
-        .call_or_subscript => |call| {
-            const args = try arena.alloc(*Expr, call.args.len);
-            for (call.args, 0..) |arg, idx| {
-                args[idx] = try cloneExprWithSubst(arena, arg, name, replacement);
-            }
-            cloned.* = .{ .call_or_subscript = .{ .name = call.name, .args = args } };
-        },
-        .substring => |sub| {
-            const args = try arena.alloc(*Expr, sub.args.len);
-            for (sub.args, 0..) |arg, idx| {
-                args[idx] = try cloneExprWithSubst(arena, arg, name, replacement);
-            }
-            const start_expr = if (sub.start) |s| try cloneExprWithSubst(arena, s, name, replacement) else null;
-            const end_expr = if (sub.end) |e| try cloneExprWithSubst(arena, e, name, replacement) else null;
-            cloned.* = .{ .substring = .{ .name = sub.name, .args = args, .start = start_expr, .end = end_expr } };
-        },
-        .dim_range => |range| {
-            const lower = if (range.lower) |l| try cloneExprWithSubst(arena, l, name, replacement) else null;
-            const upper = try cloneExprWithSubst(arena, range.upper, name, replacement);
-            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
-        },
-    }
-    return cloned;
 }

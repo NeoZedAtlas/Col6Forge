@@ -1775,3 +1775,48 @@ test "parseStatement accepts fixed-form exponent blanks in assignment RHS" {
     const stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expect(stmt.node == .assignment);
 }
+
+test "parseStatement keeps concatenated WRITE format as expression" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      WRITE(*, '(A)' // '(I5)') X\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt.node == .write);
+    try testing.expect(stmt.node.write.format == .expr);
+    try testing.expect(stmt.node.write.format.expr.* == .binary);
+    try testing.expectEqual(ast.BinaryOp.concat, stmt.node.write.format.expr.binary.op);
+}
+
+test "parseStatement rejects unsupported REWIND controls instead of swallowing" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      REWIND(UNIT=10, IOSTAT=IOS)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    try testing.expectError(
+        error.UnsupportedIoControlClause,
+        parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names),
+    );
+}
