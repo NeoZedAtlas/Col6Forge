@@ -1,45 +1,32 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
-const logical_line = @import("../../logical_line.zig");
 const lexer = @import("../../lexer.zig");
 const context = @import("../context.zig");
 const expr = @import("../expr.zig");
 const array_info = @import("../array_info.zig");
 
 const LineParser = context.LineParser;
-const Segment = logical_line.Segment;
 const Expr = ast.Expr;
 
 const ParseStmtError = anyerror;
+const max_data_inits: usize = 1_000_000;
 
 pub fn parseDataStatement(
     arena: std.mem.Allocator,
-    line: logical_line.LogicalLine,
+    lp: *LineParser,
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
 ) ParseStmtError!ast.StmtNode {
-    const text = line.text;
-    var i: usize = 0;
-    skipSpaces(text, &i);
-    if (!consumeKeywordLoose(text, &i, "DATA")) return error.UnexpectedToken;
+    if (!lp.consumeKeyword("DATA")) return error.UnexpectedToken;
 
     var inits = std.array_list.Managed(ast.DataInit).init(arena);
-    while (i < text.len) {
-        skipSeparators(text, &i);
-        if (i >= text.len) break;
-        const var_start = i;
-        const var_end = findSlash(text, i) orelse return error.UnexpectedToken;
-        const var_text = std.mem.trim(u8, text[var_start..var_end], " \t");
-        i = var_end + 1;
+    while (lp.peek() != null) {
+        const vars = try parseDataVarList(arena, lp);
+        _ = lp.expect(.slash) orelse return error.UnexpectedToken;
+        const values = try parseDataValueList(arena, lp, param_ints, param_strings);
+        _ = lp.expect(.slash) orelse return error.UnexpectedToken;
 
-        const val_start = i;
-        const val_end = findSlash(text, i) orelse return error.UnexpectedToken;
-        const val_text = std.mem.trim(u8, text[val_start..val_end], " \t");
-        i = val_end + 1;
-
-        const vars = try parseDataVarList(arena, line, var_text);
-        const values = try parseDataValueList(arena, val_text, param_ints, param_strings);
         if (values.len < vars.len) return error.DataValueCountMismatch;
         var v_idx: usize = 0;
         var var_idx: usize = 0;
@@ -56,15 +43,18 @@ pub fn parseDataStatement(
                     var local_idx: usize = 0;
                     while (local_idx < take) : (local_idx += 1) {
                         const target = try buildArrayDataTarget(arena, name, info, local_idx);
+                        try ensureAppendBudget(inits.items.len, 1);
                         try inits.append(.{ .target = target, .value = values[v_idx] });
                         v_idx += 1;
                     }
                     continue;
                 }
             }
+            try ensureAppendBudget(inits.items.len, 1);
             try inits.append(.{ .target = var_expr, .value = values[v_idx] });
             v_idx += 1;
         }
+        if (!lp.consume(.comma)) break;
     }
 
     return .{ .data = .{ .inits = try inits.toOwnedSlice() } };
@@ -119,77 +109,143 @@ fn buildArrayDataTarget(
     return target;
 }
 
-fn parseDataVarList(arena: std.mem.Allocator, line: logical_line.LogicalLine, text: []const u8) ParseStmtError![]*Expr {
-    const segs = try arena.alloc(Segment, 1);
-    segs[0] = .{ .line = line.span.start_line, .column = 7, .length = text.len };
-    const tmp_line = logical_line.LogicalLine{
-        .label = null,
-        .text = text,
-        .span = line.span,
-        .segments = segs,
-    };
-    const tokens = try lexer.lexLogicalLine(arena, tmp_line);
-    var lp = LineParser.init(tmp_line, tokens);
-
+fn parseDataVarList(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError![]*Expr {
     var items = std.array_list.Managed(*Expr).init(arena);
-    while (lp.peek() != null) {
-        if (lp.peekIs(.l_paren) and isImpliedDoStart(lp)) {
-            const expanded = try parseImpliedDoExpanded(arena, &lp);
+    while (lp.peek() != null and !lp.peekIs(.slash)) {
+        if (lp.peekIs(.l_paren) and isImpliedDoStart(lp.*)) {
+            const expanded = try parseImpliedDoExpanded(arena, lp);
             try items.appendSlice(expanded);
         } else {
-            const node = try expr.parseExpr(&lp, arena, 0);
+            const start = lp.index;
+            const end = varSegmentEnd(lp.*);
+            if (start >= end) return error.UnexpectedToken;
+            const node = try parseExprFromTokenRange(arena, lp.*, start, end);
+            lp.index = end;
             try items.append(node);
         }
-        if (!lp.consume(.comma)) break;
+        if (lp.peekIs(.slash)) break;
+        _ = lp.expect(.comma) orelse return error.UnexpectedToken;
     }
     return items.toOwnedSlice();
 }
 
+fn varSegmentEnd(lp: LineParser) usize {
+    var depth: usize = 0;
+    var i = lp.index;
+    while (i < lp.tokens.len) : (i += 1) {
+        const tok = lp.tokens[i];
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => {
+                if (depth > 0) depth -= 1;
+            },
+            .comma => if (depth == 0) return i,
+            .slash => if (depth == 0) return i,
+            else => {},
+        }
+    }
+    return i;
+}
+
 fn parseDataValueList(
     arena: std.mem.Allocator,
-    text: []const u8,
+    lp: *LineParser,
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
 ) ParseStmtError![]*Expr {
     var values = std.array_list.Managed(*Expr).init(arena);
-    var i: usize = 0;
-    while (i < text.len) {
-        skipSeparators(text, &i);
-        if (i >= text.len) break;
-
-        var repeat: ?usize = null;
-        if (try tryParseRepeatCount(arena, text, &i, param_ints)) |count| {
-            repeat = count;
-        }
-
-        const value_slice = try nextDataValueSlice(text, &i);
-        var value_expr = try parseDataValueExpr(arena, value_slice);
-        value_expr = try resolveParamString(arena, value_expr, param_strings);
-        const count = repeat orelse 1;
+    while (lp.peek() != null and !lp.peekIs(.slash)) {
+        const spec = try parseDataValueSpec(arena, lp, param_ints);
+        const value_expr = try resolveParamString(arena, spec.value, param_strings);
+        const repeat = spec.repeat orelse 1;
+        try ensureAppendBudget(values.items.len, repeat);
         var idx: usize = 0;
-        while (idx < count) : (idx += 1) {
-            try values.append(value_expr);
-        }
+        while (idx < repeat) : (idx += 1) try values.append(value_expr);
+
+        if (lp.peekIs(.slash)) break;
+        _ = lp.expect(.comma) orelse return error.UnexpectedToken;
     }
     return values.toOwnedSlice();
 }
 
-fn parseDataValueExpr(arena: std.mem.Allocator, text: []const u8) ParseStmtError!*Expr {
-    const trimmed = std.mem.trim(u8, text, " \t");
-    if (trimmed.len == 0) return error.UnexpectedToken;
-    const segs = try arena.alloc(Segment, 1);
-    segs[0] = .{ .line = 1, .column = 7, .length = trimmed.len };
-    const tmp_line = logical_line.LogicalLine{
-        .label = null,
-        .text = trimmed,
-        .span = .{ .start_line = 1, .end_line = 1 },
-        .segments = segs,
-    };
-    const tokens = try lexer.lexLogicalLine(arena, tmp_line);
-    var lp = LineParser.init(tmp_line, tokens);
-    const expr_node = try expr.parseExpr(&lp, arena, 0);
-    if (lp.peek() != null) return error.UnexpectedToken;
-    return expr_node;
+const DataValueSpec = struct {
+    value: *Expr,
+    repeat: ?usize,
+};
+
+fn parseDataValueSpec(
+    arena: std.mem.Allocator,
+    lp: *LineParser,
+    param_ints: *const std.StringHashMap(i64),
+) ParseStmtError!DataValueSpec {
+    const start = lp.index;
+    const end = valueSegmentEnd(lp.*);
+    if (start >= end) return error.UnexpectedToken;
+
+    var repeat_star: ?usize = null;
+    var depth: usize = 0;
+    var i = start;
+    while (i < end) : (i += 1) {
+        const tok = lp.tokens[i];
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => {
+                if (depth > 0) depth -= 1;
+            },
+            .star => {
+                if (depth == 0) {
+                    repeat_star = i;
+                    break;
+                }
+            },
+            else => {},
+        }
+    }
+
+    if (repeat_star) |star_idx| {
+        if (star_idx == start or star_idx + 1 >= end) return error.UnexpectedToken;
+        const repeat_expr = try parseExprFromTokenRange(arena, lp.*, start, star_idx);
+        const repeat_val = evalIntConst(repeat_expr, param_ints) orelse return error.UnsupportedImpliedDo;
+        if (repeat_val < 0) return error.UnsupportedImpliedDo;
+        const value_expr = try parseExprFromTokenRange(arena, lp.*, star_idx + 1, end);
+        lp.index = end;
+        return .{ .value = value_expr, .repeat = @intCast(repeat_val) };
+    }
+
+    const value_expr = try parseExprFromTokenRange(arena, lp.*, start, end);
+    lp.index = end;
+    return .{ .value = value_expr, .repeat = null };
+}
+
+fn valueSegmentEnd(lp: LineParser) usize {
+    var depth: usize = 0;
+    var i = lp.index;
+    while (i < lp.tokens.len) : (i += 1) {
+        const tok = lp.tokens[i];
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => {
+                if (depth > 0) depth -= 1;
+            },
+            .comma => if (depth == 0) return i,
+            .slash => if (depth == 0) return i,
+            else => {},
+        }
+    }
+    return i;
+}
+
+fn parseExprFromTokenRange(
+    arena: std.mem.Allocator,
+    base_lp: LineParser,
+    start: usize,
+    end: usize,
+) ParseStmtError!*Expr {
+    if (start >= end or end > base_lp.tokens.len) return error.UnexpectedToken;
+    var sub = LineParser.init(base_lp.line, base_lp.tokens[start..end]);
+    const node = try expr.parseExpr(&sub, arena, 0);
+    if (sub.peek() != null) return error.UnexpectedToken;
+    return node;
 }
 
 fn resolveParamString(
@@ -205,41 +261,6 @@ fn resolveParamString(
         }
     }
     return expr_node;
-}
-
-fn nextDataValueSlice(text: []const u8, index: *usize) ParseStmtError![]const u8 {
-    var i = index.*;
-    var depth: usize = 0;
-    var quote: u8 = 0;
-    while (i < text.len) : (i += 1) {
-        const c = text[i];
-        if (quote != 0) {
-            if (c == quote) {
-                if (i + 1 < text.len and text[i + 1] == quote) {
-                    i += 1;
-                    continue;
-                }
-                quote = 0;
-            }
-            continue;
-        }
-        if (c == '\'' or c == '"') {
-            quote = c;
-            continue;
-        }
-        if (c == '(') {
-            depth += 1;
-            continue;
-        }
-        if (c == ')') {
-            if (depth > 0) depth -= 1;
-            continue;
-        }
-        if (c == ',' and depth == 0) break;
-    }
-    const slice = text[index.*..i];
-    index.* = i;
-    return slice;
 }
 
 fn isImpliedDoStart(lp: LineParser) bool {
@@ -308,6 +329,7 @@ fn parseImpliedDoExpanded(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
             const iter_expr = try makeIntegerLiteral(arena, idx);
             for (items.items) |item| {
                 const clone = try cloneExprWithSubst(arena, item, var_name, iter_expr);
+                try ensureAppendBudget(expanded.items.len, 1);
                 try expanded.append(clone);
             }
         }
@@ -316,6 +338,7 @@ fn parseImpliedDoExpanded(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
             const iter_expr = try makeIntegerLiteral(arena, idx);
             for (items.items) |item| {
                 const clone = try cloneExprWithSubst(arena, item, var_name, iter_expr);
+                try ensureAppendBudget(expanded.items.len, 1);
                 try expanded.append(clone);
             }
         }
@@ -443,129 +466,7 @@ fn powInt(base: i64, exp: i64) i64 {
     return result;
 }
 
-fn tryParseRepeatCount(
-    arena: std.mem.Allocator,
-    text: []const u8,
-    index: *usize,
-    param_ints: *const std.StringHashMap(i64),
-) ParseStmtError!?usize {
-    var i = index.*;
-    var depth: usize = 0;
-    var quote: u8 = 0;
-    while (i < text.len) : (i += 1) {
-        const c = text[i];
-        if (quote != 0) {
-            if (c == quote) {
-                if (i + 1 < text.len and text[i + 1] == quote) {
-                    i += 1;
-                    continue;
-                }
-                quote = 0;
-            }
-            continue;
-        }
-        if (c == '\'' or c == '"') {
-            quote = c;
-            continue;
-        }
-        if (c == '(') {
-            depth += 1;
-            continue;
-        }
-        if (c == ')') {
-            if (depth > 0) depth -= 1;
-            continue;
-        }
-        if (c == ',' and depth == 0) return null;
-        if (c == '*' and depth == 0) {
-            const repeat_text = std.mem.trim(u8, text[index.*..i], " \t");
-            if (repeat_text.len == 0) return null;
-            const repeat_expr = try parseDataValueExpr(arena, repeat_text);
-            const repeat_val = evalIntConst(repeat_expr, param_ints) orelse return null;
-            if (repeat_val < 0) return error.UnsupportedImpliedDo;
-            index.* = i + 1;
-            return @intCast(repeat_val);
-        }
-    }
-    return null;
-}
-
-fn skipSpaces(text: []const u8, index: *usize) void {
-    while (index.* < text.len and (text[index.*] == ' ' or text[index.*] == '\t')) {
-        index.* += 1;
-    }
-}
-
-fn skipSeparators(text: []const u8, index: *usize) void {
-    while (index.* < text.len) {
-        const c = text[index.*];
-        if (c == ' ' or c == '\t' or c == ',') {
-            index.* += 1;
-            continue;
-        }
-        break;
-    }
-}
-
-fn consumeKeyword(text: []const u8, index: *usize, keyword: []const u8) bool {
-    skipSpaces(text, index);
-    if (index.* + keyword.len > text.len) return false;
-    var i: usize = 0;
-    while (i < keyword.len) : (i += 1) {
-        if (std.ascii.toLower(text[index.* + i]) != std.ascii.toLower(keyword[i])) return false;
-    }
-    index.* += keyword.len;
-    return true;
-}
-
-fn consumeKeywordLoose(text: []const u8, index: *usize, keyword: []const u8) bool {
-    skipSpaces(text, index);
-    var i = index.*;
-    var k: usize = 0;
-    while (k < keyword.len) {
-        if (i >= text.len) return false;
-        const ch = text[i];
-        if (ch == ' ' or ch == '\t') {
-            i += 1;
-            continue;
-        }
-        if (std.ascii.toLower(ch) != std.ascii.toLower(keyword[k])) return false;
-        i += 1;
-        k += 1;
-    }
-    index.* = i;
-    return true;
-}
-
-fn findSlash(text: []const u8, start: usize) ?usize {
-    var i = start;
-    var depth: usize = 0;
-    var quote: u8 = 0;
-    while (i < text.len) : (i += 1) {
-        const c = text[i];
-        if (quote != 0) {
-            if (c == quote) {
-                if (i + 1 < text.len and text[i + 1] == quote) {
-                    i += 1;
-                    continue;
-                }
-                quote = 0;
-            }
-            continue;
-        }
-        if (c == '\'' or c == '"') {
-            quote = c;
-            continue;
-        }
-        if (c == '(') {
-            depth += 1;
-            continue;
-        }
-        if (c == ')') {
-            if (depth > 0) depth -= 1;
-            continue;
-        }
-        if (c == '/' and depth == 0) return i;
-    }
-    return null;
+fn ensureAppendBudget(current_len: usize, add_len: usize) ParseStmtError!void {
+    const next = std.math.add(usize, current_len, add_len) catch return error.DataExpansionTooLarge;
+    if (next > max_data_inits) return error.DataExpansionTooLarge;
 }
