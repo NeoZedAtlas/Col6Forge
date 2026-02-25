@@ -64,7 +64,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .dimension => |dim| {
             for (dim.items) |item| {
-                const idx = try symbols_mod.ensureSymbol(self, item.name);
+                const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
                 if (item.dims.len > 0 and self.symbols.items[idx].dims.len > 0) {
                     return error.DuplicateDeclaration;
                 }
@@ -73,7 +73,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .parameter => |param| {
             for (param.assigns) |assign| {
-                const idx = try symbols_mod.ensureSymbol(self, assign.name);
+                const idx = try symbols_mod.ensureDeclaredSymbol(self, assign.name);
                 var sym = &self.symbols.items[idx];
                 sym.kind = .parameter;
                 sym.storage = .local;
@@ -144,13 +144,13 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .external => |ext| {
             for (ext.names) |name| {
-                const idx = try symbols_mod.ensureSymbol(self, name);
+                const idx = try symbols_mod.ensureDeclaredSymbol(self, name);
                 self.symbols.items[idx].is_external = true;
             }
         },
         .intrinsic => |intr| {
             for (intr.names) |name| {
-                const idx = try symbols_mod.ensureSymbol(self, name);
+                const idx = try symbols_mod.ensureDeclaredSymbol(self, name);
                 self.symbols.items[idx].is_intrinsic = true;
             }
         },
@@ -159,7 +159,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 for (save_decl.items) |save_item| {
                     switch (save_item) {
                         .name => |name| {
-                            _ = try symbols_mod.ensureSymbol(self, name);
+                            _ = try symbols_mod.ensureDeclaredSymbol(self, name);
                         },
                         .common => |block_name| {
                             if (!(try hasCommonBlock(self, block_name))) return error.UnknownCommonBlock;

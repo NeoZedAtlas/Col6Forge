@@ -269,20 +269,8 @@ pub fn parseDoStatement(arena: std.mem.Allocator, lp: *LineParser, do_ctx: *DoCo
         try do_ctx.push(end_label);
         var_name = lp.readName(arena) orelse return error.MissingName;
     } else {
-        end_label = try helpers.parseLabelToken(lp);
-        try do_ctx.push(end_label);
-        _ = lp.consume(.comma);
-        if (lp.isKeywordSplit("WHILE")) {
-            _ = lp.consumeKeyword("WHILE");
-            _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
-            const condition = try expr.parseExpr(lp, arena, 0);
-            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-            return .{ .do_while = .{
-                .end_label = end_label,
-                .condition = condition,
-            } };
-        }
-        var_name = lp.readName(arena) orelse return error.MissingName;
+        // Legacy labeled DO requires a numeric statement label; reject other heads.
+        return error.UnexpectedToken;
     }
 
     _ = lp.expect(.equals) orelse return error.UnexpectedToken;

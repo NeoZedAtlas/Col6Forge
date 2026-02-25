@@ -23,7 +23,7 @@ pub fn applyDeclarator(
     storage: StorageClass,
     explicit_type: bool,
 ) !void {
-    const idx = try symbols_mod.ensureSymbol(self, item.name);
+    const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
     if (explicit_type and self.symbols.items[idx].type_explicit) {
         return error.DuplicateDeclaration;
     }

@@ -438,7 +438,20 @@ fn normalizeStmtText(allocator: std.mem.Allocator, text: []const u8) ![]const u8
 }
 
 fn mapTypeSpec(allocator: std.mem.Allocator, spec_raw: []const u8, kind_state: KindState) ![]const u8 {
-    const compact = try compactUpper(allocator, spec_raw);
+    const trimmed = std.mem.trim(u8, spec_raw, " \t");
+    const split_idx = topLevelCommaIndex(trimmed);
+    const base = if (split_idx) |idx| std.mem.trim(u8, trimmed[0..idx], " \t") else trimmed;
+    const attrs = if (split_idx) |idx| std.mem.trim(u8, trimmed[idx + 1 ..], " \t") else "";
+
+    const mapped_base = try mapTypeBase(allocator, base, kind_state);
+    defer allocator.free(mapped_base);
+
+    if (attrs.len == 0) return allocator.dupe(u8, mapped_base);
+    return std.fmt.allocPrint(allocator, "{s}, {s}", .{ mapped_base, attrs });
+}
+
+fn mapTypeBase(allocator: std.mem.Allocator, base_raw: []const u8, kind_state: KindState) ![]const u8 {
+    const compact = try compactUpper(allocator, base_raw);
     defer allocator.free(compact);
 
     if (std.mem.eql(u8, compact, "REAL(WP)")) {
@@ -466,12 +479,22 @@ fn mapTypeSpec(allocator: std.mem.Allocator, spec_raw: []const u8, kind_state: K
     if (std.mem.eql(u8, compact, "INTEGER")) return allocator.dupe(u8, "INTEGER");
     if (std.mem.eql(u8, compact, "LOGICAL")) return allocator.dupe(u8, "LOGICAL");
     if (std.mem.eql(u8, compact, "DOUBLEPRECISION")) return allocator.dupe(u8, "DOUBLE PRECISION");
+    return allocator.dupe(u8, std.mem.trim(u8, base_raw, " \t"));
+}
 
-    if (std.mem.indexOfScalar(u8, spec_raw, '(')) |p| {
-        const base = std.mem.trim(u8, spec_raw[0..p], " \t");
-        return allocator.dupe(u8, base);
+fn topLevelCommaIndex(text: []const u8) ?usize {
+    var depth: i32 = 0;
+    for (text, 0..) |ch, i| {
+        switch (ch) {
+            '(' => depth += 1,
+            ')' => {
+                if (depth > 0) depth -= 1;
+            },
+            ',' => if (depth == 0) return i,
+            else => {},
+        }
     }
-    return allocator.dupe(u8, std.mem.trim(u8, spec_raw, " \t"));
+    return null;
 }
 
 fn extractAssignNames(allocator: std.mem.Allocator, assigns: []const u8) ![]const u8 {
@@ -724,6 +747,19 @@ test "normalizeFreeForm keeps REAL(WP) parameter type when WP kind is unknown" {
     try testing.expectEqual(@as(usize, 2), lines.len);
     try testing.expectEqualStrings("REAL(WP) one", lines[0].text);
     try testing.expectEqualStrings("PARAMETER (one = 1.0_wp)", lines[1].text);
+}
+
+test "normalizeFreeForm preserves DIMENSION attribute for scalar PARAMETER rewrite" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "integer,dimension(ncases),parameter :: info_original = 1\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expectEqualStrings("INTEGER, dimension(ncases) info_original", lines[0].text);
+    try testing.expectEqualStrings("PARAMETER (info_original = 1)", lines[1].text);
 }
 
 test "normalizeFreeForm infers WP kind from minpack_module use for parameter rewrite" {

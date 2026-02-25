@@ -169,10 +169,12 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
         .substring => |sub| {
             for (sub.args) |arg| _ = try checkExprType(self, arg);
             if (sub.start) |start| {
-                if (!isIntegerLike(try checkExprType(self, start))) return error.InvalidSubscript;
+                const start_ty = try checkExprType(self, start);
+                if (!isIntegerLike(start_ty)) return error.InvalidSubscript;
             }
             if (sub.end) |end_expr| {
-                if (!isIntegerLike(try checkExprType(self, end_expr))) return error.InvalidSubscript;
+                const end_ty = try checkExprType(self, end_expr);
+                if (!isIntegerLike(end_ty)) return error.InvalidSubscript;
             }
             return .character;
         },

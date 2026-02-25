@@ -149,6 +149,30 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
     return internSymbol(self, symbol);
 }
 
+// ensureDeclaredSymbol is for declaration targets (type/dimension/parameter/external/intrinsic/save names).
+// It intentionally ignores host-associated symbols so local declarations can shadow host names.
+pub fn ensureDeclaredSymbol(self: *context.Context, name: []const u8) !usize {
+    if (self.current_scope == null) return error.MissingScope;
+    if (findCurrentScopeSymbolIndex(self, name)) |idx| {
+        return idx;
+    }
+
+    const info = implicitInfo(self, name);
+    const symbol = Symbol{
+        .name = name,
+        .type_kind = info.type_kind,
+        .dims = &.{},
+        .char_len = info.char_len,
+        .kind = .variable,
+        .storage = .local,
+        .is_external = false,
+        .is_intrinsic = false,
+        .const_value = null,
+        .type_explicit = false,
+    };
+    return internSymbol(self, symbol);
+}
+
 pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
     if (self.current_scope == null) return error.MissingScope;
     const scope_id = self.current_scope.?;
@@ -186,6 +210,11 @@ fn findSymbolIndexNoCache(self: *context.Context, name: []const u8) ?usize {
         scope_id = self.scopes.items[id.index].parent;
     }
     return null;
+}
+
+fn findCurrentScopeSymbolIndex(self: *context.Context, name: []const u8) ?usize {
+    const scope_id = self.current_scope orelse return null;
+    return getLowercaseMapValue(usize, &self.scopes.items[scope_id.index].symbols, name);
 }
 
 const ImplicitInfo = struct {

@@ -40,7 +40,10 @@ fn rewriteStmtList(
         var prelude = std.array_list.Managed(ast.Stmt).init(ctx.arena);
         defer prelude.deinit();
 
+        const prev_stmt = ctx.current_stmt;
+        ctx.setCurrentStmt(stmt);
         const stmt_changed = try rewriteStmt(ctx, state, &stmt_copy, &prelude, allow_prelude);
+        ctx.current_stmt = prev_stmt;
         if (prelude.items.len > 0) {
             try out.appendSlice(prelude.items);
             changed = true;

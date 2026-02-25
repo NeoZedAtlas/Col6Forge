@@ -48,7 +48,12 @@ pub const Resolver = struct {
             ctx.current_decl_source = null;
         }
         try validateAssumedCharacterLengths(ctx);
-        try rewrite_calls.lowerIntrinsicArrayConversions(ctx);
+        rewrite_calls.lowerIntrinsicArrayConversions(ctx) catch |err| switch (err) {
+            // Array-conversion lowering is an optimization/rewrite pass.
+            // If shape analysis is inconclusive, keep original AST and continue.
+            error.UnsupportedIntrinsicType, error.InvalidSubscript => {},
+            else => return err,
+        };
         for (ctx.unit.stmts) |stmt| {
             try statements.resolveStmt(ctx, stmt);
         }

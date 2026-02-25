@@ -627,6 +627,42 @@ test "semantic resolves host PARAMETER in declaration context" {
     try testing.expect(found_host_n);
 }
 
+test "semantic allows local declaration to shadow host symbol in internal procedure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE OUTER\n" ++
+        "      INTEGER I\n" ++
+        "      CONTAINS\n" ++
+        "      SUBROUTINE INNER\n" ++
+        "      INTEGER I\n" ++
+        "      I=1\n" ++
+        "      END\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found_inner_i = false;
+    for (sem.units) |unit| {
+        if (!std.ascii.eqlIgnoreCase(unit.name, "INNER")) continue;
+        for (unit.symbols) |sym| {
+            if (!std.ascii.eqlIgnoreCase(sym.name, "I")) continue;
+            found_inner_i = true;
+            try testing.expect(!sym.is_host_associated);
+            try testing.expectEqual(symbols.StorageClass.local, sym.storage);
+            try testing.expectEqual(symbols.SymbolKind.variable, sym.kind);
+            break;
+        }
+    }
+    try testing.expect(found_inner_i);
+}
+
 test "semantic reports CF3126 for overlapping IMPLICIT rules" {
     const testing = std.testing;
     const allocator = testing.allocator;
