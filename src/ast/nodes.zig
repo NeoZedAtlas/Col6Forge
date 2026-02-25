@@ -295,10 +295,16 @@ pub const TabFormat = struct {
     count: usize,
 };
 
+pub const RepeatFormat = struct {
+    count: usize,
+    items: []const FormatItem,
+};
+
 pub const FormatItem = union(enum) {
     literal: []const u8,
     spaces: usize,
     tab: TabFormat,
+    repeat_group: RepeatFormat,
     int: IntFormat,
     real: RealFormat,
     real_fixed: RealFormat,
@@ -308,6 +314,8 @@ pub const FormatItem = union(enum) {
     scale: i32,
     blank_control: BlankControl,
     sign_control: SignControl,
+    // Parser metadata: flattened reversion anchor position before lowering.
+    reversion_offset: usize,
     reversion_anchor: void,
 };
 

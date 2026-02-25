@@ -15,6 +15,7 @@ const FormatSequence = struct {
     items: []FormatItem,
     has_descriptor: bool,
     reversion_offset: ?usize,
+    flat_len: usize,
 };
 
 pub fn parseInlineFormatSpec(
@@ -72,19 +73,12 @@ pub fn parseFormatItems(arena: std.mem.Allocator, text: []const u8) ![]FormatIte
     const inner = text[open_idx + 1 .. close_idx];
 
     var i: usize = 0;
-    const sequence = try parseFormatSequence(arena, inner, &i, false);
-    var reversion_start: ?usize = sequence.reversion_offset;
-    if (sequence.has_descriptor and reversion_start == null) {
-        reversion_start = 0;
-    }
+    var sequence = try parseFormatSequence(arena, inner, &i, false);
+    if (i != inner.len) return error.UnexpectedToken;
+
+    const reversion_start = sequence.reversion_offset orelse if (sequence.has_descriptor) @as(usize, 0) else null;
     if (reversion_start) |idx| {
-        var items = std.array_list.Managed(FormatItem).init(arena);
-        try ensureAppendBudget(0, sequence.items.len + 1);
-        try items.ensureTotalCapacity(sequence.items.len + 1);
-        try items.appendSlice(sequence.items[0..idx]);
-        try items.append(.{ .reversion_anchor = {} });
-        try items.appendSlice(sequence.items[idx..]);
-        return items.toOwnedSlice();
+        sequence.items = try appendReversionOffsetItem(arena, sequence.items, idx);
     }
     return sequence.items;
 }
@@ -98,6 +92,7 @@ fn parseFormatSequence(
     var items = std.array_list.Managed(FormatItem).init(arena);
     var has_descriptor = false;
     var reversion_offset: ?usize = null;
+    var flat_len: usize = 0;
     var expect_separator = false;
     var allow_omitted_separator = false;
     while (index.* < text.len) {
@@ -125,7 +120,7 @@ fn parseFormatSequence(
             const next = text[index.*];
             const ctrl = if (next == 'N' or next == 'n') ast.BlankControl.nulls else if (next == 'Z' or next == 'z') ast.BlankControl.zeros else return error.UnexpectedToken;
             index.* += 1;
-            try appendItem(&items, .{ .blank_control = ctrl });
+            try appendItemFlat(&items, .{ .blank_control = ctrl }, &flat_len);
             expect_separator = true;
             allow_omitted_separator = false;
             continue;
@@ -148,7 +143,7 @@ fn parseFormatSequence(
                 index.* += 1;
             }
             const lit = try buf.toOwnedSlice();
-            try appendItem(&items, .{ .literal = lit });
+            try appendItemFlat(&items, .{ .literal = lit }, &flat_len);
             expect_separator = true;
             allow_omitted_separator = false;
             continue;
@@ -156,14 +151,14 @@ fn parseFormatSequence(
 
         if (ch == '(') {
             index.* += 1;
-            const group_start = items.items.len;
             const group = try parseFormatSequence(arena, text, index, true);
+            const group_start = flat_len;
             if (group.has_descriptor) {
                 has_descriptor = true;
                 const inner_offset = group.reversion_offset orelse 0;
                 reversion_offset = group_start + inner_offset;
             }
-            try appendRepeatedItems(&items, group.items, 1);
+            try appendRepeatGroup(&items, group.items, 1, group.flat_len, &flat_len);
             expect_separator = true;
             allow_omitted_separator = false;
             continue;
@@ -173,14 +168,14 @@ fn parseFormatSequence(
             while (index.* < text.len and (text[index.*] == ' ' or text[index.*] == '\t')) : (index.* += 1) {}
             if (index.* >= text.len or text[index.*] != '(') return error.UnexpectedToken;
             index.* += 1;
-            const group_start = items.items.len;
             const group = try parseFormatSequence(arena, text, index, true);
+            const group_start = flat_len;
             if (group.has_descriptor) {
                 has_descriptor = true;
                 const inner_offset = group.reversion_offset orelse 0;
                 reversion_offset = group_start + inner_offset;
             }
-            try appendRepeatedItems(&items, group.items, 1);
+            try appendRepeatGroup(&items, group.items, 1, group.flat_len, &flat_len);
             expect_separator = true;
             allow_omitted_separator = false;
             continue;
@@ -190,7 +185,7 @@ fn parseFormatSequence(
             index.* += 1;
             const lit = try arena.alloc(u8, 1);
             lit[0] = '\n';
-            try appendItem(&items, .{ .literal = lit });
+            try appendItemFlat(&items, .{ .literal = lit }, &flat_len);
             expect_separator = true;
             allow_omitted_separator = true;
             continue;
@@ -198,7 +193,7 @@ fn parseFormatSequence(
 
         if (ch == 'X' or ch == 'x') {
             index.* += 1;
-            try appendItem(&items, .{ .spaces = 1 });
+            try appendItemFlat(&items, .{ .spaces = 1 }, &flat_len);
             expect_separator = true;
             allow_omitted_separator = false;
             continue;
@@ -208,7 +203,7 @@ fn parseFormatSequence(
             // Colon edit descriptor: terminate format reversion. We model it
             // as a format item so codegen can honor it.
             index.* += 1;
-            try appendItem(&items, .{ .colon = {} });
+            try appendItemFlat(&items, .{ .colon = {} }, &flat_len);
             expect_separator = true;
             allow_omitted_separator = true;
             continue;
@@ -228,7 +223,7 @@ fn parseFormatSequence(
                     index.* += 1;
                 }
             }
-            try appendItem(&items, .{ .sign_control = control });
+            try appendItemFlat(&items, .{ .sign_control = control }, &flat_len);
             expect_separator = true;
             allow_omitted_separator = false;
             continue;
@@ -249,7 +244,7 @@ fn parseFormatSequence(
                 }
             }
             const count = parseUnsigned(text, index) orelse return error.UnexpectedToken;
-            try appendItem(&items, .{ .tab = .{ .kind = kind, .count = count } });
+            try appendItemFlat(&items, .{ .tab = .{ .kind = kind, .count = count } }, &flat_len);
             expect_separator = true;
             allow_omitted_separator = false;
             continue;
@@ -270,7 +265,7 @@ fn parseFormatSequence(
             if (index.* < text.len and (text[index.*] == 'P' or text[index.*] == 'p')) {
                 index.* += 1;
                 const value = sign * @as(i32, @intCast(count));
-                try appendItem(&items, .{ .scale = value });
+                try appendItemFlat(&items, .{ .scale = value }, &flat_len);
                 expect_separator = true;
                 allow_omitted_separator = true;
                 continue;
@@ -279,14 +274,14 @@ fn parseFormatSequence(
 
             if (index.* < text.len and text[index.*] == '(') {
                 index.* += 1;
-                const group_start = items.items.len;
                 const group = try parseFormatSequence(arena, text, index, true);
+                const group_start = flat_len;
                 if (group.has_descriptor) {
                     has_descriptor = true;
                     const inner_offset = group.reversion_offset orelse 0;
                     reversion_offset = group_start + inner_offset;
                 }
-                try appendRepeatedItems(&items, group.items, count);
+                try appendRepeatGroup(&items, group.items, count, group.flat_len, &flat_len);
                 expect_separator = true;
                 allow_omitted_separator = false;
                 continue;
@@ -296,21 +291,21 @@ fn parseFormatSequence(
                 if (index.* + count > text.len) return error.UnexpectedToken;
                 const lit = text[index.* .. index.* + count];
                 index.* += count;
-                try appendItem(&items, .{ .literal = lit });
+                try appendItemFlat(&items, .{ .literal = lit }, &flat_len);
                 expect_separator = true;
                 allow_omitted_separator = false;
                 continue;
             }
             if (index.* < text.len and (text[index.*] == 'X' or text[index.*] == 'x')) {
                 index.* += 1;
-                try items.append(.{ .spaces = count });
+                try appendItemFlat(&items, .{ .spaces = count }, &flat_len);
                 expect_separator = true;
                 allow_omitted_separator = false;
                 continue;
             }
             if (index.* < text.len and text[index.*] == ':') {
                 index.* += 1;
-                try appendRepeatedItem(&items, .{ .colon = {} }, count);
+                try appendRepeatedItem(&items, .{ .colon = {} }, count, &flat_len);
                 expect_separator = true;
                 allow_omitted_separator = true;
                 continue;
@@ -328,7 +323,7 @@ fn parseFormatSequence(
                         index.* += 1;
                     }
                 }
-                try appendRepeatedItem(&items, .{ .sign_control = control }, count);
+                try appendRepeatedItem(&items, .{ .sign_control = control }, count, &flat_len);
                 expect_separator = true;
                 allow_omitted_separator = false;
                 continue;
@@ -347,7 +342,7 @@ fn parseFormatSequence(
                     }
                 }
                 const tab_count = parseUnsigned(text, index) orelse return error.UnexpectedToken;
-                try appendRepeatedItem(&items, .{ .tab = .{ .kind = kind, .count = tab_count } }, count);
+                try appendRepeatedItem(&items, .{ .tab = .{ .kind = kind, .count = tab_count } }, count, &flat_len);
                 expect_separator = true;
                 allow_omitted_separator = false;
                 continue;
@@ -356,7 +351,7 @@ fn parseFormatSequence(
                 index.* += 1;
                 const lit = try arena.alloc(u8, count);
                 @memset(lit, '\n');
-                try appendItem(&items, .{ .literal = lit });
+                try appendItemFlat(&items, .{ .literal = lit }, &flat_len);
                 expect_separator = true;
                 allow_omitted_separator = true;
                 continue;
@@ -367,7 +362,7 @@ fn parseFormatSequence(
                 const next = text[index.*];
                 const ctrl = if (next == 'N' or next == 'n') ast.BlankControl.nulls else if (next == 'Z' or next == 'z') ast.BlankControl.zeros else return error.UnexpectedToken;
                 index.* += 1;
-                try appendRepeatedItem(&items, .{ .blank_control = ctrl }, count);
+                try appendRepeatedItem(&items, .{ .blank_control = ctrl }, count, &flat_len);
                 expect_separator = true;
                 allow_omitted_separator = false;
                 continue;
@@ -376,7 +371,7 @@ fn parseFormatSequence(
             if (index.* < text.len and (text[index.*] == 'I' or text[index.*] == 'i')) {
                 index.* += 1;
                 const spec = try parseIntFormat(text, index);
-                try appendRepeatedItem(&items, .{ .int = spec }, count);
+                try appendRepeatedItem(&items, .{ .int = spec }, count, &flat_len);
                 has_descriptor = true;
                 expect_separator = true;
                 allow_omitted_separator = false;
@@ -385,7 +380,7 @@ fn parseFormatSequence(
             if (index.* < text.len and (text[index.*] == 'E' or text[index.*] == 'e')) {
                 index.* += 1;
                 const spec = try parseRealFormat(text, index, .e);
-                try appendRepeatedItem(&items, .{ .real = spec }, count);
+                try appendRepeatedItem(&items, .{ .real = spec }, count, &flat_len);
                 has_descriptor = true;
                 expect_separator = true;
                 allow_omitted_separator = false;
@@ -396,7 +391,7 @@ fn parseFormatSequence(
                 const spec = try parseRealFormat(text, index, .g);
                 // Treat G editing as real editing for now. This is sufficient
                 // for NIST format parsing and avoids MissingFormatLabel.
-                try appendRepeatedItem(&items, .{ .real = spec }, count);
+                try appendRepeatedItem(&items, .{ .real = spec }, count, &flat_len);
                 has_descriptor = true;
                 expect_separator = true;
                 allow_omitted_separator = false;
@@ -405,7 +400,7 @@ fn parseFormatSequence(
             if (index.* < text.len and (text[index.*] == 'D' or text[index.*] == 'd')) {
                 index.* += 1;
                 const spec = try parseRealFormat(text, index, .d);
-                try appendRepeatedItem(&items, .{ .real = spec }, count);
+                try appendRepeatedItem(&items, .{ .real = spec }, count, &flat_len);
                 has_descriptor = true;
                 expect_separator = true;
                 allow_omitted_separator = false;
@@ -414,7 +409,7 @@ fn parseFormatSequence(
             if (index.* < text.len and (text[index.*] == 'F' or text[index.*] == 'f')) {
                 index.* += 1;
                 const spec = try parseRealFormat(text, index, .e);
-                try appendRepeatedItem(&items, .{ .real_fixed = spec }, count);
+                try appendRepeatedItem(&items, .{ .real_fixed = spec }, count, &flat_len);
                 has_descriptor = true;
                 expect_separator = true;
                 allow_omitted_separator = false;
@@ -423,7 +418,7 @@ fn parseFormatSequence(
             if (index.* < text.len and (text[index.*] == 'A' or text[index.*] == 'a')) {
                 index.* += 1;
                 const spec = parseCharFormat(text, index);
-                try appendRepeatedItem(&items, .{ .char = spec }, count);
+                try appendRepeatedItem(&items, .{ .char = spec }, count, &flat_len);
                 has_descriptor = true;
                 expect_separator = true;
                 allow_omitted_separator = false;
@@ -432,7 +427,7 @@ fn parseFormatSequence(
             if (index.* < text.len and (text[index.*] == 'L' or text[index.*] == 'l')) {
                 index.* += 1;
                 const spec = try parseLogicalFormat(text, index);
-                try appendRepeatedItem(&items, .{ .logical = spec }, count);
+                try appendRepeatedItem(&items, .{ .logical = spec }, count, &flat_len);
                 has_descriptor = true;
                 expect_separator = true;
                 allow_omitted_separator = false;
@@ -445,7 +440,7 @@ fn parseFormatSequence(
         if (ch == 'I' or ch == 'i') {
             index.* += 1;
             const spec = try parseIntFormat(text, index);
-            try appendItem(&items, .{ .int = spec });
+            try appendItemFlat(&items, .{ .int = spec }, &flat_len);
             has_descriptor = true;
             expect_separator = true;
             allow_omitted_separator = false;
@@ -454,7 +449,7 @@ fn parseFormatSequence(
         if (ch == 'E' or ch == 'e') {
             index.* += 1;
             const spec = try parseRealFormat(text, index, .e);
-            try appendItem(&items, .{ .real = spec });
+            try appendItemFlat(&items, .{ .real = spec }, &flat_len);
             has_descriptor = true;
             expect_separator = true;
             allow_omitted_separator = false;
@@ -464,7 +459,7 @@ fn parseFormatSequence(
             index.* += 1;
             const spec = try parseRealFormat(text, index, .g);
             // Treat G editing as real editing for now.
-            try appendItem(&items, .{ .real = spec });
+            try appendItemFlat(&items, .{ .real = spec }, &flat_len);
             has_descriptor = true;
             expect_separator = true;
             allow_omitted_separator = false;
@@ -473,7 +468,7 @@ fn parseFormatSequence(
         if (ch == 'D' or ch == 'd') {
             index.* += 1;
             const spec = try parseRealFormat(text, index, .d);
-            try appendItem(&items, .{ .real = spec });
+            try appendItemFlat(&items, .{ .real = spec }, &flat_len);
             has_descriptor = true;
             expect_separator = true;
             allow_omitted_separator = false;
@@ -482,7 +477,7 @@ fn parseFormatSequence(
         if (ch == 'F' or ch == 'f') {
             index.* += 1;
             const spec = try parseRealFormat(text, index, .e);
-            try appendItem(&items, .{ .real_fixed = spec });
+            try appendItemFlat(&items, .{ .real_fixed = spec }, &flat_len);
             has_descriptor = true;
             expect_separator = true;
             allow_omitted_separator = false;
@@ -491,7 +486,7 @@ fn parseFormatSequence(
         if (ch == 'A' or ch == 'a') {
             index.* += 1;
             const spec = parseCharFormat(text, index);
-            try appendItem(&items, .{ .char = spec });
+            try appendItemFlat(&items, .{ .char = spec }, &flat_len);
             has_descriptor = true;
             expect_separator = true;
             allow_omitted_separator = false;
@@ -500,7 +495,7 @@ fn parseFormatSequence(
         if (ch == 'L' or ch == 'l') {
             index.* += 1;
             const spec = try parseLogicalFormat(text, index);
-            try appendItem(&items, .{ .logical = spec });
+            try appendItemFlat(&items, .{ .logical = spec }, &flat_len);
             has_descriptor = true;
             expect_separator = true;
             allow_omitted_separator = false;
@@ -514,30 +509,54 @@ fn parseFormatSequence(
         .items = try items.toOwnedSlice(),
         .has_descriptor = has_descriptor,
         .reversion_offset = reversion_offset,
+        .flat_len = flat_len,
     };
 }
 
-fn appendRepeatedItems(items: *std.array_list.Managed(FormatItem), group: []const FormatItem, count: usize) !void {
-    if (count == 0 or group.len == 0) return;
-    const group_total = std.math.mul(usize, group.len, count) catch return error.FormatExpansionTooLarge;
-    try ensureAppendBudget(items.items.len, group_total);
-    var repeat: usize = 0;
-    while (repeat < count) : (repeat += 1) {
-        try items.appendSlice(group);
-    }
+fn appendReversionOffsetItem(arena: std.mem.Allocator, base: []FormatItem, offset: usize) ![]FormatItem {
+    var out = std.array_list.Managed(FormatItem).init(arena);
+    try out.ensureTotalCapacity(base.len + 1);
+    try out.appendSlice(base);
+    try out.append(.{ .reversion_offset = offset });
+    return out.toOwnedSlice();
 }
 
-fn appendRepeatedItem(items: *std.array_list.Managed(FormatItem), item: FormatItem, count: usize) !void {
+fn appendRepeatedItems(
+    items: *std.array_list.Managed(FormatItem),
+    group: []const FormatItem,
+    count: usize,
+    group_flat_len: usize,
+    flat_len: *usize,
+) !void {
+    return appendRepeatGroup(items, group, count, group_flat_len, flat_len);
+}
+
+fn appendRepeatedItem(items: *std.array_list.Managed(FormatItem), item: FormatItem, count: usize, flat_len: *usize) !void {
     if (count == 0) return;
-    try ensureAppendBudget(items.items.len, count);
-    var repeat: usize = 0;
-    while (repeat < count) : (repeat += 1) {
-        try items.append(item);
-    }
+    if (count == 1) return appendItemFlat(items, item, flat_len);
+
+    const one = try items.allocator.alloc(FormatItem, 1);
+    one[0] = item;
+    return appendRepeatGroup(items, one, count, 1, flat_len);
 }
 
-fn appendItem(items: *std.array_list.Managed(FormatItem), item: FormatItem) !void {
-    try ensureAppendBudget(items.items.len, 1);
+fn appendRepeatGroup(
+    items: *std.array_list.Managed(FormatItem),
+    group: []const FormatItem,
+    count: usize,
+    group_flat_len: usize,
+    flat_len: *usize,
+) !void {
+    if (count == 0 or group_flat_len == 0) return;
+    const group_total = std.math.mul(usize, group_flat_len, count) catch return error.FormatExpansionTooLarge;
+    try ensureFlatBudget(flat_len.*, group_total);
+    flat_len.* += group_total;
+    try items.append(.{ .repeat_group = .{ .count = count, .items = group } });
+}
+
+fn appendItemFlat(items: *std.array_list.Managed(FormatItem), item: FormatItem, flat_len: *usize) !void {
+    try ensureFlatBudget(flat_len.*, 1);
+    flat_len.* += 1;
     try items.append(item);
 }
 
@@ -599,7 +618,7 @@ fn parseDecimalChecked(text: []const u8) ?usize {
     return value;
 }
 
-fn ensureAppendBudget(current_len: usize, add_len: usize) !void {
+fn ensureFlatBudget(current_len: usize, add_len: usize) !void {
     const next = std.math.add(usize, current_len, add_len) catch return error.FormatExpansionTooLarge;
     if (next > max_format_items) return error.FormatExpansionTooLarge;
 }
@@ -609,14 +628,17 @@ test "parseFormatItems accepts unlimited repeat group after slash" {
     const allocator = testing.allocator;
 
     const items = try parseFormatItems(allocator, "(5X,A//,*(5X,5D15.7/))");
-    var has_anchor = false;
+    var has_reversion_offset = false;
+    var has_repeat_group = false;
     for (items) |item| {
-        if (item == .reversion_anchor) {
-            has_anchor = true;
-            break;
+        switch (item) {
+            .reversion_offset => has_reversion_offset = true,
+            .repeat_group => has_repeat_group = true,
+            else => {},
         }
     }
-    try testing.expect(has_anchor);
+    try testing.expect(has_reversion_offset);
+    try testing.expect(has_repeat_group);
 }
 
 test "parseFormatItems accepts unlimited repeat group without comma" {
@@ -624,14 +646,17 @@ test "parseFormatItems accepts unlimited repeat group without comma" {
     const allocator = testing.allocator;
 
     const items = try parseFormatItems(allocator, "(5X,A//*(5X,5D15.7/))");
-    var has_anchor = false;
+    var has_reversion_offset = false;
+    var has_repeat_group = false;
     for (items) |item| {
-        if (item == .reversion_anchor) {
-            has_anchor = true;
-            break;
+        switch (item) {
+            .reversion_offset => has_reversion_offset = true,
+            .repeat_group => has_repeat_group = true,
+            else => {},
         }
     }
-    try testing.expect(has_anchor);
+    try testing.expect(has_reversion_offset);
+    try testing.expect(has_repeat_group);
 }
 
 test "parseFormatItems rejects missing comma between descriptors" {

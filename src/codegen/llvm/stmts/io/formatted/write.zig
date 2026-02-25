@@ -12,6 +12,7 @@ const EmitError = anyerror;
 
 const io_utils = @import("../utils.zig");
 const expansion = @import("../expansion.zig");
+const format_items = @import("../../../../../format/items.zig");
 
 const countFormatDescriptors = io_utils.countFormatDescriptors;
 const isAllNewlines = io_utils.isAllNewlines;
@@ -57,6 +58,9 @@ fn emitWriteFormattedImpl(
     direct_spec: ?DirectIoSpec,
 ) EmitError!void {
     _ = write;
+    const flat_fmt_items = try format_items.flattenWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    defer ctx.allocator.free(flat_fmt_items);
+
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();
 
@@ -64,11 +68,11 @@ fn emitWriteFormattedImpl(
     var args = std.array_list.Managed(Arg).init(ctx.allocator);
     defer args.deinit();
 
-    const descriptor_count = countFormatDescriptors(fmt_items);
+    const descriptor_count = countFormatDescriptors(flat_fmt_items);
     if (descriptor_count == 0) {
         var pending_spaces: usize = 0;
         var column: usize = 1;
-        format_loop: for (fmt_items) |item| {
+        format_loop: for (flat_fmt_items) |item| {
             switch (item) {
                 .literal => |text| {
                     if (isAllNewlines(text)) {
@@ -139,7 +143,7 @@ fn emitWriteFormattedImpl(
     } else if (expanded_values.values.items.len == 0) {
         var pending_spaces: usize = 0;
         var column: usize = 1;
-        format_loop: for (fmt_items) |item| {
+        format_loop: for (flat_fmt_items) |item| {
             switch (item) {
                 .literal => |text| {
                     if (isAllNewlines(text)) {
@@ -207,13 +211,13 @@ fn emitWriteFormattedImpl(
                     pending_spaces = 0;
                     break;
                 },
-                .scale, .blank_control, .sign_control, .reversion_anchor => {},
+                .repeat_group, .scale, .blank_control, .sign_control, .reversion_offset, .reversion_anchor => {},
             }
         }
     } else {
         var arg_index: usize = 0;
         var pending_spaces: usize = 0;
-        const reversion_start = findReversionStart(fmt_items);
+        const reversion_start = findReversionStart(flat_fmt_items);
         var format_start: usize = 0;
         var first_pass = true;
         while (arg_index < expanded_values.values.items.len) {
@@ -227,8 +231,8 @@ fn emitWriteFormattedImpl(
             var column: usize = 1;
             var idx: usize = format_start;
             var stop_format = false;
-            while (idx < fmt_items.len) : (idx += 1) {
-                const item = fmt_items[idx];
+            while (idx < flat_fmt_items.len) : (idx += 1) {
+                const item = flat_fmt_items[idx];
                 switch (item) {
                     .literal => |text| {
                         if (isAllNewlines(text)) {
@@ -466,6 +470,8 @@ fn emitWriteFormattedImpl(
                     .sign_control => |ctrl| {
                         sign_plus = (ctrl == .plus);
                     },
+                    .repeat_group => {},
+                    .reversion_offset => {},
                     .reversion_anchor => {},
                 }
                 if (stop_format) break;

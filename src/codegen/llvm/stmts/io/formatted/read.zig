@@ -11,6 +11,7 @@ const EmitError = anyerror;
 
 const io_utils = @import("../utils.zig");
 const expansion = @import("../expansion.zig");
+const format_items = @import("../../../../../format/items.zig");
 
 const countFormatDescriptors = io_utils.countFormatDescriptors;
 const appendScanfLiteral = io_utils.appendScanfLiteral;
@@ -60,6 +61,8 @@ fn emitReadFormattedImpl(
     direct_spec: ?DirectIoSpec,
 ) EmitError!ValueRef {
     _ = read;
+    const flat_fmt_items = try format_items.flattenWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    defer ctx.allocator.free(flat_fmt_items);
 
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();
@@ -75,9 +78,9 @@ fn emitReadFormattedImpl(
     var scale_fixups = std.array_list.Managed(ScaleFixup).init(ctx.allocator);
     defer scale_fixups.deinit();
 
-    const descriptor_count = countFormatDescriptors(fmt_items);
+    const descriptor_count = countFormatDescriptors(flat_fmt_items);
     if (descriptor_count == 0) {
-        for (fmt_items) |item| {
+        for (flat_fmt_items) |item| {
             switch (item) {
                 .literal => |text| {
                     try appendScanfLiteral(&fmt_buf, text);
@@ -103,7 +106,7 @@ fn emitReadFormattedImpl(
         }
     } else {
         var arg_index: usize = 0;
-        const reversion_start = findReversionStart(fmt_items);
+        const reversion_start = findReversionStart(flat_fmt_items);
         var format_start: usize = 0;
         var first_pass = true;
 
@@ -115,8 +118,8 @@ fn emitReadFormattedImpl(
 
             var scale_factor: i32 = 0;
             var fmt_index: usize = format_start;
-            while (fmt_index < fmt_items.len) : (fmt_index += 1) {
-                const item = fmt_items[fmt_index];
+            while (fmt_index < flat_fmt_items.len) : (fmt_index += 1) {
+                const item = flat_fmt_items[fmt_index];
                 switch (item) {
                     .literal => |text| {
                         try appendScanfLiteral(&fmt_buf, text);
@@ -227,6 +230,8 @@ fn emitReadFormattedImpl(
                         try fmt_buf.writer().print("%{c}", .{directive});
                     },
                     .sign_control => {},
+                    .repeat_group => {},
+                    .reversion_offset => {},
                     .reversion_anchor => {},
                 }
             }

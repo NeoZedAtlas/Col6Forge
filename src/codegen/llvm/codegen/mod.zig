@@ -6,6 +6,7 @@ const common = @import("common.zig");
 const codegen_diag = @import("../../diagnostic.zig");
 const stmts = @import("../stmts/mod.zig");
 const utils = @import("utils.zig");
+const format_items = @import("../../../format/items.zig");
 
 const Program = input.Program;
 const FormatInfo = context.FormatInfo;
@@ -369,11 +370,12 @@ fn collectFormatsAndInlineFromNode(
             const format_label = label orelse return error.FormatMissingLabel;
             const label_entry = try label_map.getOrPut(format_label);
             if (label_entry.found_existing) return error.DuplicateFormatLabel;
-            const format_bytes = try buildPrintfFormat(allocator, fmt.items);
+            const flat_items = try format_items.flattenWithReversionAnchor(allocator, fmt.items, format_items.max_flat_items);
+            const format_bytes = try buildPrintfFormat(allocator, flat_items);
             const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}{s}", .{ unit_mangled, format_label });
             try builder.globalString(global_name, format_bytes);
             label_entry.value_ptr.* = .{
-                .items = fmt.items,
+                .items = flat_items,
                 .global_name = global_name,
                 .string_len = format_bytes.len + 1,
             };
@@ -394,12 +396,13 @@ fn collectFormatsAndInlineFromNode(
             const key = @as(usize, @intFromPtr(items.ptr));
             const inline_entry = try inline_map.getOrPut(key);
             if (inline_entry.found_existing) return;
-            const format_bytes = try buildPrintfFormat(allocator, items);
+            const flat_items = try format_items.flattenWithReversionAnchor(allocator, items, format_items.max_flat_items);
+            const format_bytes = try buildPrintfFormat(allocator, flat_items);
             const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}inline{d}", .{ unit_mangled, inline_index.* });
             inline_index.* += 1;
             try builder.globalString(global_name, format_bytes);
             inline_entry.value_ptr.* = .{
-                .items = items,
+                .items = flat_items,
                 .global_name = global_name,
                 .string_len = format_bytes.len + 1,
             };
@@ -410,12 +413,13 @@ fn collectFormatsAndInlineFromNode(
             const key = @as(usize, @intFromPtr(items.ptr));
             const inline_entry = try inline_map.getOrPut(key);
             if (inline_entry.found_existing) return;
-            const format_bytes = try buildPrintfFormat(allocator, items);
+            const flat_items = try format_items.flattenWithReversionAnchor(allocator, items, format_items.max_flat_items);
+            const format_bytes = try buildPrintfFormat(allocator, flat_items);
             const global_name = try std.fmt.allocPrint(allocator, "fmt_{s}inline{d}", .{ unit_mangled, inline_index.* });
             inline_index.* += 1;
             try builder.globalString(global_name, format_bytes);
             inline_entry.value_ptr.* = .{
-                .items = items,
+                .items = flat_items,
                 .global_name = global_name,
                 .string_len = format_bytes.len + 1,
             };
@@ -484,7 +488,7 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const input.FormatIt
     errdefer buffer.deinit();
     var last_non_space: ?usize = null;
     for (items, 0..) |item, idx| {
-        if (item != .spaces and item != .tab and item != .colon and item != .scale and item != .blank_control and item != .sign_control and item != .reversion_anchor) {
+        if (item != .spaces and item != .tab and item != .colon and item != .scale and item != .blank_control and item != .sign_control and item != .reversion_anchor and item != .repeat_group and item != .reversion_offset) {
             last_non_space = idx;
         }
     }
@@ -536,9 +540,11 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const input.FormatIt
                     try buffer.writer().print("%{d}c", .{spec.width});
                 }
             },
+            .repeat_group => {},
             .scale => {},
             .blank_control => {},
             .sign_control => {},
+            .reversion_offset => {},
             .reversion_anchor => {},
         }
     }
