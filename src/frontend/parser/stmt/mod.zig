@@ -597,11 +597,7 @@ fn parseSelectCaseBlock(
         }
         if (decl.isDeclarationStart(lp)) return error.DeclarationInIfBlock;
         var node = try parseStatement(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
-        if (node.source_line == 0) {
-            node.source_line = line.span.start_line;
-            node.source_column = if (line.segments.len > 0) line.segments[0].column else 1;
-            node.source_text = line.text;
-        }
+        setStmtSourceIfMissing(&node, line);
         try stmts.append(node);
     }
     return stmts.toOwnedSlice();
@@ -661,11 +657,7 @@ pub fn parseIfBlock(
         }
         if (decl.isDeclarationStart(lp)) return error.DeclarationInIfBlock;
         var node = try parseStatement(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
-        if (node.source_line == 0) {
-            node.source_line = line.span.start_line;
-            node.source_column = if (line.segments.len > 0) line.segments[0].column else 1;
-            node.source_text = line.text;
-        }
+        setStmtSourceIfMissing(&node, line);
         try stmts.append(node);
     }
     return stmts.toOwnedSlice();
@@ -680,171 +672,196 @@ fn parseActionStmtNode(
 ) ParseStmtError!StmtNode {
     // Shared dispatcher for executable/action statements used by both
     // top-level statement parsing and single-line IF bodies.
-    if (mode == .top_level) {
-        if (lp.isKeywordSplit("FORMAT")) {
-            const items = try format.parseFormatItems(arena, line.text);
-            return .{ .format = .{ .items = items } };
-        }
-        if (lp.isKeywordSplit("DATA")) {
-            return try data_stmt.parseDataStatement(arena, lp);
-        }
-        if (lp.isKeywordSplit("USE")) {
-            return try parseUseStatement(arena, lp);
-        }
-    }
+    const lead = blk: {
+        const tok = lp.peek() orelse break :blk @as(u8, 0);
+        if (tok.kind != .identifier) break :blk @as(u8, 0);
+        const text = lp.tokenText(tok);
+        if (text.len == 0) break :blk @as(u8, 0);
+        break :blk std.ascii.toUpper(text[0]);
+    };
 
-    if (lp.isKeywordSplit("ALLOCATE") or lp.isKeywordSplit("DEALLOCATE")) {
-        return .{ .cont = {} };
-    }
-    if (lp.isKeywordSplit("WHERE")) {
-        return try parseWhereAsIfSingle(arena, lp);
-    }
-    if (lp.isKeywordSplit("PAUSE")) {
-        return try parsePauseStatement(arena, lp);
-    }
-    if (isErrorStopStart(lp.*)) {
-        if (!lp.consumeKeyword("ERRORSTOP")) {
-            _ = lp.consumeKeyword("ERROR");
-            _ = lp.consumeKeyword("STOP");
-        }
-        return .{ .stop = {} };
-    }
-    if (lp.isKeywordSplit("STOP")) {
-        _ = lp.consumeKeyword("STOP");
-        return .{ .stop = {} };
-    }
-    if (lp.isKeywordSplit("WRITE")) return try io.parseWriteStatement(arena, lp);
-    if (lp.isKeywordSplit("PRINT")) return try io.parsePrintStatement(arena, lp);
-    if (lp.isKeywordSplit("READ")) return try io.parseReadStatement(arena, lp);
-    if (lp.isKeywordSplit("REWIND")) return try io.parseRewindStatement(arena, lp);
-    if (lp.isKeywordSplit("BACKSPACE")) return try io.parseBackspaceStatement(arena, lp);
-    if (lp.isKeywordSplit("ENDFILE")) return try io.parseEndfileStatement(arena, lp);
-    if (lp.isKeywordSplit("OPEN")) return try io.parseOpenStatement(arena, lp);
-    if (lp.isKeywordSplit("INQUIRE")) return try io.parseInquireStatement(arena, lp);
-    if (lp.isKeywordSplit("CLOSE")) return try io.parseCloseStatement(arena, lp);
-
-    if (lp.isKeywordSplit("ENTRY")) {
-        if (mode != .top_level) return error.UnexpectedToken;
-        _ = lp.consumeKeyword("ENTRY");
-        const name = lp.readName(arena) orelse return error.MissingName;
-        var args = std.array_list.Managed([]const u8).init(arena);
-        if (lp.consume(.l_paren)) {
-            while (!lp.peekIs(.r_paren)) {
-                if (lp.consume(.star)) {
-                    _ = lp.consume(.comma);
-                    continue;
+    switch (lead) {
+        'A' => {
+            if (lp.isKeywordSplit("ALLOCATE") or lp.isKeywordSplit("DEALLOCATE")) {
+                return .{ .cont = {} };
+            }
+            if (lp.isKeywordSplit("ASSIGN")) {
+                return try helpers.parseAssignStatement(arena, lp);
+            }
+        },
+        'B' => {
+            if (lp.isKeywordSplit("BACKSPACE")) return try io.parseBackspaceStatement(arena, lp);
+        },
+        'C' => {
+            if (lp.isKeywordSplit("CLOSE")) return try io.parseCloseStatement(arena, lp);
+            if (lp.isKeywordSplit("CALL")) {
+                if (helpers.lineHasEquals(lp.*)) {
+                    if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |stmt_node| {
+                        return stmt_node;
+                    }
                 }
-                const arg_name = lp.readName(arena) orelse return error.MissingName;
-                try args.append(arg_name);
-                _ = lp.consume(.comma);
-            }
-            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-        }
-        return .{ .entry = .{ .name = name, .args = try args.toOwnedSlice() } };
-    }
-
-    if (lp.isKeywordSplit("CALL")) {
-        if (helpers.lineHasEquals(lp.*)) {
-            if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |stmt_node| {
-                return stmt_node;
-            }
-        }
-        _ = lp.consumeKeyword("CALL");
-        const name = lp.readName(arena) orelse return error.MissingName;
-        var args = std.array_list.Managed(CallArg).init(arena);
-        if (lp.consume(.l_paren)) {
-            while (!lp.peekIs(.r_paren)) {
-                if (lp.consume(.star)) {
-                    const label_tok = lp.peek() orelse return error.UnexpectedToken;
-                    if (label_tok.kind != .integer and label_tok.kind != .identifier) return error.UnexpectedToken;
-                    _ = lp.next();
-                    const normalized = helpers.normalizeLabelText(lp.tokenText(label_tok));
-                    const alt_label = try arena.dupe(u8, normalized);
-                    try args.append(.{ .alt_return = alt_label });
-                } else {
-                    const arg = try expr.parseExpr(lp, arena, 0);
-                    try args.append(.{ .expr = arg });
+                _ = lp.consumeKeyword("CALL");
+                const name = lp.readName(arena) orelse return error.MissingName;
+                var args = std.array_list.Managed(CallArg).init(arena);
+                if (lp.consume(.l_paren)) {
+                    while (!lp.peekIs(.r_paren)) {
+                        if (lp.consume(.star)) {
+                            const label_tok = lp.peek() orelse return error.UnexpectedToken;
+                            if (label_tok.kind != .integer and label_tok.kind != .identifier) return error.UnexpectedToken;
+                            _ = lp.next();
+                            const normalized = helpers.normalizeLabelText(lp.tokenText(label_tok));
+                            const alt_label = try arena.dupe(u8, normalized);
+                            try args.append(.{ .alt_return = alt_label });
+                        } else {
+                            const arg = try expr.parseExpr(lp, arena, 0);
+                            try args.append(.{ .expr = arg });
+                        }
+                        _ = lp.consume(.comma);
+                    }
+                    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
                 }
-                _ = lp.consume(.comma);
+                return .{ .call = .{ .name = name, .args = try args.toOwnedSlice() } };
             }
-            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-        }
-        return .{ .call = .{ .name = name, .args = try args.toOwnedSlice() } };
-    }
-
-    if (lp.isKeywordSplit("ASSIGN")) {
-        return try helpers.parseAssignStatement(arena, lp);
-    }
-
-    if (lp.isKeywordSplit("DO")) {
-        if (mode != .top_level) return error.UnexpectedToken;
-        // Avoid misclassifying modern block DO ("DO I = ...") as an assignment.
-        var do_scan = lp.*;
-        _ = do_scan.consumeKeyword("DO");
-        const is_block_do = do_scan.peekIs(.identifier) and helpers.nextTokenIsEquals(do_scan);
-        const looks_like_assignment = !helpers.hasCommaAfterEquals(do_scan);
-        if (!is_block_do and (helpers.labelFollowedByEquals(lp.*) or looks_like_assignment)) {
-            if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |assign_node| {
-                return assign_node;
+            if (lp.isKeywordSplit("CYCLE")) {
+                _ = lp.consumeKeyword("CYCLE");
+                const loop_name = if (lp.peek() != null) lp.readName(arena) else null;
+                const cycle_label = resolveCycleLabel(do_ctx, loop_name) orelse return error.UnexpectedToken;
+                return .{ .goto = .{ .label = cycle_label } };
             }
-        }
-        _ = lp.consumeKeyword("DO");
-        const stmt_node = try control_flow.parseDoStatement(arena, lp, do_ctx);
-        _ = try maybeAttachLoopExitLabel(arena, do_ctx, stmt_node);
-        return stmt_node;
-    }
-
-    if (helpers.isSplitDo(lp.*)) {
-        if (mode != .top_level) return error.UnexpectedToken;
-        var do_lp = lp.*;
-        _ = do_lp.next();
-        _ = do_lp.next();
-        if (helpers.labelFollowedByEquals(do_lp) or !helpers.hasCommaAfterEquals(do_lp)) {
-            if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |stmt_node| {
+            if (lp.isKeywordSplit("CONTINUE")) {
+                _ = lp.consumeKeyword("CONTINUE");
+                return .{ .cont = {} };
+            }
+            if (helpers.isSplitKeyword(lp.*, "CONTINUE")) {
+                if (mode != .top_level) return error.UnexpectedToken;
+                return .{ .cont = {} };
+            }
+        },
+        'D' => {
+            if (mode == .top_level and lp.isKeywordSplit("DATA")) {
+                return try data_stmt.parseDataStatement(arena, lp);
+            }
+            if (lp.isKeywordSplit("DO")) {
+                if (mode != .top_level) return error.UnexpectedToken;
+                // Avoid misclassifying modern block DO ("DO I = ...") as an assignment.
+                var do_scan = lp.*;
+                _ = do_scan.consumeKeyword("DO");
+                const is_block_do = do_scan.peekIs(.identifier) and helpers.nextTokenIsEquals(do_scan);
+                const looks_like_assignment = !helpers.hasCommaAfterEquals(do_scan);
+                if (!is_block_do and (helpers.labelFollowedByEquals(lp.*) or looks_like_assignment)) {
+                    if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |assign_node| {
+                        return assign_node;
+                    }
+                }
+                _ = lp.consumeKeyword("DO");
+                const stmt_node = try control_flow.parseDoStatement(arena, lp, do_ctx);
+                _ = try maybeAttachLoopExitLabel(arena, do_ctx, stmt_node);
                 return stmt_node;
             }
-        }
-        const stmt_node = try control_flow.parseDoStatement(arena, &do_lp, do_ctx);
-        _ = try maybeAttachLoopExitLabel(arena, do_ctx, stmt_node);
-        return stmt_node;
-    }
-
-    if (helpers.isGotoStart(lp.*)) {
-        if (helpers.lineHasEquals(lp.*)) {
-            if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |stmt_node| {
+            if (helpers.isSplitDo(lp.*)) {
+                if (mode != .top_level) return error.UnexpectedToken;
+                var do_lp = lp.*;
+                _ = do_lp.next();
+                _ = do_lp.next();
+                if (helpers.labelFollowedByEquals(do_lp) or !helpers.hasCommaAfterEquals(do_lp)) {
+                    if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |stmt_node| {
+                        return stmt_node;
+                    }
+                }
+                const stmt_node = try control_flow.parseDoStatement(arena, &do_lp, do_ctx);
+                _ = try maybeAttachLoopExitLabel(arena, do_ctx, stmt_node);
                 return stmt_node;
             }
-        }
-        return try helpers.parseGotoStatement(arena, lp);
-    }
-
-    if (lp.isKeywordSplit("EXIT")) {
-        _ = lp.consumeKeyword("EXIT");
-        const block_name = if (lp.peek() != null) lp.readName(arena) else null;
-        const exit_label = (try resolveExitLabel(arena, do_ctx, block_name)) orelse return error.UnexpectedToken;
-        return .{ .goto = .{ .label = exit_label } };
-    }
-    if (lp.isKeywordSplit("CYCLE")) {
-        _ = lp.consumeKeyword("CYCLE");
-        const loop_name = if (lp.peek() != null) lp.readName(arena) else null;
-        const cycle_label = resolveCycleLabel(do_ctx, loop_name) orelse return error.UnexpectedToken;
-        return .{ .goto = .{ .label = cycle_label } };
-    }
-    if (lp.isKeywordSplit("RETURN")) {
-        _ = lp.consumeKeyword("RETURN");
-        var ret_value: ?*Expr = null;
-        if (lp.peek() != null) {
-            ret_value = try expr.parseExpr(lp, arena, 0);
-        }
-        return .{ .ret = .{ .value = ret_value } };
-    }
-    if (lp.isKeywordSplit("CONTINUE")) {
-        _ = lp.consumeKeyword("CONTINUE");
-        return .{ .cont = {} };
-    }
-    if (helpers.isSplitKeyword(lp.*, "CONTINUE")) {
-        if (mode != .top_level) return error.UnexpectedToken;
-        return .{ .cont = {} };
+        },
+        'E' => {
+            if (lp.isKeywordSplit("ENDFILE")) return try io.parseEndfileStatement(arena, lp);
+            if (lp.isKeywordSplit("EXIT")) {
+                _ = lp.consumeKeyword("EXIT");
+                const block_name = if (lp.peek() != null) lp.readName(arena) else null;
+                const exit_label = (try resolveExitLabel(arena, do_ctx, block_name)) orelse return error.UnexpectedToken;
+                return .{ .goto = .{ .label = exit_label } };
+            }
+            if (lp.isKeywordSplit("ENTRY")) {
+                if (mode != .top_level) return error.UnexpectedToken;
+                _ = lp.consumeKeyword("ENTRY");
+                const name = lp.readName(arena) orelse return error.MissingName;
+                var args = std.array_list.Managed([]const u8).init(arena);
+                if (lp.consume(.l_paren)) {
+                    while (!lp.peekIs(.r_paren)) {
+                        if (lp.consume(.star)) {
+                            _ = lp.consume(.comma);
+                            continue;
+                        }
+                        const arg_name = lp.readName(arena) orelse return error.MissingName;
+                        try args.append(arg_name);
+                        _ = lp.consume(.comma);
+                    }
+                    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+                }
+                return .{ .entry = .{ .name = name, .args = try args.toOwnedSlice() } };
+            }
+            if (isErrorStopStart(lp.*)) {
+                if (!lp.consumeKeyword("ERRORSTOP")) {
+                    _ = lp.consumeKeyword("ERROR");
+                    _ = lp.consumeKeyword("STOP");
+                }
+                return .{ .stop = {} };
+            }
+        },
+        'F' => {
+            if (mode == .top_level and lp.isKeywordSplit("FORMAT")) {
+                const items = try format.parseFormatItems(arena, line.text);
+                return .{ .format = .{ .items = items } };
+            }
+        },
+        'G' => {
+            if (helpers.isGotoStart(lp.*)) {
+                if (helpers.lineHasEquals(lp.*)) {
+                    if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |stmt_node| {
+                        return stmt_node;
+                    }
+                }
+                return try helpers.parseGotoStatement(arena, lp);
+            }
+        },
+        'I' => {
+            if (lp.isKeywordSplit("INQUIRE")) return try io.parseInquireStatement(arena, lp);
+        },
+        'O' => {
+            if (lp.isKeywordSplit("OPEN")) return try io.parseOpenStatement(arena, lp);
+        },
+        'P' => {
+            if (lp.isKeywordSplit("PRINT")) return try io.parsePrintStatement(arena, lp);
+            if (lp.isKeywordSplit("PAUSE")) return try parsePauseStatement(arena, lp);
+        },
+        'R' => {
+            if (lp.isKeywordSplit("READ")) return try io.parseReadStatement(arena, lp);
+            if (lp.isKeywordSplit("REWIND")) return try io.parseRewindStatement(arena, lp);
+            if (lp.isKeywordSplit("RETURN")) {
+                _ = lp.consumeKeyword("RETURN");
+                var ret_value: ?*Expr = null;
+                if (lp.peek() != null) {
+                    ret_value = try expr.parseExpr(lp, arena, 0);
+                }
+                return .{ .ret = .{ .value = ret_value } };
+            }
+        },
+        'S' => {
+            if (lp.isKeywordSplit("STOP")) {
+                _ = lp.consumeKeyword("STOP");
+                return .{ .stop = {} };
+            }
+        },
+        'U' => {
+            if (mode == .top_level and lp.isKeywordSplit("USE")) {
+                return try parseUseStatement(arena, lp);
+            }
+        },
+        'W' => {
+            if (lp.isKeywordSplit("WRITE")) return try io.parseWriteStatement(arena, lp);
+            if (lp.isKeywordSplit("WHERE")) return try parseWhereAsIfSingle(arena, lp);
+        },
+        else => {},
     }
 
     if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |stmt_node| {
