@@ -23,12 +23,6 @@ fn cstrnlen(text: [*:0]const u8, limit: usize) usize {
     return i;
 }
 
-fn cstrlenRaw(text: []const u8) usize {
-    var i: usize = 0;
-    while (i < text.len and text[i] != 0) : (i += 1) {}
-    return i;
-}
-
 fn asConstCStr(buf: anytype) [*:0]const u8 {
     return @ptrCast(buf);
 }
@@ -132,7 +126,9 @@ fn consumeFloatArg(arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_index
     const idx = arg_index.*;
     arg_index.* += 1;
     const kind = runtimeArgKindAt(arg_kinds, idx, total);
-    if (kind != 0 and kind != 'f') return 0.0;
+    // Formatted write runtime currently passes promoted floating values as f64
+    // pointers and uses kind 'f' (legacy) or 'D' (explicit f64).
+    if (kind != 0 and kind != 'f' and kind != 'D') return 0.0;
     const arg_any = runtimeArgPtrAt(arg_ptrs, idx, total) orelse return 0.0;
     const ptr: *const f64 = @ptrCast(@alignCast(arg_any));
     return ptr.*;
@@ -184,10 +180,8 @@ fn appendFormattedNumeric(
     conv: u8,
     plus_flag: bool,
     alt_flag: bool,
-    width_star: bool,
     width_val: c_int,
     width_set: bool,
-    precision_star: bool,
     precision_val: c_int,
     precision_set: bool,
     i_val: c_int,
@@ -205,65 +199,77 @@ fn appendFormattedNumeric(
         spec[sp] = '#';
         sp += 1;
     }
-    if (width_star) {
+    if (width_set) {
         spec[sp] = '*';
         sp += 1;
-    } else if (width_set and width_val != 0) {
-        var tmp_num: [16]u8 = [_]u8{0} ** 16;
-        _ = snprintf(&tmp_num[0], tmp_num.len, "%d", width_val);
-        const n = cstrlenRaw(tmp_num[0..]);
-        var i: usize = 0;
-        while (i < n and sp + 1 < spec.len) : (i += 1) {
-            spec[sp] = tmp_num[i];
-            sp += 1;
-        }
     }
     if (precision_set) {
         spec[sp] = '.';
         sp += 1;
-        if (precision_star) {
-            spec[sp] = '*';
-            sp += 1;
-        } else {
-            var tmp_num: [16]u8 = [_]u8{0} ** 16;
-            _ = snprintf(&tmp_num[0], tmp_num.len, "%d", precision_val);
-            const n = cstrlenRaw(tmp_num[0..]);
-            var i: usize = 0;
-            while (i < n and sp + 1 < spec.len) : (i += 1) {
-                spec[sp] = tmp_num[i];
-                sp += 1;
-            }
-        }
+        spec[sp] = '*';
+        sp += 1;
     }
     spec[sp] = conv;
     sp += 1;
     spec[sp] = 0;
 
     var tmp: [256]u8 = [_]u8{0} ** 256;
+    var written: c_int = -1;
     if (conv == 'd' or conv == 'c') {
-        if (width_star and precision_star) {
-            _ = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, precision_val, i_val);
-        } else if (width_star) {
-            _ = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, i_val);
-        } else if (precision_star) {
-            _ = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), precision_val, i_val);
+        if (width_set and precision_set) {
+            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, precision_val, i_val);
+        } else if (width_set) {
+            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, i_val);
+        } else if (precision_set) {
+            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), precision_val, i_val);
         } else {
-            _ = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), i_val);
+            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), i_val);
         }
     } else if (conv == 'f') {
-        if (width_star and precision_star) {
-            _ = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, precision_val, f_val);
-        } else if (width_star) {
-            _ = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, f_val);
-        } else if (precision_star) {
-            _ = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), precision_val, f_val);
+        if (width_set and precision_set) {
+            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, precision_val, f_val);
+        } else if (width_set) {
+            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), width_val, f_val);
+        } else if (precision_set) {
+            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), precision_val, f_val);
         } else {
-            _ = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), f_val);
+            written = snprintf(&tmp[0], tmp.len, asConstCStr(&spec), f_val);
         }
     } else {
         return true;
     }
-    return out.appendSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+    if (written < 0) return false;
+    const need: usize = @intCast(written);
+    if (need < tmp.len) {
+        return out.appendSlice(tmp[0..need]);
+    }
+
+    const raw = realloc(null, need + 1) orelse return false;
+    defer free(raw);
+    const heap_buf: [*]u8 = @ptrCast(raw);
+
+    if (conv == 'd' or conv == 'c') {
+        if (width_set and precision_set) {
+            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), width_val, precision_val, i_val);
+        } else if (width_set) {
+            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), width_val, i_val);
+        } else if (precision_set) {
+            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), precision_val, i_val);
+        } else {
+            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), i_val);
+        }
+    } else {
+        if (width_set and precision_set) {
+            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), width_val, precision_val, f_val);
+        } else if (width_set) {
+            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), width_val, f_val);
+        } else if (precision_set) {
+            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), precision_val, f_val);
+        } else {
+            _ = snprintf(@ptrCast(heap_buf), need + 1, asConstCStr(&spec), f_val);
+        }
+    }
+    return out.appendSlice(heap_buf[0..need]);
 }
 
 fn renderWriteFormatted(
@@ -345,15 +351,15 @@ fn renderWriteFormatted(
             },
             'd' => {
                 const v = consumeIntArg(arg_ptrs, arg_kinds, &arg_index, total);
-                if (!appendFormattedNumeric(&out, 'd', plus_flag, alt_flag, width_star, width_runtime, width_set, precision_star, precision_runtime, precision_set, v, 0.0)) return null;
+                if (!appendFormattedNumeric(&out, 'd', plus_flag, alt_flag, width_runtime, width_set, precision_runtime, precision_set, v, 0.0)) return null;
             },
             'c' => {
                 const v = consumeIntArg(arg_ptrs, arg_kinds, &arg_index, total);
-                if (!appendFormattedNumeric(&out, 'c', plus_flag, alt_flag, width_star, width_runtime, width_set, precision_star, precision_runtime, precision_set, v, 0.0)) return null;
+                if (!appendFormattedNumeric(&out, 'c', plus_flag, alt_flag, width_runtime, width_set, precision_runtime, precision_set, v, 0.0)) return null;
             },
             'f' => {
                 const v = consumeFloatArg(arg_ptrs, arg_kinds, &arg_index, total);
-                if (!appendFormattedNumeric(&out, 'f', plus_flag, alt_flag, width_star, width_runtime, width_set, precision_star, precision_runtime, precision_set, 0, v)) return null;
+                if (!appendFormattedNumeric(&out, 'f', plus_flag, alt_flag, width_runtime, width_set, precision_runtime, precision_set, 0, v)) return null;
             },
             else => {
                 if (!out.appendByte('%')) return null;
@@ -433,6 +439,8 @@ pub export fn col6forge_write_direct_internal_v(
     defer free(@ptrCast(rendered));
 
     const record_count = countRenderedRecords(rendered);
+    var line_buf: RenderBuffer = .{};
+    defer line_buf.deinit();
     var start: usize = 0;
     var current: usize = 0;
     while (current < record_count) : (current += 1) {
@@ -442,16 +450,28 @@ pub export fn col6forge_write_direct_internal_v(
         var end = start;
         while (rendered[end] != 0 and rendered[end] != '\n') : (end += 1) {}
 
-        const saved = rendered[end];
-        rendered[end] = 0;
-        col6forge_write_internal_core(dst, recl, @ptrCast(rendered + start));
-        rendered[end] = saved;
+        line_buf.len = 0;
+        if (!line_buf.appendSlice(rendered[start..end])) return 1;
+        if (!line_buf.terminate()) return 1;
+        col6forge_write_internal_core(dst, recl, @ptrCast(line_buf.data.?));
 
-        if (saved == 0) break;
+        if (rendered[end] == 0) break;
         start = end + 1;
     }
 
     const last_rec = addRecordOffset(rec, record_count - 1) orelse return 1;
     col6forge_direct_record_commit(unit, last_rec);
     return 0;
+}
+
+test "renderWriteFormatted does not truncate wide numeric fields" {
+    var value: f64 = 1.25;
+    var args: [1]?*anyopaque = .{@ptrCast(&value)};
+    var kinds: [1]u8 = .{'f'};
+    const rendered = renderWriteFormatted("%300.2f", &args, &kinds, 1) orelse return error.OutOfMemory;
+    defer free(@ptrCast(rendered));
+
+    const text = std.mem.sliceTo(rendered, 0);
+    try std.testing.expectEqual(@as(usize, 300), text.len);
+    try std.testing.expect(std.mem.endsWith(u8, text, "1.25"));
 }
