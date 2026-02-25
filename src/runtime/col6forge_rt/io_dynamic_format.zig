@@ -317,6 +317,10 @@ fn kindAt(arg_kinds: ?[*]const u8, i: usize, n: usize) u8 {
     return arg_kinds.?[i];
 }
 
+fn isFloatKind(kind: u8) bool {
+    return kind == 'f' or kind == 'D';
+}
+
 fn descriptorCount(tokens: []const Token) usize {
     var n: usize = 0;
     for (tokens) |t| switch (t) { .int, .real, .real_fixed, .char, .logical => n += 1, else => {} };
@@ -379,7 +383,7 @@ fn lowerWrite(allocator: std.mem.Allocator, tokens: []const Token, arg_kinds: ?[
                 const k = kindAt(arg_kinds, arg_i, nargs);
                 if (k == 'i') {
                     if (s.width > 0) try out.writer().print("%{d}d", .{s.width}) else try out.appendSlice("%d");
-                } else if (k == 'f') {
+                } else if (isFloatKind(k)) {
                     if (s.width > 0) try out.writer().print("%{d}.0f", .{s.width}) else try out.appendSlice("%.0f");
                 } else {
                     if (s.width > 0) try out.writer().print("%{d}s", .{s.width}) else try out.appendSlice("%s");
@@ -525,4 +529,20 @@ pub export fn col6forge_read_internal_fmt_expr_core(buf: ?[*]u8, len: c_int, cou
     const lowered = lowerFormat(.read_any, fmt_ptr, fmt_len, arg_kinds, arg_count) catch return 1;
     defer if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
     return col6forge_read_internal_core(buf, len, count, asConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count);
+}
+
+test "lowerWrite maps A descriptor with D kind to numeric format" {
+    const fmt = "(A5)";
+    var kinds = [_]u8{'D'};
+    const lowered = try lowerFormat(.write_external, fmt.ptr, @intCast(fmt.len), &kinds, 1);
+    defer if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
+    try std.testing.expectEqualStrings("%5.0f\n", std.mem.sliceTo(lowered.bytes, 0));
+}
+
+test "lowerWrite keeps A descriptor as string for s kind" {
+    const fmt = "(A5)";
+    var kinds = [_]u8{'s'};
+    const lowered = try lowerFormat(.write_external, fmt.ptr, @intCast(fmt.len), &kinds, 1);
+    defer if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
+    try std.testing.expectEqualStrings("%5s\n", std.mem.sliceTo(lowered.bytes, 0));
 }

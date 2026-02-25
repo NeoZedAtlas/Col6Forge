@@ -3,6 +3,8 @@ const std = @import("std");
 const FILE = opaque {};
 extern fn fwrite(ptr: ?*const anyopaque, size: usize, nmemb: usize, stream: *FILE) usize;
 extern fn fflush(stream: *FILE) c_int;
+extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
+extern fn free(ptr: ?*anyopaque) void;
 
 extern fn col6forge_rt_stdout() ?*FILE;
 extern fn col6forge_rt_stderr() ?*FILE;
@@ -20,22 +22,22 @@ var line_output_mutex: std.Thread.Mutex = .{};
 
 fn writeLineWithOptionalNl(stream: *FILE, src: [*:0]const u8, src_len: usize) bool {
     const needs_nl = (src_len == 0 or src[src_len - 1] != '\n');
-    if (needs_nl and src_len < 4095) {
+    if (!needs_nl) return fwrite(@ptrCast(src), 1, src_len, stream) == src_len;
+
+    const total = src_len + 1;
+    if (total <= 4096) {
         var line: [4096]u8 = [_]u8{0} ** 4096;
-        var i: usize = 0;
-        while (i < src_len) : (i += 1) {
-            line[i] = src[i];
-        }
+        @memcpy(line[0..src_len], src[0..src_len]);
         line[src_len] = '\n';
-        return fwrite(@ptrCast(&line), 1, src_len + 1, stream) == src_len + 1;
+        return fwrite(@ptrCast(&line), 1, total, stream) == total;
     }
 
-    if (fwrite(@ptrCast(src), 1, src_len, stream) != src_len) return false;
-    if (needs_nl) {
-        const nl: [1]u8 = .{'\n'};
-        if (fwrite(@ptrCast(&nl), 1, 1, stream) != 1) return false;
-    }
-    return true;
+    const raw = realloc(null, total) orelse return false;
+    defer free(raw);
+    const line: [*]u8 = @ptrCast(raw);
+    @memcpy(line[0..src_len], src[0..src_len]);
+    line[src_len] = '\n';
+    return fwrite(@ptrCast(line), 1, total, stream) == total;
 }
 
 pub export fn col6forge_line_output_release_cached(unit: c_int) callconv(.c) void {
