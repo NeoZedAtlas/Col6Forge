@@ -20,7 +20,7 @@ fn cstrlen(text: [*:0]const u8) usize {
 
 var line_output_mutex: std.Thread.Mutex = .{};
 
-fn writeLineWithOptionalNl(stream: *FILE, src: [*:0]const u8, src_len: usize) bool {
+fn writeLineWithOptionalNl(stream: *FILE, src: [*]const u8, src_len: usize) bool {
     const needs_nl = (src_len == 0 or src[src_len - 1] != '\n');
     if (!needs_nl) return fwrite(@ptrCast(src), 1, src_len, stream) == src_len;
 
@@ -45,10 +45,10 @@ pub export fn col6forge_line_output_release_cached(unit: c_int) callconv(.c) voi
     _ = unit;
 }
 
-pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) callconv(.c) c_int {
-    if (text == null) return if (strict_status != 0) 1 else 0;
+pub export fn col6forge_write_rendered_line_n(unit: c_int, text: ?[*]const u8, text_len: c_int, strict_status: c_int) callconv(.c) c_int {
+    if (text == null or text_len < 0) return if (strict_status != 0) 1 else 0;
     const src = text.?;
-    const src_len = cstrlen(src);
+    const src_len: usize = @intCast(text_len);
     const unit_opened = col6forge_open_unit_is_open(unit) != 0;
 
     if ((unit == 6 or unit == 0) and !unit_opened) {
@@ -79,4 +79,12 @@ pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, s
 
     commit_pos = 1;
     return 0;
+}
+
+pub export fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) callconv(.c) c_int {
+    if (text == null) return if (strict_status != 0) 1 else 0;
+    const src = text.?;
+    const src_len = cstrlen(src);
+    if (src_len > @as(usize, @intCast(std.math.maxInt(c_int)))) return if (strict_status != 0) 1 else 0;
+    return col6forge_write_rendered_line_n(unit, @ptrCast(src), @intCast(src_len), strict_status);
 }

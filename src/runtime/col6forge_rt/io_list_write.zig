@@ -1,5 +1,7 @@
+const std = @import("std");
+
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
-extern fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) c_int;
+extern fn col6forge_write_rendered_line_n(unit: c_int, text: ?[*]const u8, text_len: c_int, strict_status: c_int) c_int;
 
 const COL6FORGE_LIST_WRAP: usize = 132;
 
@@ -15,7 +17,8 @@ const ListWriter = struct {
 
     fn flush(self: *ListWriter) bool {
         self.line[self.len] = 0;
-        if (col6forge_write_rendered_line(self.unit, @ptrCast(&self.line), self.strict_status) != 0) return false;
+        if (self.len > @as(usize, @intCast(std.math.maxInt(c_int)))) return false;
+        if (col6forge_write_rendered_line_n(self.unit, @ptrCast(&self.line), @intCast(self.len), self.strict_status) != 0) return false;
         self.len = 0;
         self.line[0] = 0;
         return true;
@@ -125,7 +128,7 @@ fn formatC64(real: f64, imag: f64, tmp: *[256]u8) ?[]const u8 {
 
 fn writeEmptyLine(unit: c_int, strict_status: c_int) c_int {
     var empty: [1]u8 = .{0};
-    return col6forge_write_rendered_line(unit, @ptrCast(&empty), strict_status);
+    return col6forge_write_rendered_line_n(unit, @ptrCast(&empty), 0, strict_status);
 }
 
 fn writeTokenI32(writer: *ListWriter, value: c_int, with_separator: bool) bool {

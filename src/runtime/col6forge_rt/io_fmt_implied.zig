@@ -3,7 +3,7 @@ const std = @import("std");
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) void;
 
-extern fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) c_int;
+extern fn col6forge_write_rendered_line_n(unit: c_int, text: ?[*]const u8, text_len: c_int, strict_status: c_int) c_int;
 extern fn col6forge_fmt_d(width: c_int, precision: c_int, exp_width: c_int, scale: c_int, sign_flag: c_int, value: f64) ?[*:0]u8;
 extern fn col6forge_fmt_release_all() void;
 
@@ -90,7 +90,8 @@ fn checkedMul(a: usize, b: usize) ?usize {
 
 fn flushLine(unit: c_int, out: *LineBuffer) c_int {
     if (!out.terminate()) return 1;
-    return col6forge_write_rendered_line(unit, @ptrCast(out.data.?), 0);
+    if (out.len > @as(usize, @intCast(std.math.maxInt(c_int)))) return 1;
+    return col6forge_write_rendered_line_n(unit, @ptrCast(out.data.?), @intCast(out.len), 0);
 }
 
 pub export fn col6forge_write_fmt_d_implied(

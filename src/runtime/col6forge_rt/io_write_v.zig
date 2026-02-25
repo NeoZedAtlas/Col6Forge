@@ -5,6 +5,7 @@ extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 
 extern fn col6forge_write_rendered_line(unit: c_int, text: ?[*:0]const u8, strict_status: c_int) c_int;
+extern fn col6forge_write_rendered_line_n(unit: c_int, text: ?[*]const u8, text_len: c_int, strict_status: c_int) c_int;
 extern fn col6forge_write_internal_core(buf: ?[*]u8, len: c_int, src: ?[*:0]const u8) void;
 extern fn col6forge_write_internal_n_core(buf: ?[*]u8, len: c_int, count: c_int, src: ?[*:0]const u8) void;
 extern fn col6forge_direct_record_ptr(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
@@ -101,15 +102,20 @@ fn addRecordOffset(base: c_int, offset: usize) ?c_int {
     return out[0];
 }
 
-fn countRenderedRecords(text: [*:0]const u8) usize {
+fn countRenderedRecords(text: [*]const u8, len: usize) usize {
     var records: usize = 0;
     var i: usize = 0;
-    while (text[i] != 0) : (i += 1) {
+    while (i < len) : (i += 1) {
         if (text[i] == '\n') records += 1;
     }
-    if (i == 0 or text[i - 1] != '\n') records += 1;
+    if (len == 0 or text[len - 1] != '\n') records += 1;
     if (records == 0) return 1;
     return records;
+}
+
+fn usizeToCInt(n: usize) ?c_int {
+    if (n > @as(usize, @intCast(std.math.maxInt(c_int)))) return null;
+    return @intCast(n);
 }
 
 fn consumeIntArg(arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_index: *usize, total: usize) c_int {
@@ -288,12 +294,17 @@ fn appendFormattedNumeric(
     return out.appendSlice(heap_buf[0..need]);
 }
 
+const RenderedText = struct {
+    ptr: [*:0]u8,
+    len: usize,
+};
+
 fn renderWriteFormatted(
     fmt: [*:0]const u8,
     arg_ptrs: ?[*]?*anyopaque,
     arg_kinds: ?[*]const u8,
     arg_count: c_int,
-) ?[*:0]u8 {
+) ?RenderedText {
     var out: RenderBuffer = .{};
     errdefer out.deinit();
 
@@ -385,7 +396,10 @@ fn renderWriteFormatted(
     }
 
     if (!out.terminate()) return null;
-    return @ptrCast(out.data.?);
+    return .{
+        .ptr = @ptrCast(out.data.?),
+        .len = out.len,
+    };
 }
 
 test "renderWriteFormatted uses precision-bounded scan for %*.*s" {
@@ -399,9 +413,9 @@ test "renderWriteFormatted uses precision-bounded scan for %*.*s" {
     };
     var kinds: [3]u8 = .{ 'i', 'i', 's' };
     const rendered = renderWriteFormatted("%*.*s", &args, &kinds, 3) orelse return error.OutOfMemory;
-    defer free(@ptrCast(rendered));
+    defer free(@ptrCast(rendered.ptr));
 
-    try std.testing.expectEqualStrings("ABC", std.mem.sliceTo(rendered, 0));
+    try std.testing.expectEqualStrings("ABC", rendered.ptr[0..rendered.len]);
 }
 
 test "renderWriteFormatted supports dynamic width precision for float" {
@@ -415,9 +429,9 @@ test "renderWriteFormatted supports dynamic width precision for float" {
     };
     var kinds: [3]u8 = .{ 'i', 'i', 'f' };
     const rendered = renderWriteFormatted("%*.*f", &args, &kinds, 3) orelse return error.OutOfMemory;
-    defer free(@ptrCast(rendered));
+    defer free(@ptrCast(rendered.ptr));
 
-    try std.testing.expectEqualStrings("   1.250", std.mem.sliceTo(rendered, 0));
+    try std.testing.expectEqualStrings("   1.250", rendered.ptr[0..rendered.len]);
 }
 
 test "renderWriteFormatted accepts D kind for float arguments" {
@@ -425,9 +439,9 @@ test "renderWriteFormatted accepts D kind for float arguments" {
     var args: [1]?*anyopaque = .{@ptrCast(&value)};
     var kinds: [1]u8 = .{'D'};
     const rendered = renderWriteFormatted("%8.3f", &args, &kinds, 1) orelse return error.OutOfMemory;
-    defer free(@ptrCast(rendered));
+    defer free(@ptrCast(rendered.ptr));
 
-    try std.testing.expectEqualStrings("   1.250", std.mem.sliceTo(rendered, 0));
+    try std.testing.expectEqualStrings("   1.250", rendered.ptr[0..rendered.len]);
 }
 
 test "renderWriteFormatted accepts F kind for float arguments" {
@@ -435,9 +449,9 @@ test "renderWriteFormatted accepts F kind for float arguments" {
     var args: [1]?*anyopaque = .{@ptrCast(&value)};
     var kinds: [1]u8 = .{'F'};
     const rendered = renderWriteFormatted("%8.3f", &args, &kinds, 1) orelse return error.OutOfMemory;
-    defer free(@ptrCast(rendered));
+    defer free(@ptrCast(rendered.ptr));
 
-    try std.testing.expectEqualStrings("   1.250", std.mem.sliceTo(rendered, 0));
+    try std.testing.expectEqualStrings("   1.250", rendered.ptr[0..rendered.len]);
 }
 
 pub export fn col6forge_write_v(
@@ -451,8 +465,9 @@ pub export fn col6forge_write_v(
     defer col6forge_fmt_release_all();
     if (fmt == null) return if (strict_status != 0) 1 else 0;
     const rendered = renderWriteFormatted(fmt.?, arg_ptrs, arg_kinds, arg_count) orelse return if (strict_status != 0) 1 else 0;
-    defer free(@ptrCast(rendered));
-    return col6forge_write_rendered_line(unit, rendered, strict_status);
+    defer free(@ptrCast(rendered.ptr));
+    const rendered_len = usizeToCInt(rendered.len) orelse return if (strict_status != 0) 1 else 0;
+    return col6forge_write_rendered_line_n(unit, @ptrCast(rendered.ptr), rendered_len, strict_status);
 }
 
 pub export fn col6forge_write_internal_v(
@@ -467,11 +482,11 @@ pub export fn col6forge_write_internal_v(
     defer col6forge_fmt_release_all();
     if (buf == null or len <= 0 or count <= 0 or fmt == null) return;
     const rendered = renderWriteFormatted(fmt.?, arg_ptrs, arg_kinds, arg_count) orelse return;
-    defer free(@ptrCast(rendered));
+    defer free(@ptrCast(rendered.ptr));
     if (count > 1) {
-        col6forge_write_internal_n_core(buf, len, count, rendered);
+        col6forge_write_internal_n_core(buf, len, count, rendered.ptr);
     } else {
-        col6forge_write_internal_core(buf, len, rendered);
+        col6forge_write_internal_core(buf, len, rendered.ptr);
     }
 }
 
@@ -488,9 +503,9 @@ pub export fn col6forge_write_direct_internal_v(
     if (rec <= 0 or recl <= 0 or fmt == null) return 1;
 
     const rendered = renderWriteFormatted(fmt.?, arg_ptrs, arg_kinds, arg_count) orelse return 1;
-    defer free(@ptrCast(rendered));
+    defer free(@ptrCast(rendered.ptr));
 
-    const record_count = countRenderedRecords(rendered);
+    const record_count = countRenderedRecords(@ptrCast(rendered.ptr), rendered.len);
     var line_buf: RenderBuffer = .{};
     defer line_buf.deinit();
     var start: usize = 0;
@@ -500,14 +515,14 @@ pub export fn col6forge_write_direct_internal_v(
         const dst = col6forge_direct_record_ptr(unit, rec_num, recl) orelse return 1;
 
         var end = start;
-        while (rendered[end] != 0 and rendered[end] != '\n') : (end += 1) {}
+        while (end < rendered.len and rendered.ptr[end] != '\n') : (end += 1) {}
 
         line_buf.len = 0;
-        if (!line_buf.appendSlice(rendered[start..end])) return 1;
+        if (!line_buf.appendSlice(rendered.ptr[start..end])) return 1;
         if (!line_buf.terminate()) return 1;
         col6forge_write_internal_core(dst, recl, @ptrCast(line_buf.data.?));
 
-        if (rendered[end] == 0) break;
+        if (end >= rendered.len) break;
         start = end + 1;
     }
 
@@ -521,9 +536,9 @@ test "renderWriteFormatted does not truncate wide numeric fields" {
     var args: [1]?*anyopaque = .{@ptrCast(&value)};
     var kinds: [1]u8 = .{'f'};
     const rendered = renderWriteFormatted("%300.2f", &args, &kinds, 1) orelse return error.OutOfMemory;
-    defer free(@ptrCast(rendered));
+    defer free(@ptrCast(rendered.ptr));
 
-    const text = std.mem.sliceTo(rendered, 0);
+    const text = rendered.ptr[0..rendered.len];
     try std.testing.expectEqual(@as(usize, 300), text.len);
     try std.testing.expect(std.mem.endsWith(u8, text, "1.25"));
 }
