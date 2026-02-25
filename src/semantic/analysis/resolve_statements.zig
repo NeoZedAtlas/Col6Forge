@@ -122,6 +122,7 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         .do_while => |loop| {
             try expressions.resolveExpr(self, loop.condition);
         },
+        .do_infinite => {},
         .goto => {},
         .computed_goto => |gt| {
             try expressions.resolveExpr(self, gt.selector);

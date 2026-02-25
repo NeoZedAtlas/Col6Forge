@@ -102,6 +102,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             if (loop.step) |step| try checkExpr(self, step);
         },
         .do_while => |loop| try checkExpr(self, loop.condition),
+        .do_infinite => {},
         .goto => {},
         .computed_goto => |cg| try checkExpr(self, cg.selector),
         .assigned_goto => {},

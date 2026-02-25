@@ -118,6 +118,59 @@ pub fn emitDoWhileList(
     );
 }
 
+pub fn emitDoInfinite(
+    ctx: *Context,
+    builder: anytype,
+    block_names: [][]const u8,
+    do_idx: usize,
+    end_idx: usize,
+    after_loop: []const u8,
+    comptime emit_sequence_with_end: anytype,
+) EmitError!void {
+    try emitDoInfiniteImpl(
+        ctx,
+        builder,
+        ctx.unit.stmts,
+        block_names,
+        null,
+        null,
+        do_idx,
+        end_idx,
+        after_loop,
+        false,
+        emit_sequence_with_end,
+        {},
+    );
+}
+
+pub fn emitDoInfiniteList(
+    ctx: *Context,
+    builder: anytype,
+    stmts: []ast.Stmt,
+    block_names: [][]const u8,
+    label_map: *const std.StringHashMap([]const u8),
+    label_index: *const std.StringHashMap(usize),
+    do_idx: usize,
+    end_idx: usize,
+    after_loop: []const u8,
+    comptime emit_stmt_list_range: anytype,
+) EmitError!void {
+    try emitDoInfiniteImpl(
+        ctx,
+        builder,
+        stmts,
+        block_names,
+        label_map,
+        label_index,
+        do_idx,
+        end_idx,
+        after_loop,
+        true,
+        {},
+        emit_stmt_list_range,
+    );
+}
+
 fn emitDoImpl(
     ctx: *Context,
     builder: anytype,
@@ -332,6 +385,41 @@ fn emitDoWhileImpl(
     const cond_raw = try expr.emitExpr(ctx, builder, loop.condition);
     if (cond_raw.ty != .i1) return error.UnsupportedLogicalOp;
     try builder.brCond(cond_raw, block_names[do_idx + 1], after_loop);
+
+    if (comptime use_list) {
+        try emit_stmt_list_range(ctx, builder, stmts, block_names, label_map.?, label_index.?, do_idx + 1, end_idx, inc_label);
+    } else {
+        try emit_sequence_with_end(ctx, builder, block_names, do_idx + 1, end_idx, inc_label);
+    }
+
+    try builder.label(inc_label);
+    try builder.br(test_label);
+}
+
+fn emitDoInfiniteImpl(
+    ctx: *Context,
+    builder: anytype,
+    stmts: []ast.Stmt,
+    block_names: [][]const u8,
+    label_map: ?*const std.StringHashMap([]const u8),
+    label_index: ?*const std.StringHashMap(usize),
+    do_idx: usize,
+    end_idx: usize,
+    after_loop: []const u8,
+    comptime use_list: bool,
+    comptime emit_sequence_with_end: anytype,
+    comptime emit_stmt_list_range: anytype,
+) EmitError!void {
+    _ = after_loop;
+    const stmt = stmts[do_idx];
+    _ = stmt.node.do_infinite;
+
+    const test_label = try ctx.nextLabel("do_infinite_test");
+    const inc_label = try ctx.nextLabel("do_infinite_inc");
+    try builder.br(test_label);
+
+    try builder.label(test_label);
+    try builder.br(block_names[do_idx + 1]);
 
     if (comptime use_list) {
         try emit_stmt_list_range(ctx, builder, stmts, block_names, label_map.?, label_index.?, do_idx + 1, end_idx, inc_label);

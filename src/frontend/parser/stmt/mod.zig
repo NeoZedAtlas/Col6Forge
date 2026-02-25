@@ -41,6 +41,7 @@ pub fn parseStatement(
     defer arena.free(tokens);
     var lp = LineParser.init(line, tokens);
     const label = line.label;
+    try closeCompletedLabeledDoLoops(do_ctx, label);
 
     if (helpers.isEndDo(lp)) {
         if (!lp.consumeKeyword("ENDDO")) {
@@ -245,7 +246,8 @@ pub fn parseStatement(
         var do_scan = lp;
         _ = do_scan.consumeKeyword("DO");
         const is_block_do = do_scan.peekIs(.identifier) and helpers.nextTokenIsEquals(do_scan);
-        if (!is_block_do and helpers.labelFollowedByEquals(lp)) {
+        const looks_like_assignment = !helpers.hasCommaAfterEquals(do_scan);
+        if (!is_block_do and (helpers.labelFollowedByEquals(lp) or looks_like_assignment)) {
             if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp)) |assign_node| {
                 index.* += 1;
                 return .{ .label = label, .node = assign_node };
@@ -261,7 +263,7 @@ pub fn parseStatement(
         var do_lp = lp;
         _ = do_lp.next();
         _ = do_lp.next();
-        if (helpers.labelFollowedByEquals(do_lp)) {
+        if (helpers.labelFollowedByEquals(do_lp) or !helpers.hasCommaAfterEquals(do_lp)) {
             if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp)) |stmt_node| {
                 index.* += 1;
                 return .{ .label = label, .node = stmt_node };
@@ -286,7 +288,7 @@ pub fn parseStatement(
     if (lp.isKeywordSplit("EXIT")) {
         _ = lp.consumeKeyword("EXIT");
         const block_name = if (lp.peek() != null) lp.readName(arena) else null;
-        const exit_label = resolveExitLabel(do_ctx, block_name) orelse return error.UnexpectedToken;
+        const exit_label = (try resolveExitLabel(arena, do_ctx, block_name)) orelse return error.UnexpectedToken;
         index.* += 1;
         return .{ .label = label, .node = .{ .goto = .{ .label = exit_label } } };
     }
@@ -602,6 +604,7 @@ fn loopEndLabel(node: StmtNode) ?[]const u8 {
     return switch (node) {
         .do_loop => |loop| loop.end_label,
         .do_while => |loop| loop.end_label,
+        .do_infinite => |loop| loop.end_label,
         else => null,
     };
 }
@@ -614,12 +617,28 @@ fn maybeAttachLoopExitLabel(arena: std.mem.Allocator, do_ctx: *DoContext, node: 
     return exit_label;
 }
 
-fn resolveExitLabel(do_ctx: *DoContext, name: ?[]const u8) ?[]const u8 {
+fn closeCompletedLabeledDoLoops(do_ctx: *DoContext, line_label: ?[]const u8) ParseStmtError!void {
+    const raw_label = line_label orelse return;
+    const normalized = helpers.normalizeLabelText(raw_label);
+    while (do_ctx.peek()) |cycle_label| {
+        // Numeric labels close legacy labeled DO loops when the labeled statement is reached.
+        if (std.mem.startsWith(u8, cycle_label, "ENDDO")) break;
+        if (!std.mem.eql(u8, cycle_label, normalized)) break;
+        const frame = do_ctx.popLoop() orelse break;
+        do_ctx.popNamedDoByLabel(frame.cycle_label);
+        if (frame.exit_label) |exit_label| {
+            try do_ctx.pushPending(.{ .label = exit_label, .node = .{ .cont = {} } });
+        }
+    }
+}
+
+fn resolveExitLabel(arena: std.mem.Allocator, do_ctx: *DoContext, name: ?[]const u8) ParseStmtError!?[]const u8 {
     if (name) |target_name| {
-        if (do_ctx.resolveNamedDoExit(target_name)) |label| return label;
+        if (try do_ctx.ensureNamedDoExitLabel(arena, target_name)) |label| return label;
         return do_ctx.resolveBlockExit(target_name);
     }
-    return do_ctx.peekExitLabel() orelse do_ctx.resolveBlockExit(null);
+    if (try do_ctx.ensureInnermostDoExitLabel(arena)) |label| return label;
+    return do_ctx.resolveBlockExit(null);
 }
 
 fn resolveCycleLabel(do_ctx: *DoContext, name: ?[]const u8) ?[]const u8 {
@@ -975,7 +994,7 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator, do_ctx: *DoCon
     if (lp.isKeywordSplit("EXIT")) {
         _ = lp.consumeKeyword("EXIT");
         const block_name = if (lp.peek() != null) lp.readName(arena) else null;
-        const exit_label = resolveExitLabel(do_ctx, block_name) orelse return error.UnexpectedToken;
+        const exit_label = (try resolveExitLabel(arena, do_ctx, block_name)) orelse return error.UnexpectedToken;
         const node = try arena.create(StmtNode);
         node.* = .{ .goto = .{ .label = exit_label } };
         return node;
@@ -1383,6 +1402,28 @@ test "parseStatement handles DO WHILE with ENDDO" {
     try testing.expectEqual(@as(usize, 3), idx);
 }
 
+test "parseStatement keeps ambiguous DO assignment as assignment" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      DO 10 I = 1.10\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt.node == .assignment);
+    try testing.expect(stmt.node.assignment.target.* == .identifier);
+    try testing.expectEqualStrings("DO10I", stmt.node.assignment.target.identifier);
+}
+
 test "parseStatement handles named BLOCK construct lines" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1465,8 +1506,8 @@ test "parseStatement maps EXIT INNER in named DO construct" {
     var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
 
     const do_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
-    try testing.expect(do_stmt.node == .do_while);
-    try testing.expectEqualStrings("ENDDO0", do_stmt.node.do_while.end_label);
+    try testing.expect(do_stmt.node == .do_infinite);
+    try testing.expectEqualStrings("ENDDO0", do_stmt.node.do_infinite.end_label);
 
     const exit_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expect(exit_stmt.node == .if_single);
@@ -1497,10 +1538,52 @@ test "parseStatement maps bare EXIT to innermost DO end label" {
     var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
     var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
 
-    _ = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    const do_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(do_stmt.node == .do_infinite);
     const exit_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expect(exit_stmt.node == .goto);
     try testing.expectEqualStrings("EXITDO1", exit_stmt.node.goto.label);
+}
+
+test "parseStatement maps EXIT in labeled DO to loop exit label" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      DO 10 I = 1, 3\n" ++
+        "      IF (I .EQ. 2) EXIT\n" ++
+        "   10 CONTINUE\n" ++
+        "      X = 1\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const do_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(do_stmt.node == .do_loop);
+    try testing.expectEqualStrings("10", do_stmt.node.do_loop.end_label);
+
+    const exit_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(exit_stmt.node == .if_single);
+    try testing.expect(exit_stmt.node.if_single.stmt.* == .goto);
+    try testing.expectEqualStrings("EXITDO0", exit_stmt.node.if_single.stmt.goto.label);
+
+    const end_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(end_stmt.node == .cont);
+    try testing.expectEqualStrings("10", end_stmt.label.?);
+
+    const exit_join = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(exit_join.node == .cont);
+    try testing.expectEqualStrings("EXITDO0", exit_join.label.?);
+
+    const after_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(after_stmt.node == .assignment);
 }
 
 test "parseStatement maps CYCLE OUTER to named DO cycle label" {

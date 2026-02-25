@@ -84,6 +84,50 @@ pub const DoContext = struct {
         self.stack.items[idx].exit_label = exit_label;
     }
 
+    pub fn ensureInnermostDoExitLabel(self: *DoContext, arena: std.mem.Allocator) !?[]const u8 {
+        if (self.stack.items.len == 0) return null;
+        const idx = self.stack.items.len - 1;
+        if (self.stack.items[idx].exit_label) |exit_label| return exit_label;
+
+        const cycle_label = self.stack.items[idx].cycle_label;
+        const exit_label = try self.nextLoopExitLabel(arena);
+        self.stack.items[idx].exit_label = exit_label;
+
+        var i: usize = self.named_do_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (std.mem.eql(u8, self.named_do_stack.items[i].cycle_label, cycle_label)) {
+                self.named_do_stack.items[i].exit_label = exit_label;
+                break;
+            }
+        }
+        return exit_label;
+    }
+
+    pub fn ensureNamedDoExitLabel(self: *DoContext, arena: std.mem.Allocator, name: []const u8) !?[]const u8 {
+        var i: usize = self.named_do_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (!std.ascii.eqlIgnoreCase(self.named_do_stack.items[i].name, name)) continue;
+            if (self.named_do_stack.items[i].exit_label) |exit_label| return exit_label;
+
+            const cycle_label = self.named_do_stack.items[i].cycle_label;
+            const exit_label = try self.nextLoopExitLabel(arena);
+            self.named_do_stack.items[i].exit_label = exit_label;
+
+            var j: usize = self.stack.items.len;
+            while (j > 0) {
+                j -= 1;
+                if (std.mem.eql(u8, self.stack.items[j].cycle_label, cycle_label)) {
+                    self.stack.items[j].exit_label = exit_label;
+                    break;
+                }
+            }
+            return exit_label;
+        }
+        return null;
+    }
+
     pub fn nextLoopExitLabel(self: *DoContext, arena: std.mem.Allocator) ![]const u8 {
         const label = try std.fmt.allocPrint(arena, "EXITDO{d}", .{self.counter});
         self.counter += 1;
@@ -196,11 +240,8 @@ pub fn parseDoStatement(arena: std.mem.Allocator, lp: *LineParser, do_ctx: *DoCo
     if (lp.peek() == null) {
         const end_label = try do_ctx.nextLabel(arena);
         try do_ctx.push(end_label);
-        const cond = try arena.create(Expr);
-        cond.* = .{ .literal = .{ .kind = .logical, .text = "1" } };
-        return .{ .do_while = .{
+        return .{ .do_infinite = .{
             .end_label = end_label,
-            .condition = cond,
         } };
     }
 
@@ -210,6 +251,7 @@ pub fn parseDoStatement(arena: std.mem.Allocator, lp: *LineParser, do_ctx: *DoCo
 
     if (next_tok.kind == .integer) {
         end_label = try helpers.parseLabelToken(lp);
+        try do_ctx.push(end_label);
         _ = lp.consume(.comma);
         if (lp.isKeywordSplit("WHILE")) {
             _ = lp.consumeKeyword("WHILE");
@@ -228,6 +270,7 @@ pub fn parseDoStatement(arena: std.mem.Allocator, lp: *LineParser, do_ctx: *DoCo
         var_name = lp.readName(arena) orelse return error.MissingName;
     } else {
         end_label = try helpers.parseLabelToken(lp);
+        try do_ctx.push(end_label);
         _ = lp.consume(.comma);
         if (lp.isKeywordSplit("WHILE")) {
             _ = lp.consumeKeyword("WHILE");

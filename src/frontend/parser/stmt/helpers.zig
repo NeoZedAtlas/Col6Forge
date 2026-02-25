@@ -91,6 +91,18 @@ pub fn labelFollowedByEquals(lp: LineParser) bool {
     return second.kind == .equals;
 }
 
+pub fn hasCommaAfterEquals(lp: LineParser) bool {
+    var seen_equals = false;
+    for (lp.tokens[lp.index..]) |tok| {
+        if (!seen_equals) {
+            if (tok.kind == .equals) seen_equals = true;
+            continue;
+        }
+        if (tok.kind == .comma) return true;
+    }
+    return false;
+}
+
 pub fn tryParseBlankInsensitiveAssignment(arena: std.mem.Allocator, line: logical_line.LogicalLine, lp: LineParser) ?StmtNode {
     var eq_idx: ?usize = null;
     var i: usize = lp.index;

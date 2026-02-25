@@ -139,6 +139,7 @@ fn rewriteStmt(
         .do_while => |*loop| {
             changed = (try rewriteExpr(ctx, state, loop.condition, stmt.*, prelude, allow_prelude)) or changed;
         },
+        .do_infinite => {},
         .goto => {},
         .computed_goto => |*gt| {
             changed = (try rewriteExpr(ctx, state, gt.selector, stmt.*, prelude, allow_prelude)) or changed;

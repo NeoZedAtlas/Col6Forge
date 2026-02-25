@@ -62,6 +62,7 @@ pub const GotoStmt = ast.GotoStmt;
 pub const ComputedGotoStmt = ast.ComputedGotoStmt;
 pub const AssignedGotoStmt = ast.AssignedGotoStmt;
 pub const DoLoopStmt = ast.DoLoopStmt;
+pub const DoInfiniteStmt = ast.DoInfiniteStmt;
 pub const ImpliedDo = ast.ImpliedDo;
 
 pub const Expr = ast.Expr;

@@ -138,6 +138,9 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         .do_while => |loop| {
             try writer.print(";   stmt label={s} do-while end={s}\n", .{ label_text, loop.end_label });
         },
+        .do_infinite => |loop| {
+            try writer.print(";   stmt label={s} do-infinite end={s}\n", .{ label_text, loop.end_label });
+        },
         .ret => |ret| {
             const mode = if (ret.value == null) "plain" else "value";
             try writer.print(";   stmt label={s} return {s}\n", .{ label_text, mode });

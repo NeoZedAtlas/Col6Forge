@@ -7,6 +7,8 @@ pub const emitDo = loops.emitDo;
 pub const emitDoList = loops.emitDoList;
 pub const emitDoWhile = loops.emitDoWhile;
 pub const emitDoWhileList = loops.emitDoWhileList;
+pub const emitDoInfinite = loops.emitDoInfinite;
+pub const emitDoInfiniteList = loops.emitDoInfiniteList;
 
 pub const emitComputedGoto = branch.emitComputedGoto;
 pub const emitAssignedGoto = branch.emitAssignedGoto;
