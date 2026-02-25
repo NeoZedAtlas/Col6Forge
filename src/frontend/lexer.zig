@@ -149,7 +149,10 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
                     i = frac_digits.idx;
                 }
             }
-            const exp_i = scanExponent(text, i, is_real);
+            // Fixed-form code frequently splits exponent markers with blanks
+            // (e.g. "4 E17"). Accept blanks before exponent letters for both
+            // integer-like and real-like mantissas.
+            const exp_i = scanExponent(text, i, true);
             if (exp_i != i) {
                 is_real = true;
                 i = exp_i;
@@ -393,6 +396,23 @@ test "lexLogicalLine merges blank-separated exponents" {
     defer allocator.free(tokens);
 
     const expected = [_]TokenKind{ .identifier, .equals, .real };
+    try testing.expectEqual(expected.len, tokens.len);
+    for (tokens, 0..) |tok, idx| {
+        try testing.expectEqual(expected[idx], tok.kind);
+    }
+}
+
+test "lexLogicalLine merges blank-separated integer exponents" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A=4 E17+1\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+
+    const expected = [_]TokenKind{ .identifier, .equals, .real, .plus, .integer };
     try testing.expectEqual(expected.len, tokens.len);
     for (tokens, 0..) |tok, idx| {
         try testing.expectEqual(expected[idx], tok.kind);

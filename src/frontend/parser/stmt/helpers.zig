@@ -124,40 +124,9 @@ pub fn tryParseBlankInsensitiveAssignment(arena: std.mem.Allocator, line: logica
     const rhs_tokens = lp.tokens[idx + 1 ..];
     if (rhs_tokens.len == 0) return null;
 
-    var value_expr: *ast.Expr = undefined;
-    var parsed_rhs = false;
-
     var rhs_lp = LineParser.init(line, rhs_tokens);
-    if (expr.parseExpr(&rhs_lp, arena, 0) catch null) |parsed| {
-        if (rhs_lp.peek() == null) {
-            value_expr = parsed;
-            parsed_rhs = true;
-        }
-    }
-
-    if (!parsed_rhs) {
-        // Compatibility fallback for fixed-form numeric exponent splits such as
-        // "3.491 E10". Keep this path narrow and only use it when direct
-        // token parsing fails.
-        var rhs_buf = std.array_list.Managed(u8).init(arena);
-        for (rhs_tokens) |tok| {
-            appendSansBlanks(&rhs_buf, lp.tokenText(tok), tok.kind) catch return null;
-        }
-        const rhs_text = rhs_buf.toOwnedSlice() catch return null;
-        if (rhs_text.len == 0) return null;
-
-        const rhs_line = logical_line.LogicalLine{
-            .label = null,
-            .text = rhs_text,
-            .span = line.span,
-            .segments = &.{},
-        };
-        const reparsed_tokens = lexer.lexLogicalLine(arena, rhs_line) catch return null;
-        if (reparsed_tokens.len == 0) return null;
-        var reparsed_lp = LineParser.init(rhs_line, reparsed_tokens);
-        value_expr = expr.parseExpr(&reparsed_lp, arena, 0) catch return null;
-        if (reparsed_lp.peek() != null) return null;
-    }
+    const value_expr = (expr.parseExpr(&rhs_lp, arena, 0) catch null) orelse return null;
+    if (rhs_lp.peek() != null) return null;
 
     const target_expr = arena.create(ast.Expr) catch return null;
     target_expr.* = .{ .identifier = target_name };
