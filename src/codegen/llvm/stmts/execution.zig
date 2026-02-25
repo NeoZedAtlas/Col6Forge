@@ -623,8 +623,29 @@ pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!v
             target_ptr = try expr.emitLValue(ctx, builder, init.target);
         }
         if (target_len) |char_len| {
-            try storeCharacterValue(ctx, builder, target_ptr, char_len, init.value);
-            const const_value = try evalCharConst(ctx, init.value, char_len);
+            var effective_value_expr = init.value;
+            var parameter_string_literal: ast.Expr = undefined;
+            if (init.value.* == .identifier) {
+                const name = init.value.identifier;
+                if (ctx.findSymbol(name)) |sym| {
+                    if (sym.kind == .parameter and sym.const_value != null) {
+                        switch (sym.const_value.?) {
+                            .string => |bytes| {
+                                parameter_string_literal = .{
+                                    .literal = .{
+                                        .kind = .string,
+                                        .text = bytes,
+                                    },
+                                };
+                                effective_value_expr = &parameter_string_literal;
+                            },
+                            else => {},
+                        }
+                    }
+                }
+            }
+            try storeCharacterValue(ctx, builder, target_ptr, char_len, effective_value_expr);
+            const const_value = try evalCharConst(ctx, effective_value_expr, char_len);
             trackCharAssignment(ctx, init.target, const_value);
             continue;
         }
@@ -733,15 +754,7 @@ fn storeCharacterValue(ctx: *Context, builder: anytype, target_ptr: ValueRef, ch
         const lit = value_expr.literal;
         if (lit.kind == .string or lit.kind == .hollerith) {
             const bytes = try literalBytes(ctx.allocator, lit);
-            var i: usize = 0;
-            while (i < char_len) : (i += 1) {
-                const byte: u8 = if (i < bytes.len) bytes[i] else ' ';
-                const offset = ValueRef{ .name = try ctx.intLiteral(@intCast(i)), .ty = .i32, .is_ptr = false };
-                const gep = try ctx.nextTemp();
-                try builder.gep(gep, .i8, target_ptr, offset);
-                const val = ValueRef{ .name = try ctx.intLiteral(byte), .ty = .i8, .is_ptr = false };
-                try builder.store(val, .{ .name = gep, .ty = .ptr, .is_ptr = true });
-            }
+            try emitCharacterBytesStore(ctx, builder, target_ptr, char_len, bytes);
             return;
         }
     }
@@ -762,6 +775,24 @@ fn storeCharacterValue(ctx: *Context, builder: anytype, target_ptr: ValueRef, ch
             val = .{ .name = tmp, .ty = .i8, .is_ptr = false };
         }
         try builder.store(val, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
+    }
+}
+
+fn emitCharacterBytesStore(
+    ctx: *Context,
+    builder: anytype,
+    target_ptr: ValueRef,
+    char_len: usize,
+    bytes: []const u8,
+) EmitError!void {
+    var i: usize = 0;
+    while (i < char_len) : (i += 1) {
+        const byte: u8 = if (i < bytes.len) bytes[i] else ' ';
+        const offset = ValueRef{ .name = try ctx.intLiteral(@intCast(i)), .ty = .i32, .is_ptr = false };
+        const gep = try ctx.nextTemp();
+        try builder.gep(gep, .i8, target_ptr, offset);
+        const val = ValueRef{ .name = try ctx.intLiteral(byte), .ty = .i8, .is_ptr = false };
+        try builder.store(val, .{ .name = gep, .ty = .ptr, .is_ptr = true });
     }
 }
 

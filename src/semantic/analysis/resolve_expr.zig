@@ -51,6 +51,35 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                 }
                 if (sym.dims.len > 0) {
                     kind = .subscript;
+                } else if (symbols_mod.lookupKnownProcedureSig(self, call.name)) |sig| {
+                    if (sig.kind == .function) {
+                        kind = .call;
+                        if (sym.kind == .variable) {
+                            sym.kind = .function;
+                        }
+                        if (!sym.is_intrinsic and sym.storage != .dummy) {
+                            sym.is_external = true;
+                        }
+                        if (symbols_mod.lookupKnownFunctionType(self, call.name)) |fn_ty| {
+                            sym.type_kind = fn_ty;
+                            sym.type_explicit = true;
+                        }
+                        self.symbols.items[idx] = sym;
+                    } else {
+                        // In expression context, known subroutine names cannot be indexed.
+                        return error.InvalidSubscript;
+                    }
+                } else if (symbols_mod.lookupKnownFunctionType(self, call.name)) |fn_ty| {
+                    kind = .call;
+                    if (sym.kind == .variable) {
+                        sym.kind = .function;
+                    }
+                    if (!sym.is_intrinsic and sym.storage != .dummy) {
+                        sym.is_external = true;
+                    }
+                    sym.type_kind = fn_ty;
+                    sym.type_explicit = true;
+                    self.symbols.items[idx] = sym;
                 } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
                     kind = .call;
                 } else if (sym.type_explicit and call.args.len > 0) {
