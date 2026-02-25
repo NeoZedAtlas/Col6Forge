@@ -112,8 +112,12 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
                 .{ label_text, node.neg_label, node.zero_label, node.pos_label },
             );
         },
-        .pause => {
-            try writer.print(";   stmt label={s} pause\n", .{label_text});
+        .pause => |pause_stmt| {
+            if (pause_stmt.value != null) {
+                try writer.print(";   stmt label={s} pause value\n", .{label_text});
+            } else {
+                try writer.print(";   stmt label={s} pause\n", .{label_text});
+            }
         },
         .stop => {
             try writer.print(";   stmt label={s} stop\n", .{label_text});

@@ -595,7 +595,7 @@ test "PAUSE lowers to runtime call with configured mode" {
     const a = arena.allocator();
 
     const stmt_list = try a.alloc(input.Stmt, 2);
-    stmt_list[0] = .{ .label = null, .node = .{ .pause = {} } };
+    stmt_list[0] = .{ .label = null, .node = .{ .pause = .{ .value = null } } };
     stmt_list[1] = .{ .label = null, .node = .{ .cont = {} } };
 
     const unit = input.ProgramUnit{
@@ -633,6 +633,60 @@ test "PAUSE lowers to runtime call with configured mode" {
     );
 
     const output = buffer.items;
-    try testing.expect(std.mem.indexOf(u8, output, "call void @col6forge_pause(i32 0)") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "call void @col6forge_pause(i32 0)\n  br label") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call void @col6forge_pause_with_payload(i32 0, ptr null)") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call void @col6forge_pause_with_payload(i32 0, ptr null)\n  br label") != null);
+}
+
+test "PAUSE string payload lowers to runtime payload call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const pause_expr = try a.create(input.Expr);
+    pause_expr.* = .{ .literal = .{ .kind = .string, .text = "'INIT DONE'" } };
+
+    const stmt_list = try a.alloc(input.Stmt, 2);
+    stmt_list[0] = .{ .label = null, .node = .{ .pause = .{ .value = pause_expr } } };
+    stmt_list[1] = .{ .label = null, .node = .{ .cont = {} } };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = try a.alloc(input.sema.Symbol, 0),
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(
+        &writer,
+        allocator,
+        program,
+        sem_prog,
+        "pause_payload_test.f",
+        .{ .pause_mode = .auto },
+    );
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "call void @col6forge_pause_with_payload(i32 0, ptr %") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "INIT DONE") != null);
 }

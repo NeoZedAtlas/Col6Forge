@@ -126,12 +126,23 @@ fn consumeFloatArg(arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_index
     const idx = arg_index.*;
     arg_index.* += 1;
     const kind = runtimeArgKindAt(arg_kinds, idx, total);
-    // Formatted write runtime currently passes promoted floating values as f64
-    // pointers and uses kind 'f' (legacy) or 'D' (explicit f64).
-    if (kind != 0 and kind != 'f' and kind != 'D') return 0.0;
     const arg_any = runtimeArgPtrAt(arg_ptrs, idx, total) orelse return 0.0;
-    const ptr: *const f64 = @ptrCast(@alignCast(arg_any));
-    return ptr.*;
+    // Contract:
+    // - 'D': pointer to f64
+    // - 'F': pointer to f32
+    // - 'f': legacy promoted-real path (pointer to f64)
+    // - 0: unknown legacy caller, keep f64 fallback
+    return switch (kind) {
+        'F' => blk: {
+            const ptr: *const f32 = @ptrCast(@alignCast(arg_any));
+            break :blk @as(f64, @floatCast(ptr.*));
+        },
+        0, 'f', 'D' => blk: {
+            const ptr: *const f64 = @ptrCast(@alignCast(arg_any));
+            break :blk ptr.*;
+        },
+        else => 0.0,
+    };
 }
 
 fn consumeStringArg(arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_index: *usize, total: usize) [*:0]const u8 {
@@ -413,6 +424,16 @@ test "renderWriteFormatted accepts D kind for float arguments" {
     var value: f64 = 1.25;
     var args: [1]?*anyopaque = .{@ptrCast(&value)};
     var kinds: [1]u8 = .{'D'};
+    const rendered = renderWriteFormatted("%8.3f", &args, &kinds, 1) orelse return error.OutOfMemory;
+    defer free(@ptrCast(rendered));
+
+    try std.testing.expectEqualStrings("   1.250", std.mem.sliceTo(rendered, 0));
+}
+
+test "renderWriteFormatted accepts F kind for float arguments" {
+    var value: f32 = 1.25;
+    var args: [1]?*anyopaque = .{@ptrCast(&value)};
+    var kinds: [1]u8 = .{'F'};
     const rendered = renderWriteFormatted("%8.3f", &args, &kinds, 1) orelse return error.OutOfMemory;
     defer free(@ptrCast(rendered));
 

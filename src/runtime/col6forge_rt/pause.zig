@@ -1,15 +1,14 @@
-﻿const builtin = @import("builtin");
+const std = @import("std");
 
 const FILE = opaque {};
 
 extern fn col6forge_rt_stdin() ?*FILE;
+extern fn col6forge_rt_stderr() ?*FILE;
 extern fn col6forge_rt_stdout() ?*FILE;
 extern fn fwrite(ptr: ?*const anyopaque, size: usize, nmemb: usize, stream: *FILE) usize;
 extern fn fflush(stream: *FILE) c_int;
 extern fn fgetc(stream: *FILE) c_int;
 extern fn exit(status: c_int) noreturn;
-extern fn isatty(fd: c_int) c_int;
-extern fn _isatty(fd: c_int) c_int;
 
 const PauseAction = enum {
     continue_,
@@ -25,19 +24,40 @@ fn resolvePauseAction(mode: c_int, interactive: bool) PauseAction {
     };
 }
 
-fn fdIsTty(fd: c_int) bool {
-    if (builtin.os.tag == .windows) {
-        return _isatty(fd) != 0;
-    }
-    return isatty(fd) != 0;
+fn cstrlen(text: [*:0]const u8) usize {
+    var i: usize = 0;
+    while (text[i] != 0) : (i += 1) {}
+    return i;
 }
 
 fn isInteractiveStdio() bool {
-    return fdIsTty(0) and fdIsTty(1);
+    return std.fs.File.stdin().isTty() and std.fs.File.stderr().isTty();
 }
 
-fn waitForEnter() void {
-    if (col6forge_rt_stdout()) |out| {
+fn pauseOutput() ?*FILE {
+    return col6forge_rt_stderr() orelse col6forge_rt_stdout();
+}
+
+fn payloadLen(payload: ?[*:0]const u8) usize {
+    if (payload == null) return 0;
+    return cstrlen(payload.?);
+}
+
+fn writePausePayload(out: *FILE, payload: ?[*:0]const u8) bool {
+    const len = payloadLen(payload);
+    if (len == 0) return false;
+    const prefix = "PAUSE: ";
+    const suffix = "\n";
+    const text = payload.?;
+    _ = fwrite(@ptrCast(prefix.ptr), 1, prefix.len, out);
+    _ = fwrite(@ptrCast(text), 1, len, out);
+    _ = fwrite(@ptrCast(suffix.ptr), 1, suffix.len, out);
+    return true;
+}
+
+fn waitForEnter(payload: ?[*:0]const u8) void {
+    if (pauseOutput()) |out| {
+        _ = writePausePayload(out, payload);
         const msg = "PAUSE: press Enter to continue...\n";
         _ = fwrite(@ptrCast(msg.ptr), 1, msg.len, out);
         _ = fflush(out);
@@ -50,39 +70,57 @@ fn waitForEnter() void {
     }
 }
 
-fn emitPauseSeparatorLine() void {
-    if (col6forge_rt_stdout()) |out| {
+fn emitPauseContinueNotice(payload: ?[*:0]const u8) void {
+    if (pauseOutput()) |out| {
+        if (writePausePayload(out, payload)) {
+            _ = fflush(out);
+            return;
+        }
         const nl = "\n";
         _ = fwrite(@ptrCast(nl.ptr), 1, nl.len, out);
         _ = fflush(out);
     }
 }
 
-pub export fn col6forge_pause(mode: c_int) callconv(.c) void {
+pub export fn col6forge_pause_with_payload(mode: c_int, payload: ?[*:0]const u8) callconv(.c) void {
     const interactive = isInteractiveStdio();
     switch (resolvePauseAction(mode, interactive)) {
         .continue_ => {
             // Legacy PAUSE in batch mode still leaves a visible separator line.
-            if (mode == 0 and !interactive) emitPauseSeparatorLine();
+            if (mode == 0 and !interactive) emitPauseContinueNotice(payload);
             return;
         },
-        .wait => waitForEnter(),
-        .stop => exit(0),
+        .wait => waitForEnter(payload),
+        .stop => {
+            emitPauseContinueNotice(payload);
+            exit(0);
+        },
     }
 }
 
+pub export fn col6forge_pause(mode: c_int) callconv(.c) void {
+    col6forge_pause_with_payload(mode, null);
+}
+
 test "resolvePauseAction auto waits only for interactive" {
-    try @import("std").testing.expect(resolvePauseAction(0, true) == .wait);
-    try @import("std").testing.expect(resolvePauseAction(0, false) == .continue_);
+    try std.testing.expect(resolvePauseAction(0, true) == .wait);
+    try std.testing.expect(resolvePauseAction(0, false) == .continue_);
 }
 
 test "resolvePauseAction continue always continues" {
-    try @import("std").testing.expect(resolvePauseAction(1, true) == .continue_);
-    try @import("std").testing.expect(resolvePauseAction(1, false) == .continue_);
+    try std.testing.expect(resolvePauseAction(1, true) == .continue_);
+    try std.testing.expect(resolvePauseAction(1, false) == .continue_);
 }
 
 test "resolvePauseAction stop is predictable" {
-    try @import("std").testing.expect(resolvePauseAction(2, true) == .stop);
-    try @import("std").testing.expect(resolvePauseAction(2, false) == .stop);
+    try std.testing.expect(resolvePauseAction(2, true) == .stop);
+    try std.testing.expect(resolvePauseAction(2, false) == .stop);
 }
 
+test "payloadLen handles null and empty payload" {
+    try std.testing.expectEqual(@as(usize, 0), payloadLen(null));
+    const empty = "";
+    try std.testing.expectEqual(@as(usize, 0), payloadLen(empty));
+    const text = "INIT DONE";
+    try std.testing.expectEqual(@as(usize, 9), payloadLen(text));
+}

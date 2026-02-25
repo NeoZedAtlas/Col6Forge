@@ -125,8 +125,9 @@ pub fn parseStatement(
         return .{ .label = label, .node = stmt_node };
     }
     if (lp.isKeywordSplit("PAUSE")) {
+        const stmt_node = try parsePauseStatement(arena, &lp);
         index.* += 1;
-        return .{ .label = label, .node = .{ .pause = {} } };
+        return .{ .label = label, .node = stmt_node };
     }
     if (isErrorStopStart(lp)) {
         if (!lp.consumeKeyword("ERRORSTOP")) {
@@ -442,6 +443,15 @@ fn parseWhereAsIfSingle(arena: std.mem.Allocator, lp: *LineParser) ParseStmtErro
     const assign_node = try arena.create(StmtNode);
     assign_node.* = .{ .assignment = .{ .target = target, .value = value } };
     return .{ .if_single = .{ .condition = cond, .stmt = assign_node } };
+}
+
+fn parsePauseStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
+    if (!lp.consumeKeyword("PAUSE")) return error.UnexpectedToken;
+    var payload: ?*Expr = null;
+    if (lp.peek() != null) {
+        payload = try expr.parseExpr(lp, arena, 0);
+    }
+    return .{ .pause = .{ .value = payload } };
 }
 
 fn parseUseStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
@@ -880,9 +890,8 @@ fn parseInlineStmtNode(lp: *LineParser, arena: std.mem.Allocator, do_ctx: *DoCon
         return node;
     }
     if (lp.isKeywordSplit("PAUSE")) {
-        _ = lp.consumeKeyword("PAUSE");
         const node = try arena.create(StmtNode);
-        node.* = .{ .pause = {} };
+        node.* = try parsePauseStatement(arena, lp);
         return node;
     }
     if (lp.isKeywordSplit("ALLOCATE") or lp.isKeywordSplit("DEALLOCATE")) {
@@ -1581,4 +1590,54 @@ test "parseStatement parses WHERE as conditional assignment" {
     try testing.expect(stmt_node.node == .if_single);
     try testing.expect(stmt_node.node.if_single.stmt.* == .assignment);
     try testing.expectEqual(@as(usize, 1), idx);
+}
+
+test "parseStatement preserves PAUSE string payload" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      PAUSE 'INIT DONE'\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .pause);
+    try testing.expect(stmt_node.node.pause.value != null);
+    const payload = stmt_node.node.pause.value.?;
+    try testing.expect(payload.* == .literal);
+    try testing.expectEqual(ast.LiteralKind.string, payload.literal.kind);
+    try testing.expectEqualStrings("'INIT DONE'", payload.literal.text);
+}
+
+test "parseStatement preserves PAUSE integer payload text" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      PAUSE 00000\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .pause);
+    try testing.expect(stmt_node.node.pause.value != null);
+    const payload = stmt_node.node.pause.value.?;
+    try testing.expect(payload.* == .literal);
+    try testing.expectEqual(ast.LiteralKind.integer, payload.literal.kind);
+    try testing.expectEqualStrings("00000", payload.literal.text);
 }

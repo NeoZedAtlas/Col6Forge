@@ -111,8 +111,8 @@ fn emitStmtInner(
             try control.emitArithIf(ctx, builder, arith, local_label_map);
             return true;
         },
-        .pause => {
-            try execution.emitPause(ctx, builder);
+        .pause => |pause_stmt| {
+            try execution.emitPause(ctx, builder, pause_stmt);
             try builder.br(next_block);
             return true;
         },

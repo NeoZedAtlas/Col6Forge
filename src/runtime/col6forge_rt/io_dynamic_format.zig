@@ -318,7 +318,7 @@ fn kindAt(arg_kinds: ?[*]const u8, i: usize, n: usize) u8 {
 }
 
 fn isFloatKind(kind: u8) bool {
-    return kind == 'f' or kind == 'D';
+    return kind == 'f' or kind == 'F' or kind == 'D';
 }
 
 fn descriptorCount(tokens: []const Token) usize {

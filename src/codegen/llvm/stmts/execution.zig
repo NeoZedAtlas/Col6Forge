@@ -13,15 +13,48 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 
-pub fn emitPause(ctx: *Context, builder: anytype) EmitError!void {
+pub fn emitPause(ctx: *Context, builder: anytype, pause: ast.PauseStmt) EmitError!void {
     const pause_mode: i64 = switch (ctx.options.pause_mode) {
         .auto => 0,
         .continue_ => 1,
         .stop => 2,
     };
-    const pause_name = try ctx.ensureDeclRaw("col6forge_pause", .void, &[_]llvm_types.IRType{.i32}, false);
+    const pause_name = try ctx.ensureDeclRaw("col6forge_pause_with_payload", .void, &[_]llvm_types.IRType{ .i32, .ptr }, false);
     const mode_val = ValueRef{ .name = try ctx.intLiteral(pause_mode), .ty = .i32, .is_ptr = false };
-    try builder.callTyped(null, .void, pause_name, &.{mode_val});
+    const payload_val = try emitPausePayloadPtr(ctx, builder, pause) orelse ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    try builder.callTyped(null, .void, pause_name, &.{ mode_val, payload_val });
+}
+
+fn emitPausePayloadPtr(ctx: *Context, builder: anytype, pause: ast.PauseStmt) EmitError!?ValueRef {
+    const payload_expr = pause.value orelse return null;
+
+    if (payload_expr.* == .literal) {
+        const lit = payload_expr.literal;
+        switch (lit.kind) {
+            .integer => {
+                const text = std.mem.trim(u8, lit.text, " \t");
+                if (text.len == 0) return null;
+                return try emitPausePayloadFromBytes(ctx, builder, text);
+            },
+            .string, .hollerith => {
+                const bytes = try literalBytes(ctx.allocator, lit);
+                return try emitPausePayloadFromBytes(ctx, builder, bytes);
+            },
+            else => return null,
+        }
+    }
+
+    const folded = intLiteralValue(payload_expr) orelse return null;
+    const text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{folded});
+    return try emitPausePayloadFromBytes(ctx, builder, text);
+}
+
+fn emitPausePayloadFromBytes(ctx: *Context, builder: anytype, bytes: []const u8) EmitError!ValueRef {
+    if (bytes.len == 0) return ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const global_name = try ctx.string_pool.intern(bytes);
+    const gep_tmp = try ctx.nextTemp();
+    try builder.gepConstString(gep_tmp, global_name, bytes.len + 1);
+    return .{ .name = gep_tmp, .ty = .ptr, .is_ptr = true };
 }
 
 pub fn emitContinuationDirective(ctx: *Context, builder: anytype, stmt: ast.Stmt) EmitError!bool {

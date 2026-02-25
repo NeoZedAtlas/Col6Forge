@@ -141,7 +141,7 @@ pub const StmtNode = union(enum) {
     data: DataStmt,
     format: FormatStmt,
     arith_if: ArithIfStmt,
-    pause: void,
+    pause: PauseStmt,
     stop: void,
     do_loop: DoLoopStmt,
     do_while: DoWhileStmt,
@@ -341,6 +341,10 @@ pub const ArithIfStmt = struct {
     neg_label: []const u8,
     zero_label: []const u8,
     pos_label: []const u8,
+};
+
+pub const PauseStmt = struct {
+    value: ?*Expr,
 };
 
 pub const GotoStmt = struct {

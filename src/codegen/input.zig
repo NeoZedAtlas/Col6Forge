@@ -57,6 +57,7 @@ pub const LogicalFormat = ast.LogicalFormat;
 pub const IfSingle = ast.IfSingle;
 pub const IfBlock = ast.IfBlock;
 pub const ArithIfStmt = ast.ArithIfStmt;
+pub const PauseStmt = ast.PauseStmt;
 pub const GotoStmt = ast.GotoStmt;
 pub const ComputedGotoStmt = ast.ComputedGotoStmt;
 pub const AssignedGotoStmt = ast.AssignedGotoStmt;
