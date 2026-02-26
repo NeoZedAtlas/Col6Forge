@@ -46,23 +46,8 @@ extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 var store_registry_mutex: std.Thread.Mutex = .{};
 var store_unit_locks: [COL6FORGE_STORE_LOCK_STRIPES]std.Thread.Mutex = [_]std.Thread.Mutex{.{}} ** COL6FORGE_STORE_LOCK_STRIPES;
 
-const ExtraDirectUnit = struct {
-    unit: c_int,
-    state: *DirectUnit,
-};
-
-const ExtraUnformattedUnit = struct {
-    unit: c_int,
-    state: *UnformattedUnit,
-};
-
-var extra_direct_units: ?[*]ExtraDirectUnit = null;
-var extra_direct_count: usize = 0;
-var extra_direct_cap: usize = 0;
-
-var extra_unformatted_units: ?[*]ExtraUnformattedUnit = null;
-var extra_unformatted_count: usize = 0;
-var extra_unformatted_cap: usize = 0;
+var extra_direct_units: std.AutoHashMapUnmanaged(c_int, *DirectUnit) = .{};
+var extra_unformatted_units: std.AutoHashMapUnmanaged(c_int, *UnformattedUnit) = .{};
 
 const UNFORMATTED_FILE_MAGIC = "C6UF1";
 const UNFORMATTED_ENTRY_RECORD: u8 = 0;
@@ -100,72 +85,36 @@ fn unitLock(unit: c_int) *std.Thread.Mutex {
     return &store_unit_locks[unitLockIndex(unit)];
 }
 
-fn findExtraDirectIndexLocked(unit: c_int) ?usize {
-    if (extra_direct_units == null) return null;
-    var i: usize = 0;
-    while (i < extra_direct_count) : (i += 1) {
-        if (extra_direct_units.?[i].unit == unit) return i;
-    }
-    return null;
-}
-
-fn findExtraUnformattedIndexLocked(unit: c_int) ?usize {
-    if (extra_unformatted_units == null) return null;
-    var i: usize = 0;
-    while (i < extra_unformatted_count) : (i += 1) {
-        if (extra_unformatted_units.?[i].unit == unit) return i;
-    }
-    return null;
+fn runtimeAllocator() std.mem.Allocator {
+    return std.heap.page_allocator;
 }
 
 fn ensureExtraDirectUnitLocked(unit: c_int) ?*DirectUnit {
-    if (findExtraDirectIndexLocked(unit)) |idx| return extra_direct_units.?[idx].state;
+    if (extra_direct_units.get(unit)) |state| return state;
 
-    if (extra_direct_count >= extra_direct_cap) {
-        var new_cap: usize = if (extra_direct_cap == 0) 8 else extra_direct_cap * 2;
-        while (new_cap <= extra_direct_count) : (new_cap *= 2) {}
-        const prev: ?*anyopaque = if (extra_direct_units) |items| @ptrCast(items) else null;
-        const new_raw = realloc(prev, new_cap * @sizeOf(ExtraDirectUnit)) orelse return null;
-        const aligned: *align(@alignOf(ExtraDirectUnit)) anyopaque = @alignCast(new_raw);
-        const items: [*]ExtraDirectUnit = @ptrCast(aligned);
-        extra_direct_units = items;
-        extra_direct_cap = new_cap;
-    }
-
-    const idx = extra_direct_count;
     const state_raw = realloc(null, @sizeOf(DirectUnit)) orelse return null;
     const state_aligned: *align(@alignOf(DirectUnit)) anyopaque = @alignCast(state_raw);
     const state_ptr: *DirectUnit = @ptrCast(state_aligned);
     state_ptr.* = zeroDirectUnit();
-    extra_direct_units.?[idx].unit = unit;
-    extra_direct_units.?[idx].state = state_ptr;
-    extra_direct_count += 1;
-    return extra_direct_units.?[idx].state;
+    extra_direct_units.put(runtimeAllocator(), unit, state_ptr) catch {
+        free(state_raw);
+        return null;
+    };
+    return state_ptr;
 }
 
 fn ensureExtraUnformattedUnitLocked(unit: c_int) ?*UnformattedUnit {
-    if (findExtraUnformattedIndexLocked(unit)) |idx| return extra_unformatted_units.?[idx].state;
+    if (extra_unformatted_units.get(unit)) |state| return state;
 
-    if (extra_unformatted_count >= extra_unformatted_cap) {
-        var new_cap: usize = if (extra_unformatted_cap == 0) 8 else extra_unformatted_cap * 2;
-        while (new_cap <= extra_unformatted_count) : (new_cap *= 2) {}
-        const prev: ?*anyopaque = if (extra_unformatted_units) |items| @ptrCast(items) else null;
-        const new_raw = realloc(prev, new_cap * @sizeOf(ExtraUnformattedUnit)) orelse return null;
-        const aligned: *align(@alignOf(ExtraUnformattedUnit)) anyopaque = @alignCast(new_raw);
-        const items: [*]ExtraUnformattedUnit = @ptrCast(aligned);
-        extra_unformatted_units = items;
-        extra_unformatted_cap = new_cap;
-    }
-
-    const idx = extra_unformatted_count;
     const state_raw = realloc(null, @sizeOf(UnformattedUnit)) orelse return null;
     const state_aligned: *align(@alignOf(UnformattedUnit)) anyopaque = @alignCast(state_raw);
     const state_ptr: *UnformattedUnit = @ptrCast(state_aligned);
     state_ptr.* = zeroUnformattedUnit();
-    extra_unformatted_units.?[idx].unit = unit;
-    extra_unformatted_units.?[idx].state = state_ptr;
-    extra_unformatted_count += 1;
-    return extra_unformatted_units.?[idx].state;
+    extra_unformatted_units.put(runtimeAllocator(), unit, state_ptr) catch {
+        free(state_raw);
+        return null;
+    };
+    return state_ptr;
 }
 
 fn getDirectUnitLocked(unit: c_int, create_if_missing: bool) ?*DirectUnit {
@@ -174,8 +123,7 @@ fn getDirectUnitLocked(unit: c_int, create_if_missing: bool) ?*DirectUnit {
         return &direct_units[idx];
     }
     if (create_if_missing) return ensureExtraDirectUnitLocked(unit);
-    if (findExtraDirectIndexLocked(unit)) |idx| return extra_direct_units.?[idx].state;
-    return null;
+    return extra_direct_units.get(unit);
 }
 
 fn getUnformattedUnitLocked(unit: c_int, create_if_missing: bool) ?*UnformattedUnit {
@@ -184,8 +132,7 @@ fn getUnformattedUnitLocked(unit: c_int, create_if_missing: bool) ?*UnformattedU
         return &unformatted_units[idx];
     }
     if (create_if_missing) return ensureExtraUnformattedUnitLocked(unit);
-    if (findExtraUnformattedIndexLocked(unit)) |idx| return extra_unformatted_units.?[idx].state;
-    return null;
+    return extra_unformatted_units.get(unit);
 }
 
 fn getDirectUnit(unit: c_int, create_if_missing: bool) ?*DirectUnit {
