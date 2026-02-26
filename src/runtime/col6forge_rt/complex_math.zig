@@ -70,8 +70,18 @@ fn complexInv(comptime T: type, a: Complex(T)) Complex(T) {
     const ar = @abs(a.r);
     const ai = @abs(a.i);
     if (ar == zero and ai == zero) {
+        const inf = std.math.inf(T);
+        return .{ .r = inf, .i = inf };
+    }
+    if (std.math.isNan(ar) or std.math.isNan(ai)) {
         const nan = std.math.nan(T);
         return .{ .r = nan, .i = nan };
+    }
+    if (std.math.isInf(ar) or std.math.isInf(ai)) {
+        return .{
+            .r = std.math.copysign(zero, a.r),
+            .i = std.math.copysign(zero, -a.i),
+        };
     }
 
     if (ar >= ai) {
@@ -292,14 +302,14 @@ pub export fn col6forge_zpowi(z: col6forge_complex64, n: c_int) callconv(.c) col
     return toC64(complexPowi(f64, fromC64(z), n));
 }
 
-test "logic layer: complex integer power division by zero returns NaN components" {
+test "logic layer: complex integer power division by zero returns infinite components" {
     const zero_c = complexPowi(f32, .{ .r = 0.0, .i = 0.0 }, -1);
-    try std.testing.expect(std.math.isNan(zero_c.r));
-    try std.testing.expect(std.math.isNan(zero_c.i));
+    try std.testing.expect(std.math.isInf(zero_c.r));
+    try std.testing.expect(std.math.isInf(zero_c.i));
 
     const zero_z = complexPowi(f64, .{ .r = 0.0, .i = 0.0 }, -1);
-    try std.testing.expect(std.math.isNan(zero_z.r));
-    try std.testing.expect(std.math.isNan(zero_z.i));
+    try std.testing.expect(std.math.isInf(zero_z.r));
+    try std.testing.expect(std.math.isInf(zero_z.i));
 }
 
 test "logic layer: complex integer power keeps valid inverse for nonzero values" {
@@ -382,4 +392,19 @@ test "logic layer: complex inverse stays finite for very large and very small va
     const inv_small_d = complexInv(f64, .{ .r = 1.0e-300, .i = 1.0e-300 });
     try std.testing.expect(!std.math.isNan(inv_small_d.r));
     try std.testing.expect(!std.math.isNan(inv_small_d.i));
+}
+
+test "logic layer: complex inverse of infinite magnitudes collapses to signed zero" {
+    const pinf = std.math.inf(f64);
+    const inv_pp = complexInv(f64, .{ .r = pinf, .i = pinf });
+    try std.testing.expect(inv_pp.r == 0.0);
+    try std.testing.expect(inv_pp.i == 0.0);
+    try std.testing.expect(!std.math.signbit(inv_pp.r));
+    try std.testing.expect(std.math.signbit(inv_pp.i));
+
+    const inv_mn = complexInv(f64, .{ .r = -pinf, .i = -pinf });
+    try std.testing.expect(inv_mn.r == 0.0);
+    try std.testing.expect(inv_mn.i == 0.0);
+    try std.testing.expect(std.math.signbit(inv_mn.r));
+    try std.testing.expect(!std.math.signbit(inv_mn.i));
 }
