@@ -2,10 +2,10 @@ const std = @import("std");
 
 const FILE = opaque {};
 extern fn fgetc(stream: *FILE) c_int;
-extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
 extern fn exit(status: c_int) noreturn;
 
 extern fn col6forge_rt_stdin() ?*FILE;
+extern fn col6forge_io_should_abort() c_int;
 extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 extern fn col6forge_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
@@ -132,11 +132,13 @@ fn isAllAsterisksField(field: []const u8) bool {
     return true;
 }
 
-fn abortReadFatal(unit: c_int, is_stdin: bool, managed_read_stream: bool, stream: ?*FILE, start_pos: c_long) noreturn {
+fn abortReadFatal(unit: c_int, is_stdin: bool, managed_read_stream: bool, stream: ?*FILE, start_pos: c_long) void {
     if (!is_stdin and managed_read_stream and stream != null) {
         col6forge_unit_stream_release_read(unit, @ptrCast(stream.?), start_pos, 0);
     }
-    exit(2);
+    if (col6forge_io_should_abort() != 0) {
+        exit(2);
+    }
 }
 
 fn failRead(
@@ -152,6 +154,7 @@ fn failRead(
     commit_stream_pos.* = false;
     if (status_mode != 0) return code;
     abortReadFatal(unit, is_stdin, managed_read_stream, stream, start_pos);
+    return code;
 }
 
 pub export fn col6forge_formatted_read_core(
@@ -177,12 +180,14 @@ pub export fn col6forge_formatted_read_core(
         stream = col6forge_rt_stdin() orelse {
             if (status_mode != 0) return 1;
             abortReadFatal(unit, true, false, null, 0);
+            return 1;
         };
     } else {
         var raw: ?*anyopaque = null;
         if (col6forge_unit_stream_acquire_read(unit, &raw, &start_pos) == 0) {
             if (status_mode != 0) return 1;
             abortReadFatal(unit, false, false, null, 0);
+            return 1;
         }
         stream = @ptrCast(@alignCast(raw.?));
         managed_read_stream = true;

@@ -7,6 +7,7 @@ extern fn ungetc(c: c_int, stream: *FILE) c_int;
 extern fn exit(status: c_int) noreturn;
 
 extern fn col6forge_rt_stdin() ?*FILE;
+extern fn col6forge_io_should_abort() c_int;
 extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
@@ -95,11 +96,14 @@ fn listReadFailWithContext(
     commit_pos: bool,
 ) c_int {
     if (status_mode != 0) return code;
-    if (!input_closed.*) {
-        col6forgeCloseListInput(unit, input.*, commit_pos);
-        input_closed.* = true;
+    if (col6forge_io_should_abort() != 0) {
+        if (!input_closed.*) {
+            col6forgeCloseListInput(unit, input.*, commit_pos);
+            input_closed.* = true;
+        }
+        exit(2);
     }
-    exit(2);
+    return code;
 }
 
 fn listDelim(ch: c_int) bool {
@@ -376,7 +380,8 @@ pub export fn col6forge_read_list_v(
 
     const input = col6forgeOpenListInput(unit) orelse {
         if (status_mode != 0) return 1;
-        exit(2);
+        if (col6forge_io_should_abort() != 0) exit(2);
+        return 1;
     };
     var commit_pos = false;
     var input_closed = false;

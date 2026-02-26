@@ -86,6 +86,7 @@ const runtime_io_line_output = @import("col6forge_rt/io_line_output.zig");
 const runtime_io_unit_stream = @import("col6forge_rt/io_unit_stream.zig");
 const runtime_io_common = @import("col6forge_rt/io_common.zig");
 const runtime_io_stdio = @import("col6forge_rt/io_stdio.zig");
+const runtime_io_failure_policy = @import("col6forge_rt/io_failure_policy.zig");
 const runtime_io_dynamic_format = @import("col6forge_rt/io_dynamic_format.zig");
 const runtime_pause = @import("col6forge_rt/pause.zig");
 
@@ -105,6 +106,7 @@ comptime {
     _ = runtime_io_unit_stream;
     _ = runtime_io_common;
     _ = runtime_io_stdio;
+    _ = runtime_io_failure_policy;
     _ = runtime_io_dynamic_format;
     _ = runtime_pause;
 }

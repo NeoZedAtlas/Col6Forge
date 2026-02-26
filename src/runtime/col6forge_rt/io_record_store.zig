@@ -43,11 +43,12 @@ extern var direct_units: [COL6FORGE_MAX_UNITS]DirectUnit;
 extern var unformatted_units: [COL6FORGE_MAX_UNITS]UnformattedUnit;
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 
-var store_registry_mutex: std.Thread.Mutex = .{};
 var store_unit_locks: [COL6FORGE_STORE_LOCK_STRIPES]std.Thread.Mutex = [_]std.Thread.Mutex{.{}} ** COL6FORGE_STORE_LOCK_STRIPES;
 
-var extra_direct_units: std.AutoHashMapUnmanaged(c_int, *DirectUnit) = .{};
-var extra_unformatted_units: std.AutoHashMapUnmanaged(c_int, *UnformattedUnit) = .{};
+var extra_direct_units: [COL6FORGE_STORE_LOCK_STRIPES]std.AutoHashMapUnmanaged(c_int, *DirectUnit) =
+    [_]std.AutoHashMapUnmanaged(c_int, *DirectUnit){.{}} ** COL6FORGE_STORE_LOCK_STRIPES;
+var extra_unformatted_units: [COL6FORGE_STORE_LOCK_STRIPES]std.AutoHashMapUnmanaged(c_int, *UnformattedUnit) =
+    [_]std.AutoHashMapUnmanaged(c_int, *UnformattedUnit){.{}} ** COL6FORGE_STORE_LOCK_STRIPES;
 
 const UNFORMATTED_FILE_MAGIC = "C6UF1";
 const UNFORMATTED_ENTRY_RECORD: u8 = 0;
@@ -90,13 +91,15 @@ fn runtimeAllocator() std.mem.Allocator {
 }
 
 fn ensureExtraDirectUnitLocked(unit: c_int) ?*DirectUnit {
-    if (extra_direct_units.get(unit)) |state| return state;
+    const stripe = unitLockIndex(unit);
+    const map = &extra_direct_units[stripe];
+    if (map.get(unit)) |state| return state;
 
     const state_raw = realloc(null, @sizeOf(DirectUnit)) orelse return null;
     const state_aligned: *align(@alignOf(DirectUnit)) anyopaque = @alignCast(state_raw);
     const state_ptr: *DirectUnit = @ptrCast(state_aligned);
     state_ptr.* = zeroDirectUnit();
-    extra_direct_units.put(runtimeAllocator(), unit, state_ptr) catch {
+    map.put(runtimeAllocator(), unit, state_ptr) catch {
         free(state_raw);
         return null;
     };
@@ -104,13 +107,15 @@ fn ensureExtraDirectUnitLocked(unit: c_int) ?*DirectUnit {
 }
 
 fn ensureExtraUnformattedUnitLocked(unit: c_int) ?*UnformattedUnit {
-    if (extra_unformatted_units.get(unit)) |state| return state;
+    const stripe = unitLockIndex(unit);
+    const map = &extra_unformatted_units[stripe];
+    if (map.get(unit)) |state| return state;
 
     const state_raw = realloc(null, @sizeOf(UnformattedUnit)) orelse return null;
     const state_aligned: *align(@alignOf(UnformattedUnit)) anyopaque = @alignCast(state_raw);
     const state_ptr: *UnformattedUnit = @ptrCast(state_aligned);
     state_ptr.* = zeroUnformattedUnit();
-    extra_unformatted_units.put(runtimeAllocator(), unit, state_ptr) catch {
+    map.put(runtimeAllocator(), unit, state_ptr) catch {
         free(state_raw);
         return null;
     };
@@ -118,13 +123,15 @@ fn ensureExtraUnformattedUnitLocked(unit: c_int) ?*UnformattedUnit {
 }
 
 fn removeExtraDirectUnitLocked(unit: c_int) void {
-    if (extra_direct_units.fetchRemove(unit)) |removed| {
+    const stripe = unitLockIndex(unit);
+    if (extra_direct_units[stripe].fetchRemove(unit)) |removed| {
         free(@ptrCast(removed.value));
     }
 }
 
 fn removeExtraUnformattedUnitLocked(unit: c_int) void {
-    if (extra_unformatted_units.fetchRemove(unit)) |removed| {
+    const stripe = unitLockIndex(unit);
+    if (extra_unformatted_units[stripe].fetchRemove(unit)) |removed| {
         free(@ptrCast(removed.value));
     }
 }
@@ -135,7 +142,7 @@ fn getDirectUnitLocked(unit: c_int, create_if_missing: bool) ?*DirectUnit {
         return &direct_units[idx];
     }
     if (create_if_missing) return ensureExtraDirectUnitLocked(unit);
-    return extra_direct_units.get(unit);
+    return extra_direct_units[unitLockIndex(unit)].get(unit);
 }
 
 fn getUnformattedUnitLocked(unit: c_int, create_if_missing: bool) ?*UnformattedUnit {
@@ -144,7 +151,7 @@ fn getUnformattedUnitLocked(unit: c_int, create_if_missing: bool) ?*UnformattedU
         return &unformatted_units[idx];
     }
     if (create_if_missing) return ensureExtraUnformattedUnitLocked(unit);
-    return extra_unformatted_units.get(unit);
+    return extra_unformatted_units[unitLockIndex(unit)].get(unit);
 }
 
 fn getDirectUnit(unit: c_int, create_if_missing: bool) ?*DirectUnit {
@@ -152,8 +159,8 @@ fn getDirectUnit(unit: c_int, create_if_missing: bool) ?*DirectUnit {
         const idx: usize = @intCast(unit);
         return &direct_units[idx];
     }
-    store_registry_mutex.lock();
-    defer store_registry_mutex.unlock();
+    // Non-array unit metadata is striped by unitLockIndex(unit) and must be
+    // accessed while holding that stripe's unit lock.
     return getDirectUnitLocked(unit, create_if_missing);
 }
 
@@ -162,8 +169,8 @@ fn getUnformattedUnit(unit: c_int, create_if_missing: bool) ?*UnformattedUnit {
         const idx: usize = @intCast(unit);
         return &unformatted_units[idx];
     }
-    store_registry_mutex.lock();
-    defer store_registry_mutex.unlock();
+    // Non-array unit metadata is striped by unitLockIndex(unit) and must be
+    // accessed while holding that stripe's unit lock.
     return getUnformattedUnitLocked(unit, create_if_missing);
 }
 

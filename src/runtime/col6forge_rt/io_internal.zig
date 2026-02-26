@@ -24,7 +24,6 @@ fn checkedAdd(lhs: usize, rhs: usize) ?usize {
     return out[0];
 }
 
-extern fn strtol(nptr: [*:0]const u8, endptr: ?*?[*:0]u8, base: c_int) c_long;
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 extern fn col6forge_direct_record_ptr_ro(unit: c_int, rec: c_int, recl: c_int) ?[*]u8;
 extern fn col6forge_direct_record_commit(unit: c_int, rec: c_int) void;
@@ -52,9 +51,31 @@ fn parseFloatSlice(text: []const u8) ?f64 {
     return std.fmt.parseFloat(f64, trimmed) catch null;
 }
 
+fn parseIntegerSlice(text: []const u8) ?c_int {
+    const trimmed = trimAsciiSpace(text);
+    if (trimmed.len == 0) return null;
+    const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return null;
+    if (parsed < std.math.minInt(c_int) or parsed > std.math.maxInt(c_int)) return null;
+    return @intCast(parsed);
+}
+
 fn parseFloatCString(text: []const u8) ?f64 {
     const n = cstrlenRaw(text);
     return parseFloatSlice(text[0..n]);
+}
+
+fn parseIntegerCString(text: []const u8) ?c_int {
+    const n = cstrlenRaw(text);
+    return parseIntegerSlice(text[0..n]);
+}
+
+fn isAllAsterisksSlice(text: []const u8) bool {
+    const trimmed = trimAsciiSpace(text);
+    if (trimmed.len == 0) return false;
+    for (trimmed) |ch| {
+        if (ch != '*') return false;
+    }
+    return true;
 }
 
 fn runtimeArgCount(arg_count: c_int) usize {
@@ -344,7 +365,7 @@ pub export fn col6forge_read_internal_list_v(
                     return if (status_mode != 0) -1 else 0;
                 }
                 const out: *c_int = @ptrCast(@alignCast(arg));
-                out.* = @intCast(strtol(asConstCStr(&token), null, 10));
+                out.* = parseIntegerCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
             },
             'f' => {
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
@@ -360,7 +381,7 @@ pub export fn col6forge_read_internal_list_v(
                 }
                 col6forge_normalize_exponent(asCStr(&token));
                 const out: *f64 = @ptrCast(@alignCast(arg));
-                out.* = parseFloatCString(token[0..]) orelse 0.0;
+                out.* = parseFloatCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
             },
             'l' => {
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
@@ -393,12 +414,14 @@ pub export fn col6forge_read_internal_list_v(
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const real = @as(f32, @floatCast(parseFloatCString(token[0..]) orelse 0.0));
+                const real_val = parseFloatCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
+                const real = @as(f32, @floatCast(real_val));
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const imag = @as(f32, @floatCast(parseFloatCString(token[0..]) orelse 0.0));
+                const imag_val = parseFloatCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
+                const imag = @as(f32, @floatCast(imag_val));
                 const out: [*]f32 = @ptrCast(@alignCast(arg));
                 out[0] = real;
                 out[1] = imag;
@@ -408,12 +431,12 @@ pub export fn col6forge_read_internal_list_v(
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const real = parseFloatCString(token[0..]) orelse 0.0;
+                const real = parseFloatCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const imag = parseFloatCString(token[0..]) orelse 0.0;
+                const imag = parseFloatCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
                 const out: [*]f64 = @ptrCast(@alignCast(arg));
                 out[0] = real;
                 out[1] = imag;
@@ -575,19 +598,40 @@ fn readInternalCoreWithProvider(
         if (conv == 'd' and kind == 'd') {
             col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             const out: *c_int = @ptrCast(@alignCast(arg_any));
-            out.* = @intCast(strtol(asConstCStr(&field), null, 10));
+            const view = field[0..@intCast(@max(used, 0))];
+            if (parseIntegerSlice(view)) |parsed| {
+                out.* = parsed;
+            } else if (isAllAsterisksSlice(view)) {
+                out.* = 0;
+            } else {
+                return null;
+            }
             assigned += 1;
         } else if (conv == 'f' and is_long and kind == 'D') {
             col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f64 = @ptrCast(@alignCast(arg_any));
-            out.* = parseFloatSlice(field[0..@intCast(@max(used, 0))]) orelse 0.0;
+            const view = field[0..@intCast(@max(used, 0))];
+            if (parseFloatSlice(view)) |parsed| {
+                out.* = parsed;
+            } else if (isAllAsterisksSlice(view)) {
+                out.* = 0.0;
+            } else {
+                return null;
+            }
             assigned += 1;
         } else if (conv == 'f' and !is_long and kind == 'f') {
             col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f32 = @ptrCast(@alignCast(arg_any));
-            out.* = @floatCast(parseFloatSlice(field[0..@intCast(@max(used, 0))]) orelse 0.0);
+            const view = field[0..@intCast(@max(used, 0))];
+            if (parseFloatSlice(view)) |parsed| {
+                out.* = @floatCast(parsed);
+            } else if (isAllAsterisksSlice(view)) {
+                out.* = 0.0;
+            } else {
+                return null;
+            }
             assigned += 1;
         } else if (conv == 'c' and kind == 'c') {
             const out: [*]u8 = @ptrCast(arg_any);
