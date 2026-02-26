@@ -42,24 +42,25 @@ fn complexMul(comptime T: type, a: Complex(T), b: Complex(T)) Complex(T) {
     };
 }
 
-// Cross-platform stable |a+bi| using scaling to avoid overflow/underflow.
+// Robust |a+bi|:
+// 1) Prefer std.math.hypot for platform-optimized codegen.
+// 2) Fallback to scaled arithmetic if hypot returns NaN for finite inputs.
 fn complexAbs(comptime T: type, a: T, b: T) T {
     const zero = @as(T, 0.0);
-    var x = @abs(a);
-    var y = @abs(b);
+    const x = @abs(a);
+    const y = @abs(b);
 
     if (std.math.isInf(x) or std.math.isInf(y)) return std.math.inf(T);
     if (std.math.isNan(x) or std.math.isNan(y)) return std.math.nan(T);
 
-    if (x < y) {
-        const t = x;
-        x = y;
-        y = t;
-    }
-    if (x == zero) return zero;
+    const h = std.math.hypot(x, y);
+    if (!std.math.isNan(h)) return h;
 
-    const r = y / x;
-    return x * @sqrt(@as(T, 1.0) + (r * r));
+    const hi = @max(x, y);
+    const lo = @min(x, y);
+    if (hi == zero) return zero;
+    const r = lo / hi;
+    return hi * @sqrt(@mulAdd(T, r, r, @as(T, 1.0)));
 }
 
 // Numerically stable complex reciprocal (Smith-style scaling).
@@ -341,7 +342,7 @@ test "controller layer: null pointer contract is rejected by checked controller"
     );
 }
 
-test "logic layer: complex log uses scaled magnitude to avoid overflow" {
+test "logic layer: complex log uses robust magnitude path to avoid overflow" {
     const zf = complexLog(f32, .{ .r = 2.0e19, .i = 0.0 });
     try std.testing.expect(!std.math.isNan(zf.r));
     try std.testing.expect(!std.math.isInf(zf.r));
