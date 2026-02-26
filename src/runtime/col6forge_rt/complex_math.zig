@@ -42,6 +42,26 @@ fn complexMul(comptime T: type, a: Complex(T), b: Complex(T)) Complex(T) {
     };
 }
 
+// Cross-platform stable |a+bi| using scaling to avoid overflow/underflow.
+fn complexAbs(comptime T: type, a: T, b: T) T {
+    const zero = @as(T, 0.0);
+    var x = @abs(a);
+    var y = @abs(b);
+
+    if (std.math.isInf(x) or std.math.isInf(y)) return std.math.inf(T);
+    if (std.math.isNan(x) or std.math.isNan(y)) return std.math.nan(T);
+
+    if (x < y) {
+        const t = x;
+        x = y;
+        y = t;
+    }
+    if (x == zero) return zero;
+
+    const r = y / x;
+    return x * @sqrt(@as(T, 1.0) + (r * r));
+}
+
 // Numerically stable complex reciprocal (Smith-style scaling).
 fn complexInv(comptime T: type, a: Complex(T)) Complex(T) {
     const zero = @as(T, 0.0);
@@ -101,7 +121,7 @@ fn complexExp(comptime T: type, z: Complex(T)) Complex(T) {
 fn complexLog(comptime T: type, z: Complex(T)) Complex(T) {
     const a = z.r;
     const b = z.i;
-    const mag = std.math.hypot(a, b);
+    const mag = complexAbs(T, a, b);
     return .{
         .r = @log(mag),
         .i = std.math.atan2(b, a),
@@ -113,7 +133,7 @@ fn complexSqrt(comptime T: type, z: Complex(T)) Complex(T) {
     const zero = @as(T, 0.0);
     const a = z.r;
     const b = z.i;
-    const mag = std.math.hypot(a, b);
+    const mag = complexAbs(T, a, b);
     if (mag == zero) return .{ .r = zero, .i = zero };
 
     const half: T = 0.5;
@@ -321,7 +341,7 @@ test "controller layer: null pointer contract is rejected by checked controller"
     );
 }
 
-test "logic layer: complex log uses hypot to avoid overflow in magnitude" {
+test "logic layer: complex log uses scaled magnitude to avoid overflow" {
     const zf = complexLog(f32, .{ .r = 2.0e19, .i = 0.0 });
     try std.testing.expect(!std.math.isNan(zf.r));
     try std.testing.expect(!std.math.isInf(zf.r));
