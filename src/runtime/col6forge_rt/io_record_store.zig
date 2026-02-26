@@ -117,6 +117,18 @@ fn ensureExtraUnformattedUnitLocked(unit: c_int) ?*UnformattedUnit {
     return state_ptr;
 }
 
+fn removeExtraDirectUnitLocked(unit: c_int) void {
+    if (extra_direct_units.fetchRemove(unit)) |removed| {
+        free(@ptrCast(removed.value));
+    }
+}
+
+fn removeExtraUnformattedUnitLocked(unit: c_int) void {
+    if (extra_unformatted_units.fetchRemove(unit)) |removed| {
+        free(@ptrCast(removed.value));
+    }
+}
+
 fn getDirectUnitLocked(unit: c_int, create_if_missing: bool) ?*DirectUnit {
     if (isArrayUnit(unit)) {
         const idx: usize = @intCast(unit);
@@ -813,6 +825,7 @@ pub export fn col6forge_record_store_reset(unit: c_int) callconv(.c) void {
     const lock = unitLock(unit);
     lock.lock();
     defer lock.unlock();
+    const array_unit = isArrayUnit(unit);
 
     if (getDirectUnit(unit, false)) |du| {
         freeDirectStorage(du);
@@ -821,12 +834,17 @@ pub export fn col6forge_record_store_reset(unit: c_int) callconv(.c) void {
     if (getUnformattedUnit(unit, false)) |uu| {
         freeUnformattedStorage(uu);
     }
+    if (!array_unit) {
+        removeExtraDirectUnitLocked(unit);
+        removeExtraUnformattedUnitLocked(unit);
+    }
 }
 
 pub export fn col6forge_record_store_close(unit: c_int, status: c_int) callconv(.c) void {
     const lock = unitLock(unit);
     lock.lock();
     defer lock.unlock();
+    const array_unit = isArrayUnit(unit);
 
     const du = getDirectUnit(unit, false);
     const uu = getUnformattedUnit(unit, false);
@@ -849,6 +867,10 @@ pub export fn col6forge_record_store_close(unit: c_int, status: c_int) callconv(
     }
     if (uu) |u| {
         freeUnformattedStorage(u);
+    }
+    if (!array_unit) {
+        removeExtraDirectUnitLocked(unit);
+        removeExtraUnformattedUnitLocked(unit);
     }
 }
 
@@ -927,4 +949,21 @@ test "direct and unformatted storage support non-array unit numbers" {
     try std.testing.expectEqual(@as(usize, 4), read_len);
     try std.testing.expectEqual(@as(u8, 9), read_rec.?[0]);
     try std.testing.expectEqual(@as(u8, 6), read_rec.?[3]);
+}
+
+test "reset and close drop non-array unit state" {
+    const unit: c_int = 1500;
+
+    col6forge_open_direct(unit, 8);
+    try std.testing.expectEqual(@as(c_int, 8), col6forge_direct_get_recl(unit));
+
+    col6forge_record_store_reset(unit);
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_direct_get_recl(unit));
+
+    col6forge_open_direct(unit, 8);
+    const rec = col6forge_direct_record_ptr(unit, 1, 8);
+    try std.testing.expect(rec != null);
+    rec.?[0] = 42;
+    col6forge_record_store_close(unit, 1);
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_direct_get_recl(unit));
 }
