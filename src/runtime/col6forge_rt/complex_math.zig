@@ -206,101 +206,94 @@ fn unaryPtrController(
     out.?.* = toC(op(T, fromC(input.?.*)));
 }
 
-fn col6forge_cinv(a: col6forge_complex32) col6forge_complex32 {
-    return toC32(complexInv(f32, fromC32(a)));
+fn exportedName(comptime prefix: []const u8, comptime suffix: []const u8) []const u8 {
+    return std.fmt.comptimePrint("{s}{s}", .{ prefix, suffix });
 }
 
-fn col6forge_zinv(a: col6forge_complex64) col6forge_complex64 {
-    return toC64(complexInv(f64, fromC64(a)));
+fn ComplexApi(
+    comptime T: type,
+    comptime CType: type,
+    comptime fromC: fn (CType) Complex(T),
+    comptime toC: fn (Complex(T)) CType,
+    comptime symbol_prefix: []const u8,
+) type {
+    return struct {
+        const Self = @This();
+
+        const sin_name = exportedName(symbol_prefix, "sin");
+        const sin_ptr_name = exportedName(symbol_prefix, "sin_ptr");
+        const cos_name = exportedName(symbol_prefix, "cos");
+        const cos_ptr_name = exportedName(symbol_prefix, "cos_ptr");
+        const exp_name = exportedName(symbol_prefix, "exp");
+        const exp_ptr_name = exportedName(symbol_prefix, "exp_ptr");
+        const log_name = exportedName(symbol_prefix, "log");
+        const log_ptr_name = exportedName(symbol_prefix, "log_ptr");
+        const sqrt_name = exportedName(symbol_prefix, "sqrt");
+        const sqrt_ptr_name = exportedName(symbol_prefix, "sqrt_ptr");
+        const powi_name = exportedName(symbol_prefix, "powi");
+
+        pub fn sin(z: CType) callconv(.c) CType {
+            return toC(complexSin(T, fromC(z)));
+        }
+
+        pub fn sin_ptr(out: ?*CType, input: ?*const CType) callconv(.c) void {
+            unaryPtrController(T, CType, out, input, fromC, toC, complexSin) catch pointerContractFail(sin_ptr_name);
+        }
+
+        pub fn cos(z: CType) callconv(.c) CType {
+            return toC(complexCos(T, fromC(z)));
+        }
+
+        pub fn cos_ptr(out: ?*CType, input: ?*const CType) callconv(.c) void {
+            unaryPtrController(T, CType, out, input, fromC, toC, complexCos) catch pointerContractFail(cos_ptr_name);
+        }
+
+        pub fn exp(z: CType) callconv(.c) CType {
+            return toC(complexExp(T, fromC(z)));
+        }
+
+        pub fn exp_ptr(out: ?*CType, input: ?*const CType) callconv(.c) void {
+            unaryPtrController(T, CType, out, input, fromC, toC, complexExp) catch pointerContractFail(exp_ptr_name);
+        }
+
+        pub fn log(z: CType) callconv(.c) CType {
+            return toC(complexLog(T, fromC(z)));
+        }
+
+        pub fn log_ptr(out: ?*CType, input: ?*const CType) callconv(.c) void {
+            unaryPtrController(T, CType, out, input, fromC, toC, complexLog) catch pointerContractFail(log_ptr_name);
+        }
+
+        pub fn sqrt(z: CType) callconv(.c) CType {
+            return toC(complexSqrt(T, fromC(z)));
+        }
+
+        pub fn sqrt_ptr(out: ?*CType, input: ?*const CType) callconv(.c) void {
+            unaryPtrController(T, CType, out, input, fromC, toC, complexSqrt) catch pointerContractFail(sqrt_ptr_name);
+        }
+
+        pub fn powi(z: CType, n: c_int) callconv(.c) CType {
+            return toC(complexPowi(T, fromC(z), n));
+        }
+
+        comptime {
+            @export(&Self.sin, .{ .name = sin_name, .linkage = .strong });
+            @export(&Self.sin_ptr, .{ .name = sin_ptr_name, .linkage = .strong });
+            @export(&Self.cos, .{ .name = cos_name, .linkage = .strong });
+            @export(&Self.cos_ptr, .{ .name = cos_ptr_name, .linkage = .strong });
+            @export(&Self.exp, .{ .name = exp_name, .linkage = .strong });
+            @export(&Self.exp_ptr, .{ .name = exp_ptr_name, .linkage = .strong });
+            @export(&Self.log, .{ .name = log_name, .linkage = .strong });
+            @export(&Self.log_ptr, .{ .name = log_ptr_name, .linkage = .strong });
+            @export(&Self.sqrt, .{ .name = sqrt_name, .linkage = .strong });
+            @export(&Self.sqrt_ptr, .{ .name = sqrt_ptr_name, .linkage = .strong });
+            @export(&Self.powi, .{ .name = powi_name, .linkage = .strong });
+        }
+    };
 }
 
-pub export fn col6forge_csin(z: col6forge_complex32) callconv(.c) col6forge_complex32 {
-    return toC32(complexSin(f32, fromC32(z)));
-}
-
-pub export fn col6forge_csin_ptr(out: ?*col6forge_complex32, input: ?*const col6forge_complex32) callconv(.c) void {
-    unaryPtrController(f32, col6forge_complex32, out, input, fromC32, toC32, complexSin) catch pointerContractFail("col6forge_csin_ptr");
-}
-
-pub export fn col6forge_ccos(z: col6forge_complex32) callconv(.c) col6forge_complex32 {
-    return toC32(complexCos(f32, fromC32(z)));
-}
-
-pub export fn col6forge_ccos_ptr(out: ?*col6forge_complex32, input: ?*const col6forge_complex32) callconv(.c) void {
-    unaryPtrController(f32, col6forge_complex32, out, input, fromC32, toC32, complexCos) catch pointerContractFail("col6forge_ccos_ptr");
-}
-
-pub export fn col6forge_cexp(z: col6forge_complex32) callconv(.c) col6forge_complex32 {
-    return toC32(complexExp(f32, fromC32(z)));
-}
-
-pub export fn col6forge_cexp_ptr(out: ?*col6forge_complex32, input: ?*const col6forge_complex32) callconv(.c) void {
-    unaryPtrController(f32, col6forge_complex32, out, input, fromC32, toC32, complexExp) catch pointerContractFail("col6forge_cexp_ptr");
-}
-
-pub export fn col6forge_clog(z: col6forge_complex32) callconv(.c) col6forge_complex32 {
-    return toC32(complexLog(f32, fromC32(z)));
-}
-
-pub export fn col6forge_clog_ptr(out: ?*col6forge_complex32, input: ?*const col6forge_complex32) callconv(.c) void {
-    unaryPtrController(f32, col6forge_complex32, out, input, fromC32, toC32, complexLog) catch pointerContractFail("col6forge_clog_ptr");
-}
-
-pub export fn col6forge_csqrt(z: col6forge_complex32) callconv(.c) col6forge_complex32 {
-    return toC32(complexSqrt(f32, fromC32(z)));
-}
-
-pub export fn col6forge_csqrt_ptr(out: ?*col6forge_complex32, input: ?*const col6forge_complex32) callconv(.c) void {
-    unaryPtrController(f32, col6forge_complex32, out, input, fromC32, toC32, complexSqrt) catch pointerContractFail("col6forge_csqrt_ptr");
-}
-
-pub export fn col6forge_cpowi(z: col6forge_complex32, n: c_int) callconv(.c) col6forge_complex32 {
-    return toC32(complexPowi(f32, fromC32(z), n));
-}
-
-pub export fn col6forge_zsin(z: col6forge_complex64) callconv(.c) col6forge_complex64 {
-    return toC64(complexSin(f64, fromC64(z)));
-}
-
-pub export fn col6forge_zsin_ptr(out: ?*col6forge_complex64, input: ?*const col6forge_complex64) callconv(.c) void {
-    unaryPtrController(f64, col6forge_complex64, out, input, fromC64, toC64, complexSin) catch pointerContractFail("col6forge_zsin_ptr");
-}
-
-pub export fn col6forge_zcos(z: col6forge_complex64) callconv(.c) col6forge_complex64 {
-    return toC64(complexCos(f64, fromC64(z)));
-}
-
-pub export fn col6forge_zcos_ptr(out: ?*col6forge_complex64, input: ?*const col6forge_complex64) callconv(.c) void {
-    unaryPtrController(f64, col6forge_complex64, out, input, fromC64, toC64, complexCos) catch pointerContractFail("col6forge_zcos_ptr");
-}
-
-pub export fn col6forge_zexp(z: col6forge_complex64) callconv(.c) col6forge_complex64 {
-    return toC64(complexExp(f64, fromC64(z)));
-}
-
-pub export fn col6forge_zexp_ptr(out: ?*col6forge_complex64, input: ?*const col6forge_complex64) callconv(.c) void {
-    unaryPtrController(f64, col6forge_complex64, out, input, fromC64, toC64, complexExp) catch pointerContractFail("col6forge_zexp_ptr");
-}
-
-pub export fn col6forge_zlog(z: col6forge_complex64) callconv(.c) col6forge_complex64 {
-    return toC64(complexLog(f64, fromC64(z)));
-}
-
-pub export fn col6forge_zlog_ptr(out: ?*col6forge_complex64, input: ?*const col6forge_complex64) callconv(.c) void {
-    unaryPtrController(f64, col6forge_complex64, out, input, fromC64, toC64, complexLog) catch pointerContractFail("col6forge_zlog_ptr");
-}
-
-pub export fn col6forge_zsqrt(z: col6forge_complex64) callconv(.c) col6forge_complex64 {
-    return toC64(complexSqrt(f64, fromC64(z)));
-}
-
-pub export fn col6forge_zsqrt_ptr(out: ?*col6forge_complex64, input: ?*const col6forge_complex64) callconv(.c) void {
-    unaryPtrController(f64, col6forge_complex64, out, input, fromC64, toC64, complexSqrt) catch pointerContractFail("col6forge_zsqrt_ptr");
-}
-
-pub export fn col6forge_zpowi(z: col6forge_complex64, n: c_int) callconv(.c) col6forge_complex64 {
-    return toC64(complexPowi(f64, fromC64(z), n));
-}
+const C32Api = ComplexApi(f32, col6forge_complex32, fromC32, toC32, "col6forge_c");
+const C64Api = ComplexApi(f64, col6forge_complex64, fromC64, toC64, "col6forge_z");
 
 test "logic layer: complex integer power division by zero returns infinite components" {
     const zero_c = complexPowi(f32, .{ .r = 0.0, .i = 0.0 }, -1);
@@ -325,15 +318,15 @@ test "logic layer: complex integer power keeps valid inverse for nonzero values"
 test "controller layer: pointer unary wrappers match direct complex implementations" {
     var in_c: col6forge_complex32 = .{ .r = 0.5, .i = -0.25 };
     var out_c: col6forge_complex32 = .{ .r = 0.0, .i = 0.0 };
-    col6forge_cexp_ptr(&out_c, &in_c);
-    const want_c = col6forge_cexp(in_c);
+    C32Api.exp_ptr(&out_c, &in_c);
+    const want_c = C32Api.exp(in_c);
     try std.testing.expectApproxEqAbs(want_c.r, out_c.r, 1e-6);
     try std.testing.expectApproxEqAbs(want_c.i, out_c.i, 1e-6);
 
     var in_z: col6forge_complex64 = .{ .r = -3.0, .i = 4.0 };
     var out_z: col6forge_complex64 = .{ .r = 0.0, .i = 0.0 };
-    col6forge_zsqrt_ptr(&out_z, &in_z);
-    const want_z = col6forge_zsqrt(in_z);
+    C64Api.sqrt_ptr(&out_z, &in_z);
+    const want_z = C64Api.sqrt(in_z);
     try std.testing.expectApproxEqAbs(want_z.r, out_z.r, 1e-12);
     try std.testing.expectApproxEqAbs(want_z.i, out_z.i, 1e-12);
 }
