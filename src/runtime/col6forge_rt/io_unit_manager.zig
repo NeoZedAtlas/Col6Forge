@@ -10,7 +10,16 @@ extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
 extern fn ftell(stream: *FILE) c_long;
 
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
+extern fn col6forge_trim_filename(file: ?[*]const u8, file_len: c_int, out: ?[*]u8, out_len: usize) void;
 extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
+const OpenState = extern struct {
+    opened: c_int,
+    filename: [COL6FORGE_FILENAME_MAX]u8,
+    access: c_int,
+    form: c_int,
+    blank: c_int,
+};
+extern var open_units: [COL6FORGE_MAX_UNITS]OpenState;
 
 const StreamMode = enum(u8) {
     none,
@@ -31,6 +40,9 @@ var manager_mutex: std.Thread.Mutex = .{};
 var fixed_entries: [COL6FORGE_MAX_UNITS]StreamEntry = [_]StreamEntry{.{}} ** COL6FORGE_MAX_UNITS;
 var extra_entries: std.AutoHashMapUnmanaged(c_int, *StreamEntry) = .{};
 var extra_unit_pos: std.AutoHashMapUnmanaged(c_int, c_long) = .{};
+var extra_open_units: std.AutoHashMapUnmanaged(c_int, OpenState) = .{};
+var open_filename_index: std.StringHashMapUnmanaged(c_int) = .{};
+var open_unit_filename_keys: std.AutoHashMapUnmanaged(c_int, []const u8) = .{};
 
 fn runtimeAllocator() std.mem.Allocator {
     return std.heap.page_allocator;
@@ -42,6 +54,210 @@ fn asConstCStr(buf: anytype) [*:0]const u8 {
 
 fn isFixedUnit(unit: c_int) bool {
     return unit >= 0 and unit < COL6FORGE_MAX_UNITS;
+}
+
+fn cstrSlice(value: [*:0]const u8) []const u8 {
+    return std.mem.span(value);
+}
+
+fn findOpenUnitLocked(unit: c_int) ?*OpenState {
+    if (isFixedUnit(unit)) return &open_units[@as(usize, @intCast(unit))];
+    return extra_open_units.getPtr(unit);
+}
+
+fn ensureOpenUnitLocked(unit: c_int) ?*OpenState {
+    if (isFixedUnit(unit)) return &open_units[@as(usize, @intCast(unit))];
+    if (extra_open_units.getPtr(unit)) |entry| return entry;
+
+    extra_open_units.put(runtimeAllocator(), unit, .{
+        .opened = 0,
+        .filename = [_]u8{0} ** COL6FORGE_FILENAME_MAX,
+        .access = 0,
+        .form = 0,
+        .blank = 0,
+    }) catch return null;
+    return extra_open_units.getPtr(unit);
+}
+
+fn writeOpenUnitLocked(ou: *OpenState, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int) void {
+    ou.opened = 1;
+    ou.access = access;
+    ou.form = form;
+    ou.blank = blank;
+    if (file != null and file_len > 0) {
+        col6forge_trim_filename(file, file_len, @ptrCast(&ou.filename), ou.filename.len);
+    } else {
+        ou.filename[0] = 0;
+    }
+}
+
+fn removeOpenFilenameIndexForUnitLocked(unit: c_int) void {
+    if (open_unit_filename_keys.fetchRemove(unit)) |kv| {
+        _ = open_filename_index.remove(kv.value);
+        runtimeAllocator().free(kv.value);
+    }
+}
+
+fn indexOpenFilenameForUnitLocked(unit: c_int, filename: [*:0]const u8) void {
+    const name = cstrSlice(filename);
+    if (name.len == 0) return;
+
+    if (open_filename_index.get(name)) |owner_unit| {
+        if (owner_unit != unit) {
+            removeOpenFilenameIndexForUnitLocked(owner_unit);
+        } else {
+            return;
+        }
+    }
+
+    const allocator = runtimeAllocator();
+    const key = allocator.dupe(u8, name) catch return;
+    errdefer allocator.free(key);
+
+    if (open_filename_index.fetchPut(allocator, key, unit) catch return) |old| {
+        allocator.free(old.key);
+    }
+    if (open_unit_filename_keys.fetchPut(allocator, unit, key) catch {
+        _ = open_filename_index.remove(key);
+        return;
+    }) |old_unit_key| {
+        _ = open_filename_index.remove(old_unit_key.value);
+        allocator.free(old_unit_key.value);
+    }
+}
+
+fn openUnitFilenameMatchesLocked(unit: c_int, wanted_name: []const u8) bool {
+    const ou = findOpenUnitLocked(unit) orelse return false;
+    return ou.opened != 0 and ou.filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&ou.filename)), wanted_name);
+}
+
+pub const OpenMeta = extern struct {
+    opened: c_int,
+    access: c_int,
+    form: c_int,
+    blank: c_int,
+};
+
+pub fn openCopyFilename(unit: c_int, out: ?[*]u8, len: usize) c_int {
+    if (out == null or len == 0) return 0;
+    manager_mutex.lock();
+    defer manager_mutex.unlock();
+
+    const ou = findOpenUnitLocked(unit) orelse return 0;
+    if (ou.opened == 0 or ou.filename[0] == 0) return 0;
+    var i: usize = 0;
+    while (i + 1 < len and ou.filename[i] != 0) : (i += 1) out.?[i] = ou.filename[i];
+    out.?[i] = 0;
+    return 1;
+}
+
+pub fn openIsOpen(unit: c_int) c_int {
+    manager_mutex.lock();
+    defer manager_mutex.unlock();
+    const ou = findOpenUnitLocked(unit) orelse return 0;
+    return if (ou.opened != 0) 1 else 0;
+}
+
+pub fn openBlankCode(unit: c_int) c_int {
+    manager_mutex.lock();
+    defer manager_mutex.unlock();
+    const ou = findOpenUnitLocked(unit) orelse return 0;
+    return if (ou.opened != 0) ou.blank else 0;
+}
+
+pub fn openGetMeta(unit: c_int, out: ?*OpenMeta) c_int {
+    if (out == null) return 0;
+    const meta = out.?;
+    meta.* = .{ .opened = 0, .access = 0, .form = 0, .blank = 0 };
+
+    manager_mutex.lock();
+    defer manager_mutex.unlock();
+
+    const ou = findOpenUnitLocked(unit) orelse return 0;
+    meta.* = .{
+        .opened = ou.opened,
+        .access = ou.access,
+        .form = ou.form,
+        .blank = ou.blank,
+    };
+    return 1;
+}
+
+pub fn openSet(unit: c_int, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int) void {
+    manager_mutex.lock();
+    defer manager_mutex.unlock();
+
+    removeOpenFilenameIndexForUnitLocked(unit);
+    const ou = ensureOpenUnitLocked(unit) orelse return;
+    writeOpenUnitLocked(ou, file, file_len, access, form, blank);
+    if (ou.opened != 0 and ou.filename[0] != 0) {
+        indexOpenFilenameForUnitLocked(unit, asConstCStr(&ou.filename));
+    }
+}
+
+pub fn openClear(unit: c_int) void {
+    manager_mutex.lock();
+    defer manager_mutex.unlock();
+
+    removeOpenFilenameIndexForUnitLocked(unit);
+    const ou = findOpenUnitLocked(unit) orelse return;
+    ou.opened = 0;
+    ou.filename[0] = 0;
+    ou.access = 0;
+    ou.form = 0;
+    ou.blank = 0;
+}
+
+pub fn openFindUnitByFilename(file: ?[*]const u8, file_len: c_int, out_unit: ?*c_int) c_int {
+    if (out_unit == null) return 0;
+    out_unit.?.* = -1;
+
+    var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
+    col6forge_trim_filename(file, file_len, &name, name.len);
+    if (name[0] == 0) return 0;
+    const wanted_name = cstrSlice(asConstCStr(&name));
+
+    manager_mutex.lock();
+    defer manager_mutex.unlock();
+
+    var found_unit: c_int = -1;
+    if (open_filename_index.get(wanted_name)) |indexed_unit| {
+        if (openUnitFilenameMatchesLocked(indexed_unit, wanted_name)) {
+            found_unit = indexed_unit;
+        } else {
+            _ = open_filename_index.remove(wanted_name);
+            removeOpenFilenameIndexForUnitLocked(indexed_unit);
+        }
+    }
+
+    if (found_unit < 0) {
+        var i: usize = 0;
+        while (i < COL6FORGE_MAX_UNITS) : (i += 1) {
+            const unit: c_int = @intCast(i);
+            if (openUnitFilenameMatchesLocked(unit, wanted_name)) {
+                found_unit = unit;
+                break;
+            }
+        }
+    }
+    if (found_unit < 0) {
+        var it = extra_open_units.iterator();
+        while (it.next()) |kv| {
+            if (openUnitFilenameMatchesLocked(kv.key_ptr.*, wanted_name)) {
+                found_unit = kv.key_ptr.*;
+                break;
+            }
+        }
+    }
+
+    if (found_unit >= 0 and open_filename_index.get(wanted_name) == null) {
+        if (findOpenUnitLocked(found_unit)) |ou| {
+            indexOpenFilenameForUnitLocked(found_unit, asConstCStr(&ou.filename));
+        }
+    }
+
+    out_unit.?.* = found_unit;
+    return if (found_unit >= 0) 1 else 0;
 }
 
 pub fn posGet(unit: c_int, out: ?*c_long) c_int {

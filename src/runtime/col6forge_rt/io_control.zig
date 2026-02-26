@@ -1,6 +1,5 @@
 const std = @import("std");
 const io_unit_manager = @import("io_unit_manager.zig");
-const COL6FORGE_MAX_UNITS = 256;
 const COL6FORGE_FILENAME_MAX = 4096;
 
 extern fn remove(pathname: [*:0]const u8) c_int;
@@ -9,16 +8,6 @@ extern fn fread(ptr: ?*anyopaque, size: usize, nitems: usize, stream: *FILE) usi
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
 
 const FILE = opaque {};
-
-const OpenUnit = extern struct {
-    opened: c_int,
-    filename: [COL6FORGE_FILENAME_MAX]u8,
-    access: c_int,
-    form: c_int,
-    blank: c_int,
-};
-
-extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
 
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
 extern fn col6forge_trim_filename(file: ?[*]const u8, file_len: c_int, out: ?[*]u8, out_len: usize) void;
@@ -37,123 +26,16 @@ extern fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaque, s
 extern fn col6forge_unit_stream_set_pos(unit: c_int, pos: c_long) c_int;
 extern fn col6forge_unit_stream_get_pos(unit: c_int, out: ?*c_long) c_int;
 
-var open_state_mutex: std.Thread.Mutex = .{};
-var extra_open_units: std.AutoHashMapUnmanaged(c_int, OpenUnit) = .{};
-var open_filename_index: std.StringHashMapUnmanaged(c_int) = .{};
-var open_unit_filename_keys: std.AutoHashMapUnmanaged(c_int, []const u8) = .{};
-
-fn runtimeAllocator() std.mem.Allocator {
-    return std.heap.page_allocator;
-}
-
-fn isArrayUnit(unit: c_int) bool {
-    return unit >= 0 and unit < COL6FORGE_MAX_UNITS;
-}
-
-fn findOpenUnitLocked(unit: c_int) ?*OpenUnit {
-    if (isArrayUnit(unit)) {
-        return &open_units[@as(usize, @intCast(unit))];
-    }
-    return extra_open_units.getPtr(unit);
-}
-
-fn ensureOpenUnitLocked(unit: c_int) ?*OpenUnit {
-    if (isArrayUnit(unit)) {
-        return &open_units[@as(usize, @intCast(unit))];
-    }
-    if (extra_open_units.getPtr(unit)) |entry| return entry;
-
-    extra_open_units.put(std.heap.page_allocator, unit, .{
-        .opened = 0,
-        .filename = [_]u8{0} ** COL6FORGE_FILENAME_MAX,
-        .access = 0,
-        .form = 0,
-        .blank = 0,
-    }) catch return null;
-    return extra_open_units.getPtr(unit);
-}
-
-fn writeOpenUnitLocked(ou: *OpenUnit, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int) void {
-    ou.opened = 1;
-    ou.access = access;
-    ou.form = form;
-    ou.blank = blank;
-    if (file != null and file_len > 0) {
-        col6forge_trim_filename(file, file_len, @ptrCast(&ou.filename), ou.filename.len);
-    } else {
-        ou.filename[0] = 0;
-    }
-}
-
-fn removeOpenFilenameIndexForUnitLocked(unit: c_int) void {
-    if (open_unit_filename_keys.fetchRemove(unit)) |kv| {
-        _ = open_filename_index.remove(kv.value);
-        runtimeAllocator().free(kv.value);
-    }
-}
-
-fn indexOpenFilenameForUnitLocked(unit: c_int, filename: [*:0]const u8) void {
-    const name = cstrSlice(filename);
-    if (name.len == 0) return;
-
-    const allocator = runtimeAllocator();
-    if (open_filename_index.get(name)) |owner_unit| {
-        if (owner_unit != unit) {
-            removeOpenFilenameIndexForUnitLocked(owner_unit);
-        } else {
-            return;
-        }
-    }
-
-    const key = allocator.dupe(u8, name) catch return;
-    errdefer allocator.free(key);
-
-    if (open_filename_index.fetchPut(allocator, key, unit) catch return) |old| {
-        allocator.free(old.key);
-    }
-    if (open_unit_filename_keys.fetchPut(allocator, unit, key) catch {
-        _ = open_filename_index.remove(key);
-        return;
-    }) |old_unit_key| {
-        _ = open_filename_index.remove(old_unit_key.value);
-        allocator.free(old_unit_key.value);
-    }
-}
-
-fn openUnitFilenameMatchesLocked(unit: c_int, wanted_name: []const u8) bool {
-    const ou = findOpenUnitLocked(unit) orelse return false;
-    return ou.opened != 0 and ou.filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&ou.filename)), wanted_name);
-}
-
-fn copyOpenFilenameLocked(unit: c_int, out: [*]u8, len: usize) c_int {
-    if (len == 0) return 0;
-    const ou = findOpenUnitLocked(unit) orelse return 0;
-    if (ou.opened == 0 or ou.filename[0] == 0) return 0;
-    var i: usize = 0;
-    while (i + 1 < len and ou.filename[i] != 0) : (i += 1) out[i] = ou.filename[i];
-    out[i] = 0;
-    return 1;
-}
-
 pub export fn col6forge_open_unit_copy_filename(unit: c_int, out: ?[*]u8, len: usize) callconv(.c) c_int {
-    if (out == null or len == 0) return 0;
-    open_state_mutex.lock();
-    defer open_state_mutex.unlock();
-    return copyOpenFilenameLocked(unit, out.?, len);
+    return io_unit_manager.openCopyFilename(unit, out, len);
 }
 
 pub export fn col6forge_open_unit_is_open(unit: c_int) callconv(.c) c_int {
-    open_state_mutex.lock();
-    defer open_state_mutex.unlock();
-    const ou = findOpenUnitLocked(unit) orelse return 0;
-    return if (ou.opened != 0) 1 else 0;
+    return io_unit_manager.openIsOpen(unit);
 }
 
 pub export fn col6forge_open_unit_blank_code(unit: c_int) callconv(.c) c_int {
-    open_state_mutex.lock();
-    defer open_state_mutex.unlock();
-    const ou = findOpenUnitLocked(unit) orelse return 0;
-    return if (ou.opened != 0) ou.blank else 0;
+    return io_unit_manager.openBlankCode(unit);
 }
 
 pub export fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) callconv(.c) c_int {
@@ -296,14 +178,7 @@ pub export fn col6forge_open(unit: c_int, file: ?[*]const u8, file_len: c_int, a
     _ = col6forge_unit_stream_set_pos(unit, 0);
     col6forge_record_store_reset(unit);
 
-    open_state_mutex.lock();
-    defer open_state_mutex.unlock();
-    removeOpenFilenameIndexForUnitLocked(unit);
-    const ou = ensureOpenUnitLocked(unit) orelse return;
-    writeOpenUnitLocked(ou, file, file_len, access, form, blank);
-    if (ou.opened != 0 and ou.filename[0] != 0) {
-        indexOpenFilenameForUnitLocked(unit, asConstCStr(&ou.filename));
-    }
+    io_unit_manager.openSet(unit, file, file_len, access, form, blank);
 }
 
 pub export fn col6forge_open_ex(
@@ -342,25 +217,21 @@ pub export fn col6forge_close(unit: c_int, status: c_int) callconv(.c) void {
     _ = col6forge_unit_stream_set_pos(unit, 0);
     col6forge_record_store_close(unit, status);
 
-    open_state_mutex.lock();
-    removeOpenFilenameIndexForUnitLocked(unit);
-    if (findOpenUnitLocked(unit)) |ou| {
-        if (status == 2) {
-            delete_ready = copyOpenFilenameLocked(unit, &delete_name, delete_name.len) != 0;
-            if (!delete_ready) {
-                _ = snprintf(&delete_name, delete_name.len, "fort.%d", unit);
-                delete_name[delete_name.len - 1] = 0;
-                delete_ready = true;
-            }
+    if (status == 2) {
+        delete_ready = io_unit_manager.openCopyFilename(unit, &delete_name, delete_name.len) != 0;
+        if (!delete_ready) {
+            _ = snprintf(&delete_name, delete_name.len, "fort.%d", unit);
+            delete_name[delete_name.len - 1] = 0;
+            delete_ready = true;
         }
-        ou.opened = 0;
-        ou.filename[0] = 0;
-    } else if (status == 2) {
+    }
+
+    io_unit_manager.openClear(unit);
+    if (status == 2 and !delete_ready) {
         _ = snprintf(&delete_name, delete_name.len, "fort.%d", unit);
         delete_name[delete_name.len - 1] = 0;
         delete_ready = true;
     }
-    open_state_mutex.unlock();
 
     if (status == 2 and delete_ready and delete_name[0] != 0) {
         _ = remove(asConstCStr(&delete_name));
@@ -396,21 +267,20 @@ pub export fn col6forge_inquire_unit(
     nextrec: ?*c_int,
 ) callconv(.c) void {
     if (iostat) |v| v.* = 0;
-    var is_open = false;
-    var access_code: c_int = 0;
-    var form_code: c_int = 0;
-    var blank_code: c_int = 0;
+    var meta: io_unit_manager.OpenMeta = .{
+        .opened = 0,
+        .access = 0,
+        .form = 0,
+        .blank = 0,
+    };
     var filename: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
 
-    open_state_mutex.lock();
-    if (findOpenUnitLocked(unit)) |ou| {
-        is_open = ou.opened != 0;
-        access_code = ou.access;
-        form_code = ou.form;
-        blank_code = ou.blank;
-        _ = copyOpenFilenameLocked(unit, &filename, filename.len);
-    }
-    open_state_mutex.unlock();
+    _ = io_unit_manager.openGetMeta(unit, &meta);
+    _ = io_unit_manager.openCopyFilename(unit, &filename, filename.len);
+    const is_open = meta.opened != 0;
+    const access_code = meta.access;
+    const form_code = meta.form;
+    const blank_code = meta.blank;
 
     if (exist) |v| {
         if (is_open) {
@@ -481,49 +351,9 @@ pub export fn col6forge_inquire_file(
 
     var name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
     col6forge_trim_filename(file, file_len, &name, name.len);
-    const wanted_name = cstrSlice(asConstCStr(&name));
 
     var found_unit: c_int = -1;
-    open_state_mutex.lock();
-    {
-        if (open_filename_index.get(wanted_name)) |indexed_unit| {
-            if (openUnitFilenameMatchesLocked(indexed_unit, wanted_name)) {
-                found_unit = indexed_unit;
-            } else {
-                _ = open_filename_index.remove(wanted_name);
-                removeOpenFilenameIndexForUnitLocked(indexed_unit);
-            }
-        }
-
-        var i: usize = 0;
-        if (found_unit < 0) {
-            while (i < COL6FORGE_MAX_UNITS) : (i += 1) {
-                if (open_units[i].opened != 0 and open_units[i].filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&open_units[i].filename)), wanted_name)) {
-                    found_unit = @intCast(i);
-                    break;
-                }
-            }
-        }
-        if (found_unit < 0) {
-            var it = extra_open_units.iterator();
-            while (it.next()) |kv| {
-                const entry = kv.value_ptr;
-                if (entry.opened != 0 and entry.filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&entry.filename)), wanted_name)) {
-                    found_unit = kv.key_ptr.*;
-                    break;
-                }
-            }
-        }
-        if (found_unit >= 0 and !openUnitFilenameMatchesLocked(found_unit, wanted_name)) {
-            found_unit = -1;
-        }
-        if (found_unit >= 0 and open_filename_index.get(wanted_name) == null) {
-            if (findOpenUnitLocked(found_unit)) |ou| {
-                indexOpenFilenameForUnitLocked(found_unit, asConstCStr(&ou.filename));
-            }
-        }
-    }
-    open_state_mutex.unlock();
+    _ = io_unit_manager.openFindUnitByFilename(file, file_len, &found_unit);
 
     if (found_unit >= 0) {
         col6forge_inquire_unit(found_unit, iostat, exist, opened, number, access, access_len, sequential, sequential_len, direct, direct_len, form, form_len, formatted, formatted_len, unformatted, unformatted_len, blank, blank_len, recl, nextrec);
