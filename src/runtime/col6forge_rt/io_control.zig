@@ -48,6 +48,12 @@ const ExtraOpenUnit = extern struct {
 
 var open_state_mutex: std.Thread.Mutex = .{};
 var extra_open_units: std.AutoHashMapUnmanaged(c_int, ExtraOpenUnit) = .{};
+var open_filename_index: std.StringHashMapUnmanaged(c_int) = .{};
+var open_unit_filename_keys: std.AutoHashMapUnmanaged(c_int, []const u8) = .{};
+
+fn runtimeAllocator() std.mem.Allocator {
+    return std.heap.page_allocator;
+}
 
 fn isArrayUnit(unit: c_int) bool {
     return unit >= 0 and unit < COL6FORGE_MAX_UNITS;
@@ -81,6 +87,54 @@ fn writeOpenUnitLocked(ou: anytype, file: ?[*]const u8, file_len: c_int, access:
     } else {
         ou.filename[0] = 0;
     }
+}
+
+fn removeOpenFilenameIndexForUnitLocked(unit: c_int) void {
+    if (open_unit_filename_keys.fetchRemove(unit)) |kv| {
+        _ = open_filename_index.remove(kv.value);
+        runtimeAllocator().free(kv.value);
+    }
+}
+
+fn indexOpenFilenameForUnitLocked(unit: c_int, filename: [*:0]const u8) void {
+    const name = cstrSlice(filename);
+    if (name.len == 0) return;
+
+    const allocator = runtimeAllocator();
+    if (open_filename_index.get(name)) |owner_unit| {
+        if (owner_unit != unit) {
+            removeOpenFilenameIndexForUnitLocked(owner_unit);
+        } else {
+            return;
+        }
+    }
+
+    const key = allocator.dupe(u8, name) catch return;
+    errdefer allocator.free(key);
+
+    if (open_filename_index.fetchPut(allocator, key, unit) catch return) |old| {
+        allocator.free(old.key);
+    }
+    if (open_unit_filename_keys.fetchPut(allocator, unit, key) catch {
+        _ = open_filename_index.remove(key);
+        return;
+    }) |old_unit_key| {
+        _ = open_filename_index.remove(old_unit_key.value);
+        allocator.free(old_unit_key.value);
+    }
+}
+
+fn openUnitFilenameMatchesLocked(unit: c_int, wanted_name: []const u8) bool {
+    if (isArrayUnit(unit)) {
+        const idx: usize = @intCast(unit);
+        const ou = &open_units[idx];
+        return ou.opened != 0 and ou.filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&ou.filename)), wanted_name);
+    }
+
+    if (findExtraOpenUnitLocked(unit)) |eu| {
+        return eu.opened != 0 and eu.filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&eu.filename)), wanted_name);
+    }
+    return false;
 }
 
 fn copyOpenFilenameLocked(unit: c_int, out: [*]u8, len: usize) c_int {
@@ -285,15 +339,22 @@ pub export fn col6forge_open(unit: c_int, file: ?[*]const u8, file_len: c_int, a
 
     open_state_mutex.lock();
     defer open_state_mutex.unlock();
+    removeOpenFilenameIndexForUnitLocked(unit);
 
     if (isArrayUnit(unit)) {
         const idx: usize = @intCast(unit);
         writeOpenUnitLocked(&open_units[idx], file, file_len, access, form, blank);
+        if (open_units[idx].opened != 0 and open_units[idx].filename[0] != 0) {
+            indexOpenFilenameForUnitLocked(unit, asConstCStr(&open_units[idx].filename));
+        }
         return;
     }
 
     const ou = ensureExtraOpenUnitLocked(unit) orelse return;
     writeOpenUnitLocked(ou, file, file_len, access, form, blank);
+    if (ou.opened != 0 and ou.filename[0] != 0) {
+        indexOpenFilenameForUnitLocked(unit, asConstCStr(&ou.filename));
+    }
 }
 
 pub export fn col6forge_open_ex(
@@ -333,6 +394,7 @@ pub export fn col6forge_close(unit: c_int, status: c_int) callconv(.c) void {
     col6forge_record_store_close(unit, status);
 
     open_state_mutex.lock();
+    removeOpenFilenameIndexForUnitLocked(unit);
     if (isArrayUnit(unit)) {
         const idx: usize = @intCast(unit);
         const ou = &open_units[idx];
@@ -495,11 +557,22 @@ pub export fn col6forge_inquire_file(
     var found_unit: c_int = -1;
     open_state_mutex.lock();
     {
+        if (open_filename_index.get(wanted_name)) |indexed_unit| {
+            if (openUnitFilenameMatchesLocked(indexed_unit, wanted_name)) {
+                found_unit = indexed_unit;
+            } else {
+                _ = open_filename_index.remove(wanted_name);
+                removeOpenFilenameIndexForUnitLocked(indexed_unit);
+            }
+        }
+
         var i: usize = 0;
-        while (i < COL6FORGE_MAX_UNITS) : (i += 1) {
-            if (open_units[i].opened != 0 and open_units[i].filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&open_units[i].filename)), wanted_name)) {
-                found_unit = @intCast(i);
-                break;
+        if (found_unit < 0) {
+            while (i < COL6FORGE_MAX_UNITS) : (i += 1) {
+                if (open_units[i].opened != 0 and open_units[i].filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&open_units[i].filename)), wanted_name)) {
+                    found_unit = @intCast(i);
+                    break;
+                }
             }
         }
         if (found_unit < 0) {
@@ -510,6 +583,17 @@ pub export fn col6forge_inquire_file(
                     found_unit = kv.key_ptr.*;
                     break;
                 }
+            }
+        }
+        if (found_unit >= 0 and !openUnitFilenameMatchesLocked(found_unit, wanted_name)) {
+            found_unit = -1;
+        }
+        if (found_unit >= 0 and open_filename_index.get(wanted_name) == null) {
+            if (isArrayUnit(found_unit)) {
+                const idx: usize = @intCast(found_unit);
+                indexOpenFilenameForUnitLocked(found_unit, asConstCStr(&open_units[idx].filename));
+            } else if (findExtraOpenUnitLocked(found_unit)) |ou| {
+                indexOpenFilenameForUnitLocked(found_unit, asConstCStr(&ou.filename));
             }
         }
     }
