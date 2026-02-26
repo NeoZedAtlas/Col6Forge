@@ -44,9 +44,11 @@ fn complexMul(comptime T: type, a: Complex(T), b: Complex(T)) Complex(T) {
 
 // Numerically stable complex reciprocal (Smith-style scaling).
 fn complexInv(comptime T: type, a: Complex(T)) Complex(T) {
+    const zero = @as(T, 0.0);
+    const one = @as(T, 1.0);
     const ar = @abs(a.r);
     const ai = @abs(a.i);
-    if (ar == 0 and ai == 0) {
+    if (ar == zero and ai == zero) {
         const nan = std.math.nan(T);
         return .{ .r = nan, .i = nan };
     }
@@ -55,7 +57,7 @@ fn complexInv(comptime T: type, a: Complex(T)) Complex(T) {
         const ratio = a.i / a.r;
         const denom = a.r + (ratio * a.i);
         return .{
-            .r = 1 / denom,
+            .r = one / denom,
             .i = -ratio / denom,
         };
     }
@@ -64,7 +66,7 @@ fn complexInv(comptime T: type, a: Complex(T)) Complex(T) {
     const denom = a.i + (ratio * a.r);
     return .{
         .r = ratio / denom,
-        .i = -1 / denom,
+        .i = -one / denom,
     };
 }
 
@@ -108,33 +110,34 @@ fn complexLog(comptime T: type, z: Complex(T)) Complex(T) {
 
 // Stable principal square root that avoids catastrophic cancellation.
 fn complexSqrt(comptime T: type, z: Complex(T)) Complex(T) {
+    const zero = @as(T, 0.0);
     const a = z.r;
     const b = z.i;
     const mag = std.math.hypot(a, b);
-    if (mag == 0) return .{ .r = 0, .i = 0 };
+    if (mag == zero) return .{ .r = zero, .i = zero };
 
     const half: T = 0.5;
     const two: T = 2.0;
 
-    if (a > 0) {
-        const t = @sqrt(@max(@as(T, 0), half * (mag + a)));
+    if (a > zero) {
+        const t = @sqrt(@max(zero, half * (mag + a)));
         return .{
             .r = t,
             .i = b / (two * t),
         };
     }
 
-    const u = @sqrt(@max(@as(T, 0), half * (mag - a)));
+    const u = @sqrt(@max(zero, half * (mag - a)));
     const t = @abs(b) / (two * u);
     return .{
         .r = t,
-        .i = if (b < 0) -u else u,
+        .i = if (b < zero) -u else u,
     };
 }
 
 // Binary exponentiation with O(log n) multiplications.
 fn complexPowi(comptime T: type, z: Complex(T), n: c_int) Complex(T) {
-    var result: Complex(T) = .{ .r = 1, .i = 0 };
+    var result: Complex(T) = .{ .r = @as(T, 1.0), .i = @as(T, 0.0) };
     if (n == 0) return result;
 
     var exp_n: u32 = @bitCast(if (n < 0) -%n else n);
