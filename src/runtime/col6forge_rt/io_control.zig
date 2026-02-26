@@ -37,17 +37,8 @@ extern fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaque, s
 extern fn col6forge_unit_stream_set_pos(unit: c_int, pos: c_long) c_int;
 extern fn col6forge_unit_stream_get_pos(unit: c_int, out: ?*c_long) c_int;
 
-const ExtraOpenUnit = extern struct {
-    unit: c_int,
-    opened: c_int,
-    filename: [COL6FORGE_FILENAME_MAX]u8,
-    access: c_int,
-    form: c_int,
-    blank: c_int,
-};
-
 var open_state_mutex: std.Thread.Mutex = .{};
-var extra_open_units: std.AutoHashMapUnmanaged(c_int, ExtraOpenUnit) = .{};
+var extra_open_units: std.AutoHashMapUnmanaged(c_int, OpenUnit) = .{};
 var open_filename_index: std.StringHashMapUnmanaged(c_int) = .{};
 var open_unit_filename_keys: std.AutoHashMapUnmanaged(c_int, []const u8) = .{};
 
@@ -59,15 +50,20 @@ fn isArrayUnit(unit: c_int) bool {
     return unit >= 0 and unit < COL6FORGE_MAX_UNITS;
 }
 
-fn findExtraOpenUnitLocked(unit: c_int) ?*ExtraOpenUnit {
+fn findOpenUnitLocked(unit: c_int) ?*OpenUnit {
+    if (isArrayUnit(unit)) {
+        return &open_units[@as(usize, @intCast(unit))];
+    }
     return extra_open_units.getPtr(unit);
 }
 
-fn ensureExtraOpenUnitLocked(unit: c_int) ?*ExtraOpenUnit {
+fn ensureOpenUnitLocked(unit: c_int) ?*OpenUnit {
+    if (isArrayUnit(unit)) {
+        return &open_units[@as(usize, @intCast(unit))];
+    }
     if (extra_open_units.getPtr(unit)) |entry| return entry;
 
     extra_open_units.put(std.heap.page_allocator, unit, .{
-        .unit = unit,
         .opened = 0,
         .filename = [_]u8{0} ** COL6FORGE_FILENAME_MAX,
         .access = 0,
@@ -77,7 +73,7 @@ fn ensureExtraOpenUnitLocked(unit: c_int) ?*ExtraOpenUnit {
     return extra_open_units.getPtr(unit);
 }
 
-fn writeOpenUnitLocked(ou: anytype, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int) void {
+fn writeOpenUnitLocked(ou: *OpenUnit, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int) void {
     ou.opened = 1;
     ou.access = access;
     ou.form = form;
@@ -125,42 +121,18 @@ fn indexOpenFilenameForUnitLocked(unit: c_int, filename: [*:0]const u8) void {
 }
 
 fn openUnitFilenameMatchesLocked(unit: c_int, wanted_name: []const u8) bool {
-    if (isArrayUnit(unit)) {
-        const idx: usize = @intCast(unit);
-        const ou = &open_units[idx];
-        return ou.opened != 0 and ou.filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&ou.filename)), wanted_name);
-    }
-
-    if (findExtraOpenUnitLocked(unit)) |eu| {
-        return eu.opened != 0 and eu.filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&eu.filename)), wanted_name);
-    }
-    return false;
+    const ou = findOpenUnitLocked(unit) orelse return false;
+    return ou.opened != 0 and ou.filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&ou.filename)), wanted_name);
 }
 
 fn copyOpenFilenameLocked(unit: c_int, out: [*]u8, len: usize) c_int {
     if (len == 0) return 0;
-
-    if (isArrayUnit(unit)) {
-        const idx: usize = @intCast(unit);
-        const ou = &open_units[idx];
-        if (ou.opened != 0 and ou.filename[0] != 0) {
-            var i: usize = 0;
-            while (i + 1 < len and ou.filename[i] != 0) : (i += 1) out[i] = ou.filename[i];
-            out[i] = 0;
-            return 1;
-        }
-        return 0;
-    }
-
-    if (findExtraOpenUnitLocked(unit)) |eu| {
-        if (eu.opened != 0 and eu.filename[0] != 0) {
-            var i: usize = 0;
-            while (i + 1 < len and eu.filename[i] != 0) : (i += 1) out[i] = eu.filename[i];
-            out[i] = 0;
-            return 1;
-        }
-    }
-    return 0;
+    const ou = findOpenUnitLocked(unit) orelse return 0;
+    if (ou.opened == 0 or ou.filename[0] == 0) return 0;
+    var i: usize = 0;
+    while (i + 1 < len and ou.filename[i] != 0) : (i += 1) out[i] = ou.filename[i];
+    out[i] = 0;
+    return 1;
 }
 
 pub export fn col6forge_open_unit_copy_filename(unit: c_int, out: ?[*]u8, len: usize) callconv(.c) c_int {
@@ -173,28 +145,15 @@ pub export fn col6forge_open_unit_copy_filename(unit: c_int, out: ?[*]u8, len: u
 pub export fn col6forge_open_unit_is_open(unit: c_int) callconv(.c) c_int {
     open_state_mutex.lock();
     defer open_state_mutex.unlock();
-
-    if (isArrayUnit(unit)) {
-        return if (open_units[@as(usize, @intCast(unit))].opened != 0) 1 else 0;
-    }
-    if (findExtraOpenUnitLocked(unit)) |eu| {
-        return if (eu.opened != 0) 1 else 0;
-    }
-    return 0;
+    const ou = findOpenUnitLocked(unit) orelse return 0;
+    return if (ou.opened != 0) 1 else 0;
 }
 
 pub export fn col6forge_open_unit_blank_code(unit: c_int) callconv(.c) c_int {
     open_state_mutex.lock();
     defer open_state_mutex.unlock();
-
-    if (isArrayUnit(unit)) {
-        const ou = &open_units[@as(usize, @intCast(unit))];
-        return if (ou.opened != 0) ou.blank else 0;
-    }
-    if (findExtraOpenUnitLocked(unit)) |eu| {
-        return if (eu.opened != 0) eu.blank else 0;
-    }
-    return 0;
+    const ou = findOpenUnitLocked(unit) orelse return 0;
+    return if (ou.opened != 0) ou.blank else 0;
 }
 
 pub export fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) callconv(.c) c_int {
@@ -340,17 +299,7 @@ pub export fn col6forge_open(unit: c_int, file: ?[*]const u8, file_len: c_int, a
     open_state_mutex.lock();
     defer open_state_mutex.unlock();
     removeOpenFilenameIndexForUnitLocked(unit);
-
-    if (isArrayUnit(unit)) {
-        const idx: usize = @intCast(unit);
-        writeOpenUnitLocked(&open_units[idx], file, file_len, access, form, blank);
-        if (open_units[idx].opened != 0 and open_units[idx].filename[0] != 0) {
-            indexOpenFilenameForUnitLocked(unit, asConstCStr(&open_units[idx].filename));
-        }
-        return;
-    }
-
-    const ou = ensureExtraOpenUnitLocked(unit) orelse return;
+    const ou = ensureOpenUnitLocked(unit) orelse return;
     writeOpenUnitLocked(ou, file, file_len, access, form, blank);
     if (ou.opened != 0 and ou.filename[0] != 0) {
         indexOpenFilenameForUnitLocked(unit, asConstCStr(&ou.filename));
@@ -395,20 +344,7 @@ pub export fn col6forge_close(unit: c_int, status: c_int) callconv(.c) void {
 
     open_state_mutex.lock();
     removeOpenFilenameIndexForUnitLocked(unit);
-    if (isArrayUnit(unit)) {
-        const idx: usize = @intCast(unit);
-        const ou = &open_units[idx];
-        if (status == 2) {
-            delete_ready = copyOpenFilenameLocked(unit, &delete_name, delete_name.len) != 0;
-            if (!delete_ready) {
-                _ = snprintf(&delete_name, delete_name.len, "fort.%d", unit);
-                delete_name[delete_name.len - 1] = 0;
-                delete_ready = true;
-            }
-        }
-        ou.opened = 0;
-        ou.filename[0] = 0;
-    } else if (findExtraOpenUnitLocked(unit)) |ou| {
+    if (findOpenUnitLocked(unit)) |ou| {
         if (status == 2) {
             delete_ready = copyOpenFilenameLocked(unit, &delete_name, delete_name.len) != 0;
             if (!delete_ready) {
@@ -467,14 +403,7 @@ pub export fn col6forge_inquire_unit(
     var filename: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
 
     open_state_mutex.lock();
-    if (isArrayUnit(unit)) {
-        const ou = &open_units[@as(usize, @intCast(unit))];
-        is_open = ou.opened != 0;
-        access_code = ou.access;
-        form_code = ou.form;
-        blank_code = ou.blank;
-        _ = copyOpenFilenameLocked(unit, &filename, filename.len);
-    } else if (findExtraOpenUnitLocked(unit)) |ou| {
+    if (findOpenUnitLocked(unit)) |ou| {
         is_open = ou.opened != 0;
         access_code = ou.access;
         form_code = ou.form;
@@ -589,10 +518,7 @@ pub export fn col6forge_inquire_file(
             found_unit = -1;
         }
         if (found_unit >= 0 and open_filename_index.get(wanted_name) == null) {
-            if (isArrayUnit(found_unit)) {
-                const idx: usize = @intCast(found_unit);
-                indexOpenFilenameForUnitLocked(found_unit, asConstCStr(&open_units[idx].filename));
-            } else if (findExtraOpenUnitLocked(found_unit)) |ou| {
+            if (findOpenUnitLocked(found_unit)) |ou| {
                 indexOpenFilenameForUnitLocked(found_unit, asConstCStr(&ou.filename));
             }
         }
