@@ -189,12 +189,20 @@ fn getUnformattedUnitLocked(unit: c_int, create_if_missing: bool) ?*UnformattedU
 }
 
 fn getDirectUnit(unit: c_int, create_if_missing: bool) ?*DirectUnit {
+    if (isArrayUnit(unit)) {
+        const idx: usize = @intCast(unit);
+        return &direct_units[idx];
+    }
     store_registry_mutex.lock();
     defer store_registry_mutex.unlock();
     return getDirectUnitLocked(unit, create_if_missing);
 }
 
 fn getUnformattedUnit(unit: c_int, create_if_missing: bool) ?*UnformattedUnit {
+    if (isArrayUnit(unit)) {
+        const idx: usize = @intCast(unit);
+        return &unformatted_units[idx];
+    }
     store_registry_mutex.lock();
     defer store_registry_mutex.unlock();
     return getUnformattedUnitLocked(unit, create_if_missing);
@@ -581,14 +589,48 @@ fn directLastRecord(rec: c_int, count: c_int) ?c_int {
 
 pub export fn col6forge_direct_record_span_ptr(unit: c_int, rec: c_int, recl: c_int, count: c_int) callconv(.c) ?[*]u8 {
     const last_rec = directLastRecord(rec, count) orelse return null;
-    _ = col6forge_direct_record_ptr(unit, last_rec, recl) orelse return null;
-    return col6forge_direct_record_ptr(unit, rec, recl);
+    const lock = unitLock(unit);
+    lock.lock();
+    defer lock.unlock();
+
+    const du = getDirectUnit(unit, false) orelse return null;
+    const recl_local = resolvedDirectRecl(du, recl) orelse return null;
+    loadDirectFromFile(unit, du);
+
+    const recl_size: usize = @intCast(recl_local);
+    const first = directRecordRange(rec, recl_size) orelse return null;
+    const last = directRecordRange(last_rec, recl_size) orelse return null;
+    if (last.end < first.offset) return null;
+
+    directEnsureCapacity(du, last.end);
+    if (du.data == null or du.size < last.end) return null;
+
+    const begin_ptr = du.data.? + first.offset;
+    const span_len = last.end - first.offset;
+    var i: usize = 0;
+    while (i < span_len) : (i += 1) {
+        begin_ptr[i] = ' ';
+    }
+    return begin_ptr;
 }
 
 pub export fn col6forge_direct_record_span_ptr_ro(unit: c_int, rec: c_int, recl: c_int, count: c_int) callconv(.c) ?[*]u8 {
     const last_rec = directLastRecord(rec, count) orelse return null;
-    _ = col6forge_direct_record_ptr_ro(unit, last_rec, recl) orelse return null;
-    return col6forge_direct_record_ptr_ro(unit, rec, recl);
+    const lock = unitLock(unit);
+    lock.lock();
+    defer lock.unlock();
+
+    const du = getDirectUnit(unit, false) orelse return null;
+    const recl_local = resolvedDirectRecl(du, recl) orelse return null;
+    loadDirectFromFile(unit, du);
+    if (du.data == null) return null;
+
+    const recl_size: usize = @intCast(recl_local);
+    const first = directRecordRange(rec, recl_size) orelse return null;
+    const last = directRecordRange(last_rec, recl_size) orelse return null;
+    if (last.end < first.offset) return null;
+    if (du.size < last.end) return null;
+    return du.data.? + first.offset;
 }
 
 pub export fn col6forge_direct_record_commit(unit: c_int, rec: c_int) callconv(.c) void {
