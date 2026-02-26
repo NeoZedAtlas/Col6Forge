@@ -10,8 +10,7 @@ extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
 extern fn ftell(stream: *FILE) c_long;
 
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
-extern fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) c_int;
-extern fn col6forge_unit_pos_set(unit: c_int, pos: c_long) void;
+extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
 
 const StreamMode = enum(u8) {
     none,
@@ -31,6 +30,7 @@ const StreamEntry = struct {
 var manager_mutex: std.Thread.Mutex = .{};
 var fixed_entries: [COL6FORGE_MAX_UNITS]StreamEntry = [_]StreamEntry{.{}} ** COL6FORGE_MAX_UNITS;
 var extra_entries: std.AutoHashMapUnmanaged(c_int, *StreamEntry) = .{};
+var extra_unit_pos: std.AutoHashMapUnmanaged(c_int, c_long) = .{};
 
 fn runtimeAllocator() std.mem.Allocator {
     return std.heap.page_allocator;
@@ -42,6 +42,43 @@ fn asConstCStr(buf: anytype) [*:0]const u8 {
 
 fn isFixedUnit(unit: c_int) bool {
     return unit >= 0 and unit < COL6FORGE_MAX_UNITS;
+}
+
+pub fn posGet(unit: c_int, out: ?*c_long) c_int {
+    if (out == null) return 0;
+    const out_ptr = out.?;
+
+    manager_mutex.lock();
+    defer manager_mutex.unlock();
+
+    if (isFixedUnit(unit)) {
+        out_ptr.* = unit_pos[@as(usize, @intCast(unit))];
+        return 1;
+    }
+    if (extra_unit_pos.get(unit)) |pos| {
+        out_ptr.* = pos;
+        return 1;
+    }
+
+    out_ptr.* = 0;
+    return 0;
+}
+
+pub fn posSet(unit: c_int, pos: c_long) void {
+    manager_mutex.lock();
+    defer manager_mutex.unlock();
+
+    if (isFixedUnit(unit)) {
+        unit_pos[@as(usize, @intCast(unit))] = pos;
+        return;
+    }
+
+    const allocator = runtimeAllocator();
+    extra_unit_pos.put(allocator, unit, pos) catch {};
+}
+
+pub fn posClear(unit: c_int) void {
+    posSet(unit, 0);
 }
 
 fn findEntry(unit: c_int) ?*StreamEntry {
@@ -129,7 +166,7 @@ pub fn acquire(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long, 
     if (entry.has_cursor) {
         start_pos = entry.cursor;
     } else {
-        _ = col6forge_unit_pos_get(unit, &start_pos);
+        _ = posGet(unit, &start_pos);
     }
 
     const ready = if (want_write) ensureWritable(entry, unit, start_pos) else ensureReadable(entry, unit);
@@ -161,21 +198,21 @@ pub fn release(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: 
             const final_pos = if (pos >= 0) pos else start_pos;
             entry.cursor = final_pos;
             entry.has_cursor = true;
-            col6forge_unit_pos_set(unit, final_pos);
+            posSet(unit, final_pos);
         } else {
             _ = fseek(s, start_pos, 0);
             entry.cursor = start_pos;
             entry.has_cursor = true;
-            col6forge_unit_pos_set(unit, start_pos);
+            posSet(unit, start_pos);
         }
     } else if (commit_pos == 0) {
         entry.cursor = start_pos;
         entry.has_cursor = true;
-        col6forge_unit_pos_set(unit, start_pos);
+        posSet(unit, start_pos);
     } else if (entry.has_cursor) {
-        col6forge_unit_pos_set(unit, entry.cursor);
+        posSet(unit, entry.cursor);
     } else {
-        col6forge_unit_pos_set(unit, start_pos);
+        posSet(unit, start_pos);
     }
 
     entry.held = false;
@@ -193,7 +230,7 @@ pub fn setPos(unit: c_int, pos: c_long) c_int {
 
     entry.cursor = pos;
     entry.has_cursor = true;
-    col6forge_unit_pos_set(unit, pos);
+    posSet(unit, pos);
     return 1;
 }
 
@@ -221,7 +258,7 @@ pub fn getPos(unit: c_int, out: ?*c_long) c_int {
         }
     }
 
-    return col6forge_unit_pos_get(unit, out);
+    return posGet(unit, out);
 }
 
 pub fn invalidate(unit: c_int) void {

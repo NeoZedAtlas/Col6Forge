@@ -1,4 +1,5 @@
 const std = @import("std");
+const io_unit_manager = @import("io_unit_manager.zig");
 const COL6FORGE_MAX_UNITS = 256;
 const COL6FORGE_FILENAME_MAX = 4096;
 
@@ -6,7 +7,6 @@ extern fn remove(pathname: [*:0]const u8) c_int;
 extern fn fseek(stream: *FILE, offset: c_long, origin: c_int) c_int;
 extern fn fread(ptr: ?*anyopaque, size: usize, nitems: usize, stream: *FILE) usize;
 extern fn snprintf(str: [*c]u8, n: usize, format: [*:0]const u8, ...) c_int;
-extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 
 const FILE = opaque {};
 
@@ -18,7 +18,6 @@ const OpenUnit = extern struct {
     blank: c_int,
 };
 
-extern var unit_pos: [COL6FORGE_MAX_UNITS]c_long;
 extern var open_units: [COL6FORGE_MAX_UNITS]OpenUnit;
 
 extern fn unit_filename(unit: c_int, buf: ?[*]u8, len: usize) void;
@@ -48,87 +47,28 @@ const ExtraOpenUnit = extern struct {
 };
 
 var open_state_mutex: std.Thread.Mutex = .{};
-var extra_open_units: ?[*]ExtraOpenUnit = null;
-var extra_open_count: usize = 0;
-var extra_open_cap: usize = 0;
-
-const ExtraUnitPos = extern struct {
-    unit: c_int,
-    pos: c_long,
-};
-
-var pos_state_mutex: std.Thread.Mutex = .{};
-var extra_unit_pos: ?[*]ExtraUnitPos = null;
-var extra_unit_pos_count: usize = 0;
-var extra_unit_pos_cap: usize = 0;
+var extra_open_units: std.AutoHashMapUnmanaged(c_int, ExtraOpenUnit) = .{};
 
 fn isArrayUnit(unit: c_int) bool {
     return unit >= 0 and unit < COL6FORGE_MAX_UNITS;
 }
 
-fn findExtraOpenIndexLocked(unit: c_int) ?usize {
-    if (extra_open_units == null) return null;
-    var i: usize = 0;
-    while (i < extra_open_count) : (i += 1) {
-        if (extra_open_units.?[i].unit == unit) return i;
-    }
-    return null;
-}
-
-fn findExtraUnitPosIndexLocked(unit: c_int) ?usize {
-    if (extra_unit_pos == null) return null;
-    var i: usize = 0;
-    while (i < extra_unit_pos_count) : (i += 1) {
-        if (extra_unit_pos.?[i].unit == unit) return i;
-    }
-    return null;
-}
-
-fn ensureExtraUnitPosLocked(unit: c_int) ?*ExtraUnitPos {
-    if (findExtraUnitPosIndexLocked(unit)) |idx| return &extra_unit_pos.?[idx];
-
-    if (extra_unit_pos_count >= extra_unit_pos_cap) {
-        var new_cap: usize = if (extra_unit_pos_cap == 0) 8 else extra_unit_pos_cap * 2;
-        while (new_cap <= extra_unit_pos_count) : (new_cap *= 2) {}
-        const prev: ?*anyopaque = if (extra_unit_pos) |items| @ptrCast(items) else null;
-        const new_raw = realloc(prev, new_cap * @sizeOf(ExtraUnitPos)) orelse return null;
-        const aligned: *align(@alignOf(ExtraUnitPos)) anyopaque = @alignCast(new_raw);
-        const items: [*]ExtraUnitPos = @ptrCast(aligned);
-        extra_unit_pos = items;
-        extra_unit_pos_cap = new_cap;
-    }
-
-    const idx = extra_unit_pos_count;
-    extra_unit_pos.?[idx].unit = unit;
-    extra_unit_pos.?[idx].pos = 0;
-    extra_unit_pos_count += 1;
-    return &extra_unit_pos.?[idx];
+fn findExtraOpenUnitLocked(unit: c_int) ?*ExtraOpenUnit {
+    return extra_open_units.getPtr(unit);
 }
 
 fn ensureExtraOpenUnitLocked(unit: c_int) ?*ExtraOpenUnit {
-    if (findExtraOpenIndexLocked(unit)) |idx| return &extra_open_units.?[idx];
+    if (extra_open_units.getPtr(unit)) |entry| return entry;
 
-    if (extra_open_count >= extra_open_cap) {
-        var new_cap: usize = if (extra_open_cap == 0) 8 else extra_open_cap * 2;
-        while (new_cap <= extra_open_count) : (new_cap *= 2) {}
-        const prev: ?*anyopaque = if (extra_open_units) |items| @ptrCast(items) else null;
-        const new_raw = realloc(prev, new_cap * @sizeOf(ExtraOpenUnit)) orelse return null;
-        const aligned: *align(@alignOf(ExtraOpenUnit)) anyopaque = @alignCast(new_raw);
-        const items: [*]ExtraOpenUnit = @ptrCast(aligned);
-        extra_open_units = items;
-        extra_open_cap = new_cap;
-    }
-
-    const idx = extra_open_count;
-    const entry = &extra_open_units.?[idx];
-    entry.unit = unit;
-    entry.opened = 0;
-    entry.filename[0] = 0;
-    entry.access = 0;
-    entry.form = 0;
-    entry.blank = 0;
-    extra_open_count += 1;
-    return entry;
+    extra_open_units.put(std.heap.page_allocator, unit, .{
+        .unit = unit,
+        .opened = 0,
+        .filename = [_]u8{0} ** COL6FORGE_FILENAME_MAX,
+        .access = 0,
+        .form = 0,
+        .blank = 0,
+    }) catch return null;
+    return extra_open_units.getPtr(unit);
 }
 
 fn writeOpenUnitLocked(ou: anytype, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int) void {
@@ -158,8 +98,7 @@ fn copyOpenFilenameLocked(unit: c_int, out: [*]u8, len: usize) c_int {
         return 0;
     }
 
-    if (findExtraOpenIndexLocked(unit)) |idx| {
-        const eu = &extra_open_units.?[idx];
+    if (findExtraOpenUnitLocked(unit)) |eu| {
         if (eu.opened != 0 and eu.filename[0] != 0) {
             var i: usize = 0;
             while (i + 1 < len and eu.filename[i] != 0) : (i += 1) out[i] = eu.filename[i];
@@ -184,8 +123,8 @@ pub export fn col6forge_open_unit_is_open(unit: c_int) callconv(.c) c_int {
     if (isArrayUnit(unit)) {
         return if (open_units[@as(usize, @intCast(unit))].opened != 0) 1 else 0;
     }
-    if (findExtraOpenIndexLocked(unit)) |idx| {
-        return if (extra_open_units.?[idx].opened != 0) 1 else 0;
+    if (findExtraOpenUnitLocked(unit)) |eu| {
+        return if (eu.opened != 0) 1 else 0;
     }
     return 0;
 }
@@ -198,45 +137,22 @@ pub export fn col6forge_open_unit_blank_code(unit: c_int) callconv(.c) c_int {
         const ou = &open_units[@as(usize, @intCast(unit))];
         return if (ou.opened != 0) ou.blank else 0;
     }
-    if (findExtraOpenIndexLocked(unit)) |idx| {
-        const eu = &extra_open_units.?[idx];
+    if (findExtraOpenUnitLocked(unit)) |eu| {
         return if (eu.opened != 0) eu.blank else 0;
     }
     return 0;
 }
 
 pub export fn col6forge_unit_pos_get(unit: c_int, out: ?*c_long) callconv(.c) c_int {
-    if (out == null) return 0;
-    const out_ptr = out.?;
-    pos_state_mutex.lock();
-    defer pos_state_mutex.unlock();
-
-    if (isArrayUnit(unit)) {
-        out_ptr.* = unit_pos[@as(usize, @intCast(unit))];
-        return 1;
-    }
-    if (findExtraUnitPosIndexLocked(unit)) |idx| {
-        out_ptr.* = extra_unit_pos.?[idx].pos;
-        return 1;
-    }
-    out_ptr.* = 0;
-    return 0;
+    return io_unit_manager.posGet(unit, out);
 }
 
 pub export fn col6forge_unit_pos_set(unit: c_int, pos: c_long) callconv(.c) void {
-    pos_state_mutex.lock();
-    defer pos_state_mutex.unlock();
-
-    if (isArrayUnit(unit)) {
-        unit_pos[@as(usize, @intCast(unit))] = pos;
-        return;
-    }
-    const entry = ensureExtraUnitPosLocked(unit) orelse return;
-    entry.pos = pos;
+    io_unit_manager.posSet(unit, pos);
 }
 
 pub export fn col6forge_unit_pos_clear(unit: c_int) callconv(.c) void {
-    col6forge_unit_pos_set(unit, 0);
+    io_unit_manager.posClear(unit);
 }
 
 fn asConstCStr(buf: anytype) [*:0]const u8 {
@@ -430,8 +346,7 @@ pub export fn col6forge_close(unit: c_int, status: c_int) callconv(.c) void {
         }
         ou.opened = 0;
         ou.filename[0] = 0;
-    } else if (findExtraOpenIndexLocked(unit)) |extra_idx| {
-        const ou = &extra_open_units.?[extra_idx];
+    } else if (findExtraOpenUnitLocked(unit)) |ou| {
         if (status == 2) {
             delete_ready = copyOpenFilenameLocked(unit, &delete_name, delete_name.len) != 0;
             if (!delete_ready) {
@@ -497,8 +412,7 @@ pub export fn col6forge_inquire_unit(
         form_code = ou.form;
         blank_code = ou.blank;
         _ = copyOpenFilenameLocked(unit, &filename, filename.len);
-    } else if (findExtraOpenIndexLocked(unit)) |extra_idx| {
-        const ou = &extra_open_units.?[extra_idx];
+    } else if (findExtraOpenUnitLocked(unit)) |ou| {
         is_open = ou.opened != 0;
         access_code = ou.access;
         form_code = ou.form;
@@ -588,12 +502,12 @@ pub export fn col6forge_inquire_file(
                 break;
             }
         }
-        if (found_unit < 0 and extra_open_units != null) {
-            i = 0;
-            while (i < extra_open_count) : (i += 1) {
-                const entry = &extra_open_units.?[i];
+        if (found_unit < 0) {
+            var it = extra_open_units.iterator();
+            while (it.next()) |kv| {
+                const entry = kv.value_ptr;
                 if (entry.opened != 0 and entry.filename[0] != 0 and std.mem.eql(u8, cstrSlice(asConstCStr(&entry.filename)), wanted_name)) {
-                    found_unit = entry.unit;
+                    found_unit = kv.key_ptr.*;
                     break;
                 }
             }
