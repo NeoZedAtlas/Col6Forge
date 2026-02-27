@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("nodes.zig");
 
 pub fn printProgram(writer: anytype, program: ast.Program) !void {
@@ -64,12 +65,7 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
     switch (stmt.node) {
         .assignment => |assign| {
             try writer.print(";   stmt label={s} assignment\n", .{label_text});
-            try printIndent(writer, 2);
-            try writer.writeAll("target:\n");
-            try printExpr(writer, assign.target, 3);
-            try printIndent(writer, 2);
-            try writer.writeAll("value:\n");
-            try printExpr(writer, assign.value, 3);
+            try printAssignmentDetails(writer, assign, 2);
         },
         .assign_label => |assign| {
             try writer.print(";   stmt label={s} assign {s} to {s}\n", .{ label_text, assign.label, assign.target });
@@ -82,46 +78,65 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         },
         .write => |write| {
             try writer.print(";   stmt label={s} write args={d}\n", .{ label_text, write.args.len });
-            try printIndent(writer, 2);
-            try writer.writeAll("unit:\n");
-            try printExpr(writer, write.unit, 3);
-            try printFormatSpec(writer, write.format, 2);
-            if (write.rec) |rec| {
-                try printIndent(writer, 2);
-                try writer.writeAll("rec:\n");
-                try printExpr(writer, rec, 3);
-            }
-            for (write.args, 0..) |arg, idx| {
-                try printIndent(writer, 2);
-                try writer.print("arg[{d}]:\n", .{idx});
-                try printExpr(writer, arg, 3);
-            }
+            try printIoDetails(writer, write.unit, write.format, write.rec, write.args, write.err_label, null, write.iostat, 2);
         },
         .read => |read| {
             try writer.print(";   stmt label={s} read args={d}\n", .{ label_text, read.args.len });
+            try printIoDetails(writer, read.unit, read.format, read.rec, read.args, read.err_label, read.end_label, read.iostat, 2);
+        },
+        .rewind => |rw| {
+            try writer.print(";   stmt label={s} rewind\n", .{label_text});
             try printIndent(writer, 2);
             try writer.writeAll("unit:\n");
-            try printExpr(writer, read.unit, 3);
-            try printFormatSpec(writer, read.format, 2);
-            if (read.rec) |rec| {
-                try printIndent(writer, 2);
-                try writer.writeAll("rec:\n");
-                try printExpr(writer, rec, 3);
-            }
-            for (read.args, 0..) |arg, idx| {
-                try printIndent(writer, 2);
-                try writer.print("arg[{d}]:\n", .{idx});
-                try printExpr(writer, arg, 3);
-            }
+            try printExpr(writer, rw.unit, 3);
         },
-        .rewind => {
-            try writer.print(";   stmt label={s} rewind\n", .{label_text});
-        },
-        .backspace => {
+        .backspace => |bs| {
             try writer.print(";   stmt label={s} backspace\n", .{label_text});
+            try printIndent(writer, 2);
+            try writer.writeAll("unit:\n");
+            try printExpr(writer, bs.unit, 3);
         },
-        .endfile => {
+        .endfile => |ef| {
             try writer.print(";   stmt label={s} endfile\n", .{label_text});
+            try printIndent(writer, 2);
+            try writer.writeAll("unit:\n");
+            try printExpr(writer, ef.unit, 3);
+        },
+        .open => |opn| {
+            try writer.print(";   stmt label={s} open\n", .{label_text});
+            try printIndent(writer, 2);
+            try writer.writeAll("unit:\n");
+            try printExpr(writer, opn.unit, 3);
+            if (opn.recl) |recl| {
+                try printIndent(writer, 2);
+                try writer.writeAll("recl:\n");
+                try printExpr(writer, recl, 3);
+            }
+            if (opn.file) |file| {
+                try printIndent(writer, 2);
+                try writer.writeAll("file:\n");
+                try printExpr(writer, file, 3);
+            }
+            if (opn.access) |access| {
+                try printIndent(writer, 2);
+                try writer.writeAll("access:\n");
+                try printExpr(writer, access, 3);
+            }
+            if (opn.form) |form| {
+                try printIndent(writer, 2);
+                try writer.writeAll("form:\n");
+                try printExpr(writer, form, 3);
+            }
+            if (opn.blank) |blank| {
+                try printIndent(writer, 2);
+                try writer.writeAll("blank:\n");
+                try printExpr(writer, blank, 3);
+            }
+            if (opn.status) |status| {
+                try printIndent(writer, 2);
+                try writer.writeAll("status:\n");
+                try printExpr(writer, status, 3);
+            }
         },
         .inquire => |inq| {
             try writer.print(";   stmt label={s} inquire controls({d})\n", .{ label_text, inq.controls.len });
@@ -183,12 +198,7 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         },
         .if_single => |ifs| {
             try writer.print(";   stmt label={s} if-single\n", .{label_text});
-            try printIndent(writer, 2);
-            try writer.writeAll("condition:\n");
-            try printExpr(writer, ifs.condition, 3);
-            try printIndent(writer, 2);
-            try writer.writeAll("then-stmt:\n");
-            try printInlineStmtNode(writer, ifs.stmt.*, 3);
+            try printIfSingleDetails(writer, ifs, 2);
         },
         .if_block => |ifb| {
             try writer.print(";   stmt label={s} if-block then({d}) else({d})\n", .{ label_text, ifb.then_stmts.len, ifb.else_stmts.len });
@@ -308,12 +318,7 @@ fn printInlineStmtNode(writer: anytype, node: ast.StmtNode, depth: usize) !void 
         .assignment => |assign| {
             try printIndent(writer, depth);
             try writer.writeAll("stmt assignment\n");
-            try printIndent(writer, depth + 1);
-            try writer.writeAll("target:\n");
-            try printExpr(writer, assign.target, depth + 2);
-            try printIndent(writer, depth + 1);
-            try writer.writeAll("value:\n");
-            try printExpr(writer, assign.value, depth + 2);
+            try printAssignmentDetails(writer, assign, depth + 1);
         },
         .call => |call| {
             try printIndent(writer, depth);
@@ -335,17 +340,70 @@ fn printInlineStmtNode(writer: anytype, node: ast.StmtNode, depth: usize) !void 
         .if_single => |ifs| {
             try printIndent(writer, depth);
             try writer.writeAll("stmt if-single\n");
-            try printIndent(writer, depth + 1);
-            try writer.writeAll("condition:\n");
-            try printExpr(writer, ifs.condition, depth + 2);
-            try printIndent(writer, depth + 1);
-            try writer.writeAll("then-stmt:\n");
-            try printInlineStmtNode(writer, ifs.stmt.*, depth + 2);
+            try printIfSingleDetails(writer, ifs, depth + 1);
         },
         else => {
             try printIndent(writer, depth);
             try writer.print("stmt {s}\n", .{stmtNodeName(node)});
         },
+    }
+}
+
+fn printAssignmentDetails(writer: anytype, assign: ast.Assignment, depth: usize) !void {
+    try printIndent(writer, depth);
+    try writer.writeAll("target:\n");
+    try printExpr(writer, assign.target, depth + 1);
+    try printIndent(writer, depth);
+    try writer.writeAll("value:\n");
+    try printExpr(writer, assign.value, depth + 1);
+}
+
+fn printIfSingleDetails(writer: anytype, ifs: ast.IfSingle, depth: usize) !void {
+    try printIndent(writer, depth);
+    try writer.writeAll("condition:\n");
+    try printExpr(writer, ifs.condition, depth + 1);
+    try printIndent(writer, depth);
+    try writer.writeAll("then-stmt:\n");
+    try printInlineStmtNode(writer, ifs.stmt.*, depth + 1);
+}
+
+fn printIoDetails(
+    writer: anytype,
+    unit: *ast.Expr,
+    format: ast.FormatSpec,
+    rec: ?*ast.Expr,
+    args: []*ast.Expr,
+    err_label: ?[]const u8,
+    end_label: ?[]const u8,
+    iostat: ?*ast.Expr,
+    depth: usize,
+) !void {
+    try printIndent(writer, depth);
+    try writer.writeAll("unit:\n");
+    try printExpr(writer, unit, depth + 1);
+    try printFormatSpec(writer, format, depth);
+    if (rec) |rec_expr| {
+        try printIndent(writer, depth);
+        try writer.writeAll("rec:\n");
+        try printExpr(writer, rec_expr, depth + 1);
+    }
+    if (err_label) |label| {
+        try printIndent(writer, depth);
+        try writer.print("err-label: {s}\n", .{label});
+    }
+    if (end_label) |label| {
+        try printIndent(writer, depth);
+        try writer.print("end-label: {s}\n", .{label});
+    }
+    if (iostat) |io_expr| {
+        try printIndent(writer, depth);
+        try writer.writeAll("iostat:\n");
+        try printExpr(writer, io_expr, depth + 1);
+    }
+    for (args, 0..) |arg, idx| {
+        try printIndent(writer, depth);
+        try writer.print("arg[{d}]:\n", .{idx});
+        try printExpr(writer, arg, depth + 1);
     }
 }
 
@@ -570,4 +628,94 @@ fn typeKindName(kind: ast.TypeKind) []const u8 {
         .logical => "LOGICAL",
         .character => "CHARACTER",
     };
+}
+
+test "printProgram prints open/read/write control details" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const unit_expr = try a.create(ast.Expr);
+    unit_expr.* = .{ .literal = .{ .kind = .integer, .text = "10" } };
+
+    const rec_expr = try a.create(ast.Expr);
+    rec_expr.* = .{ .literal = .{ .kind = .integer, .text = "2" } };
+
+    const value_expr = try a.create(ast.Expr);
+    value_expr.* = .{ .identifier = "X" };
+
+    const iostat_expr = try a.create(ast.Expr);
+    iostat_expr.* = .{ .identifier = "IOS" };
+
+    const file_expr = try a.create(ast.Expr);
+    file_expr.* = .{ .literal = .{ .kind = .string, .text = "'out.dat'" } };
+
+    const write_args = try a.alloc(*ast.Expr, 1);
+    write_args[0] = value_expr;
+
+    const read_args = try a.alloc(*ast.Expr, 1);
+    read_args[0] = value_expr;
+
+    const stmts = try a.alloc(ast.Stmt, 3);
+    stmts[0] = .{
+        .label = null,
+        .node = .{
+            .open = .{
+                .unit = unit_expr,
+                .recl = null,
+                .file = file_expr,
+                .access = null,
+                .form = null,
+                .blank = null,
+                .status = null,
+            },
+        },
+    };
+    stmts[1] = .{
+        .label = null,
+        .node = .{
+            .write = .{
+                .unit = unit_expr,
+                .format = .list_directed,
+                .rec = rec_expr,
+                .args = write_args,
+                .err_label = "900",
+                .iostat = iostat_expr,
+            },
+        },
+    };
+    stmts[2] = .{
+        .label = null,
+        .node = .{
+            .read = .{
+                .unit = unit_expr,
+                .format = .list_directed,
+                .rec = null,
+                .args = read_args,
+                .err_label = "901",
+                .end_label = "902",
+                .iostat = iostat_expr,
+            },
+        },
+    };
+
+    const units = try a.alloc(ast.ProgramUnit, 1);
+    units[0] = .{
+        .kind = .program,
+        .name = "MAIN",
+        .args = &.{},
+        .decls = &.{},
+        .stmts = stmts,
+    };
+    const program = ast.Program{ .units = units };
+
+    var buf = std.array_list.Managed(u8).init(std.testing.allocator);
+    defer buf.deinit();
+    try printProgram(buf.writer(), program);
+
+    try std.testing.expect(std.mem.indexOf(u8, buf.items, "stmt label=- open") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf.items, "err-label: 900") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf.items, "err-label: 901") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf.items, "end-label: 902") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buf.items, "iostat:") != null);
 }
