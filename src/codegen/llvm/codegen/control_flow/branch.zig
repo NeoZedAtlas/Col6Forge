@@ -29,11 +29,7 @@ pub fn emitComputedGoto(
 
     var cases = std.array_list.Managed(@TypeOf(builder.*).SwitchCase).init(ctx.allocator);
     defer cases.deinit();
-    var seen = std.AutoHashMap(i64, void).init(ctx.allocator);
-    defer seen.deinit();
     for (plan) |item| {
-        if (seen.contains(item.index)) continue;
-        try seen.put(item.index, {});
         try cases.append(.{
             .value = item.index,
             .label = item.target_block,
@@ -49,10 +45,6 @@ pub fn emitAssignedGoto(
     next_block: []const u8,
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!void {
-    if (gt.labels.len == 0) {
-        try builder.br(next_block);
-        return;
-    }
     const sym = ctx.findSymbol(gt.var_name) orelse return error.UnknownSymbol;
     const ptr = try ctx.getPointer(gt.var_name);
     const tmp = try ctx.nextTemp();
@@ -61,7 +53,10 @@ pub fn emitAssignedGoto(
     var sel = ValueRef{ .name = tmp, .ty = ty, .is_ptr = false };
     sel = try expr.coerce(ctx, builder, sel, .i32);
 
-    const plan = try logic.resolveGotoTargets(ctx.allocator, gt.labels, local_label_map, &ctx.label_map, .assigned);
+    const plan = if (gt.labels.len == 0)
+        try logic.resolveAssignedGotoTargetsNoList(ctx.allocator, local_label_map, &ctx.label_map)
+    else
+        try logic.resolveGotoTargets(ctx.allocator, gt.labels, local_label_map, &ctx.label_map, .assigned);
     defer ctx.allocator.free(plan);
 
     var cases = std.array_list.Managed(@TypeOf(builder.*).SwitchCase).init(ctx.allocator);
@@ -75,6 +70,13 @@ pub fn emitAssignedGoto(
             .value = item.index,
             .label = item.target_block,
         });
+    }
+    if (gt.labels.len == 0) {
+        const invalid_label = try ctx.nextLabel("assigned_goto_invalid");
+        try builder.switchBr(sel, invalid_label, cases.items);
+        try builder.label(invalid_label);
+        try builder.emitUnreachable();
+        return;
     }
     try builder.switchBr(sel, next_block, cases.items);
 }

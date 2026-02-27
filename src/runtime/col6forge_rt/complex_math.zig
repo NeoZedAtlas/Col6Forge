@@ -295,6 +295,11 @@ fn ComplexApi(
 const C32Api = ComplexApi(f32, col6forge_complex32, fromC32, toC32, "col6forge_c");
 const C64Api = ComplexApi(f64, col6forge_complex64, fromC64, toC64, "col6forge_z");
 
+comptime {
+    _ = C32Api;
+    _ = C64Api;
+}
+
 test "logic layer: complex integer power division by zero returns infinite components" {
     const zero_c = complexPowi(f32, .{ .r = 0.0, .i = 0.0 }, -1);
     try std.testing.expect(std.math.isInf(zero_c.r));

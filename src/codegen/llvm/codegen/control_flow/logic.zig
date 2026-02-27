@@ -59,6 +59,49 @@ pub fn resolveGotoTargets(
     return targets.toOwnedSlice(allocator);
 }
 
+pub fn resolveAssignedGotoTargetsNoList(
+    allocator: std.mem.Allocator,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+    global_label_map: *const std.StringHashMap([]const u8),
+) ![]BranchTarget {
+    var targets: std.ArrayList(BranchTarget) = .empty;
+    errdefer targets.deinit(allocator);
+
+    var seen = std.AutoHashMap(i64, void).init(allocator);
+    defer seen.deinit();
+
+    if (local_label_map) |map| {
+        var it_local = map.iterator();
+        while (it_local.next()) |entry| {
+            try appendAssignedTargetFromEntry(allocator, &targets, &seen, entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+
+    var it_global = global_label_map.iterator();
+    while (it_global.next()) |entry| {
+        try appendAssignedTargetFromEntry(allocator, &targets, &seen, entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    if (targets.items.len == 0) return error.MissingLabel;
+    return targets.toOwnedSlice(allocator);
+}
+
+fn appendAssignedTargetFromEntry(
+    allocator: std.mem.Allocator,
+    targets: *std.ArrayList(BranchTarget),
+    seen: *std.AutoHashMap(i64, void),
+    label_text: []const u8,
+    target_block: []const u8,
+) !void {
+    const branch_value = std.fmt.parseInt(i64, label_text, 10) catch return error.InvalidLabelValue;
+    if (seen.contains(branch_value)) return;
+    try seen.put(branch_value, {});
+    try targets.append(allocator, .{
+        .index = branch_value,
+        .target_block = target_block,
+    });
+}
+
 pub fn analyzeLoopConfig(loop: ast.DoLoopStmt, var_kind: ast.TypeKind) LoopConfig {
     return .{
         .var_type = llvm_types.typeFromKind(var_kind),
@@ -149,4 +192,42 @@ test "resolveGotoTargets assigned mode uses numeric label value" {
     try testing.expectEqual(@as(usize, 2), plan.len);
     try testing.expectEqual(@as(i64, 10), plan[0].index);
     try testing.expectEqual(@as(i64, 30), plan[1].index);
+}
+
+test "resolveAssignedGotoTargetsNoList collects numeric labels from global map" {
+    const testing = std.testing;
+    var map = std.StringHashMap([]const u8).init(testing.allocator);
+    defer map.deinit();
+    try map.put("10", "L10");
+    try map.put("20", "L20");
+
+    const plan = try resolveAssignedGotoTargetsNoList(testing.allocator, null, &map);
+    defer testing.allocator.free(plan);
+
+    var saw10 = false;
+    var saw20 = false;
+    for (plan) |item| {
+        if (item.index == 10 and std.mem.eql(u8, item.target_block, "L10")) saw10 = true;
+        if (item.index == 20 and std.mem.eql(u8, item.target_block, "L20")) saw20 = true;
+    }
+    try testing.expect(saw10);
+    try testing.expect(saw20);
+}
+
+test "resolveAssignedGotoTargetsNoList prefers local map entries on duplicate labels" {
+    const testing = std.testing;
+    var global = std.StringHashMap([]const u8).init(testing.allocator);
+    defer global.deinit();
+    try global.put("10", "L10_global");
+
+    var local = std.StringHashMap([]const u8).init(testing.allocator);
+    defer local.deinit();
+    try local.put("10", "L10_local");
+
+    const plan = try resolveAssignedGotoTargetsNoList(testing.allocator, &local, &global);
+    defer testing.allocator.free(plan);
+
+    try testing.expectEqual(@as(usize, 1), plan.len);
+    try testing.expectEqual(@as(i64, 10), plan[0].index);
+    try testing.expectEqualStrings("L10_local", plan[0].target_block);
 }
