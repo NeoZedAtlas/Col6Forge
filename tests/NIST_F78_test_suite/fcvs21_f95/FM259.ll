@@ -855,10 +855,12 @@ if_else34:
   br label %bb54
 if_else30:
   %t355 = load i32, ptr %t24
-  switch i32 %t355, label %L33 [
+  switch i32 %t355, label %assigned_goto_invalid35 [
     i32 33, label %L33
     i32 34, label %L34
   ]
+assigned_goto_invalid35:
+  unreachable
 L33:
   store i32 5, ptr %t22
   br label %if_else31

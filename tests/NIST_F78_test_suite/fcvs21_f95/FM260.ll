@@ -764,10 +764,12 @@ L16:
   br label %bb50
 bb50:
   %t328 = load i32, ptr %t23
-  switch i32 %t328, label %L17 [
+  switch i32 %t328, label %assigned_goto_invalid19 [
     i32 17, label %L17
     i32 18, label %L18
   ]
+assigned_goto_invalid19:
+  unreachable
 L17:
   store i32 0018, ptr %t23
   br label %bb52
@@ -777,12 +779,12 @@ bb52:
 L18:
   %t329 = load i32, ptr %t24
   %t330 = icmp sle i32 %t329, 8
-  br i1 %t330, label %if_then19, label %if_else20
-if_then19:
+  br i1 %t330, label %if_then20, label %if_else21
+if_then20:
   %t331 = load i32, ptr %t26
   store i32 %t331, ptr %t22
   br label %L19
-if_else20:
+if_else21:
   store i32 11, ptr %t22
   br label %L19
 L19:
@@ -851,21 +853,21 @@ bb62:
   %t361 = icmp sle i32 1, 8
   %t362 = icmp ne i32 1, 0
   %t363 = and i1 %t361, %t362
-  br i1 %t363, label %do_trip_calc21, label %do_trip_zero22
-do_trip_calc21:
+  br i1 %t363, label %do_trip_calc22, label %do_trip_zero23
+do_trip_calc22:
   %t364 = sub i32 8, 1
   %t365 = sdiv i32 %t364, 1
   %t366 = add i32 %t365, 1
   %t367 = sext i32 %t366 to i64
   store i64 %t367, ptr %t359
-  br label %do_trip_done23
-do_trip_zero22:
+  br label %do_trip_done24
+do_trip_zero23:
   store i64 0, ptr %t359
-  br label %do_trip_done23
-do_trip_done23:
+  br label %do_trip_done24
+do_trip_done24:
   store i64 0, ptr %t360
-  br label %do_test24
-do_test24:
+  br label %do_test25
+do_test25:
   %t368 = load i64, ptr %t360
   %t369 = load i64, ptr %t359
   %t370 = icmp slt i64 %t368, %t369
@@ -876,36 +878,36 @@ bb63:
 bb64:
   %t371 = load i32, ptr %t24
   %t372 = icmp slt i32 %t371, 5
-  br i1 %t372, label %if_then26, label %if_else28
-if_then26:
+  br i1 %t372, label %if_then27, label %if_else29
+if_then27:
   %t373 = load i32, ptr %t24
   %t374 = icmp sle i32 %t373, 2
-  br i1 %t374, label %if_then30, label %if_else32
-if_then30:
+  br i1 %t374, label %if_then31, label %if_else33
+if_then31:
   %t375 = load i32, ptr %t24
   %t376 = sub i32 %t375, 1
   %t377 = icmp eq i32 %t376, 0
-  br i1 %t377, label %if_then34, label %if_else35
-if_then34:
+  br i1 %t377, label %if_then35, label %if_else36
+if_then35:
   %t378 = load i32, ptr %t22
   %t379 = add i32 %t378, 1
   store i32 %t379, ptr %t22
-  br label %if_then31
-if_else35:
+  br label %if_then32
+if_else36:
   %t380 = load i32, ptr %t22
   %t381 = add i32 %t380, 2
   store i32 %t381, ptr %t22
-  br label %if_then31
-if_then31:
+  br label %if_then32
+if_then32:
   %t382 = load i32, ptr %t22
   %t383 = mul i32 %t382, 2
   store i32 %t383, ptr %t22
-  br label %if_then27
-if_else32:
+  br label %if_then28
+if_else33:
   %t384 = load i32, ptr %t24
   %t385 = icmp eq i32 %t384, 3
-  br i1 %t385, label %if_then36, label %if_else37
-if_then36:
+  br i1 %t385, label %if_then37, label %if_else38
+if_then37:
   %t386 = alloca i32
   %t387 = alloca i64
   %t388 = alloca i64
@@ -915,31 +917,31 @@ if_then36:
   %t390 = icmp sle i32 1, %t389
   %t391 = icmp ne i32 1, 0
   %t392 = and i1 %t390, %t391
-  br i1 %t392, label %do_trip_calc38, label %do_trip_zero39
-do_trip_calc38:
+  br i1 %t392, label %do_trip_calc39, label %do_trip_zero40
+do_trip_calc39:
   %t393 = sub i32 %t389, 1
   %t394 = sdiv i32 %t393, 1
   %t395 = add i32 %t394, 1
   %t396 = sext i32 %t395 to i64
   store i64 %t396, ptr %t387
-  br label %do_trip_done40
-do_trip_zero39:
+  br label %do_trip_done41
+do_trip_zero40:
   store i64 0, ptr %t387
-  br label %do_trip_done40
-do_trip_done40:
+  br label %do_trip_done41
+do_trip_done41:
   store i64 0, ptr %t388
-  br label %do_test41
-do_test41:
+  br label %do_test42
+do_test42:
   %t397 = load i64, ptr %t388
   %t398 = load i64, ptr %t387
   %t399 = icmp slt i64 %t397, %t398
-  br i1 %t399, label %L20, label %if_else33
+  br i1 %t399, label %L20, label %if_else34
 L20:
   %t400 = load i32, ptr %t22
   %t401 = add i32 %t400, 10
   store i32 %t401, ptr %t22
-  br label %do_inc42
-do_inc42:
+  br label %do_inc43
+do_inc43:
   %t402 = load i32, ptr %t25
   %t403 = load i32, ptr %t386
   %t404 = add i32 %t402, %t403
@@ -947,8 +949,8 @@ do_inc42:
   %t405 = load i64, ptr %t388
   %t406 = add i64 %t405, 1
   store i64 %t406, ptr %t388
-  br label %do_test41
-if_else37:
+  br label %do_test42
+if_else38:
   %t407 = alloca i32
   %t408 = alloca i64
   %t409 = alloca i64
@@ -958,31 +960,31 @@ if_else37:
   %t411 = icmp sle i32 1, %t410
   %t412 = icmp ne i32 1, 0
   %t413 = and i1 %t411, %t412
-  br i1 %t413, label %do_trip_calc43, label %do_trip_zero44
-do_trip_calc43:
+  br i1 %t413, label %do_trip_calc44, label %do_trip_zero45
+do_trip_calc44:
   %t414 = sub i32 %t410, 1
   %t415 = sdiv i32 %t414, 1
   %t416 = add i32 %t415, 1
   %t417 = sext i32 %t416 to i64
   store i64 %t417, ptr %t408
-  br label %do_trip_done45
-do_trip_zero44:
+  br label %do_trip_done46
+do_trip_zero45:
   store i64 0, ptr %t408
-  br label %do_trip_done45
-do_trip_done45:
+  br label %do_trip_done46
+do_trip_done46:
   store i64 0, ptr %t409
-  br label %do_test46
-do_test46:
+  br label %do_test47
+do_test47:
   %t418 = load i64, ptr %t409
   %t419 = load i64, ptr %t408
   %t420 = icmp slt i64 %t418, %t419
-  br i1 %t420, label %L22, label %if_else33
+  br i1 %t420, label %L22, label %if_else34
 L22:
   %t421 = load i32, ptr %t22
   %t422 = add i32 %t421, 10
   store i32 %t422, ptr %t22
-  br label %do_inc47
-do_inc47:
+  br label %do_inc48
+do_inc48:
   %t423 = load i32, ptr %t25
   %t424 = load i32, ptr %t407
   %t425 = add i32 %t423, %t424
@@ -990,65 +992,65 @@ do_inc47:
   %t426 = load i64, ptr %t409
   %t427 = add i64 %t426, 1
   store i64 %t427, ptr %t409
-  br label %do_test46
-if_else33:
+  br label %do_test47
+if_else34:
   %t428 = load i32, ptr %t22
   %t429 = sdiv i32 %t428, 10
   %t430 = mul i32 %t429, 2
   store i32 %t430, ptr %t22
-  br label %if_then27
-if_then27:
+  br label %if_then28
+if_then28:
   %t431 = load i32, ptr %t22
   %t432 = mul i32 %t431, 3
   store i32 %t432, ptr %t22
   br label %bb65
-if_else28:
+if_else29:
   %t433 = load i32, ptr %t24
   %t434 = icmp sle i32 %t433, 6
-  br i1 %t434, label %if_then48, label %if_else50
-if_then48:
+  br i1 %t434, label %if_then49, label %if_else51
+if_then49:
   %t435 = load i32, ptr %t24
   %t436 = sub i32 %t435, 5
   %t437 = icmp eq i32 %t436, 0
-  br i1 %t437, label %if_then52, label %if_else53
-if_then52:
+  br i1 %t437, label %if_then53, label %if_else54
+if_then53:
   %t438 = load i32, ptr %t22
   %t439 = add i32 %t438, 105
   store i32 %t439, ptr %t22
-  br label %if_then49
-if_else53:
+  br label %if_then50
+if_else54:
   %t440 = load i32, ptr %t22
   %t441 = add i32 %t440, 106
   store i32 %t441, ptr %t22
-  br label %if_then49
-if_then49:
+  br label %if_then50
+if_then50:
   %t442 = load i32, ptr %t22
   %t443 = sub i32 %t442, 100
   %t444 = mul i32 %t443, 3
   store i32 %t444, ptr %t22
-  br label %if_else29
-if_else50:
+  br label %if_else30
+if_else51:
   %t445 = load i32, ptr %t24
   %t446 = icmp sle i32 %t445, 7
-  br i1 %t446, label %if_then54, label %if_else55
-if_then54:
+  br i1 %t446, label %if_then55, label %if_else56
+if_then55:
   %t447 = load i32, ptr %t22
   %t448 = sub i32 %t447, 7
   store i32 %t448, ptr %t22
-  br label %if_else51
-if_else55:
+  br label %if_else52
+if_else56:
   %t449 = load i32, ptr %t22
   %t450 = sub i32 %t449, 8
   store i32 %t450, ptr %t22
-  br label %if_else51
-if_else51:
+  br label %if_else52
+if_else52:
   %t451 = load i32, ptr %t22
   %t452 = load i32, ptr %t24
   %t453 = mul i32 %t452, 4
   %t454 = add i32 %t451, %t453
   store i32 %t454, ptr %t22
-  br label %if_else29
-if_else29:
+  br label %if_else30
+if_else30:
   %t455 = load i32, ptr %t22
   %t456 = mul i32 %t455, 2
   store i32 %t456, ptr %t22
@@ -1078,8 +1080,8 @@ bb67:
   store i32 %t469, ptr %t21
   br label %L21
 L21:
-  br label %do_inc25
-do_inc25:
+  br label %do_inc26
+do_inc26:
   %t470 = load i32, ptr %t24
   %t471 = load i32, ptr %t358
   %t472 = add i32 %t470, %t471
@@ -1087,7 +1089,7 @@ do_inc25:
   %t473 = load i64, ptr %t360
   %t474 = add i64 %t473, 1
   store i64 %t474, ptr %t360
-  br label %do_test24
+  br label %do_test25
 L30215:
   br label %L30225
 L30225:

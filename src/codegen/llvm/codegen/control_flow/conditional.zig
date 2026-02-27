@@ -1,10 +1,12 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
+const sema = @import("../../../../semantic/mod.zig");
 const context = @import("../context.zig");
 const expr = @import("../expression/mod.zig");
 const cfg = @import("../../stmts/cfg.zig");
 const utils = @import("../utils.zig");
 const logic = @import("logic.zig");
+const builder_mod = @import("../builder.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -151,4 +153,169 @@ pub fn emitIfBlock(
         try emit_stmt_list_range(ctx, builder, ifb.else_stmts, blocks.names, &blocks.label_map, &blocks.label_index, 0, blocks.names.len - 1, next_block);
     }
     return true;
+}
+
+const TestHarness = struct {
+    arena: std.heap.ArenaAllocator,
+    unit: ast.ProgramUnit,
+    sem_unit: sema.SemanticUnit,
+    decls: std.StringHashMap(context.IRDecl),
+    defined: std.StringHashMap(void),
+    formats: std.StringHashMap(context.FormatInfo),
+    inline_formats: std.AutoHashMap(usize, context.FormatInfo),
+    string_pool: context.StringPool,
+    intrinsic_wrappers: std.StringHashMap(context.IntrinsicWrapperKind),
+    ctx: Context,
+
+    fn init(allocator: std.mem.Allocator) !TestHarness {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        const a = arena.allocator();
+
+        const symbols = try a.alloc(sema.Symbol, 1);
+        symbols[0] = .{
+            .name = "A",
+            .type_kind = .integer,
+            .dims = try a.alloc(*ast.Expr, 0),
+            .char_len = null,
+            .kind = .variable,
+            .storage = .local,
+            .is_external = false,
+            .is_intrinsic = false,
+            .const_value = null,
+            .type_explicit = true,
+        };
+        const sem_unit = sema.SemanticUnit{
+            .name = "UNIT",
+            .kind = .subroutine,
+            .symbols = symbols,
+            .implicit_rules = try a.alloc(sema.ImplicitRule, 0),
+            .resolved_refs = try a.alloc(sema.ResolvedRef, 0),
+        };
+        const unit = ast.ProgramUnit{
+            .kind = .subroutine,
+            .name = "UNIT",
+            .args = &[_][]const u8{},
+            .decls = try a.alloc(ast.Decl, 0),
+            .stmts = try a.alloc(ast.Stmt, 0),
+        };
+
+        var decls = std.StringHashMap(context.IRDecl).init(a);
+        var defined = std.StringHashMap(void).init(a);
+        var formats = std.StringHashMap(context.FormatInfo).init(a);
+        var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
+        var string_pool = context.StringPool.init(a);
+        var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
+        var ctx = try Context.init(
+            a,
+            unit,
+            &sem_unit,
+            &decls,
+            &defined,
+            &formats,
+            &inline_formats,
+            &string_pool,
+            &intrinsic_wrappers,
+            .{},
+        );
+        try ctx.locals.put("A", .{ .name = "%a", .ty = .ptr, .is_ptr = true });
+
+        return .{
+            .arena = arena,
+            .unit = unit,
+            .sem_unit = sem_unit,
+            .decls = decls,
+            .defined = defined,
+            .formats = formats,
+            .inline_formats = inline_formats,
+            .string_pool = string_pool,
+            .intrinsic_wrappers = intrinsic_wrappers,
+            .ctx = ctx,
+        };
+    }
+
+    fn deinit(self: *TestHarness) void {
+        self.ctx.deinit();
+        self.decls.deinit();
+        self.defined.deinit();
+        self.formats.deinit();
+        self.inline_formats.deinit();
+        self.string_pool.deinit();
+        self.intrinsic_wrappers.deinit();
+        self.arena.deinit();
+    }
+};
+
+fn makeLiteral(arena: std.mem.Allocator, kind: ast.LiteralKind, text: []const u8) !*ast.Expr {
+    const node = try arena.create(ast.Expr);
+    node.* = .{ .literal = .{ .kind = kind, .text = text } };
+    return node;
+}
+
+fn emitUnterminatedStub(
+    ctx: *Context,
+    builder: anytype,
+    stmt: ast.Stmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) anyerror!bool {
+    _ = ctx;
+    _ = builder;
+    _ = stmt;
+    _ = next_block;
+    _ = local_label_map;
+    return false;
+}
+
+test "emitArithIf does not force integer compare to i32 for non-i32 values" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    try harness.ctx.label_map.put("10", "L10");
+    try harness.ctx.label_map.put("20", "L20");
+    try harness.ctx.label_map.put("30", "L30");
+
+    const cond = try makeLiteral(harness.arena.allocator(), .logical, "1");
+    const arith = ast.ArithIfStmt{
+        .condition = cond,
+        .neg_label = "10",
+        .zero_label = "20",
+        .pos_label = "30",
+    };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    try emitArithIf(&harness.ctx, &builder, arith, null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "icmp slt i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "icmp eq i64") != null);
+}
+
+test "emitIfSingle appends branch when nested emission reports unterminated" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    const cond = try makeLiteral(harness.arena.allocator(), .logical, "1");
+    const inner_node = try harness.arena.allocator().create(ast.StmtNode);
+    inner_node.* = .{ .cont = {} };
+    const ifs = ast.IfSingle{
+        .condition = cond,
+        .stmt = inner_node,
+    };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const terminated = try emitIfSingle(&harness.ctx, &builder, ifs, "if_end", null, emitUnterminatedStub);
+    try testing.expect(terminated);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "br label %if_end") != null);
 }

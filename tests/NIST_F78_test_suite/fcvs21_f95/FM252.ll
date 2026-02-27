@@ -362,17 +362,19 @@ bb48:
   br label %L40020
 L25:
   %t103 = load i32, ptr %t10
-  switch i32 %t103, label %L40020 [
+  switch i32 %t103, label %assigned_goto_invalid25 [
     i32 22, label %L22
     i32 23, label %L23
     i32 24, label %L24
   ]
+assigned_goto_invalid25:
+  unreachable
 L40020:
   %t104 = load i32, ptr %t8
   %t105 = sub i32 %t104, 1
   %t106 = icmp slt i32 %t105, 0
-  br i1 %t106, label %L20020, label %arith_if_zero25
-arith_if_zero25:
+  br i1 %t106, label %L20020, label %arith_if_zero26
+arith_if_zero26:
   %t107 = icmp eq i32 %t105, 0
   br i1 %t107, label %L10020, label %L20020
 L30020:
@@ -395,8 +397,8 @@ bb52:
 bb53:
   %t117 = load i32, ptr %t5
   %t118 = icmp slt i32 %t117, 0
-  br i1 %t118, label %L10020, label %arith_if_zero26
-arith_if_zero26:
+  br i1 %t118, label %L10020, label %arith_if_zero27
+arith_if_zero27:
   %t119 = icmp eq i32 %t117, 0
   br i1 %t119, label %L31, label %L20020
 L10020:
@@ -453,8 +455,8 @@ bb60:
 bb61:
   %t144 = load i32, ptr %t5
   %t145 = icmp slt i32 %t144, 0
-  br i1 %t145, label %L30030, label %arith_if_zero27
-arith_if_zero27:
+  br i1 %t145, label %L30030, label %arith_if_zero28
+arith_if_zero28:
   %t146 = icmp eq i32 %t144, 0
   br i1 %t146, label %L30, label %L30030
 L30:
@@ -493,17 +495,19 @@ bb74:
   br label %L40030
 L35:
   %t147 = load i32, ptr %t11
-  switch i32 %t147, label %L40030 [
+  switch i32 %t147, label %assigned_goto_invalid29 [
     i32 32, label %L32
     i32 33, label %L33
     i32 34, label %L34
   ]
+assigned_goto_invalid29:
+  unreachable
 L40030:
   %t148 = load i32, ptr %t8
   %t149 = sub i32 %t148, 1
   %t150 = icmp slt i32 %t149, 0
-  br i1 %t150, label %L20030, label %arith_if_zero28
-arith_if_zero28:
+  br i1 %t150, label %L20030, label %arith_if_zero30
+arith_if_zero30:
   %t151 = icmp eq i32 %t149, 0
   br i1 %t151, label %L10030, label %L20030
 L30030:
@@ -526,8 +530,8 @@ bb78:
 bb79:
   %t161 = load i32, ptr %t5
   %t162 = icmp slt i32 %t161, 0
-  br i1 %t162, label %L10030, label %arith_if_zero29
-arith_if_zero29:
+  br i1 %t162, label %L10030, label %arith_if_zero31
+arith_if_zero31:
   %t163 = icmp eq i32 %t161, 0
   br i1 %t163, label %L41, label %L20030
 L10030:
@@ -584,8 +588,8 @@ bb86:
 bb87:
   %t188 = load i32, ptr %t5
   %t189 = icmp slt i32 %t188, 0
-  br i1 %t189, label %L30040, label %arith_if_zero30
-arith_if_zero30:
+  br i1 %t189, label %L30040, label %arith_if_zero32
+arith_if_zero32:
   %t190 = icmp eq i32 %t188, 0
   br i1 %t190, label %L40, label %L30040
 L40:
@@ -619,16 +623,18 @@ bb98:
   br label %L40040
 L45:
   %t191 = load i32, ptr %t12
-  switch i32 %t191, label %L40040 [
+  switch i32 %t191, label %assigned_goto_invalid33 [
     i32 44, label %L44
     i32 43, label %L43
   ]
+assigned_goto_invalid33:
+  unreachable
 L40040:
   %t192 = load i32, ptr %t8
   %t193 = sub i32 %t192, 1
   %t194 = icmp slt i32 %t193, 0
-  br i1 %t194, label %L20040, label %arith_if_zero31
-arith_if_zero31:
+  br i1 %t194, label %L20040, label %arith_if_zero34
+arith_if_zero34:
   %t195 = icmp eq i32 %t193, 0
   br i1 %t195, label %L10040, label %L20040
 L30040:
@@ -651,8 +657,8 @@ bb102:
 bb103:
   %t205 = load i32, ptr %t5
   %t206 = icmp slt i32 %t205, 0
-  br i1 %t206, label %L10040, label %arith_if_zero32
-arith_if_zero32:
+  br i1 %t206, label %L10040, label %arith_if_zero35
+arith_if_zero35:
   %t207 = icmp eq i32 %t205, 0
   br i1 %t207, label %L51, label %L20040
 L10040:
@@ -709,8 +715,8 @@ bb110:
 bb111:
   %t232 = load i32, ptr %t5
   %t233 = icmp slt i32 %t232, 0
-  br i1 %t233, label %L30050, label %arith_if_zero33
-arith_if_zero33:
+  br i1 %t233, label %L30050, label %arith_if_zero36
+arith_if_zero36:
   %t234 = icmp eq i32 %t232, 0
   br i1 %t234, label %L50, label %L30050
 L50:
@@ -743,17 +749,19 @@ bb122:
   br label %L40050
 L54:
   %t235 = load i32, ptr %t7
-  switch i32 %t235, label %L40050 [
+  switch i32 %t235, label %assigned_goto_invalid37 [
     i32 52, label %L52
     i32 1, label %L1
     i32 53, label %L53
   ]
+assigned_goto_invalid37:
+  unreachable
 L40050:
   %t236 = load i32, ptr %t8
   %t237 = sub i32 %t236, 1
   %t238 = icmp slt i32 %t237, 0
-  br i1 %t238, label %L20050, label %arith_if_zero34
-arith_if_zero34:
+  br i1 %t238, label %L20050, label %arith_if_zero38
+arith_if_zero38:
   %t239 = icmp eq i32 %t237, 0
   br i1 %t239, label %L10050, label %L20050
 L30050:
@@ -776,8 +784,8 @@ bb126:
 bb127:
   %t249 = load i32, ptr %t5
   %t250 = icmp slt i32 %t249, 0
-  br i1 %t250, label %L10050, label %arith_if_zero35
-arith_if_zero35:
+  br i1 %t250, label %L10050, label %arith_if_zero39
+arith_if_zero39:
   %t251 = icmp eq i32 %t249, 0
   br i1 %t251, label %L61, label %L20050
 L10050:
@@ -834,8 +842,8 @@ bb134:
 bb135:
   %t276 = load i32, ptr %t5
   %t277 = icmp slt i32 %t276, 0
-  br i1 %t277, label %L30060, label %arith_if_zero36
-arith_if_zero36:
+  br i1 %t277, label %L30060, label %arith_if_zero40
+arith_if_zero40:
   %t278 = icmp eq i32 %t276, 0
   br i1 %t278, label %L60, label %L30060
 L60:
@@ -868,17 +876,19 @@ bb146:
   br label %L40060
 L64:
   %t279 = load i32, ptr %t10
-  switch i32 %t279, label %L40060 [
+  switch i32 %t279, label %assigned_goto_invalid41 [
     i32 62, label %L62
     i32 99999, label %L99999
     i32 63, label %L63
   ]
+assigned_goto_invalid41:
+  unreachable
 L40060:
   %t280 = load i32, ptr %t8
   %t281 = sub i32 %t280, 1
   %t282 = icmp slt i32 %t281, 0
-  br i1 %t282, label %L20060, label %arith_if_zero37
-arith_if_zero37:
+  br i1 %t282, label %L20060, label %arith_if_zero42
+arith_if_zero42:
   %t283 = icmp eq i32 %t281, 0
   br i1 %t283, label %L10060, label %L20060
 L30060:
@@ -901,8 +911,8 @@ bb150:
 bb151:
   %t293 = load i32, ptr %t5
   %t294 = icmp slt i32 %t293, 0
-  br i1 %t294, label %L10060, label %arith_if_zero38
-arith_if_zero38:
+  br i1 %t294, label %L10060, label %arith_if_zero43
+arith_if_zero43:
   %t295 = icmp eq i32 %t293, 0
   br i1 %t295, label %L71, label %L20060
 L10060:
@@ -959,8 +969,8 @@ bb158:
 bb159:
   %t320 = load i32, ptr %t5
   %t321 = icmp slt i32 %t320, 0
-  br i1 %t321, label %L30070, label %arith_if_zero39
-arith_if_zero39:
+  br i1 %t321, label %L30070, label %arith_if_zero44
+arith_if_zero44:
   %t322 = icmp eq i32 %t320, 0
   br i1 %t322, label %L70, label %L30070
 L70:
@@ -1008,16 +1018,16 @@ L40070:
   %t324 = load i32, ptr %t7
   %t325 = sub i32 %t324, 2
   %t326 = icmp slt i32 %t325, 0
-  br i1 %t326, label %L20070, label %arith_if_zero40
-arith_if_zero40:
+  br i1 %t326, label %L20070, label %arith_if_zero45
+arith_if_zero45:
   %t327 = icmp eq i32 %t325, 0
   br i1 %t327, label %L40071, label %L20070
 L40071:
   %t328 = load i32, ptr %t8
   %t329 = sub i32 %t328, 1
   %t330 = icmp slt i32 %t329, 0
-  br i1 %t330, label %L20070, label %arith_if_zero41
-arith_if_zero41:
+  br i1 %t330, label %L20070, label %arith_if_zero46
+arith_if_zero46:
   %t331 = icmp eq i32 %t329, 0
   br i1 %t331, label %L10070, label %L20070
 L30070:
@@ -1040,8 +1050,8 @@ bb177:
 bb178:
   %t341 = load i32, ptr %t5
   %t342 = icmp slt i32 %t341, 0
-  br i1 %t342, label %L10070, label %arith_if_zero42
-arith_if_zero42:
+  br i1 %t342, label %L10070, label %arith_if_zero47
+arith_if_zero47:
   %t343 = icmp eq i32 %t341, 0
   br i1 %t343, label %L81, label %L20070
 L10070:
@@ -1098,8 +1108,8 @@ bb185:
 bb186:
   %t368 = load i32, ptr %t5
   %t369 = icmp slt i32 %t368, 0
-  br i1 %t369, label %L30080, label %arith_if_zero43
-arith_if_zero43:
+  br i1 %t369, label %L30080, label %arith_if_zero48
+arith_if_zero48:
   %t370 = icmp eq i32 %t368, 0
   br i1 %t370, label %L80, label %L30080
 L80:
@@ -1129,8 +1139,8 @@ L40080:
   %t372 = load i32, ptr %t8
   %t373 = sub i32 %t372, 1
   %t374 = icmp slt i32 %t373, 0
-  br i1 %t374, label %L20080, label %arith_if_zero44
-arith_if_zero44:
+  br i1 %t374, label %L20080, label %arith_if_zero49
+arith_if_zero49:
   %t375 = icmp eq i32 %t373, 0
   br i1 %t375, label %L10080, label %L20080
 L30080:
@@ -1153,8 +1163,8 @@ bb197:
 bb198:
   %t385 = load i32, ptr %t5
   %t386 = icmp slt i32 %t385, 0
-  br i1 %t386, label %L10080, label %arith_if_zero45
-arith_if_zero45:
+  br i1 %t386, label %L10080, label %arith_if_zero50
+arith_if_zero50:
   %t387 = icmp eq i32 %t385, 0
   br i1 %t387, label %L91, label %L20080
 L10080:
@@ -1211,8 +1221,8 @@ bb205:
 bb206:
   %t412 = load i32, ptr %t5
   %t413 = icmp slt i32 %t412, 0
-  br i1 %t413, label %L30090, label %arith_if_zero46
-arith_if_zero46:
+  br i1 %t413, label %L30090, label %arith_if_zero51
+arith_if_zero51:
   %t414 = icmp eq i32 %t412, 0
   br i1 %t414, label %L90, label %L30090
 L90:
@@ -1251,8 +1261,8 @@ L40090:
   %t416 = load i32, ptr %t8
   %t417 = sub i32 %t416, 1
   %t418 = icmp slt i32 %t417, 0
-  br i1 %t418, label %L20090, label %arith_if_zero47
-arith_if_zero47:
+  br i1 %t418, label %L20090, label %arith_if_zero52
+arith_if_zero52:
   %t419 = icmp eq i32 %t417, 0
   br i1 %t419, label %L10090, label %L20090
 L30090:
@@ -1275,8 +1285,8 @@ bb220:
 bb221:
   %t429 = load i32, ptr %t5
   %t430 = icmp slt i32 %t429, 0
-  br i1 %t430, label %L10090, label %arith_if_zero48
-arith_if_zero48:
+  br i1 %t430, label %L10090, label %arith_if_zero53
+arith_if_zero53:
   %t431 = icmp eq i32 %t429, 0
   br i1 %t431, label %L101, label %L20090
 L10090:
@@ -1333,8 +1343,8 @@ bb228:
 bb229:
   %t456 = load i32, ptr %t5
   %t457 = icmp slt i32 %t456, 0
-  br i1 %t457, label %L30100, label %arith_if_zero49
-arith_if_zero49:
+  br i1 %t457, label %L30100, label %arith_if_zero54
+arith_if_zero54:
   %t458 = icmp eq i32 %t456, 0
   br i1 %t458, label %L100, label %L30100
 L100:
@@ -1373,8 +1383,8 @@ L40100:
   %t460 = load i32, ptr %t8
   %t461 = sub i32 %t460, 1
   %t462 = icmp slt i32 %t461, 0
-  br i1 %t462, label %L20100, label %arith_if_zero50
-arith_if_zero50:
+  br i1 %t462, label %L20100, label %arith_if_zero55
+arith_if_zero55:
   %t463 = icmp eq i32 %t461, 0
   br i1 %t463, label %L10100, label %L20100
 L30100:
@@ -1397,8 +1407,8 @@ bb243:
 bb244:
   %t473 = load i32, ptr %t5
   %t474 = icmp slt i32 %t473, 0
-  br i1 %t474, label %L10100, label %arith_if_zero51
-arith_if_zero51:
+  br i1 %t474, label %L10100, label %arith_if_zero56
+arith_if_zero56:
   %t475 = icmp eq i32 %t473, 0
   br i1 %t475, label %L111, label %L20100
 L10100:
@@ -1455,8 +1465,8 @@ bb251:
 bb252:
   %t500 = load i32, ptr %t5
   %t501 = icmp slt i32 %t500, 0
-  br i1 %t501, label %L30110, label %arith_if_zero52
-arith_if_zero52:
+  br i1 %t501, label %L30110, label %arith_if_zero57
+arith_if_zero57:
   %t502 = icmp eq i32 %t500, 0
   br i1 %t502, label %L110, label %L30110
 L110:
@@ -1496,8 +1506,8 @@ L40110:
   %t505 = load i32, ptr %t8
   %t506 = sub i32 %t505, 1
   %t507 = icmp slt i32 %t506, 0
-  br i1 %t507, label %L20110, label %arith_if_zero53
-arith_if_zero53:
+  br i1 %t507, label %L20110, label %arith_if_zero58
+arith_if_zero58:
   %t508 = icmp eq i32 %t506, 0
   br i1 %t508, label %L10110, label %L20110
 L30110:
@@ -1520,8 +1530,8 @@ bb266:
 bb267:
   %t518 = load i32, ptr %t5
   %t519 = icmp slt i32 %t518, 0
-  br i1 %t519, label %L10110, label %arith_if_zero54
-arith_if_zero54:
+  br i1 %t519, label %L10110, label %arith_if_zero59
+arith_if_zero59:
   %t520 = icmp eq i32 %t518, 0
   br i1 %t520, label %L121, label %L20110
 L10110:

@@ -114,12 +114,11 @@ pub fn emitAssignedGoto(
             .label = item.target_block,
         });
     }
-    if (gt.labels.len == 0) {
-        const invalid_label = try ctx.nextLabel("assigned_goto_invalid");
-        try builder.switchBr(sel, invalid_label, cases.items);
-        try builder.label(invalid_label);
-        try builder.emitUnreachable();
-        return;
-    }
-    try builder.switchBr(sel, next_block, cases.items);
+    const invalid_label = try ctx.nextLabel("assigned_goto_invalid");
+    // ASSIGNED GOTO must not silently fall through when the selector is invalid.
+    // Keep the invalid path explicit so runtime misroutes are visible.
+    _ = next_block;
+    try builder.switchBr(sel, invalid_label, cases.items);
+    try builder.label(invalid_label);
+    try builder.emitUnreachable();
 }
