@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub const nodes = @import("nodes.zig");
 pub const print = @import("print.zig");
 
@@ -83,3 +85,14 @@ pub const BinaryExpr = nodes.BinaryExpr;
 pub const BinaryOp = nodes.BinaryOp;
 
 pub const printProgram = print.printProgram;
+
+comptime {
+    for (std.meta.declarations(nodes)) |decl| {
+        if (!@hasDecl(@This(), decl.name)) {
+            @compileError(std.fmt.comptimePrint(
+                "ast/mod.zig missing re-export for nodes.{s}",
+                .{decl.name},
+            ));
+        }
+    }
+}

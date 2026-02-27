@@ -30,6 +30,7 @@ const DYNFMT_MAX_TOKENS: usize = 4096;
 const DYNFMT_MAX_REPEAT: usize = 4096;
 const DYNFMT_MAX_LITERAL_BYTES: usize = 1 << 20;
 const DYNFMT_TLS_SCRATCH_BYTES: usize = 64 * 1024;
+const DYNFMT_HEAP_ALLOCATOR = std.heap.page_allocator;
 
 threadlocal var dynfmt_tls_scratch: [DYNFMT_TLS_SCRATCH_BYTES]u8 = undefined;
 
@@ -122,6 +123,8 @@ const Parser = struct {
     }
 
     fn appendRepeatedToken(self: *Parser, out: *std.array_list.Managed(Token), tok: Token, repeat: usize) !void {
+        if (repeat > DYNFMT_MAX_TOKENS - out.items.len) return error.FormatTooLarge;
+        try out.ensureTotalCapacity(out.items.len + repeat);
         var i: usize = 0;
         while (i < repeat) : (i += 1) {
             try self.appendToken(out, tok);
@@ -156,6 +159,7 @@ const Parser = struct {
                 if (expanded_mul[1] != 0) return error.FormatTooLarge;
                 const expanded_add = @addWithOverflow(out.items.len, expanded_mul[0]);
                 if (expanded_add[1] != 0 or expanded_add[0] > DYNFMT_MAX_TOKENS) return error.FormatTooLarge;
+                try out.ensureTotalCapacity(expanded_add[0]);
                 for (0..repeat) |_| {
                     for (group) |tok| try self.appendToken(&out, tok);
                 }
@@ -497,9 +501,9 @@ fn lowerFormat(
     const scratch_alloc = scratch.allocator();
     const in_scratch = lowerFormatWithAlloc(scratch_alloc, scratch_alloc, mode, fmt_ptr, fmt_len, arg_kinds, arg_count) catch |err| switch (err) {
         error.OutOfMemory => {
-            var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            var arena = std.heap.ArenaAllocator.init(DYNFMT_HEAP_ALLOCATOR);
             defer arena.deinit();
-            const heap_bytes = try lowerFormatWithAlloc(arena.allocator(), std.heap.page_allocator, mode, fmt_ptr, fmt_len, arg_kinds, arg_count);
+            const heap_bytes = try lowerFormatWithAlloc(arena.allocator(), DYNFMT_HEAP_ALLOCATOR, mode, fmt_ptr, fmt_len, arg_kinds, arg_count);
             return .{ .bytes = heap_bytes, .heap_owned = true };
         },
         else => return err,
@@ -509,25 +513,25 @@ fn lowerFormat(
 
 pub export fn col6forge_write_fmt_expr_v(unit: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int, strict_status: c_int) callconv(.c) c_int {
     const lowered = lowerFormat(.write_external, fmt_ptr, fmt_len, arg_kinds, arg_count) catch return if (strict_status != 0) 1 else 0;
-    defer if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
+    defer if (lowered.heap_owned) DYNFMT_HEAP_ALLOCATOR.free(lowered.bytes);
     return col6forge_write_v(unit, asConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count, strict_status);
 }
 
 pub export fn col6forge_write_internal_fmt_expr_v(buf: ?[*]u8, len: c_int, count: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int) callconv(.c) void {
     const lowered = lowerFormat(.write_internal, fmt_ptr, fmt_len, arg_kinds, arg_count) catch return;
-    defer if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
+    defer if (lowered.heap_owned) DYNFMT_HEAP_ALLOCATOR.free(lowered.bytes);
     col6forge_write_internal_v(buf, len, count, asConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count);
 }
 
 pub export fn col6forge_read_fmt_expr_core(unit: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int, status_mode: c_int) callconv(.c) c_int {
     const lowered = lowerFormat(.read_any, fmt_ptr, fmt_len, arg_kinds, arg_count) catch return if (status_mode != 0) 1 else -1;
-    defer if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
+    defer if (lowered.heap_owned) DYNFMT_HEAP_ALLOCATOR.free(lowered.bytes);
     return col6forge_formatted_read_core(unit, asConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count, status_mode);
 }
 
 pub export fn col6forge_read_internal_fmt_expr_core(buf: ?[*]u8, len: c_int, count: c_int, fmt_ptr: ?[*]const u8, fmt_len: c_int, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_count: c_int) callconv(.c) c_int {
     const lowered = lowerFormat(.read_any, fmt_ptr, fmt_len, arg_kinds, arg_count) catch return 1;
-    defer if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
+    defer if (lowered.heap_owned) DYNFMT_HEAP_ALLOCATOR.free(lowered.bytes);
     return col6forge_read_internal_core(buf, len, count, asConstCStr(lowered.bytes), arg_ptrs, arg_kinds, arg_count);
 }
 
@@ -535,7 +539,7 @@ test "lowerWrite maps A descriptor with D kind to numeric format" {
     const fmt = "(A5)";
     var kinds = [_]u8{'D'};
     const lowered = try lowerFormat(.write_external, fmt.ptr, @intCast(fmt.len), &kinds, 1);
-    defer if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
+    defer if (lowered.heap_owned) DYNFMT_HEAP_ALLOCATOR.free(lowered.bytes);
     try std.testing.expectEqualStrings("%5.0f\n", std.mem.sliceTo(lowered.bytes, 0));
 }
 
@@ -543,6 +547,6 @@ test "lowerWrite keeps A descriptor as string for s kind" {
     const fmt = "(A5)";
     var kinds = [_]u8{'s'};
     const lowered = try lowerFormat(.write_external, fmt.ptr, @intCast(fmt.len), &kinds, 1);
-    defer if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
+    defer if (lowered.heap_owned) DYNFMT_HEAP_ALLOCATOR.free(lowered.bytes);
     try std.testing.expectEqualStrings("%5s\n", std.mem.sliceTo(lowered.bytes, 0));
 }

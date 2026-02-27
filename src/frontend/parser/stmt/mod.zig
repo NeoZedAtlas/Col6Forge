@@ -72,7 +72,6 @@ pub fn parseStatement(
         }
         const loop_frame = do_ctx.popLoop() orelse return error.EndDoWithoutDo;
         const end_label = loop_frame.cycle_label;
-        do_ctx.popNamedDoByLabel(end_label);
         if (loop_frame.exit_label) |exit_label| {
             try do_ctx.pushPending(.{ .label = exit_label, .node = .{ .cont = {} } });
         }
@@ -467,7 +466,6 @@ fn closeCompletedLabeledDoLoops(do_ctx: *DoContext, line_label: ?[]const u8) Par
         if (std.mem.startsWith(u8, cycle_label, "ENDDO")) break;
         if (!std.mem.eql(u8, cycle_label, normalized)) break;
         const frame = do_ctx.popLoop() orelse break;
-        do_ctx.popNamedDoByLabel(frame.cycle_label);
         if (frame.exit_label) |exit_label| {
             try do_ctx.pushPending(.{ .label = exit_label, .node = .{ .cont = {} } });
         }

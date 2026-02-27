@@ -215,11 +215,6 @@ pub const DoContext = struct {
         return error.UnexpectedToken;
     }
 
-    pub fn popNamedDoByLabel(self: *DoContext, cycle_label: []const u8) void {
-        _ = self;
-        _ = cycle_label;
-    }
-
     pub fn resolveNamedDoExit(self: *DoContext, name: []const u8) ?[]const u8 {
         var i = self.scope_stack.items.len;
         while (i > 0) {
