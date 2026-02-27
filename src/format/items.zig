@@ -12,71 +12,97 @@ pub fn flattenWithReversionAnchor(
     items: []const ast.FormatItem,
     max_items: usize,
 ) ![]ast.FormatItem {
+    var reversion_offset: ?usize = null;
+    const expanded_len = try analyzeExpandedLen(items, &reversion_offset);
+    if (reversion_offset) |offset| {
+        if (offset > expanded_len) return error.UnexpectedToken;
+    }
+
+    const anchor_extra: usize = if (reversion_offset != null) 1 else 0;
+    try ensureBudget(expanded_len, anchor_extra, max_items);
+
     var flat = std.array_list.Managed(ast.FormatItem).init(allocator);
     errdefer flat.deinit();
+    try flat.ensureTotalCapacity(expanded_len + anchor_extra);
 
-    var reversion_offset: ?usize = null;
-    try flattenTopLevel(&flat, items, max_items, &reversion_offset);
-
-    if (reversion_offset) |offset| {
-        if (offset > flat.items.len) return error.UnexpectedToken;
-        try ensureBudget(flat.items.len, 1, max_items);
-        try flat.insert(offset, .{ .reversion_anchor = {} });
+    var inserted_anchor = false;
+    try flattenItemsInto(&flat, items, true, reversion_offset, &inserted_anchor);
+    if (reversion_offset != null and !inserted_anchor) {
+        // Offset at stream end: emit anchor after the last flattened item.
+        try flat.append(.{ .reversion_anchor = {} });
     }
 
     return flat.toOwnedSlice();
 }
 
-fn flattenTopLevel(
-    out: *std.array_list.Managed(ast.FormatItem),
+fn analyzeExpandedLen(
     items: []const ast.FormatItem,
-    max_items: usize,
     reversion_offset: *?usize,
-) !void {
+) FlattenError!usize {
+    return analyzeItems(items, true, reversion_offset);
+}
+
+fn analyzeItems(
+    items: []const ast.FormatItem,
+    allow_reversion_offset: bool,
+    reversion_offset: *?usize,
+) FlattenError!usize {
+    var total: usize = 0;
     for (items) |item| {
         switch (item) {
             .reversion_offset => |offset| {
+                if (!allow_reversion_offset) return error.UnexpectedToken;
                 if (reversion_offset.* != null) return error.UnexpectedToken;
                 // Parser emits this as a flattened logical coordinate (descriptor
                 // index in the fully expanded stream), not as AST node index.
                 reversion_offset.* = offset;
             },
             .repeat_group => |rep| {
-                const per_iter = try measureFlatSliceLen(rep.items);
-                const total = std.math.mul(usize, per_iter, rep.count) catch return error.FormatExpansionTooLarge;
-                try ensureBudget(out.items.len, total, max_items);
-                var i: usize = 0;
-                while (i < rep.count) : (i += 1) {
-                    try flattenNested(out, rep.items, max_items);
-                }
+                const per_iter = try analyzeItems(rep.items, false, reversion_offset);
+                const group_total = std.math.mul(usize, per_iter, rep.count) catch return error.FormatExpansionTooLarge;
+                total = std.math.add(usize, total, group_total) catch return error.FormatExpansionTooLarge;
             },
             else => {
-                try ensureBudget(out.items.len, 1, max_items);
-                try out.append(item);
+                total = std.math.add(usize, total, 1) catch return error.FormatExpansionTooLarge;
             },
         }
     }
+    return total;
 }
 
-fn flattenNested(
+fn maybeAppendAnchor(
+    out: *std.array_list.Managed(ast.FormatItem),
+    anchor_offset: ?usize,
+    inserted_anchor: *bool,
+) !void {
+    if (inserted_anchor.*) return;
+    const offset = anchor_offset orelse return;
+    if (out.items.len == offset) {
+        try out.append(.{ .reversion_anchor = {} });
+        inserted_anchor.* = true;
+    }
+}
+
+fn flattenItemsInto(
     out: *std.array_list.Managed(ast.FormatItem),
     items: []const ast.FormatItem,
-    max_items: usize,
+    allow_reversion_offset: bool,
+    anchor_offset: ?usize,
+    inserted_anchor: *bool,
 ) !void {
     for (items) |item| {
         switch (item) {
-            .reversion_offset => return error.UnexpectedToken,
+            .reversion_offset => {
+                if (!allow_reversion_offset) return error.UnexpectedToken;
+            },
             .repeat_group => |rep| {
-                const per_iter = try measureFlatSliceLen(rep.items);
-                const total = std.math.mul(usize, per_iter, rep.count) catch return error.FormatExpansionTooLarge;
-                try ensureBudget(out.items.len, total, max_items);
                 var i: usize = 0;
                 while (i < rep.count) : (i += 1) {
-                    try flattenNested(out, rep.items, max_items);
+                    try flattenItemsInto(out, rep.items, false, anchor_offset, inserted_anchor);
                 }
             },
             else => {
-                try ensureBudget(out.items.len, 1, max_items);
+                try maybeAppendAnchor(out, anchor_offset, inserted_anchor);
                 try out.append(item);
             },
         }
@@ -86,26 +112,6 @@ fn flattenNested(
 fn ensureBudget(current_len: usize, add_len: usize, max_items: usize) !void {
     const next = std.math.add(usize, current_len, add_len) catch return error.FormatExpansionTooLarge;
     if (next > max_items) return error.FormatExpansionTooLarge;
-}
-
-fn measureFlatSliceLen(items: []const ast.FormatItem) FlattenError!usize {
-    var total: usize = 0;
-    for (items) |item| {
-        const add = try measureFlatItemLen(item);
-        total = std.math.add(usize, total, add) catch return error.FormatExpansionTooLarge;
-    }
-    return total;
-}
-
-fn measureFlatItemLen(item: ast.FormatItem) FlattenError!usize {
-    return switch (item) {
-        .reversion_offset => return error.UnexpectedToken,
-        .repeat_group => |rep| blk: {
-            const per_iter = try measureFlatSliceLen(rep.items);
-            break :blk std.math.mul(usize, per_iter, rep.count) catch return error.FormatExpansionTooLarge;
-        },
-        else => 1,
-    };
 }
 
 test "flattenWithReversionAnchor expands repeats and inserts anchor once" {
@@ -163,4 +169,34 @@ test "flattenWithReversionAnchor fails early on excessive expanded repeat size" 
     root[0] = .{ .repeat_group = .{ .count = 4, .items = repeated } };
 
     try testing.expectError(error.FormatExpansionTooLarge, flattenWithReversionAnchor(allocator, root, 3));
+}
+
+test "flattenWithReversionAnchor rejects nested reversion offset" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const nested = try allocator.alloc(ast.FormatItem, 2);
+    nested[0] = .{ .int = .{ .width = 5, .min_digits = 0 } };
+    nested[1] = .{ .reversion_offset = 0 };
+
+    const root = try allocator.alloc(ast.FormatItem, 1);
+    root[0] = .{ .repeat_group = .{ .count = 2, .items = nested } };
+
+    try testing.expectError(error.UnexpectedToken, flattenWithReversionAnchor(allocator, root, max_flat_items));
+}
+
+test "flattenWithReversionAnchor supports anchor at expanded stream end" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const root = try allocator.alloc(ast.FormatItem, 2);
+    root[0] = .{ .int = .{ .width = 3, .min_digits = 0 } };
+    root[1] = .{ .reversion_offset = 1 };
+
+    const flat = try flattenWithReversionAnchor(allocator, root, max_flat_items);
+    defer allocator.free(flat);
+
+    try testing.expectEqual(@as(usize, 2), flat.len);
+    try testing.expect(flat[0] == .int);
+    try testing.expect(flat[1] == .reversion_anchor);
 }
