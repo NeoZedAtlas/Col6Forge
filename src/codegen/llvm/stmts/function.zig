@@ -30,6 +30,9 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     const uses_explicit_result_name = ctx.unit.kind == .function and !std.ascii.eqlIgnoreCase(return_symbol_name, ctx.unit.name);
 
     const func_name = utils.mangleName(ctx.allocator, ctx.unit.name) catch return error.OutOfMemory;
+    const prev_fn_name = ctx.current_function_ir_name;
+    ctx.current_function_ir_name = func_name;
+    defer ctx.current_function_ir_name = prev_fn_name;
     const has_alt_return = ctx.unit.kind == .subroutine and execution.unitHasAltReturn(ctx.unit);
     var return_ty: ?llvm_types.IRType = null;
     var is_character_function = false;
@@ -255,6 +258,8 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         }
         ctx.allocator.free(block_names);
     }
+
+    try installAssignedGotoSlots(ctx, builder);
 
     if (block_names.len == 0) {
         try execution.emitDefaultReturn(ctx, builder);
@@ -491,6 +496,66 @@ fn symbolHasDeferredDims(sym: ast.sema.Symbol) bool {
         }
     }
     return false;
+}
+
+fn installAssignedGotoSlots(ctx: *Context, builder: anytype) EmitError!void {
+    var seen = context.CaseInsensitiveStringHashMap(void).initContext(ctx.allocator, .{});
+    defer seen.deinit();
+    var names = std.array_list.Managed([]const u8).init(ctx.allocator);
+    defer names.deinit();
+
+    try collectAssignedGotoVars(ctx.unit.stmts, &seen, &names);
+    for (names.items) |name| {
+        if (ctx.assigned_goto_slots.contains(name)) continue;
+        const slot_name = try ctx.nextTemp();
+        try builder.alloca(slot_name, .ptr);
+        const slot_ptr = ValueRef{ .name = slot_name, .ty = .ptr, .is_ptr = true };
+        try builder.store(.{ .name = "null", .ty = .ptr, .is_ptr = false }, slot_ptr);
+        try ctx.assigned_goto_slots.put(name, slot_ptr);
+    }
+}
+
+fn collectAssignedGotoVars(
+    stmts: []const ast.Stmt,
+    seen: *context.CaseInsensitiveStringHashMap(void),
+    out_names: *std.array_list.Managed([]const u8),
+) EmitError!void {
+    for (stmts) |stmt| {
+        try collectAssignedGotoVarsFromNode(stmt.node, seen, out_names);
+    }
+}
+
+fn collectAssignedGotoVarsFromNode(
+    node: ast.StmtNode,
+    seen: *context.CaseInsensitiveStringHashMap(void),
+    out_names: *std.array_list.Managed([]const u8),
+) EmitError!void {
+    switch (node) {
+        .assign_label => {},
+        .assigned_goto => |assigned| {
+            // Only no-list assigned GOTO can lower to indirectbr; list-form
+            // keeps the classic integer switch path.
+            if (assigned.labels.len == 0) {
+                try addAssignedGotoVar(assigned.var_name, seen, out_names);
+            }
+        },
+        .if_single => |ifs| try collectAssignedGotoVarsFromNode(ifs.stmt.*, seen, out_names),
+        .if_block => |ifb| {
+            try collectAssignedGotoVars(ifb.then_stmts, seen, out_names);
+            try collectAssignedGotoVars(ifb.else_stmts, seen, out_names);
+        },
+        else => {},
+    }
+}
+
+fn addAssignedGotoVar(
+    name: []const u8,
+    seen: *context.CaseInsensitiveStringHashMap(void),
+    out_names: *std.array_list.Managed([]const u8),
+) EmitError!void {
+    if (seen.contains(name)) return;
+    try seen.put(name, {});
+    try out_names.append(name);
 }
 
 const SizeAlign = struct {

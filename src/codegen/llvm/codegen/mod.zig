@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const input = @import("../../input.zig");
 const context = @import("context.zig");
 const builder_mod = @import("builder.zig");
@@ -701,4 +701,64 @@ test "PAUSE string payload lowers to runtime payload call" {
     const output = buffer.items;
     try testing.expect(std.mem.indexOf(u8, output, "call void @col6forge_pause_with_payload(i32 0, ptr %") != null);
     try testing.expect(std.mem.indexOf(u8, output, "INIT DONE") != null);
+}
+
+test "ASSIGN plus no-list assigned GOTO lowers to blockaddress indirectbr path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const stmt_list = try a.alloc(input.Stmt, 4);
+    stmt_list[0] = .{ .label = null, .node = .{ .assign_label = .{ .label = "0012", .target = "I" } } };
+    stmt_list[1] = .{ .label = null, .node = .{ .assigned_goto = .{ .var_name = "I", .labels = &[_][]const u8{} } } };
+    stmt_list[2] = .{ .label = "0012", .node = .{ .cont = {} } };
+    stmt_list[3] = .{ .label = null, .node = .{ .cont = {} } };
+
+    const decls = try a.alloc(input.Decl, 0);
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = decls,
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const symbols = try a.alloc(input.sema.Symbol, 1);
+    symbols[0] = .{
+        .name = "I",
+        .type_kind = .integer,
+        .dims = &[_]*input.Expr{},
+        .char_len = null,
+        .kind = .variable,
+        .storage = .local,
+        .is_external = false,
+        .is_intrinsic = false,
+        .const_value = null,
+        .type_explicit = true,
+    };
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "assigned_goto_nolist.f", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "store ptr blockaddress(@") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "indirectbr ptr %") != null);
 }

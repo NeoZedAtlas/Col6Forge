@@ -225,6 +225,31 @@ pub fn emitAssignLabel(ctx: *Context, builder: anytype, assign: ast.AssignLabelS
         value = try expr.coerce(ctx, builder, value, target_ty);
     }
     try builder.store(value, target_ptr);
+
+    if (ctx.assigned_goto_slots.get(assign.target)) |slot_ptr| {
+        const function_name = ctx.current_function_ir_name orelse return error.UnsupportedProgramUnit;
+        const target_block = resolveAssignedLabelBlock(ctx, assign.label) orelse return error.MissingLabel;
+        try builder.storeBlockAddress(function_name, target_block, slot_ptr);
+    }
+}
+
+fn resolveAssignedLabelBlock(ctx: *Context, label: []const u8) ?[]const u8 {
+    if (ctx.label_map.get(label)) |target| return target;
+    const canonical = canonicalNumericLabel(label);
+    if (!std.mem.eql(u8, canonical, label)) {
+        if (ctx.label_map.get(canonical)) |target| return target;
+    }
+    return null;
+}
+
+fn canonicalNumericLabel(label: []const u8) []const u8 {
+    if (label.len == 0) return label;
+    for (label) |ch| {
+        if (!std.ascii.isDigit(ch)) return label;
+    }
+    var start: usize = 0;
+    while (start + 1 < label.len and label[start] == '0') : (start += 1) {}
+    return label[start..];
 }
 
 fn emitContiguousSectionScalarAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {

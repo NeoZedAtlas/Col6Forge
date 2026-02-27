@@ -118,8 +118,17 @@ fn resolveLabel(
 ) ?[]const u8 {
     if (local_map) |map| {
         if (map.get(label)) |name| return name;
+        const canonical = canonicalNumericLabel(label);
+        if (!std.mem.eql(u8, canonical, label)) {
+            if (map.get(canonical)) |name| return name;
+        }
     }
-    return global_map.get(label);
+    if (global_map.get(label)) |name| return name;
+    const canonical = canonicalNumericLabel(label);
+    if (!std.mem.eql(u8, canonical, label)) {
+        if (global_map.get(canonical)) |name| return name;
+    }
+    return null;
 }
 
 fn determineStepSign(step_expr: ?*ast.Expr) StepSign {
@@ -194,6 +203,16 @@ test "resolveGotoTargets assigned mode uses numeric label value" {
     try testing.expectEqual(@as(i64, 30), plan[1].index);
 }
 
+fn canonicalNumericLabel(label: []const u8) []const u8 {
+    if (label.len == 0) return label;
+    for (label) |ch| {
+        if (!std.ascii.isDigit(ch)) return label;
+    }
+    var start: usize = 0;
+    while (start + 1 < label.len and label[start] == '0') : (start += 1) {}
+    return label[start..];
+}
+
 test "resolveAssignedGotoTargetsNoList collects numeric labels from global map" {
     const testing = std.testing;
     var map = std.StringHashMap([]const u8).init(testing.allocator);
@@ -230,4 +249,18 @@ test "resolveAssignedGotoTargetsNoList prefers local map entries on duplicate la
     try testing.expectEqual(@as(usize, 1), plan.len);
     try testing.expectEqual(@as(i64, 10), plan[0].index);
     try testing.expectEqualStrings("L10_local", plan[0].target_block);
+}
+
+test "resolveGotoTargets accepts zero-padded label lookup via canonical key" {
+    const testing = std.testing;
+    var map = std.StringHashMap([]const u8).init(testing.allocator);
+    defer map.deinit();
+    try map.put("12", "L12");
+
+    const plan = try resolveGotoTargets(testing.allocator, &[_][]const u8{"0012"}, null, &map, .assigned);
+    defer testing.allocator.free(plan);
+
+    try testing.expectEqual(@as(usize, 1), plan.len);
+    try testing.expectEqual(@as(i64, 12), plan[0].index);
+    try testing.expectEqualStrings("L12", plan[0].target_block);
 }

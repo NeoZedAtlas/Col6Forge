@@ -45,6 +45,49 @@ pub fn emitAssignedGoto(
     next_block: []const u8,
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!void {
+    if (gt.labels.len == 0) {
+        if (ctx.assigned_goto_slots.get(gt.var_name)) |slot_ptr| {
+            const addr_tmp = try ctx.nextTemp();
+            try builder.load(addr_tmp, .ptr, slot_ptr);
+            const addr = ValueRef{ .name = addr_tmp, .ty = .ptr, .is_ptr = false };
+
+            const plan_no_list = try logic.resolveAssignedGotoTargetsNoList(ctx.allocator, local_label_map, &ctx.label_map);
+            defer ctx.allocator.free(plan_no_list);
+
+            var destinations = std.array_list.Managed([]const u8).init(ctx.allocator);
+            defer destinations.deinit();
+            var seen_labels = std.StringHashMap(void).init(ctx.allocator);
+            defer seen_labels.deinit();
+            for (plan_no_list) |item| {
+                if (seen_labels.contains(item.target_block)) continue;
+                try seen_labels.put(item.target_block, {});
+                try destinations.append(item.target_block);
+            }
+            if (destinations.items.len == 0) return error.MissingLabel;
+
+            const invalid_label = try ctx.nextLabel("assigned_goto_invalid");
+            const indir_label = try ctx.nextLabel("assigned_goto_indirect");
+            const is_null_tmp = try ctx.nextTemp();
+            try builder.compare(
+                is_null_tmp,
+                "icmp",
+                "eq",
+                .ptr,
+                addr,
+                .{ .name = "null", .ty = .ptr, .is_ptr = false },
+            );
+            const is_null = ValueRef{ .name = is_null_tmp, .ty = .i1, .is_ptr = false };
+            try builder.brCond(is_null, invalid_label, indir_label);
+
+            try builder.label(indir_label);
+            try builder.indirectBr(addr, destinations.items);
+
+            try builder.label(invalid_label);
+            try builder.emitUnreachable();
+            return;
+        }
+    }
+
     const sym = ctx.findSymbol(gt.var_name) orelse return error.UnknownSymbol;
     const ptr = try ctx.getPointer(gt.var_name);
     const tmp = try ctx.nextTemp();

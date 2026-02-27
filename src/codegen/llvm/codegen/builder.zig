@@ -170,6 +170,19 @@ pub fn Builder(comptime WriterType: type) type {
             try self.writer.writeAll("  ]\n");
         }
 
+        pub fn indirectBr(self: *@This(), addr: ValueRef, destinations: []const []const u8) !void {
+            try self.bump();
+            try self.writer.writeAll("  indirectbr ptr ");
+            try self.writer.writeAll(addr.name);
+            try self.writer.writeAll(", [ ");
+            for (destinations, 0..) |label_name, idx| {
+                if (idx != 0) try self.writer.writeAll(", ");
+                try self.writer.writeAll("label %");
+                try self.writer.writeAll(label_name);
+            }
+            try self.writer.writeAll(" ]\n");
+        }
+
         pub fn alloca(self: *@This(), name: []const u8, ty: IRType) !void {
             try self.bump();
             try self.writer.writeAll("  ");
@@ -201,6 +214,14 @@ pub fn Builder(comptime WriterType: type) type {
             try self.writer.writeAll(", ptr ");
             try self.writer.writeAll(ptr.name);
             try self.writer.writeAll("\n");
+        }
+
+        pub fn storeBlockAddress(self: *@This(), function_name: []const u8, label_name: []const u8, ptr: ValueRef) !void {
+            try self.bump();
+            try self.writer.print(
+                "  store ptr blockaddress(@{s}, %{s}), ptr {s}\n",
+                .{ function_name, label_name, ptr.name },
+            );
         }
 
         pub fn load(self: *@This(), tmp: []const u8, ty: IRType, ptr: ValueRef) !void {
@@ -495,6 +516,39 @@ test "switchBr serializes switch terminator" {
             "    i32 1, label %L10\n" ++
             "    i32 2, label %L20\n" ++
             "  ]\n",
+        buf.items,
+    );
+}
+
+test "indirectBr serializes indirect branch terminator" {
+    const testing = std.testing;
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
+    defer buf.deinit();
+
+    const writer = buf.writer();
+    var builder = Builder(@TypeOf(writer)).init(writer);
+    const addr = ValueRef{ .name = "%addr", .ty = .ptr, .is_ptr = false };
+    const destinations = [_][]const u8{ "L10", "L20" };
+    try builder.indirectBr(addr, &destinations);
+
+    try testing.expectEqualStrings(
+        "  indirectbr ptr %addr, [ label %L10, label %L20 ]\n",
+        buf.items,
+    );
+}
+
+test "storeBlockAddress serializes blockaddress store" {
+    const testing = std.testing;
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
+    defer buf.deinit();
+
+    const writer = buf.writer();
+    var builder = Builder(@TypeOf(writer)).init(writer);
+    const slot_ptr = ValueRef{ .name = "%slot", .ty = .ptr, .is_ptr = true };
+    try builder.storeBlockAddress("f_unit", "L10", slot_ptr);
+
+    try testing.expectEqualStrings(
+        "  store ptr blockaddress(@f_unit, %L10), ptr %slot\n",
         buf.items,
     );
 }

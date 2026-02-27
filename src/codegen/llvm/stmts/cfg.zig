@@ -39,16 +39,30 @@ pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !Local
 
     for (stmts, 0..) |stmt, idx| {
         const name = if (stmt.label) |label| blk: {
-            const block_name = if (ctx.label_map.get(label)) |existing|
-                existing
-            else alloc: {
+            const canonical = canonicalNumericLabel(label);
+            const block_name = blk_name: {
+                if (ctx.label_map.get(label)) |existing| break :blk_name existing;
+                if (!std.mem.eql(u8, canonical, label)) {
+                    if (ctx.label_map.get(canonical)) |existing| break :blk_name existing;
+                }
                 const allocated = try std.fmt.allocPrint(ctx.allocator, "L{s}", .{label});
                 errdefer ctx.allocator.free(allocated);
                 try ctx.label_map.put(label, allocated);
-                break :alloc allocated;
+                if (!std.mem.eql(u8, canonical, label) and !ctx.label_map.contains(canonical)) {
+                    try ctx.label_map.put(canonical, allocated);
+                }
+                break :blk_name allocated;
             };
             try label_map.put(label, block_name);
             try label_index.put(label, idx);
+            if (!std.mem.eql(u8, canonical, label)) {
+                if (!label_map.contains(canonical)) {
+                    try label_map.put(canonical, block_name);
+                }
+                if (!label_index.contains(canonical)) {
+                    try label_index.put(canonical, idx);
+                }
+            }
             break :blk block_name;
         } else blk: {
             const temp_name = try ctx.nextLabel(prefix);
@@ -80,8 +94,17 @@ pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !Local
 pub fn resolveLabel(ctx: *Context, local_map: ?*const std.StringHashMap([]const u8), label: []const u8) ?[]const u8 {
     if (local_map) |map| {
         if (map.get(label)) |name| return name;
+        const canonical = canonicalNumericLabel(label);
+        if (!std.mem.eql(u8, canonical, label)) {
+            if (map.get(canonical)) |name| return name;
+        }
     }
-    return ctx.label_map.get(label);
+    if (ctx.label_map.get(label)) |name| return name;
+    const canonical = canonicalNumericLabel(label);
+    if (!std.mem.eql(u8, canonical, label)) {
+        if (ctx.label_map.get(canonical)) |name| return name;
+    }
+    return null;
 }
 
 pub fn findLabelIndex(stmts: []Stmt, label: []const u8) ?usize {
@@ -91,4 +114,14 @@ pub fn findLabelIndex(stmts: []Stmt, label: []const u8) ?usize {
         }
     }
     return null;
+}
+
+fn canonicalNumericLabel(label: []const u8) []const u8 {
+    if (label.len == 0) return label;
+    for (label) |ch| {
+        if (!std.ascii.isDigit(ch)) return label;
+    }
+    var start: usize = 0;
+    while (start + 1 < label.len and label[start] == '0') : (start += 1) {}
+    return label[start..];
 }

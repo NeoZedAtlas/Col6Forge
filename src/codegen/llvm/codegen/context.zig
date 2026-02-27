@@ -124,6 +124,8 @@ pub const Context = struct {
     label_map: std.StringHashMap([]const u8),
     label_index: std.StringHashMap(usize),
     label_counter: usize,
+    current_function_ir_name: ?[]const u8,
+    assigned_goto_slots: CaseInsensitiveStringHashMap(ValueRef),
     symbol_index_exact: std.StringHashMap(usize),
     symbol_index: CaseInsensitiveStringHashMap(usize),
     array_elem_count_cache: std.AutoHashMap(usize, usize),
@@ -167,6 +169,8 @@ pub const Context = struct {
             .label_map = std.StringHashMap([]const u8).init(allocator),
             .label_index = std.StringHashMap(usize).init(allocator),
             .label_counter = 0,
+            .current_function_ir_name = null,
+            .assigned_goto_slots = CaseInsensitiveStringHashMap(ValueRef).initContext(allocator, .{}),
             .symbol_index_exact = std.StringHashMap(usize).init(allocator),
             .symbol_index = CaseInsensitiveStringHashMap(usize).initContext(allocator, .{}),
             .array_elem_count_cache = std.AutoHashMap(usize, usize).init(allocator),
@@ -182,6 +186,7 @@ pub const Context = struct {
             .options = options,
             .current_stmt = null,
         };
+        errdefer ctx.assigned_goto_slots.deinit();
         errdefer ctx.symbol_index_exact.deinit();
         errdefer ctx.symbol_index.deinit();
         errdefer ctx.array_elem_count_cache.deinit();
@@ -208,6 +213,7 @@ pub const Context = struct {
         }
         self.label_map.deinit();
         self.label_index.deinit();
+        self.assigned_goto_slots.deinit();
         self.symbol_index_exact.deinit();
         self.symbol_index.deinit();
         self.array_elem_count_cache.deinit();
@@ -249,6 +255,15 @@ pub const Context = struct {
                 const block_name = try self.allocPrefixedName("L", label);
                 try self.label_map.put(label, block_name);
                 try self.label_index.put(label, idx);
+                const canonical = canonicalNumericLabel(label);
+                if (!std.mem.eql(u8, canonical, label)) {
+                    if (!self.label_map.contains(canonical)) {
+                        try self.label_map.put(canonical, block_name);
+                    }
+                    if (!self.label_index.contains(canonical)) {
+                        try self.label_index.put(canonical, idx);
+                    }
+                }
                 break :blk block_name;
             } else try self.allocIndexedName("bb", idx, false);
             try names.append(name);
@@ -418,6 +433,16 @@ pub const Context = struct {
         return self.symbol_index.get(name);
     }
 };
+
+fn canonicalNumericLabel(label: []const u8) []const u8 {
+    if (label.len == 0) return label;
+    for (label) |ch| {
+        if (!std.ascii.isDigit(ch)) return label;
+    }
+    var start: usize = 0;
+    while (start + 1 < label.len and label[start] == '0') : (start += 1) {}
+    return label[start..];
+}
 
 fn writeUnsignedDecimal(buffer: []u8, value: usize) []const u8 {
     var v = value;

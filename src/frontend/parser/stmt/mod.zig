@@ -1621,6 +1621,27 @@ test "parseStatement keeps ASSIGN and assigned GOTO forms distinct" {
     try testing.expectEqualStrings("20", goto_stmt.node.assigned_goto.labels[1]);
 }
 
+test "parseStatement preserves ASSIGN label text with leading zeros" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      ASSIGN 0012 TO I\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const assign_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(assign_stmt.node == .assign_label);
+    try testing.expectEqualStrings("0012", assign_stmt.node.assign_label.label);
+}
+
 test "parseStatement accepts fixed-form exponent blanks in assignment RHS" {
     const testing = std.testing;
     const allocator = testing.allocator;
