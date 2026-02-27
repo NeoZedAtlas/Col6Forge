@@ -11,6 +11,83 @@ const Stmt = ast.Stmt;
 const Context = context.Context;
 
 const EmitError = anyerror;
+const LoopAfterMode = enum {
+    unit_tail_exit,
+    range_end_next,
+};
+
+fn resolveLoopEndIndex(
+    label_index: *const std.StringHashMap(usize),
+    loop_end_label: []const u8,
+    i: usize,
+    end_idx: usize,
+) EmitError!usize {
+    const end_label_idx = label_index.get(loop_end_label) orelse return error.MissingLabel;
+    if (end_label_idx <= i) return error.InvalidDoLabel;
+    if (end_label_idx > end_idx) return error.InvalidDoLabel;
+    return end_label_idx;
+}
+
+fn tryEmitLoopForUnit(
+    ctx: *Context,
+    builder: anytype,
+    stmt: Stmt,
+    block_names: [][]const u8,
+    i: usize,
+    end_idx: usize,
+    after_mode: LoopAfterMode,
+    end_next: []const u8,
+) EmitError!?usize {
+    const loop_end_label = switch (stmt.node) {
+        .do_loop => |loop| loop.end_label,
+        .do_while => |loop| loop.end_label,
+        .do_infinite => |loop| loop.end_label,
+        else => return null,
+    };
+    const end_label_idx = try resolveLoopEndIndex(&ctx.label_index, loop_end_label, i, end_idx);
+    const after_loop = switch (after_mode) {
+        .unit_tail_exit => if (end_label_idx + 1 < ctx.unit.stmts.len) block_names[end_label_idx + 1] else "exit",
+        .range_end_next => if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next,
+    };
+
+    switch (stmt.node) {
+        .do_loop => try control.emitDo(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd),
+        .do_while => try control.emitDoWhile(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd),
+        .do_infinite => try control.emitDoInfinite(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd),
+        else => unreachable,
+    }
+    return end_label_idx + 1;
+}
+
+fn tryEmitLoopForList(
+    ctx: *Context,
+    builder: anytype,
+    stmt: Stmt,
+    stmts: []Stmt,
+    block_names: [][]const u8,
+    label_map: *const std.StringHashMap([]const u8),
+    label_index: *const std.StringHashMap(usize),
+    i: usize,
+    end_idx: usize,
+    end_next: []const u8,
+) EmitError!?usize {
+    const loop_end_label = switch (stmt.node) {
+        .do_loop => |loop| loop.end_label,
+        .do_while => |loop| loop.end_label,
+        .do_infinite => |loop| loop.end_label,
+        else => return null,
+    };
+    const end_label_idx = try resolveLoopEndIndex(label_index, loop_end_label, i, end_idx);
+    const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
+
+    switch (stmt.node) {
+        .do_loop => try control.emitDoList(ctx, builder, stmts, block_names, label_map, label_index, i, end_label_idx, after_loop, emitStmtListRange),
+        .do_while => try control.emitDoWhileList(ctx, builder, stmts, block_names, label_map, label_index, i, end_label_idx, after_loop, emitStmtListRange),
+        .do_infinite => try control.emitDoInfiniteList(ctx, builder, stmts, block_names, label_map, label_index, i, end_label_idx, after_loop, emitStmtListRange),
+        else => unreachable,
+    }
+    return end_label_idx + 1;
+}
 
 pub fn emitStmt(
     ctx: *Context,
@@ -169,35 +246,9 @@ pub fn emitSequence(ctx: *Context, builder: anytype, block_names: [][]const u8, 
         const stmt = ctx.unit.stmts[i];
         const block_name = block_names[i];
         try builder.label(block_name);
-        switch (stmt.node) {
-            .do_loop => |loop| {
-                const end_label_idx = ctx.label_index.get(loop.end_label) orelse return error.MissingLabel;
-                if (end_label_idx <= i) return error.InvalidDoLabel;
-                if (end_label_idx > end_idx) return error.InvalidDoLabel;
-                const after_loop = if (end_label_idx + 1 < ctx.unit.stmts.len) block_names[end_label_idx + 1] else "exit";
-                try control.emitDo(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd);
-                i = end_label_idx + 1;
-                continue;
-            },
-            .do_while => |loop| {
-                const end_label_idx = ctx.label_index.get(loop.end_label) orelse return error.MissingLabel;
-                if (end_label_idx <= i) return error.InvalidDoLabel;
-                if (end_label_idx > end_idx) return error.InvalidDoLabel;
-                const after_loop = if (end_label_idx + 1 < ctx.unit.stmts.len) block_names[end_label_idx + 1] else "exit";
-                try control.emitDoWhile(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd);
-                i = end_label_idx + 1;
-                continue;
-            },
-            .do_infinite => |loop| {
-                const end_label_idx = ctx.label_index.get(loop.end_label) orelse return error.MissingLabel;
-                if (end_label_idx <= i) return error.InvalidDoLabel;
-                if (end_label_idx > end_idx) return error.InvalidDoLabel;
-                const after_loop = if (end_label_idx + 1 < ctx.unit.stmts.len) block_names[end_label_idx + 1] else "exit";
-                try control.emitDoInfinite(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd);
-                i = end_label_idx + 1;
-                continue;
-            },
-            else => {},
+        if (try tryEmitLoopForUnit(ctx, builder, stmt, block_names, i, end_idx, .unit_tail_exit, "exit")) |next_i| {
+            i = next_i;
+            continue;
         }
         const next_block = if (i + 1 <= end_idx) block_names[i + 1] else "exit";
         _ = try emitStmt(ctx, builder, stmt, next_block, null);
@@ -218,35 +269,9 @@ pub fn emitSequenceWithEnd(
         const stmt = ctx.unit.stmts[i];
         const block_name = block_names[i];
         try builder.label(block_name);
-        switch (stmt.node) {
-            .do_loop => |loop| {
-                const end_label_idx = ctx.label_index.get(loop.end_label) orelse return error.MissingLabel;
-                if (end_label_idx <= i) return error.InvalidDoLabel;
-                if (end_label_idx > end_idx) return error.InvalidDoLabel;
-                const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
-                try control.emitDo(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd);
-                i = end_label_idx + 1;
-                continue;
-            },
-            .do_while => |loop| {
-                const end_label_idx = ctx.label_index.get(loop.end_label) orelse return error.MissingLabel;
-                if (end_label_idx <= i) return error.InvalidDoLabel;
-                if (end_label_idx > end_idx) return error.InvalidDoLabel;
-                const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
-                try control.emitDoWhile(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd);
-                i = end_label_idx + 1;
-                continue;
-            },
-            .do_infinite => |loop| {
-                const end_label_idx = ctx.label_index.get(loop.end_label) orelse return error.MissingLabel;
-                if (end_label_idx <= i) return error.InvalidDoLabel;
-                if (end_label_idx > end_idx) return error.InvalidDoLabel;
-                const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
-                try control.emitDoInfinite(ctx, builder, block_names, i, end_label_idx, after_loop, emitSequenceWithEnd);
-                i = end_label_idx + 1;
-                continue;
-            },
-            else => {},
+        if (try tryEmitLoopForUnit(ctx, builder, stmt, block_names, i, end_idx, .range_end_next, end_next)) |next_i| {
+            i = next_i;
+            continue;
         }
         const next_block = if (i == end_idx) end_next else block_names[i + 1];
         _ = try emitStmt(ctx, builder, stmt, next_block, null);
@@ -270,35 +295,9 @@ pub fn emitStmtListRange(
         const stmt = stmts[i];
         const block_name = block_names[i];
         try builder.label(block_name);
-        switch (stmt.node) {
-            .do_loop => |loop| {
-                const end_label_idx = label_index.get(loop.end_label) orelse return error.MissingLabel;
-                if (end_label_idx <= i) return error.InvalidDoLabel;
-                if (end_label_idx > end_idx) return error.InvalidDoLabel;
-                const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
-                try control.emitDoList(ctx, builder, stmts, block_names, label_map, label_index, i, end_label_idx, after_loop, emitStmtListRange);
-                i = end_label_idx + 1;
-                continue;
-            },
-            .do_while => |loop| {
-                const end_label_idx = label_index.get(loop.end_label) orelse return error.MissingLabel;
-                if (end_label_idx <= i) return error.InvalidDoLabel;
-                if (end_label_idx > end_idx) return error.InvalidDoLabel;
-                const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
-                try control.emitDoWhileList(ctx, builder, stmts, block_names, label_map, label_index, i, end_label_idx, after_loop, emitStmtListRange);
-                i = end_label_idx + 1;
-                continue;
-            },
-            .do_infinite => |loop| {
-                const end_label_idx = label_index.get(loop.end_label) orelse return error.MissingLabel;
-                if (end_label_idx <= i) return error.InvalidDoLabel;
-                if (end_label_idx > end_idx) return error.InvalidDoLabel;
-                const after_loop = if (end_label_idx + 1 <= end_idx) block_names[end_label_idx + 1] else end_next;
-                try control.emitDoInfiniteList(ctx, builder, stmts, block_names, label_map, label_index, i, end_label_idx, after_loop, emitStmtListRange);
-                i = end_label_idx + 1;
-                continue;
-            },
-            else => {},
+        if (try tryEmitLoopForList(ctx, builder, stmt, stmts, block_names, label_map, label_index, i, end_idx, end_next)) |next_i| {
+            i = next_i;
+            continue;
         }
         const next_block = if (i == end_idx) end_next else block_names[i + 1];
         _ = try emitStmt(ctx, builder, stmt, next_block, label_map);
