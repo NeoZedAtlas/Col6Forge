@@ -64,6 +64,12 @@ pub const StatementFunctionSubst = struct {
     actuals: []*input.Expr,
 };
 
+pub const RuntimeArrayDescriptor = struct {
+    rank: usize,
+    lower_slots: []ValueRef,
+    extent_slots: []ValueRef,
+};
+
 pub const IntrinsicWrapperKind = enum {
     iabs,
 };
@@ -136,6 +142,7 @@ pub const Context = struct {
     char_values: std.StringHashMap([]const u8),
     char_array_values: std.StringHashMap([]const u8),
     char_arg_lens: CaseInsensitiveStringHashMap(ValueRef),
+    runtime_array_descs: std.AutoHashMap(usize, RuntimeArrayDescriptor),
     int_literal_cache: std.AutoHashMap(i64, []const u8),
     heap_temps_to_free: std.array_list.Managed(ValueRef),
     options: CodegenOptions,
@@ -181,6 +188,7 @@ pub const Context = struct {
             .char_values = std.StringHashMap([]const u8).init(allocator),
             .char_array_values = std.StringHashMap([]const u8).init(allocator),
             .char_arg_lens = CaseInsensitiveStringHashMap(ValueRef).initContext(allocator, .{}),
+            .runtime_array_descs = std.AutoHashMap(usize, RuntimeArrayDescriptor).init(allocator),
             .int_literal_cache = std.AutoHashMap(i64, []const u8).init(allocator),
             .heap_temps_to_free = std.array_list.Managed(ValueRef).init(allocator),
             .options = options,
@@ -232,6 +240,12 @@ pub const Context = struct {
         }
         self.char_array_values.deinit();
         self.char_arg_lens.deinit();
+        var desc_it = self.runtime_array_descs.iterator();
+        while (desc_it.next()) |entry| {
+            self.allocator.free(entry.value_ptr.lower_slots);
+            self.allocator.free(entry.value_ptr.extent_slots);
+        }
+        self.runtime_array_descs.deinit();
         self.int_literal_cache.deinit();
         self.heap_temps_to_free.deinit();
     }
@@ -396,6 +410,42 @@ pub const Context = struct {
         return .{ .name = try self.intLiteral(value), .ty = .i32, .is_ptr = false };
     }
 
+    pub fn setRuntimeArrayDescriptor(
+        self: *Context,
+        name: []const u8,
+        lower_slots: []ValueRef,
+        extent_slots: []ValueRef,
+    ) !void {
+        if (lower_slots.len != extent_slots.len) return error.InvalidArrayDim;
+        const sym_idx = self.symbolIndexForName(name) orelse return error.UnknownSymbol;
+        if (self.runtime_array_descs.fetchRemove(sym_idx)) |kv| {
+            self.allocator.free(kv.value.lower_slots);
+            self.allocator.free(kv.value.extent_slots);
+        }
+        try self.runtime_array_descs.put(sym_idx, .{
+            .rank = lower_slots.len,
+            .lower_slots = lower_slots,
+            .extent_slots = extent_slots,
+        });
+    }
+
+    pub fn runtimeArrayDescriptor(self: *const Context, name: []const u8) ?RuntimeArrayDescriptor {
+        const sym_idx = self.symbolIndexForName(name) orelse return null;
+        return self.runtime_array_descs.get(sym_idx);
+    }
+
+    pub fn runtimeArrayDimLowerSlot(self: *const Context, name: []const u8, dim_index: usize) ?ValueRef {
+        const desc = self.runtimeArrayDescriptor(name) orelse return null;
+        if (dim_index >= desc.rank) return null;
+        return desc.lower_slots[dim_index];
+    }
+
+    pub fn runtimeArrayDimExtentSlot(self: *const Context, name: []const u8, dim_index: usize) ?ValueRef {
+        const desc = self.runtimeArrayDescriptor(name) orelse return null;
+        if (dim_index >= desc.rank) return null;
+        return desc.extent_slots[dim_index];
+    }
+
     pub fn setCurrentStmt(self: *Context, stmt: input.Stmt) void {
         self.current_stmt = stmt;
     }
@@ -428,7 +478,7 @@ pub const Context = struct {
         return out;
     }
 
-    fn symbolIndexForName(self: *Context, name: []const u8) ?usize {
+    fn symbolIndexForName(self: *const Context, name: []const u8) ?usize {
         if (self.symbol_index_exact.get(name)) |idx| return idx;
         return self.symbol_index.get(name);
     }

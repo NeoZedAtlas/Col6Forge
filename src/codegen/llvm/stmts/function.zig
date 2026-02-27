@@ -159,6 +159,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
                 continue;
             }
             try ctx.locals.put(sym.name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
+            try installDeferredArrayDescriptor(ctx, builder, sym);
             continue;
         }
         if (sym.type_kind == .character) {
@@ -464,10 +465,13 @@ fn unitHasEquivalenceDecls(decls: []const ast.Decl) bool {
 
 fn emitDynamicElemCount(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) EmitError!ValueRef {
     var total = constI64(ctx, 1);
-    for (sym.dims) |dim| {
-        var extent = expression.emitDimValue(ctx, builder, dim) catch |err| switch (err) {
-            // Deferred-shape extents such as SIZE(x) are lowered conservatively.
-            error.UnknownSymbol => constI64(ctx, 1),
+    for (sym.dims, 0..) |dim, dim_idx| {
+        var extent = expression.emitSymbolDimExtent(ctx, builder, sym, dim_idx) catch |err| switch (err) {
+            // Keep conservative behavior for unresolved extents.
+            error.UnknownSymbol => expression.emitDimValue(ctx, builder, dim) catch |inner| switch (inner) {
+                error.UnknownSymbol => constI64(ctx, 1),
+                else => return inner,
+            },
             else => return err,
         };
         if (extent.ty != .i64) {
@@ -476,6 +480,31 @@ fn emitDynamicElemCount(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) E
         total = try expression.emitMul(ctx, builder, total, extent);
     }
     return total;
+}
+
+fn installDeferredArrayDescriptor(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) EmitError!void {
+    if (sym.dims.len == 0) return;
+    var lower_slots = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    errdefer ctx.allocator.free(lower_slots);
+    var extent_slots = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    errdefer ctx.allocator.free(extent_slots);
+
+    for (sym.dims, 0..) |_, idx| {
+        const lower_name = try ctx.nextTemp();
+        try builder.alloca(lower_name, .i64);
+        const lower_ptr = ValueRef{ .name = lower_name, .ty = .ptr, .is_ptr = true };
+        try builder.store(constI64(ctx, 1), lower_ptr);
+        lower_slots[idx] = lower_ptr;
+
+        const extent_name = try ctx.nextTemp();
+        try builder.alloca(extent_name, .i64);
+        const extent_ptr = ValueRef{ .name = extent_name, .ty = .ptr, .is_ptr = true };
+        // Unallocated deferred-shape arrays expose extent 0 and fail bounds checks.
+        try builder.store(constI64(ctx, 0), extent_ptr);
+        extent_slots[idx] = extent_ptr;
+    }
+
+    try ctx.setRuntimeArrayDescriptor(sym.name, lower_slots, extent_slots);
 }
 
 fn constI64(ctx: *Context, value: i64) ValueRef {

@@ -46,10 +46,10 @@ fn emitColumnMajorOffset(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, 
     var idx: usize = 0;
     while (idx < sym.dims.len) : (idx += 1) {
         const idx_val = try emitIndex(ctx, builder, args[idx]);
-        const lb = try emitDimLower(ctx, builder, sym.dims[idx]);
+        const lb = try emitSymbolDimLower(ctx, builder, sym, idx);
         var dim_val: ?ValueRef = null;
         if (ctx.options.bounds_check or idx + 1 < sym.dims.len) {
-            dim_val = try emitDimValue(ctx, builder, sym.dims[idx]);
+            dim_val = try emitSymbolDimExtent(ctx, builder, sym, idx);
         }
         if (ctx.options.bounds_check) {
             const upper_delta = try binary.emitSub(ctx, builder, dim_val.?, oneIndexValue());
@@ -78,8 +78,8 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
     const idx1 = try emitIndex(ctx, builder, call.args[0]);
     if (ctx.options.bounds_check) {
         var extent_total = oneIndexValue();
-        for (sym.dims) |dim_expr| {
-            const dim_val = try emitDimValue(ctx, builder, dim_expr);
+        for (sym.dims, 0..) |_, dim_idx| {
+            const dim_val = try emitSymbolDimExtent(ctx, builder, sym, dim_idx);
             extent_total = try binary.emitMul(ctx, builder, extent_total, dim_val);
         }
         try emitBoundsCheck(ctx, builder, idx1, oneIndexValue(), extent_total);
@@ -120,6 +120,24 @@ pub fn emitDimValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     }
     const value = try dispatch.emitExpr(ctx, builder, expr);
     return casting.coerce(ctx, builder, value, index_ty);
+}
+
+pub fn emitSymbolDimExtent(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, dim_index: usize) !ValueRef {
+    if (ctx.runtimeArrayDimExtentSlot(sym.name, dim_index)) |slot| {
+        const tmp = try ctx.nextTemp();
+        try builder.load(tmp, .i64, slot);
+        return .{ .name = tmp, .ty = .i64, .is_ptr = false };
+    }
+    return emitDimValue(ctx, builder, sym.dims[dim_index]);
+}
+
+pub fn emitSymbolDimLower(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, dim_index: usize) !ValueRef {
+    if (ctx.runtimeArrayDimLowerSlot(sym.name, dim_index)) |slot| {
+        const tmp = try ctx.nextTemp();
+        try builder.load(tmp, .i64, slot);
+        return .{ .name = tmp, .ty = .i64, .is_ptr = false };
+    }
+    return emitDimLower(ctx, builder, sym.dims[dim_index]);
 }
 
 fn emitDimLower(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {

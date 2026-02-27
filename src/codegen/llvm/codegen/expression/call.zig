@@ -418,9 +418,12 @@ fn emitMulI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !Va
 
 fn emitDynamicElemCountForSymbol(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) !ValueRef {
     var total = i64Const(ctx, 1);
-    for (sym.dims) |dim| {
-        var extent = memory.emitDimValue(ctx, builder, dim) catch |err| switch (err) {
-            error.UnknownSymbol => i64Const(ctx, 1),
+    for (sym.dims, 0..) |dim, dim_idx| {
+        var extent = memory.emitSymbolDimExtent(ctx, builder, sym, dim_idx) catch |err| switch (err) {
+            error.UnknownSymbol => memory.emitDimValue(ctx, builder, dim) catch |inner| switch (inner) {
+                error.UnknownSymbol => i64Const(ctx, 1),
+                else => return inner,
+            },
             else => return err,
         };
         if (extent.ty != .i64) {
