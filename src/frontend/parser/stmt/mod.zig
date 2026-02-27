@@ -424,7 +424,7 @@ fn maybeAttachLoopExitLabel(arena: std.mem.Allocator, do_ctx: *DoContext, node: 
 fn closeCompletedLabeledDoLoops(do_ctx: *DoContext, line_label: ?[]const u8) ParseStmtError!void {
     const raw_label = line_label orelse return;
     const normalized = helpers.normalizeLabelText(raw_label);
-    while (do_ctx.peek()) |cycle_label| {
+    while (do_ctx.peekTopLoop()) |cycle_label| {
         // Numeric labels close legacy labeled DO loops when the labeled statement is reached.
         if (std.mem.startsWith(u8, cycle_label, "ENDDO")) break;
         if (!std.mem.eql(u8, cycle_label, normalized)) break;
@@ -1265,6 +1265,60 @@ test "parseStatement handles DO WHILE with ENDDO" {
     try testing.expect(end_stmt.node == .cont);
     try testing.expect(end_stmt.label != null);
     try testing.expectEqual(@as(usize, 3), idx);
+}
+
+test "parseStatement rejects END DO when innermost construct is BLOCK" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      DO\n" ++
+        "      BLOCK\n" ++
+        "      END DO\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    _ = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    _ = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expectError(
+        error.EndDoWithoutDo,
+        parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names),
+    );
+}
+
+test "parseStatement rejects END BLOCK when innermost construct is DO" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      BLOCK\n" ++
+        "      DO\n" ++
+        "      END BLOCK\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    _ = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    _ = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expectError(
+        error.UnexpectedToken,
+        parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names),
+    );
 }
 
 test "parseStatement keeps ambiguous DO assignment as assignment" {

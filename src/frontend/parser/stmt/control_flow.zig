@@ -12,6 +12,11 @@ const Expr = ast.Expr;
 const ParseStmtError = anyerror;
 
 pub const DoContext = struct {
+    const ScopeKind = enum {
+        do_loop,
+        block_construct,
+    };
+
     const DoFrame = struct {
         cycle_label: []const u8,
         exit_label: ?[]const u8,
@@ -22,23 +27,21 @@ pub const DoContext = struct {
         end_label: []const u8,
     };
 
-    const NamedDoFrame = struct {
-        name: []const u8,
-        cycle_label: []const u8,
-        exit_label: ?[]const u8,
+    const ScopeFrame = struct {
+        kind: ScopeKind,
+        name: ?[]const u8 = null,
+        cycle_label: ?[]const u8 = null,
+        exit_label: ?[]const u8 = null,
+        end_label: ?[]const u8 = null,
     };
 
-    stack: std.array_list.Managed(DoFrame),
-    block_stack: std.array_list.Managed(BlockFrame),
-    named_do_stack: std.array_list.Managed(NamedDoFrame),
+    scope_stack: std.array_list.Managed(ScopeFrame),
     counter: usize,
     pending: std.array_list.Managed(Stmt),
 
     pub fn init(arena: std.mem.Allocator) DoContext {
         return .{
-            .stack = std.array_list.Managed(DoFrame).init(arena),
-            .block_stack = std.array_list.Managed(BlockFrame).init(arena),
-            .named_do_stack = std.array_list.Managed(NamedDoFrame).init(arena),
+            .scope_stack = std.array_list.Managed(ScopeFrame).init(arena),
             .counter = 0,
             .pending = std.array_list.Managed(Stmt).init(arena),
         };
@@ -51,7 +54,11 @@ pub const DoContext = struct {
     }
 
     pub fn push(self: *DoContext, label: []const u8) !void {
-        try self.stack.append(.{ .cycle_label = label, .exit_label = null });
+        try self.scope_stack.append(.{
+            .kind = .do_loop,
+            .cycle_label = label,
+            .exit_label = null,
+        });
     }
 
     pub fn pop(self: *DoContext) ?[]const u8 {
@@ -59,70 +66,81 @@ pub const DoContext = struct {
     }
 
     pub fn popLoop(self: *DoContext) ?DoFrame {
-        if (self.stack.items.len == 0) return null;
-        const idx = self.stack.items.len - 1;
-        const frame = self.stack.items[idx];
-        self.stack.shrinkRetainingCapacity(idx);
-        return frame;
+        if (self.scope_stack.items.len == 0) return null;
+        const top = self.scope_stack.items[self.scope_stack.items.len - 1];
+        if (top.kind != .do_loop) return null;
+        _ = self.scope_stack.pop();
+        return .{
+            .cycle_label = top.cycle_label orelse return null,
+            .exit_label = top.exit_label,
+        };
     }
 
     pub fn peek(self: *const DoContext) ?[]const u8 {
-        if (self.stack.items.len == 0) return null;
-        return self.stack.items[self.stack.items.len - 1].cycle_label;
+        var i = self.scope_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            const frame = self.scope_stack.items[i];
+            if (frame.kind == .do_loop) return frame.cycle_label;
+        }
+        return null;
+    }
+
+    pub fn peekTopLoop(self: *const DoContext) ?[]const u8 {
+        if (self.scope_stack.items.len == 0) return null;
+        const top = self.scope_stack.items[self.scope_stack.items.len - 1];
+        if (top.kind != .do_loop) return null;
+        return top.cycle_label;
     }
 
     pub fn peekExitLabel(self: *const DoContext) ?[]const u8 {
-        if (self.stack.items.len == 0) return null;
-        const frame = self.stack.items[self.stack.items.len - 1];
-        return frame.exit_label orelse frame.cycle_label;
+        var i = self.scope_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            const frame = self.scope_stack.items[i];
+            if (frame.kind != .do_loop) continue;
+            return frame.exit_label orelse frame.cycle_label;
+        }
+        return null;
     }
 
     pub fn bindDoExitLabel(self: *DoContext, cycle_label: []const u8, exit_label: []const u8) void {
-        if (self.stack.items.len == 0) return;
-        const idx = self.stack.items.len - 1;
-        if (!std.mem.eql(u8, self.stack.items[idx].cycle_label, cycle_label)) return;
-        self.stack.items[idx].exit_label = exit_label;
+        var i = self.scope_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            const frame = &self.scope_stack.items[i];
+            if (frame.kind != .do_loop) continue;
+            if (!std.mem.eql(u8, frame.cycle_label.?, cycle_label)) continue;
+            frame.exit_label = exit_label;
+            return;
+        }
     }
 
     pub fn ensureInnermostDoExitLabel(self: *DoContext, arena: std.mem.Allocator) !?[]const u8 {
-        if (self.stack.items.len == 0) return null;
-        const idx = self.stack.items.len - 1;
-        if (self.stack.items[idx].exit_label) |exit_label| return exit_label;
-
-        const cycle_label = self.stack.items[idx].cycle_label;
-        const exit_label = try self.nextLoopExitLabel(arena);
-        self.stack.items[idx].exit_label = exit_label;
-
-        var i: usize = self.named_do_stack.items.len;
+        var i = self.scope_stack.items.len;
         while (i > 0) {
             i -= 1;
-            if (std.mem.eql(u8, self.named_do_stack.items[i].cycle_label, cycle_label)) {
-                self.named_do_stack.items[i].exit_label = exit_label;
-                break;
-            }
+            const frame = &self.scope_stack.items[i];
+            if (frame.kind != .do_loop) continue;
+            if (frame.exit_label) |exit_label| return exit_label;
+            const exit_label = try self.nextLoopExitLabel(arena);
+            frame.exit_label = exit_label;
+            return exit_label;
         }
-        return exit_label;
+        return null;
     }
 
     pub fn ensureNamedDoExitLabel(self: *DoContext, arena: std.mem.Allocator, name: []const u8) !?[]const u8 {
-        var i: usize = self.named_do_stack.items.len;
+        var i = self.scope_stack.items.len;
         while (i > 0) {
             i -= 1;
-            if (!std.ascii.eqlIgnoreCase(self.named_do_stack.items[i].name, name)) continue;
-            if (self.named_do_stack.items[i].exit_label) |exit_label| return exit_label;
-
-            const cycle_label = self.named_do_stack.items[i].cycle_label;
+            const frame = &self.scope_stack.items[i];
+            if (frame.kind != .do_loop) continue;
+            const frame_name = frame.name orelse continue;
+            if (!std.ascii.eqlIgnoreCase(frame_name, name)) continue;
+            if (frame.exit_label) |exit_label| return exit_label;
             const exit_label = try self.nextLoopExitLabel(arena);
-            self.named_do_stack.items[i].exit_label = exit_label;
-
-            var j: usize = self.stack.items.len;
-            while (j > 0) {
-                j -= 1;
-                if (std.mem.eql(u8, self.stack.items[j].cycle_label, cycle_label)) {
-                    self.stack.items[j].exit_label = exit_label;
-                    break;
-                }
-            }
+            frame.exit_label = exit_label;
             return exit_label;
         }
         return null;
@@ -141,26 +159,39 @@ pub const DoContext = struct {
     }
 
     pub fn pushBlock(self: *DoContext, name: ?[]const u8, end_label: []const u8) !void {
-        try self.block_stack.append(.{ .name = name, .end_label = end_label });
+        try self.scope_stack.append(.{
+            .kind = .block_construct,
+            .name = name,
+            .end_label = end_label,
+        });
     }
 
     pub fn popBlock(self: *DoContext) ?BlockFrame {
-        if (self.block_stack.items.len == 0) return null;
-        const idx = self.block_stack.items.len - 1;
-        const frame = self.block_stack.items[idx];
-        self.block_stack.shrinkRetainingCapacity(idx);
-        return frame;
+        if (self.scope_stack.items.len == 0) return null;
+        const top = self.scope_stack.items[self.scope_stack.items.len - 1];
+        if (top.kind != .block_construct) return null;
+        _ = self.scope_stack.pop();
+        return .{
+            .name = top.name,
+            .end_label = top.end_label orelse return null,
+        };
     }
 
     pub fn resolveBlockExit(self: *DoContext, name: ?[]const u8) ?[]const u8 {
-        if (self.block_stack.items.len == 0) return null;
         if (name == null) {
-            return self.block_stack.items[self.block_stack.items.len - 1].end_label;
+            var i = self.scope_stack.items.len;
+            while (i > 0) {
+                i -= 1;
+                const frame = self.scope_stack.items[i];
+                if (frame.kind == .block_construct) return frame.end_label;
+            }
+            return null;
         }
-        var i: usize = self.block_stack.items.len;
+        var i = self.scope_stack.items.len;
         while (i > 0) {
             i -= 1;
-            const frame = self.block_stack.items[i];
+            const frame = self.scope_stack.items[i];
+            if (frame.kind != .block_construct) continue;
             if (frame.name) |block_name| {
                 if (std.ascii.eqlIgnoreCase(block_name, name.?)) {
                     return frame.end_label;
@@ -171,37 +202,44 @@ pub const DoContext = struct {
     }
 
     pub fn pushNamedDo(self: *DoContext, name: []const u8, cycle_label: []const u8, exit_label: ?[]const u8) !void {
-        try self.named_do_stack.append(.{
-            .name = name,
-            .cycle_label = cycle_label,
-            .exit_label = exit_label,
-        });
+        var i = self.scope_stack.items.len;
+        while (i > 0) {
+            i -= 1;
+            const frame = &self.scope_stack.items[i];
+            if (frame.kind != .do_loop) continue;
+            if (!std.mem.eql(u8, frame.cycle_label.?, cycle_label)) continue;
+            frame.name = name;
+            if (exit_label) |label| frame.exit_label = label;
+            return;
+        }
+        return error.UnexpectedToken;
     }
 
     pub fn popNamedDoByLabel(self: *DoContext, cycle_label: []const u8) void {
-        if (self.named_do_stack.items.len == 0) return;
-        const idx = self.named_do_stack.items.len - 1;
-        if (std.mem.eql(u8, self.named_do_stack.items[idx].cycle_label, cycle_label)) {
-            self.named_do_stack.shrinkRetainingCapacity(idx);
-        }
+        _ = self;
+        _ = cycle_label;
     }
 
     pub fn resolveNamedDoExit(self: *DoContext, name: []const u8) ?[]const u8 {
-        var i: usize = self.named_do_stack.items.len;
+        var i = self.scope_stack.items.len;
         while (i > 0) {
             i -= 1;
-            const frame = self.named_do_stack.items[i];
-            if (std.ascii.eqlIgnoreCase(frame.name, name)) return frame.exit_label orelse frame.cycle_label;
+            const frame = self.scope_stack.items[i];
+            if (frame.kind != .do_loop) continue;
+            const frame_name = frame.name orelse continue;
+            if (std.ascii.eqlIgnoreCase(frame_name, name)) return frame.exit_label orelse frame.cycle_label;
         }
         return null;
     }
 
     pub fn resolveNamedDoCycle(self: *DoContext, name: []const u8) ?[]const u8 {
-        var i: usize = self.named_do_stack.items.len;
+        var i = self.scope_stack.items.len;
         while (i > 0) {
             i -= 1;
-            const frame = self.named_do_stack.items[i];
-            if (std.ascii.eqlIgnoreCase(frame.name, name)) return frame.cycle_label;
+            const frame = self.scope_stack.items[i];
+            if (frame.kind != .do_loop) continue;
+            const frame_name = frame.name orelse continue;
+            if (std.ascii.eqlIgnoreCase(frame_name, name)) return frame.cycle_label;
         }
         return null;
     }
