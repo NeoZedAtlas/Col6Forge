@@ -1,499 +1,88 @@
-pub const Program = struct {
-    units: []ProgramUnit,
-};
-
-pub const ProgramUnitKind = enum {
-    program,
-    subroutine,
-    function,
-    block_data,
-};
-
-pub const ProgramUnit = struct {
-    kind: ProgramUnitKind,
-    name: []const u8,
-    result_name: ?[]const u8 = null,
-    args: []const []const u8,
-    decls: []Decl,
-    decl_sources: []DeclSource = &.{},
-    stmts: []Stmt,
-};
-
-pub const DeclSource = struct {
-    line: usize = 0,
-    column: usize = 0,
-    text: []const u8 = "",
-};
-
-pub const TypeKind = enum {
-    integer,
-    real,
-    double_precision,
-    complex,
-    complex_double,
-    logical,
-    character,
-};
-
-pub const Decl = union(enum) {
-    implicit: ImplicitDecl,
-    type_decl: TypeDecl,
-    dimension: DimensionDecl,
-    parameter: ParameterDecl,
-    common: CommonDecl,
-    equivalence: EquivalenceDecl,
-    external: NameListDecl,
-    intrinsic: NameListDecl,
-    save: SaveDecl,
-};
-
-pub const TypeDecl = struct {
-    type_kind: TypeKind,
-    kind_selector: ?*Expr = null,
-    items: []Declarator,
-    save: bool = false,
-};
-
-pub const DimensionDecl = struct {
-    items: []Declarator,
-};
-
-pub const ParameterDecl = struct {
-    assigns: []ParamAssign,
-};
-
-pub const ParamAssign = struct {
-    name: []const u8,
-    value: *Expr,
-};
-
-pub const CommonDecl = struct {
-    blocks: []CommonBlock,
-};
-
-pub const CommonBlock = struct {
-    name: ?[]const u8,
-    items: []Declarator,
-};
-
-pub const EquivalenceDecl = struct {
-    groups: []EquivalenceGroup,
-};
-
-pub const EquivalenceGroup = struct {
-    items: []*Expr,
-};
-
-pub const ImplicitDecl = struct {
-    rules: []ImplicitRule,
-};
-
-pub const ImplicitRule = struct {
-    start: u8,
-    end: u8,
-    type_kind: TypeKind,
-    kind_selector: ?*Expr = null,
-    char_len: ?*Expr,
-};
-
-pub const NameListDecl = struct {
-    names: []const []const u8,
-};
-
-pub const SaveItem = union(enum) {
-    name: []const u8,
-    common: ?[]const u8,
-};
-
-pub const SaveDecl = struct {
-    items: []SaveItem,
-    save_all: bool,
-};
-
-pub const Declarator = struct {
-    name: []const u8,
-    dims: []*Expr,
-    char_len: ?*Expr,
-    init: ?*Expr = null,
-};
-
-pub const Stmt = struct {
-    label: ?[]const u8,
-    node: StmtNode,
-    source_line: usize = 0,
-    source_column: usize = 0,
-    source_text: []const u8 = "",
-};
-
-pub const StmtNode = union(enum) {
-    assignment: Assignment,
-    assign_label: AssignLabelStmt,
-    use_stmt: UseStmt,
-    call: CallStmt,
-    goto: GotoStmt,
-    computed_goto: ComputedGotoStmt,
-    assigned_goto: AssignedGotoStmt,
-    write: WriteStmt,
-    read: ReadStmt,
-    rewind: RewindStmt,
-    backspace: BackspaceStmt,
-    endfile: EndfileStmt,
-    open: OpenStmt,
-    inquire: InquireStmt,
-    close: CloseStmt,
-    data: DataStmt,
-    format: FormatStmt,
-    arith_if: ArithIfStmt,
-    pause: PauseStmt,
-    stop: void,
-    do_loop: DoLoopStmt,
-    do_while: DoWhileStmt,
-    do_infinite: DoInfiniteStmt,
-    ret: ReturnStmt,
-    cont: void,
-    entry: EntryStmt,
-    if_single: IfSingle,
-    if_block: IfBlock,
-};
-
-pub const Assignment = struct {
-    target: *Expr,
-    value: *Expr,
-};
-
-pub const AssignLabelStmt = struct {
-    label: []const u8,
-    target: []const u8,
-};
-
-pub const UseStmt = struct {
-    module_name: []const u8,
-    only_items: []const UseOnlyItem,
-};
-
-pub const UseOnlyItem = struct {
-    local_name: []const u8,
-    remote_name: []const u8,
-};
-
-pub const CallStmt = struct {
-    name: []const u8,
-    args: []CallArg,
-};
-
-pub const CallArg = union(enum) {
-    expr: *Expr,
-    alt_return: []const u8,
-};
-
-pub const ReturnStmt = struct {
-    value: ?*Expr,
-};
-
-pub const EntryStmt = struct {
-    name: []const u8,
-    args: []const []const u8,
-};
-
-pub const WriteStmt = struct {
-    unit: *Expr,
-    format: FormatSpec,
-    rec: ?*Expr,
-    args: []*Expr,
-    err_label: ?[]const u8,
-    iostat: ?*Expr,
-};
-
-pub const ReadStmt = struct {
-    unit: *Expr,
-    format: FormatSpec,
-    rec: ?*Expr,
-    args: []*Expr,
-    err_label: ?[]const u8,
-    end_label: ?[]const u8,
-    iostat: ?*Expr,
-};
-
-pub const OpenStmt = struct {
-    unit: *Expr,
-    recl: ?*Expr,
-    file: ?*Expr,
-    access: ?*Expr,
-    form: ?*Expr,
-    blank: ?*Expr,
-    status: ?*Expr,
-};
-
-pub const InquireStmt = struct {
-    controls: []ControlItem,
-};
-
-pub const CloseStmt = struct {
-    controls: []ControlItem,
-};
-
-pub const ControlItem = struct {
-    name: ?[]const u8,
-    value: *Expr,
-};
-
-pub const RewindStmt = struct {
-    unit: *Expr,
-};
-
-pub const BackspaceStmt = struct {
-    unit: *Expr,
-};
-
-pub const EndfileStmt = struct {
-    unit: *Expr,
-};
-
-pub const DataInit = struct {
-    target: *Expr,
-    value: *Expr,
-};
-
-pub const DataValueSpec = struct {
-    value: *Expr,
-    repeat: ?*Expr = null,
-};
-
-pub const DataGroup = struct {
-    targets: []*Expr,
-    values: []DataValueSpec,
-};
-
-pub const DataStmt = struct {
-    inits: []DataInit = &.{},
-    groups: []DataGroup = &.{},
-};
-
-pub const FormatStmt = struct {
-    items: []FormatItem,
-};
-
-pub const FormatSpec = union(enum) {
-    none: void,
-    list_directed: void,
-    label: []const u8,
-    inline_items: []FormatItem,
-    expr: *Expr,
-};
-
-pub const BlankControl = enum {
-    nulls,
-    zeros,
-};
-
-pub const SignControl = enum {
-    default,
-    plus,
-    suppress,
-};
-
-pub const TabControl = enum {
-    absolute,
-    relative_left,
-    relative_right,
-};
-
-pub const TabFormat = struct {
-    kind: TabControl,
-    count: usize,
-};
-
-pub const RepeatFormat = struct {
-    count: usize,
-    items: []const FormatItem,
-};
-
-pub const FormatItem = union(enum) {
-    literal: []const u8,
-    spaces: usize,
-    tab: TabFormat,
-    repeat_group: RepeatFormat,
-    int: IntFormat,
-    real: RealFormat,
-    real_fixed: RealFormat,
-    char: CharFormat,
-    logical: LogicalFormat,
-    colon: void,
-    scale: i32,
-    blank_control: BlankControl,
-    sign_control: SignControl,
-    // Parser metadata: flattened reversion anchor position before lowering.
-    reversion_offset: usize,
-    reversion_anchor: void,
-};
-
-pub const IntFormat = struct {
-    width: usize,
-    min_digits: usize,
-};
-
-pub const RealFormat = struct {
-    width: usize,
-    precision: usize,
-    exp_width: usize,
-    kind: RealFormatKind = .e,
-};
-
-pub const RealFormatKind = enum {
-    e,
-    d,
-    g,
-};
-
-pub const CharFormat = struct {
-    width: usize,
-};
-
-pub const LogicalFormat = struct {
-    width: usize,
-};
-
-pub const IfSingle = struct {
-    condition: *Expr,
-    stmt: *StmtNode,
-};
-
-pub const IfBlock = struct {
-    condition: *Expr,
-    then_stmts: []Stmt,
-    else_stmts: []Stmt,
-};
-
-pub const ArithIfStmt = struct {
-    condition: *Expr,
-    neg_label: []const u8,
-    zero_label: []const u8,
-    pos_label: []const u8,
-};
-
-pub const PauseStmt = struct {
-    value: ?*Expr,
-};
-
-pub const GotoStmt = struct {
-    label: []const u8,
-};
-
-pub const ComputedGotoStmt = struct {
-    labels: []const []const u8,
-    selector: *Expr,
-};
-
-pub const AssignedGotoStmt = struct {
-    var_name: []const u8,
-    labels: []const []const u8,
-};
-
-pub const DoLoopStmt = struct {
-    end_label: []const u8,
-    var_name: []const u8,
-    start: *Expr,
-    end: *Expr,
-    step: ?*Expr,
-};
-
-pub const DoWhileStmt = struct {
-    end_label: []const u8,
-    condition: *Expr,
-};
-
-pub const DoInfiniteStmt = struct {
-    end_label: []const u8,
-};
-
-pub const ImpliedDo = struct {
-    items: []*Expr,
-    var_name: []const u8,
-    start: *Expr,
-    end: *Expr,
-    step: ?*Expr,
-};
-
-pub const Expr = union(enum) {
-    identifier: []const u8,
-    literal: Literal,
-    call_or_subscript: CallOrSubscript,
-    substring: SubstringExpr,
-    dim_range: DimRange,
-    unary: UnaryExpr,
-    binary: BinaryExpr,
-    complex_literal: ComplexLiteral,
-    implied_do: ImpliedDo,
-};
-
-pub const DimRange = struct {
-    lower: ?*Expr,
-    upper: *Expr,
-};
-
-pub const Literal = struct {
-    kind: LiteralKind,
-    text: []const u8,
-};
-
-pub const LiteralKind = enum {
-    integer,
-    real,
-    string,
-    hollerith,
-    logical,
-    assumed_size,
-};
-
-pub const CallOrSubscript = struct {
-    name: []const u8,
-    args: []*Expr,
-};
-
-pub const SubstringExpr = struct {
-    name: []const u8,
-    args: []*Expr,
-    start: ?*Expr,
-    end: ?*Expr,
-};
-
-pub const ComplexLiteral = struct {
-    real: *Expr,
-    imag: *Expr,
-};
-
-pub const UnaryExpr = struct {
-    op: UnaryOp,
-    expr: *Expr,
-};
-
-pub const UnaryOp = enum {
-    plus,
-    minus,
-    not,
-};
-
-pub const BinaryExpr = struct {
-    op: BinaryOp,
-    left: *Expr,
-    right: *Expr,
-};
-
-pub const BinaryOp = enum {
-    add,
-    sub,
-    mul,
-    div,
-    concat,
-    power,
-    eq,
-    ne,
-    lt,
-    le,
-    gt,
-    ge,
-    and_,
-    or_,
-    eqv,
-    neqv,
-};
+const program_nodes = @import("nodes/program.zig");
+const decl_nodes = @import("nodes/decl.zig");
+const stmt_nodes = @import("nodes/stmt.zig");
+const format_nodes = @import("nodes/format.zig");
+const expr_nodes = @import("nodes/expr.zig");
+
+pub const Program = program_nodes.Program;
+pub const ProgramUnitKind = program_nodes.ProgramUnitKind;
+pub const ProgramUnit = program_nodes.ProgramUnit;
+pub const DeclSource = program_nodes.DeclSource;
+
+pub const TypeKind = decl_nodes.TypeKind;
+pub const Decl = decl_nodes.Decl;
+pub const TypeDecl = decl_nodes.TypeDecl;
+pub const DimensionDecl = decl_nodes.DimensionDecl;
+pub const ParameterDecl = decl_nodes.ParameterDecl;
+pub const ParamAssign = decl_nodes.ParamAssign;
+pub const CommonDecl = decl_nodes.CommonDecl;
+pub const CommonBlock = decl_nodes.CommonBlock;
+pub const EquivalenceDecl = decl_nodes.EquivalenceDecl;
+pub const EquivalenceGroup = decl_nodes.EquivalenceGroup;
+pub const ImplicitDecl = decl_nodes.ImplicitDecl;
+pub const ImplicitRule = decl_nodes.ImplicitRule;
+pub const NameListDecl = decl_nodes.NameListDecl;
+pub const SaveItem = decl_nodes.SaveItem;
+pub const SaveDecl = decl_nodes.SaveDecl;
+pub const Declarator = decl_nodes.Declarator;
+
+pub const Stmt = stmt_nodes.Stmt;
+pub const StmtNode = stmt_nodes.StmtNode;
+pub const Assignment = stmt_nodes.Assignment;
+pub const AssignLabelStmt = stmt_nodes.AssignLabelStmt;
+pub const UseStmt = stmt_nodes.UseStmt;
+pub const UseOnlyItem = stmt_nodes.UseOnlyItem;
+pub const CallStmt = stmt_nodes.CallStmt;
+pub const CallArg = stmt_nodes.CallArg;
+pub const ReturnStmt = stmt_nodes.ReturnStmt;
+pub const EntryStmt = stmt_nodes.EntryStmt;
+pub const WriteStmt = stmt_nodes.WriteStmt;
+pub const ReadStmt = stmt_nodes.ReadStmt;
+pub const OpenStmt = stmt_nodes.OpenStmt;
+pub const InquireStmt = stmt_nodes.InquireStmt;
+pub const CloseStmt = stmt_nodes.CloseStmt;
+pub const ControlItem = stmt_nodes.ControlItem;
+pub const RewindStmt = stmt_nodes.RewindStmt;
+pub const BackspaceStmt = stmt_nodes.BackspaceStmt;
+pub const EndfileStmt = stmt_nodes.EndfileStmt;
+pub const DataInit = stmt_nodes.DataInit;
+pub const DataValueSpec = stmt_nodes.DataValueSpec;
+pub const DataGroup = stmt_nodes.DataGroup;
+pub const DataStmt = stmt_nodes.DataStmt;
+pub const FormatStmt = stmt_nodes.FormatStmt;
+pub const IfSingle = stmt_nodes.IfSingle;
+pub const IfBlock = stmt_nodes.IfBlock;
+pub const ArithIfStmt = stmt_nodes.ArithIfStmt;
+pub const PauseStmt = stmt_nodes.PauseStmt;
+pub const GotoStmt = stmt_nodes.GotoStmt;
+pub const ComputedGotoStmt = stmt_nodes.ComputedGotoStmt;
+pub const AssignedGotoStmt = stmt_nodes.AssignedGotoStmt;
+pub const DoLoopStmt = stmt_nodes.DoLoopStmt;
+pub const DoWhileStmt = stmt_nodes.DoWhileStmt;
+pub const DoInfiniteStmt = stmt_nodes.DoInfiniteStmt;
+
+pub const FormatSpec = format_nodes.FormatSpec;
+pub const BlankControl = format_nodes.BlankControl;
+pub const SignControl = format_nodes.SignControl;
+pub const TabControl = format_nodes.TabControl;
+pub const TabFormat = format_nodes.TabFormat;
+pub const RepeatFormat = format_nodes.RepeatFormat;
+pub const FormatItem = format_nodes.FormatItem;
+pub const IntFormat = format_nodes.IntFormat;
+pub const RealFormat = format_nodes.RealFormat;
+pub const RealFormatKind = format_nodes.RealFormatKind;
+pub const CharFormat = format_nodes.CharFormat;
+pub const LogicalFormat = format_nodes.LogicalFormat;
+
+pub const ImpliedDo = expr_nodes.ImpliedDo;
+pub const Expr = expr_nodes.Expr;
+pub const DimRange = expr_nodes.DimRange;
+pub const Literal = expr_nodes.Literal;
+pub const LiteralKind = expr_nodes.LiteralKind;
+pub const CallOrSubscript = expr_nodes.CallOrSubscript;
+pub const SubstringExpr = expr_nodes.SubstringExpr;
+pub const ComplexLiteral = expr_nodes.ComplexLiteral;
+pub const UnaryExpr = expr_nodes.UnaryExpr;
+pub const UnaryOp = expr_nodes.UnaryOp;
+pub const BinaryExpr = expr_nodes.BinaryExpr;
+pub const BinaryOp = expr_nodes.BinaryOp;

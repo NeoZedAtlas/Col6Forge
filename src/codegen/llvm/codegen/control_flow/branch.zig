@@ -104,15 +104,27 @@ pub fn emitAssignedGoto(
 
     var cases = std.array_list.Managed(@TypeOf(builder.*).SwitchCase).init(ctx.allocator);
     defer cases.deinit();
-    var seen = std.AutoHashMap(i64, void).init(ctx.allocator);
-    defer seen.deinit();
-    for (plan) |item| {
-        if (seen.contains(item.index)) continue;
-        try seen.put(item.index, {});
-        try cases.append(.{
-            .value = item.index,
-            .label = item.target_block,
-        });
+    if (gt.labels.len == 0) {
+        // No-list path is already de-duplicated by resolver.
+        for (plan) |item| {
+            try cases.append(.{
+                .value = item.index,
+                .label = item.target_block,
+            });
+        }
+    } else {
+        // Explicit ASSIGNED GOTO label lists may repeat numeric labels.
+        // Deduplicate switch values to keep deterministic IR and golden output.
+        var seen = std.AutoHashMap(i64, void).init(ctx.allocator);
+        defer seen.deinit();
+        for (plan) |item| {
+            if (seen.contains(item.index)) continue;
+            try seen.put(item.index, {});
+            try cases.append(.{
+                .value = item.index,
+                .label = item.target_block,
+            });
+        }
     }
     const invalid_label = try ctx.nextLabel("assigned_goto_invalid");
     // ASSIGNED GOTO must not silently fall through when the selector is invalid.

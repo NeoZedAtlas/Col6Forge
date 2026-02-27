@@ -112,11 +112,9 @@ pub fn parseStatement(
         return makeStmtWithSource(line, label, stmt_node);
     }
     if (lp.isKeywordSplit("IF")) {
-        if (!helpers.tokenAfterKeywordIs(lp, "IF", .l_paren)) {
-            if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp)) |stmt_node| {
-                index.* += 1;
-                return makeStmtWithSource(line, label, stmt_node);
-            }
+        if (tryParseAmbiguousAssignment(arena, line, lp, .top_level)) |stmt_node| {
+            index.* += 1;
+            return makeStmtWithSource(line, label, stmt_node);
         }
         var stmt = try parseIfStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names);
         setStmtSourceIfMissing(&stmt, line);
@@ -258,6 +256,46 @@ fn parsePauseStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError
         payload = try expr.parseExpr(lp, arena, 0);
     }
     return .{ .pause = .{ .value = payload } };
+}
+
+fn shouldTreatDoAsAssignment(lp: LineParser) bool {
+    var do_scan = lp;
+    _ = do_scan.consumeKeyword("DO");
+    const is_block_do = do_scan.peekIs(.identifier) and helpers.nextTokenIsEquals(do_scan);
+    const looks_like_assignment = !helpers.hasCommaAfterEquals(do_scan);
+    return !is_block_do and (helpers.labelFollowedByEquals(lp) or looks_like_assignment);
+}
+
+fn shouldTreatSplitDoAsAssignment(lp: LineParser) bool {
+    var do_lp = lp;
+    _ = do_lp.next();
+    _ = do_lp.next();
+    return helpers.labelFollowedByEquals(do_lp) or !helpers.hasCommaAfterEquals(do_lp);
+}
+
+fn tryParseAmbiguousAssignment(
+    arena: std.mem.Allocator,
+    line: logical_line.LogicalLine,
+    lp: LineParser,
+    mode: ActionParseMode,
+) ?StmtNode {
+    if (!helpers.lineHasEquals(lp)) return null;
+    if (lp.isKeywordSplit("IF") and !helpers.tokenAfterKeywordIs(lp, "IF", .l_paren)) {
+        return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
+    }
+    if (lp.isKeywordSplit("CALL")) {
+        return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
+    }
+    if (helpers.isGotoStart(lp)) {
+        return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
+    }
+    if (mode == .top_level and lp.isKeywordSplit("DO") and shouldTreatDoAsAssignment(lp)) {
+        return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
+    }
+    if (mode == .top_level and helpers.isSplitDo(lp) and shouldTreatSplitDoAsAssignment(lp)) {
+        return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
+    }
+    return null;
 }
 
 fn parseUseStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
@@ -672,6 +710,10 @@ fn parseActionStmtNode(
 ) ParseStmtError!StmtNode {
     // Shared dispatcher for executable/action statements used by both
     // top-level statement parsing and single-line IF bodies.
+    if (tryParseAmbiguousAssignment(arena, line, lp.*, mode)) |stmt_node| {
+        return stmt_node;
+    }
+
     const lead = blk: {
         const tok = lp.peek() orelse break :blk @as(u8, 0);
         if (tok.kind != .identifier) break :blk @as(u8, 0);
@@ -695,11 +737,6 @@ fn parseActionStmtNode(
         'C' => {
             if (lp.isKeywordSplit("CLOSE")) return try io.parseCloseStatement(arena, lp);
             if (lp.isKeywordSplit("CALL")) {
-                if (helpers.lineHasEquals(lp.*)) {
-                    if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |stmt_node| {
-                        return stmt_node;
-                    }
-                }
                 _ = lp.consumeKeyword("CALL");
                 const name = lp.readName(arena) orelse return error.MissingName;
                 var args = std.array_list.Managed(CallArg).init(arena);
@@ -743,16 +780,6 @@ fn parseActionStmtNode(
             }
             if (lp.isKeywordSplit("DO")) {
                 if (mode != .top_level) return error.UnexpectedToken;
-                // Avoid misclassifying modern block DO ("DO I = ...") as an assignment.
-                var do_scan = lp.*;
-                _ = do_scan.consumeKeyword("DO");
-                const is_block_do = do_scan.peekIs(.identifier) and helpers.nextTokenIsEquals(do_scan);
-                const looks_like_assignment = !helpers.hasCommaAfterEquals(do_scan);
-                if (!is_block_do and (helpers.labelFollowedByEquals(lp.*) or looks_like_assignment)) {
-                    if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |assign_node| {
-                        return assign_node;
-                    }
-                }
                 _ = lp.consumeKeyword("DO");
                 const stmt_node = try control_flow.parseDoStatement(arena, lp, do_ctx);
                 _ = try maybeAttachLoopExitLabel(arena, do_ctx, stmt_node);
@@ -763,11 +790,6 @@ fn parseActionStmtNode(
                 var do_lp = lp.*;
                 _ = do_lp.next();
                 _ = do_lp.next();
-                if (helpers.labelFollowedByEquals(do_lp) or !helpers.hasCommaAfterEquals(do_lp)) {
-                    if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |stmt_node| {
-                        return stmt_node;
-                    }
-                }
                 const stmt_node = try control_flow.parseDoStatement(arena, &do_lp, do_ctx);
                 _ = try maybeAttachLoopExitLabel(arena, do_ctx, stmt_node);
                 return stmt_node;
@@ -816,11 +838,6 @@ fn parseActionStmtNode(
         },
         'G' => {
             if (helpers.isGotoStart(lp.*)) {
-                if (helpers.lineHasEquals(lp.*)) {
-                    if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |stmt_node| {
-                        return stmt_node;
-                    }
-                }
                 return try helpers.parseGotoStatement(arena, lp);
             }
         },
