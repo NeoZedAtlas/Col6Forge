@@ -797,7 +797,13 @@ fn storeCharacterValue(ctx: *Context, builder: anytype, target_ptr: ValueRef, ch
     }
 
     const src_ptr = try expr.emitExpr(ctx, builder, value_expr);
-    const src_len = charLenForExpr(ctx, value_expr) orelse 1;
+    const src_len_opt = charLenForExpr(ctx, value_expr);
+    if (src_len_opt == null and expr_call.isCharacterActualArg(ctx, value_expr)) {
+        const target_len = constI32(ctx, @intCast(char_len));
+        try storeCharacterValueDynamic(ctx, builder, target_ptr, target_len, value_expr);
+        return;
+    }
+    const src_len = src_len_opt orelse 1;
     var i: usize = 0;
     while (i < char_len) : (i += 1) {
         const offset = ValueRef{ .name = try ctx.intLiteral(@intCast(i)), .ty = .i32, .is_ptr = false };
@@ -908,21 +914,45 @@ fn storeCharacterValueDynamic(
 
 fn emitSubstringLenValue(ctx: *Context, builder: anytype, sub: ast.SubstringExpr) EmitError!ValueRef {
     const sym = ctx.findSymbol(sub.name) orelse return error.UnknownSymbol;
-    const base_len: i64 = @intCast(sym.char_len orelse 1);
     const start_val = if (sub.start) |start_expr| try expr.emitIndex(ctx, builder, start_expr) else utils.oneValue();
-    const end_val = if (sub.end) |end_expr| try expr.emitIndex(ctx, builder, end_expr) else constI32(ctx, base_len);
+    const end_val = if (sub.end) |end_expr|
+        try expr.emitIndex(ctx, builder, end_expr)
+    else
+        try emitCharSymbolLenValue(ctx, sub.name, sym);
     const diff = try expr.emitSub(ctx, builder, end_val, start_val);
     return expr.emitAdd(ctx, builder, diff, utils.oneValue());
 }
 
 fn emitCharLenValue(ctx: *Context, builder: anytype, value_expr: *ast.Expr) EmitError!?ValueRef {
-    if (charLenForExpr(ctx, value_expr)) |len| {
-        return constI32(ctx, @intCast(len));
+    switch (value_expr.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
+            if (sym.type_kind != .character) return null;
+            return try emitCharSymbolLenValue(ctx, name, sym);
+        },
+        .call_or_subscript => |call| {
+            const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
+            if (sym.type_kind != .character) return null;
+            return try emitCharSymbolLenValue(ctx, call.name, sym);
+        },
+        .substring => |sub| {
+            return try emitSubstringLenValue(ctx, builder, sub);
+        },
+        .binary => |bin| {
+            if (bin.op != .concat) return null;
+            const left_len = (try emitCharLenValue(ctx, builder, bin.left)) orelse return null;
+            const right_len = (try emitCharLenValue(ctx, builder, bin.right)) orelse return null;
+            const sum_tmp = try ctx.nextTemp();
+            try builder.binary(sum_tmp, "add", .i32, left_len, right_len);
+            return .{ .name = sum_tmp, .ty = .i32, .is_ptr = false };
+        },
+        else => {
+            if (charLenForExpr(ctx, value_expr)) |len| {
+                return constI32(ctx, @intCast(len));
+            }
+            return null;
+        },
     }
-    if (value_expr.* == .substring) {
-        return try emitSubstringLenValue(ctx, builder, value_expr.substring);
-    }
-    return null;
 }
 
 fn constI32(ctx: *Context, value: i64) ValueRef {
@@ -931,6 +961,12 @@ fn constI32(ctx: *Context, value: i64) ValueRef {
 
 fn constI64(ctx: *Context, value: i64) ValueRef {
     return .{ .name = ctx.intLiteral(value) catch unreachable, .ty = .i64, .is_ptr = false };
+}
+
+fn emitCharSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) EmitError!ValueRef {
+    if (sym.char_len) |len| return constI32(ctx, @intCast(len));
+    if (ctx.char_arg_lens.get(name)) |len_val| return len_val;
+    return constI32(ctx, 1);
 }
 
 fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
