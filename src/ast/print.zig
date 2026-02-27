@@ -134,6 +134,7 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         },
         .format => |format| {
             try writer.print(";   stmt label={s} format items={d}\n", .{ label_text, format.items.len });
+            try printFormatItems(writer, format.items, 2);
         },
         .arith_if => |node| {
             try writer.print(
@@ -212,11 +213,92 @@ fn printFormatSpec(writer: anytype, spec: ast.FormatSpec, depth: usize) !void {
         .inline_items => |items| {
             try printIndent(writer, depth);
             try writer.print("format: inline items({d})\n", .{items.len});
+            try printFormatItems(writer, items, depth + 1);
         },
         .expr => |expr_node| {
             try printIndent(writer, depth);
             try writer.writeAll("format: expr\n");
             try printExpr(writer, expr_node, depth + 1);
+        },
+    }
+}
+
+fn printFormatItems(writer: anytype, items: []const ast.FormatItem, depth: usize) !void {
+    for (items, 0..) |item, idx| {
+        try printIndent(writer, depth);
+        try writer.print("item[{d}]:\n", .{idx});
+        try printFormatItem(writer, item, depth + 1);
+    }
+}
+
+fn printFormatItem(writer: anytype, item: ast.FormatItem, depth: usize) !void {
+    switch (item) {
+        .literal => |text| {
+            try printIndent(writer, depth);
+            try writer.print("fmt literal `{s}`\n", .{text});
+        },
+        .spaces => |count| {
+            try printIndent(writer, depth);
+            try writer.print("fmt spaces {d}\n", .{count});
+        },
+        .tab => |tab| {
+            try printIndent(writer, depth);
+            try writer.print("fmt tab {s} {d}\n", .{ tabControlName(tab.kind), tab.count });
+        },
+        .repeat_group => |group| {
+            try printIndent(writer, depth);
+            try writer.print("fmt repeat-group count={d} items({d})\n", .{ group.count, group.items.len });
+            try printFormatItems(writer, group.items, depth + 1);
+        },
+        .int => |int_fmt| {
+            try printIndent(writer, depth);
+            try writer.print("fmt int w={d} m={d}\n", .{ int_fmt.width, int_fmt.min_digits });
+        },
+        .real => |real_fmt| {
+            try printIndent(writer, depth);
+            try writer.print(
+                "fmt real kind={s} w={d} p={d} e={d}\n",
+                .{ realFormatKindName(real_fmt.kind), real_fmt.width, real_fmt.precision, real_fmt.exp_width },
+            );
+        },
+        .real_fixed => |real_fmt| {
+            try printIndent(writer, depth);
+            try writer.print(
+                "fmt real-fixed kind={s} w={d} p={d} e={d}\n",
+                .{ realFormatKindName(real_fmt.kind), real_fmt.width, real_fmt.precision, real_fmt.exp_width },
+            );
+        },
+        .char => |char_fmt| {
+            try printIndent(writer, depth);
+            try writer.print("fmt char w={d}\n", .{char_fmt.width});
+        },
+        .logical => |logical_fmt| {
+            try printIndent(writer, depth);
+            try writer.print("fmt logical w={d}\n", .{logical_fmt.width});
+        },
+        .colon => {
+            try printIndent(writer, depth);
+            try writer.writeAll("fmt colon\n");
+        },
+        .scale => |scale| {
+            try printIndent(writer, depth);
+            try writer.print("fmt scale {d}\n", .{scale});
+        },
+        .blank_control => |blank| {
+            try printIndent(writer, depth);
+            try writer.print("fmt blank-control {s}\n", .{blankControlName(blank)});
+        },
+        .sign_control => |sign| {
+            try printIndent(writer, depth);
+            try writer.print("fmt sign-control {s}\n", .{signControlName(sign)});
+        },
+        .reversion_offset => |offset| {
+            try printIndent(writer, depth);
+            try writer.print("fmt reversion-offset {d}\n", .{offset});
+        },
+        .reversion_anchor => {
+            try printIndent(writer, depth);
+            try writer.writeAll("fmt reversion-anchor\n");
         },
     }
 }
@@ -444,6 +526,37 @@ fn binaryOpName(op: ast.BinaryOp) []const u8 {
         .or_ => "or",
         .eqv => "eqv",
         .neqv => "neqv",
+    };
+}
+
+fn tabControlName(kind: ast.TabControl) []const u8 {
+    return switch (kind) {
+        .absolute => "absolute",
+        .relative_left => "relative-left",
+        .relative_right => "relative-right",
+    };
+}
+
+fn realFormatKindName(kind: ast.RealFormatKind) []const u8 {
+    return switch (kind) {
+        .e => "E",
+        .d => "D",
+        .g => "G",
+    };
+}
+
+fn blankControlName(mode: ast.BlankControl) []const u8 {
+    return switch (mode) {
+        .nulls => "nulls",
+        .zeros => "zeros",
+    };
+}
+
+fn signControlName(mode: ast.SignControl) []const u8 {
+    return switch (mode) {
+        .default => "default",
+        .plus => "plus",
+        .suppress => "suppress",
     };
 }
 
