@@ -44,17 +44,24 @@ pub fn emitArithIf(
         .Integer => {},
     }
 
-    const int_val = try expr.coerce(ctx, builder, value, .i32);
-    const zero_i32 = utils.zeroValue(.i32);
+    var int_val = value;
+    const int_ty = switch (value.ty) {
+        .i8, .i32, .i64 => value.ty,
+        else => blk: {
+            int_val = try expr.coerce(ctx, builder, value, .i64);
+            break :blk .i64;
+        },
+    };
+    const zero = utils.zeroValue(int_ty);
     const lt_name = try ctx.nextTemp();
-    try builder.compare(lt_name, "icmp", "slt", .i32, int_val, zero_i32);
+    try builder.compare(lt_name, "icmp", "slt", int_ty, int_val, zero);
     const lt_val = ValueRef{ .name = lt_name, .ty = .i1, .is_ptr = false };
     const mid_label = try ctx.nextLabel("arith_if_zero");
     try builder.brCond(lt_val, neg_label, mid_label);
     try builder.label(mid_label);
 
     const eq_name = try ctx.nextTemp();
-    try builder.compare(eq_name, "icmp", "eq", .i32, int_val, zero_i32);
+    try builder.compare(eq_name, "icmp", "eq", int_ty, int_val, zero);
     const eq_val = ValueRef{ .name = eq_name, .ty = .i1, .is_ptr = false };
     try builder.brCond(eq_val, zero_label, pos_label);
 }
@@ -90,7 +97,13 @@ pub fn emitIfSingle(
         .source_column = src_stmt.source_column,
         .source_text = src_stmt.source_text,
     };
-    return emit_stmt_fn(ctx, builder, inline_stmt, next_block, local_label_map);
+    const terminated = try emit_stmt_fn(ctx, builder, inline_stmt, next_block, local_label_map);
+    if (!terminated) {
+        // Keep LOGICAL IF lowering robust if downstream statement emission
+        // introduces a non-terminating path.
+        try builder.br(next_block);
+    }
+    return true;
 }
 
 pub fn emitIfBlock(
@@ -101,6 +114,8 @@ pub fn emitIfBlock(
     local_label_map: ?*const std.StringHashMap([]const u8),
     comptime emit_stmt_list_range: anytype,
 ) EmitError!bool {
+    // Branch-local block maps accelerate in-branch label lookups; label
+    // resolution still falls back to procedure-global labels via cfg.resolveLabel.
     _ = local_label_map;
     const cond = try expr.emitCond(ctx, builder, ifb.condition);
     if (ifb.then_stmts.len == 0 and ifb.else_stmts.len == 0) {
