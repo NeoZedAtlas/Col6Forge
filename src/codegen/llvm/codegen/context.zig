@@ -44,6 +44,7 @@ pub const CodegenOptions = struct {
 
     bounds_check: bool = false,
     pause_mode: PauseMode = .auto,
+    target: ?[]const u8 = null,
 };
 
 pub const FormatInfo = struct {

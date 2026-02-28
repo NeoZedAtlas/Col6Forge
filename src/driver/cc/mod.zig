@@ -60,6 +60,7 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
         parsed.fortran_inputs,
         parsed.bounds_check,
         parsed.pause_mode,
+        runtime_cfg.target,
         parsed.time_report,
         known_symbols.function_types,
         known_symbols.procedure_sigs,

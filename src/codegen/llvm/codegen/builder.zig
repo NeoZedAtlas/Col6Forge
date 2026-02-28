@@ -9,6 +9,12 @@ const ValueRef = utils.ValueRef;
 
 pub fn Builder(comptime WriterType: type) type {
     return struct {
+        pub const Options = struct {
+            // wasm backends in current toolchains can crash on LLVM `common` linkage;
+            // lower COMMON blocks as weak globals when cross-compiling to wasm.
+            lower_common_as_weak: bool = false,
+        };
+
         pub const PhiIncoming = struct {
             value: ValueRef,
             label: []const u8,
@@ -22,9 +28,19 @@ pub fn Builder(comptime WriterType: type) type {
         writer: WriterType,
         emit_count: usize,
         emit_limit: usize,
+        options: Options,
 
         pub fn init(writer: WriterType) @This() {
-            return .{ .writer = writer, .emit_count = 0, .emit_limit = 1_000_000 };
+            return initWithOptions(writer, .{});
+        }
+
+        pub fn initWithOptions(writer: WriterType, options: Options) @This() {
+            return .{
+                .writer = writer,
+                .emit_count = 0,
+                .emit_limit = 1_000_000,
+                .options = options,
+            };
         }
 
         fn bump(self: *@This()) !void {
@@ -48,7 +64,11 @@ pub fn Builder(comptime WriterType: type) type {
 
         pub fn commonGlobal(self: *@This(), name: []const u8, size: usize, alignment: usize) !void {
             try self.bump();
-            try self.writer.print("@{s} = common global [{d} x i8] zeroinitializer, align {d}\n", .{ name, size, alignment });
+            if (self.options.lower_common_as_weak) {
+                try self.writer.print("@{s} = weak global [{d} x i8] zeroinitializer, align {d}\n", .{ name, size, alignment });
+            } else {
+                try self.writer.print("@{s} = common global [{d} x i8] zeroinitializer, align {d}\n", .{ name, size, alignment });
+            }
         }
 
         pub fn globalString(self: *@This(), name: []const u8, bytes: []const u8) !void {

@@ -87,6 +87,11 @@ fn commonLayoutsCompatible(a: []const common.CommonItem, b: []const common.Commo
     return true;
 }
 
+fn isWasmTarget(target: ?[]const u8) bool {
+    const t = target orelse return false;
+    return std.mem.startsWith(u8, t, "wasm32") or std.mem.startsWith(u8, t, "wasm64");
+}
+
 pub fn emitModule(
     allocator: std.mem.Allocator,
     program: Program,
@@ -123,7 +128,9 @@ pub fn emitModuleToWriter(
     defer arena.deinit();
     const scratch = arena.allocator();
 
-    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+    var builder = builder_mod.Builder(@TypeOf(writer)).initWithOptions(writer, .{
+        .lower_common_as_weak = isWasmTarget(options.target),
+    });
     try builder.moduleHeader(source_name);
 
     var decls = std.StringHashMap(context.IRDecl).init(scratch);

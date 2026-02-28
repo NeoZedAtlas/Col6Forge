@@ -15,6 +15,7 @@ pub const PauseMode = codegen.CodegenOptions.PauseMode;
 pub const PipelineOptions = struct {
     bounds_check: bool = false,
     pause_mode: PauseMode = .auto,
+    target: ?[]const u8 = null,
     time_report: bool = false,
     coarse_source_map: bool = false,
     capture_profile: bool = false,
@@ -365,6 +366,7 @@ fn emitLlvmModule(
             .{
                 .bounds_check = options.bounds_check,
                 .pause_mode = options.pause_mode,
+                .target = options.target,
             },
         ) catch |err| {
             if (profile) |p| {
@@ -419,6 +421,7 @@ fn emitLlvmModule(
         .{
             .bounds_check = options.bounds_check,
             .pause_mode = options.pause_mode,
+            .target = options.target,
         },
     ) catch |err| {
         if (profile) |p| {
@@ -456,6 +459,7 @@ fn emitLlvmModuleToWriter(
             .{
                 .bounds_check = options.bounds_check,
                 .pause_mode = options.pause_mode,
+                .target = options.target,
             },
         ) catch |err| {
             if (profile) |p| {
@@ -511,6 +515,7 @@ fn emitLlvmModuleToWriter(
         .{
             .bounds_check = options.bounds_check,
             .pause_mode = options.pause_mode,
+            .target = options.target,
         },
     ) catch |err| {
         if (profile) |p| {
