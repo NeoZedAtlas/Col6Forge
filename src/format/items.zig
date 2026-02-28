@@ -2,10 +2,31 @@ const std = @import("std");
 const ast = @import("../ast/nodes.zig");
 
 pub const max_flat_items: usize = 1_000_000;
+pub const PreparedItems = struct {
+    items: []const ast.FormatItem,
+    owned: bool = false,
+
+    pub fn deinit(self: PreparedItems, allocator: std.mem.Allocator) void {
+        if (self.owned) allocator.free(self.items);
+    }
+};
+
 const FlattenError = error{
     UnexpectedToken,
     FormatExpansionTooLarge,
 };
+
+pub fn ensureFlatWithReversionAnchor(
+    allocator: std.mem.Allocator,
+    items: []const ast.FormatItem,
+    max_items: usize,
+) !PreparedItems {
+    if (isAlreadyFlat(items)) {
+        return .{ .items = items, .owned = false };
+    }
+    const flat = try flattenWithReversionAnchor(allocator, items, max_items);
+    return .{ .items = flat, .owned = true };
+}
 
 pub fn flattenWithReversionAnchor(
     allocator: std.mem.Allocator,
@@ -114,6 +135,16 @@ fn ensureBudget(current_len: usize, add_len: usize, max_items: usize) !void {
     if (next > max_items) return error.FormatExpansionTooLarge;
 }
 
+fn isAlreadyFlat(items: []const ast.FormatItem) bool {
+    for (items) |item| {
+        switch (item) {
+            .repeat_group, .reversion_offset => return false,
+            else => {},
+        }
+    }
+    return true;
+}
+
 test "flattenWithReversionAnchor expands repeats and inserts anchor once" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -199,4 +230,37 @@ test "flattenWithReversionAnchor supports anchor at expanded stream end" {
     try testing.expectEqual(@as(usize, 2), flat.len);
     try testing.expect(flat[0] == .int);
     try testing.expect(flat[1] == .reversion_anchor);
+}
+
+test "ensureFlatWithReversionAnchor reuses pre-flattened items" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const items = try allocator.alloc(ast.FormatItem, 2);
+    defer allocator.free(items);
+    items[0] = .{ .int = .{ .width = 5, .min_digits = 0 } };
+    items[1] = .{ .reversion_anchor = {} };
+
+    const prepared = try ensureFlatWithReversionAnchor(allocator, items, max_flat_items);
+    defer prepared.deinit(allocator);
+    try testing.expect(!prepared.owned);
+    try testing.expectEqual(@as(usize, 2), prepared.items.len);
+}
+
+test "ensureFlatWithReversionAnchor flattens repeat groups" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const child = try allocator.alloc(ast.FormatItem, 1);
+    child[0] = .{ .int = .{ .width = 5, .min_digits = 0 } };
+
+    const root = try allocator.alloc(ast.FormatItem, 2);
+    root[0] = .{ .repeat_group = .{ .count = 2, .items = child } };
+    root[1] = .{ .reversion_offset = 0 };
+
+    const prepared = try ensureFlatWithReversionAnchor(allocator, root, max_flat_items);
+    defer prepared.deinit(allocator);
+    try testing.expect(prepared.owned);
+    try testing.expectEqual(@as(usize, 3), prepared.items.len);
+    try testing.expect(prepared.items[0] == .reversion_anchor);
 }

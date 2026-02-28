@@ -154,8 +154,9 @@ fn emitTrailingDVectorFormattedWrite(
 ) EmitError!bool {
     if (is_internal) return false;
     if (write.args.len < 2) return false;
-    const flat_fmt_items = try format_items.flattenWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
-    defer ctx.allocator.free(flat_fmt_items);
+    const prepared_fmt = try format_items.ensureFlatWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    defer prepared_fmt.deinit(ctx.allocator);
+    const flat_fmt_items = prepared_fmt.items;
 
     const vector_source = try resolveDVectorSource(ctx, builder, write.args[write.args.len - 1]) orelse return false;
     const reversion_start = findReversionStart(flat_fmt_items);
@@ -315,8 +316,9 @@ fn emitDynamicImpliedDoFormattedWrite(
 ) EmitError!bool {
     if (is_internal) return false;
     if (write.args.len != 2) return false;
-    const flat_fmt_items = try format_items.flattenWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
-    defer ctx.allocator.free(flat_fmt_items);
+    const prepared_fmt = try format_items.ensureFlatWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    defer prepared_fmt.deinit(ctx.allocator);
+    const flat_fmt_items = prepared_fmt.items;
     const vector_source = try resolveDVectorSource(ctx, builder, write.args[1]) orelse return false;
 
     const plan = parseDynamicDImpliedFormat(ctx, flat_fmt_items) orelse return false;

@@ -61,8 +61,9 @@ fn emitReadFormattedImpl(
     direct_spec: ?DirectIoSpec,
 ) EmitError!ValueRef {
     _ = read;
-    const flat_fmt_items = try format_items.flattenWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
-    defer ctx.allocator.free(flat_fmt_items);
+    const prepared_fmt = try format_items.ensureFlatWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    defer prepared_fmt.deinit(ctx.allocator);
+    const flat_fmt_items = prepared_fmt.items;
 
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();

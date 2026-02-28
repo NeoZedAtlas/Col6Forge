@@ -142,6 +142,7 @@ pub const Context = struct {
     char_values: std.StringHashMap([]const u8),
     char_array_values: std.StringHashMap([]const u8),
     char_arg_lens: CaseInsensitiveStringHashMap(ValueRef),
+    managed_allocatables: CaseInsensitiveStringHashMap(void),
     runtime_array_descs: std.AutoHashMap(usize, RuntimeArrayDescriptor),
     int_literal_cache: std.AutoHashMap(i64, []const u8),
     heap_temps_to_free: std.array_list.Managed(ValueRef),
@@ -188,6 +189,7 @@ pub const Context = struct {
             .char_values = std.StringHashMap([]const u8).init(allocator),
             .char_array_values = std.StringHashMap([]const u8).init(allocator),
             .char_arg_lens = CaseInsensitiveStringHashMap(ValueRef).initContext(allocator, .{}),
+            .managed_allocatables = CaseInsensitiveStringHashMap(void).initContext(allocator, .{}),
             .runtime_array_descs = std.AutoHashMap(usize, RuntimeArrayDescriptor).init(allocator),
             .int_literal_cache = std.AutoHashMap(i64, []const u8).init(allocator),
             .heap_temps_to_free = std.array_list.Managed(ValueRef).init(allocator),
@@ -240,6 +242,7 @@ pub const Context = struct {
         }
         self.char_array_values.deinit();
         self.char_arg_lens.deinit();
+        self.managed_allocatables.deinit();
         var desc_it = self.runtime_array_descs.iterator();
         while (desc_it.next()) |entry| {
             self.allocator.free(entry.value_ptr.lower_slots);
@@ -444,6 +447,18 @@ pub const Context = struct {
         const desc = self.runtimeArrayDescriptor(name) orelse return null;
         if (dim_index >= desc.rank) return null;
         return desc.extent_slots[dim_index];
+    }
+
+    pub fn markManagedAllocation(self: *Context, name: []const u8) !void {
+        try self.managed_allocatables.put(name, {});
+    }
+
+    pub fn clearManagedAllocation(self: *Context, name: []const u8) void {
+        _ = self.managed_allocatables.remove(name);
+    }
+
+    pub fn hasManagedAllocation(self: *const Context, name: []const u8) bool {
+        return self.managed_allocatables.contains(name);
     }
 
     pub fn setCurrentStmt(self: *Context, stmt: input.Stmt) void {

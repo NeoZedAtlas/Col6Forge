@@ -134,20 +134,25 @@ fn emitAllocateSpecFromText(ctx: *Context, builder: anytype, spec: []const u8) E
     }
 
     const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
-    if (ctx.runtimeArrayDescriptor(name)) |desc| {
-        if (desc.rank != dim_specs.items.len) return error.InvalidSubscript;
-        for (dim_specs.items, 0..) |dim_spec, dim_idx| {
-            try builder.store(dim_spec.lower, desc.lower_slots[dim_idx]);
-            try builder.store(dim_spec.extent, desc.extent_slots[dim_idx]);
-        }
-    }
+    const desc = ctx.runtimeArrayDescriptor(name) orelse return error.UnsupportedAllocateSyntax;
+    if (desc.rank != dim_specs.items.len) return error.InvalidSubscript;
+
+    // ALLOCATE currently targets deferred-shape arrays backed by runtime
+    // descriptor slots; release previous allocation before replacing the base.
+    try freeManagedArrayPointerIfAllocated(ctx, builder, name);
 
     const elem_size = constI64(ctx, @intCast(elementByteSize(sym)));
     const total_bytes = try expr.emitMul(ctx, builder, extent_product, elem_size);
     const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &.{.i64}, false);
     const ptr_tmp = try ctx.nextTemp();
     try builder.callTyped(ptr_tmp, .ptr, malloc_name, &.{total_bytes});
-    try ctx.locals.put(name, .{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true });
+    const base_ptr = ValueRef{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true };
+    try ctx.locals.put(name, base_ptr);
+    try ctx.markManagedAllocation(name);
+    for (dim_specs.items, 0..) |dim_spec, dim_idx| {
+        try builder.store(dim_spec.lower, desc.lower_slots[dim_idx]);
+        try builder.store(dim_spec.extent, desc.extent_slots[dim_idx]);
+    }
 }
 
 fn emitDeallocateListFromText(ctx: *Context, builder: anytype, text: []const u8) EmitError!void {
@@ -179,20 +184,29 @@ fn emitDeallocateSpecFromText(ctx: *Context, builder: anytype, spec: []const u8)
     else
         std.mem.trim(u8, spec, " \t");
     if (name.len == 0) return error.UnsupportedAllocateSyntax;
-    const desc = ctx.runtimeArrayDescriptor(name) orelse return;
+    const desc = ctx.runtimeArrayDescriptor(name) orelse return error.UnsupportedAllocateSyntax;
 
-    if (ctx.locals.get(name)) |ptr| {
-        if (!std.mem.eql(u8, ptr.name, "null")) {
-            const free_name = try ctx.ensureDeclRaw("free", .void, &[_]llvm_types.IRType{.ptr}, false);
-            try builder.callTyped(null, .void, free_name, &.{ptr});
-        }
-        try ctx.locals.put(name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
-    }
+    try freeManagedArrayPointerIfAllocated(ctx, builder, name);
+    ctx.clearManagedAllocation(name);
+    try ctx.locals.put(name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
 
     for (0..desc.rank) |dim_idx| {
         try builder.store(constI64(ctx, 1), desc.lower_slots[dim_idx]);
         try builder.store(constI64(ctx, 0), desc.extent_slots[dim_idx]);
     }
+}
+
+fn freeManagedArrayPointerIfAllocated(ctx: *Context, builder: anytype, name: []const u8) EmitError!void {
+    if (!ctx.hasManagedAllocation(name)) return;
+    const ptr = ctx.locals.get(name) orelse return;
+    if (std.mem.eql(u8, ptr.name, "null")) {
+        ctx.clearManagedAllocation(name);
+        return;
+    }
+    const free_name = try ctx.ensureDeclRaw("free", .void, &[_]llvm_types.IRType{.ptr}, false);
+    try builder.callTyped(null, .void, free_name, &.{ptr});
+    ctx.clearManagedAllocation(name);
+    try ctx.locals.put(name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
 }
 
 fn emitExtentFromText(ctx: *Context, builder: anytype, text: []const u8) EmitError!ValueRef {
