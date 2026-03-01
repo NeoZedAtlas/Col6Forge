@@ -277,23 +277,6 @@ pub fn countNewlinesLiteral(text: []const u8) usize {
     return text.len;
 }
 
-pub fn emitPointerArrayFromValues(ctx: *Context, builder: anytype, ptrs: []const ValueRef) EmitError!ValueRef {
-    if (ptrs.len == 0) {
-        return .{ .name = "null", .ty = .ptr, .is_ptr = false };
-    }
-    const arr_name = try ctx.nextTemp();
-    try builder.allocaArray(arr_name, .ptr, ptrs.len);
-    const arr_ptr = ValueRef{ .name = arr_name, .ty = .ptr, .is_ptr = true };
-    for (ptrs, 0..) |ptr, idx| {
-        const off = try ctx.constI32(@intCast(idx));
-        const gep = try ctx.nextTemp();
-        try builder.gep(gep, .ptr, arr_ptr, off);
-        const slot_ptr = ValueRef{ .name = gep, .ty = .ptr, .is_ptr = true };
-        try builder.store(.{ .name = ptr.name, .ty = .ptr, .is_ptr = false }, slot_ptr);
-    }
-    return arr_ptr;
-}
-
 pub fn emitHeapBytes(ctx: *Context, builder: anytype, bytes: usize) EmitError!ValueRef {
     const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &[_]llvm_types.IRType{.i64}, false);
     const size_val = ValueRef{ .name = try ctx.intLiteral(@intCast(bytes)), .ty = .i64, .is_ptr = false };
@@ -342,13 +325,12 @@ pub fn emitHeapI32Array(ctx: *Context, builder: anytype, values: []const i32) Em
     return arr_ptr;
 }
 
-pub fn emitPointerArrayFromNames(ctx: *Context, builder: anytype, names: []const []const u8) EmitError!ValueRef {
+pub fn emitHeapPointerArrayFromNames(ctx: *Context, builder: anytype, names: []const []const u8) EmitError!ValueRef {
     if (names.len == 0) {
         return .{ .name = "null", .ty = .ptr, .is_ptr = false };
     }
-    const arr_name = try ctx.nextTemp();
-    try builder.allocaArray(arr_name, .ptr, names.len);
-    const arr_ptr = ValueRef{ .name = arr_name, .ty = .ptr, .is_ptr = true };
+    const bytes = names.len * @sizeOf(usize);
+    const arr_ptr = try emitHeapBytes(ctx, builder, bytes);
     for (names, 0..) |name, idx| {
         const off = try ctx.constI32(@intCast(idx));
         const gep = try ctx.nextTemp();

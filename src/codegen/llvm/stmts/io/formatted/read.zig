@@ -17,7 +17,9 @@ const countFormatDescriptors = io_utils.countFormatDescriptors;
 const appendScanfLiteral = io_utils.appendScanfLiteral;
 const appendSpaces = io_utils.appendSpaces;
 const findReversionStart = io_utils.findReversionStart;
-const emitPointerArrayFromNames = io_utils.emitPointerArrayFromNames;
+const emitHeapBytes = io_utils.emitHeapBytes;
+const emitHeapPointerArrayFromNames = io_utils.emitHeapPointerArrayFromNames;
+const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
@@ -78,6 +80,8 @@ fn emitReadFormattedImpl(
 
     var scale_fixups = std.array_list.Managed(ScaleFixup).init(ctx.allocator);
     defer scale_fixups.deinit();
+    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer heap_allocs.deinit();
 
     const descriptor_count = countFormatDescriptors(flat_fmt_items);
     if (descriptor_count == 0) {
@@ -160,10 +164,14 @@ fn emitReadFormattedImpl(
                             try fmt_buf.writer().print("%{s}", .{fmt_spec});
                         }
                         if (scale_factor != 0) {
-                            const tmp_name = try ctx.nextTemp();
-                            try builder.alloca(tmp_name, ty);
-                            const tmp_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
-                            try arg_ptrs.append(tmp_name);
+                            const bytes: usize = switch (ty) {
+                                .f32 => 4,
+                                .f64 => 8,
+                                else => return error.UnsupportedIntrinsicType,
+                            };
+                            const tmp_ptr = try emitHeapBytes(ctx, builder, bytes);
+                            try heap_allocs.append(tmp_ptr);
+                            try arg_ptrs.append(tmp_ptr.name);
                             try arg_kinds.append(if (ty == .f64) 'D' else 'f');
                             try scale_fixups.append(.{
                                 .target_ptr = expanded.ptrs.items[arg_index],
@@ -186,10 +194,9 @@ fn emitReadFormattedImpl(
                         try fmt_buf.writer().print("%{d}c", .{width});
 
                         if (target_len > 0 and width > target_len) {
-                            const tmp_name = try ctx.nextTemp();
-                            try builder.allocaArray(tmp_name, .i8, width);
-                            const tmp_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
-                            try arg_ptrs.append(tmp_name);
+                            const tmp_ptr = try emitHeapBytes(ctx, builder, width);
+                            try heap_allocs.append(tmp_ptr);
+                            try arg_ptrs.append(tmp_ptr.name);
                             try arg_kinds.append('c');
                             try char_fixups.append(.{
                                 .target_ptr = target_ptr,
@@ -245,7 +252,8 @@ fn emitReadFormattedImpl(
     try builder.gepConstString(fmt_ptr_name, fmt_global, fmt_buf.items.len + 1);
 
     const fmt_ptr = ValueRef{ .name = fmt_ptr_name, .ty = .ptr, .is_ptr = true };
-    const ptr_array = try emitPointerArrayFromNames(ctx, builder, arg_ptrs.items);
+    const ptr_array = try emitHeapPointerArrayFromNames(ctx, builder, arg_ptrs.items);
+    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
     const arg_count_val = try constI32(ctx, arg_ptrs.items.len);
 
@@ -320,6 +328,8 @@ fn emitReadFormattedImpl(
             try builder.callTyped(null, .void, memset_name, &.{ dst_ptr, space_i8, try constI32(ctx, pad_len), false_i1 });
         }
     }
+
+    try emitFreeAllocs(ctx, builder, heap_allocs.items);
 
     return status_val;
 }
