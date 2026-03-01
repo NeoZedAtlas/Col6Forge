@@ -71,16 +71,16 @@ pub fn resolveAssignedGotoTargetsNoList(
     var seen = std.AutoHashMap(i64, void).init(allocator);
     defer seen.deinit();
 
+    var it_global = global_label_map.iterator();
+    while (it_global.next()) |entry| {
+        try appendAssignedTargetFromEntry(allocator, &targets, &seen, entry.key_ptr.*, entry.value_ptr.*);
+    }
+
     if (local_label_map) |map| {
         var it_local = map.iterator();
         while (it_local.next()) |entry| {
             try appendAssignedTargetFromEntry(allocator, &targets, &seen, entry.key_ptr.*, entry.value_ptr.*);
         }
-    }
-
-    var it_global = global_label_map.iterator();
-    while (it_global.next()) |entry| {
-        try appendAssignedTargetFromEntry(allocator, &targets, &seen, entry.key_ptr.*, entry.value_ptr.*);
     }
 
     if (targets.items.len == 0) return error.MissingLabel;
@@ -117,17 +117,16 @@ fn resolveLabel(
     global_map: *const std.StringHashMap([]const u8),
     label: []const u8,
 ) ?[]const u8 {
-    if (local_map) |map| {
-        if (map.get(label)) |name| return name;
-        const canonical = canonicalNumericLabel(label);
-        if (!std.mem.eql(u8, canonical, label)) {
-            if (map.get(canonical)) |name| return name;
-        }
-    }
     if (global_map.get(label)) |name| return name;
     const canonical = canonicalNumericLabel(label);
     if (!std.mem.eql(u8, canonical, label)) {
         if (global_map.get(canonical)) |name| return name;
+    }
+    if (local_map) |map| {
+        if (map.get(label)) |name| return name;
+        if (!std.mem.eql(u8, canonical, label)) {
+            if (map.get(canonical)) |name| return name;
+        }
     }
     return null;
 }
@@ -256,7 +255,7 @@ test "resolveAssignedGotoTargetsNoList collects numeric labels from global map" 
     try testing.expect(saw20);
 }
 
-test "resolveAssignedGotoTargetsNoList prefers local map entries on duplicate labels" {
+test "resolveAssignedGotoTargetsNoList prefers global map entries on duplicate labels" {
     const testing = std.testing;
     var global = std.StringHashMap([]const u8).init(testing.allocator);
     defer global.deinit();
@@ -271,7 +270,7 @@ test "resolveAssignedGotoTargetsNoList prefers local map entries on duplicate la
 
     try testing.expectEqual(@as(usize, 1), plan.len);
     try testing.expectEqual(@as(i64, 10), plan[0].index);
-    try testing.expectEqualStrings("L10_local", plan[0].target_block);
+    try testing.expectEqualStrings("L10_global", plan[0].target_block);
 }
 
 test "resolveGotoTargets accepts zero-padded label lookup via canonical key" {

@@ -92,17 +92,16 @@ pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !Local
 }
 
 pub fn resolveLabel(ctx: *Context, local_map: ?*const std.StringHashMap([]const u8), label: []const u8) ?[]const u8 {
-    if (local_map) |map| {
-        if (map.get(label)) |name| return name;
-        const canonical = canonicalNumericLabel(label);
-        if (!std.mem.eql(u8, canonical, label)) {
-            if (map.get(canonical)) |name| return name;
-        }
-    }
     if (ctx.label_map.get(label)) |name| return name;
     const canonical = canonicalNumericLabel(label);
     if (!std.mem.eql(u8, canonical, label)) {
         if (ctx.label_map.get(canonical)) |name| return name;
+    }
+    if (local_map) |map| {
+        if (map.get(label)) |name| return name;
+        if (!std.mem.eql(u8, canonical, label)) {
+            if (map.get(canonical)) |name| return name;
+        }
     }
     return null;
 }
