@@ -218,11 +218,16 @@ fn buildTypedWriteArgs(ctx: *Context, builder: anytype, args_nodes: []*ast.Expr)
             }
         }
 
+        const source_ptr = expr.emitLValue(ctx, builder, arg) catch null;
         const value = try expr.emitExpr(ctx, builder, arg);
         if (value.ty == .ptr) {
             const len = charLenForExpr(ctx, arg) orelse 1;
             if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
             try appendArg(&out, .{ .name = value.name, .ty = .ptr, .is_ptr = true }, 's', @intCast(len));
+            continue;
+        }
+        if (source_ptr) |ptr| {
+            try appendArg(&out, ptr, try kindForScalarType(value.ty), 0);
             continue;
         }
 
