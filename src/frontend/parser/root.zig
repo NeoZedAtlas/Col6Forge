@@ -21,9 +21,12 @@ const LineParser = context.LineParser;
 
 pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.LogicalLine) !Program {
     parse_diag.clear();
+    const token_cache = try arena_allocator.alloc(?[]lexer.Token, lines.len);
+    @memset(token_cache, null);
     var parser = Parser{
         .arena = arena_allocator,
         .lines = lines,
+        .token_cache = token_cache,
         .index = 0,
         .block_data_counter = 0,
         .implicit_program_counter = 0,
@@ -35,26 +38,80 @@ pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.Lo
 const Parser = struct {
     arena: std.mem.Allocator,
     lines: []logical_line.LogicalLine,
+    token_cache: []?[]lexer.Token,
     index: usize,
     block_data_counter: usize,
     implicit_program_counter: usize,
 
+    fn tokensForIndex(self: *Parser, line_index: usize) ![]lexer.Token {
+        if (self.token_cache[line_index]) |cached| return cached;
+        const tokens = try lexer.lexLogicalLine(self.arena, self.lines[line_index]);
+        self.token_cache[line_index] = tokens;
+        return tokens;
+    }
+
+    fn maybeTokensForIndex(self: *Parser, line_index: usize) ?[]lexer.Token {
+        return self.tokensForIndex(line_index) catch null;
+    }
+
+    fn isStandaloneEndAt(self: *Parser, line_index: usize) bool {
+        const line = self.lines[line_index];
+        const tokens = self.maybeTokensForIndex(line_index) orelse return false;
+        return isStandaloneEndTokens(line, tokens);
+    }
+
+    fn isProgramUnitEndAt(self: *Parser, line_index: usize) bool {
+        const line = self.lines[line_index];
+        const tokens = self.maybeTokensForIndex(line_index) orelse return false;
+        return isProgramUnitEndTokens(line, tokens);
+    }
+
+    fn isModuleEndAt(self: *Parser, line_index: usize) bool {
+        const line = self.lines[line_index];
+        const tokens = self.maybeTokensForIndex(line_index) orelse return false;
+        return isModuleEndTokens(line, tokens);
+    }
+
+    fn isModuleHeaderAt(self: *Parser, line_index: usize) bool {
+        const line = self.lines[line_index];
+        const tokens = self.maybeTokensForIndex(line_index) orelse return false;
+        return isModuleHeaderTokens(line, tokens);
+    }
+
+    fn isContainsAt(self: *Parser, line_index: usize) bool {
+        const line = self.lines[line_index];
+        const tokens = self.maybeTokensForIndex(line_index) orelse return false;
+        return isContainsTokens(line, tokens);
+    }
+
+    fn isInterfaceStartAt(self: *Parser, line_index: usize) bool {
+        const line = self.lines[line_index];
+        const tokens = self.maybeTokensForIndex(line_index) orelse return false;
+        return isInterfaceStartTokens(line, tokens);
+    }
+
+    fn isInterfaceEndAt(self: *Parser, line_index: usize) bool {
+        const line = self.lines[line_index];
+        const tokens = self.maybeTokensForIndex(line_index) orelse return false;
+        return isInterfaceEndTokens(line, tokens);
+    }
+
     fn parseProgram(self: *Parser) !Program {
         var units = std.array_list.Managed(ProgramUnit).init(self.arena);
         while (self.index < self.lines.len) {
-            if (isStandaloneEndLine(self.arena, self.lines[self.index])) {
+            if (self.isStandaloneEndAt(self.index)) {
                 self.index += 1;
                 continue;
             }
-            if (isProgramUnitEndLine(self.arena, self.lines[self.index])) {
+            if (self.isProgramUnitEndAt(self.index)) {
                 self.index += 1;
                 continue;
             }
-            if (isModuleEndLine(self.arena, self.lines[self.index])) {
+            if (self.isModuleEndAt(self.index)) {
                 self.index += 1;
                 continue;
             }
-            if (isModuleHeaderLine(self.arena, self.lines[self.index])) {
+            if (self.isModuleHeaderAt(self.index)) {
                 try self.parseModuleContainer(&units);
                 continue;
             }
@@ -74,32 +131,31 @@ const Parser = struct {
         var in_interface = false;
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
-            if (isModuleEndLine(self.arena, line)) {
+            if (self.isModuleEndAt(self.index)) {
                 self.index += 1;
                 return;
             }
-            if (isContainsLine(self.arena, line)) {
+            if (self.isContainsAt(self.index)) {
                 self.index += 1;
                 saw_contains = true;
                 break;
             }
-            if (isInterfaceStartLine(self.arena, line)) {
+            if (self.isInterfaceStartAt(self.index)) {
                 in_interface = true;
                 self.index += 1;
                 continue;
             }
             if (in_interface) {
-                if (isInterfaceEndLine(self.arena, line)) {
+                if (self.isInterfaceEndAt(self.index)) {
                     in_interface = false;
                 }
                 self.index += 1;
                 continue;
             }
-            const tokens = lexer.lexLogicalLine(self.arena, line) catch {
+            const tokens = self.tokensForIndex(self.index) catch {
                 self.index += 1;
                 continue;
             };
-            defer self.arena.free(tokens);
             var lp = LineParser.init(line, tokens);
             if (decl.isDeclarationStart(lp)) {
                 const decl_node = decl.parseDecl(&lp, self.arena) catch {
@@ -114,12 +170,11 @@ const Parser = struct {
         if (!saw_contains) return;
 
         while (self.index < self.lines.len) {
-            const line = self.lines[self.index];
-            if (isModuleEndLine(self.arena, line)) {
+            if (self.isModuleEndAt(self.index)) {
                 self.index += 1;
                 return;
             }
-            if (isStandaloneEndLine(self.arena, line)) {
+            if (self.isStandaloneEndAt(self.index)) {
                 self.index += 1;
                 continue;
             }
@@ -134,11 +189,10 @@ const Parser = struct {
     fn parseProgramUnit(self: *Parser) !ProgramUnit {
         if (self.index >= self.lines.len) return error.UnexpectedEOF;
         const header_line = self.lines[self.index];
-        const header_tokens = lexer.lexLogicalLine(self.arena, header_line) catch |err| {
+        const header_tokens = self.tokensForIndex(self.index) catch |err| {
             setLexerOrLineDiagnostic(header_line, err);
             return err;
         };
-        defer self.arena.free(header_tokens);
         var lp = LineParser.init(header_line, header_tokens);
         var parsed_implicit_program = false;
         const header = parseProgramUnitHeader(self.arena, &lp, &self.block_data_counter) catch |err| switch (err) {
@@ -168,14 +222,13 @@ const Parser = struct {
         }
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
-            const tokens = lexer.lexLogicalLine(self.arena, line) catch |err| {
+            const tokens = self.tokensForIndex(self.index) catch |err| {
                 setLexerOrLineDiagnostic(line, err);
                 return err;
             };
-            defer self.arena.free(tokens);
             var stmt_lp = LineParser.init(line, tokens);
             if (decls.items.len == 0 and stmts.items.len == 0) {
-                if (isDuplicateProgramUnitLine(self.arena, line, header)) {
+                if (isDuplicateProgramUnitTokens(self.arena, line, tokens, header)) {
                     self.index += 1;
                     continue;
                 }
@@ -334,6 +387,15 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
 fn isDuplicateProgramUnitLine(arena: std.mem.Allocator, line: logical_line.LogicalLine, header: ProgramUnitHeader) bool {
     const tokens = lexer.lexLogicalLine(arena, line) catch return false;
     defer arena.free(tokens);
+    return isDuplicateProgramUnitTokens(arena, line, tokens, header);
+}
+
+fn isDuplicateProgramUnitTokens(
+    arena: std.mem.Allocator,
+    line: logical_line.LogicalLine,
+    tokens: []lexer.Token,
+    header: ProgramUnitHeader,
+) bool {
     var lp = LineParser.init(line, tokens);
     var block_data_counter: usize = 0;
     const parsed = parseProgramUnitHeader(arena, &lp, &block_data_counter) catch return false;
@@ -467,6 +529,10 @@ fn parseErrorInfo(err: anyerror) struct { code: []const u8, message: []const u8 
 fn isStandaloneEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
     const tokens = lexer.lexLogicalLine(arena, line) catch return false;
     defer arena.free(tokens);
+    return isStandaloneEndTokens(line, tokens);
+}
+
+fn isStandaloneEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
     var lp = LineParser.init(line, tokens);
     if (!lp.consumeKeyword("END")) return false;
     return lp.peek() == null;
@@ -1105,6 +1171,10 @@ fn parseTypePrefixKindSelectorExpr(lp: *LineParser, arena: std.mem.Allocator) !?
 fn isModuleHeaderLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
     const tokens = lexer.lexLogicalLine(arena, line) catch return false;
     defer arena.free(tokens);
+    return isModuleHeaderTokens(line, tokens);
+}
+
+fn isModuleHeaderTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
     var lp = LineParser.init(line, tokens);
     if (!lp.consumeKeyword("MODULE")) return false;
     const next = lp.peek() orelse return false;
@@ -1116,6 +1186,10 @@ fn isModuleHeaderLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) 
 fn isModuleEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
     const tokens = lexer.lexLogicalLine(arena, line) catch return false;
     defer arena.free(tokens);
+    return isModuleEndTokens(line, tokens);
+}
+
+fn isModuleEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
     var lp = LineParser.init(line, tokens);
     if (!lp.consumeKeyword("END")) return false;
     return lp.consumeKeyword("MODULE");
@@ -1124,6 +1198,10 @@ fn isModuleEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) boo
 fn isContainsLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
     const tokens = lexer.lexLogicalLine(arena, line) catch return false;
     defer arena.free(tokens);
+    return isContainsTokens(line, tokens);
+}
+
+fn isContainsTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
     var lp = LineParser.init(line, tokens);
     if (!lp.consumeKeyword("CONTAINS")) return false;
     return lp.peek() == null;
@@ -1132,6 +1210,10 @@ fn isContainsLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool
 fn isProgramUnitEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
     const tokens = lexer.lexLogicalLine(arena, line) catch return false;
     defer arena.free(tokens);
+    return isProgramUnitEndTokens(line, tokens);
+}
+
+fn isProgramUnitEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
     var lp = LineParser.init(line, tokens);
     if (!lp.consumeKeyword("END")) return false;
     return lp.isKeywordSplit("PROGRAM") or
@@ -1143,6 +1225,10 @@ fn isProgramUnitEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine
 fn isInterfaceStartLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
     const tokens = lexer.lexLogicalLine(arena, line) catch return false;
     defer arena.free(tokens);
+    return isInterfaceStartTokens(line, tokens);
+}
+
+fn isInterfaceStartTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
     var lp = LineParser.init(line, tokens);
     if (lp.consumeKeyword("ABSTRACT")) {
         return lp.consumeKeyword("INTERFACE");
@@ -1154,6 +1240,10 @@ fn isInterfaceStartLine(arena: std.mem.Allocator, line: logical_line.LogicalLine
 fn isInterfaceEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
     const tokens = lexer.lexLogicalLine(arena, line) catch return false;
     defer arena.free(tokens);
+    return isInterfaceEndTokens(line, tokens);
+}
+
+fn isInterfaceEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
     var lp = LineParser.init(line, tokens);
     if (!lp.consumeKeyword("END")) return false;
     return lp.consumeKeyword("INTERFACE");

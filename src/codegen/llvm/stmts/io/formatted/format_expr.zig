@@ -71,10 +71,11 @@ fn emitFreeAllocs(ctx: *Context, builder: anytype, allocs: []const ValueRef) Emi
     }
 }
 
-fn emitHeapPointerArrayFromValues(ctx: *Context, builder: anytype, ptrs: []const ValueRef) EmitError!?ValueRef {
+fn emitStackPointerArrayFromValues(ctx: *Context, builder: anytype, ptrs: []const ValueRef) EmitError!?ValueRef {
     if (ptrs.len == 0) return null;
-    const bytes = ptrs.len * @sizeOf(usize);
-    const arr_ptr = try emitMallocBytes(ctx, builder, bytes);
+    const arr_name = try ctx.nextTemp();
+    try builder.allocaArray(arr_name, .ptr, ptrs.len);
+    const arr_ptr = ValueRef{ .name = arr_name, .ty = .ptr, .is_ptr = true };
     for (ptrs, 0..) |ptr, idx| {
         const off = try constI32(ctx, @intCast(idx));
         const gep = try ctx.nextTemp();
@@ -244,9 +245,8 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
         }
     }
 
-    const ptr_array_opt = try emitHeapPointerArrayFromValues(ctx, builder, ptr_args.items);
+    const ptr_array_opt = try emitStackPointerArrayFromValues(ctx, builder, ptr_args.items);
     const ptr_array: ValueRef = if (ptr_array_opt) |arr| arr else .{ .name = "null", .ty = .ptr, .is_ptr = false };
-    if (ptr_array_opt) |arr| try heap_allocs.append(arr);
 
     return .{
         .ptr_array = ptr_array,
@@ -273,9 +273,8 @@ fn buildReadRuntimeArgs(ctx: *Context, builder: anytype, expanded: *ExpandedRead
         }
     }
 
-    const ptr_array_opt = try emitHeapPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
+    const ptr_array_opt = try emitStackPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
     const ptr_array: ValueRef = if (ptr_array_opt) |arr| arr else .{ .name = "null", .ty = .ptr, .is_ptr = false };
-    if (ptr_array_opt) |arr| try heap_allocs.append(arr);
 
     return .{
         .ptr_array = ptr_array,

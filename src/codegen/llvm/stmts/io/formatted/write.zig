@@ -20,7 +20,7 @@ const flushPendingSpaces = io_utils.flushPendingSpaces;
 const findReversionStart = io_utils.findReversionStart;
 const appendIntFormat = io_utils.appendIntFormat;
 const emitHeapBytes = io_utils.emitHeapBytes;
-const emitHeapPointerArrayFromValues = io_utils.emitHeapPointerArrayFromValues;
+const emitStackPointerArrayFromValues = io_utils.emitStackPointerArrayFromValues;
 const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
@@ -555,8 +555,7 @@ fn emitWriteFormattedImpl(
             else => return error.UnsupportedIntrinsicType,
         }
     }
-    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, ptr_args.items);
-    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
+    const ptr_array = try emitStackPointerArrayFromValues(ctx, builder, ptr_args.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
     const arg_count_val = try ctx.constI32(@intCast(ptr_args.items.len));
     const fmt_ptr_val = ValueRef{ .name = fmt_ptr, .ty = .ptr, .is_ptr = true };

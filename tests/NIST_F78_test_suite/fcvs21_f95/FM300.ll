@@ -193,13 +193,12 @@ bb29:
   %t102 = call ptr @malloc(i64 4)
   %t103 = getelementptr i32, ptr %t102, i32 0
   store i32 %t100, ptr %t103
-  %t104 = call ptr @malloc(i64 8)
+  %t104 = alloca ptr, i32 1
   %t105 = getelementptr ptr, ptr %t104, i32 0
   store ptr %t103, ptr %t105
   %t106 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t99, ptr %t101, ptr %t104, ptr %t106, i32 1, i32 0)
   call void @free(ptr %t102)
-  call void @free(ptr %t104)
   br label %bb30
 bb30:
   %t107 = load i32, ptr %t42
@@ -220,13 +219,12 @@ bb32:
   %t115 = call ptr @malloc(i64 4)
   %t116 = getelementptr i32, ptr %t115, i32 0
   store i32 %t113, ptr %t116
-  %t117 = call ptr @malloc(i64 8)
+  %t117 = alloca ptr, i32 1
   %t118 = getelementptr ptr, ptr %t117, i32 0
   store ptr %t116, ptr %t118
   %t119 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t112, ptr %t114, ptr %t117, ptr %t119, i32 1, i32 0)
   call void @free(ptr %t115)
-  call void @free(ptr %t117)
   br label %bb33
 bb33:
   br label %L21
@@ -248,7 +246,7 @@ bb35:
   store i32 %t124, ptr %t129
   %t130 = getelementptr i32, ptr %t127, i32 2
   store i32 %t125, ptr %t130
-  %t131 = call ptr @malloc(i64 24)
+  %t131 = alloca ptr, i32 3
   %t132 = getelementptr ptr, ptr %t131, i32 0
   store ptr %t128, ptr %t132
   %t133 = getelementptr ptr, ptr %t131, i32 1
@@ -258,7 +256,6 @@ bb35:
   %t135 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t122, ptr %t126, ptr %t131, ptr %t135, i32 3, i32 0)
   call void @free(ptr %t127)
-  call void @free(ptr %t131)
   br label %L21
 L21:
   br label %bb37
@@ -308,13 +305,12 @@ bb48:
   %t153 = call ptr @malloc(i64 4)
   %t154 = getelementptr i32, ptr %t153, i32 0
   store i32 %t151, ptr %t154
-  %t155 = call ptr @malloc(i64 8)
+  %t155 = alloca ptr, i32 1
   %t156 = getelementptr ptr, ptr %t155, i32 0
   store ptr %t154, ptr %t156
   %t157 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t150, ptr %t152, ptr %t155, ptr %t157, i32 1, i32 0)
   call void @free(ptr %t153)
-  call void @free(ptr %t155)
   br label %bb49
 bb49:
   %t158 = load i32, ptr %t42
@@ -335,13 +331,12 @@ bb51:
   %t166 = call ptr @malloc(i64 4)
   %t167 = getelementptr i32, ptr %t166, i32 0
   store i32 %t164, ptr %t167
-  %t168 = call ptr @malloc(i64 8)
+  %t168 = alloca ptr, i32 1
   %t169 = getelementptr ptr, ptr %t168, i32 0
   store ptr %t167, ptr %t169
   %t170 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t163, ptr %t165, ptr %t168, ptr %t170, i32 1, i32 0)
   call void @free(ptr %t166)
-  call void @free(ptr %t168)
   br label %bb52
 bb52:
   br label %L31
@@ -363,7 +358,7 @@ bb54:
   %t182 = call ptr @malloc(i64 4)
   %t183 = getelementptr i32, ptr %t182, i32 0
   store i32 %t174, ptr %t183
-  %t184 = call ptr @malloc(i64 24)
+  %t184 = alloca ptr, i32 3
   %t185 = getelementptr ptr, ptr %t184, i32 0
   store ptr %t183, ptr %t185
   %t186 = getelementptr ptr, ptr %t184, i32 1
@@ -373,7 +368,6 @@ bb54:
   %t188 = getelementptr [4 x i8], ptr @str15, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t173, ptr %t181, ptr %t184, ptr %t188, i32 3, i32 0)
   call void @free(ptr %t182)
-  call void @free(ptr %t184)
   br label %L31
 L31:
   br label %bb56
@@ -416,13 +410,12 @@ bb66:
   %t201 = call ptr @malloc(i64 4)
   %t202 = getelementptr i32, ptr %t201, i32 0
   store i32 %t199, ptr %t202
-  %t203 = call ptr @malloc(i64 8)
+  %t203 = alloca ptr, i32 1
   %t204 = getelementptr ptr, ptr %t203, i32 0
   store ptr %t202, ptr %t204
   %t205 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t198, ptr %t200, ptr %t203, ptr %t205, i32 1, i32 0)
   call void @free(ptr %t201)
-  call void @free(ptr %t203)
   br label %bb67
 bb67:
   %t206 = load i32, ptr %t42
@@ -443,13 +436,12 @@ bb69:
   %t214 = call ptr @malloc(i64 4)
   %t215 = getelementptr i32, ptr %t214, i32 0
   store i32 %t212, ptr %t215
-  %t216 = call ptr @malloc(i64 8)
+  %t216 = alloca ptr, i32 1
   %t217 = getelementptr ptr, ptr %t216, i32 0
   store ptr %t215, ptr %t217
   %t218 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t211, ptr %t213, ptr %t216, ptr %t218, i32 1, i32 0)
   call void @free(ptr %t214)
-  call void @free(ptr %t216)
   br label %bb70
 bb70:
   br label %L41
@@ -471,7 +463,7 @@ bb72:
   store i32 %t223, ptr %t228
   %t229 = getelementptr i32, ptr %t226, i32 2
   store i32 %t224, ptr %t229
-  %t230 = call ptr @malloc(i64 24)
+  %t230 = alloca ptr, i32 3
   %t231 = getelementptr ptr, ptr %t230, i32 0
   store ptr %t227, ptr %t231
   %t232 = getelementptr ptr, ptr %t230, i32 1
@@ -481,7 +473,6 @@ bb72:
   %t234 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t221, ptr %t225, ptr %t230, ptr %t234, i32 3, i32 0)
   call void @free(ptr %t226)
-  call void @free(ptr %t230)
   br label %L41
 L41:
   br label %bb74
@@ -605,13 +596,12 @@ bb85:
   %t307 = call ptr @malloc(i64 4)
   %t308 = getelementptr i32, ptr %t307, i32 0
   store i32 %t305, ptr %t308
-  %t309 = call ptr @malloc(i64 8)
+  %t309 = alloca ptr, i32 1
   %t310 = getelementptr ptr, ptr %t309, i32 0
   store ptr %t308, ptr %t310
   %t311 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t304, ptr %t306, ptr %t309, ptr %t311, i32 1, i32 0)
   call void @free(ptr %t307)
-  call void @free(ptr %t309)
   br label %bb86
 bb86:
   %t312 = load i32, ptr %t42
@@ -632,13 +622,12 @@ bb88:
   %t320 = call ptr @malloc(i64 4)
   %t321 = getelementptr i32, ptr %t320, i32 0
   store i32 %t318, ptr %t321
-  %t322 = call ptr @malloc(i64 8)
+  %t322 = alloca ptr, i32 1
   %t323 = getelementptr ptr, ptr %t322, i32 0
   store ptr %t321, ptr %t323
   %t324 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t317, ptr %t319, ptr %t322, ptr %t324, i32 1, i32 0)
   call void @free(ptr %t320)
-  call void @free(ptr %t322)
   br label %bb89
 bb89:
   br label %L51
@@ -662,7 +651,7 @@ bb91:
   store i32 14, ptr %t334
   %t335 = getelementptr i32, ptr %t330, i32 4
   store i32 14, ptr %t335
-  %t336 = call ptr @malloc(i64 56)
+  %t336 = alloca ptr, i32 7
   %t337 = getelementptr ptr, ptr %t336, i32 0
   store ptr %t331, ptr %t337
   %t338 = getelementptr ptr, ptr %t336, i32 1
@@ -680,7 +669,6 @@ bb91:
   %t344 = getelementptr [8 x i8], ptr @str18, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t327, ptr %t329, ptr %t336, ptr %t344, i32 7, i32 0)
   call void @free(ptr %t330)
-  call void @free(ptr %t336)
   br label %L51
 L51:
   br label %bb93
@@ -735,13 +723,12 @@ bb106:
   %t363 = call ptr @malloc(i64 4)
   %t364 = getelementptr i32, ptr %t363, i32 0
   store i32 %t361, ptr %t364
-  %t365 = call ptr @malloc(i64 8)
+  %t365 = alloca ptr, i32 1
   %t366 = getelementptr ptr, ptr %t365, i32 0
   store ptr %t364, ptr %t366
   %t367 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t360, ptr %t362, ptr %t365, ptr %t367, i32 1, i32 0)
   call void @free(ptr %t363)
-  call void @free(ptr %t365)
   br label %bb107
 bb107:
   %t368 = load i32, ptr %t42
@@ -762,13 +749,12 @@ bb109:
   %t376 = call ptr @malloc(i64 4)
   %t377 = getelementptr i32, ptr %t376, i32 0
   store i32 %t374, ptr %t377
-  %t378 = call ptr @malloc(i64 8)
+  %t378 = alloca ptr, i32 1
   %t379 = getelementptr ptr, ptr %t378, i32 0
   store ptr %t377, ptr %t379
   %t380 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t373, ptr %t375, ptr %t378, ptr %t380, i32 1, i32 0)
   call void @free(ptr %t376)
-  call void @free(ptr %t378)
   br label %bb110
 bb110:
   br label %L61
@@ -790,7 +776,7 @@ bb112:
   store i32 %t385, ptr %t390
   %t391 = getelementptr i32, ptr %t388, i32 2
   store i32 %t386, ptr %t391
-  %t392 = call ptr @malloc(i64 24)
+  %t392 = alloca ptr, i32 3
   %t393 = getelementptr ptr, ptr %t392, i32 0
   store ptr %t389, ptr %t393
   %t394 = getelementptr ptr, ptr %t392, i32 1
@@ -800,7 +786,6 @@ bb112:
   %t396 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t383, ptr %t387, ptr %t392, ptr %t396, i32 3, i32 0)
   call void @free(ptr %t388)
-  call void @free(ptr %t392)
   br label %L61
 L61:
   br label %bb114
@@ -843,13 +828,12 @@ bb125:
   %t410 = call ptr @malloc(i64 4)
   %t411 = getelementptr i32, ptr %t410, i32 0
   store i32 %t408, ptr %t411
-  %t412 = call ptr @malloc(i64 8)
+  %t412 = alloca ptr, i32 1
   %t413 = getelementptr ptr, ptr %t412, i32 0
   store ptr %t411, ptr %t413
   %t414 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t407, ptr %t409, ptr %t412, ptr %t414, i32 1, i32 0)
   call void @free(ptr %t410)
-  call void @free(ptr %t412)
   br label %bb126
 bb126:
   %t415 = load i32, ptr %t42
@@ -870,13 +854,12 @@ bb128:
   %t423 = call ptr @malloc(i64 4)
   %t424 = getelementptr i32, ptr %t423, i32 0
   store i32 %t421, ptr %t424
-  %t425 = call ptr @malloc(i64 8)
+  %t425 = alloca ptr, i32 1
   %t426 = getelementptr ptr, ptr %t425, i32 0
   store ptr %t424, ptr %t426
   %t427 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t420, ptr %t422, ptr %t425, ptr %t427, i32 1, i32 0)
   call void @free(ptr %t423)
-  call void @free(ptr %t425)
   br label %bb129
 bb129:
   br label %L71
@@ -898,7 +881,7 @@ bb131:
   store i32 %t432, ptr %t437
   %t438 = getelementptr i32, ptr %t435, i32 2
   store i32 %t433, ptr %t438
-  %t439 = call ptr @malloc(i64 24)
+  %t439 = alloca ptr, i32 3
   %t440 = getelementptr ptr, ptr %t439, i32 0
   store ptr %t436, ptr %t440
   %t441 = getelementptr ptr, ptr %t439, i32 1
@@ -908,7 +891,6 @@ bb131:
   %t443 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t430, ptr %t434, ptr %t439, ptr %t443, i32 3, i32 0)
   call void @free(ptr %t435)
-  call void @free(ptr %t439)
   br label %L71
 L71:
   br label %bb133
@@ -952,13 +934,12 @@ bb145:
   %t457 = call ptr @malloc(i64 4)
   %t458 = getelementptr i32, ptr %t457, i32 0
   store i32 %t455, ptr %t458
-  %t459 = call ptr @malloc(i64 8)
+  %t459 = alloca ptr, i32 1
   %t460 = getelementptr ptr, ptr %t459, i32 0
   store ptr %t458, ptr %t460
   %t461 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t454, ptr %t456, ptr %t459, ptr %t461, i32 1, i32 0)
   call void @free(ptr %t457)
-  call void @free(ptr %t459)
   br label %bb146
 bb146:
   %t462 = load i32, ptr %t42
@@ -979,13 +960,12 @@ bb148:
   %t470 = call ptr @malloc(i64 4)
   %t471 = getelementptr i32, ptr %t470, i32 0
   store i32 %t468, ptr %t471
-  %t472 = call ptr @malloc(i64 8)
+  %t472 = alloca ptr, i32 1
   %t473 = getelementptr ptr, ptr %t472, i32 0
   store ptr %t471, ptr %t473
   %t474 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t467, ptr %t469, ptr %t472, ptr %t474, i32 1, i32 0)
   call void @free(ptr %t470)
-  call void @free(ptr %t472)
   br label %bb149
 bb149:
   br label %L81
@@ -1007,7 +987,7 @@ bb151:
   store i32 %t479, ptr %t484
   %t485 = getelementptr i32, ptr %t482, i32 2
   store i32 %t480, ptr %t485
-  %t486 = call ptr @malloc(i64 24)
+  %t486 = alloca ptr, i32 3
   %t487 = getelementptr ptr, ptr %t486, i32 0
   store ptr %t483, ptr %t487
   %t488 = getelementptr ptr, ptr %t486, i32 1
@@ -1017,7 +997,6 @@ bb151:
   %t490 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t477, ptr %t481, ptr %t486, ptr %t490, i32 3, i32 0)
   call void @free(ptr %t482)
-  call void @free(ptr %t486)
   br label %L81
 L81:
   br label %bb153
@@ -1057,13 +1036,12 @@ bb161:
   %t504 = call ptr @malloc(i64 4)
   %t505 = getelementptr i32, ptr %t504, i32 0
   store i32 %t502, ptr %t505
-  %t506 = call ptr @malloc(i64 8)
+  %t506 = alloca ptr, i32 1
   %t507 = getelementptr ptr, ptr %t506, i32 0
   store ptr %t505, ptr %t507
   %t508 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t501, ptr %t503, ptr %t506, ptr %t508, i32 1, i32 0)
   call void @free(ptr %t504)
-  call void @free(ptr %t506)
   br label %bb162
 bb162:
   %t509 = load i32, ptr %t42
@@ -1084,13 +1062,12 @@ bb164:
   %t517 = call ptr @malloc(i64 4)
   %t518 = getelementptr i32, ptr %t517, i32 0
   store i32 %t515, ptr %t518
-  %t519 = call ptr @malloc(i64 8)
+  %t519 = alloca ptr, i32 1
   %t520 = getelementptr ptr, ptr %t519, i32 0
   store ptr %t518, ptr %t520
   %t521 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t514, ptr %t516, ptr %t519, ptr %t521, i32 1, i32 0)
   call void @free(ptr %t517)
-  call void @free(ptr %t519)
   br label %bb165
 bb165:
   br label %L91
@@ -1112,7 +1089,7 @@ bb167:
   store i32 %t526, ptr %t531
   %t532 = getelementptr i32, ptr %t529, i32 2
   store i32 %t527, ptr %t532
-  %t533 = call ptr @malloc(i64 24)
+  %t533 = alloca ptr, i32 3
   %t534 = getelementptr ptr, ptr %t533, i32 0
   store ptr %t530, ptr %t534
   %t535 = getelementptr ptr, ptr %t533, i32 1
@@ -1122,7 +1099,6 @@ bb167:
   %t537 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t524, ptr %t528, ptr %t533, ptr %t537, i32 3, i32 0)
   call void @free(ptr %t529)
-  call void @free(ptr %t533)
   br label %L91
 L91:
   br label %bb169
@@ -1177,13 +1153,12 @@ bb182:
   %t556 = call ptr @malloc(i64 4)
   %t557 = getelementptr i32, ptr %t556, i32 0
   store i32 %t554, ptr %t557
-  %t558 = call ptr @malloc(i64 8)
+  %t558 = alloca ptr, i32 1
   %t559 = getelementptr ptr, ptr %t558, i32 0
   store ptr %t557, ptr %t559
   %t560 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t553, ptr %t555, ptr %t558, ptr %t560, i32 1, i32 0)
   call void @free(ptr %t556)
-  call void @free(ptr %t558)
   br label %bb183
 bb183:
   %t561 = load i32, ptr %t42
@@ -1204,13 +1179,12 @@ bb185:
   %t569 = call ptr @malloc(i64 4)
   %t570 = getelementptr i32, ptr %t569, i32 0
   store i32 %t567, ptr %t570
-  %t571 = call ptr @malloc(i64 8)
+  %t571 = alloca ptr, i32 1
   %t572 = getelementptr ptr, ptr %t571, i32 0
   store ptr %t570, ptr %t572
   %t573 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t566, ptr %t568, ptr %t571, ptr %t573, i32 1, i32 0)
   call void @free(ptr %t569)
-  call void @free(ptr %t571)
   br label %bb186
 bb186:
   br label %L101
@@ -1232,7 +1206,7 @@ bb188:
   store i32 %t578, ptr %t583
   %t584 = getelementptr i32, ptr %t581, i32 2
   store i32 %t579, ptr %t584
-  %t585 = call ptr @malloc(i64 24)
+  %t585 = alloca ptr, i32 3
   %t586 = getelementptr ptr, ptr %t585, i32 0
   store ptr %t582, ptr %t586
   %t587 = getelementptr ptr, ptr %t585, i32 1
@@ -1242,7 +1216,6 @@ bb188:
   %t589 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t576, ptr %t580, ptr %t585, ptr %t589, i32 3, i32 0)
   call void @free(ptr %t581)
-  call void @free(ptr %t585)
   br label %L101
 L101:
   br label %bb190
@@ -1297,13 +1270,12 @@ bb203:
   %t608 = call ptr @malloc(i64 4)
   %t609 = getelementptr i32, ptr %t608, i32 0
   store i32 %t606, ptr %t609
-  %t610 = call ptr @malloc(i64 8)
+  %t610 = alloca ptr, i32 1
   %t611 = getelementptr ptr, ptr %t610, i32 0
   store ptr %t609, ptr %t611
   %t612 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t605, ptr %t607, ptr %t610, ptr %t612, i32 1, i32 0)
   call void @free(ptr %t608)
-  call void @free(ptr %t610)
   br label %bb204
 bb204:
   %t613 = load i32, ptr %t42
@@ -1324,13 +1296,12 @@ bb206:
   %t621 = call ptr @malloc(i64 4)
   %t622 = getelementptr i32, ptr %t621, i32 0
   store i32 %t619, ptr %t622
-  %t623 = call ptr @malloc(i64 8)
+  %t623 = alloca ptr, i32 1
   %t624 = getelementptr ptr, ptr %t623, i32 0
   store ptr %t622, ptr %t624
   %t625 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t618, ptr %t620, ptr %t623, ptr %t625, i32 1, i32 0)
   call void @free(ptr %t621)
-  call void @free(ptr %t623)
   br label %bb207
 bb207:
   br label %L111
@@ -1352,7 +1323,7 @@ bb209:
   store i32 %t630, ptr %t635
   %t636 = getelementptr i32, ptr %t633, i32 2
   store i32 %t631, ptr %t636
-  %t637 = call ptr @malloc(i64 24)
+  %t637 = alloca ptr, i32 3
   %t638 = getelementptr ptr, ptr %t637, i32 0
   store ptr %t634, ptr %t638
   %t639 = getelementptr ptr, ptr %t637, i32 1
@@ -1362,7 +1333,6 @@ bb209:
   %t641 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t628, ptr %t632, ptr %t637, ptr %t641, i32 3, i32 0)
   call void @free(ptr %t633)
-  call void @free(ptr %t637)
   br label %L111
 L111:
   br label %bb211
@@ -1437,13 +1407,12 @@ bb224:
   %t685 = call ptr @malloc(i64 4)
   %t686 = getelementptr i32, ptr %t685, i32 0
   store i32 %t683, ptr %t686
-  %t687 = call ptr @malloc(i64 8)
+  %t687 = alloca ptr, i32 1
   %t688 = getelementptr ptr, ptr %t687, i32 0
   store ptr %t686, ptr %t688
   %t689 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t682, ptr %t684, ptr %t687, ptr %t689, i32 1, i32 0)
   call void @free(ptr %t685)
-  call void @free(ptr %t687)
   br label %bb225
 bb225:
   %t690 = load i32, ptr %t42
@@ -1464,13 +1433,12 @@ bb227:
   %t698 = call ptr @malloc(i64 4)
   %t699 = getelementptr i32, ptr %t698, i32 0
   store i32 %t696, ptr %t699
-  %t700 = call ptr @malloc(i64 8)
+  %t700 = alloca ptr, i32 1
   %t701 = getelementptr ptr, ptr %t700, i32 0
   store ptr %t699, ptr %t701
   %t702 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t695, ptr %t697, ptr %t700, ptr %t702, i32 1, i32 0)
   call void @free(ptr %t698)
-  call void @free(ptr %t700)
   br label %bb228
 bb228:
   br label %L121
@@ -1492,7 +1460,7 @@ bb230:
   store i32 %t707, ptr %t712
   %t713 = getelementptr i32, ptr %t710, i32 2
   store i32 %t708, ptr %t713
-  %t714 = call ptr @malloc(i64 24)
+  %t714 = alloca ptr, i32 3
   %t715 = getelementptr ptr, ptr %t714, i32 0
   store ptr %t711, ptr %t715
   %t716 = getelementptr ptr, ptr %t714, i32 1
@@ -1502,7 +1470,6 @@ bb230:
   %t718 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t705, ptr %t709, ptr %t714, ptr %t718, i32 3, i32 0)
   call void @free(ptr %t710)
-  call void @free(ptr %t714)
   br label %L121
 L121:
   br label %bb232
@@ -1547,13 +1514,12 @@ bb240:
   %t737 = call ptr @malloc(i64 4)
   %t738 = getelementptr i32, ptr %t737, i32 0
   store i32 %t735, ptr %t738
-  %t739 = call ptr @malloc(i64 8)
+  %t739 = alloca ptr, i32 1
   %t740 = getelementptr ptr, ptr %t739, i32 0
   store ptr %t738, ptr %t740
   %t741 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t734, ptr %t736, ptr %t739, ptr %t741, i32 1, i32 0)
   call void @free(ptr %t737)
-  call void @free(ptr %t739)
   br label %bb241
 bb241:
   %t742 = load i32, ptr %t42
@@ -1574,13 +1540,12 @@ bb243:
   %t750 = call ptr @malloc(i64 4)
   %t751 = getelementptr i32, ptr %t750, i32 0
   store i32 %t748, ptr %t751
-  %t752 = call ptr @malloc(i64 8)
+  %t752 = alloca ptr, i32 1
   %t753 = getelementptr ptr, ptr %t752, i32 0
   store ptr %t751, ptr %t753
   %t754 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t747, ptr %t749, ptr %t752, ptr %t754, i32 1, i32 0)
   call void @free(ptr %t750)
-  call void @free(ptr %t752)
   br label %bb244
 bb244:
   br label %L131
@@ -1602,7 +1567,7 @@ bb246:
   store i32 %t759, ptr %t764
   %t765 = getelementptr i32, ptr %t762, i32 2
   store i32 %t760, ptr %t765
-  %t766 = call ptr @malloc(i64 24)
+  %t766 = alloca ptr, i32 3
   %t767 = getelementptr ptr, ptr %t766, i32 0
   store ptr %t763, ptr %t767
   %t768 = getelementptr ptr, ptr %t766, i32 1
@@ -1612,7 +1577,6 @@ bb246:
   %t770 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t757, ptr %t761, ptr %t766, ptr %t770, i32 3, i32 0)
   call void @free(ptr %t762)
-  call void @free(ptr %t766)
   br label %L131
 L131:
   br label %bb248
@@ -1677,13 +1641,12 @@ bb259:
   %t803 = call ptr @malloc(i64 4)
   %t804 = getelementptr i32, ptr %t803, i32 0
   store i32 %t801, ptr %t804
-  %t805 = call ptr @malloc(i64 8)
+  %t805 = alloca ptr, i32 1
   %t806 = getelementptr ptr, ptr %t805, i32 0
   store ptr %t804, ptr %t806
   %t807 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t800, ptr %t802, ptr %t805, ptr %t807, i32 1, i32 0)
   call void @free(ptr %t803)
-  call void @free(ptr %t805)
   br label %bb260
 bb260:
   %t808 = load i32, ptr %t42
@@ -1704,13 +1667,12 @@ bb262:
   %t816 = call ptr @malloc(i64 4)
   %t817 = getelementptr i32, ptr %t816, i32 0
   store i32 %t814, ptr %t817
-  %t818 = call ptr @malloc(i64 8)
+  %t818 = alloca ptr, i32 1
   %t819 = getelementptr ptr, ptr %t818, i32 0
   store ptr %t817, ptr %t819
   %t820 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t813, ptr %t815, ptr %t818, ptr %t820, i32 1, i32 0)
   call void @free(ptr %t816)
-  call void @free(ptr %t818)
   br label %bb263
 bb263:
   br label %L141
@@ -1732,7 +1694,7 @@ bb265:
   %t832 = call ptr @malloc(i64 4)
   %t833 = getelementptr i32, ptr %t832, i32 0
   store i32 %t824, ptr %t833
-  %t834 = call ptr @malloc(i64 24)
+  %t834 = alloca ptr, i32 3
   %t835 = getelementptr ptr, ptr %t834, i32 0
   store ptr %t833, ptr %t835
   %t836 = getelementptr ptr, ptr %t834, i32 1
@@ -1742,7 +1704,6 @@ bb265:
   %t838 = getelementptr [4 x i8], ptr @str15, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t823, ptr %t831, ptr %t834, ptr %t838, i32 3, i32 0)
   call void @free(ptr %t832)
-  call void @free(ptr %t834)
   br label %L141
 L141:
   br label %bb267
@@ -1807,13 +1768,12 @@ bb278:
   %t871 = call ptr @malloc(i64 4)
   %t872 = getelementptr i32, ptr %t871, i32 0
   store i32 %t869, ptr %t872
-  %t873 = call ptr @malloc(i64 8)
+  %t873 = alloca ptr, i32 1
   %t874 = getelementptr ptr, ptr %t873, i32 0
   store ptr %t872, ptr %t874
   %t875 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t868, ptr %t870, ptr %t873, ptr %t875, i32 1, i32 0)
   call void @free(ptr %t871)
-  call void @free(ptr %t873)
   br label %bb279
 bb279:
   %t876 = load i32, ptr %t42
@@ -1834,13 +1794,12 @@ bb281:
   %t884 = call ptr @malloc(i64 4)
   %t885 = getelementptr i32, ptr %t884, i32 0
   store i32 %t882, ptr %t885
-  %t886 = call ptr @malloc(i64 8)
+  %t886 = alloca ptr, i32 1
   %t887 = getelementptr ptr, ptr %t886, i32 0
   store ptr %t885, ptr %t887
   %t888 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t881, ptr %t883, ptr %t886, ptr %t888, i32 1, i32 0)
   call void @free(ptr %t884)
-  call void @free(ptr %t886)
   br label %bb282
 bb282:
   br label %L151
@@ -1862,7 +1821,7 @@ bb284:
   %t900 = call ptr @malloc(i64 4)
   %t901 = getelementptr i32, ptr %t900, i32 0
   store i32 %t892, ptr %t901
-  %t902 = call ptr @malloc(i64 24)
+  %t902 = alloca ptr, i32 3
   %t903 = getelementptr ptr, ptr %t902, i32 0
   store ptr %t901, ptr %t903
   %t904 = getelementptr ptr, ptr %t902, i32 1
@@ -1872,7 +1831,6 @@ bb284:
   %t906 = getelementptr [4 x i8], ptr @str15, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t891, ptr %t899, ptr %t902, ptr %t906, i32 3, i32 0)
   call void @free(ptr %t900)
-  call void @free(ptr %t902)
   br label %L151
 L151:
   br label %bb286
@@ -1929,13 +1887,12 @@ bb296:
   %t935 = call ptr @malloc(i64 4)
   %t936 = getelementptr i32, ptr %t935, i32 0
   store i32 %t933, ptr %t936
-  %t937 = call ptr @malloc(i64 8)
+  %t937 = alloca ptr, i32 1
   %t938 = getelementptr ptr, ptr %t937, i32 0
   store ptr %t936, ptr %t938
   %t939 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t932, ptr %t934, ptr %t937, ptr %t939, i32 1, i32 0)
   call void @free(ptr %t935)
-  call void @free(ptr %t937)
   br label %bb297
 bb297:
   %t940 = load i32, ptr %t42
@@ -1956,13 +1913,12 @@ bb299:
   %t948 = call ptr @malloc(i64 4)
   %t949 = getelementptr i32, ptr %t948, i32 0
   store i32 %t946, ptr %t949
-  %t950 = call ptr @malloc(i64 8)
+  %t950 = alloca ptr, i32 1
   %t951 = getelementptr ptr, ptr %t950, i32 0
   store ptr %t949, ptr %t951
   %t952 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t945, ptr %t947, ptr %t950, ptr %t952, i32 1, i32 0)
   call void @free(ptr %t948)
-  call void @free(ptr %t950)
   br label %bb300
 bb300:
   br label %L161
@@ -1984,7 +1940,7 @@ bb302:
   store i32 %t957, ptr %t962
   %t963 = getelementptr i32, ptr %t960, i32 2
   store i32 %t958, ptr %t963
-  %t964 = call ptr @malloc(i64 24)
+  %t964 = alloca ptr, i32 3
   %t965 = getelementptr ptr, ptr %t964, i32 0
   store ptr %t961, ptr %t965
   %t966 = getelementptr ptr, ptr %t964, i32 1
@@ -1994,7 +1950,6 @@ bb302:
   %t968 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t955, ptr %t959, ptr %t964, ptr %t968, i32 3, i32 0)
   call void @free(ptr %t960)
-  call void @free(ptr %t964)
   br label %L161
 L161:
   br label %bb304
@@ -2046,13 +2001,12 @@ bb314:
   %t992 = call ptr @malloc(i64 4)
   %t993 = getelementptr i32, ptr %t992, i32 0
   store i32 %t990, ptr %t993
-  %t994 = call ptr @malloc(i64 8)
+  %t994 = alloca ptr, i32 1
   %t995 = getelementptr ptr, ptr %t994, i32 0
   store ptr %t993, ptr %t995
   %t996 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t989, ptr %t991, ptr %t994, ptr %t996, i32 1, i32 0)
   call void @free(ptr %t992)
-  call void @free(ptr %t994)
   br label %bb315
 bb315:
   %t997 = load i32, ptr %t42
@@ -2073,13 +2027,12 @@ bb317:
   %t1005 = call ptr @malloc(i64 4)
   %t1006 = getelementptr i32, ptr %t1005, i32 0
   store i32 %t1003, ptr %t1006
-  %t1007 = call ptr @malloc(i64 8)
+  %t1007 = alloca ptr, i32 1
   %t1008 = getelementptr ptr, ptr %t1007, i32 0
   store ptr %t1006, ptr %t1008
   %t1009 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1002, ptr %t1004, ptr %t1007, ptr %t1009, i32 1, i32 0)
   call void @free(ptr %t1005)
-  call void @free(ptr %t1007)
   br label %bb318
 bb318:
   br label %L171
@@ -2101,7 +2054,7 @@ bb320:
   store i32 %t1014, ptr %t1019
   %t1020 = getelementptr i32, ptr %t1017, i32 2
   store i32 %t1015, ptr %t1020
-  %t1021 = call ptr @malloc(i64 24)
+  %t1021 = alloca ptr, i32 3
   %t1022 = getelementptr ptr, ptr %t1021, i32 0
   store ptr %t1018, ptr %t1022
   %t1023 = getelementptr ptr, ptr %t1021, i32 1
@@ -2111,7 +2064,6 @@ bb320:
   %t1025 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1012, ptr %t1016, ptr %t1021, ptr %t1025, i32 3, i32 0)
   call void @free(ptr %t1017)
-  call void @free(ptr %t1021)
   br label %L171
 L171:
   br label %bb322
@@ -2180,13 +2132,12 @@ bb332:
   %t1066 = call ptr @malloc(i64 4)
   %t1067 = getelementptr i32, ptr %t1066, i32 0
   store i32 %t1064, ptr %t1067
-  %t1068 = call ptr @malloc(i64 8)
+  %t1068 = alloca ptr, i32 1
   %t1069 = getelementptr ptr, ptr %t1068, i32 0
   store ptr %t1067, ptr %t1069
   %t1070 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1063, ptr %t1065, ptr %t1068, ptr %t1070, i32 1, i32 0)
   call void @free(ptr %t1066)
-  call void @free(ptr %t1068)
   br label %bb333
 bb333:
   %t1071 = load i32, ptr %t42
@@ -2207,13 +2158,12 @@ bb335:
   %t1079 = call ptr @malloc(i64 4)
   %t1080 = getelementptr i32, ptr %t1079, i32 0
   store i32 %t1077, ptr %t1080
-  %t1081 = call ptr @malloc(i64 8)
+  %t1081 = alloca ptr, i32 1
   %t1082 = getelementptr ptr, ptr %t1081, i32 0
   store ptr %t1080, ptr %t1082
   %t1083 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1076, ptr %t1078, ptr %t1081, ptr %t1083, i32 1, i32 0)
   call void @free(ptr %t1079)
-  call void @free(ptr %t1081)
   br label %bb336
 bb336:
   br label %L181
@@ -2235,7 +2185,7 @@ bb338:
   store i32 %t1088, ptr %t1093
   %t1094 = getelementptr i32, ptr %t1091, i32 2
   store i32 %t1089, ptr %t1094
-  %t1095 = call ptr @malloc(i64 24)
+  %t1095 = alloca ptr, i32 3
   %t1096 = getelementptr ptr, ptr %t1095, i32 0
   store ptr %t1092, ptr %t1096
   %t1097 = getelementptr ptr, ptr %t1095, i32 1
@@ -2245,7 +2195,6 @@ bb338:
   %t1099 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1086, ptr %t1090, ptr %t1095, ptr %t1099, i32 3, i32 0)
   call void @free(ptr %t1091)
-  call void @free(ptr %t1095)
   br label %L181
 L181:
   br label %bb340
@@ -2314,13 +2263,12 @@ bb350:
   %t1140 = call ptr @malloc(i64 4)
   %t1141 = getelementptr i32, ptr %t1140, i32 0
   store i32 %t1138, ptr %t1141
-  %t1142 = call ptr @malloc(i64 8)
+  %t1142 = alloca ptr, i32 1
   %t1143 = getelementptr ptr, ptr %t1142, i32 0
   store ptr %t1141, ptr %t1143
   %t1144 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1137, ptr %t1139, ptr %t1142, ptr %t1144, i32 1, i32 0)
   call void @free(ptr %t1140)
-  call void @free(ptr %t1142)
   br label %bb351
 bb351:
   %t1145 = load i32, ptr %t42
@@ -2341,13 +2289,12 @@ bb353:
   %t1153 = call ptr @malloc(i64 4)
   %t1154 = getelementptr i32, ptr %t1153, i32 0
   store i32 %t1151, ptr %t1154
-  %t1155 = call ptr @malloc(i64 8)
+  %t1155 = alloca ptr, i32 1
   %t1156 = getelementptr ptr, ptr %t1155, i32 0
   store ptr %t1154, ptr %t1156
   %t1157 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1150, ptr %t1152, ptr %t1155, ptr %t1157, i32 1, i32 0)
   call void @free(ptr %t1153)
-  call void @free(ptr %t1155)
   br label %bb354
 bb354:
   br label %L191
@@ -2369,7 +2316,7 @@ bb356:
   store i32 %t1162, ptr %t1167
   %t1168 = getelementptr i32, ptr %t1165, i32 2
   store i32 %t1163, ptr %t1168
-  %t1169 = call ptr @malloc(i64 24)
+  %t1169 = alloca ptr, i32 3
   %t1170 = getelementptr ptr, ptr %t1169, i32 0
   store ptr %t1166, ptr %t1170
   %t1171 = getelementptr ptr, ptr %t1169, i32 1
@@ -2379,7 +2326,6 @@ bb356:
   %t1173 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1160, ptr %t1164, ptr %t1169, ptr %t1173, i32 3, i32 0)
   call void @free(ptr %t1165)
-  call void @free(ptr %t1169)
   br label %L191
 L191:
   br label %bb358
@@ -2419,13 +2365,12 @@ bb366:
   %t1187 = call ptr @malloc(i64 4)
   %t1188 = getelementptr i32, ptr %t1187, i32 0
   store i32 %t1185, ptr %t1188
-  %t1189 = call ptr @malloc(i64 8)
+  %t1189 = alloca ptr, i32 1
   %t1190 = getelementptr ptr, ptr %t1189, i32 0
   store ptr %t1188, ptr %t1190
   %t1191 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1184, ptr %t1186, ptr %t1189, ptr %t1191, i32 1, i32 0)
   call void @free(ptr %t1187)
-  call void @free(ptr %t1189)
   br label %bb367
 bb367:
   %t1192 = load i32, ptr %t42
@@ -2446,13 +2391,12 @@ bb369:
   %t1200 = call ptr @malloc(i64 4)
   %t1201 = getelementptr i32, ptr %t1200, i32 0
   store i32 %t1198, ptr %t1201
-  %t1202 = call ptr @malloc(i64 8)
+  %t1202 = alloca ptr, i32 1
   %t1203 = getelementptr ptr, ptr %t1202, i32 0
   store ptr %t1201, ptr %t1203
   %t1204 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1197, ptr %t1199, ptr %t1202, ptr %t1204, i32 1, i32 0)
   call void @free(ptr %t1200)
-  call void @free(ptr %t1202)
   br label %bb370
 bb370:
   br label %L201
@@ -2474,7 +2418,7 @@ bb372:
   store i32 %t1209, ptr %t1214
   %t1215 = getelementptr i32, ptr %t1212, i32 2
   store i32 %t1210, ptr %t1215
-  %t1216 = call ptr @malloc(i64 24)
+  %t1216 = alloca ptr, i32 3
   %t1217 = getelementptr ptr, ptr %t1216, i32 0
   store ptr %t1213, ptr %t1217
   %t1218 = getelementptr ptr, ptr %t1216, i32 1
@@ -2484,7 +2428,6 @@ bb372:
   %t1220 = getelementptr [4 x i8], ptr @str13, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1207, ptr %t1211, ptr %t1216, ptr %t1220, i32 3, i32 0)
   call void @free(ptr %t1212)
-  call void @free(ptr %t1216)
   br label %L201
 L201:
   br label %bb374
@@ -2520,13 +2463,12 @@ bb379:
   %t1234 = call ptr @malloc(i64 4)
   %t1235 = getelementptr i32, ptr %t1234, i32 0
   store i32 %t1232, ptr %t1235
-  %t1236 = call ptr @malloc(i64 8)
+  %t1236 = alloca ptr, i32 1
   %t1237 = getelementptr ptr, ptr %t1236, i32 0
   store ptr %t1235, ptr %t1237
   %t1238 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1231, ptr %t1233, ptr %t1236, ptr %t1238, i32 1, i32 0)
   call void @free(ptr %t1234)
-  call void @free(ptr %t1236)
   br label %bb380
 bb380:
   %t1239 = load i32, ptr %t38
@@ -2535,13 +2477,12 @@ bb380:
   %t1242 = call ptr @malloc(i64 4)
   %t1243 = getelementptr i32, ptr %t1242, i32 0
   store i32 %t1240, ptr %t1243
-  %t1244 = call ptr @malloc(i64 8)
+  %t1244 = alloca ptr, i32 1
   %t1245 = getelementptr ptr, ptr %t1244, i32 0
   store ptr %t1243, ptr %t1245
   %t1246 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1239, ptr %t1241, ptr %t1244, ptr %t1246, i32 1, i32 0)
   call void @free(ptr %t1242)
-  call void @free(ptr %t1244)
   br label %bb381
 bb381:
   %t1247 = load i32, ptr %t38
@@ -2550,13 +2491,12 @@ bb381:
   %t1250 = call ptr @malloc(i64 4)
   %t1251 = getelementptr i32, ptr %t1250, i32 0
   store i32 %t1248, ptr %t1251
-  %t1252 = call ptr @malloc(i64 8)
+  %t1252 = alloca ptr, i32 1
   %t1253 = getelementptr ptr, ptr %t1252, i32 0
   store ptr %t1251, ptr %t1253
   %t1254 = getelementptr [2 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1247, ptr %t1249, ptr %t1252, ptr %t1254, i32 1, i32 0)
   call void @free(ptr %t1250)
-  call void @free(ptr %t1252)
   br label %bb382
 bb382:
   ret void

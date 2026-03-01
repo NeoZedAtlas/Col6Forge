@@ -309,6 +309,23 @@ pub fn emitHeapPointerArrayFromValues(ctx: *Context, builder: anytype, ptrs: []c
     return arr_ptr;
 }
 
+pub fn emitStackPointerArrayFromValues(ctx: *Context, builder: anytype, ptrs: []const ValueRef) EmitError!ValueRef {
+    if (ptrs.len == 0) {
+        return .{ .name = "null", .ty = .ptr, .is_ptr = false };
+    }
+    const arr_name = try ctx.nextTemp();
+    try builder.allocaArray(arr_name, .ptr, ptrs.len);
+    const arr_ptr = ValueRef{ .name = arr_name, .ty = .ptr, .is_ptr = true };
+    for (ptrs, 0..) |ptr, idx| {
+        const off = try ctx.constI32(@intCast(idx));
+        const gep = try ctx.nextTemp();
+        try builder.gep(gep, .ptr, arr_ptr, off);
+        const slot_ptr = ValueRef{ .name = gep, .ty = .ptr, .is_ptr = true };
+        try builder.store(.{ .name = ptr.name, .ty = .ptr, .is_ptr = false }, slot_ptr);
+    }
+    return arr_ptr;
+}
+
 pub fn emitHeapI32Array(ctx: *Context, builder: anytype, values: []const i32) EmitError!ValueRef {
     if (values.len == 0) {
         return .{ .name = "null", .ty = .ptr, .is_ptr = false };

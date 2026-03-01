@@ -18,6 +18,8 @@ pub fn normalizeFixedFormWithMapMode(
     var list = std.array_list.Managed(LogicalLine).init(allocator);
     var buffer = std.array_list.Managed(u8).init(allocator);
     var segments = std.array_list.Managed(Segment).init(allocator);
+    defer buffer.deinit();
+    defer segments.deinit();
     var current_label: ?[]const u8 = null;
     var current_start: usize = 0;
     var current_end: usize = 0;
@@ -42,7 +44,7 @@ pub fn normalizeFixedFormWithMapMode(
 
         if (trimmed_code.len == 0 and !is_cont) {
             if (in_stmt) {
-                const text_owned = try buffer.toOwnedSlice();
+                const text_owned = try makeTextOwned(allocator, &buffer);
                 const segments_owned = try makeSegmentsOwned(
                     allocator,
                     &segments,
@@ -56,8 +58,6 @@ pub fn normalizeFixedFormWithMapMode(
                     .span = .{ .start_line = current_start, .end_line = current_end },
                     .segments = segments_owned,
                 });
-                buffer = std.array_list.Managed(u8).init(allocator);
-                segments = std.array_list.Managed(Segment).init(allocator);
                 in_stmt = false;
                 current_label = null;
             }
@@ -66,7 +66,7 @@ pub fn normalizeFixedFormWithMapMode(
 
         if (!is_cont or !in_stmt) {
             if (in_stmt) {
-                const text_owned = try buffer.toOwnedSlice();
+                const text_owned = try makeTextOwned(allocator, &buffer);
                 const segments_owned = try makeSegmentsOwned(
                     allocator,
                     &segments,
@@ -80,8 +80,6 @@ pub fn normalizeFixedFormWithMapMode(
                     .span = .{ .start_line = current_start, .end_line = current_end },
                     .segments = segments_owned,
                 });
-                buffer = std.array_list.Managed(u8).init(allocator);
-                segments = std.array_list.Managed(Segment).init(allocator);
             }
             const label = try parseLabel(allocator, line);
             current_start = line_no;
@@ -108,7 +106,7 @@ pub fn normalizeFixedFormWithMapMode(
     }
 
     if (in_stmt) {
-        const text_owned = try buffer.toOwnedSlice();
+        const text_owned = try makeTextOwned(allocator, &buffer);
         const segments_owned = try makeSegmentsOwned(
             allocator,
             &segments,
@@ -122,12 +120,16 @@ pub fn normalizeFixedFormWithMapMode(
             .span = .{ .start_line = current_start, .end_line = current_end },
             .segments = segments_owned,
         });
-    } else {
-        buffer.deinit();
-        segments.deinit();
     }
 
     return list.toOwnedSlice();
+}
+
+fn makeTextOwned(allocator: std.mem.Allocator, buffer: *std.array_list.Managed(u8)) ![]u8 {
+    const out = try allocator.alloc(u8, buffer.items.len);
+    @memcpy(out, buffer.items);
+    buffer.clearRetainingCapacity();
+    return out;
 }
 
 fn makeSegmentsOwned(
@@ -138,7 +140,10 @@ fn makeSegmentsOwned(
     text_len: usize,
 ) ![]Segment {
     if (!coarse_source_map) {
-        return segments.toOwnedSlice();
+        const out = try allocator.alloc(Segment, segments.items.len);
+        @memcpy(out, segments.items);
+        segments.clearRetainingCapacity();
+        return out;
     }
 
     segments.clearRetainingCapacity();
