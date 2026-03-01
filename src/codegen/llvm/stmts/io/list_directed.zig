@@ -485,9 +485,14 @@ fn emitDynamicImpliedDoListRead(
     read: ast.ReadStmt,
     unit_i32: ValueRef,
 ) EmitError!?ValueRef {
-    if (read.args.len != 1) return null;
-    if (read.args[0].* != .implied_do) return null;
-    const implied = read.args[0].implied_do;
+    var implied_idx_opt: ?usize = null;
+    for (read.args, 0..) |arg, idx| {
+        if (arg.* != .implied_do) continue;
+        if (implied_idx_opt != null) return null;
+        implied_idx_opt = idx;
+    }
+    const implied_idx = implied_idx_opt orelse return null;
+    const implied = read.args[implied_idx].implied_do;
     if (implied.items.len != 1) return null;
     if (implied.items[0].* != .call_or_subscript) return null;
 
@@ -549,9 +554,127 @@ fn emitDynamicImpliedDoListRead(
     };
     const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
 
-    const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
+    if (read.args.len == 1) {
+        const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
+        const status_tmp = try ctx.nextTemp();
+        try builder.callTyped(status_tmp, .i32, decl, &.{ unit_i32, final_count, stride, base_ptr });
+        return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+    }
+
+    var pre_expanded = try expandReadTargets(ctx, builder, read.args[0..implied_idx]);
+    defer pre_expanded.deinit();
+    var post_expanded = try expandReadTargets(ctx, builder, read.args[implied_idx + 1 ..]);
+    defer post_expanded.deinit();
+
+    var pre_kinds = std.array_list.Managed(u8).init(ctx.allocator);
+    defer pre_kinds.deinit();
+    var pre_lens = std.array_list.Managed(i32).init(ctx.allocator);
+    defer pre_lens.deinit();
+    var pre_heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer pre_heap_allocs.deinit();
+    for (pre_expanded.types.items, 0..) |ty, idx| {
+        switch (ty) {
+            .i32 => {
+                try pre_kinds.append('i');
+                try pre_lens.append(0);
+            },
+            .f32 => {
+                try pre_kinds.append('f');
+                try pre_lens.append(0);
+            },
+            .f64 => {
+                try pre_kinds.append('d');
+                try pre_lens.append(0);
+            },
+            .i1 => {
+                try pre_kinds.append('l');
+                try pre_lens.append(0);
+            },
+            .ptr => {
+                const len = pre_expanded.char_lens.items[idx];
+                if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
+                try pre_kinds.append('s');
+                try pre_lens.append(@intCast(len));
+            },
+            else => return null,
+        }
+    }
+    const pre_ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, pre_expanded.ptrs.items);
+    const pre_kinds_ptr = try emitKindArray(ctx, builder, pre_kinds.items);
+    const pre_lens_array = try emitHeapI32Array(ctx, builder, pre_lens.items);
+    if (!std.mem.eql(u8, pre_ptr_array.name, "null")) try pre_heap_allocs.append(pre_ptr_array);
+    if (!std.mem.eql(u8, pre_lens_array.name, "null")) try pre_heap_allocs.append(pre_lens_array);
+    const pre_count_val = try ctx.constI32(@intCast(pre_expanded.ptrs.items.len));
+
+    var post_kinds = std.array_list.Managed(u8).init(ctx.allocator);
+    defer post_kinds.deinit();
+    var post_lens = std.array_list.Managed(i32).init(ctx.allocator);
+    defer post_lens.deinit();
+    var post_heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer post_heap_allocs.deinit();
+    for (post_expanded.types.items, 0..) |ty, idx| {
+        switch (ty) {
+            .i32 => {
+                try post_kinds.append('i');
+                try post_lens.append(0);
+            },
+            .f32 => {
+                try post_kinds.append('f');
+                try post_lens.append(0);
+            },
+            .f64 => {
+                try post_kinds.append('d');
+                try post_lens.append(0);
+            },
+            .i1 => {
+                try post_kinds.append('l');
+                try post_lens.append(0);
+            },
+            .ptr => {
+                const len = post_expanded.char_lens.items[idx];
+                if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
+                try post_kinds.append('s');
+                try post_lens.append(@intCast(len));
+            },
+            else => return null,
+        }
+    }
+    const post_ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, post_expanded.ptrs.items);
+    const post_kinds_ptr = try emitKindArray(ctx, builder, post_kinds.items);
+    const post_lens_array = try emitHeapI32Array(ctx, builder, post_lens.items);
+    if (!std.mem.eql(u8, post_ptr_array.name, "null")) try post_heap_allocs.append(post_ptr_array);
+    if (!std.mem.eql(u8, post_lens_array.name, "null")) try post_heap_allocs.append(post_lens_array);
+    const post_count_val = try ctx.constI32(@intCast(post_expanded.ptrs.items.len));
+
+    const mid_kind_val: i64 = switch (sym.type_kind) {
+        .integer => 'i',
+        .real => 'f',
+        .double_precision => 'd',
+        .complex => 'c',
+        .complex_double => 'z',
+        .logical => 'l',
+        else => return null,
+    };
+    const mix_decl = try ctx.ensureDeclRaw("col6forge_read_list_mix_v_n", .i32, &[_]utils.IRType{
+        .i32,
+        .ptr, .ptr, .ptr, .i32,
+        .i32, .i32, .i32, .ptr,
+        .ptr, .ptr, .ptr, .i32,
+        .i32,
+    }, false);
     const status_tmp = try ctx.nextTemp();
-    try builder.callTyped(status_tmp, .i32, decl, &.{ unit_i32, final_count, stride, base_ptr });
+    try builder.callTyped(status_tmp, .i32, mix_decl, &.{
+        unit_i32,
+        pre_ptr_array, pre_kinds_ptr, pre_lens_array, pre_count_val,
+        try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
+        post_ptr_array, post_kinds_ptr, post_lens_array, post_count_val,
+        ValueRef{ .name = "1", .ty = .i32, .is_ptr = false },
+    });
+
+    try applyComplexFixups(ctx, builder, &pre_expanded);
+    try applyComplexFixups(ctx, builder, &post_expanded);
+    try emitFreeAllocs(ctx, builder, pre_heap_allocs.items);
+    try emitFreeAllocs(ctx, builder, post_heap_allocs.items);
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
 }
 
