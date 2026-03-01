@@ -26,19 +26,12 @@ const emitWriteFormatted = write_mod.emitWriteFormatted;
 const emitReadFormatted = read_mod.emitReadFormatted;
 const emitReadFormattedStatus = read_mod.emitReadFormattedStatus;
 const resolveCharFormatItemsFromExpr = char_format.resolveCharFormatItemsFromExpr;
-const emitWriteDynamicCharArrayFormat = char_format.emitWriteDynamicCharArrayFormat;
-const emitReadDynamicCharArrayFormat = char_format.emitReadDynamicCharArrayFormat;
-const emitReadDynamicCharArrayFormatStatus = char_format.emitReadDynamicCharArrayFormatStatus;
 const emitPointerArrayFromValues = io_utils.emitPointerArrayFromValues;
 const emitKindArray = io_utils.emitKindArray;
 
 const FormatExprResolution = union(enum) {
     dynamic_label_var: []const u8,
     static_items: []const ast.FormatItem,
-    dynamic_char_array: struct {
-        name: []const u8,
-        index_expr: *ast.Expr,
-    },
     runtime_char_expr: void,
 };
 
@@ -294,15 +287,6 @@ fn resolveFormatExpr(ctx: *Context, fmt_expr: *ast.Expr) EmitError!FormatExprRes
     if (try resolveCharFormatItemsFromExpr(ctx, fmt_expr)) |items| {
         return .{ .static_items = items };
     }
-    if (fmt_expr.* == .call_or_subscript) {
-        const call = fmt_expr.call_or_subscript;
-        if (call.args.len == 1) {
-            return .{ .dynamic_char_array = .{
-                .name = call.name,
-                .index_expr = call.args[0],
-            } };
-        }
-    }
     return .{ .runtime_char_expr = {} };
 }
 
@@ -344,32 +328,6 @@ pub fn emitWriteFormatExpr(
                 is_internal,
                 unit_i32,
                 items,
-                expanded_values,
-            );
-        },
-        .dynamic_char_array => |dyn| {
-            if (try emitWriteDynamicCharArrayFormat(
-                ctx,
-                builder,
-                write,
-                unit_value,
-                unit_char_len,
-                unit_record_count,
-                is_internal,
-                unit_i32,
-                dyn.name,
-                dyn.index_expr,
-                expanded_values,
-            )) return;
-            return emitWriteRuntimeFormatExpr(
-                ctx,
-                builder,
-                fmt_expr,
-                unit_value,
-                unit_char_len,
-                unit_record_count,
-                is_internal,
-                unit_i32,
                 expanded_values,
             );
         },
@@ -430,32 +388,6 @@ pub fn emitReadFormatExpr(
                 expanded,
             );
         },
-        .dynamic_char_array => |dyn| {
-            if (try emitReadDynamicCharArrayFormat(
-                ctx,
-                builder,
-                read,
-                unit_value,
-                unit_char_len,
-                unit_record_count,
-                is_internal,
-                unit_i32,
-                dyn.name,
-                dyn.index_expr,
-                expanded,
-            )) return;
-            return emitReadRuntimeFormatExpr(
-                ctx,
-                builder,
-                fmt_expr,
-                unit_value,
-                unit_char_len,
-                unit_record_count,
-                is_internal,
-                unit_i32,
-                expanded,
-            );
-        },
         .runtime_char_expr => {
             return emitReadRuntimeFormatExpr(
                 ctx,
@@ -510,32 +442,6 @@ pub fn emitReadFormatExprStatus(
                 is_internal,
                 unit_i32,
                 items,
-                expanded,
-            );
-        },
-        .dynamic_char_array => |dyn| {
-            if (try emitReadDynamicCharArrayFormatStatus(
-                ctx,
-                builder,
-                read,
-                unit_value,
-                unit_char_len,
-                unit_record_count,
-                is_internal,
-                unit_i32,
-                dyn.name,
-                dyn.index_expr,
-                expanded,
-            )) |status| return status;
-            return emitReadRuntimeFormatExprStatus(
-                ctx,
-                builder,
-                fmt_expr,
-                unit_value,
-                unit_char_len,
-                unit_record_count,
-                is_internal,
-                unit_i32,
                 expanded,
             );
         },

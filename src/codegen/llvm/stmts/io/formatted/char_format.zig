@@ -29,6 +29,7 @@ pub fn formatFromCharArrayData(ctx: *Context, name: []const u8) EmitError!?[]con
     const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return null;
     if (elem_count == 0) return null;
     const char_len = sym.char_len orelse 1;
+    const lower_bound = declaredLowerBound(sym.dims[0]) orelse return null;
 
     var elements = try ctx.allocator.alloc(?[]const u8, elem_count);
     defer ctx.allocator.free(elements);
@@ -43,8 +44,9 @@ pub fn formatFromCharArrayData(ctx: *Context, name: []const u8) EmitError!?[]con
                     if (!std.mem.eql(u8, call.name, name)) continue;
                     if (call.args.len != 1) continue;
                     const idx_val = intLiteralValue(call.args[0]) orelse continue;
-                    if (idx_val <= 0) continue;
-                    const idx_usize: usize = @intCast(idx_val - 1);
+                    const zero_based = idx_val - lower_bound;
+                    if (zero_based < 0) continue;
+                    const idx_usize: usize = @intCast(zero_based);
                     if (idx_usize >= elem_count) continue;
                     idx_opt = idx_usize;
                 },
@@ -114,33 +116,7 @@ fn resolveCharFormatString(ctx: *Context, expr_node: *ast.Expr) EmitError!?[]con
                 else => null,
             };
         },
-        .identifier => |name| {
-            if (ctx.char_values.get(name)) |val| return val;
-            const sym = ctx.findSymbol(name) orelse return null;
-            if (sym.type_kind == .character and sym.dims.len > 0) {
-                const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return null;
-                const char_len = sym.char_len orelse 1;
-                var buffer = std.array_list.Managed(u8).init(ctx.allocator);
-                errdefer buffer.deinit();
-                var key_buf = std.array_list.Managed(u8).init(ctx.allocator);
-                defer key_buf.deinit();
-                var idx: usize = 1;
-                while (idx <= elem_count) : (idx += 1) {
-                    const key = try formatCharArrayKey(&key_buf, name, idx);
-                    if (ctx.char_array_values.get(key)) |val| {
-                        try buffer.appendSlice(val);
-                    } else {
-                        const pad = try ctx.allocator.alloc(u8, char_len);
-                        defer ctx.allocator.free(pad);
-                        @memset(pad, ' ');
-                        try buffer.appendSlice(pad);
-                    }
-                }
-                const owned = try buffer.toOwnedSlice();
-                return owned;
-            }
-            return null;
-        },
+        .identifier => return null,
         .binary => |bin| {
             if (bin.op != .concat) return null;
             const left = try resolveCharFormatString(ctx, bin.left) orelse return null;
@@ -148,17 +124,16 @@ fn resolveCharFormatString(ctx: *Context, expr_node: *ast.Expr) EmitError!?[]con
             const combined = try std.mem.concat(ctx.allocator, u8, &.{ left, right });
             return combined;
         },
-        .call_or_subscript => |call| {
-            if (call.args.len != 1) return null;
-            const idx_val = intLiteralValue(call.args[0]) orelse return null;
-            var key_buf = std.array_list.Managed(u8).init(ctx.allocator);
-            defer key_buf.deinit();
-            const key = try formatCharArrayKey(&key_buf, call.name, idx_val);
-            if (ctx.char_array_values.get(key)) |val| return val;
-            return null;
-        },
+        .call_or_subscript => return null,
         else => return null,
     }
+}
+
+fn declaredLowerBound(dim: *ast.Expr) ?i64 {
+    return switch (dim.*) {
+        .dim_range => |range| if (range.lower) |lower| intLiteralValue(lower) else 1,
+        else => 1,
+    };
 }
 const CharFormatEntry = struct {
     index: i32,
