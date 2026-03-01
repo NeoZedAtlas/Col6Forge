@@ -547,9 +547,14 @@ fn emitDynamicImpliedDoDirectWrite(
     write: ast.WriteStmt,
 ) EmitError!bool {
     if (write.rec == null) return false;
-    if (write.args.len != 1) return false;
-    if (write.args[0].* != .implied_do) return false;
-    const implied = write.args[0].implied_do;
+    var implied_idx_opt: ?usize = null;
+    for (write.args, 0..) |arg, idx| {
+        if (arg.* != .implied_do) continue;
+        if (implied_idx_opt != null) return false;
+        implied_idx_opt = idx;
+    }
+    const implied_idx = implied_idx_opt orelse return false;
+    const implied = write.args[implied_idx].implied_do;
     if (implied.items.len != 1) return false;
     if (implied.items[0].* != .call_or_subscript) return false;
 
@@ -582,8 +587,46 @@ fn emitDynamicImpliedDoDirectWrite(
     const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end);
     const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
 
-    const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .i32, .ptr }, false);
-    try builder.callTyped(null, .i32, decl, &.{ unit_i32, rec_i32, final_count, stride, base_ptr });
+    if (write.args.len == 1) {
+        const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .i32, .ptr }, false);
+        try builder.callTyped(null, .i32, decl, &.{ unit_i32, rec_i32, final_count, stride, base_ptr });
+        return true;
+    }
+
+    var pre_expanded = try expandIoArgs(ctx, write.args[0..implied_idx]);
+    defer pre_expanded.deinit(ctx.allocator);
+    var post_expanded = try expandIoArgs(ctx, write.args[implied_idx + 1 ..]);
+    defer post_expanded.deinit(ctx.allocator);
+    var pre_typed = try buildTypedWriteArgs(ctx, builder, pre_expanded.items);
+    defer pre_typed.deinit();
+    var post_typed = try buildTypedWriteArgs(ctx, builder, post_expanded.items);
+    defer post_typed.deinit();
+    const pre_packed = try packTypedDirectArgs(ctx, builder, &pre_typed);
+    const post_packed = try packTypedDirectArgs(ctx, builder, &post_typed);
+
+    const mid_kind_val: i64 = switch (sym.type_kind) {
+        .integer => 'i',
+        .real => 'f',
+        .double_precision => 'd',
+        .complex => 'c',
+        .complex_double => 'z',
+        .logical => 'l',
+        else => return false,
+    };
+    const mix_decl = try ctx.ensureDeclRaw("col6forge_write_direct_mix_v_n", .i32, &[_]utils.IRType{
+        .i32, .i32,
+        .ptr, .ptr, .ptr, .i32,
+        .i32, .i32, .i32, .ptr,
+        .ptr, .ptr, .ptr, .i32,
+    }, false);
+    try builder.callTyped(null, .i32, mix_decl, &.{
+        unit_i32, rec_i32,
+        pre_packed.ptr_array, pre_packed.kinds_ptr, pre_packed.lens_ptr, pre_packed.count,
+        try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
+        post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
+    });
+    try emitFreeAllocs(ctx, builder, pre_typed.heap_allocs.items);
+    try emitFreeAllocs(ctx, builder, post_typed.heap_allocs.items);
     return true;
 }
 
@@ -593,9 +636,14 @@ fn emitDynamicImpliedDoDirectRead(
     read: ast.ReadStmt,
 ) EmitError!bool {
     if (read.rec == null) return false;
-    if (read.args.len != 1) return false;
-    if (read.args[0].* != .implied_do) return false;
-    const implied = read.args[0].implied_do;
+    var implied_idx_opt: ?usize = null;
+    for (read.args, 0..) |arg, idx| {
+        if (arg.* != .implied_do) continue;
+        if (implied_idx_opt != null) return false;
+        implied_idx_opt = idx;
+    }
+    const implied_idx = implied_idx_opt orelse return false;
+    const implied = read.args[implied_idx].implied_do;
     if (implied.items.len != 1) return false;
     if (implied.items[0].* != .call_or_subscript) return false;
 
@@ -628,8 +676,46 @@ fn emitDynamicImpliedDoDirectRead(
     const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end);
     const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
 
-    const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .i32, .ptr }, false);
-    try builder.callTyped(null, .i32, decl, &.{ unit_i32, rec_i32, final_count, stride, base_ptr });
+    if (read.args.len == 1) {
+        const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .i32, .ptr }, false);
+        try builder.callTyped(null, .i32, decl, &.{ unit_i32, rec_i32, final_count, stride, base_ptr });
+        return true;
+    }
+
+    var pre_expanded = try expandIoArgs(ctx, read.args[0..implied_idx]);
+    defer pre_expanded.deinit(ctx.allocator);
+    var post_expanded = try expandIoArgs(ctx, read.args[implied_idx + 1 ..]);
+    defer post_expanded.deinit(ctx.allocator);
+    var pre_typed = try buildTypedReadArgs(ctx, builder, pre_expanded.items);
+    defer pre_typed.deinit();
+    var post_typed = try buildTypedReadArgs(ctx, builder, post_expanded.items);
+    defer post_typed.deinit();
+    const pre_packed = try packTypedDirectArgs(ctx, builder, &pre_typed);
+    const post_packed = try packTypedDirectArgs(ctx, builder, &post_typed);
+
+    const mid_kind_val: i64 = switch (sym.type_kind) {
+        .integer => 'i',
+        .real => 'f',
+        .double_precision => 'd',
+        .complex => 'c',
+        .complex_double => 'z',
+        .logical => 'l',
+        else => return false,
+    };
+    const mix_decl = try ctx.ensureDeclRaw("col6forge_read_direct_mix_v_n", .i32, &[_]utils.IRType{
+        .i32, .i32,
+        .ptr, .ptr, .ptr, .i32,
+        .i32, .i32, .i32, .ptr,
+        .ptr, .ptr, .ptr, .i32,
+    }, false);
+    try builder.callTyped(null, .i32, mix_decl, &.{
+        unit_i32, rec_i32,
+        pre_packed.ptr_array, pre_packed.kinds_ptr, pre_packed.lens_ptr, pre_packed.count,
+        try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
+        post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
+    });
+    try emitFreeAllocs(ctx, builder, pre_typed.heap_allocs.items);
+    try emitFreeAllocs(ctx, builder, post_typed.heap_allocs.items);
     return true;
 }
 
