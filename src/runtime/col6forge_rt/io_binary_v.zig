@@ -165,6 +165,231 @@ pub export fn col6forge_read_direct_typed(
     return assigned;
 }
 
+pub export fn col6forge_write_direct_mix_v_n(
+    unit: c_int,
+    rec: c_int,
+    pre_ptrs: ?[*]?*anyopaque,
+    pre_kinds: ?[*]const u8,
+    pre_lens: ?[*]const c_int,
+    pre_count: c_int,
+    mid_kind: c_int,
+    mid_count: c_int,
+    mid_stride: c_int,
+    mid_base: ?*anyopaque,
+    post_ptrs: ?[*]?*anyopaque,
+    post_kinds: ?[*]const u8,
+    post_lens: ?[*]const c_int,
+    post_count: c_int,
+) callconv(.c) c_int {
+    if (rec <= 0) return 1;
+    const pre_total = runtimeArgCount(pre_count);
+    const post_total = runtimeArgCount(post_count);
+    const mid_n: usize = @intCast(@max(mid_count, 0));
+    const mid_stride_u: usize = @intCast(@max(mid_stride, 0));
+    const mid_kind_u8: u8 = @intCast(mid_kind);
+
+    var pre_size: usize = 0;
+    var i: usize = 0;
+    while (i < pre_total) : (i += 1) {
+        const field = typedFieldSize(runtimeArgKindAt(pre_kinds, i, pre_total), runtimeArgLenAt(pre_lens, i, pre_total)) orelse return 1;
+        pre_size = checkedAdd(pre_size, field) orelse return 1;
+    }
+    const mid_elem_size = typedFieldSize(mid_kind_u8, 0) orelse return 1;
+    const mid_size = checkedMul(mid_n, mid_elem_size) orelse return 1;
+    var post_size: usize = 0;
+    i = 0;
+    while (i < post_total) : (i += 1) {
+        const field = typedFieldSize(runtimeArgKindAt(post_kinds, i, post_total), runtimeArgLenAt(post_lens, i, post_total)) orelse return 1;
+        post_size = checkedAdd(post_size, field) orelse return 1;
+    }
+    const record_size = checkedAdd(checkedAdd(pre_size, mid_size) orelse return 1, post_size) orelse return 1;
+
+    const recl_i32 = col6forge_direct_get_recl(unit);
+    if (recl_i32 <= 0) return 1;
+    const recl: usize = @intCast(recl_i32);
+    if (record_size > recl) return 1;
+    const record = col6forge_direct_record_ptr(unit, rec, recl_i32) orelse return 1;
+    var z: usize = 0;
+    while (z < recl) : (z += 1) record[z] = 0;
+
+    var pos: usize = 0;
+    i = 0;
+    while (i < pre_total) : (i += 1) {
+        const kind = runtimeArgKindAt(pre_kinds, i, pre_total);
+        const len = runtimeArgLenAt(pre_lens, i, pre_total);
+        const field_size = typedFieldSize(kind, len) orelse return 1;
+        const arg_any = runtimeArgPtrAt(pre_ptrs, i, pre_total);
+        if (arg_any != null and pos + field_size <= recl) {
+            const src: [*]const u8 = @ptrCast(arg_any.?);
+            copyRawBytes(record + pos, src, field_size);
+        }
+        pos += field_size;
+    }
+
+    if (mid_n > 0) {
+        if (mid_base == null or mid_stride_u == 0) return 1;
+        switch (mid_kind_u8) {
+            'i', 'f', 'd', 'l' => {
+                const base: [*]const u8 = @ptrCast(mid_base.?);
+                const byte_stride = checkedMul(mid_stride_u, mid_elem_size) orelse return 1;
+                var j: usize = 0;
+                while (j < mid_n) : (j += 1) {
+                    const src_off = checkedMul(j, byte_stride) orelse return 1;
+                    if (pos + mid_elem_size <= recl) {
+                        copyRawBytes(record + pos, base + src_off, mid_elem_size);
+                    }
+                    pos += mid_elem_size;
+                }
+            },
+            'c', 'z' => {
+                const scalar_size = if (mid_kind_u8 == 'c') @sizeOf(f32) else @sizeOf(f64);
+                const complex_size = checkedMul(scalar_size, 2) orelse return 1;
+                const base: [*]const u8 = @ptrCast(mid_base.?);
+                const byte_stride = checkedMul(checkedMul(mid_stride_u, 2) orelse return 1, scalar_size) orelse return 1;
+                var j: usize = 0;
+                while (j < mid_n) : (j += 1) {
+                    const src_off = checkedMul(j, byte_stride) orelse return 1;
+                    if (pos + complex_size <= recl) {
+                        copyRawBytes(record + pos, base + src_off, complex_size);
+                    }
+                    pos += complex_size;
+                }
+            },
+            else => return 1,
+        }
+    }
+
+    i = 0;
+    while (i < post_total) : (i += 1) {
+        const kind = runtimeArgKindAt(post_kinds, i, post_total);
+        const len = runtimeArgLenAt(post_lens, i, post_total);
+        const field_size = typedFieldSize(kind, len) orelse return 1;
+        const arg_any = runtimeArgPtrAt(post_ptrs, i, post_total);
+        if (arg_any != null and pos + field_size <= recl) {
+            const src: [*]const u8 = @ptrCast(arg_any.?);
+            copyRawBytes(record + pos, src, field_size);
+        }
+        pos += field_size;
+    }
+
+    col6forge_direct_record_commit(unit, rec);
+    return 0;
+}
+
+pub export fn col6forge_read_direct_mix_v_n(
+    unit: c_int,
+    rec: c_int,
+    pre_ptrs: ?[*]?*anyopaque,
+    pre_kinds: ?[*]const u8,
+    pre_lens: ?[*]const c_int,
+    pre_count: c_int,
+    mid_kind: c_int,
+    mid_count: c_int,
+    mid_stride: c_int,
+    mid_base: ?*anyopaque,
+    post_ptrs: ?[*]?*anyopaque,
+    post_kinds: ?[*]const u8,
+    post_lens: ?[*]const c_int,
+    post_count: c_int,
+) callconv(.c) c_int {
+    if (rec <= 0) return 0;
+    const pre_total = runtimeArgCount(pre_count);
+    const post_total = runtimeArgCount(post_count);
+    const mid_n: usize = @intCast(@max(mid_count, 0));
+    const mid_stride_u: usize = @intCast(@max(mid_stride, 0));
+    const mid_kind_u8: u8 = @intCast(mid_kind);
+
+    var pre_size: usize = 0;
+    var i: usize = 0;
+    while (i < pre_total) : (i += 1) {
+        const field = typedFieldSize(runtimeArgKindAt(pre_kinds, i, pre_total), runtimeArgLenAt(pre_lens, i, pre_total)) orelse return 0;
+        pre_size = checkedAdd(pre_size, field) orelse return 0;
+    }
+    const mid_elem_size = typedFieldSize(mid_kind_u8, 0) orelse return 0;
+    const mid_size = checkedMul(mid_n, mid_elem_size) orelse return 0;
+    var post_size: usize = 0;
+    i = 0;
+    while (i < post_total) : (i += 1) {
+        const field = typedFieldSize(runtimeArgKindAt(post_kinds, i, post_total), runtimeArgLenAt(post_lens, i, post_total)) orelse return 0;
+        post_size = checkedAdd(post_size, field) orelse return 0;
+    }
+    const expected_size = checkedAdd(checkedAdd(pre_size, mid_size) orelse return 0, post_size) orelse return 0;
+
+    const recl_i32 = col6forge_direct_get_recl(unit);
+    if (recl_i32 <= 0) return 0;
+    const recl: usize = @intCast(recl_i32);
+    if (expected_size > recl) return 0;
+    const record = col6forge_direct_record_ptr_ro(unit, rec, recl_i32) orelse return 0;
+
+    var pos: usize = 0;
+    var assigned: c_int = 0;
+    i = 0;
+    while (i < pre_total) : (i += 1) {
+        const kind = runtimeArgKindAt(pre_kinds, i, pre_total);
+        const len = runtimeArgLenAt(pre_lens, i, pre_total);
+        const field_size = typedFieldSize(kind, len) orelse return 0;
+        const arg_any = runtimeArgPtrAt(pre_ptrs, i, pre_total);
+        if (arg_any != null and pos + field_size <= recl) {
+            const dst: [*]u8 = @ptrCast(arg_any.?);
+            copyRawBytes(dst, record + pos, field_size);
+            assigned += 1;
+        }
+        pos += field_size;
+    }
+
+    if (mid_n > 0) {
+        if (mid_base == null or mid_stride_u == 0) return 0;
+        switch (mid_kind_u8) {
+            'i', 'f', 'd', 'l' => {
+                const base: [*]u8 = @ptrCast(mid_base.?);
+                const byte_stride = checkedMul(mid_stride_u, mid_elem_size) orelse return 0;
+                var j: usize = 0;
+                while (j < mid_n) : (j += 1) {
+                    const dst_off = checkedMul(j, byte_stride) orelse return 0;
+                    if (pos + mid_elem_size <= recl) {
+                        copyRawBytes(base + dst_off, record + pos, mid_elem_size);
+                        assigned += 1;
+                    }
+                    pos += mid_elem_size;
+                }
+            },
+            'c', 'z' => {
+                const scalar_size = if (mid_kind_u8 == 'c') @sizeOf(f32) else @sizeOf(f64);
+                const complex_size = checkedMul(scalar_size, 2) orelse return 0;
+                const base: [*]u8 = @ptrCast(mid_base.?);
+                const byte_stride = checkedMul(checkedMul(mid_stride_u, 2) orelse return 0, scalar_size) orelse return 0;
+                var j: usize = 0;
+                while (j < mid_n) : (j += 1) {
+                    const dst_off = checkedMul(j, byte_stride) orelse return 0;
+                    if (pos + complex_size <= recl) {
+                        copyRawBytes(base + dst_off, record + pos, complex_size);
+                        assigned += 1;
+                    }
+                    pos += complex_size;
+                }
+            },
+            else => return 0,
+        }
+    }
+
+    i = 0;
+    while (i < post_total) : (i += 1) {
+        const kind = runtimeArgKindAt(post_kinds, i, post_total);
+        const len = runtimeArgLenAt(post_lens, i, post_total);
+        const field_size = typedFieldSize(kind, len) orelse return 0;
+        const arg_any = runtimeArgPtrAt(post_ptrs, i, post_total);
+        if (arg_any != null and pos + field_size <= recl) {
+            const dst: [*]u8 = @ptrCast(arg_any.?);
+            copyRawBytes(dst, record + pos, field_size);
+            assigned += 1;
+        }
+        pos += field_size;
+    }
+
+    col6forge_direct_record_commit(unit, rec);
+    return assigned;
+}
+
 pub export fn col6forge_write_unformatted_typed(
     unit: c_int,
     arg_ptrs: ?[*]?*anyopaque,

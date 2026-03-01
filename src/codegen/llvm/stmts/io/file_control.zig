@@ -157,7 +157,7 @@ fn emitCharArg(ctx: *Context, builder: anytype, node: ?*ast.Expr) EmitError!Char
     if (node) |expr_node| {
         const value = try expr.emitExpr(ctx, builder, expr_node);
         if (value.ty == .ptr) {
-            const len = try emitCharExprLen(ctx, builder, expr_node) orelse try constI32(ctx, 0);
+            const len = try emitCharExprLen(ctx, builder, expr_node) orelse try constI32(ctx, 1);
             return .{ .ptr = value, .len = len };
         }
     }
@@ -320,7 +320,7 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
 
     if (spec.file_expr) |file_node| {
         const file_val = try expr.emitExpr(ctx, builder, file_node);
-        const file_len_i32 = (try emitCharExprLen(ctx, builder, file_node)) orelse try constI32(ctx, 0);
+        const file_len_i32 = (try emitCharExprLen(ctx, builder, file_node)) orelse try constI32(ctx, 1);
         const args = [_]ValueRef{
             file_val,
             file_len_i32,
