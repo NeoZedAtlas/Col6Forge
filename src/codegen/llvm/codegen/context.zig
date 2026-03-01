@@ -1,5 +1,6 @@
 const std = @import("std");
 const input = @import("../../input.zig");
+const ast = @import("../../../ast/nodes.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
 const utils = @import("utils.zig");
@@ -270,6 +271,7 @@ pub const Context = struct {
         var names = std.array_list.Managed([]const u8).init(self.allocator);
         var current_block: ?[]const u8 = null;
         var prev_can_fallthrough = false;
+        var prev_had_label = false;
         for (self.unit.stmts, 0..) |stmt, idx| {
             const name = if (stmt.label) |label| blk: {
                 const block_name = try self.allocPrefixedName("L", label);
@@ -287,13 +289,14 @@ pub const Context = struct {
                 current_block = block_name;
                 break :blk block_name;
             } else blk: {
-                if (current_block == null or !prev_can_fallthrough) {
+                if (current_block == null or !prev_can_fallthrough or prev_had_label) {
                     current_block = try self.allocIndexedName("bb", idx, false);
                 }
                 break :blk current_block.?;
             };
             try names.append(name);
             prev_can_fallthrough = stmtCanFallthroughInBlock(stmt);
+            prev_had_label = stmt.label != null;
         }
         return names.toOwnedSlice();
     }
@@ -519,7 +522,7 @@ fn canonicalNumericLabel(label: []const u8) []const u8 {
     return label[start..];
 }
 
-fn stmtCanFallthroughInBlock(stmt: input.ast.Stmt) bool {
+fn stmtCanFallthroughInBlock(stmt: ast.Stmt) bool {
     return switch (stmt.node) {
         .assignment, .assign_label, .use_stmt, .data, .format => true,
         else => false,

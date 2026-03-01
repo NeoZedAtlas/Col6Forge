@@ -242,7 +242,11 @@ pub export fn col6forge_write_direct_mix_v_n(
                 }
             },
             'c', 'z' => {
-                const scalar_size = if (mid_kind_u8 == 'c') @sizeOf(f32) else @sizeOf(f64);
+                const scalar_size: usize = switch (mid_kind_u8) {
+                    'c' => @sizeOf(f32),
+                    'z' => @sizeOf(f64),
+                    else => unreachable,
+                };
                 const complex_size = checkedMul(scalar_size, 2) orelse return 1;
                 const base: [*]const u8 = @ptrCast(mid_base.?);
                 const byte_stride = checkedMul(checkedMul(mid_stride_u, 2) orelse return 1, scalar_size) orelse return 1;
@@ -354,7 +358,11 @@ pub export fn col6forge_read_direct_mix_v_n(
                 }
             },
             'c', 'z' => {
-                const scalar_size = if (mid_kind_u8 == 'c') @sizeOf(f32) else @sizeOf(f64);
+                const scalar_size: usize = switch (mid_kind_u8) {
+                    'c' => @sizeOf(f32),
+                    'z' => @sizeOf(f64),
+                    else => unreachable,
+                };
                 const complex_size = checkedMul(scalar_size, 2) orelse return 0;
                 const base: [*]u8 = @ptrCast(mid_base.?);
                 const byte_stride = checkedMul(checkedMul(mid_stride_u, 2) orelse return 0, scalar_size) orelse return 0;
@@ -502,7 +510,11 @@ pub export fn col6forge_write_unformatted_mix_v_n(
                 }
             },
             'c', 'z' => {
-                const scalar_size = if (mid_kind_u8 == 'c') @sizeOf(f32) else @sizeOf(f64);
+                const scalar_size: usize = switch (mid_kind_u8) {
+                    'c' => @sizeOf(f32),
+                    'z' => @sizeOf(f64),
+                    else => unreachable,
+                };
                 const complex_size = checkedMul(scalar_size, 2) orelse return 1;
                 const base: [*]const u8 = @ptrCast(mid_base.?);
                 const byte_stride = checkedMul(checkedMul(mid_stride_u, 2) orelse return 1, scalar_size) orelse return 1;
@@ -650,7 +662,11 @@ pub export fn col6forge_read_unformatted_mix_v_n(
                 }
             },
             'c', 'z' => {
-                const scalar_size = if (mid_kind_u8 == 'c') @sizeOf(f32) else @sizeOf(f64);
+                const scalar_size: usize = switch (mid_kind_u8) {
+                    'c' => @sizeOf(f32),
+                    'z' => @sizeOf(f64),
+                    else => unreachable,
+                };
                 const complex_size = checkedMul(scalar_size, 2) orelse return 1;
                 const base: [*]u8 = @ptrCast(mid_base.?);
                 const byte_stride = checkedMul(checkedMul(mid_stride_u, 2) orelse return 1, scalar_size) orelse return 1;

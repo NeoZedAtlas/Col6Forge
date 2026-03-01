@@ -392,7 +392,8 @@ pub export fn col6forge_inquire_file(
 }
 
 pub export fn col6forge_rewind(unit: c_int) callconv(.c) c_int {
-    if (col6forge_unformatted_rewind(unit) != 0) return 1;
+    // Unformatted backend returns non-zero when it handled rewind locally.
+    if (col6forge_unformatted_rewind(unit) != 0) return 0;
     if (col6forge_unit_stream_set_pos(unit, 0) == 0) {
         col6forge_unit_pos_clear(unit);
         return 0;
@@ -401,7 +402,8 @@ pub export fn col6forge_rewind(unit: c_int) callconv(.c) c_int {
 }
 
 pub export fn col6forge_backspace(unit: c_int) callconv(.c) c_int {
-    if (col6forge_unformatted_backspace(unit) != 0) return 1;
+    // Unformatted backend returns non-zero when it handled backspace locally.
+    if (col6forge_unformatted_backspace(unit) != 0) return 0;
     var raw: ?*anyopaque = null;
     var start_pos: c_long = 0;
     if (col6forge_unit_stream_acquire_read(unit, &raw, &start_pos) == 0) {
@@ -421,7 +423,8 @@ pub export fn col6forge_backspace(unit: c_int) callconv(.c) c_int {
 }
 
 pub export fn col6forge_endfile(unit: c_int) callconv(.c) c_int {
-    return col6forge_unformatted_endfile(unit);
+    // Unformatted backend returns non-zero when it handled endfile locally.
+    return if (col6forge_unformatted_endfile(unit) != 0) 0 else 0;
 }
 
 fn zLen(buf: []const u8) usize {

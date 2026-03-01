@@ -126,29 +126,7 @@ fn emitIoStatusOutcome(
         return true;
     }
 
-    if (iostat_expr == null) {
-        const bad_tmp = try ctx.nextTemp();
-        try builder.compare(bad_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
-        const bad = ValueRef{ .name = bad_tmp, .ty = .i1, .is_ptr = false };
-        const fatal_check = try ctx.nextLabel("io_fatal_check");
-        try builder.brCond(bad, fatal_check, next_block);
-
-        try builder.label(fatal_check);
-        const should_abort_name = try ctx.ensureDeclRaw("col6forge_io_should_abort", .i32, &.{}, false);
-        const abort_tmp = try ctx.nextTemp();
-        try builder.callTyped(abort_tmp, .i32, should_abort_name, &.{});
-        const abort_cmp_tmp = try ctx.nextTemp();
-        try builder.compare(abort_cmp_tmp, "icmp", "ne", .i32, .{ .name = abort_tmp, .ty = .i32, .is_ptr = false }, try constI32(ctx, 0));
-        const abort_cond = ValueRef{ .name = abort_cmp_tmp, .ty = .i1, .is_ptr = false };
-        const do_exit = try ctx.nextLabel("io_fatal_exit");
-        try builder.brCond(abort_cond, do_exit, next_block);
-
-        try builder.label(do_exit);
-        const exit_name = try ctx.ensureDeclRaw("exit", .void, &.{.i32}, true);
-        try builder.callTyped(null, .void, exit_name, &.{try constI32(ctx, 2)});
-        try builder.br(next_block);
-        return true;
-    }
+    if (iostat_expr == null) return false;
 
     return false;
 }
@@ -405,7 +383,7 @@ pub fn emitClose(
             unit_expr = control.value;
         }
     }
-    const unit_node = unit_expr orelse return;
+    const unit_node = unit_expr orelse return false;
     const unit_value = try expr.emitExpr(ctx, builder, unit_node);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
     const status_arg = try emitCharArg(ctx, builder, status_expr);

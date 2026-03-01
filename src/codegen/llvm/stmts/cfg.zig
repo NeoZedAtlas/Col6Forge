@@ -39,6 +39,7 @@ pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !Local
 
     var current_block: ?[]const u8 = null;
     var prev_can_fallthrough = false;
+    var prev_had_label = false;
     for (stmts, 0..) |stmt, idx| {
         const name = if (stmt.label) |label| blk: {
             const canonical = canonicalNumericLabel(label);
@@ -68,7 +69,7 @@ pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !Local
             current_block = block_name;
             break :blk block_name;
         } else blk: {
-            if (current_block == null or !prev_can_fallthrough) {
+            if (current_block == null or !prev_can_fallthrough or prev_had_label) {
                 const temp_name = try ctx.nextLabel(prefix);
                 errdefer ctx.allocator.free(temp_name);
                 try local_names.append(temp_name);
@@ -78,6 +79,7 @@ pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !Local
         };
         try names.append(name);
         prev_can_fallthrough = stmtCanFallthroughInBlock(stmt);
+        prev_had_label = stmt.label != null;
     }
 
     const names_slice = try names.toOwnedSlice();

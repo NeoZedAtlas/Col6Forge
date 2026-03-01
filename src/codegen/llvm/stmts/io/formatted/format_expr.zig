@@ -16,6 +16,7 @@ const dynamic_mod = @import("dynamic.zig");
 const char_format = @import("char_format.zig");
 const write_mod = @import("write.zig");
 const read_mod = @import("read.zig");
+const common = @import("../../../codegen/common.zig");
 
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
@@ -93,12 +94,24 @@ fn emitFormatExprLen(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitE
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return null;
             if (sym.type_kind != .character) return null;
+            if (sym.dims.len > 0) {
+                if (sym.char_len) |len| {
+                    const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch null;
+                    if (elem_count) |count| return try constI32(ctx, @intCast(len * count));
+                }
+            }
             if (sym.char_len) |len| return try constI32(ctx, @intCast(len));
             return lookupCharArgLen(ctx, name) orelse try constI32(ctx, 1);
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return null;
             if (sym.type_kind != .character) return null;
+            if (call.args.len == 0 and sym.dims.len > 0) {
+                if (sym.char_len) |len| {
+                    const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch null;
+                    if (elem_count) |count| return try constI32(ctx, @intCast(len * count));
+                }
+            }
             if (sym.char_len) |len| return try constI32(ctx, @intCast(len));
             return lookupCharArgLen(ctx, call.name) orelse try constI32(ctx, 1);
         },
@@ -197,10 +210,9 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
         }
     }
 
-    const ptr_array = if (try emitHeapPointerArrayFromValues(ctx, builder, ptr_args.items)) |arr| blk: {
-        try heap_allocs.append(arr);
-        break :blk arr;
-    } else .{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const ptr_array_opt = try emitHeapPointerArrayFromValues(ctx, builder, ptr_args.items);
+    const ptr_array: ValueRef = if (ptr_array_opt) |arr| arr else .{ .name = "null", .ty = .ptr, .is_ptr = false };
+    if (ptr_array_opt) |arr| try heap_allocs.append(arr);
 
     return .{
         .ptr_array = ptr_array,
@@ -227,10 +239,9 @@ fn buildReadRuntimeArgs(ctx: *Context, builder: anytype, expanded: *ExpandedRead
         }
     }
 
-    const ptr_array = if (try emitHeapPointerArrayFromValues(ctx, builder, expanded.ptrs.items)) |arr| blk: {
-        try heap_allocs.append(arr);
-        break :blk arr;
-    } else .{ .name = "null", .ty = .ptr, .is_ptr = false };
+    const ptr_array_opt = try emitHeapPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
+    const ptr_array: ValueRef = if (ptr_array_opt) |arr| arr else .{ .name = "null", .ty = .ptr, .is_ptr = false };
+    if (ptr_array_opt) |arr| try heap_allocs.append(arr);
 
     return .{
         .ptr_array = ptr_array,
