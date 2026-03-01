@@ -26,7 +26,6 @@ const emitWriteFormatted = write_mod.emitWriteFormatted;
 const emitReadFormatted = read_mod.emitReadFormatted;
 const emitReadFormattedStatus = read_mod.emitReadFormattedStatus;
 const resolveCharFormatItemsFromExpr = char_format.resolveCharFormatItemsFromExpr;
-const emitPointerArrayFromValues = io_utils.emitPointerArrayFromValues;
 const emitKindArray = io_utils.emitKindArray;
 
 const FormatExprResolution = union(enum) {
@@ -39,6 +38,7 @@ const RuntimeCallArgs = struct {
     ptr_array: ValueRef,
     kinds_ptr: ValueRef,
     arg_count: ValueRef,
+    heap_allocs: []const ValueRef,
 };
 
 const RuntimeFormatValue = struct {
@@ -48,6 +48,40 @@ const RuntimeFormatValue = struct {
 
 fn constI32(ctx: *Context, value: i64) EmitError!ValueRef {
     return try ctx.constI32(value);
+}
+
+fn constI64(ctx: *Context, value: i64) EmitError!ValueRef {
+    return .{ .name = try ctx.intLiteral(value), .ty = .i64, .is_ptr = false };
+}
+
+fn emitMallocBytes(ctx: *Context, builder: anytype, bytes: usize) EmitError!ValueRef {
+    const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &[_]llvm_types.IRType{.i64}, false);
+    const size_val = try constI64(ctx, @intCast(bytes));
+    const tmp = try ctx.nextTemp();
+    try builder.callTyped(tmp, .ptr, malloc_name, &.{size_val});
+    return .{ .name = tmp, .ty = .ptr, .is_ptr = true };
+}
+
+fn emitFreeAllocs(ctx: *Context, builder: anytype, allocs: []const ValueRef) EmitError!void {
+    if (allocs.len == 0) return;
+    const free_name = try ctx.ensureDeclRaw("free", .void, &[_]llvm_types.IRType{.ptr}, false);
+    for (allocs) |ptr| {
+        try builder.callTyped(null, .void, free_name, &.{ptr});
+    }
+}
+
+fn emitHeapPointerArrayFromValues(ctx: *Context, builder: anytype, ptrs: []const ValueRef) EmitError!?ValueRef {
+    if (ptrs.len == 0) return null;
+    const bytes = ptrs.len * @sizeOf(usize);
+    const arr_ptr = try emitMallocBytes(ctx, builder, bytes);
+    for (ptrs, 0..) |ptr, idx| {
+        const off = try constI32(ctx, @intCast(idx));
+        const gep = try ctx.nextTemp();
+        try builder.gep(gep, .ptr, arr_ptr, off);
+        const slot_ptr = ValueRef{ .name = gep, .ty = .ptr, .is_ptr = true };
+        try builder.store(.{ .name = ptr.name, .ty = .ptr, .is_ptr = false }, slot_ptr);
+    }
+    return arr_ptr;
 }
 
 fn lookupCharArgLen(ctx: *Context, name: []const u8) ?ValueRef {
@@ -125,6 +159,8 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
     defer ptr_args.deinit();
     var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_kinds.deinit();
+    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer heap_allocs.deinit();
 
     for (expanded_values.values.items) |value| {
         switch (value.ty) {
@@ -133,47 +169,52 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
                 try arg_kinds.append('s');
             },
             .i32 => {
-                const tmp = try ctx.nextTemp();
-                try builder.alloca(tmp, .i32);
-                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                const ptr = try emitMallocBytes(ctx, builder, @sizeOf(i32));
                 try builder.store(value, ptr);
                 try ptr_args.append(ptr);
+                try heap_allocs.append(ptr);
                 try arg_kinds.append('i');
             },
             .i1 => {
                 const select_tmp = try ctx.nextTemp();
                 try builder.select(select_tmp, .i32, value, try constI32(ctx, 1), try constI32(ctx, 0));
                 const select_val = ValueRef{ .name = select_tmp, .ty = .i32, .is_ptr = false };
-                const tmp = try ctx.nextTemp();
-                try builder.alloca(tmp, .i32);
-                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                const ptr = try emitMallocBytes(ctx, builder, @sizeOf(i32));
                 try builder.store(select_val, ptr);
                 try ptr_args.append(ptr);
+                try heap_allocs.append(ptr);
                 try arg_kinds.append('i');
             },
             .f32, .f64 => {
                 const f64_val = try expr.coerce(ctx, builder, value, .f64);
-                const tmp = try ctx.nextTemp();
-                try builder.alloca(tmp, .f64);
-                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                const ptr = try emitMallocBytes(ctx, builder, @sizeOf(f64));
                 try builder.store(f64_val, ptr);
                 try ptr_args.append(ptr);
+                try heap_allocs.append(ptr);
                 try arg_kinds.append('f');
             },
             else => return error.UnsupportedIntrinsicType,
         }
     }
 
+    const ptr_array = if (try emitHeapPointerArrayFromValues(ctx, builder, ptr_args.items)) |arr| blk: {
+        try heap_allocs.append(arr);
+        break :blk arr;
+    } else .{ .name = "null", .ty = .ptr, .is_ptr = false };
+
     return .{
-        .ptr_array = try emitPointerArrayFromValues(ctx, builder, ptr_args.items),
+        .ptr_array = ptr_array,
         .kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items),
         .arg_count = try constI32(ctx, @intCast(ptr_args.items.len)),
+        .heap_allocs = try heap_allocs.toOwnedSlice(),
     };
 }
 
 fn buildReadRuntimeArgs(ctx: *Context, builder: anytype, expanded: *ExpandedReadTargets) EmitError!RuntimeCallArgs {
     var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_kinds.deinit();
+    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer heap_allocs.deinit();
 
     for (expanded.types.items) |ty| {
         switch (ty) {
@@ -186,10 +227,16 @@ fn buildReadRuntimeArgs(ctx: *Context, builder: anytype, expanded: *ExpandedRead
         }
     }
 
+    const ptr_array = if (try emitHeapPointerArrayFromValues(ctx, builder, expanded.ptrs.items)) |arr| blk: {
+        try heap_allocs.append(arr);
+        break :blk arr;
+    } else .{ .name = "null", .ty = .ptr, .is_ptr = false };
+
     return .{
-        .ptr_array = try emitPointerArrayFromValues(ctx, builder, expanded.ptrs.items),
+        .ptr_array = ptr_array,
         .kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items),
         .arg_count = try constI32(ctx, @intCast(expanded.ptrs.items.len)),
+        .heap_allocs = try heap_allocs.toOwnedSlice(),
     };
 }
 
@@ -213,11 +260,13 @@ fn emitWriteRuntimeFormatExpr(
         const count_ref = try constI32(ctx, @intCast(count_val));
         const write_name = try ctx.ensureDeclRaw("col6forge_write_internal_fmt_expr_v", .void, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .void, write_name, &.{ unit_value, len_val, count_ref, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count });
+        try emitFreeAllocs(ctx, builder, runtime_args.heap_allocs);
         return;
     }
 
     const write_name = try ctx.ensureDeclRaw("col6forge_write_fmt_expr_v", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
     try builder.callTyped(null, .i32, write_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 0) });
+    try emitFreeAllocs(ctx, builder, runtime_args.heap_allocs);
 }
 
 fn emitReadRuntimeFormatExpr(
@@ -240,11 +289,13 @@ fn emitReadRuntimeFormatExpr(
         const count_ref = try constI32(ctx, @intCast(count_val));
         const read_name = try ctx.ensureDeclRaw("col6forge_read_internal_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count });
+        try emitFreeAllocs(ctx, builder, runtime_args.heap_allocs);
         return;
     }
 
     const read_name = try ctx.ensureDeclRaw("col6forge_read_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
     try builder.callTyped(null, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 0) });
+    try emitFreeAllocs(ctx, builder, runtime_args.heap_allocs);
 }
 
 fn emitReadRuntimeFormatExprStatus(
@@ -267,12 +318,14 @@ fn emitReadRuntimeFormatExprStatus(
         const count_ref = try constI32(ctx, @intCast(count_val));
         const read_name = try ctx.ensureDeclRaw("col6forge_read_internal_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
         try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count });
+        try emitFreeAllocs(ctx, builder, runtime_args.heap_allocs);
         return try constI32(ctx, 0);
     }
 
     const read_name = try ctx.ensureDeclRaw("col6forge_read_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 1) });
+    try emitFreeAllocs(ctx, builder, runtime_args.heap_allocs);
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
 }
 
