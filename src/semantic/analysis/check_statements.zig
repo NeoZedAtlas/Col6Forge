@@ -107,20 +107,20 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             try checkExpr(self, loop.end);
             if (loop.step) |step| try checkExpr(self, step);
         },
-        .do_while => |loop| try checkExpr(self, loop.condition),
+        .do_while => |loop| try checkLogicalConditionExpr(self, loop.condition),
         .do_infinite => {},
         .goto => {},
         .computed_goto => |cg| try checkExpr(self, cg.selector),
         .assigned_goto => {},
         .if_single => |ifs| {
-            try checkExpr(self, ifs.condition);
+            try checkLogicalConditionExpr(self, ifs.condition);
             if (ifs.stmt.* == .if_single or ifs.stmt.* == .if_block) {
                 return error.InvalidLogicalIfNesting;
             }
             try checkStmtNode(self, ifs.stmt.*);
         },
         .if_block => |ifb| {
-            try checkExpr(self, ifb.condition);
+            try checkLogicalConditionExpr(self, ifb.condition);
             for (ifb.then_stmts) |inner| try checkStmt(self, inner);
             for (ifb.else_stmts) |inner| try checkStmt(self, inner);
         },
@@ -144,6 +144,11 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
 
 fn checkExpr(self: *context.Context, expr: *ast.Expr) CheckError!void {
     _ = try checkExprType(self, expr);
+}
+
+fn checkLogicalConditionExpr(self: *context.Context, expr: *ast.Expr) CheckError!void {
+    const ty = try checkExprType(self, expr);
+    if (ty != .logical) return error.InvalidConditionType;
 }
 
 fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKind {

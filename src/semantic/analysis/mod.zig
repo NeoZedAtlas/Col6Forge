@@ -105,6 +105,7 @@ fn semanticErrorInfo(err: anyerror) struct { code: []const u8, message: []const 
         error.UnsupportedIntrinsicType => .{ .code = "CF3127", .message = "unsupported intrinsic argument or array conversion shape in semantic lowering" },
         error.DataValueCountMismatch => .{ .code = "CF3128", .message = "DATA statement target/value count mismatch" },
         error.DataExpansionTooLarge => .{ .code = "CF3129", .message = "DATA statement expansion exceeds semantic safety limit" },
+        error.InvalidConditionType => .{ .code = "CF3130", .message = "IF/DO WHILE condition must be LOGICAL expression" },
         else => .{ .code = "CF3199", .message = "semantic analysis failed" },
     };
 }
