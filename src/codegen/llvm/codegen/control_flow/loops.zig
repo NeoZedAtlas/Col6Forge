@@ -340,14 +340,17 @@ fn emitStoreTripCountForSign(
     }
     const diff = ValueRef{ .name = diff_name, .ty = var_ty, .is_ptr = false };
 
+    // Use INT((diff + step_abs) / step_abs) to avoid undercounting floating loops
+    // due to binary rounding before integer conversion.
+    const numer_name = try ctx.nextTemp();
+    try builder.binary(numer_name, add_op, var_ty, diff, step_abs);
+    const numer = ValueRef{ .name = numer_name, .ty = var_ty, .is_ptr = false };
+
     const quot_name = try ctx.nextTemp();
-    try builder.binary(quot_name, div_op, var_ty, diff, step_abs);
+    try builder.binary(quot_name, div_op, var_ty, numer, step_abs);
     const quot = ValueRef{ .name = quot_name, .ty = var_ty, .is_ptr = false };
 
-    const trip_num_name = try ctx.nextTemp();
-    try builder.binary(trip_num_name, add_op, var_ty, quot, oneValueForType(var_ty));
-    const trip_num = ValueRef{ .name = trip_num_name, .ty = var_ty, .is_ptr = false };
-    const trip_i64 = try castToI64(ctx, builder, trip_num);
+    const trip_i64 = try castToI64(ctx, builder, quot);
     try builder.store(trip_i64, trip_addr);
     try builder.br(done_label);
 
