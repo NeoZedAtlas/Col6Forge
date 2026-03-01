@@ -103,6 +103,56 @@ fn controlLabelFromExpr(node: *ast.Expr) ?[]const u8 {
     };
 }
 
+fn emitIoStatusOutcome(
+    ctx: *Context,
+    builder: anytype,
+    status: ValueRef,
+    iostat_expr: ?*ast.Expr,
+    err_label: ?[]const u8,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!bool {
+    if (iostat_expr) |iostat_node| {
+        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_node);
+        try builder.store(status, iostat_ptr);
+    }
+
+    if (err_label) |label| {
+        const err_target = cfg.resolveLabel(ctx, local_label_map, label) orelse return error.MissingLabel;
+        const cmp_tmp = try ctx.nextTemp();
+        try builder.compare(cmp_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        try builder.brCond(cond, err_target, next_block);
+        return true;
+    }
+
+    if (iostat_expr == null) {
+        const bad_tmp = try ctx.nextTemp();
+        try builder.compare(bad_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
+        const bad = ValueRef{ .name = bad_tmp, .ty = .i1, .is_ptr = false };
+        const fatal_check = try ctx.nextLabel("io_fatal_check");
+        try builder.brCond(bad, fatal_check, next_block);
+
+        try builder.label(fatal_check);
+        const should_abort_name = try ctx.ensureDeclRaw("col6forge_io_should_abort", .i32, &.{}, false);
+        const abort_tmp = try ctx.nextTemp();
+        try builder.callTyped(abort_tmp, .i32, should_abort_name, &.{});
+        const abort_cmp_tmp = try ctx.nextTemp();
+        try builder.compare(abort_cmp_tmp, "icmp", "ne", .i32, .{ .name = abort_tmp, .ty = .i32, .is_ptr = false }, try constI32(ctx, 0));
+        const abort_cond = ValueRef{ .name = abort_cmp_tmp, .ty = .i1, .is_ptr = false };
+        const do_exit = try ctx.nextLabel("io_fatal_exit");
+        try builder.brCond(abort_cond, do_exit, next_block);
+
+        try builder.label(do_exit);
+        const exit_name = try ctx.ensureDeclRaw("exit", .void, &.{.i32}, true);
+        try builder.callTyped(null, .void, exit_name, &.{try constI32(ctx, 2)});
+        try builder.br(next_block);
+        return true;
+    }
+
+    return false;
+}
+
 fn emitCharArg(ctx: *Context, builder: anytype, node: ?*ast.Expr) EmitError!CharArg {
     if (node) |expr_node| {
         const value = try expr.emitExpr(ctx, builder, expr_node);
@@ -169,22 +219,7 @@ pub fn emitOpen(
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, open_name, args[0..]);
     const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
-
-    if (open.iostat) |iostat_expr| {
-        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
-        try builder.store(status, iostat_ptr);
-    }
-
-    if (open.err_label) |err_label| {
-        const err_target = cfg.resolveLabel(ctx, local_label_map, err_label) orelse return error.MissingLabel;
-        const cmp_tmp = try ctx.nextTemp();
-        try builder.compare(cmp_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        try builder.brCond(cond, err_target, next_block);
-        return true;
-    }
-
-    return false;
+    return emitIoStatusOutcome(ctx, builder, status, open.iostat, open.err_label, next_block, local_label_map);
 }
 pub fn emitRewind(
     ctx: *Context,
@@ -199,22 +234,7 @@ pub fn emitRewind(
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, rewind_name, &.{unit_i32});
     const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
-
-    if (rewind.iostat) |iostat_expr| {
-        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
-        try builder.store(status, iostat_ptr);
-    }
-
-    if (rewind.err_label) |err_label| {
-        const err_target = cfg.resolveLabel(ctx, local_label_map, err_label) orelse return error.MissingLabel;
-        const cmp_tmp = try ctx.nextTemp();
-        try builder.compare(cmp_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        try builder.brCond(cond, err_target, next_block);
-        return true;
-    }
-
-    return false;
+    return emitIoStatusOutcome(ctx, builder, status, rewind.iostat, rewind.err_label, next_block, local_label_map);
 }
 const InquireSpec = struct {
     unit_expr: ?*ast.Expr = null,
@@ -393,22 +413,7 @@ pub fn emitClose(
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, fn_name, &.{ unit_i32, status_arg.ptr, status_arg.len });
     const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
-
-    if (iostat_expr) |iostat_node| {
-        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_node);
-        try builder.store(status, iostat_ptr);
-    }
-
-    if (err_label) |label| {
-        const err_target = cfg.resolveLabel(ctx, local_label_map, label) orelse return error.MissingLabel;
-        const cmp_tmp = try ctx.nextTemp();
-        try builder.compare(cmp_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        try builder.brCond(cond, err_target, next_block);
-        return true;
-    }
-
-    return false;
+    return emitIoStatusOutcome(ctx, builder, status, iostat_expr, err_label, next_block, local_label_map);
 }
 pub fn emitBackspace(
     ctx: *Context,
@@ -423,22 +428,7 @@ pub fn emitBackspace(
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, backspace_name, &.{unit_i32});
     const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
-
-    if (backspace.iostat) |iostat_expr| {
-        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
-        try builder.store(status, iostat_ptr);
-    }
-
-    if (backspace.err_label) |err_label| {
-        const err_target = cfg.resolveLabel(ctx, local_label_map, err_label) orelse return error.MissingLabel;
-        const cmp_tmp = try ctx.nextTemp();
-        try builder.compare(cmp_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        try builder.brCond(cond, err_target, next_block);
-        return true;
-    }
-
-    return false;
+    return emitIoStatusOutcome(ctx, builder, status, backspace.iostat, backspace.err_label, next_block, local_label_map);
 }
 pub fn emitEndfile(
     ctx: *Context,
@@ -453,20 +443,5 @@ pub fn emitEndfile(
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, endfile_name, &.{unit_i32});
     const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
-
-    if (endfile.iostat) |iostat_expr| {
-        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
-        try builder.store(status, iostat_ptr);
-    }
-
-    if (endfile.err_label) |err_label| {
-        const err_target = cfg.resolveLabel(ctx, local_label_map, err_label) orelse return error.MissingLabel;
-        const cmp_tmp = try ctx.nextTemp();
-        try builder.compare(cmp_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
-        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
-        try builder.brCond(cond, err_target, next_block);
-        return true;
-    }
-
-    return false;
+    return emitIoStatusOutcome(ctx, builder, status, endfile.iostat, endfile.err_label, next_block, local_label_map);
 }
