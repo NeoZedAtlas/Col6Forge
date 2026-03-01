@@ -19,7 +19,9 @@ const isAllNewlines = io_utils.isAllNewlines;
 const flushPendingSpaces = io_utils.flushPendingSpaces;
 const findReversionStart = io_utils.findReversionStart;
 const appendIntFormat = io_utils.appendIntFormat;
-const emitPointerArrayFromValues = io_utils.emitPointerArrayFromValues;
+const emitHeapBytes = io_utils.emitHeapBytes;
+const emitHeapPointerArrayFromValues = io_utils.emitHeapPointerArrayFromValues;
+const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 
@@ -495,6 +497,8 @@ fn emitWriteFormattedImpl(
     defer ptr_args.deinit();
     var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_kinds.deinit();
+    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer heap_allocs.deinit();
     for (args.items) |arg| {
         switch (arg.ty) {
             .ptr => {
@@ -503,26 +507,25 @@ fn emitWriteFormattedImpl(
             },
             .i32 => {
                 const val = ValueRef{ .name = arg.name, .ty = .i32, .is_ptr = false };
-                const tmp = try ctx.nextTemp();
-                try builder.alloca(tmp, .i32);
-                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                const ptr = try emitHeapBytes(ctx, builder, @sizeOf(i32));
                 try builder.store(val, ptr);
                 try ptr_args.append(ptr);
+                try heap_allocs.append(ptr);
                 try arg_kinds.append('i');
             },
             .f64 => {
                 const val = ValueRef{ .name = arg.name, .ty = .f64, .is_ptr = false };
-                const tmp = try ctx.nextTemp();
-                try builder.alloca(tmp, .f64);
-                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                const ptr = try emitHeapBytes(ctx, builder, @sizeOf(f64));
                 try builder.store(val, ptr);
                 try ptr_args.append(ptr);
+                try heap_allocs.append(ptr);
                 try arg_kinds.append('f');
             },
             else => return error.UnsupportedIntrinsicType,
         }
     }
-    const ptr_array = try emitPointerArrayFromValues(ctx, builder, ptr_args.items);
+    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, ptr_args.items);
+    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
     const arg_count_val = try ctx.constI32(@intCast(ptr_args.items.len));
     const fmt_ptr_val = ValueRef{ .name = fmt_ptr, .ty = .ptr, .is_ptr = true };
@@ -539,6 +542,7 @@ fn emitWriteFormattedImpl(
         const write_name = try ctx.ensureDeclRaw("col6forge_write_v", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
         try builder.callTyped(null, .i32, write_name, &.{ unit_i32, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
     }
+    try emitFreeAllocs(ctx, builder, heap_allocs.items);
 }
 
 pub fn emitWriteFormatted(

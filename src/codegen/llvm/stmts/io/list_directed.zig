@@ -16,28 +16,14 @@ const expansion = @import("expansion.zig");
 const charLenForExpr = io_utils.charLenForExpr;
 const internalUnitRecordCount = io_utils.internalUnitRecordCount;
 const evalConstIntSem = io_utils.evalConstIntSem;
-const emitPointerArrayFromValues = io_utils.emitPointerArrayFromValues;
+const emitHeapBytes = io_utils.emitHeapBytes;
+const emitHeapPointerArrayFromValues = io_utils.emitHeapPointerArrayFromValues;
+const emitHeapI32Array = io_utils.emitHeapI32Array;
+const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
 const expandWriteArgsList = expansion.expandWriteArgsList;
 const expandReadTargets = expansion.expandReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
-
-fn emitI32Array(ctx: *Context, builder: anytype, values: []const i32) EmitError!ValueRef {
-    if (values.len == 0) {
-        return .{ .name = "null", .ty = .ptr, .is_ptr = false };
-    }
-    const arr_name = try ctx.nextTemp();
-    try builder.allocaArray(arr_name, .i32, values.len);
-    const arr_ptr = ValueRef{ .name = arr_name, .ty = .ptr, .is_ptr = true };
-    for (values, 0..) |value, idx| {
-        const off = try ctx.constI32(@intCast(idx));
-        const gep = try ctx.nextTemp();
-        try builder.gep(gep, .i32, arr_ptr, off);
-        const slot_ptr = ValueRef{ .name = gep, .ty = .ptr, .is_ptr = true };
-        try builder.store(try ctx.constI32(value), slot_ptr);
-    }
-    return arr_ptr;
-}
 
 fn emitListDirectedWriteExternal(ctx: *Context, builder: anytype, write: ast.WriteStmt, unit_i32: ValueRef) EmitError!void {
     var expanded_values = try expandWriteArgsList(ctx, builder, write.args);
@@ -49,15 +35,24 @@ fn emitListDirectedWriteExternal(ctx: *Context, builder: anytype, write: ast.Wri
     defer arg_kinds.deinit();
     var arg_lens = std.array_list.Managed(i32).init(ctx.allocator);
     defer arg_lens.deinit();
+    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer heap_allocs.deinit();
 
     for (expanded_values.values.items, 0..) |value, idx| {
         switch (value.ty) {
             .i32, .f32, .f64, .i1, .complex_f32, .complex_f64 => {
-                const tmp = try ctx.nextTemp();
-                try builder.alloca(tmp, value.ty);
-                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                const bytes: usize = switch (value.ty) {
+                    .i32, .f32 => 4,
+                    .f64 => 8,
+                    .i1 => 1,
+                    .complex_f32 => 8,
+                    .complex_f64 => 16,
+                    else => unreachable,
+                };
+                const ptr = try emitHeapBytes(ctx, builder, bytes);
                 try builder.store(value, ptr);
                 try ptr_args.append(ptr);
+                try heap_allocs.append(ptr);
                 try arg_kinds.append(switch (value.ty) {
                     .i32 => 'i',
                     .f32 => 'f',
@@ -80,12 +75,15 @@ fn emitListDirectedWriteExternal(ctx: *Context, builder: anytype, write: ast.Wri
         }
     }
 
-    const ptr_array = try emitPointerArrayFromValues(ctx, builder, ptr_args.items);
+    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, ptr_args.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const lens_array = try emitI32Array(ctx, builder, arg_lens.items);
+    const lens_array = try emitHeapI32Array(ctx, builder, arg_lens.items);
+    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
+    if (!std.mem.eql(u8, lens_array.name, "null")) try heap_allocs.append(lens_array);
     const arg_count_val = try ctx.constI32(@intCast(ptr_args.items.len));
     const write_name = try ctx.ensureDeclRaw("col6forge_write_list_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
     try builder.callTyped(null, .i32, write_name, &.{ unit_i32, ptr_array, kinds_ptr, lens_array, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
+    try emitFreeAllocs(ctx, builder, heap_allocs.items);
 }
 
 fn emitListDirectedWriteInternal(
@@ -105,15 +103,24 @@ fn emitListDirectedWriteInternal(
     defer arg_kinds.deinit();
     var arg_lens = std.array_list.Managed(i32).init(ctx.allocator);
     defer arg_lens.deinit();
+    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer heap_allocs.deinit();
 
     for (expanded_values.values.items, 0..) |value, idx| {
         switch (value.ty) {
             .i32, .f32, .f64, .i1, .complex_f32, .complex_f64 => {
-                const tmp = try ctx.nextTemp();
-                try builder.alloca(tmp, value.ty);
-                const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+                const bytes: usize = switch (value.ty) {
+                    .i32, .f32 => 4,
+                    .f64 => 8,
+                    .i1 => 1,
+                    .complex_f32 => 8,
+                    .complex_f64 => 16,
+                    else => unreachable,
+                };
+                const ptr = try emitHeapBytes(ctx, builder, bytes);
                 try builder.store(value, ptr);
                 try ptr_args.append(ptr);
+                try heap_allocs.append(ptr);
                 try arg_kinds.append(switch (value.ty) {
                     .i32 => 'i',
                     .f32 => 'f',
@@ -136,15 +143,18 @@ fn emitListDirectedWriteInternal(
         }
     }
 
-    const ptr_array = try emitPointerArrayFromValues(ctx, builder, ptr_args.items);
+    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, ptr_args.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const lens_array = try emitI32Array(ctx, builder, arg_lens.items);
+    const lens_array = try emitHeapI32Array(ctx, builder, arg_lens.items);
+    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
+    if (!std.mem.eql(u8, lens_array.name, "null")) try heap_allocs.append(lens_array);
     const arg_count_val = try ctx.constI32(@intCast(ptr_args.items.len));
     const len_val = try ctx.constI32(@intCast(unit_char_len));
     const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
     const count_ref = try ctx.constI32(@intCast(count_val));
     const write_name = try ctx.ensureDeclRaw("col6forge_write_internal_list_v", .void, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .void, write_name, &.{ unit_value, len_val, count_ref, ptr_array, kinds_ptr, lens_array, arg_count_val });
+    try emitFreeAllocs(ctx, builder, heap_allocs.items);
 }
 
 fn emitListDirectedReadExternal(ctx: *Context, builder: anytype, read: ast.ReadStmt, unit_i32: ValueRef, status_mode: bool) EmitError!ValueRef {
@@ -155,6 +165,8 @@ fn emitListDirectedReadExternal(ctx: *Context, builder: anytype, read: ast.ReadS
     defer arg_kinds.deinit();
     var arg_lens = std.array_list.Managed(i32).init(ctx.allocator);
     defer arg_lens.deinit();
+    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer heap_allocs.deinit();
 
     for (expanded.types.items, 0..) |ty, idx| {
         switch (ty) {
@@ -184,9 +196,11 @@ fn emitListDirectedReadExternal(ctx: *Context, builder: anytype, read: ast.ReadS
         }
     }
 
-    const ptr_array = try emitPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
+    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const lens_array = try emitI32Array(ctx, builder, arg_lens.items);
+    const lens_array = try emitHeapI32Array(ctx, builder, arg_lens.items);
+    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
+    if (!std.mem.eql(u8, lens_array.name, "null")) try heap_allocs.append(lens_array);
     const arg_count_val = try ctx.constI32(@intCast(expanded.ptrs.items.len));
     const mode_val = ValueRef{ .name = if (status_mode) "1" else "0", .ty = .i32, .is_ptr = false };
     const read_name = try ctx.ensureDeclRaw("col6forge_read_list_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
@@ -200,6 +214,7 @@ fn emitListDirectedReadExternal(ctx: *Context, builder: anytype, read: ast.ReadS
     }
 
     try applyComplexFixups(ctx, builder, &expanded);
+    try emitFreeAllocs(ctx, builder, heap_allocs.items);
     return status_val;
 }
 
@@ -219,6 +234,8 @@ fn emitListDirectedReadInternal(
     defer arg_kinds.deinit();
     var arg_lens = std.array_list.Managed(i32).init(ctx.allocator);
     defer arg_lens.deinit();
+    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer heap_allocs.deinit();
 
     for (expanded.types.items, 0..) |ty, idx| {
         switch (ty) {
@@ -248,9 +265,11 @@ fn emitListDirectedReadInternal(
         }
     }
 
-    const ptr_array = try emitPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
+    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const lens_array = try emitI32Array(ctx, builder, arg_lens.items);
+    const lens_array = try emitHeapI32Array(ctx, builder, arg_lens.items);
+    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
+    if (!std.mem.eql(u8, lens_array.name, "null")) try heap_allocs.append(lens_array);
     const arg_count_val = try ctx.constI32(@intCast(expanded.ptrs.items.len));
     const len_val = try ctx.constI32(@intCast(unit_char_len));
     const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
@@ -267,6 +286,7 @@ fn emitListDirectedReadInternal(
     }
 
     try applyComplexFixups(ctx, builder, &expanded);
+    try emitFreeAllocs(ctx, builder, heap_allocs.items);
     return status_val;
 }
 
