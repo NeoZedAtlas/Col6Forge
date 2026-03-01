@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
     const tools_optimize = b.option(
         std.builtin.OptimizeMode,
         "tools_optimize",
-        "Optimization mode for build tools (golden/verify/blas/lapack/test-harness)",
+        "Optimization mode for build tools (golden/verify/blas/lapack/test-harness/perf tools)",
     ) orelse .Debug;
     const run_from_install = b.option(
         bool,
@@ -180,6 +180,24 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const perf_bench = b.addExecutable(.{
+        .name = "perf_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/perf_bench.zig"),
+            .target = target,
+            .optimize = tools_optimize,
+        }),
+    });
+
+    const perf_compare = b.addExecutable(.{
+        .name = "perf_compare",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/perf_compare.zig"),
+            .target = target,
+            .optimize = tools_optimize,
+        }),
+    });
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
@@ -199,6 +217,8 @@ pub fn build(b: *std.Build) void {
     const install_blas_runner = b.addInstallArtifact(blas_runner, .{});
     const install_lapack_runner = b.addInstallArtifact(lapack_runner, .{});
     const install_test_harness = b.addInstallArtifact(test_harness, .{});
+    const install_perf_bench = b.addInstallArtifact(perf_bench, .{});
+    const install_perf_compare = b.addInstallArtifact(perf_compare, .{});
 
     const tools_step = b.step("tools", "Install all developer runner tools");
     tools_step.dependOn(&install_golden_runner.step);
@@ -206,6 +226,8 @@ pub fn build(b: *std.Build) void {
     tools_step.dependOn(&install_blas_runner.step);
     tools_step.dependOn(&install_lapack_runner.step);
     tools_step.dependOn(&install_test_harness.step);
+    tools_step.dependOn(&install_perf_bench.step);
+    tools_step.dependOn(&install_perf_compare.step);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -271,6 +293,14 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
+    const lexer_fuzz_tests = b.addTest(.{
+        .root_module = mod,
+        .filters = &.{"lexer fuzzes malformed fixed-form legacy code without crashing"},
+    });
+    const fuzz_step = b.step("fuzz", "Run lexer fuzz tests (COL6FORGE_LEX_FUZZ_ITERS controls intensity)");
+    const run_lexer_fuzz = b.addRunArtifact(lexer_fuzz_tests);
+    fuzz_step.dependOn(&run_lexer_fuzz.step);
+
     // Compile-focused fast path: build core artifacts and tests without executing them.
     const check_step = b.step("check", "Compile CLI and tests without running");
     check_step.dependOn(&exe.step);
@@ -285,6 +315,8 @@ pub fn build(b: *std.Build) void {
     tools_check_step.dependOn(&blas_runner.step);
     tools_check_step.dependOn(&lapack_runner.step);
     tools_check_step.dependOn(&test_harness.step);
+    tools_check_step.dependOn(&perf_bench.step);
+    tools_check_step.dependOn(&perf_compare.step);
 
     const golden_step = b.step("golden", "Run golden file tests");
     const run_golden = b.addRunArtifact(golden_runner);
@@ -330,6 +362,23 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_test_all.addArgs(args);
     }
+
+    const perf_bench_step = b.step("perf-bench", "Run BLAS/LAPACK benchmark sampling and emit JSON");
+    const run_perf_bench = b.addRunArtifact(perf_bench);
+    perf_bench_step.dependOn(&run_perf_bench.step);
+    if (b.args) |args| {
+        run_perf_bench.addArgs(args);
+    }
+
+    const perf_compare_step = b.step("perf-compare", "Compare two benchmark JSON reports and fail on regressions");
+    const run_perf_compare = b.addRunArtifact(perf_compare);
+    perf_compare_step.dependOn(&run_perf_compare.step);
+    if (b.args) |args| {
+        run_perf_compare.addArgs(args);
+    }
+
+    const perf_regress_step = b.step("perf-regress", "Alias of perf-compare for CI regression checks");
+    perf_regress_step.dependOn(&run_perf_compare.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

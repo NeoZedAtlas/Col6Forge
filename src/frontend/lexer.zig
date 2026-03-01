@@ -508,11 +508,103 @@ test "lexLogicalLine tokenizes USE rename arrow as equals + greater" {
     defer allocator.free(tokens);
 
     const expected = [_]TokenKind{
-        .identifier, .identifier, .comma, .identifier, .colon,
-        .identifier, .equals, .greater, .identifier,
+        .identifier, .identifier, .comma,   .identifier, .colon,
+        .identifier, .equals,     .greater, .identifier,
     };
     try testing.expectEqual(expected.len, tokens.len);
     for (tokens, 0..) |tok, idx| {
         try testing.expectEqual(expected[idx], tok.kind);
+    }
+}
+
+fn fuzzIterations(allocator: std.mem.Allocator) usize {
+    const default_iterations: usize = 512;
+    const value = std.process.getEnvVarOwned(allocator, "COL6FORGE_LEX_FUZZ_ITERS") catch return default_iterations;
+    defer allocator.free(value);
+    const parsed = std.fmt.parseInt(usize, value, 10) catch return default_iterations;
+    return if (parsed == 0) 1 else parsed;
+}
+
+fn appendRandomLegacyLine(random: *std.Random, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
+    // Preserve fixed-form card columns (label/comment/continuation region) while
+    // randomizing payload bytes aggressively to exercise legacy malformed inputs.
+    var col: usize = 0;
+    while (col < 6) : (col += 1) {
+        const mode = random.uintLessThan(u8, 6);
+        const ch: u8 = switch (mode) {
+            0 => ' ',
+            1 => '\t',
+            2 => @as(u8, '0') + random.uintLessThan(u8, 10),
+            3 => '*',
+            4 => 'C',
+            else => 'D',
+        };
+        try out.append(allocator, ch);
+    }
+
+    const payload_len: usize = @as(usize, random.uintLessThan(u8, 128));
+    var i: usize = 0;
+    while (i < payload_len) : (i += 1) {
+        const mode = random.uintLessThan(u8, 12);
+        var ch: u8 = switch (mode) {
+            0 => '\'',
+            1 => '"',
+            2 => '.',
+            3 => '_',
+            4 => '=',
+            5 => '>',
+            6 => '*',
+            7 => @as(u8, '0') + random.uintLessThan(u8, 10),
+            8 => @as(u8, 'A') + random.uintLessThan(u8, 26),
+            9 => @as(u8, 'a') + random.uintLessThan(u8, 26),
+            10 => 1 + random.uintLessThan(u8, 31),
+            else => 32 + random.uintLessThan(u8, 95),
+        };
+        if (ch == '\n' or ch == '\r') ch = ' ';
+        try out.append(allocator, ch);
+    }
+    try out.append(allocator, '\n');
+}
+
+test "lexer fuzzes malformed fixed-form legacy code without crashing" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(0xCF6F_0A11_DA7A_2026);
+    var random = prng.random();
+    const iterations = fuzzIterations(allocator);
+
+    var iter: usize = 0;
+    while (iter < iterations) : (iter += 1) {
+        var source_buf: std.ArrayList(u8) = .empty;
+        defer source_buf.deinit(allocator);
+
+        const line_count: usize = @as(usize, random.uintLessThan(u8, 8)) + 1;
+        var line_idx: usize = 0;
+        while (line_idx < line_count) : (line_idx += 1) {
+            try appendRandomLegacyLine(&random, allocator, &source_buf);
+        }
+
+        const source = try source_buf.toOwnedSlice(allocator);
+        defer allocator.free(source);
+
+        const logical_lines = fixed_form.normalizeFixedForm(allocator, source) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => continue,
+        };
+        defer fixed_form.freeLogicalLines(allocator, logical_lines);
+
+        for (logical_lines) |line| {
+            const tokens = lexLogicalLine(allocator, line) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.UnexpectedCharacter, error.InvalidHollerith, error.HollerithLengthOverflow => {
+                    _ = takeDiagnostic();
+                    continue;
+                },
+                else => return err,
+            };
+            defer allocator.free(tokens);
+            _ = takeDiagnostic();
+        }
     }
 }
