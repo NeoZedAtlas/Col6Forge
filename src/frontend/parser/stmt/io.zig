@@ -388,14 +388,106 @@ pub fn parseRewindStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmt
 
 pub fn parseBackspaceStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
     _ = lp.consumeKeyword("BACKSPACE");
-    const unit_expr = try parseUnitStatementControl(arena, lp);
-    return .{ .backspace = .{ .unit = unit_expr } };
+    if (!lp.peekIs(.l_paren)) {
+        const unit_expr = try parseUnitStatementControl(arena, lp);
+        return .{ .backspace = .{ .unit = unit_expr, .err_label = null, .iostat = null } };
+    }
+
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    var unit_expr: ?*Expr = null;
+    var err_label: ?[]const u8 = null;
+    var iostat_expr: ?*Expr = null;
+    var first = true;
+    while (!lp.peekIs(.r_paren)) {
+        if (!first) {
+            _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+        }
+        first = false;
+        if (lp.peekIs(.identifier) and helpers.nextTokenIs(lp.*, .equals)) {
+            const name_tok = lp.expectIdentifier() orelse return error.UnexpectedToken;
+            _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+            const name = lp.tokenText(name_tok);
+            if (context.eqNoCase(name, "UNIT")) {
+                unit_expr = try expr.parseExpr(lp, arena, 0);
+                continue;
+            }
+            if (context.eqNoCase(name, "ERR")) {
+                const err_tok = lp.peek() orelse return error.UnexpectedToken;
+                if (err_tok.kind == .integer or err_tok.kind == .identifier) {
+                    _ = lp.next();
+                    err_label = normalizeLabelText(lp.tokenText(err_tok));
+                    continue;
+                }
+                _ = try expr.parseExpr(lp, arena, 0);
+                continue;
+            }
+            if (context.eqNoCase(name, "IOSTAT")) {
+                iostat_expr = try expr.parseExpr(lp, arena, 0);
+                continue;
+            }
+            return error.UnsupportedIoControlClause;
+        }
+        if (unit_expr == null) {
+            unit_expr = try expr.parseExpr(lp, arena, 0);
+            continue;
+        }
+        return error.UnsupportedIoControlClause;
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    const unit_final = unit_expr orelse return error.UnexpectedToken;
+    return .{ .backspace = .{ .unit = unit_final, .err_label = err_label, .iostat = iostat_expr } };
 }
 
 pub fn parseEndfileStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
     _ = lp.consumeKeyword("ENDFILE");
-    const unit_expr = try parseUnitStatementControl(arena, lp);
-    return .{ .endfile = .{ .unit = unit_expr } };
+    if (!lp.peekIs(.l_paren)) {
+        const unit_expr = try parseUnitStatementControl(arena, lp);
+        return .{ .endfile = .{ .unit = unit_expr, .err_label = null, .iostat = null } };
+    }
+
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    var unit_expr: ?*Expr = null;
+    var err_label: ?[]const u8 = null;
+    var iostat_expr: ?*Expr = null;
+    var first = true;
+    while (!lp.peekIs(.r_paren)) {
+        if (!first) {
+            _ = lp.expect(.comma) orelse return error.UnexpectedToken;
+        }
+        first = false;
+        if (lp.peekIs(.identifier) and helpers.nextTokenIs(lp.*, .equals)) {
+            const name_tok = lp.expectIdentifier() orelse return error.UnexpectedToken;
+            _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+            const name = lp.tokenText(name_tok);
+            if (context.eqNoCase(name, "UNIT")) {
+                unit_expr = try expr.parseExpr(lp, arena, 0);
+                continue;
+            }
+            if (context.eqNoCase(name, "ERR")) {
+                const err_tok = lp.peek() orelse return error.UnexpectedToken;
+                if (err_tok.kind == .integer or err_tok.kind == .identifier) {
+                    _ = lp.next();
+                    err_label = normalizeLabelText(lp.tokenText(err_tok));
+                    continue;
+                }
+                _ = try expr.parseExpr(lp, arena, 0);
+                continue;
+            }
+            if (context.eqNoCase(name, "IOSTAT")) {
+                iostat_expr = try expr.parseExpr(lp, arena, 0);
+                continue;
+            }
+            return error.UnsupportedIoControlClause;
+        }
+        if (unit_expr == null) {
+            unit_expr = try expr.parseExpr(lp, arena, 0);
+            continue;
+        }
+        return error.UnsupportedIoControlClause;
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    const unit_final = unit_expr orelse return error.UnexpectedToken;
+    return .{ .endfile = .{ .unit = unit_final, .err_label = err_label, .iostat = iostat_expr } };
 }
 
 fn parseUnitStatementControl(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!*Expr {

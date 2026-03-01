@@ -410,15 +410,63 @@ pub fn emitClose(
 
     return false;
 }
-pub fn emitBackspace(ctx: *Context, builder: anytype, backspace: ast.BackspaceStmt) EmitError!void {
+pub fn emitBackspace(
+    ctx: *Context,
+    builder: anytype,
+    backspace: ast.BackspaceStmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!bool {
     const unit_value = try expr.emitExpr(ctx, builder, backspace.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
-    const backspace_name = try ctx.ensureDeclRaw("col6forge_backspace", .void, &.{.i32}, false);
-    try builder.callTyped(null, .void, backspace_name, &.{unit_i32});
+    const backspace_name = try ctx.ensureDeclRaw("col6forge_backspace", .i32, &.{.i32}, false);
+    const status_tmp = try ctx.nextTemp();
+    try builder.callTyped(status_tmp, .i32, backspace_name, &.{unit_i32});
+    const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+
+    if (backspace.iostat) |iostat_expr| {
+        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
+        try builder.store(status, iostat_ptr);
+    }
+
+    if (backspace.err_label) |err_label| {
+        const err_target = cfg.resolveLabel(ctx, local_label_map, err_label) orelse return error.MissingLabel;
+        const cmp_tmp = try ctx.nextTemp();
+        try builder.compare(cmp_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        try builder.brCond(cond, err_target, next_block);
+        return true;
+    }
+
+    return false;
 }
-pub fn emitEndfile(ctx: *Context, builder: anytype, endfile: ast.EndfileStmt) EmitError!void {
+pub fn emitEndfile(
+    ctx: *Context,
+    builder: anytype,
+    endfile: ast.EndfileStmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!bool {
     const unit_value = try expr.emitExpr(ctx, builder, endfile.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
-    const endfile_name = try ctx.ensureDeclRaw("col6forge_endfile", .void, &.{.i32}, false);
-    try builder.callTyped(null, .void, endfile_name, &.{unit_i32});
+    const endfile_name = try ctx.ensureDeclRaw("col6forge_endfile", .i32, &.{.i32}, false);
+    const status_tmp = try ctx.nextTemp();
+    try builder.callTyped(status_tmp, .i32, endfile_name, &.{unit_i32});
+    const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+
+    if (endfile.iostat) |iostat_expr| {
+        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
+        try builder.store(status, iostat_ptr);
+    }
+
+    if (endfile.err_label) |err_label| {
+        const err_target = cfg.resolveLabel(ctx, local_label_map, err_label) orelse return error.MissingLabel;
+        const cmp_tmp = try ctx.nextTemp();
+        try builder.compare(cmp_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        try builder.brCond(cond, err_target, next_block);
+        return true;
+    }
+
+    return false;
 }

@@ -177,13 +177,17 @@ fn emitStmtInner(
             return true;
         },
         .backspace => |backspace| {
-            try io.emitBackspace(ctx, builder, backspace);
-            try builder.br(next_block);
+            const terminated = try io.emitBackspace(ctx, builder, backspace, next_block, local_label_map);
+            if (!terminated) {
+                try builder.br(next_block);
+            }
             return true;
         },
         .endfile => |endfile| {
-            try io.emitEndfile(ctx, builder, endfile);
-            try builder.br(next_block);
+            const terminated = try io.emitEndfile(ctx, builder, endfile, next_block, local_label_map);
+            if (!terminated) {
+                try builder.br(next_block);
+            }
             return true;
         },
         .data => |data| {

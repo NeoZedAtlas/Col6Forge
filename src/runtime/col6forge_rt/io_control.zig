@@ -400,27 +400,28 @@ pub export fn col6forge_rewind(unit: c_int) callconv(.c) c_int {
     return 1;
 }
 
-pub export fn col6forge_backspace(unit: c_int) callconv(.c) void {
-    if (col6forge_unformatted_backspace(unit) != 0) return;
+pub export fn col6forge_backspace(unit: c_int) callconv(.c) c_int {
+    if (col6forge_unformatted_backspace(unit) != 0) return 1;
     var raw: ?*anyopaque = null;
     var start_pos: c_long = 0;
     if (col6forge_unit_stream_acquire_read(unit, &raw, &start_pos) == 0) {
         var pos: c_long = 0;
         _ = col6forge_unit_stream_get_pos(unit, &pos);
         if (pos <= 0) col6forge_unit_pos_clear(unit);
-        return;
+        return 0;
     }
 
     const stream: *FILE = @ptrCast(@alignCast(raw.?));
     const target = scanBackspaceTarget(stream, start_pos) orelse {
         col6forge_unit_stream_release_read(unit, @ptrCast(stream), start_pos, 0);
-        return;
+        return 1;
     };
     col6forge_unit_stream_release_read(unit, @ptrCast(stream), target, 0);
+    return 0;
 }
 
-pub export fn col6forge_endfile(unit: c_int) callconv(.c) void {
-    _ = col6forge_unformatted_endfile(unit);
+pub export fn col6forge_endfile(unit: c_int) callconv(.c) c_int {
+    return col6forge_unformatted_endfile(unit);
 }
 
 fn zLen(buf: []const u8) usize {

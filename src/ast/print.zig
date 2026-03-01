@@ -104,12 +104,30 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
             try printIndent(writer, 2);
             try writer.writeAll("unit:\n");
             try printExpr(writer, bs.unit, 3);
+            if (bs.err_label) |label| {
+                try printIndent(writer, 2);
+                try writer.print("err-label: {s}\n", .{label});
+            }
+            if (bs.iostat) |io_expr| {
+                try printIndent(writer, 2);
+                try writer.writeAll("iostat:\n");
+                try printExpr(writer, io_expr, 3);
+            }
         },
         .endfile => |ef| {
             try writer.print(";   stmt label={s} endfile\n", .{label_text});
             try printIndent(writer, 2);
             try writer.writeAll("unit:\n");
             try printExpr(writer, ef.unit, 3);
+            if (ef.err_label) |label| {
+                try printIndent(writer, 2);
+                try writer.print("err-label: {s}\n", .{label});
+            }
+            if (ef.iostat) |io_expr| {
+                try printIndent(writer, 2);
+                try writer.writeAll("iostat:\n");
+                try printExpr(writer, io_expr, 3);
+            }
         },
         .open => |opn| {
             try writer.print(";   stmt label={s} open\n", .{label_text});

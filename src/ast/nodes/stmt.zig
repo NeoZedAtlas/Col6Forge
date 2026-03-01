@@ -135,10 +135,14 @@ pub const RewindStmt = struct {
 
 pub const BackspaceStmt = struct {
     unit: *Expr,
+    err_label: ?[]const u8,
+    iostat: ?*Expr,
 };
 
 pub const EndfileStmt = struct {
     unit: *Expr,
+    err_label: ?[]const u8,
+    iostat: ?*Expr,
 };
 
 pub const DataInit = struct {
