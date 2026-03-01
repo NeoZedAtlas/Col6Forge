@@ -281,7 +281,7 @@ test "emitBinary rejects mixed logical and numeric comparisons" {
     try testing.expectError(error.UnsupportedLogicalOp, emitBinary(&harness.ctx, &builder, .eq, logical, integer));
 }
 
-test "emitBinary real power with integer constant uses multiplication path" {
+test "emitBinary real power with integer exponent uses llvm powi intrinsic" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -297,8 +297,7 @@ test "emitBinary real power with integer constant uses multiplication path" {
     const rhs = ValueRef{ .name = "2", .ty = .i32, .is_ptr = false };
     const pow = try emitBinary(&harness.ctx, &builder, .power, lhs, rhs);
     try testing.expectEqual(IRType.f32, pow.ty);
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "fmul float") != null);
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "llvm.pow.f32") == null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call float @llvm.powi.f32") != null);
 }
 
 test "emitBinary integer power supports i64 and rejects negative constants" {
@@ -322,6 +321,26 @@ test "emitBinary integer power supports i64 and rejects negative constants" {
 
     const neg_rhs = ValueRef{ .name = "-1", .ty = .i64, .is_ptr = false };
     try testing.expectError(error.PowerUnsupported, emitBinary(&harness.ctx, &builder, .power, lhs, neg_rhs));
+}
+
+test "emitBinary integer power with dynamic exponent calls runtime helper" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lhs = ValueRef{ .name = "2", .ty = .i64, .is_ptr = false };
+    const rhs = ValueRef{ .name = "%exp", .ty = .i64, .is_ptr = false };
+    const pow = try emitBinary(&harness.ctx, &builder, .power, lhs, rhs);
+    try testing.expectEqual(IRType.i64, pow.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call i64 @col6forge_ipow_i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "ipow_header") == null);
 }
 
 test "emitCall and emitArgPointer build call args" {
@@ -406,9 +425,12 @@ test "emitCond, loadValue, loadI32, and exprType produce expected types" {
     const writer = buffer.writer();
     var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
 
-    const lit = try makeLiteral(harness.arena.allocator(), .integer, "1");
+    const lit = try makeLiteral(harness.arena.allocator(), .logical, "1");
     const cond = try emitCond(&harness.ctx, &builder, lit);
     try testing.expectEqual(IRType.i1, cond.ty);
+
+    const int_lit = try makeLiteral(harness.arena.allocator(), .integer, "1");
+    try testing.expectError(error.UnsupportedLogicalOp, emitCond(&harness.ctx, &builder, int_lit));
 
     const ptr = ValueRef{ .name = "%p", .ty = .ptr, .is_ptr = true };
     const loaded = try loadValue(&harness.ctx, &builder, ptr, .i32);

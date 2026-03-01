@@ -73,6 +73,7 @@ pub export var open_units: [COL6FORGE_MAX_UNITS]OpenUnit align(16) = [_]OpenUnit
 
 const runtime_formatting = @import("col6forge_rt/formatting.zig");
 const runtime_complex_math = @import("col6forge_rt/complex_math.zig");
+const runtime_integer_math = @import("col6forge_rt/integer_math.zig");
 const runtime_io_write_v = @import("col6forge_rt/io_write_v.zig");
 const runtime_io_binary_v = @import("col6forge_rt/io_binary_v.zig");
 const runtime_io_formatted_read = @import("col6forge_rt/io_formatted_read.zig");
@@ -93,6 +94,7 @@ const runtime_pause = @import("col6forge_rt/pause.zig");
 comptime {
     _ = runtime_formatting;
     _ = runtime_complex_math;
+    _ = runtime_integer_math;
     _ = runtime_io_write_v;
     _ = runtime_io_binary_v;
     _ = runtime_io_formatted_read;

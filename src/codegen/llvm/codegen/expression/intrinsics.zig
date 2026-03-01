@@ -149,6 +149,16 @@ pub fn emitIntrinsicBinaryFloatValue(ctx: *Context, builder: anytype, base: []co
     return .{ .name = tmp, .ty = left.ty, .is_ptr = false };
 }
 
+pub fn emitIntrinsicPowiFloatIntValue(ctx: *Context, builder: anytype, base: ValueRef, exp_i32: ValueRef) EmitError!ValueRef {
+    if (base.ty != .f32 and base.ty != .f64) return error.UnsupportedIntrinsicType;
+    if (exp_i32.ty != .i32) return error.UnsupportedIntrinsicType;
+    const name = try llvmIntrinsicName(ctx.allocator, "powi", base.ty);
+    _ = try ctx.ensureDeclRaw(name, base.ty, &[_]IRType{ base.ty, .i32 }, false);
+    const tmp = try ctx.nextTemp();
+    try builder.callTyped(tmp, base.ty, name, &.{ base, exp_i32 });
+    return .{ .name = tmp, .ty = base.ty, .is_ptr = false };
+}
+
 pub fn emitIntrinsicUnaryFloat(ctx: *Context, builder: anytype, base: []const u8, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
