@@ -33,6 +33,14 @@ const PackedWriteArgs = struct {
     heap_allocs: []const ValueRef,
 };
 
+const PackedReadArgs = struct {
+    ptr_array: ValueRef,
+    kinds_ptr: ValueRef,
+    lens_array: ValueRef,
+    arg_count: ValueRef,
+    heap_allocs: []const ValueRef,
+};
+
 fn packWriteArgs(ctx: *Context, builder: anytype, expanded_values: *const expansion.ExpandedWriteValues) EmitError!PackedWriteArgs {
     var ptr_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer ptr_args.deinit();
@@ -108,6 +116,56 @@ fn packWriteArgs(ctx: *Context, builder: anytype, expanded_values: *const expans
     };
 }
 
+fn packReadTargets(ctx: *Context, builder: anytype, expanded: *const expansion.ExpandedReadTargets) EmitError!PackedReadArgs {
+    var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
+    defer arg_kinds.deinit();
+    var arg_lens = std.array_list.Managed(i32).init(ctx.allocator);
+    defer arg_lens.deinit();
+    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer heap_allocs.deinit();
+
+    for (expanded.types.items, 0..) |ty, idx| {
+        switch (ty) {
+            .i32 => {
+                try arg_kinds.append('i');
+                try arg_lens.append(0);
+            },
+            .f32 => {
+                try arg_kinds.append('f');
+                try arg_lens.append(0);
+            },
+            .f64 => {
+                try arg_kinds.append('d');
+                try arg_lens.append(0);
+            },
+            .i1 => {
+                try arg_kinds.append('l');
+                try arg_lens.append(0);
+            },
+            .ptr => {
+                const len = expanded.char_lens.items[idx];
+                if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
+                try arg_kinds.append('s');
+                try arg_lens.append(@intCast(len));
+            },
+            else => return error.UnsupportedIntrinsicType,
+        }
+    }
+
+    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
+    const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
+    const lens_array = try emitHeapI32Array(ctx, builder, arg_lens.items);
+    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
+    if (!std.mem.eql(u8, lens_array.name, "null")) try heap_allocs.append(lens_array);
+    return .{
+        .ptr_array = ptr_array,
+        .kinds_ptr = kinds_ptr,
+        .lens_array = lens_array,
+        .arg_count = try ctx.constI32(@intCast(expanded.ptrs.items.len)),
+        .heap_allocs = try heap_allocs.toOwnedSlice(),
+    };
+}
+
 fn emitListDirectedWriteExternal(ctx: *Context, builder: anytype, write: ast.WriteStmt, unit_i32: ValueRef) EmitError!void {
     var expanded_values = try expandWriteArgsList(ctx, builder, write.args);
     defer expanded_values.deinit();
@@ -146,60 +204,23 @@ fn emitListDirectedReadExternal(ctx: *Context, builder: anytype, read: ast.ReadS
     var expanded = try expandReadTargets(ctx, builder, read.args);
     defer expanded.deinit();
 
-    var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_kinds.deinit();
-    var arg_lens = std.array_list.Managed(i32).init(ctx.allocator);
-    defer arg_lens.deinit();
-    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
-    defer heap_allocs.deinit();
-
-    for (expanded.types.items, 0..) |ty, idx| {
-        switch (ty) {
-            .i32 => {
-                try arg_kinds.append('i');
-                try arg_lens.append(0);
-            },
-            .f32 => {
-                try arg_kinds.append('f');
-                try arg_lens.append(0);
-            },
-            .f64 => {
-                try arg_kinds.append('d');
-                try arg_lens.append(0);
-            },
-            .i1 => {
-                try arg_kinds.append('l');
-                try arg_lens.append(0);
-            },
-            .ptr => {
-                const len = expanded.char_lens.items[idx];
-                if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
-                try arg_kinds.append('s');
-                try arg_lens.append(@intCast(len));
-            },
-            else => return error.UnsupportedIntrinsicType,
-        }
+    const packed_args = try packReadTargets(ctx, builder, &expanded);
+    defer {
+        emitFreeAllocs(ctx, builder, packed_args.heap_allocs) catch {};
+        ctx.allocator.free(packed_args.heap_allocs);
     }
-
-    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
-    const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const lens_array = try emitHeapI32Array(ctx, builder, arg_lens.items);
-    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
-    if (!std.mem.eql(u8, lens_array.name, "null")) try heap_allocs.append(lens_array);
-    const arg_count_val = try ctx.constI32(@intCast(expanded.ptrs.items.len));
     const mode_val = ValueRef{ .name = if (status_mode) "1" else "0", .ty = .i32, .is_ptr = false };
     const read_name = try ctx.ensureDeclRaw("col6forge_read_list_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
     var status_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
     if (status_mode) {
         const tmp = try ctx.nextTemp();
-        try builder.callTyped(tmp, .i32, read_name, &.{ unit_i32, ptr_array, kinds_ptr, lens_array, arg_count_val, mode_val });
+        try builder.callTyped(tmp, .i32, read_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_array, packed_args.arg_count, mode_val });
         status_val = .{ .name = tmp, .ty = .i32, .is_ptr = false };
     } else {
-        try builder.callTyped(null, .i32, read_name, &.{ unit_i32, ptr_array, kinds_ptr, lens_array, arg_count_val, mode_val });
+        try builder.callTyped(null, .i32, read_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_array, packed_args.arg_count, mode_val });
     }
 
     try applyComplexFixups(ctx, builder, &expanded);
-    try emitFreeAllocs(ctx, builder, heap_allocs.items);
     return status_val;
 }
 
@@ -215,47 +236,11 @@ fn emitListDirectedReadInternal(
     var expanded = try expandReadTargets(ctx, builder, read.args);
     defer expanded.deinit();
 
-    var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_kinds.deinit();
-    var arg_lens = std.array_list.Managed(i32).init(ctx.allocator);
-    defer arg_lens.deinit();
-    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
-    defer heap_allocs.deinit();
-
-    for (expanded.types.items, 0..) |ty, idx| {
-        switch (ty) {
-            .i32 => {
-                try arg_kinds.append('i');
-                try arg_lens.append(0);
-            },
-            .f32 => {
-                try arg_kinds.append('f');
-                try arg_lens.append(0);
-            },
-            .f64 => {
-                try arg_kinds.append('d');
-                try arg_lens.append(0);
-            },
-            .i1 => {
-                try arg_kinds.append('l');
-                try arg_lens.append(0);
-            },
-            .ptr => {
-                const len = expanded.char_lens.items[idx];
-                if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
-                try arg_kinds.append('s');
-                try arg_lens.append(@intCast(len));
-            },
-            else => return error.UnsupportedIntrinsicType,
-        }
+    const packed_args = try packReadTargets(ctx, builder, &expanded);
+    defer {
+        emitFreeAllocs(ctx, builder, packed_args.heap_allocs) catch {};
+        ctx.allocator.free(packed_args.heap_allocs);
     }
-
-    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
-    const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const lens_array = try emitHeapI32Array(ctx, builder, arg_lens.items);
-    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
-    if (!std.mem.eql(u8, lens_array.name, "null")) try heap_allocs.append(lens_array);
-    const arg_count_val = try ctx.constI32(@intCast(expanded.ptrs.items.len));
     const len_val = try ctx.constI32(@intCast(unit_char_len));
     const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
     const count_ref = try ctx.constI32(@intCast(count_val));
@@ -264,14 +249,13 @@ fn emitListDirectedReadInternal(
     var status_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
     if (status_mode) {
         const tmp = try ctx.nextTemp();
-        try builder.callTyped(tmp, .i32, read_name, &.{ unit_value, len_val, count_ref, ptr_array, kinds_ptr, lens_array, arg_count_val, mode_val });
+        try builder.callTyped(tmp, .i32, read_name, &.{ unit_value, len_val, count_ref, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_array, packed_args.arg_count, mode_val });
         status_val = .{ .name = tmp, .ty = .i32, .is_ptr = false };
     } else {
-        try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, ptr_array, kinds_ptr, lens_array, arg_count_val, mode_val });
+        try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_array, packed_args.arg_count, mode_val });
     }
 
     try applyComplexFixups(ctx, builder, &expanded);
-    try emitFreeAllocs(ctx, builder, heap_allocs.items);
     return status_val;
 }
 
@@ -332,39 +316,8 @@ fn emitDynamicImpliedDoListWrite(
 
     const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return false;
 
-    var start_val = try expr.emitExpr(ctx, builder, implied.start);
-    start_val = try expr.coerce(ctx, builder, start_val, .i32);
-    var end_val = try expr.emitExpr(ctx, builder, implied.end);
-    end_val = try expr.coerce(ctx, builder, end_val, .i32);
-
-    const diff_tmp = try ctx.nextTemp();
-    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
-    const diff = ValueRef{ .name = diff_tmp, .ty = .i32, .is_ptr = false };
-    const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-    const count_tmp = try ctx.nextTemp();
-    try builder.binary(count_tmp, "add", .i32, diff, one);
-    const count_raw = ValueRef{ .name = count_tmp, .ty = .i32, .is_ptr = false };
-    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
-    const nonpos_tmp = try ctx.nextTemp();
-    try builder.compare(nonpos_tmp, "icmp", "sle", .i32, count_raw, zero);
-    const nonpos = ValueRef{ .name = nonpos_tmp, .ty = .i1, .is_ptr = false };
-    const final_count_tmp = try ctx.nextTemp();
-    try builder.select(final_count_tmp, .i32, nonpos, zero, count_raw);
-    const final_count = ValueRef{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
-
-    const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
-    defer ctx.allocator.free(base_args);
-    for (call.args, 0..) |arg, idx| {
-        base_args[idx] = arg;
-    }
-    base_args[loop_dim] = implied.start;
-    var base_expr = ast.Expr{
-        .call_or_subscript = .{
-            .name = call.name,
-            .args = base_args,
-        },
-    };
-    const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
+    const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end);
+    const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
 
     if (write.args.len == 1) {
         const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
@@ -520,39 +473,8 @@ fn emitDynamicImpliedDoListRead(
 
     const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return null;
 
-    var start_val = try expr.emitExpr(ctx, builder, implied.start);
-    start_val = try expr.coerce(ctx, builder, start_val, .i32);
-    var end_val = try expr.emitExpr(ctx, builder, implied.end);
-    end_val = try expr.coerce(ctx, builder, end_val, .i32);
-
-    const diff_tmp = try ctx.nextTemp();
-    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
-    const diff = ValueRef{ .name = diff_tmp, .ty = .i32, .is_ptr = false };
-    const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-    const count_tmp = try ctx.nextTemp();
-    try builder.binary(count_tmp, "add", .i32, diff, one);
-    const count_raw = ValueRef{ .name = count_tmp, .ty = .i32, .is_ptr = false };
-    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
-    const nonpos_tmp = try ctx.nextTemp();
-    try builder.compare(nonpos_tmp, "icmp", "sle", .i32, count_raw, zero);
-    const nonpos = ValueRef{ .name = nonpos_tmp, .ty = .i1, .is_ptr = false };
-    const final_count_tmp = try ctx.nextTemp();
-    try builder.select(final_count_tmp, .i32, nonpos, zero, count_raw);
-    const final_count = ValueRef{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
-
-    const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
-    defer ctx.allocator.free(base_args);
-    for (call.args, 0..) |arg, idx| {
-        base_args[idx] = arg;
-    }
-    base_args[loop_dim] = implied.start;
-    var base_expr = ast.Expr{
-        .call_or_subscript = .{
-            .name = call.name,
-            .args = base_args,
-        },
-    };
-    const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
+    const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end);
+    const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
 
     if (read.args.len == 1) {
         const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
@@ -566,85 +488,16 @@ fn emitDynamicImpliedDoListRead(
     var post_expanded = try expandReadTargets(ctx, builder, read.args[implied_idx + 1 ..]);
     defer post_expanded.deinit();
 
-    var pre_kinds = std.array_list.Managed(u8).init(ctx.allocator);
-    defer pre_kinds.deinit();
-    var pre_lens = std.array_list.Managed(i32).init(ctx.allocator);
-    defer pre_lens.deinit();
-    var pre_heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
-    defer pre_heap_allocs.deinit();
-    for (pre_expanded.types.items, 0..) |ty, idx| {
-        switch (ty) {
-            .i32 => {
-                try pre_kinds.append('i');
-                try pre_lens.append(0);
-            },
-            .f32 => {
-                try pre_kinds.append('f');
-                try pre_lens.append(0);
-            },
-            .f64 => {
-                try pre_kinds.append('d');
-                try pre_lens.append(0);
-            },
-            .i1 => {
-                try pre_kinds.append('l');
-                try pre_lens.append(0);
-            },
-            .ptr => {
-                const len = pre_expanded.char_lens.items[idx];
-                if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
-                try pre_kinds.append('s');
-                try pre_lens.append(@intCast(len));
-            },
-            else => return null,
-        }
+    const pre_packed = packReadTargets(ctx, builder, &pre_expanded) catch return null;
+    defer {
+        emitFreeAllocs(ctx, builder, pre_packed.heap_allocs) catch {};
+        ctx.allocator.free(pre_packed.heap_allocs);
     }
-    const pre_ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, pre_expanded.ptrs.items);
-    const pre_kinds_ptr = try emitKindArray(ctx, builder, pre_kinds.items);
-    const pre_lens_array = try emitHeapI32Array(ctx, builder, pre_lens.items);
-    if (!std.mem.eql(u8, pre_ptr_array.name, "null")) try pre_heap_allocs.append(pre_ptr_array);
-    if (!std.mem.eql(u8, pre_lens_array.name, "null")) try pre_heap_allocs.append(pre_lens_array);
-    const pre_count_val = try ctx.constI32(@intCast(pre_expanded.ptrs.items.len));
-
-    var post_kinds = std.array_list.Managed(u8).init(ctx.allocator);
-    defer post_kinds.deinit();
-    var post_lens = std.array_list.Managed(i32).init(ctx.allocator);
-    defer post_lens.deinit();
-    var post_heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
-    defer post_heap_allocs.deinit();
-    for (post_expanded.types.items, 0..) |ty, idx| {
-        switch (ty) {
-            .i32 => {
-                try post_kinds.append('i');
-                try post_lens.append(0);
-            },
-            .f32 => {
-                try post_kinds.append('f');
-                try post_lens.append(0);
-            },
-            .f64 => {
-                try post_kinds.append('d');
-                try post_lens.append(0);
-            },
-            .i1 => {
-                try post_kinds.append('l');
-                try post_lens.append(0);
-            },
-            .ptr => {
-                const len = post_expanded.char_lens.items[idx];
-                if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
-                try post_kinds.append('s');
-                try post_lens.append(@intCast(len));
-            },
-            else => return null,
-        }
+    const post_packed = packReadTargets(ctx, builder, &post_expanded) catch return null;
+    defer {
+        emitFreeAllocs(ctx, builder, post_packed.heap_allocs) catch {};
+        ctx.allocator.free(post_packed.heap_allocs);
     }
-    const post_ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, post_expanded.ptrs.items);
-    const post_kinds_ptr = try emitKindArray(ctx, builder, post_kinds.items);
-    const post_lens_array = try emitHeapI32Array(ctx, builder, post_lens.items);
-    if (!std.mem.eql(u8, post_ptr_array.name, "null")) try post_heap_allocs.append(post_ptr_array);
-    if (!std.mem.eql(u8, post_lens_array.name, "null")) try post_heap_allocs.append(post_lens_array);
-    const post_count_val = try ctx.constI32(@intCast(post_expanded.ptrs.items.len));
 
     const mid_kind_val: i64 = switch (sym.type_kind) {
         .integer => 'i',
@@ -665,17 +518,59 @@ fn emitDynamicImpliedDoListRead(
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, mix_decl, &.{
         unit_i32,
-        pre_ptr_array, pre_kinds_ptr, pre_lens_array, pre_count_val,
+        pre_packed.ptr_array, pre_packed.kinds_ptr, pre_packed.lens_array, pre_packed.arg_count,
         try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
-        post_ptr_array, post_kinds_ptr, post_lens_array, post_count_val,
+        post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_array, post_packed.arg_count,
         ValueRef{ .name = "1", .ty = .i32, .is_ptr = false },
     });
 
     try applyComplexFixups(ctx, builder, &pre_expanded);
     try applyComplexFixups(ctx, builder, &post_expanded);
-    try emitFreeAllocs(ctx, builder, pre_heap_allocs.items);
-    try emitFreeAllocs(ctx, builder, post_heap_allocs.items);
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+}
+
+fn emitImpliedFinalCount(ctx: *Context, builder: anytype, start_expr: *ast.Expr, end_expr: *ast.Expr) EmitError!ValueRef {
+    var start_val = try expr.emitExpr(ctx, builder, start_expr);
+    start_val = try expr.coerce(ctx, builder, start_val, .i32);
+    var end_val = try expr.emitExpr(ctx, builder, end_expr);
+    end_val = try expr.coerce(ctx, builder, end_val, .i32);
+
+    const diff_tmp = try ctx.nextTemp();
+    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
+    const diff = ValueRef{ .name = diff_tmp, .ty = .i32, .is_ptr = false };
+    const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+    const count_tmp = try ctx.nextTemp();
+    try builder.binary(count_tmp, "add", .i32, diff, one);
+    const count_raw = ValueRef{ .name = count_tmp, .ty = .i32, .is_ptr = false };
+    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+    const nonpos_tmp = try ctx.nextTemp();
+    try builder.compare(nonpos_tmp, "icmp", "sle", .i32, count_raw, zero);
+    const nonpos = ValueRef{ .name = nonpos_tmp, .ty = .i1, .is_ptr = false };
+    const final_count_tmp = try ctx.nextTemp();
+    try builder.select(final_count_tmp, .i32, nonpos, zero, count_raw);
+    return .{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
+}
+
+fn emitImpliedBasePtr(
+    ctx: *Context,
+    builder: anytype,
+    call: ast.CallOrSubscript,
+    loop_dim: usize,
+    start_expr: *ast.Expr,
+) EmitError!ValueRef {
+    const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
+    defer ctx.allocator.free(base_args);
+    for (call.args, 0..) |arg, idx| {
+        base_args[idx] = arg;
+    }
+    base_args[loop_dim] = start_expr;
+    var base_expr = ast.Expr{
+        .call_or_subscript = .{
+            .name = call.name,
+            .args = base_args,
+        },
+    };
+    return expr.emitLValue(ctx, builder, &base_expr);
 }
 
 fn impliedLoopDim(args: []*ast.Expr, loop_var: []const u8) ?usize {
