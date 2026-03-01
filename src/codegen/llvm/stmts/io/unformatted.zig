@@ -267,6 +267,16 @@ fn findSingleArrayArg(ctx: *Context, args: []*ast.Expr) ?usize {
     return found;
 }
 
+fn findSingleImpliedDoArg(args: []*ast.Expr) ?usize {
+    var found: ?usize = null;
+    for (args, 0..) |arg, idx| {
+        if (arg.* != .implied_do) continue;
+        if (found != null) return null;
+        found = idx;
+    }
+    return found;
+}
+
 fn emitMixedArrayUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt, unit_i32: ValueRef) EmitError!bool {
     const arr_idx = findSingleArrayArg(ctx, write.args) orelse return false;
     const arr_arg = write.args[arr_idx];
@@ -440,13 +450,7 @@ fn emitDynamicImpliedDoUnformattedWrite(
     write: ast.WriteStmt,
     unit_i32: ValueRef,
 ) EmitError!bool {
-    var implied_idx_opt: ?usize = null;
-    for (write.args, 0..) |arg, idx| {
-        if (arg.* != .implied_do) continue;
-        if (implied_idx_opt != null) return false;
-        implied_idx_opt = idx;
-    }
-    const implied_idx = implied_idx_opt orelse return false;
+    const implied_idx = findSingleImpliedDoArg(write.args) orelse return false;
     const implied = write.args[implied_idx].implied_do;
     if (implied.items.len != 1) return false;
     if (implied.items[0].* != .call_or_subscript) return false;
@@ -525,13 +529,7 @@ fn emitDynamicImpliedDoUnformattedRead(
     read: ast.ReadStmt,
     unit_i32: ValueRef,
 ) EmitError!?ValueRef {
-    var implied_idx_opt: ?usize = null;
-    for (read.args, 0..) |arg, idx| {
-        if (arg.* != .implied_do) continue;
-        if (implied_idx_opt != null) return null;
-        implied_idx_opt = idx;
-    }
-    const implied_idx = implied_idx_opt orelse return null;
+    const implied_idx = findSingleImpliedDoArg(read.args) orelse return null;
     const implied = read.args[implied_idx].implied_do;
     if (implied.items.len != 1) return null;
     if (implied.items[0].* != .call_or_subscript) return null;
