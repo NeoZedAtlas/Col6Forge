@@ -65,15 +65,19 @@ pub const DoContext = struct {
         return if (self.popLoop()) |frame| frame.cycle_label else null;
     }
 
-    pub fn popLoop(self: *DoContext) ?DoFrame {
-        if (self.scope_stack.items.len == 0) return null;
+    pub fn popLoopOrError(self: *DoContext) !DoFrame {
+        if (self.scope_stack.items.len == 0) return error.EndDoWithoutDo;
         const top = self.scope_stack.items[self.scope_stack.items.len - 1];
-        if (top.kind != .do_loop) return null;
+        if (top.kind != .do_loop) return error.EndDoWithoutDo;
         _ = self.scope_stack.pop();
         return .{
-            .cycle_label = top.cycle_label orelse return null,
+            .cycle_label = top.cycle_label orelse return error.InternalParserState,
             .exit_label = top.exit_label,
         };
+    }
+
+    pub fn popLoop(self: *DoContext) ?DoFrame {
+        return self.popLoopOrError() catch null;
     }
 
     pub fn peek(self: *const DoContext) ?[]const u8 {
@@ -201,18 +205,18 @@ pub const DoContext = struct {
         return null;
     }
 
+    pub fn updateTopDoName(self: *DoContext, name: []const u8, cycle_label: []const u8, exit_label: ?[]const u8) !void {
+        if (self.scope_stack.items.len == 0) return error.UnexpectedToken;
+        const top = &self.scope_stack.items[self.scope_stack.items.len - 1];
+        if (top.kind != .do_loop) return error.UnexpectedToken;
+        const top_cycle = top.cycle_label orelse return error.InternalParserState;
+        if (!std.mem.eql(u8, top_cycle, cycle_label)) return error.InternalParserState;
+        top.name = name;
+        if (exit_label) |label| top.exit_label = label;
+    }
+
     pub fn pushNamedDo(self: *DoContext, name: []const u8, cycle_label: []const u8, exit_label: ?[]const u8) !void {
-        var i = self.scope_stack.items.len;
-        while (i > 0) {
-            i -= 1;
-            const frame = &self.scope_stack.items[i];
-            if (frame.kind != .do_loop) continue;
-            if (!std.mem.eql(u8, frame.cycle_label.?, cycle_label)) continue;
-            frame.name = name;
-            if (exit_label) |label| frame.exit_label = label;
-            return;
-        }
-        return error.UnexpectedToken;
+        return self.updateTopDoName(name, cycle_label, exit_label);
     }
 
     pub fn resolveNamedDoExit(self: *DoContext, name: []const u8) ?[]const u8 {

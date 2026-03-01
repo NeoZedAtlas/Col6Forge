@@ -70,7 +70,7 @@ pub fn parseStatement(
             _ = lp.consumeKeyword("END");
             _ = lp.consumeKeyword("DO");
         }
-        const loop_frame = do_ctx.popLoop() orelse return error.EndDoWithoutDo;
+        const loop_frame = try do_ctx.popLoopOrError();
         const end_label = loop_frame.cycle_label;
         if (loop_frame.exit_label) |exit_label| {
             try do_ctx.pushPending(.{ .label = exit_label, .node = .{ .cont = {} } });
@@ -105,7 +105,7 @@ pub fn parseStatement(
         const stmt_node = try control_flow.parseDoStatement(arena, &do_lp, do_ctx);
         if (loopEndLabel(stmt_node)) |cycle_label| {
             const exit_label = try maybeAttachLoopExitLabel(arena, do_ctx, stmt_node);
-            try do_ctx.pushNamedDo(construct_name, cycle_label, exit_label);
+            try do_ctx.updateTopDoName(construct_name, cycle_label, exit_label);
         }
         index.* += 1;
         return makeStmtWithSource(line, label, stmt_node);
@@ -465,7 +465,7 @@ fn closeCompletedLabeledDoLoops(do_ctx: *DoContext, line_label: ?[]const u8) Par
         // Numeric labels close legacy labeled DO loops when the labeled statement is reached.
         if (std.mem.startsWith(u8, cycle_label, "ENDDO")) break;
         if (!std.mem.eql(u8, cycle_label, normalized)) break;
-        const frame = do_ctx.popLoop() orelse break;
+        const frame = try do_ctx.popLoopOrError();
         if (frame.exit_label) |exit_label| {
             try do_ctx.pushPending(.{ .label = exit_label, .node = .{ .cont = {} } });
         }
