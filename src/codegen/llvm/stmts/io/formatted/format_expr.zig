@@ -175,6 +175,31 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
     var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer heap_allocs.deinit();
 
+    var i32_slots: usize = 0;
+    var f64_slots: usize = 0;
+    for (expanded_values.values.items) |value| {
+        switch (value.ty) {
+            .i32, .i1 => i32_slots += 1,
+            .f32, .f64 => f64_slots += 1,
+            .ptr => {},
+            else => return error.UnsupportedIntrinsicType,
+        }
+    }
+
+    const i32_pool: ?ValueRef = if (i32_slots > 0) blk: {
+        const ptr = try emitMallocBytes(ctx, builder, i32_slots * @sizeOf(i32));
+        try heap_allocs.append(ptr);
+        break :blk ptr;
+    } else null;
+    const f64_pool: ?ValueRef = if (f64_slots > 0) blk: {
+        const ptr = try emitMallocBytes(ctx, builder, f64_slots * @sizeOf(f64));
+        try heap_allocs.append(ptr);
+        break :blk ptr;
+    } else null;
+
+    var i32_index: usize = 0;
+    var f64_index: usize = 0;
+
     for (expanded_values.values.items) |value| {
         switch (value.ty) {
             .ptr => {
@@ -182,28 +207,37 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
                 try arg_kinds.append('s');
             },
             .i32 => {
-                const ptr = try emitMallocBytes(ctx, builder, @sizeOf(i32));
-                try builder.store(value, ptr);
-                try ptr_args.append(ptr);
-                try heap_allocs.append(ptr);
+                const base_ptr = i32_pool orelse return error.InternalCompilerError;
+                const gep_name = try ctx.nextTemp();
+                try builder.gep(gep_name, .i32, base_ptr, try constI32(ctx, @intCast(i32_index)));
+                i32_index += 1;
+                const slot_ptr = ValueRef{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+                try builder.store(value, slot_ptr);
+                try ptr_args.append(slot_ptr);
                 try arg_kinds.append('i');
             },
             .i1 => {
                 const select_tmp = try ctx.nextTemp();
                 try builder.select(select_tmp, .i32, value, try constI32(ctx, 1), try constI32(ctx, 0));
                 const select_val = ValueRef{ .name = select_tmp, .ty = .i32, .is_ptr = false };
-                const ptr = try emitMallocBytes(ctx, builder, @sizeOf(i32));
-                try builder.store(select_val, ptr);
-                try ptr_args.append(ptr);
-                try heap_allocs.append(ptr);
+                const base_ptr = i32_pool orelse return error.InternalCompilerError;
+                const gep_name = try ctx.nextTemp();
+                try builder.gep(gep_name, .i32, base_ptr, try constI32(ctx, @intCast(i32_index)));
+                i32_index += 1;
+                const slot_ptr = ValueRef{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+                try builder.store(select_val, slot_ptr);
+                try ptr_args.append(slot_ptr);
                 try arg_kinds.append('i');
             },
             .f32, .f64 => {
                 const f64_val = try expr.coerce(ctx, builder, value, .f64);
-                const ptr = try emitMallocBytes(ctx, builder, @sizeOf(f64));
-                try builder.store(f64_val, ptr);
-                try ptr_args.append(ptr);
-                try heap_allocs.append(ptr);
+                const base_ptr = f64_pool orelse return error.InternalCompilerError;
+                const gep_name = try ctx.nextTemp();
+                try builder.gep(gep_name, .f64, base_ptr, try constI32(ctx, @intCast(f64_index)));
+                f64_index += 1;
+                const slot_ptr = ValueRef{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+                try builder.store(f64_val, slot_ptr);
+                try ptr_args.append(slot_ptr);
                 try arg_kinds.append('f');
             },
             else => return error.UnsupportedIntrinsicType,

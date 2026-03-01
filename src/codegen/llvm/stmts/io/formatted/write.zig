@@ -499,6 +499,31 @@ fn emitWriteFormattedImpl(
     defer arg_kinds.deinit();
     var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer heap_allocs.deinit();
+
+    var i32_slots: usize = 0;
+    var f64_slots: usize = 0;
+    for (args.items) |arg| {
+        switch (arg.ty) {
+            .i32 => i32_slots += 1,
+            .f64 => f64_slots += 1,
+            .ptr => {},
+            else => return error.UnsupportedIntrinsicType,
+        }
+    }
+
+    const i32_pool: ?ValueRef = if (i32_slots > 0) blk: {
+        const ptr = try emitHeapBytes(ctx, builder, i32_slots * @sizeOf(i32));
+        try heap_allocs.append(ptr);
+        break :blk ptr;
+    } else null;
+    const f64_pool: ?ValueRef = if (f64_slots > 0) blk: {
+        const ptr = try emitHeapBytes(ctx, builder, f64_slots * @sizeOf(f64));
+        try heap_allocs.append(ptr);
+        break :blk ptr;
+    } else null;
+
+    var i32_index: usize = 0;
+    var f64_index: usize = 0;
     for (args.items) |arg| {
         switch (arg.ty) {
             .ptr => {
@@ -507,18 +532,24 @@ fn emitWriteFormattedImpl(
             },
             .i32 => {
                 const val = ValueRef{ .name = arg.name, .ty = .i32, .is_ptr = false };
-                const ptr = try emitHeapBytes(ctx, builder, @sizeOf(i32));
-                try builder.store(val, ptr);
-                try ptr_args.append(ptr);
-                try heap_allocs.append(ptr);
+                const base_ptr = i32_pool orelse return error.InternalCompilerError;
+                const gep_name = try ctx.nextTemp();
+                try builder.gep(gep_name, .i32, base_ptr, try ctx.constI32(@intCast(i32_index)));
+                i32_index += 1;
+                const slot_ptr = ValueRef{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+                try builder.store(val, slot_ptr);
+                try ptr_args.append(slot_ptr);
                 try arg_kinds.append('i');
             },
             .f64 => {
                 const val = ValueRef{ .name = arg.name, .ty = .f64, .is_ptr = false };
-                const ptr = try emitHeapBytes(ctx, builder, @sizeOf(f64));
-                try builder.store(val, ptr);
-                try ptr_args.append(ptr);
-                try heap_allocs.append(ptr);
+                const base_ptr = f64_pool orelse return error.InternalCompilerError;
+                const gep_name = try ctx.nextTemp();
+                try builder.gep(gep_name, .f64, base_ptr, try ctx.constI32(@intCast(f64_index)));
+                f64_index += 1;
+                const slot_ptr = ValueRef{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+                try builder.store(val, slot_ptr);
+                try ptr_args.append(slot_ptr);
                 try arg_kinds.append('f');
             },
             else => return error.UnsupportedIntrinsicType,
