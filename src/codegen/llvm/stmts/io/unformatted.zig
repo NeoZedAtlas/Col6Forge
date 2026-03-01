@@ -22,6 +22,7 @@ const emitKindArray = io_utils.emitKindArray;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
 const expandIoArgs = expansion.expandIoArgs;
+const max_packed_array_elems: usize = 4096;
 
 const UnformattedArgs = struct {
     ptrs: std.array_list.Managed(ValueRef),
@@ -65,7 +66,8 @@ fn appendArg(args: *UnformattedArgs, ptr: ValueRef, kind: u8, len: i32) EmitErro
 }
 
 fn appendArrayArgs(ctx: *Context, builder: anytype, args: *UnformattedArgs, sym: anytype) EmitError!void {
-    const elem_count = ctx.arrayElemCountForSymbol(sym) catch 1;
+    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
+    if (elem_count > max_packed_array_elems) return error.ArrayArgTooLargeForPackedIo;
     const base_ptr = try ctx.getPointer(sym.name);
     const elem_ty = if (sym.type_kind == .character) utils.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
     const char_len = sym.char_len orelse 1;
@@ -229,11 +231,137 @@ fn packUnformattedArgs(
     };
 }
 
+fn emitArrayElemCountI32(ctx: *Context, builder: anytype, sym: anytype) EmitError!ValueRef {
+    if (ctx.arrayElemCountForSymbol(sym) catch null) |count| {
+        return ctx.constI32(@intCast(count));
+    }
+    var total = try ctx.constI32(1);
+    for (sym.dims, 0..) |dim, dim_idx| {
+        var extent = expr.emitSymbolDimExtent(ctx, builder, sym, dim_idx) catch |err| switch (err) {
+            error.UnknownSymbol => try expr.emitDimValue(ctx, builder, dim),
+            else => return err,
+        };
+        if (extent.ty != .i32) extent = try expr.coerce(ctx, builder, extent, .i32);
+        const mul_tmp = try ctx.nextTemp();
+        try builder.binary(mul_tmp, "mul", .i32, total, extent);
+        total = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
+    }
+    return total;
+}
+
+fn findSingleArrayArg(ctx: *Context, args: []*ast.Expr) ?usize {
+    var found: ?usize = null;
+    for (args, 0..) |arg, idx| {
+        if (arg.* != .identifier) continue;
+        const sym = ctx.findSymbol(arg.identifier) orelse continue;
+        if (sym.dims.len == 0) continue;
+        if (found != null) return null;
+        found = idx;
+    }
+    return found;
+}
+
+fn emitMixedArrayUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt, unit_i32: ValueRef) EmitError!bool {
+    const arr_idx = findSingleArrayArg(ctx, write.args) orelse return false;
+    const arr_arg = write.args[arr_idx];
+    const sym = ctx.findSymbol(arr_arg.identifier) orelse return false;
+    if (sym.dims.len == 0 or sym.type_kind == .character) return false;
+
+    var pre_expanded = try expandIoArgs(ctx, write.args[0..arr_idx]);
+    defer pre_expanded.deinit(ctx.allocator);
+    var post_expanded = try expandIoArgs(ctx, write.args[arr_idx + 1 ..]);
+    defer post_expanded.deinit(ctx.allocator);
+    var pre_args = try buildUnformattedWriteArgs(ctx, builder, pre_expanded.items);
+    defer pre_args.deinit();
+    var post_args = try buildUnformattedWriteArgs(ctx, builder, post_expanded.items);
+    defer post_args.deinit();
+    const pre_packed = try packUnformattedArgs(ctx, builder, &pre_args);
+    const post_packed = try packUnformattedArgs(ctx, builder, &post_args);
+
+    const mid_kind_val: i64 = switch (sym.type_kind) {
+        .integer => 'i',
+        .real => 'f',
+        .double_precision => 'd',
+        .complex => 'c',
+        .complex_double => 'z',
+        .logical => 'l',
+        else => return false,
+    };
+    const mix_decl = try ctx.ensureDeclRaw("col6forge_write_unformatted_mix_v_n", .i32, &[_]utils.IRType{
+        .i32,
+        .ptr, .ptr, .ptr, .i32,
+        .i32, .i32, .i32, .ptr,
+        .ptr, .ptr, .ptr, .i32,
+    }, false);
+    const mid_count = try emitArrayElemCountI32(ctx, builder, sym);
+    const one = try ctx.constI32(1);
+    const base_ptr = try ctx.getPointer(sym.name);
+    try builder.callTyped(null, .i32, mix_decl, &.{
+        unit_i32,
+        pre_packed.ptr_array, pre_packed.kinds_ptr, pre_packed.lens_ptr, pre_packed.count,
+        try ctx.constI32(mid_kind_val), mid_count, one, base_ptr,
+        post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
+    });
+    try emitFreeAllocs(ctx, builder, pre_args.heap_allocs.items);
+    try emitFreeAllocs(ctx, builder, post_args.heap_allocs.items);
+    return true;
+}
+
+fn emitMixedArrayUnformattedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt, unit_i32: ValueRef) EmitError!?ValueRef {
+    const arr_idx = findSingleArrayArg(ctx, read.args) orelse return null;
+    const arr_arg = read.args[arr_idx];
+    const sym = ctx.findSymbol(arr_arg.identifier) orelse return null;
+    if (sym.dims.len == 0 or sym.type_kind == .character) return null;
+
+    var pre_expanded = try expandIoArgs(ctx, read.args[0..arr_idx]);
+    defer pre_expanded.deinit(ctx.allocator);
+    var post_expanded = try expandIoArgs(ctx, read.args[arr_idx + 1 ..]);
+    defer post_expanded.deinit(ctx.allocator);
+    var pre_args = try buildUnformattedReadArgs(ctx, builder, pre_expanded.items);
+    defer pre_args.deinit();
+    var post_args = try buildUnformattedReadArgs(ctx, builder, post_expanded.items);
+    defer post_args.deinit();
+    const pre_packed = try packUnformattedArgs(ctx, builder, &pre_args);
+    const post_packed = try packUnformattedArgs(ctx, builder, &post_args);
+
+    const mid_kind_val: i64 = switch (sym.type_kind) {
+        .integer => 'i',
+        .real => 'f',
+        .double_precision => 'd',
+        .complex => 'c',
+        .complex_double => 'z',
+        .logical => 'l',
+        else => return null,
+    };
+    const mix_decl = try ctx.ensureDeclRaw("col6forge_read_unformatted_mix_v_n", .i32, &[_]utils.IRType{
+        .i32,
+        .ptr, .ptr, .ptr, .i32,
+        .i32, .i32, .i32, .ptr,
+        .ptr, .ptr, .ptr, .i32,
+    }, false);
+    const mid_count = try emitArrayElemCountI32(ctx, builder, sym);
+    const one = try ctx.constI32(1);
+    const base_ptr = try ctx.getPointer(sym.name);
+    const status_tmp = try ctx.nextTemp();
+    try builder.callTyped(status_tmp, .i32, mix_decl, &.{
+        unit_i32,
+        pre_packed.ptr_array, pre_packed.kinds_ptr, pre_packed.lens_ptr, pre_packed.count,
+        try ctx.constI32(mid_kind_val), mid_count, one, base_ptr,
+        post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
+    });
+    try emitFreeAllocs(ctx, builder, pre_args.heap_allocs.items);
+    try emitFreeAllocs(ctx, builder, post_args.heap_allocs.items);
+    return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+}
+
 pub fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
 
     if (try emitWholeArrayUnformattedWrite(ctx, builder, write, unit_i32)) {
+        return;
+    }
+    if (try emitMixedArrayUnformattedWrite(ctx, builder, write, unit_i32)) {
         return;
     }
 
@@ -259,6 +387,10 @@ fn emitUnformattedReadImpl(ctx: *Context, builder: anytype, read: ast.ReadStmt, 
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
 
     if (try emitWholeArrayUnformattedRead(ctx, builder, read, unit_i32)) |status| {
+        if (needs_status) return status;
+        return .{ .name = "0", .ty = .i32, .is_ptr = false };
+    }
+    if (try emitMixedArrayUnformattedRead(ctx, builder, read, unit_i32)) |status| {
         if (needs_status) return status;
         return .{ .name = "0", .ty = .i32, .is_ptr = false };
     }
