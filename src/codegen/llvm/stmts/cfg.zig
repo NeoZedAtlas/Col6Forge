@@ -37,6 +37,8 @@ pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !Local
     var label_index = std.StringHashMap(usize).init(ctx.allocator);
     errdefer label_index.deinit();
 
+    var current_block: ?[]const u8 = null;
+    var prev_can_fallthrough = false;
     for (stmts, 0..) |stmt, idx| {
         const name = if (stmt.label) |label| blk: {
             const canonical = canonicalNumericLabel(label);
@@ -63,14 +65,19 @@ pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !Local
                     try label_index.put(canonical, idx);
                 }
             }
+            current_block = block_name;
             break :blk block_name;
         } else blk: {
-            const temp_name = try ctx.nextLabel(prefix);
-            errdefer ctx.allocator.free(temp_name);
-            try local_names.append(temp_name);
-            break :blk temp_name;
+            if (current_block == null or !prev_can_fallthrough) {
+                const temp_name = try ctx.nextLabel(prefix);
+                errdefer ctx.allocator.free(temp_name);
+                try local_names.append(temp_name);
+                current_block = temp_name;
+            }
+            break :blk current_block.?;
         };
         try names.append(name);
+        prev_can_fallthrough = stmtCanFallthroughInBlock(stmt);
     }
 
     const names_slice = try names.toOwnedSlice();
@@ -123,4 +130,11 @@ fn canonicalNumericLabel(label: []const u8) []const u8 {
     var start: usize = 0;
     while (start + 1 < label.len and label[start] == '0') : (start += 1) {}
     return label[start..];
+}
+
+fn stmtCanFallthroughInBlock(stmt: Stmt) bool {
+    return switch (stmt.node) {
+        .assignment, .assign_label, .use_stmt, .data, .format => true,
+        else => false,
+    };
 }

@@ -16,6 +16,11 @@ const LoopAfterMode = enum {
     range_end_next,
 };
 
+fn brIfNeeded(builder: anytype, next_block: []const u8) !void {
+    if (next_block.len == 0) return;
+    try builder.br(next_block);
+}
+
 fn resolveLoopEndIndex(
     label_index: *const std.StringHashMap(usize),
     loop_end_label: []const u8,
@@ -115,16 +120,16 @@ fn emitStmtInner(
     switch (stmt.node) {
         .assignment => |assign| {
             try execution.emitAssignment(ctx, builder, assign);
-            try builder.br(next_block);
+            try brIfNeeded(builder, next_block);
             return true;
         },
         .assign_label => |assign| {
             try execution.emitAssignLabel(ctx, builder, assign);
-            try builder.br(next_block);
+            try brIfNeeded(builder, next_block);
             return true;
         },
         .use_stmt => {
-            try builder.br(next_block);
+            try brIfNeeded(builder, next_block);
             return true;
         },
         .call => |call| {
@@ -133,70 +138,70 @@ fn emitStmtInner(
                 return true;
             }
             try execution.emitCall(ctx, builder, call);
-            try builder.br(next_block);
+            try brIfNeeded(builder, next_block);
             return true;
         },
         .write => |write| {
             const terminated = try io.emitWrite(ctx, builder, write, next_block, local_label_map);
             if (!terminated) {
-                try builder.br(next_block);
+                try brIfNeeded(builder, next_block);
             }
             return true;
         },
         .read => |read| {
             const terminated = try io.emitRead(ctx, builder, read, next_block, local_label_map);
             if (!terminated) {
-                try builder.br(next_block);
+                try brIfNeeded(builder, next_block);
             }
             return true;
         },
         .open => |open_stmt| {
             const terminated = try io.emitOpen(ctx, builder, open_stmt, next_block, local_label_map);
             if (!terminated) {
-                try builder.br(next_block);
+                try brIfNeeded(builder, next_block);
             }
             return true;
         },
         .inquire => |inquire| {
             try io.emitInquire(ctx, builder, inquire);
-            try builder.br(next_block);
+            try brIfNeeded(builder, next_block);
             return true;
         },
         .close => |close_stmt| {
             const terminated = try io.emitClose(ctx, builder, close_stmt, next_block, local_label_map);
             if (!terminated) {
-                try builder.br(next_block);
+                try brIfNeeded(builder, next_block);
             }
             return true;
         },
         .rewind => |rewind| {
             const terminated = try io.emitRewind(ctx, builder, rewind, next_block, local_label_map);
             if (!terminated) {
-                try builder.br(next_block);
+                try brIfNeeded(builder, next_block);
             }
             return true;
         },
         .backspace => |backspace| {
             const terminated = try io.emitBackspace(ctx, builder, backspace, next_block, local_label_map);
             if (!terminated) {
-                try builder.br(next_block);
+                try brIfNeeded(builder, next_block);
             }
             return true;
         },
         .endfile => |endfile| {
             const terminated = try io.emitEndfile(ctx, builder, endfile, next_block, local_label_map);
             if (!terminated) {
-                try builder.br(next_block);
+                try brIfNeeded(builder, next_block);
             }
             return true;
         },
         .data => |data| {
             try execution.emitData(ctx, builder, data);
-            try builder.br(next_block);
+            try brIfNeeded(builder, next_block);
             return true;
         },
         .format => {
-            try builder.br(next_block);
+            try brIfNeeded(builder, next_block);
             return true;
         },
         .arith_if => |arith| {
@@ -205,7 +210,7 @@ fn emitStmtInner(
         },
         .pause => |pause_stmt| {
             try execution.emitPause(ctx, builder, pause_stmt);
-            try builder.br(next_block);
+            try brIfNeeded(builder, next_block);
             return true;
         },
         .stop => {
@@ -234,7 +239,7 @@ fn emitStmtInner(
         },
         .cont => {
             if (try execution.emitContinuationDirective(ctx, builder, stmt)) {
-                try builder.br(next_block);
+                try brIfNeeded(builder, next_block);
                 return true;
             }
         },
@@ -246,7 +251,7 @@ fn emitStmtInner(
             return control.emitIfBlock(ctx, builder, ifb, next_block, local_label_map, emitStmtListRange);
         },
     }
-    try builder.br(next_block);
+    try brIfNeeded(builder, next_block);
     return true;
 }
 
@@ -255,12 +260,15 @@ pub fn emitSequence(ctx: *Context, builder: anytype, block_names: [][]const u8, 
     while (i <= end_idx) {
         const stmt = ctx.unit.stmts[i];
         const block_name = block_names[i];
-        try builder.label(block_name);
+        if (i == start_idx or !std.mem.eql(u8, block_names[i - 1], block_name)) {
+            try builder.label(block_name);
+        }
         if (try tryEmitLoopForUnit(ctx, builder, stmt, block_names, i, end_idx, .unit_tail_exit, "exit")) |next_i| {
             i = next_i;
             continue;
         }
-        const next_block = if (i + 1 <= end_idx) block_names[i + 1] else "exit";
+        const immediate_next = if (i + 1 <= end_idx) block_names[i + 1] else "exit";
+        const next_block = if (std.mem.eql(u8, immediate_next, block_name)) "" else immediate_next;
         _ = try emitStmt(ctx, builder, stmt, next_block, null);
         i += 1;
     }
@@ -278,12 +286,15 @@ pub fn emitSequenceWithEnd(
     while (i <= end_idx) {
         const stmt = ctx.unit.stmts[i];
         const block_name = block_names[i];
-        try builder.label(block_name);
+        if (i == start_idx or !std.mem.eql(u8, block_names[i - 1], block_name)) {
+            try builder.label(block_name);
+        }
         if (try tryEmitLoopForUnit(ctx, builder, stmt, block_names, i, end_idx, .range_end_next, end_next)) |next_i| {
             i = next_i;
             continue;
         }
-        const next_block = if (i == end_idx) end_next else block_names[i + 1];
+        const immediate_next = if (i == end_idx) end_next else block_names[i + 1];
+        const next_block = if (std.mem.eql(u8, immediate_next, block_name)) "" else immediate_next;
         _ = try emitStmt(ctx, builder, stmt, next_block, null);
         i += 1;
     }
@@ -304,12 +315,15 @@ pub fn emitStmtListRange(
     while (i <= end_idx) {
         const stmt = stmts[i];
         const block_name = block_names[i];
-        try builder.label(block_name);
+        if (i == start_idx or !std.mem.eql(u8, block_names[i - 1], block_name)) {
+            try builder.label(block_name);
+        }
         if (try tryEmitLoopForList(ctx, builder, stmt, stmts, block_names, label_map, label_index, i, end_idx, end_next)) |next_i| {
             i = next_i;
             continue;
         }
-        const next_block = if (i == end_idx) end_next else block_names[i + 1];
+        const immediate_next = if (i == end_idx) end_next else block_names[i + 1];
+        const next_block = if (std.mem.eql(u8, immediate_next, block_name)) "" else immediate_next;
         _ = try emitStmt(ctx, builder, stmt, next_block, label_map);
         i += 1;
     }

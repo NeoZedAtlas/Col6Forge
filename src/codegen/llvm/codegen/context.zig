@@ -268,6 +268,8 @@ pub const Context = struct {
 
     pub fn buildBlockNames(self: *Context) ![][]const u8 {
         var names = std.array_list.Managed([]const u8).init(self.allocator);
+        var current_block: ?[]const u8 = null;
+        var prev_can_fallthrough = false;
         for (self.unit.stmts, 0..) |stmt, idx| {
             const name = if (stmt.label) |label| blk: {
                 const block_name = try self.allocPrefixedName("L", label);
@@ -282,9 +284,16 @@ pub const Context = struct {
                         try self.label_index.put(canonical, idx);
                     }
                 }
+                current_block = block_name;
                 break :blk block_name;
-            } else try self.allocIndexedName("bb", idx, false);
+            } else blk: {
+                if (current_block == null or !prev_can_fallthrough) {
+                    current_block = try self.allocIndexedName("bb", idx, false);
+                }
+                break :blk current_block.?;
+            };
             try names.append(name);
+            prev_can_fallthrough = stmtCanFallthroughInBlock(stmt);
         }
         return names.toOwnedSlice();
     }
@@ -508,6 +517,13 @@ fn canonicalNumericLabel(label: []const u8) []const u8 {
     var start: usize = 0;
     while (start + 1 < label.len and label[start] == '0') : (start += 1) {}
     return label[start..];
+}
+
+fn stmtCanFallthroughInBlock(stmt: input.ast.Stmt) bool {
+    return switch (stmt.node) {
+        .assignment, .assign_label, .use_stmt, .data, .format => true,
+        else => false,
+    };
 }
 
 fn writeUnsignedDecimal(buffer: []u8, value: usize) []const u8 {
