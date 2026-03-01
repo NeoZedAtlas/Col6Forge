@@ -41,6 +41,20 @@ fn emitListDirectedWriteExternal(ctx: *Context, builder: anytype, write: ast.Wri
     for (expanded_values.values.items, 0..) |value, idx| {
         switch (value.ty) {
             .i32, .f32, .f64, .i1, .complex_f32, .complex_f64 => {
+                if (expanded_values.source_ptrs.items[idx]) |src_ptr| {
+                    try ptr_args.append(src_ptr);
+                    try arg_kinds.append(switch (value.ty) {
+                        .i32 => 'i',
+                        .f32 => 'f',
+                        .f64 => 'd',
+                        .i1 => 'l',
+                        .complex_f32 => 'c',
+                        .complex_f64 => 'z',
+                        else => unreachable,
+                    });
+                    try arg_lens.append(0);
+                    continue;
+                }
                 const bytes: usize = switch (value.ty) {
                     .i32, .f32 => 4,
                     .f64 => 8,
@@ -109,6 +123,20 @@ fn emitListDirectedWriteInternal(
     for (expanded_values.values.items, 0..) |value, idx| {
         switch (value.ty) {
             .i32, .f32, .f64, .i1, .complex_f32, .complex_f64 => {
+                if (expanded_values.source_ptrs.items[idx]) |src_ptr| {
+                    try ptr_args.append(src_ptr);
+                    try arg_kinds.append(switch (value.ty) {
+                        .i32 => 'i',
+                        .f32 => 'f',
+                        .f64 => 'd',
+                        .i1 => 'l',
+                        .complex_f32 => 'c',
+                        .complex_f64 => 'z',
+                        else => unreachable,
+                    });
+                    try arg_lens.append(0);
+                    continue;
+                }
                 const bytes: usize = switch (value.ty) {
                     .i32, .f32 => 4,
                     .f64 => 8,

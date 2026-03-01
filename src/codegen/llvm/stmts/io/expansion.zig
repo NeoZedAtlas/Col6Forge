@@ -46,19 +46,28 @@ pub const ExpandedReadTargets = struct {
 pub const ExpandedWriteValues = struct {
     values: std.array_list.Managed(ValueRef),
     char_lens: std.array_list.Managed(usize),
+    source_ptrs: std.array_list.Managed(?ValueRef),
 
     pub fn init(allocator: std.mem.Allocator) ExpandedWriteValues {
         return .{
             .values = std.array_list.Managed(ValueRef).init(allocator),
             .char_lens = std.array_list.Managed(usize).init(allocator),
+            .source_ptrs = std.array_list.Managed(?ValueRef).init(allocator),
         };
     }
 
     pub fn deinit(self: *ExpandedWriteValues) void {
         self.values.deinit();
         self.char_lens.deinit();
+        self.source_ptrs.deinit();
     }
 };
+
+fn appendWriteValue(expanded: *ExpandedWriteValues, value: ValueRef, char_len: usize, source_ptr: ?ValueRef) !void {
+    try expanded.values.append(value);
+    try expanded.char_lens.append(char_len);
+    try expanded.source_ptrs.append(source_ptr);
+}
 
 pub const ExpandedIoArgs = struct {
     items: []*ast.Expr,
@@ -591,8 +600,7 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
                     const ptr_name = try ctx.nextTemp();
                     try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
                     if (sym.type_kind == .character) {
-                        try expanded.values.append(.{ .name = ptr_name, .ty = .ptr, .is_ptr = false });
-                        try expanded.char_lens.append(sym.char_len orelse 1);
+                        try appendWriteValue(&expanded, .{ .name = ptr_name, .ty = .ptr, .is_ptr = false }, sym.char_len orelse 1, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
                     } else {
                         const tmp = try ctx.nextTemp();
                         try builder.load(tmp, elem_ty, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
@@ -600,13 +608,10 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
                         if (complex.isComplexType(loaded.ty)) {
                             const real = try complex.extractComplex(ctx, builder, loaded, 0);
                             const imag = try complex.extractComplex(ctx, builder, loaded, 1);
-                            try expanded.values.append(real);
-                            try expanded.char_lens.append(0);
-                            try expanded.values.append(imag);
-                            try expanded.char_lens.append(0);
+                            try appendWriteValue(&expanded, real, 0, null);
+                            try appendWriteValue(&expanded, imag, 0, null);
                         } else {
-                            try expanded.values.append(loaded);
-                            try expanded.char_lens.append(0);
+                            try appendWriteValue(&expanded, loaded, 0, null);
                         }
                     }
                 }
@@ -618,30 +623,25 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
                 if (complex.isComplexType(value.ty)) {
                     const real = try complex.extractComplex(ctx, builder, value, 0);
                     const imag = try complex.extractComplex(ctx, builder, value, 1);
-                    try expanded.values.append(real);
-                    try expanded.char_lens.append(0);
-                    try expanded.values.append(imag);
-                    try expanded.char_lens.append(0);
+                    try appendWriteValue(&expanded, real, 0, null);
+                    try appendWriteValue(&expanded, imag, 0, null);
                 } else {
                     const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
-                    try expanded.values.append(value);
-                    try expanded.char_lens.append(len);
+                    try appendWriteValue(&expanded, value, len, null);
                 }
                 continue;
             }
         }
+        const source_ptr = expr.emitLValue(ctx, builder, arg) catch null;
         const value = try expr.emitExpr(ctx, builder, arg);
         if (complex.isComplexType(value.ty)) {
             const real = try complex.extractComplex(ctx, builder, value, 0);
             const imag = try complex.extractComplex(ctx, builder, value, 1);
-            try expanded.values.append(real);
-            try expanded.char_lens.append(0);
-            try expanded.values.append(imag);
-            try expanded.char_lens.append(0);
+            try appendWriteValue(&expanded, real, 0, null);
+            try appendWriteValue(&expanded, imag, 0, null);
         } else {
             const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
-            try expanded.values.append(value);
-            try expanded.char_lens.append(len);
+            try appendWriteValue(&expanded, value, len, source_ptr);
         }
     }
     return expanded;
@@ -660,8 +660,7 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
                 const char_len = sym.char_len orelse 1;
                 if (sym.type_kind == .character) {
                     const total_len = elem_count * char_len;
-                    try expanded.values.append(.{ .name = base_ptr.name, .ty = .ptr, .is_ptr = true });
-                    try expanded.char_lens.append(total_len);
+                    try appendWriteValue(&expanded, .{ .name = base_ptr.name, .ty = .ptr, .is_ptr = true }, total_len, .{ .name = base_ptr.name, .ty = .ptr, .is_ptr = true });
                 } else {
                     var idx: usize = 0;
                     while (idx < elem_count) : (idx += 1) {
@@ -671,8 +670,7 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
                         const tmp = try ctx.nextTemp();
                         try builder.load(tmp, elem_ty, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
                         const loaded = ValueRef{ .name = tmp, .ty = elem_ty, .is_ptr = false };
-                        try expanded.values.append(loaded);
-                        try expanded.char_lens.append(0);
+                        try appendWriteValue(&expanded, loaded, 0, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
                     }
                 }
                 continue;
@@ -681,15 +679,14 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
         if (arg.* == .call_or_subscript) {
             if (try emitCollapsedRangeSubscriptValue(ctx, builder, arg.call_or_subscript)) |value| {
                 const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
-                try expanded.values.append(value);
-                try expanded.char_lens.append(len);
+                try appendWriteValue(&expanded, value, len, null);
                 continue;
             }
         }
+        const source_ptr = expr.emitLValue(ctx, builder, arg) catch null;
         const value = try expr.emitExpr(ctx, builder, arg);
         const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
-        try expanded.values.append(value);
-        try expanded.char_lens.append(len);
+        try appendWriteValue(&expanded, value, len, source_ptr);
     }
     return expanded;
 }
