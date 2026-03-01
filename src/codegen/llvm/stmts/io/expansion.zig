@@ -13,6 +13,7 @@ const ValueRef = context.ValueRef;
 const EmitError = anyerror;
 const max_implied_do_expansion: usize = 1_000_000;
 const max_implied_do_iterations: usize = 65_536;
+const max_static_array_arg_expansion: usize = 4096;
 
 const io_utils = @import("utils.zig");
 
@@ -92,7 +93,8 @@ pub fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) Emi
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
-                const elem_count = ctx.arrayElemCountForSymbol(sym) catch 1;
+                const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
+                if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
                 const char_len = sym.char_len orelse 1;
@@ -583,7 +585,8 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
-                const elem_count = ctx.arrayElemCountForSymbol(sym) catch 1;
+                const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
+                if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
                 const char_len = sym.char_len orelse 1;
@@ -654,7 +657,8 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
-                const elem_count = ctx.arrayElemCountForSymbol(sym) catch 1;
+                const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
+                if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
                 const char_len = sym.char_len orelse 1;

@@ -29,6 +29,7 @@ const expandReadTargets = expansion.expandReadTargets;
 const emitWriteFormattedDirect = formatted.emitWriteFormattedDirect;
 const emitReadFormattedDirect = formatted.emitReadFormattedDirect;
 const formatFromCharArrayData = formatted.formatFromCharArrayData;
+const max_packed_array_elems: usize = 4096;
 
 const PreparedDirectArgs = struct {
     unit_i32: ValueRef,
@@ -43,6 +44,9 @@ const PreparedDirectArgs = struct {
 };
 
 pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
+    if (write.format == .none and try emitWholeArrayDirectWrite(ctx, builder, write)) {
+        return;
+    }
     if (write.format == .none and try emitDynamicImpliedDoDirectWrite(ctx, builder, write)) {
         return;
     }
@@ -74,6 +78,9 @@ pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) Em
 }
 
 pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!void {
+    if (read.format == .none and try emitWholeArrayDirectRead(ctx, builder, read)) {
+        return;
+    }
     if (read.format == .none and try emitDynamicImpliedDoDirectRead(ctx, builder, read)) {
         return;
     }
@@ -164,7 +171,8 @@ fn appendArg(args: *TypedDirectArgs, ptr: ValueRef, kind: u8, len: i32) EmitErro
 }
 
 fn appendArrayArgs(ctx: *Context, builder: anytype, args: *TypedDirectArgs, sym: anytype) EmitError!void {
-    const elem_count = ctx.arrayElemCountForSymbol(sym) catch 1;
+    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
+    if (elem_count > max_packed_array_elems) return error.ArrayArgTooLargeForPackedIo;
     const base_ptr = try ctx.getPointer(sym.name);
     const elem_ty = if (sym.type_kind == .character) utils.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
     const char_len = sym.char_len orelse 1;
@@ -226,6 +234,58 @@ fn buildTypedWriteArgs(ctx: *Context, builder: anytype, args_nodes: []*ast.Expr)
         try appendArg(&out, ptr, try kindForScalarType(value.ty), 0);
     }
     return out;
+}
+
+fn helperNameForDirectArray(sym: anytype, is_write: bool) ?[]const u8 {
+    return switch (sym.type_kind) {
+        .integer => if (is_write) "col6forge_write_direct_i32_n" else "col6forge_read_direct_i32_n",
+        .real => if (is_write) "col6forge_write_direct_f32_n" else "col6forge_read_direct_f32_n",
+        .double_precision => if (is_write) "col6forge_write_direct_f64_n" else "col6forge_read_direct_f64_n",
+        .complex => if (is_write) "col6forge_write_direct_c32_n" else "col6forge_read_direct_c32_n",
+        .complex_double => if (is_write) "col6forge_write_direct_c64_n" else "col6forge_read_direct_c64_n",
+        .logical => if (is_write) "col6forge_write_direct_l_n" else "col6forge_read_direct_l_n",
+        else => null,
+    };
+}
+
+fn emitWholeArrayDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!bool {
+    if (write.rec == null) return false;
+    if (write.args.len != 1 or write.args[0].* != .identifier) return false;
+    const sym = ctx.findSymbol(write.args[0].identifier) orelse return false;
+    if (sym.dims.len == 0 or sym.type_kind == .character) return false;
+    const helper = helperNameForDirectArray(sym, true) orelse return false;
+
+    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return false;
+    const unit_value = try expr.emitExpr(ctx, builder, write.unit);
+    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const rec_value = try expr.emitExpr(ctx, builder, write.rec.?);
+    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const count_i32 = try ctx.constI32(@intCast(elem_count));
+    const one_i32 = try ctx.constI32(1);
+    const base_ptr = try ctx.getPointer(sym.name);
+    const decl = try ctx.ensureDeclRaw(helper, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .i32, .ptr }, false);
+    try builder.callTyped(null, .i32, decl, &.{ unit_i32, rec_i32, count_i32, one_i32, base_ptr });
+    return true;
+}
+
+fn emitWholeArrayDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!bool {
+    if (read.rec == null) return false;
+    if (read.args.len != 1 or read.args[0].* != .identifier) return false;
+    const sym = ctx.findSymbol(read.args[0].identifier) orelse return false;
+    if (sym.dims.len == 0 or sym.type_kind == .character) return false;
+    const helper = helperNameForDirectArray(sym, false) orelse return false;
+
+    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return false;
+    const unit_value = try expr.emitExpr(ctx, builder, read.unit);
+    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const rec_value = try expr.emitExpr(ctx, builder, read.rec.?);
+    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const count_i32 = try ctx.constI32(@intCast(elem_count));
+    const one_i32 = try ctx.constI32(1);
+    const base_ptr = try ctx.getPointer(sym.name);
+    const decl = try ctx.ensureDeclRaw(helper, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .i32, .ptr }, false);
+    try builder.callTyped(null, .i32, decl, &.{ unit_i32, rec_i32, count_i32, one_i32, base_ptr });
+    return true;
 }
 
 fn buildTypedReadArgs(ctx: *Context, builder: anytype, args_nodes: []*ast.Expr) EmitError!TypedDirectArgs {
