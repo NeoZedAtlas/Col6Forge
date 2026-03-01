@@ -18,7 +18,7 @@ const appendScanfLiteral = io_utils.appendScanfLiteral;
 const appendSpaces = io_utils.appendSpaces;
 const findReversionStart = io_utils.findReversionStart;
 const emitHeapBytes = io_utils.emitHeapBytes;
-const emitHeapPointerArrayFromNames = io_utils.emitHeapPointerArrayFromNames;
+const emitStackPointerArrayFromNames = io_utils.emitStackPointerArrayFromNames;
 const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
@@ -252,8 +252,7 @@ fn emitReadFormattedImpl(
     try builder.gepConstString(fmt_ptr_name, fmt_global, fmt_buf.items.len + 1);
 
     const fmt_ptr = ValueRef{ .name = fmt_ptr_name, .ty = .ptr, .is_ptr = true };
-    const ptr_array = try emitHeapPointerArrayFromNames(ctx, builder, arg_ptrs.items);
-    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
+    const ptr_array = try emitStackPointerArrayFromNames(ctx, builder, arg_ptrs.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
     const arg_count_val = try constI32(ctx, arg_ptrs.items.len);
 

@@ -7,7 +7,6 @@ const utils = @import("../codegen/utils.zig");
 const cfg = @import("cfg.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
-const evaluator = @import("../../../semantic/evaluator.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -640,13 +639,12 @@ fn ensureTypedExternalDeclForCall(
     ret_ty: ir.IRType,
     args: []*ast.Expr,
 ) EmitError![]const u8 {
-    const mangled = try utils.mangleName(ctx.allocator, name);
+    const mangled = try ctx.mangleName(name);
     if (ctx.defined.contains(mangled)) return mangled;
-
-    const param_types = try buildSubroutineAbiParamTypes(ctx, args);
 
     if (ctx.decls.get(mangled)) |existing| {
         if (!existing.varargs) return mangled;
+        const param_types = try buildSubroutineAbiParamTypes(ctx, args);
         try ctx.decls.put(mangled, .{
             .ret_type = context.fortranAbiReturnType(ret_ty),
             .sig = try formatParamSig(ctx, param_types),
@@ -655,6 +653,7 @@ fn ensureTypedExternalDeclForCall(
         return mangled;
     }
 
+    const param_types = try buildSubroutineAbiParamTypes(ctx, args);
     return ctx.ensureDeclRaw(
         mangled,
         context.fortranAbiReturnType(ret_ty),
@@ -1132,18 +1131,6 @@ fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
 }
 
 fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
-    // Only try semantic constant evaluation if the expression is purely literal-based
-    if (isPurelyLiteral(expr_node)) {
-        if (evaluator.evalConst(expr_node, null) catch null) |const_val| {
-            return switch (const_val) {
-                .integer => |v| v,
-                .real => |v| @intFromFloat(v),
-                else => null,
-            };
-        }
-    }
-
-    // Fallback to AST-level parsing
     return switch (expr_node.*) {
         .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
         .unary => |un| {
@@ -1167,16 +1154,6 @@ fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
             };
         },
         else => null,
-    };
-}
-
-fn isPurelyLiteral(expr_node: *ast.Expr) bool {
-    return switch (expr_node.*) {
-        .literal => true,
-        .unary => |un| isPurelyLiteral(un.expr),
-        .binary => |bin| isPurelyLiteral(bin.left) and isPurelyLiteral(bin.right),
-        .complex_literal => |lit| isPurelyLiteral(lit.real) and isPurelyLiteral(lit.imag),
-        else => false,
     };
 }
 

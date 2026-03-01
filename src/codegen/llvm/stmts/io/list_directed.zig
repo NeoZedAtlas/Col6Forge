@@ -17,8 +17,8 @@ const charLenForExpr = io_utils.charLenForExpr;
 const internalUnitRecordCount = io_utils.internalUnitRecordCount;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const emitHeapBytes = io_utils.emitHeapBytes;
-const emitHeapPointerArrayFromValues = io_utils.emitHeapPointerArrayFromValues;
-const emitHeapI32Array = io_utils.emitHeapI32Array;
+const emitStackPointerArrayFromValues = io_utils.emitStackPointerArrayFromValues;
+const emitStackI32Array = io_utils.emitStackI32Array;
 const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
 const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
@@ -104,11 +104,9 @@ fn packWriteArgs(ctx: *Context, builder: anytype, expanded_values: *const expans
         }
     }
 
-    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, ptr_args.items);
+    const ptr_array = try emitStackPointerArrayFromValues(ctx, builder, ptr_args.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const lens_array = try emitHeapI32Array(ctx, builder, arg_lens.items);
-    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
-    if (!std.mem.eql(u8, lens_array.name, "null")) try heap_allocs.append(lens_array);
+    const lens_array = try emitStackI32Array(ctx, builder, arg_lens.items);
     return .{
         .ptr_array = ptr_array,
         .kinds_ptr = kinds_ptr,
@@ -154,11 +152,9 @@ fn packReadTargets(ctx: *Context, builder: anytype, expanded: *const expansion.E
         }
     }
 
-    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
+    const ptr_array = try emitStackPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const lens_array = try emitHeapI32Array(ctx, builder, arg_lens.items);
-    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
-    if (!std.mem.eql(u8, lens_array.name, "null")) try heap_allocs.append(lens_array);
+    const lens_array = try emitStackI32Array(ctx, builder, arg_lens.items);
     return .{
         .ptr_array = ptr_array,
         .kinds_ptr = kinds_ptr,

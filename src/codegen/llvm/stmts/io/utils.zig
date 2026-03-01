@@ -326,6 +326,23 @@ pub fn emitStackPointerArrayFromValues(ctx: *Context, builder: anytype, ptrs: []
     return arr_ptr;
 }
 
+pub fn emitStackI32Array(ctx: *Context, builder: anytype, values: []const i32) EmitError!ValueRef {
+    if (values.len == 0) {
+        return .{ .name = "null", .ty = .ptr, .is_ptr = false };
+    }
+    const arr_name = try ctx.nextTemp();
+    try builder.allocaArray(arr_name, .i32, values.len);
+    const arr_ptr = ValueRef{ .name = arr_name, .ty = .ptr, .is_ptr = true };
+    for (values, 0..) |value, idx| {
+        const off = try ctx.constI32(@intCast(idx));
+        const gep = try ctx.nextTemp();
+        try builder.gep(gep, .i32, arr_ptr, off);
+        const slot_ptr = ValueRef{ .name = gep, .ty = .ptr, .is_ptr = true };
+        try builder.store(try ctx.constI32(value), slot_ptr);
+    }
+    return arr_ptr;
+}
+
 pub fn emitHeapI32Array(ctx: *Context, builder: anytype, values: []const i32) EmitError!ValueRef {
     if (values.len == 0) {
         return .{ .name = "null", .ty = .ptr, .is_ptr = false };
@@ -348,6 +365,23 @@ pub fn emitHeapPointerArrayFromNames(ctx: *Context, builder: anytype, names: []c
     }
     const bytes = names.len * @sizeOf(usize);
     const arr_ptr = try emitHeapBytes(ctx, builder, bytes);
+    for (names, 0..) |name, idx| {
+        const off = try ctx.constI32(@intCast(idx));
+        const gep = try ctx.nextTemp();
+        try builder.gep(gep, .ptr, arr_ptr, off);
+        const slot_ptr = ValueRef{ .name = gep, .ty = .ptr, .is_ptr = true };
+        try builder.store(.{ .name = name, .ty = .ptr, .is_ptr = false }, slot_ptr);
+    }
+    return arr_ptr;
+}
+
+pub fn emitStackPointerArrayFromNames(ctx: *Context, builder: anytype, names: []const []const u8) EmitError!ValueRef {
+    if (names.len == 0) {
+        return .{ .name = "null", .ty = .ptr, .is_ptr = false };
+    }
+    const arr_name = try ctx.nextTemp();
+    try builder.allocaArray(arr_name, .ptr, names.len);
+    const arr_ptr = ValueRef{ .name = arr_name, .ty = .ptr, .is_ptr = true };
     for (names, 0..) |name, idx| {
         const off = try ctx.constI32(@intCast(idx));
         const gep = try ctx.nextTemp();

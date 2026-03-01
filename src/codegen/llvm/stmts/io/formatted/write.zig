@@ -19,9 +19,7 @@ const isAllNewlines = io_utils.isAllNewlines;
 const flushPendingSpaces = io_utils.flushPendingSpaces;
 const findReversionStart = io_utils.findReversionStart;
 const appendIntFormat = io_utils.appendIntFormat;
-const emitHeapBytes = io_utils.emitHeapBytes;
 const emitStackPointerArrayFromValues = io_utils.emitStackPointerArrayFromValues;
-const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 
@@ -497,8 +495,6 @@ fn emitWriteFormattedImpl(
     defer ptr_args.deinit();
     var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_kinds.deinit();
-    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
-    defer heap_allocs.deinit();
 
     var i32_slots: usize = 0;
     var f64_slots: usize = 0;
@@ -512,14 +508,14 @@ fn emitWriteFormattedImpl(
     }
 
     const i32_pool: ?ValueRef = if (i32_slots > 0) blk: {
-        const ptr = try emitHeapBytes(ctx, builder, i32_slots * @sizeOf(i32));
-        try heap_allocs.append(ptr);
-        break :blk ptr;
+        const ptr_name = try ctx.nextTemp();
+        try builder.allocaArray(ptr_name, .i32, i32_slots);
+        break :blk ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
     } else null;
     const f64_pool: ?ValueRef = if (f64_slots > 0) blk: {
-        const ptr = try emitHeapBytes(ctx, builder, f64_slots * @sizeOf(f64));
-        try heap_allocs.append(ptr);
-        break :blk ptr;
+        const ptr_name = try ctx.nextTemp();
+        try builder.allocaArray(ptr_name, .f64, f64_slots);
+        break :blk ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
     } else null;
 
     var i32_index: usize = 0;
@@ -572,7 +568,6 @@ fn emitWriteFormattedImpl(
         const write_name = try ctx.ensureDeclRaw("col6forge_write_v", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
         try builder.callTyped(null, .i32, write_name, &.{ unit_i32, fmt_ptr_val, ptr_array, kinds_ptr, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
     }
-    try emitFreeAllocs(ctx, builder, heap_allocs.items);
 }
 
 pub fn emitWriteFormatted(

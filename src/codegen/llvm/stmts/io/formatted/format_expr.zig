@@ -55,14 +55,6 @@ fn constI64(ctx: *Context, value: i64) EmitError!ValueRef {
     return .{ .name = try ctx.intLiteral(value), .ty = .i64, .is_ptr = false };
 }
 
-fn emitMallocBytes(ctx: *Context, builder: anytype, bytes: usize) EmitError!ValueRef {
-    const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &[_]llvm_types.IRType{.i64}, false);
-    const size_val = try constI64(ctx, @intCast(bytes));
-    const tmp = try ctx.nextTemp();
-    try builder.callTyped(tmp, .ptr, malloc_name, &.{size_val});
-    return .{ .name = tmp, .ty = .ptr, .is_ptr = true };
-}
-
 fn emitFreeAllocs(ctx: *Context, builder: anytype, allocs: []const ValueRef) EmitError!void {
     if (allocs.len == 0) return;
     const free_name = try ctx.ensureDeclRaw("free", .void, &[_]llvm_types.IRType{.ptr}, false);
@@ -173,8 +165,6 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
     defer ptr_args.deinit();
     var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_kinds.deinit();
-    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
-    defer heap_allocs.deinit();
 
     var i32_slots: usize = 0;
     var f64_slots: usize = 0;
@@ -188,14 +178,14 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
     }
 
     const i32_pool: ?ValueRef = if (i32_slots > 0) blk: {
-        const ptr = try emitMallocBytes(ctx, builder, i32_slots * @sizeOf(i32));
-        try heap_allocs.append(ptr);
-        break :blk ptr;
+        const ptr_name = try ctx.nextTemp();
+        try builder.allocaArray(ptr_name, .i32, i32_slots);
+        break :blk ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
     } else null;
     const f64_pool: ?ValueRef = if (f64_slots > 0) blk: {
-        const ptr = try emitMallocBytes(ctx, builder, f64_slots * @sizeOf(f64));
-        try heap_allocs.append(ptr);
-        break :blk ptr;
+        const ptr_name = try ctx.nextTemp();
+        try builder.allocaArray(ptr_name, .f64, f64_slots);
+        break :blk ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
     } else null;
 
     var i32_index: usize = 0;
@@ -252,15 +242,13 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
         .ptr_array = ptr_array,
         .kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items),
         .arg_count = try constI32(ctx, @intCast(ptr_args.items.len)),
-        .heap_allocs = try heap_allocs.toOwnedSlice(),
+        .heap_allocs = &.{},
     };
 }
 
 fn buildReadRuntimeArgs(ctx: *Context, builder: anytype, expanded: *ExpandedReadTargets) EmitError!RuntimeCallArgs {
     var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_kinds.deinit();
-    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
-    defer heap_allocs.deinit();
 
     for (expanded.types.items) |ty| {
         switch (ty) {
@@ -280,7 +268,7 @@ fn buildReadRuntimeArgs(ctx: *Context, builder: anytype, expanded: *ExpandedRead
         .ptr_array = ptr_array,
         .kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items),
         .arg_count = try constI32(ctx, @intCast(expanded.ptrs.items.len)),
-        .heap_allocs = try heap_allocs.toOwnedSlice(),
+        .heap_allocs = &.{},
     };
 }
 

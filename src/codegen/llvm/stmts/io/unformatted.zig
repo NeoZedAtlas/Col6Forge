@@ -15,8 +15,8 @@ const expansion = @import("expansion.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
 const emitHeapBytes = io_utils.emitHeapBytes;
-const emitHeapPointerArrayFromValues = io_utils.emitHeapPointerArrayFromValues;
-const emitHeapI32Array = io_utils.emitHeapI32Array;
+const emitStackPointerArrayFromValues = io_utils.emitStackPointerArrayFromValues;
+const emitStackI32Array = io_utils.emitStackI32Array;
 const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
 const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
@@ -226,11 +226,9 @@ fn packUnformattedArgs(
     lens_ptr: ValueRef,
     count: ValueRef,
 } {
-    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, args.ptrs.items);
+    const ptr_array = try emitStackPointerArrayFromValues(ctx, builder, args.ptrs.items);
     const kinds_ptr = try emitKindArray(ctx, builder, args.kinds.items);
-    const lens_ptr = try emitHeapI32Array(ctx, builder, args.lens.items);
-    if (!std.mem.eql(u8, ptr_array.name, "null")) try args.heap_allocs.append(ptr_array);
-    if (!std.mem.eql(u8, lens_ptr.name, "null")) try args.heap_allocs.append(lens_ptr);
+    const lens_ptr = try emitStackI32Array(ctx, builder, args.lens.items);
     return .{
         .ptr_array = ptr_array,
         .kinds_ptr = kinds_ptr,

@@ -91,6 +91,25 @@ pub export fn col6forge_store_char(dst: ?[*]u8, len: c_int, src: [*:0]const u8) 
     copyCharField(dst, len, src);
 }
 
+pub export fn col6forge_char_compare(
+    lhs: ?[*]const u8,
+    lhs_len: c_int,
+    rhs: ?[*]const u8,
+    rhs_len: c_int,
+) callconv(.c) c_int {
+    const lhs_n: usize = @intCast(@max(lhs_len, 0));
+    const rhs_n: usize = @intCast(@max(rhs_len, 0));
+    const max_n = @max(lhs_n, rhs_n);
+    var i: usize = 0;
+    while (i < max_n) : (i += 1) {
+        const lhs_ch: u8 = if (lhs != null and i < lhs_n) lhs.?[i] else ' ';
+        const rhs_ch: u8 = if (rhs != null and i < rhs_n) rhs.?[i] else ' ';
+        if (lhs_ch < rhs_ch) return -1;
+        if (lhs_ch > rhs_ch) return 1;
+    }
+    return 0;
+}
+
 pub export fn col6forge_trim_filename(file: ?[*]const u8, file_len: c_int, out: ?[*]u8, out_len: usize) callconv(.c) void {
     if (out == null or out_len == 0) return;
     const dst = out.?;
@@ -124,4 +143,13 @@ test "store char copies text and pads with spaces" {
     var out: [6]u8 = undefined;
     col6forge_store_char(&out, 6, "AB");
     try std.testing.expectEqualSlices(u8, "AB    ", out[0..]);
+}
+
+test "char compare uses blank padding semantics" {
+    const lhs = "AB";
+    const rhs = "AB  ";
+    const gt = "AC";
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_char_compare(@ptrCast(lhs), 2, @ptrCast(rhs), 4));
+    try std.testing.expectEqual(@as(c_int, -1), col6forge_char_compare(@ptrCast(lhs), 2, @ptrCast(gt), 2));
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_char_compare(@ptrCast(gt), 2, @ptrCast(lhs), 2));
 }

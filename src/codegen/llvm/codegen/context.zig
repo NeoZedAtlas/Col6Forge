@@ -134,6 +134,7 @@ pub const Context = struct {
     label_counter: usize,
     current_function_ir_name: ?[]const u8,
     assigned_goto_slots: CaseInsensitiveStringHashMap(ValueRef),
+    mangled_name_cache: CaseInsensitiveStringHashMap([]const u8),
     symbol_index_exact: std.StringHashMap(usize),
     symbol_index: CaseInsensitiveStringHashMap(usize),
     array_elem_count_cache: std.AutoHashMap(usize, usize),
@@ -181,6 +182,7 @@ pub const Context = struct {
             .label_counter = 0,
             .current_function_ir_name = null,
             .assigned_goto_slots = CaseInsensitiveStringHashMap(ValueRef).initContext(allocator, .{}),
+            .mangled_name_cache = CaseInsensitiveStringHashMap([]const u8).initContext(allocator, .{}),
             .symbol_index_exact = std.StringHashMap(usize).init(allocator),
             .symbol_index = CaseInsensitiveStringHashMap(usize).initContext(allocator, .{}),
             .array_elem_count_cache = std.AutoHashMap(usize, usize).init(allocator),
@@ -199,6 +201,7 @@ pub const Context = struct {
             .current_stmt = null,
         };
         errdefer ctx.assigned_goto_slots.deinit();
+        errdefer ctx.mangled_name_cache.deinit();
         errdefer ctx.symbol_index_exact.deinit();
         errdefer ctx.symbol_index.deinit();
         errdefer ctx.array_elem_count_cache.deinit();
@@ -226,6 +229,7 @@ pub const Context = struct {
         self.label_map.deinit();
         self.label_index.deinit();
         self.assigned_goto_slots.deinit();
+        self.mangled_name_cache.deinit();
         self.symbol_index_exact.deinit();
         self.symbol_index.deinit();
         self.array_elem_count_cache.deinit();
@@ -353,11 +357,18 @@ pub const Context = struct {
     }
 
     pub fn ensureDecl(self: *Context, name: []const u8, ret_ty: IRType) ![]const u8 {
-        const mangled = try utils.mangleName(self.allocator, name);
+        const mangled = try self.mangleName(name);
         if (self.defined.contains(mangled)) return mangled;
         if (self.decls.contains(mangled)) return mangled;
         const decl = IRDecl{ .ret_type = fortranAbiReturnType(ret_ty), .sig = "", .varargs = true };
         try self.decls.put(mangled, decl);
+        return mangled;
+    }
+
+    pub fn mangleName(self: *Context, name: []const u8) ![]const u8 {
+        if (self.mangled_name_cache.get(name)) |cached| return cached;
+        const mangled = try utils.mangleName(self.allocator, name);
+        try self.mangled_name_cache.put(name, mangled);
         return mangled;
     }
 

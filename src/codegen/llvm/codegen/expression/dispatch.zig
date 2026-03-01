@@ -4,7 +4,6 @@ const ir = @import("../../../ir.zig");
 const llvm_types = @import("../../types.zig");
 const context = @import("../context.zig");
 const utils = @import("../utils.zig");
-const evaluator = @import("../../../../semantic/evaluator.zig");
 
 const binary = @import("binary.zig");
 const call = @import("call.zig");
@@ -197,12 +196,12 @@ fn ensureExternalDeclForCall(
     args: []*Expr,
     has_character_result: bool,
 ) ![]const u8 {
-    const mangled = try utils.mangleName(ctx.allocator, name);
+    const mangled = try ctx.mangleName(name);
     if (ctx.defined.contains(mangled)) return mangled;
-    const param_types = try buildAbiParamTypes(ctx, ret_ty, args, has_character_result);
 
     if (ctx.decls.get(mangled)) |existing| {
         if (!existing.varargs) return mangled;
+        const param_types = try buildAbiParamTypes(ctx, ret_ty, args, has_character_result);
 
         try ctx.decls.put(mangled, .{
             .ret_type = context.fortranAbiReturnType(ret_ty),
@@ -212,6 +211,7 @@ fn ensureExternalDeclForCall(
         return mangled;
     }
 
+    const param_types = try buildAbiParamTypes(ctx, ret_ty, args, has_character_result);
     return ctx.ensureDeclRaw(
         mangled,
         context.fortranAbiReturnType(ret_ty),
@@ -355,19 +355,6 @@ fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
 }
 
 fn intLiteralValue(expr: *Expr) ?i64 {
-    // Only try semantic constant evaluation if the expression is purely literal-based
-    // (no identifiers that would require runtime evaluation)
-    if (isPurelyLiteral(expr)) {
-        if (evaluator.evalConst(expr, null) catch null) |const_val| {
-            return switch (const_val) {
-                .integer => |v| v,
-                .real => |v| @intFromFloat(v),
-                else => null,
-            };
-        }
-    }
-
-    // Fallback to AST-level parsing
     return switch (expr.*) {
         .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
         .unary => |un| {
@@ -391,16 +378,6 @@ fn intLiteralValue(expr: *Expr) ?i64 {
             };
         },
         else => null,
-    };
-}
-
-fn isPurelyLiteral(expr: *Expr) bool {
-    return switch (expr.*) {
-        .literal => true,
-        .unary => |un| isPurelyLiteral(un.expr),
-        .binary => |bin| isPurelyLiteral(bin.left) and isPurelyLiteral(bin.right),
-        .complex_literal => |lit| isPurelyLiteral(lit.real) and isPurelyLiteral(lit.imag),
-        else => false,
     };
 }
 
@@ -460,90 +437,25 @@ fn emitCharCompare(
     lhs_len: usize,
     rhs_len: usize,
 ) EmitError!ValueRef {
-    const max_len = if (lhs_len > rhs_len) lhs_len else rhs_len;
-    const blank = ValueRef{ .name = try ctx.intLiteral(32), .ty = .i8, .is_ptr = false };
-    var eq_so_far: ?ValueRef = null;
-    var lt_found: ?ValueRef = null;
-    var gt_found: ?ValueRef = null;
-    var idx: usize = 0;
-    while (idx < max_len) : (idx += 1) {
-        var lhs_val = blank;
-        var rhs_val = blank;
-        if (idx < lhs_len) {
-            const offset = try ctx.constI32(@intCast(idx));
-            const lhs_gep = try ctx.nextTemp();
-            try builder.gep(lhs_gep, .i8, lhs_ptr, offset);
-            const lhs_tmp = try ctx.nextTemp();
-            try builder.load(lhs_tmp, .i8, .{ .name = lhs_gep, .ty = .ptr, .is_ptr = true });
-            lhs_val = .{ .name = lhs_tmp, .ty = .i8, .is_ptr = false };
-        }
-        if (idx < rhs_len) {
-            const offset = try ctx.constI32(@intCast(idx));
-            const rhs_gep = try ctx.nextTemp();
-            try builder.gep(rhs_gep, .i8, rhs_ptr, offset);
-            const rhs_tmp = try ctx.nextTemp();
-            try builder.load(rhs_tmp, .i8, .{ .name = rhs_gep, .ty = .ptr, .is_ptr = true });
-            rhs_val = .{ .name = rhs_tmp, .ty = .i8, .is_ptr = false };
-        }
+    const compare_name = try ctx.ensureDeclRaw("col6forge_char_compare", .i32, &[_]ir.IRType{ .ptr, .i32, .ptr, .i32 }, false);
+    const lhs_len_i32 = try ctx.constI32(@intCast(lhs_len));
+    const rhs_len_i32 = try ctx.constI32(@intCast(rhs_len));
 
-        const eq_tmp = try ctx.nextTemp();
-        try builder.compare(eq_tmp, "icmp", "eq", .i8, lhs_val, rhs_val);
-        const eq_val = ValueRef{ .name = eq_tmp, .ty = .i1, .is_ptr = false };
+    const cmp_tmp = try ctx.nextTemp();
+    try builder.callTyped(cmp_tmp, .i32, compare_name, &.{ lhs_ptr, lhs_len_i32, rhs_ptr, rhs_len_i32 });
+    const cmp_val = ValueRef{ .name = cmp_tmp, .ty = .i32, .is_ptr = false };
+    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
 
-        const lt_tmp = try ctx.nextTemp();
-        try builder.compare(lt_tmp, "icmp", "ult", .i8, lhs_val, rhs_val);
-        const lt_val = ValueRef{ .name = lt_tmp, .ty = .i1, .is_ptr = false };
-
-        const gt_tmp = try ctx.nextTemp();
-        try builder.compare(gt_tmp, "icmp", "ugt", .i8, lhs_val, rhs_val);
-        const gt_val = ValueRef{ .name = gt_tmp, .ty = .i1, .is_ptr = false };
-
-        if (eq_so_far) |eq_prev| {
-            const eq_and_lt = try ctx.nextTemp();
-            try builder.binary(eq_and_lt, "and", .i1, eq_prev, lt_val);
-            const lt_or = try ctx.nextTemp();
-            try builder.binary(lt_or, "or", .i1, lt_found.?, .{ .name = eq_and_lt, .ty = .i1, .is_ptr = false });
-            lt_found = .{ .name = lt_or, .ty = .i1, .is_ptr = false };
-
-            const eq_and_gt = try ctx.nextTemp();
-            try builder.binary(eq_and_gt, "and", .i1, eq_prev, gt_val);
-            const gt_or = try ctx.nextTemp();
-            try builder.binary(gt_or, "or", .i1, gt_found.?, .{ .name = eq_and_gt, .ty = .i1, .is_ptr = false });
-            gt_found = .{ .name = gt_or, .ty = .i1, .is_ptr = false };
-
-            const eq_and = try ctx.nextTemp();
-            try builder.binary(eq_and, "and", .i1, eq_prev, eq_val);
-            eq_so_far = .{ .name = eq_and, .ty = .i1, .is_ptr = false };
-        } else {
-            eq_so_far = eq_val;
-            lt_found = lt_val;
-            gt_found = gt_val;
-        }
-    }
-
-    const eq_val = eq_so_far orelse ValueRef{ .name = "1", .ty = .i1, .is_ptr = false };
-    const lt_val = lt_found orelse ValueRef{ .name = "0", .ty = .i1, .is_ptr = false };
-    const gt_val = gt_found orelse ValueRef{ .name = "0", .ty = .i1, .is_ptr = false };
-
-    return switch (op) {
-        .eq => eq_val,
-        .ne => blk: {
-            const tmp = try ctx.nextTemp();
-            try builder.xorI1(tmp, eq_val);
-            break :blk .{ .name = tmp, .ty = .i1, .is_ptr = false };
-        },
-        .lt => lt_val,
-        .le => blk: {
-            const tmp = try ctx.nextTemp();
-            try builder.binary(tmp, "or", .i1, lt_val, eq_val);
-            break :blk .{ .name = tmp, .ty = .i1, .is_ptr = false };
-        },
-        .gt => gt_val,
-        .ge => blk: {
-            const tmp = try ctx.nextTemp();
-            try builder.binary(tmp, "or", .i1, gt_val, eq_val);
-            break :blk .{ .name = tmp, .ty = .i1, .is_ptr = false };
-        },
+    const pred: []const u8 = switch (op) {
+        .eq => "eq",
+        .ne => "ne",
+        .lt => "slt",
+        .le => "sle",
+        .gt => "sgt",
+        .ge => "sge",
         else => return error.UnsupportedLogicalOp,
     };
+    const result_tmp = try ctx.nextTemp();
+    try builder.compare(result_tmp, "icmp", pred, .i32, cmp_val, zero);
+    return .{ .name = result_tmp, .ty = .i1, .is_ptr = false };
 }
