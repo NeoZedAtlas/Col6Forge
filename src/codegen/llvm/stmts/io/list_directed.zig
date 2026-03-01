@@ -21,6 +21,8 @@ const emitHeapPointerArrayFromValues = io_utils.emitHeapPointerArrayFromValues;
 const emitHeapI32Array = io_utils.emitHeapI32Array;
 const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
+const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
+const emitImpliedBasePtr = io_utils.emitImpliedBasePtr;
 const expandWriteArgsList = expansion.expandWriteArgsList;
 const expandReadTargets = expansion.expandReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
@@ -525,50 +527,6 @@ fn emitDynamicImpliedDoListRead(
     try applyComplexFixups(ctx, builder, &pre_expanded);
     try applyComplexFixups(ctx, builder, &post_expanded);
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
-}
-
-fn emitImpliedFinalCount(ctx: *Context, builder: anytype, start_expr: *ast.Expr, end_expr: *ast.Expr) EmitError!ValueRef {
-    var start_val = try expr.emitExpr(ctx, builder, start_expr);
-    start_val = try expr.coerce(ctx, builder, start_val, .i32);
-    var end_val = try expr.emitExpr(ctx, builder, end_expr);
-    end_val = try expr.coerce(ctx, builder, end_val, .i32);
-
-    const diff_tmp = try ctx.nextTemp();
-    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
-    const diff = ValueRef{ .name = diff_tmp, .ty = .i32, .is_ptr = false };
-    const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-    const count_tmp = try ctx.nextTemp();
-    try builder.binary(count_tmp, "add", .i32, diff, one);
-    const count_raw = ValueRef{ .name = count_tmp, .ty = .i32, .is_ptr = false };
-    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
-    const nonpos_tmp = try ctx.nextTemp();
-    try builder.compare(nonpos_tmp, "icmp", "sle", .i32, count_raw, zero);
-    const nonpos = ValueRef{ .name = nonpos_tmp, .ty = .i1, .is_ptr = false };
-    const final_count_tmp = try ctx.nextTemp();
-    try builder.select(final_count_tmp, .i32, nonpos, zero, count_raw);
-    return .{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
-}
-
-fn emitImpliedBasePtr(
-    ctx: *Context,
-    builder: anytype,
-    call: ast.CallOrSubscript,
-    loop_dim: usize,
-    start_expr: *ast.Expr,
-) EmitError!ValueRef {
-    const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
-    defer ctx.allocator.free(base_args);
-    for (call.args, 0..) |arg, idx| {
-        base_args[idx] = arg;
-    }
-    base_args[loop_dim] = start_expr;
-    var base_expr = ast.Expr{
-        .call_or_subscript = .{
-            .name = call.name,
-            .args = base_args,
-        },
-    };
-    return expr.emitLValue(ctx, builder, &base_expr);
 }
 
 fn impliedLoopDim(args: []*ast.Expr, loop_var: []const u8) ?usize {
