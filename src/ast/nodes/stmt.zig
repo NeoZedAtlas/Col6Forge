@@ -110,6 +110,8 @@ pub const OpenStmt = struct {
     form: ?*Expr,
     blank: ?*Expr,
     status: ?*Expr,
+    err_label: ?[]const u8,
+    iostat: ?*Expr,
 };
 
 pub const InquireStmt = struct {

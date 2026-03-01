@@ -204,6 +204,8 @@ pub fn parseOpenStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
     var form_expr: ?*Expr = null;
     var blank_expr: ?*Expr = null;
     var status_expr: ?*Expr = null;
+    var err_label: ?[]const u8 = null;
+    var iostat_expr: ?*Expr = null;
     var first = true;
     while (!lp.peekIs(.r_paren)) {
         if (!first) {
@@ -242,6 +244,20 @@ pub fn parseOpenStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
             status_expr = try expr.parseExpr(lp, arena, 0);
             continue;
         }
+        if (context.eqNoCase(name, "ERR")) {
+            const err_tok = lp.peek() orelse return error.UnexpectedToken;
+            if (err_tok.kind == .integer or err_tok.kind == .identifier) {
+                _ = lp.next();
+                err_label = normalizeLabelText(lp.tokenText(err_tok));
+                continue;
+            }
+            _ = try expr.parseExpr(lp, arena, 0);
+            continue;
+        }
+        if (context.eqNoCase(name, "IOSTAT")) {
+            iostat_expr = try expr.parseExpr(lp, arena, 0);
+            continue;
+        }
         if (context.eqNoCase(name, "RECL")) {
             recl_expr = try expr.parseExpr(lp, arena, 0);
             continue;
@@ -250,7 +266,17 @@ pub fn parseOpenStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtEr
     }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     const unit_final = unit_expr orelse return error.UnexpectedToken;
-    return .{ .open = .{ .unit = unit_final, .recl = recl_expr, .file = file_expr, .access = access_expr, .form = form_expr, .blank = blank_expr, .status = status_expr } };
+    return .{ .open = .{
+        .unit = unit_final,
+        .recl = recl_expr,
+        .file = file_expr,
+        .access = access_expr,
+        .form = form_expr,
+        .blank = blank_expr,
+        .status = status_expr,
+        .err_label = err_label,
+        .iostat = iostat_expr,
+    } };
 }
 
 pub fn parseInquireStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {

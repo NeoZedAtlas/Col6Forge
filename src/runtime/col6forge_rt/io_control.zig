@@ -195,16 +195,31 @@ pub export fn col6forge_open_ex(
     status_len: c_int,
     recl: c_int,
     has_recl: c_int,
-) callconv(.c) void {
+) callconv(.c) c_int {
     const access_default: c_int = if (has_recl != 0) 1 else 0;
     const access_code = decodeAccess(access, access_len, access_default);
     const form_code = decodeForm(form, form_len, 0);
     const blank_code = decodeBlank(blank, blank_len, 0);
     const status_code = decodeOpenStatus(status, status_len, 0);
+
+    // STATUS='OLD' requires the target file to already exist.
+    if (status_code == 1) {
+        var file_name: [COL6FORGE_FILENAME_MAX]u8 = [_]u8{0} ** COL6FORGE_FILENAME_MAX;
+        if (file != null and file_len > 0) {
+            col6forge_trim_filename(file, file_len, &file_name, file_name.len);
+        } else {
+            unit_filename(unit, &file_name, file_name.len);
+        }
+        if (!col6forgeFileExists(asConstCStr(&file_name))) {
+            return 1;
+        }
+    }
+
     col6forge_open(unit, file, file_len, access_code, form_code, blank_code, status_code);
     if (access_code == 1 and has_recl != 0 and recl > 0) {
         col6forge_open_direct(unit, recl);
     }
+    return 0;
 }
 
 pub export fn col6forge_close(unit: c_int, status: c_int) callconv(.c) void {

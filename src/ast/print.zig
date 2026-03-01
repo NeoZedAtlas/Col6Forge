@@ -137,6 +137,15 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
                 try writer.writeAll("status:\n");
                 try printExpr(writer, status, 3);
             }
+            if (opn.err_label) |label| {
+                try printIndent(writer, 2);
+                try writer.print("err-label: {s}\n", .{label});
+            }
+            if (opn.iostat) |io_expr| {
+                try printIndent(writer, 2);
+                try writer.writeAll("iostat:\n");
+                try printExpr(writer, io_expr, 3);
+            }
         },
         .inquire => |inq| {
             try writer.print(";   stmt label={s} inquire controls({d})\n", .{ label_text, inq.controls.len });
@@ -668,6 +677,8 @@ test "printProgram prints open/read/write control details" {
                 .form = null,
                 .blank = null,
                 .status = null,
+                .err_label = null,
+                .iostat = null,
             },
         },
     };

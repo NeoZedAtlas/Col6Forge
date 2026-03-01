@@ -151,8 +151,10 @@ fn emitStmtInner(
             return true;
         },
         .open => |open_stmt| {
-            try io.emitOpen(ctx, builder, open_stmt);
-            try builder.br(next_block);
+            const terminated = try io.emitOpen(ctx, builder, open_stmt, next_block, local_label_map);
+            if (!terminated) {
+                try builder.br(next_block);
+            }
             return true;
         },
         .inquire => |inquire| {

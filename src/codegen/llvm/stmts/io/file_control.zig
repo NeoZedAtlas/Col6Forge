@@ -2,6 +2,7 @@
 const ast = @import("../../../input.zig");
 const context = @import("../../codegen/context.zig");
 const expr = @import("../../codegen/expression/mod.zig");
+const cfg = @import("../cfg.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -26,18 +27,92 @@ const CharArg = struct {
     len: ValueRef,
 };
 
+fn lookupCharArgLen(ctx: *Context, name: []const u8) ?ValueRef {
+    return ctx.char_arg_lens.get(name);
+}
+
+fn emitCharSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) EmitError!ValueRef {
+    if (sym.char_len) |len| return try constI32(ctx, @intCast(len));
+    if (lookupCharArgLen(ctx, name)) |len_val| return len_val;
+    return try constI32(ctx, 1);
+}
+
+fn emitSubstringLenValue(ctx: *Context, builder: anytype, sub: ast.SubstringExpr) EmitError!ValueRef {
+    const sym = ctx.findSymbol(sub.name) orelse return error.UnknownSymbol;
+    if (sym.type_kind != .character) return error.UnsupportedCast;
+
+    var end_val = try emitCharSymbolLenValue(ctx, sub.name, sym);
+    if (sub.end) |end_expr| {
+        end_val = try expr.emitExpr(ctx, builder, end_expr);
+        if (end_val.ty != .i32) end_val = try expr.coerce(ctx, builder, end_val, .i32);
+    }
+
+    var start_val = try constI32(ctx, 1);
+    if (sub.start) |start_expr| {
+        start_val = try expr.emitExpr(ctx, builder, start_expr);
+        if (start_val.ty != .i32) start_val = try expr.coerce(ctx, builder, start_val, .i32);
+    }
+
+    const diff_tmp = try ctx.nextTemp();
+    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
+    const len_tmp = try ctx.nextTemp();
+    try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, try constI32(ctx, 1));
+    return .{ .name = len_tmp, .ty = .i32, .is_ptr = false };
+}
+
+fn emitCharExprLen(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitError!?ValueRef {
+    switch (expr_node.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return null;
+            if (sym.type_kind != .character) return null;
+            return try emitCharSymbolLenValue(ctx, name, sym);
+        },
+        .call_or_subscript => |call| {
+            const sym = ctx.findSymbol(call.name) orelse return null;
+            if (sym.type_kind != .character) return null;
+            return try emitCharSymbolLenValue(ctx, call.name, sym);
+        },
+        .substring => |sub| {
+            return try emitSubstringLenValue(ctx, builder, sub);
+        },
+        .binary => |bin| {
+            if (bin.op != .concat) return null;
+            const left = try emitCharExprLen(ctx, builder, bin.left) orelse return null;
+            const right = try emitCharExprLen(ctx, builder, bin.right) orelse return null;
+            const sum_tmp = try ctx.nextTemp();
+            try builder.binary(sum_tmp, "add", .i32, left, right);
+            return .{ .name = sum_tmp, .ty = .i32, .is_ptr = false };
+        },
+        else => {
+            if (charLenForExpr(ctx, expr_node)) |len| return try constI32(ctx, @intCast(len));
+            return null;
+        },
+    }
+}
+
+fn emitCharExprLenOrZero(ctx: *Context, builder: anytype, node: ?*ast.Expr) EmitError!ValueRef {
+    const expr_node = node orelse return try constI32(ctx, 0);
+    return (try emitCharExprLen(ctx, builder, expr_node)) orelse try constI32(ctx, 0);
+}
+
 fn emitCharArg(ctx: *Context, builder: anytype, node: ?*ast.Expr) EmitError!CharArg {
     if (node) |expr_node| {
         const value = try expr.emitExpr(ctx, builder, expr_node);
         if (value.ty == .ptr) {
-            const len = charLenForExpr(ctx, expr_node) orelse 0;
-            return .{ .ptr = value, .len = try constI32(ctx, @intCast(len)) };
+            const len = try emitCharExprLen(ctx, builder, expr_node) orelse try constI32(ctx, 0);
+            return .{ .ptr = value, .len = len };
         }
     }
     return .{ .ptr = nullPtr(), .len = try constI32(ctx, 0) };
 }
 
-pub fn emitOpen(ctx: *Context, builder: anytype, open: ast.OpenStmt) EmitError!void {
+pub fn emitOpen(
+    ctx: *Context,
+    builder: anytype,
+    open: ast.OpenStmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!bool {
     const unit_value = try expr.emitExpr(ctx, builder, open.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
     const file_arg = try emitCharArg(ctx, builder, open.file);
@@ -67,7 +142,7 @@ pub fn emitOpen(ctx: *Context, builder: anytype, open: ast.OpenStmt) EmitError!v
         }
     }
 
-    const open_name = try ctx.ensureDeclRaw("col6forge_open_ex", .void, &.{ .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .i32, .i32 }, false);
+    const open_name = try ctx.ensureDeclRaw("col6forge_open_ex", .i32, &.{ .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .i32, .i32 }, false);
     const args = [_]ValueRef{
         unit_i32,
         file_arg.ptr,
@@ -83,7 +158,25 @@ pub fn emitOpen(ctx: *Context, builder: anytype, open: ast.OpenStmt) EmitError!v
         recl_i32,
         has_recl_i32,
     };
-    try builder.callTyped(null, .void, open_name, args[0..]);
+    const status_tmp = try ctx.nextTemp();
+    try builder.callTyped(status_tmp, .i32, open_name, args[0..]);
+    const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+
+    if (open.iostat) |iostat_expr| {
+        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
+        try builder.store(status, iostat_ptr);
+    }
+
+    if (open.err_label) |err_label| {
+        const err_target = cfg.resolveLabel(ctx, local_label_map, err_label) orelse return error.MissingLabel;
+        const cmp_tmp = try ctx.nextTemp();
+        try builder.compare(cmp_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        try builder.brCond(cond, err_target, next_block);
+        return true;
+    }
+
+    return false;
 }
 pub fn emitRewind(ctx: *Context, builder: anytype, rewind: ast.RewindStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, rewind.unit);
@@ -157,33 +250,25 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
     const opened_ptr = if (spec.opened_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
     const number_ptr = if (spec.number_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
     const access_ptr = if (spec.access_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const access_len = if (spec.access_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const access_len_i32 = try emitCharExprLenOrZero(ctx, builder, spec.access_expr);
     const sequential_ptr = if (spec.sequential_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const sequential_len = if (spec.sequential_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const sequential_len_i32 = try emitCharExprLenOrZero(ctx, builder, spec.sequential_expr);
     const direct_ptr = if (spec.direct_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const direct_len = if (spec.direct_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const direct_len_i32 = try emitCharExprLenOrZero(ctx, builder, spec.direct_expr);
     const form_ptr = if (spec.form_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const form_len = if (spec.form_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const form_len_i32 = try emitCharExprLenOrZero(ctx, builder, spec.form_expr);
     const formatted_ptr = if (spec.formatted_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const formatted_len = if (spec.formatted_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const formatted_len_i32 = try emitCharExprLenOrZero(ctx, builder, spec.formatted_expr);
     const unformatted_ptr = if (spec.unformatted_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const unformatted_len = if (spec.unformatted_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const unformatted_len_i32 = try emitCharExprLenOrZero(ctx, builder, spec.unformatted_expr);
     const blank_ptr = if (spec.blank_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const blank_len = if (spec.blank_expr) |expr_node| charLenForExpr(ctx, expr_node) orelse 0 else 0;
+    const blank_len_i32 = try emitCharExprLenOrZero(ctx, builder, spec.blank_expr);
     const recl_ptr = if (spec.recl_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
     const nextrec_ptr = if (spec.nextrec_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const access_len_i32 = try constI32(ctx, @intCast(access_len));
-    const sequential_len_i32 = try constI32(ctx, @intCast(sequential_len));
-    const direct_len_i32 = try constI32(ctx, @intCast(direct_len));
-    const form_len_i32 = try constI32(ctx, @intCast(form_len));
-    const formatted_len_i32 = try constI32(ctx, @intCast(formatted_len));
-    const unformatted_len_i32 = try constI32(ctx, @intCast(unformatted_len));
-    const blank_len_i32 = try constI32(ctx, @intCast(blank_len));
 
     if (spec.file_expr) |file_node| {
         const file_val = try expr.emitExpr(ctx, builder, file_node);
-        const file_len = charLenForExpr(ctx, file_node) orelse 0;
-        const file_len_i32 = try constI32(ctx, @intCast(file_len));
+        const file_len_i32 = (try emitCharExprLen(ctx, builder, file_node)) orelse try constI32(ctx, 0);
         const args = [_]ValueRef{
             file_val,
             file_len_i32,
