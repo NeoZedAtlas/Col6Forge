@@ -161,9 +161,81 @@ fn buildUnformattedReadArgs(ctx: *Context, builder: anytype, expanded_args: []*a
     return out;
 }
 
+fn helperNameForUnformattedArray(sym: anytype, is_write: bool) ?[]const u8 {
+    return switch (sym.type_kind) {
+        .integer => if (is_write) "col6forge_write_unformatted_i32_n" else "col6forge_read_unformatted_i32_n",
+        .real => if (is_write) "col6forge_write_unformatted_f32_n" else "col6forge_read_unformatted_f32_n",
+        .double_precision => if (is_write) "col6forge_write_unformatted_f64_n" else "col6forge_read_unformatted_f64_n",
+        .complex => if (is_write) "col6forge_write_unformatted_c32_n" else "col6forge_read_unformatted_c32_n",
+        .complex_double => if (is_write) "col6forge_write_unformatted_c64_n" else "col6forge_read_unformatted_c64_n",
+        .logical => if (is_write) "col6forge_write_unformatted_l_n" else "col6forge_read_unformatted_l_n",
+        else => null,
+    };
+}
+
+fn emitWholeArrayUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt, unit_i32: ValueRef) EmitError!bool {
+    if (write.args.len != 1) return false;
+    if (write.args[0].* != .identifier) return false;
+    const sym = ctx.findSymbol(write.args[0].identifier) orelse return false;
+    if (sym.dims.len == 0 or sym.type_kind == .character) return false;
+    const helper = helperNameForUnformattedArray(sym, true) orelse return false;
+
+    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return false;
+    const count_i32 = try ctx.constI32(@intCast(elem_count));
+    const one_i32 = try ctx.constI32(1);
+    const base_ptr = try ctx.getPointer(sym.name);
+    const decl = try ctx.ensureDeclRaw(helper, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
+    try builder.callTyped(null, .i32, decl, &.{ unit_i32, count_i32, one_i32, base_ptr });
+    return true;
+}
+
+fn emitWholeArrayUnformattedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt, unit_i32: ValueRef) EmitError!?ValueRef {
+    if (read.args.len != 1) return null;
+    if (read.args[0].* != .identifier) return null;
+    const sym = ctx.findSymbol(read.args[0].identifier) orelse return null;
+    if (sym.dims.len == 0 or sym.type_kind == .character) return null;
+    const helper = helperNameForUnformattedArray(sym, false) orelse return null;
+
+    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return null;
+    const count_i32 = try ctx.constI32(@intCast(elem_count));
+    const one_i32 = try ctx.constI32(1);
+    const base_ptr = try ctx.getPointer(sym.name);
+    const decl = try ctx.ensureDeclRaw(helper, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
+    const status_tmp = try ctx.nextTemp();
+    try builder.callTyped(status_tmp, .i32, decl, &.{ unit_i32, count_i32, one_i32, base_ptr });
+    return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+}
+
+fn packUnformattedArgs(
+    ctx: *Context,
+    builder: anytype,
+    args: *UnformattedArgs,
+) EmitError!struct {
+    ptr_array: ValueRef,
+    kinds_ptr: ValueRef,
+    lens_ptr: ValueRef,
+    count: ValueRef,
+} {
+    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, args.ptrs.items);
+    const kinds_ptr = try emitKindArray(ctx, builder, args.kinds.items);
+    const lens_ptr = try emitHeapI32Array(ctx, builder, args.lens.items);
+    if (!std.mem.eql(u8, ptr_array.name, "null")) try args.heap_allocs.append(ptr_array);
+    if (!std.mem.eql(u8, lens_ptr.name, "null")) try args.heap_allocs.append(lens_ptr);
+    return .{
+        .ptr_array = ptr_array,
+        .kinds_ptr = kinds_ptr,
+        .lens_ptr = lens_ptr,
+        .count = try ctx.constI32(@intCast(args.ptrs.items.len)),
+    };
+}
+
 pub fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+
+    if (try emitWholeArrayUnformattedWrite(ctx, builder, write, unit_i32)) {
+        return;
+    }
 
     if (try emitDynamicImpliedDoUnformattedWrite(ctx, builder, write, unit_i32)) {
         return;
@@ -175,21 +247,21 @@ pub fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStm
     var args = try buildUnformattedWriteArgs(ctx, builder, expanded_args.items);
     defer args.deinit();
 
-    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, args.ptrs.items);
-    const kinds_ptr = try emitKindArray(ctx, builder, args.kinds.items);
-    const lens_ptr = try emitHeapI32Array(ctx, builder, args.lens.items);
-    if (!std.mem.eql(u8, ptr_array.name, "null")) try args.heap_allocs.append(ptr_array);
-    if (!std.mem.eql(u8, lens_ptr.name, "null")) try args.heap_allocs.append(lens_ptr);
-    const count_val = try ctx.constI32(@intCast(args.ptrs.items.len));
+    const packed_args = try packUnformattedArgs(ctx, builder, &args);
 
     const write_name = try ctx.ensureDeclRaw("col6forge_write_unformatted_typed", .void, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32 }, false);
-    try builder.callTyped(null, .void, write_name, &.{ unit_i32, ptr_array, kinds_ptr, lens_ptr, count_val });
+    try builder.callTyped(null, .void, write_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
     try emitFreeAllocs(ctx, builder, args.heap_allocs.items);
 }
 
 fn emitUnformattedReadImpl(ctx: *Context, builder: anytype, read: ast.ReadStmt, needs_status: bool) EmitError!ValueRef {
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+
+    if (try emitWholeArrayUnformattedRead(ctx, builder, read, unit_i32)) |status| {
+        if (needs_status) return status;
+        return .{ .name = "0", .ty = .i32, .is_ptr = false };
+    }
 
     if (try emitDynamicImpliedDoUnformattedRead(ctx, builder, read, unit_i32)) |status| {
         if (needs_status) return status;
@@ -202,24 +274,17 @@ fn emitUnformattedReadImpl(ctx: *Context, builder: anytype, read: ast.ReadStmt, 
     var args = try buildUnformattedReadArgs(ctx, builder, expanded_args.items);
     defer args.deinit();
 
-    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, args.ptrs.items);
-    const kinds_ptr = try emitKindArray(ctx, builder, args.kinds.items);
-    const lens_ptr = try emitHeapI32Array(ctx, builder, args.lens.items);
-    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
-    defer heap_allocs.deinit();
-    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
-    if (!std.mem.eql(u8, lens_ptr.name, "null")) try heap_allocs.append(lens_ptr);
-    const count_val = try ctx.constI32(@intCast(args.ptrs.items.len));
+    const packed_args = try packUnformattedArgs(ctx, builder, &args);
 
     const read_name = try ctx.ensureDeclRaw("col6forge_read_unformatted_typed", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32 }, false);
     if (needs_status) {
         const tmp = try ctx.nextTemp();
-        try builder.callTyped(tmp, .i32, read_name, &.{ unit_i32, ptr_array, kinds_ptr, lens_ptr, count_val });
-        try emitFreeAllocs(ctx, builder, heap_allocs.items);
+        try builder.callTyped(tmp, .i32, read_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
+        try emitFreeAllocs(ctx, builder, args.heap_allocs.items);
         return .{ .name = tmp, .ty = .i32, .is_ptr = false };
     }
-    try builder.callTyped(null, .i32, read_name, &.{ unit_i32, ptr_array, kinds_ptr, lens_ptr, count_val });
-    try emitFreeAllocs(ctx, builder, heap_allocs.items);
+    try builder.callTyped(null, .i32, read_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
+    try emitFreeAllocs(ctx, builder, args.heap_allocs.items);
     return .{ .name = "0", .ty = .i32, .is_ptr = false };
 }
 
@@ -237,9 +302,14 @@ fn emitDynamicImpliedDoUnformattedWrite(
     write: ast.WriteStmt,
     unit_i32: ValueRef,
 ) EmitError!bool {
-    if (write.args.len != 1) return false;
-    if (write.args[0].* != .implied_do) return false;
-    const implied = write.args[0].implied_do;
+    var implied_idx_opt: ?usize = null;
+    for (write.args, 0..) |arg, idx| {
+        if (arg.* != .implied_do) continue;
+        if (implied_idx_opt != null) return false;
+        implied_idx_opt = idx;
+    }
+    const implied_idx = implied_idx_opt orelse return false;
+    const implied = write.args[implied_idx].implied_do;
     if (implied.items.len != 1) return false;
     if (implied.items[0].* != .call_or_subscript) return false;
 
@@ -268,8 +338,46 @@ fn emitDynamicImpliedDoUnformattedWrite(
     const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end);
     const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
 
-    const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
-    try builder.callTyped(null, .i32, decl, &.{ unit_i32, final_count, stride, base_ptr });
+    if (write.args.len == 1) {
+        const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
+        try builder.callTyped(null, .i32, decl, &.{ unit_i32, final_count, stride, base_ptr });
+        return true;
+    }
+
+    var pre_expanded = try expandIoArgs(ctx, write.args[0..implied_idx]);
+    defer pre_expanded.deinit(ctx.allocator);
+    var post_expanded = try expandIoArgs(ctx, write.args[implied_idx + 1 ..]);
+    defer post_expanded.deinit(ctx.allocator);
+    var pre_args = try buildUnformattedWriteArgs(ctx, builder, pre_expanded.items);
+    defer pre_args.deinit();
+    var post_args = try buildUnformattedWriteArgs(ctx, builder, post_expanded.items);
+    defer post_args.deinit();
+    const pre_packed = try packUnformattedArgs(ctx, builder, &pre_args);
+    const post_packed = try packUnformattedArgs(ctx, builder, &post_args);
+
+    const mid_kind_val: i64 = switch (sym.type_kind) {
+        .integer => 'i',
+        .real => 'f',
+        .double_precision => 'd',
+        .complex => 'c',
+        .complex_double => 'z',
+        .logical => 'l',
+        else => return false,
+    };
+    const mix_decl = try ctx.ensureDeclRaw("col6forge_write_unformatted_mix_v_n", .i32, &[_]utils.IRType{
+        .i32,
+        .ptr, .ptr, .ptr, .i32,
+        .i32, .i32, .i32, .ptr,
+        .ptr, .ptr, .ptr, .i32,
+    }, false);
+    try builder.callTyped(null, .i32, mix_decl, &.{
+        unit_i32,
+        pre_packed.ptr_array, pre_packed.kinds_ptr, pre_packed.lens_ptr, pre_packed.count,
+        try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
+        post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
+    });
+    try emitFreeAllocs(ctx, builder, pre_args.heap_allocs.items);
+    try emitFreeAllocs(ctx, builder, post_args.heap_allocs.items);
     return true;
 }
 
@@ -279,9 +387,14 @@ fn emitDynamicImpliedDoUnformattedRead(
     read: ast.ReadStmt,
     unit_i32: ValueRef,
 ) EmitError!?ValueRef {
-    if (read.args.len != 1) return null;
-    if (read.args[0].* != .implied_do) return null;
-    const implied = read.args[0].implied_do;
+    var implied_idx_opt: ?usize = null;
+    for (read.args, 0..) |arg, idx| {
+        if (arg.* != .implied_do) continue;
+        if (implied_idx_opt != null) return null;
+        implied_idx_opt = idx;
+    }
+    const implied_idx = implied_idx_opt orelse return null;
+    const implied = read.args[implied_idx].implied_do;
     if (implied.items.len != 1) return null;
     if (implied.items[0].* != .call_or_subscript) return null;
 
@@ -310,9 +423,48 @@ fn emitDynamicImpliedDoUnformattedRead(
     const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end);
     const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
 
-    const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
+    if (read.args.len == 1) {
+        const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
+        const status_tmp = try ctx.nextTemp();
+        try builder.callTyped(status_tmp, .i32, decl, &.{ unit_i32, final_count, stride, base_ptr });
+        return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+    }
+
+    var pre_expanded = try expandIoArgs(ctx, read.args[0..implied_idx]);
+    defer pre_expanded.deinit(ctx.allocator);
+    var post_expanded = try expandIoArgs(ctx, read.args[implied_idx + 1 ..]);
+    defer post_expanded.deinit(ctx.allocator);
+    var pre_args = try buildUnformattedReadArgs(ctx, builder, pre_expanded.items);
+    defer pre_args.deinit();
+    var post_args = try buildUnformattedReadArgs(ctx, builder, post_expanded.items);
+    defer post_args.deinit();
+    const pre_packed = try packUnformattedArgs(ctx, builder, &pre_args);
+    const post_packed = try packUnformattedArgs(ctx, builder, &post_args);
+
+    const mid_kind_val: i64 = switch (sym.type_kind) {
+        .integer => 'i',
+        .real => 'f',
+        .double_precision => 'd',
+        .complex => 'c',
+        .complex_double => 'z',
+        .logical => 'l',
+        else => return null,
+    };
+    const mix_decl = try ctx.ensureDeclRaw("col6forge_read_unformatted_mix_v_n", .i32, &[_]utils.IRType{
+        .i32,
+        .ptr, .ptr, .ptr, .i32,
+        .i32, .i32, .i32, .ptr,
+        .ptr, .ptr, .ptr, .i32,
+    }, false);
     const status_tmp = try ctx.nextTemp();
-    try builder.callTyped(status_tmp, .i32, decl, &.{ unit_i32, final_count, stride, base_ptr });
+    try builder.callTyped(status_tmp, .i32, mix_decl, &.{
+        unit_i32,
+        pre_packed.ptr_array, pre_packed.kinds_ptr, pre_packed.lens_ptr, pre_packed.count,
+        try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
+        post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
+    });
+    try emitFreeAllocs(ctx, builder, pre_args.heap_allocs.items);
+    try emitFreeAllocs(ctx, builder, post_args.heap_allocs.items);
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
 }
 
