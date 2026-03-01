@@ -89,6 +89,15 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
             try printIndent(writer, 2);
             try writer.writeAll("unit:\n");
             try printExpr(writer, rw.unit, 3);
+            if (rw.err_label) |label| {
+                try printIndent(writer, 2);
+                try writer.print("err-label: {s}\n", .{label});
+            }
+            if (rw.iostat) |io_expr| {
+                try printIndent(writer, 2);
+                try writer.writeAll("iostat:\n");
+                try printExpr(writer, io_expr, 3);
+            }
         },
         .backspace => |bs| {
             try writer.print(";   stmt label={s} backspace\n", .{label_text});

@@ -253,9 +253,10 @@ pub export fn col6forge_close(unit: c_int, status: c_int) callconv(.c) void {
     }
 }
 
-pub export fn col6forge_close_ex(unit: c_int, status: ?[*]const u8, status_len: c_int) callconv(.c) void {
+pub export fn col6forge_close_ex(unit: c_int, status: ?[*]const u8, status_len: c_int) callconv(.c) c_int {
     const status_code = decodeCloseStatus(status, status_len, 0);
     col6forge_close(unit, status_code);
+    return 0;
 }
 
 pub export fn col6forge_inquire_unit(
@@ -390,11 +391,13 @@ pub export fn col6forge_inquire_file(
     if (nextrec) |v| v.* = 0;
 }
 
-pub export fn col6forge_rewind(unit: c_int) callconv(.c) void {
-    if (col6forge_unformatted_rewind(unit) != 0) return;
+pub export fn col6forge_rewind(unit: c_int) callconv(.c) c_int {
+    if (col6forge_unformatted_rewind(unit) != 0) return 1;
     if (col6forge_unit_stream_set_pos(unit, 0) == 0) {
         col6forge_unit_pos_clear(unit);
+        return 0;
     }
+    return 1;
 }
 
 pub export fn col6forge_backspace(unit: c_int) callconv(.c) void {

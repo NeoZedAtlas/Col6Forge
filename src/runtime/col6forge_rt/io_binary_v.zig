@@ -9,7 +9,7 @@ extern fn col6forge_unformatted_begin_write(unit: c_int, sig: ?[*:0]const u8, ou
 extern fn col6forge_unformatted_begin_read(unit: c_int, sig: ?[*:0]const u8, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn col6forge_unformatted_begin_write_len(unit: c_int, record_size: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
 extern fn col6forge_unformatted_begin_read_len(unit: c_int, record_size_hint: usize, out_record: ?*?[*]u8, out_len: ?*usize) c_int;
-extern fn col6forge_rewind(unit: c_int) void;
+extern fn col6forge_rewind(unit: c_int) c_int;
 
 fn runtimeArgCount(arg_count: c_int) usize {
     return @intCast(@max(arg_count, 0));
@@ -648,7 +648,7 @@ test "typed unformatted io roundtrip handles character, complex*16 and logical" 
     const lens: [3]c_int = .{ 5, 0, 0 };
     col6forge_write_unformatted_typed(unit, &write_args, &kinds, &lens, 3);
 
-    col6forge_rewind(unit);
+    _ = col6forge_rewind(unit);
 
     var char_out: [5]u8 = .{ 0, 0, 0, 0, 0 };
     var complex_out: [2]f64 = .{ 0.0, 0.0 };

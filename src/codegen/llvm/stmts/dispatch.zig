@@ -163,13 +163,17 @@ fn emitStmtInner(
             return true;
         },
         .close => |close_stmt| {
-            try io.emitClose(ctx, builder, close_stmt);
-            try builder.br(next_block);
+            const terminated = try io.emitClose(ctx, builder, close_stmt, next_block, local_label_map);
+            if (!terminated) {
+                try builder.br(next_block);
+            }
             return true;
         },
         .rewind => |rewind| {
-            try io.emitRewind(ctx, builder, rewind);
-            try builder.br(next_block);
+            const terminated = try io.emitRewind(ctx, builder, rewind, next_block, local_label_map);
+            if (!terminated) {
+                try builder.br(next_block);
+            }
             return true;
         },
         .backspace => |backspace| {

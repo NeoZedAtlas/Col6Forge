@@ -129,6 +129,8 @@ pub const ControlItem = struct {
 
 pub const RewindStmt = struct {
     unit: *Expr,
+    err_label: ?[]const u8,
+    iostat: ?*Expr,
 };
 
 pub const BackspaceStmt = struct {

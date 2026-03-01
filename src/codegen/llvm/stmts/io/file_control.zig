@@ -95,6 +95,14 @@ fn emitCharExprLenOrZero(ctx: *Context, builder: anytype, node: ?*ast.Expr) Emit
     return (try emitCharExprLen(ctx, builder, expr_node)) orelse try constI32(ctx, 0);
 }
 
+fn controlLabelFromExpr(node: *ast.Expr) ?[]const u8 {
+    return switch (node.*) {
+        .identifier => |name| name,
+        .literal => |lit| if (lit.kind == .integer) lit.text else null,
+        else => null,
+    };
+}
+
 fn emitCharArg(ctx: *Context, builder: anytype, node: ?*ast.Expr) EmitError!CharArg {
     if (node) |expr_node| {
         const value = try expr.emitExpr(ctx, builder, expr_node);
@@ -178,11 +186,35 @@ pub fn emitOpen(
 
     return false;
 }
-pub fn emitRewind(ctx: *Context, builder: anytype, rewind: ast.RewindStmt) EmitError!void {
+pub fn emitRewind(
+    ctx: *Context,
+    builder: anytype,
+    rewind: ast.RewindStmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!bool {
     const unit_value = try expr.emitExpr(ctx, builder, rewind.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
-    const rewind_name = try ctx.ensureDeclRaw("col6forge_rewind", .void, &.{.i32}, false);
-    try builder.callTyped(null, .void, rewind_name, &.{unit_i32});
+    const rewind_name = try ctx.ensureDeclRaw("col6forge_rewind", .i32, &.{.i32}, false);
+    const status_tmp = try ctx.nextTemp();
+    try builder.callTyped(status_tmp, .i32, rewind_name, &.{unit_i32});
+    const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+
+    if (rewind.iostat) |iostat_expr| {
+        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
+        try builder.store(status, iostat_ptr);
+    }
+
+    if (rewind.err_label) |err_label| {
+        const err_target = cfg.resolveLabel(ctx, local_label_map, err_label) orelse return error.MissingLabel;
+        const cmp_tmp = try ctx.nextTemp();
+        try builder.compare(cmp_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        try builder.brCond(cond, err_target, next_block);
+        return true;
+    }
+
+    return false;
 }
 const InquireSpec = struct {
     unit_expr: ?*ast.Expr = null,
@@ -327,15 +359,27 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
     const fn_name = try ctx.ensureDeclRaw("col6forge_inquire_unit", .void, &.{ .i32, .ptr, .ptr, .ptr, .ptr, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .ptr }, true);
     try builder.callTyped(null, .void, fn_name, args[0..]);
 }
-pub fn emitClose(ctx: *Context, builder: anytype, close_stmt: ast.CloseStmt) EmitError!void {
+pub fn emitClose(
+    ctx: *Context,
+    builder: anytype,
+    close_stmt: ast.CloseStmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+) EmitError!bool {
     var unit_expr: ?*ast.Expr = null;
     var status_expr: ?*ast.Expr = null;
+    var iostat_expr: ?*ast.Expr = null;
+    var err_label: ?[]const u8 = null;
     for (close_stmt.controls) |control| {
         if (control.name) |name| {
             if (std.ascii.eqlIgnoreCase(name, "UNIT")) {
                 unit_expr = control.value;
             } else if (std.ascii.eqlIgnoreCase(name, "STATUS")) {
                 status_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "IOSTAT")) {
+                iostat_expr = control.value;
+            } else if (std.ascii.eqlIgnoreCase(name, "ERR")) {
+                err_label = controlLabelFromExpr(control.value);
             }
         } else if (unit_expr == null) {
             unit_expr = control.value;
@@ -345,8 +389,26 @@ pub fn emitClose(ctx: *Context, builder: anytype, close_stmt: ast.CloseStmt) Emi
     const unit_value = try expr.emitExpr(ctx, builder, unit_node);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
     const status_arg = try emitCharArg(ctx, builder, status_expr);
-    const fn_name = try ctx.ensureDeclRaw("col6forge_close_ex", .void, &.{ .i32, .ptr, .i32 }, false);
-    try builder.callTyped(null, .void, fn_name, &.{ unit_i32, status_arg.ptr, status_arg.len });
+    const fn_name = try ctx.ensureDeclRaw("col6forge_close_ex", .i32, &.{ .i32, .ptr, .i32 }, false);
+    const status_tmp = try ctx.nextTemp();
+    try builder.callTyped(status_tmp, .i32, fn_name, &.{ unit_i32, status_arg.ptr, status_arg.len });
+    const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+
+    if (iostat_expr) |iostat_node| {
+        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_node);
+        try builder.store(status, iostat_ptr);
+    }
+
+    if (err_label) |label| {
+        const err_target = cfg.resolveLabel(ctx, local_label_map, label) orelse return error.MissingLabel;
+        const cmp_tmp = try ctx.nextTemp();
+        try builder.compare(cmp_tmp, "icmp", "ne", .i32, status, try constI32(ctx, 0));
+        const cond = ValueRef{ .name = cmp_tmp, .ty = .i1, .is_ptr = false };
+        try builder.brCond(cond, err_target, next_block);
+        return true;
+    }
+
+    return false;
 }
 pub fn emitBackspace(ctx: *Context, builder: anytype, backspace: ast.BackspaceStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, backspace.unit);
