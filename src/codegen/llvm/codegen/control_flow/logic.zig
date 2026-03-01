@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
 const llvm_types = @import("../../types.zig");
+const evaluator = @import("../../../../semantic/evaluator.zig");
 
 pub const ArithIfStrategy = enum {
     Float,
@@ -137,6 +138,18 @@ fn determineStepSign(step_expr: ?*ast.Expr) StepSign {
 }
 
 fn stepSignFromExpr(expr_node: *ast.Expr) StepSign {
+    // Only try semantic constant evaluation if the expression is purely literal-based
+    if (isPurelyLiteral(expr_node)) {
+        if (evaluator.evalConst(expr_node, null) catch null) |const_val| {
+            return switch (const_val) {
+                .integer => |v| if (v < 0) .negative else .non_negative,
+                .real => |v| if (v < 0.0) .negative else .non_negative,
+                else => .unknown,
+            };
+        }
+    }
+
+    // Fallback to AST-level analysis
     switch (expr_node.*) {
         .literal => |lit| return stepSignFromLiteral(lit),
         .unary => |unary| {
@@ -153,6 +166,16 @@ fn stepSignFromExpr(expr_node: *ast.Expr) StepSign {
         },
         else => return .unknown,
     }
+}
+
+fn isPurelyLiteral(expr_node: *ast.Expr) bool {
+    return switch (expr_node.*) {
+        .literal => true,
+        .unary => |un| isPurelyLiteral(un.expr),
+        .binary => |bin| isPurelyLiteral(bin.left) and isPurelyLiteral(bin.right),
+        .complex_literal => |lit| isPurelyLiteral(lit.real) and isPurelyLiteral(lit.imag),
+        else => false,
+    };
 }
 
 fn stepSignFromLiteral(lit: ast.Literal) StepSign {

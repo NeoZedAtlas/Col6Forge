@@ -4,6 +4,7 @@ const ir = @import("../../../ir.zig");
 const llvm_types = @import("../../types.zig");
 const context = @import("../context.zig");
 const utils = @import("../utils.zig");
+const evaluator = @import("../../../../semantic/evaluator.zig");
 
 const binary = @import("binary.zig");
 const call = @import("call.zig");
@@ -354,6 +355,19 @@ fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
 }
 
 fn intLiteralValue(expr: *Expr) ?i64 {
+    // Only try semantic constant evaluation if the expression is purely literal-based
+    // (no identifiers that would require runtime evaluation)
+    if (isPurelyLiteral(expr)) {
+        if (evaluator.evalConst(expr, null) catch null) |const_val| {
+            return switch (const_val) {
+                .integer => |v| v,
+                .real => |v| @intFromFloat(v),
+                else => null,
+            };
+        }
+    }
+
+    // Fallback to AST-level parsing
     return switch (expr.*) {
         .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
         .unary => |un| {
@@ -377,6 +391,16 @@ fn intLiteralValue(expr: *Expr) ?i64 {
             };
         },
         else => null,
+    };
+}
+
+fn isPurelyLiteral(expr: *Expr) bool {
+    return switch (expr.*) {
+        .literal => true,
+        .unary => |un| isPurelyLiteral(un.expr),
+        .binary => |bin| isPurelyLiteral(bin.left) and isPurelyLiteral(bin.right),
+        .complex_literal => |lit| isPurelyLiteral(lit.real) and isPurelyLiteral(lit.imag),
+        else => false,
     };
 }
 

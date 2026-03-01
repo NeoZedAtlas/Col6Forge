@@ -118,6 +118,18 @@ fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     return @intCast(length);
 }
 pub fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
+    // Only try semantic constant evaluation if the expression is purely literal-based
+    if (isPurelyLiteral(expr_node)) {
+        if (evaluator.evalConst(expr_node, null) catch null) |const_val| {
+            return switch (const_val) {
+                .integer => |v| v,
+                .real => |v| @intFromFloat(v),
+                else => null,
+            };
+        }
+    }
+
+    // Fallback to AST-level parsing
     return switch (expr_node.*) {
         .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
         .unary => |un| {
@@ -141,6 +153,16 @@ pub fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
             };
         },
         else => null,
+    };
+}
+
+fn isPurelyLiteral(expr_node: *ast.Expr) bool {
+    return switch (expr_node.*) {
+        .literal => true,
+        .unary => |un| isPurelyLiteral(un.expr),
+        .binary => |bin| isPurelyLiteral(bin.left) and isPurelyLiteral(bin.right),
+        .complex_literal => |lit| isPurelyLiteral(lit.real) and isPurelyLiteral(lit.imag),
+        else => false,
     };
 }
 fn checkedAddI64(lhs: i64, rhs: i64) ?i64 {
