@@ -161,6 +161,46 @@ fn writeTokenC64(writer: *ListWriter, real: f64, imag: f64, with_separator: bool
     return writer.appendToken(token, with_separator);
 }
 
+fn appendRuntimeArgToken(writer: *ListWriter, kind: u8, arg: ?*anyopaque, len_raw: c_int, with_separator: bool, strict_status: c_int) c_int {
+    const ptr = arg orelse return statusError(strict_status);
+    switch (kind) {
+        'i' => {
+            const p: *const c_int = @ptrCast(@alignCast(ptr));
+            return if (writeTokenI32(writer, p.*, with_separator)) 0 else statusError(strict_status);
+        },
+        'f' => {
+            const p: *const f32 = @ptrCast(@alignCast(ptr));
+            return if (writeTokenF32(writer, p.*, with_separator)) 0 else statusError(strict_status);
+        },
+        'd' => {
+            const p: *const f64 = @ptrCast(@alignCast(ptr));
+            return if (writeTokenF64(writer, p.*, with_separator)) 0 else statusError(strict_status);
+        },
+        'l' => {
+            const p: *const u8 = @ptrCast(@alignCast(ptr));
+            var token: [1]u8 = .{if (p.* != 0) 'T' else 'F'};
+            return if (writer.appendToken(token[0..], with_separator)) 0 else statusError(strict_status);
+        },
+        's' => {
+            const len: usize = @intCast(@max(len_raw, 0));
+            if (len != 0) {
+                const text: [*]const u8 = @ptrCast(ptr);
+                return if (writer.appendToken(text[0..len], with_separator)) 0 else statusError(strict_status);
+            }
+            return if (with_separator and !writer.appendToken(&[_]u8{}, true)) statusError(strict_status) else 0;
+        },
+        'c' => {
+            const p: [*]const f32 = @ptrCast(@alignCast(ptr));
+            return if (writeTokenC32(writer, p[0], p[1], with_separator)) 0 else statusError(strict_status);
+        },
+        'z' => {
+            const p: [*]const f64 = @ptrCast(@alignCast(ptr));
+            return if (writeTokenC64(writer, p[0], p[1], with_separator)) 0 else statusError(strict_status);
+        },
+        else => return statusError(strict_status),
+    }
+}
+
 pub export fn col6forge_write_list_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
     if (count <= 0) return writeEmptyLine(unit, 1);
     if (base == null or stride <= 0) return 1;
@@ -264,46 +304,132 @@ pub export fn col6forge_write_list_v(
     var i: usize = 0;
     while (i < total) : (i += 1) {
         const kind = runtimeArgKindAt(arg_kinds, i, total);
-        const arg = runtimeArgPtrAt(arg_ptrs, i, total) orelse return statusError(strict_status);
+        const status = appendRuntimeArgToken(&writer, kind, runtimeArgPtrAt(arg_ptrs, i, total), runtimeArgLenAt(arg_lens, i, total), i != 0, strict_status);
+        if (status != 0) return status;
+    }
 
-        switch (kind) {
+    return if (writer.flush()) 0 else statusError(strict_status);
+}
+
+pub export fn col6forge_write_list_mix_v_n(
+    unit: c_int,
+    pre_ptrs: ?[*]?*anyopaque,
+    pre_kinds: ?[*]const u8,
+    pre_lens: ?[*]const c_int,
+    pre_count: c_int,
+    mid_kind: c_int,
+    mid_count: c_int,
+    mid_stride: c_int,
+    mid_base: ?*anyopaque,
+    post_ptrs: ?[*]?*anyopaque,
+    post_kinds: ?[*]const u8,
+    post_lens: ?[*]const c_int,
+    post_count: c_int,
+    strict_status: c_int,
+) callconv(.c) c_int {
+    const pre_total = runtimeArgCount(pre_count);
+    const post_total = runtimeArgCount(post_count);
+    const mid_n: usize = @intCast(@max(mid_count, 0));
+    const stride: usize = @intCast(@max(mid_stride, 0));
+
+    if (pre_total == 0 and post_total == 0 and mid_n == 0) return writeEmptyLine(unit, strict_status);
+    if (mid_n > 0 and (mid_base == null or stride == 0)) return statusError(strict_status);
+
+    var writer = ListWriter.init(unit, strict_status);
+    var with_separator = false;
+
+    var i: usize = 0;
+    while (i < pre_total) : (i += 1) {
+        const st = appendRuntimeArgToken(
+            &writer,
+            runtimeArgKindAt(pre_kinds, i, pre_total),
+            runtimeArgPtrAt(pre_ptrs, i, pre_total),
+            runtimeArgLenAt(pre_lens, i, pre_total),
+            with_separator,
+            strict_status,
+        );
+        if (st != 0) return st;
+        with_separator = true;
+    }
+
+    if (mid_n > 0) {
+        const kind_u8: u8 = @intCast(mid_kind);
+        switch (kind_u8) {
             'i' => {
-                const ptr: *const c_int = @ptrCast(@alignCast(arg));
-                if (!writeTokenI32(&writer, ptr.*, i != 0)) return statusError(strict_status);
+                const base: [*]const c_int = @ptrCast(@alignCast(mid_base.?));
+                var j: usize = 0;
+                while (j < mid_n) : (j += 1) {
+                    const idx = checkedMul(j, stride) orelse return statusError(strict_status);
+                    if (!writeTokenI32(&writer, base[idx], with_separator)) return statusError(strict_status);
+                    with_separator = true;
+                }
             },
             'f' => {
-                const ptr: *const f32 = @ptrCast(@alignCast(arg));
-                if (!writeTokenF32(&writer, ptr.*, i != 0)) return statusError(strict_status);
+                const base: [*]const f32 = @ptrCast(@alignCast(mid_base.?));
+                var j: usize = 0;
+                while (j < mid_n) : (j += 1) {
+                    const idx = checkedMul(j, stride) orelse return statusError(strict_status);
+                    if (!writeTokenF32(&writer, base[idx], with_separator)) return statusError(strict_status);
+                    with_separator = true;
+                }
             },
             'd' => {
-                const ptr: *const f64 = @ptrCast(@alignCast(arg));
-                if (!writeTokenF64(&writer, ptr.*, i != 0)) return statusError(strict_status);
+                const base: [*]const f64 = @ptrCast(@alignCast(mid_base.?));
+                var j: usize = 0;
+                while (j < mid_n) : (j += 1) {
+                    const idx = checkedMul(j, stride) orelse return statusError(strict_status);
+                    if (!writeTokenF64(&writer, base[idx], with_separator)) return statusError(strict_status);
+                    with_separator = true;
+                }
             },
             'l' => {
-                const ptr: *const u8 = @ptrCast(@alignCast(arg));
-                var token: [1]u8 = .{if (ptr.* != 0) 'T' else 'F'};
-                if (!writer.appendToken(token[0..], i != 0)) return statusError(strict_status);
-            },
-            's' => {
-                const len_raw = runtimeArgLenAt(arg_lens, i, total);
-                const len: usize = @intCast(@max(len_raw, 0));
-                if (len != 0) {
-                    const text: [*]const u8 = @ptrCast(arg);
-                    if (!writer.appendToken(text[0..len], i != 0)) return statusError(strict_status);
-                } else if (i != 0) {
-                    if (!writer.appendToken(&[_]u8{}, true)) return statusError(strict_status);
+                const base: [*]const u8 = @ptrCast(@alignCast(mid_base.?));
+                var j: usize = 0;
+                while (j < mid_n) : (j += 1) {
+                    const idx = checkedMul(j, stride) orelse return statusError(strict_status);
+                    var token: [1]u8 = .{if (base[idx] != 0) 'T' else 'F'};
+                    if (!writer.appendToken(token[0..], with_separator)) return statusError(strict_status);
+                    with_separator = true;
                 }
             },
             'c' => {
-                const ptr: [*]const f32 = @ptrCast(@alignCast(arg));
-                if (!writeTokenC32(&writer, ptr[0], ptr[1], i != 0)) return statusError(strict_status);
+                const base: [*]const f32 = @ptrCast(@alignCast(mid_base.?));
+                var j: usize = 0;
+                while (j < mid_n) : (j += 1) {
+                    const elem = checkedMul(j, stride) orelse return statusError(strict_status);
+                    const real_idx = checkedMul(elem, 2) orelse return statusError(strict_status);
+                    const imag_idx = checkedAdd(real_idx, 1) orelse return statusError(strict_status);
+                    if (!writeTokenC32(&writer, base[real_idx], base[imag_idx], with_separator)) return statusError(strict_status);
+                    with_separator = true;
+                }
             },
             'z' => {
-                const ptr: [*]const f64 = @ptrCast(@alignCast(arg));
-                if (!writeTokenC64(&writer, ptr[0], ptr[1], i != 0)) return statusError(strict_status);
+                const base: [*]const f64 = @ptrCast(@alignCast(mid_base.?));
+                var j: usize = 0;
+                while (j < mid_n) : (j += 1) {
+                    const elem = checkedMul(j, stride) orelse return statusError(strict_status);
+                    const real_idx = checkedMul(elem, 2) orelse return statusError(strict_status);
+                    const imag_idx = checkedAdd(real_idx, 1) orelse return statusError(strict_status);
+                    if (!writeTokenC64(&writer, base[real_idx], base[imag_idx], with_separator)) return statusError(strict_status);
+                    with_separator = true;
+                }
             },
             else => return statusError(strict_status),
         }
+    }
+
+    i = 0;
+    while (i < post_total) : (i += 1) {
+        const st = appendRuntimeArgToken(
+            &writer,
+            runtimeArgKindAt(post_kinds, i, post_total),
+            runtimeArgPtrAt(post_ptrs, i, post_total),
+            runtimeArgLenAt(post_lens, i, post_total),
+            with_separator,
+            strict_status,
+        );
+        if (st != 0) return st;
+        with_separator = true;
     }
 
     return if (writer.flush()) 0 else statusError(strict_status);

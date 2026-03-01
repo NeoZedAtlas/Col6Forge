@@ -25,10 +25,15 @@ const expandWriteArgsList = expansion.expandWriteArgsList;
 const expandReadTargets = expansion.expandReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
 
-fn emitListDirectedWriteExternal(ctx: *Context, builder: anytype, write: ast.WriteStmt, unit_i32: ValueRef) EmitError!void {
-    var expanded_values = try expandWriteArgsList(ctx, builder, write.args);
-    defer expanded_values.deinit();
+const PackedWriteArgs = struct {
+    ptr_array: ValueRef,
+    kinds_ptr: ValueRef,
+    lens_array: ValueRef,
+    arg_count: ValueRef,
+    heap_allocs: []const ValueRef,
+};
 
+fn packWriteArgs(ctx: *Context, builder: anytype, expanded_values: *const expansion.ExpandedWriteValues) EmitError!PackedWriteArgs {
     var ptr_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer ptr_args.deinit();
     var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
@@ -94,10 +99,25 @@ fn emitListDirectedWriteExternal(ctx: *Context, builder: anytype, write: ast.Wri
     const lens_array = try emitHeapI32Array(ctx, builder, arg_lens.items);
     if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
     if (!std.mem.eql(u8, lens_array.name, "null")) try heap_allocs.append(lens_array);
-    const arg_count_val = try ctx.constI32(@intCast(ptr_args.items.len));
+    return .{
+        .ptr_array = ptr_array,
+        .kinds_ptr = kinds_ptr,
+        .lens_array = lens_array,
+        .arg_count = try ctx.constI32(@intCast(ptr_args.items.len)),
+        .heap_allocs = try heap_allocs.toOwnedSlice(),
+    };
+}
+
+fn emitListDirectedWriteExternal(ctx: *Context, builder: anytype, write: ast.WriteStmt, unit_i32: ValueRef) EmitError!void {
+    var expanded_values = try expandWriteArgsList(ctx, builder, write.args);
+    defer expanded_values.deinit();
+    const packed_args = try packWriteArgs(ctx, builder, &expanded_values);
+    defer {
+        emitFreeAllocs(ctx, builder, packed_args.heap_allocs) catch {};
+        ctx.allocator.free(packed_args.heap_allocs);
+    }
     const write_name = try ctx.ensureDeclRaw("col6forge_write_list_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
-    try builder.callTyped(null, .i32, write_name, &.{ unit_i32, ptr_array, kinds_ptr, lens_array, arg_count_val, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
-    try emitFreeAllocs(ctx, builder, heap_allocs.items);
+    try builder.callTyped(null, .i32, write_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_array, packed_args.arg_count, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
 }
 
 fn emitListDirectedWriteInternal(
@@ -110,79 +130,16 @@ fn emitListDirectedWriteInternal(
 ) EmitError!void {
     var expanded_values = try expandWriteArgsList(ctx, builder, write.args);
     defer expanded_values.deinit();
-
-    var ptr_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
-    defer ptr_args.deinit();
-    var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
-    defer arg_kinds.deinit();
-    var arg_lens = std.array_list.Managed(i32).init(ctx.allocator);
-    defer arg_lens.deinit();
-    var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
-    defer heap_allocs.deinit();
-
-    for (expanded_values.values.items, 0..) |value, idx| {
-        switch (value.ty) {
-            .i32, .f32, .f64, .i1, .complex_f32, .complex_f64 => {
-                if (expanded_values.source_ptrs.items[idx]) |src_ptr| {
-                    try ptr_args.append(src_ptr);
-                    try arg_kinds.append(switch (value.ty) {
-                        .i32 => 'i',
-                        .f32 => 'f',
-                        .f64 => 'd',
-                        .i1 => 'l',
-                        .complex_f32 => 'c',
-                        .complex_f64 => 'z',
-                        else => unreachable,
-                    });
-                    try arg_lens.append(0);
-                    continue;
-                }
-                const bytes: usize = switch (value.ty) {
-                    .i32, .f32 => 4,
-                    .f64 => 8,
-                    .i1 => 1,
-                    .complex_f32 => 8,
-                    .complex_f64 => 16,
-                    else => unreachable,
-                };
-                const ptr = try emitHeapBytes(ctx, builder, bytes);
-                try builder.store(value, ptr);
-                try ptr_args.append(ptr);
-                try heap_allocs.append(ptr);
-                try arg_kinds.append(switch (value.ty) {
-                    .i32 => 'i',
-                    .f32 => 'f',
-                    .f64 => 'd',
-                    .i1 => 'l',
-                    .complex_f32 => 'c',
-                    .complex_f64 => 'z',
-                    else => unreachable,
-                });
-                try arg_lens.append(0);
-            },
-            .ptr => {
-                const arg_len = expanded_values.char_lens.items[idx];
-                if (arg_len > std.math.maxInt(i32)) return error.IntegerOverflow;
-                try ptr_args.append(.{ .name = value.name, .ty = .ptr, .is_ptr = true });
-                try arg_kinds.append('s');
-                try arg_lens.append(@intCast(arg_len));
-            },
-            else => return error.UnsupportedIntrinsicType,
-        }
+    const packed_args = try packWriteArgs(ctx, builder, &expanded_values);
+    defer {
+        emitFreeAllocs(ctx, builder, packed_args.heap_allocs) catch {};
+        ctx.allocator.free(packed_args.heap_allocs);
     }
-
-    const ptr_array = try emitHeapPointerArrayFromValues(ctx, builder, ptr_args.items);
-    const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
-    const lens_array = try emitHeapI32Array(ctx, builder, arg_lens.items);
-    if (!std.mem.eql(u8, ptr_array.name, "null")) try heap_allocs.append(ptr_array);
-    if (!std.mem.eql(u8, lens_array.name, "null")) try heap_allocs.append(lens_array);
-    const arg_count_val = try ctx.constI32(@intCast(ptr_args.items.len));
     const len_val = try ctx.constI32(@intCast(unit_char_len));
     const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
     const count_ref = try ctx.constI32(@intCast(count_val));
     const write_name = try ctx.ensureDeclRaw("col6forge_write_internal_list_v", .void, &[_]utils.IRType{ .ptr, .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
-    try builder.callTyped(null, .void, write_name, &.{ unit_value, len_val, count_ref, ptr_array, kinds_ptr, lens_array, arg_count_val });
-    try emitFreeAllocs(ctx, builder, heap_allocs.items);
+    try builder.callTyped(null, .void, write_name, &.{ unit_value, len_val, count_ref, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_array, packed_args.arg_count });
 }
 
 fn emitListDirectedReadExternal(ctx: *Context, builder: anytype, read: ast.ReadStmt, unit_i32: ValueRef, status_mode: bool) EmitError!ValueRef {
@@ -340,9 +297,14 @@ fn emitDynamicImpliedDoListWrite(
     write: ast.WriteStmt,
     unit_i32: ValueRef,
 ) EmitError!bool {
-    if (write.args.len != 1) return false;
-    if (write.args[0].* != .implied_do) return false;
-    const implied = write.args[0].implied_do;
+    var implied_idx_opt: ?usize = null;
+    for (write.args, 0..) |arg, idx| {
+        if (arg.* != .implied_do) continue;
+        if (implied_idx_opt != null) return false;
+        implied_idx_opt = idx;
+    }
+    const implied_idx = implied_idx_opt orelse return false;
+    const implied = write.args[implied_idx].implied_do;
     if (impliedBoundsStaticSmall(ctx, implied)) return false;
     if (implied.items.len != 1) return false;
     if (implied.items[0].* != .call_or_subscript) return false;
@@ -404,8 +366,50 @@ fn emitDynamicImpliedDoListWrite(
     };
     const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
 
-    const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
-    try builder.callTyped(null, .i32, decl, &.{ unit_i32, final_count, stride, base_ptr });
+    if (write.args.len == 1) {
+        const decl = try ctx.ensureDeclRaw(helper_name, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .ptr }, false);
+        try builder.callTyped(null, .i32, decl, &.{ unit_i32, final_count, stride, base_ptr });
+        return true;
+    }
+
+    var pre_expanded = try expandWriteArgsList(ctx, builder, write.args[0..implied_idx]);
+    defer pre_expanded.deinit();
+    var post_expanded = try expandWriteArgsList(ctx, builder, write.args[implied_idx + 1 ..]);
+    defer post_expanded.deinit();
+    const pre_packed = try packWriteArgs(ctx, builder, &pre_expanded);
+    defer {
+        emitFreeAllocs(ctx, builder, pre_packed.heap_allocs) catch {};
+        ctx.allocator.free(pre_packed.heap_allocs);
+    }
+    const post_packed = try packWriteArgs(ctx, builder, &post_expanded);
+    defer {
+        emitFreeAllocs(ctx, builder, post_packed.heap_allocs) catch {};
+        ctx.allocator.free(post_packed.heap_allocs);
+    }
+
+    const mid_kind_val: i64 = switch (sym.type_kind) {
+        .integer => 'i',
+        .real => 'f',
+        .double_precision => 'd',
+        .complex => 'c',
+        .complex_double => 'z',
+        .logical => 'l',
+        else => return false,
+    };
+    const mix_decl = try ctx.ensureDeclRaw("col6forge_write_list_mix_v_n", .i32, &[_]utils.IRType{
+        .i32,
+        .ptr, .ptr, .ptr, .i32,
+        .i32, .i32, .i32, .ptr,
+        .ptr, .ptr, .ptr, .i32,
+        .i32,
+    }, false);
+    try builder.callTyped(null, .i32, mix_decl, &.{
+        unit_i32,
+        pre_packed.ptr_array, pre_packed.kinds_ptr, pre_packed.lens_array, pre_packed.arg_count,
+        try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
+        post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_array, post_packed.arg_count,
+        try ctx.constI32(0),
+    });
     return true;
 }
 
