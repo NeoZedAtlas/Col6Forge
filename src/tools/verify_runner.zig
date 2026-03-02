@@ -71,6 +71,8 @@ pub fn main() !void {
             gfortran_cmd = try arena_allocator.dupe(u8, value);
         }
     }
+    const ref_compiler_cache_key = try computeReferenceCompilerCacheKey(allocator, gfortran_cmd, options.timeout_ms);
+    defer allocator.free(ref_compiler_cache_key);
 
     const cases = try collectTestCases(arena_allocator, options.tests_dir, options.filter);
     if (cases.len == 0) {
@@ -94,6 +96,7 @@ pub fn main() !void {
                 cache_dir,
                 runtime_cache_key,
                 compiler_cache_key,
+                ref_compiler_cache_key,
                 gfortran_cmd,
                 case,
                 options,
@@ -134,6 +137,7 @@ pub fn main() !void {
             cache_dir,
             runtime_cache_key,
             compiler_cache_key,
+            ref_compiler_cache_key,
             gfortran_cmd,
             case,
             options,
@@ -799,6 +803,37 @@ fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
 }
 
+fn computeReferenceCompilerCacheKey(
+    allocator: std.mem.Allocator,
+    gfortran_cmd: []const u8,
+    timeout_ms: u64,
+) ![]const u8 {
+    var hasher = std.hash.XxHash64.init(0);
+    hasher.update(gfortran_cmd);
+
+    const probe_timeout: ?u64 = if (timeout_ms == 0)
+        5_000
+    else
+        @min(timeout_ms, @as(u64, 5_000));
+
+    const probe = runProcessCapture(
+        allocator,
+        &.{ gfortran_cmd, "--version" },
+        null,
+        probe_timeout,
+    ) catch null;
+    if (probe) |result| {
+        defer result.deinit(allocator);
+        if (!result.timed_out and isZeroExit(result.term)) {
+            hasher.update(result.stdout);
+            hasher.update(result.stderr);
+        }
+    }
+
+    const final = hasher.final();
+    return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
+}
+
 const RefSource = struct {
     path: []const u8,
     owned: bool,
@@ -1218,6 +1253,7 @@ fn processCase(
     cache_dir: []const u8,
     runtime_cache_key: []const u8,
     compiler_cache_key: []const u8,
+    ref_compiler_cache_key: []const u8,
     gfortran_cmd: []const u8,
     case: TestCase,
     options: Options,
@@ -1268,6 +1304,20 @@ fn processCase(
         return false;
     }
 
+    const source_hash = if (options.incremental) try hashFileXx64(abs_input_path) else 0;
+    const ref_exe_cache_path = if (options.incremental)
+        try buildVerifyCachePath(
+            allocator,
+            cache_dir,
+            ref_compiler_cache_key,
+            source_hash,
+            options.emit,
+            if (builtin.os.tag == .windows) ".ref.exe" else ".ref",
+        )
+    else
+        null;
+    defer if (ref_exe_cache_path) |p| allocator.free(p);
+
     const ref_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
     if (ref_timeout != null and ref_timeout.? == 0) {
         log_state.stderr("timeout: {s}\n", .{abs_input_path});
@@ -1275,43 +1325,64 @@ fn processCase(
         return false;
     }
 
-    const ref_source = try prepareGfortranSource(allocator, abs_input_path, work_dir);
-    defer if (ref_source.owned) allocator.free(ref_source.path);
-
-    const ref_compile = runProcessCapture(
-        allocator,
-        &.{ gfortran_cmd, "-std=legacy", "-o", ref_exe, ref_source.path },
-        work_dir,
-        ref_timeout,
-    ) catch |err| {
-        if (err == error.FileNotFound) {
-            log_state.stderr("gfortran not found (use --gfortran or set GFORTRAN/FC)\n", .{});
-        }
-        log_state.stderr("gfortran failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
-        return false;
-    };
-    defer ref_compile.deinit(allocator);
-    if (ref_compile.timed_out) {
-        log_state.stderr("timeout: gfortran compile {s}\n", .{abs_input_path});
-        cleanupWorkDir(work_dir_rel);
-        return false;
+    var ref_cache_lock: ?*std.Thread.Mutex = null;
+    if (options.incremental) {
+        ref_cache_lock = try dir_locks.get(ref_exe_cache_path.?);
+        ref_cache_lock.?.lock();
     }
-    if (!isZeroExit(ref_compile.term)) {
-        const code = exitCode(ref_compile.term);
-        log_state.lock();
-        defer log_state.unlock();
-        var stderr_file = std.fs.File.stderr();
-        var buffer: [4096]u8 = undefined;
-        var writer = stderr_file.writer(&buffer);
-        writer.interface.print("\n=== GFORTRAN COMPILE ERROR ===\n", .{}) catch {};
-        writer.interface.print("Exit Code: {d}\n", .{code}) catch {};
-        writer.interface.print("Work Dir : {s}\n", .{work_dir}) catch {};
-        writer.interface.print("Command  : {s} -std=legacy -o {s} {s}\n", .{ gfortran_cmd, ref_exe, ref_source.path }) catch {};
-        writer.interface.print("STDOUT   : \n{s}\n", .{ref_compile.stdout}) catch {};
-        writer.interface.print("STDERR   : \n{s}\n", .{ref_compile.stderr}) catch {};
-        writer.interface.print("==============================\n", .{}) catch {};
-        writer.interface.flush() catch {};
-        return false;
+    defer if (ref_cache_lock) |lock| lock.unlock();
+
+    var need_ref_compile = true;
+    if (options.incremental and fileExistsAbsolute(ref_exe_cache_path.?)) {
+        copyFileAbsolute(ref_exe_cache_path.?, ref_exe) catch |err| {
+            log_state.stderr("failed to copy cached reference exe: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+            return false;
+        };
+        need_ref_compile = false;
+    }
+
+    if (need_ref_compile) {
+        const ref_source = try prepareGfortranSource(allocator, abs_input_path, work_dir);
+        defer if (ref_source.owned) allocator.free(ref_source.path);
+
+        const ref_compile = runProcessCapture(
+            allocator,
+            &.{ gfortran_cmd, "-std=legacy", "-o", ref_exe, ref_source.path },
+            work_dir,
+            ref_timeout,
+        ) catch |err| {
+            if (err == error.FileNotFound) {
+                log_state.stderr("gfortran not found (use --gfortran or set GFORTRAN/FC)\n", .{});
+            }
+            log_state.stderr("gfortran failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+            return false;
+        };
+        defer ref_compile.deinit(allocator);
+        if (ref_compile.timed_out) {
+            log_state.stderr("timeout: gfortran compile {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            return false;
+        }
+        if (!isZeroExit(ref_compile.term)) {
+            const code = exitCode(ref_compile.term);
+            log_state.lock();
+            defer log_state.unlock();
+            var stderr_file = std.fs.File.stderr();
+            var buffer: [4096]u8 = undefined;
+            var writer = stderr_file.writer(&buffer);
+            writer.interface.print("\n=== GFORTRAN COMPILE ERROR ===\n", .{}) catch {};
+            writer.interface.print("Exit Code: {d}\n", .{code}) catch {};
+            writer.interface.print("Work Dir : {s}\n", .{work_dir}) catch {};
+            writer.interface.print("Command  : {s} -std=legacy -o {s} {s}\n", .{ gfortran_cmd, ref_exe, ref_source.path }) catch {};
+            writer.interface.print("STDOUT   : \n{s}\n", .{ref_compile.stdout}) catch {};
+            writer.interface.print("STDERR   : \n{s}\n", .{ref_compile.stderr}) catch {};
+            writer.interface.print("==============================\n", .{}) catch {};
+            writer.interface.flush() catch {};
+            return false;
+        }
+        if (options.incremental) {
+            copyFileAbsolute(ref_exe, ref_exe_cache_path.?) catch {};
+        }
     }
 
     const compile_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
@@ -1321,7 +1392,6 @@ fn processCase(
         return false;
     }
 
-    const source_hash = if (options.incremental) try hashFileXx64(abs_input_path) else 0;
     const ll_cache_path = if (options.incremental)
         try buildVerifyCachePath(allocator, cache_dir, compiler_cache_key, source_hash, options.emit, ".ll")
     else
@@ -1509,6 +1579,7 @@ fn runCaseParallel(
     cache_dir: []const u8,
     runtime_cache_key: []const u8,
     compiler_cache_key: []const u8,
+    ref_compiler_cache_key: []const u8,
     gfortran_cmd: []const u8,
     case: TestCase,
     options: Options,
@@ -1525,6 +1596,7 @@ fn runCaseParallel(
         cache_dir,
         runtime_cache_key,
         compiler_cache_key,
+        ref_compiler_cache_key,
         gfortran_cmd,
         case,
         options,
@@ -1593,7 +1665,7 @@ const Progress = struct {
 const DirLocks = struct {
     allocator: std.mem.Allocator,
     mutex: std.Thread.Mutex = .{},
-    map: std.StringHashMapUnmanaged(std.Thread.Mutex) = .{},
+    map: std.StringHashMapUnmanaged(*std.Thread.Mutex) = .{},
 
     fn init(allocator: std.mem.Allocator) DirLocks {
         return .{ .allocator = allocator };
@@ -1602,6 +1674,7 @@ const DirLocks = struct {
     fn deinit(self: *DirLocks) void {
         var it = self.map.iterator();
         while (it.next()) |entry| {
+            self.allocator.destroy(entry.value_ptr.*);
             self.allocator.free(entry.key_ptr.*);
         }
         self.map.deinit(self.allocator);
@@ -1611,10 +1684,16 @@ const DirLocks = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        if (self.map.getPtr(dir)) |ptr| return ptr;
+        if (self.map.get(dir)) |lock_ptr| return lock_ptr;
         const key = try self.allocator.dupe(u8, dir);
-        try self.map.put(self.allocator, key, .{});
-        return self.map.getPtr(key).?;
+        errdefer self.allocator.free(key);
+
+        const lock_ptr = try self.allocator.create(std.Thread.Mutex);
+        errdefer self.allocator.destroy(lock_ptr);
+        lock_ptr.* = .{};
+
+        try self.map.put(self.allocator, key, lock_ptr);
+        return lock_ptr;
     }
 };
 
