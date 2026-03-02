@@ -834,6 +834,20 @@ fn computeReferenceCompilerCacheKey(
     return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
 }
 
+fn computeLinkedExeCacheKey(
+    allocator: std.mem.Allocator,
+    compiler_cache_key: []const u8,
+    runtime_cache_key: []const u8,
+    runtime_backend: RuntimeBackend,
+) ![]const u8 {
+    var hasher = std.hash.XxHash64.init(0);
+    hasher.update(compiler_cache_key);
+    hasher.update(runtime_cache_key);
+    hasher.update(runtimeBackendTag(runtime_backend));
+    const final = hasher.final();
+    return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
+}
+
 const RefSource = struct {
     path: []const u8,
     owned: bool,
@@ -1402,6 +1416,23 @@ fn processCase(
     else
         null;
     defer if (obj_cache_path) |p| allocator.free(p);
+    const linked_exe_cache_key = if (options.incremental)
+        try computeLinkedExeCacheKey(allocator, compiler_cache_key, runtime_cache_key, options.runtime_backend)
+    else
+        null;
+    defer if (linked_exe_cache_key) |p| allocator.free(p);
+    const test_exe_cache_path = if (options.incremental)
+        try buildVerifyCachePath(
+            allocator,
+            cache_dir,
+            linked_exe_cache_key.?,
+            source_hash,
+            options.emit,
+            if (builtin.os.tag == .windows) ".test.exe" else ".test",
+        )
+    else
+        null;
+    defer if (test_exe_cache_path) |p| allocator.free(p);
 
     if (options.incremental and fileExistsAbsolute(obj_cache_path.?)) {
         copyFileAbsolute(obj_cache_path.?, translated_obj_path) catch |err| {
@@ -1477,28 +1508,47 @@ fn processCase(
         return false;
     }
 
-    var compile_args: std.ArrayList([]const u8) = .empty;
-    defer compile_args.deinit(allocator);
-    try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, translated_obj_path });
-    try runtime_artifacts.appendToArgs(allocator, &compile_args);
-    const our_compile = runProcessCapture(
-        allocator,
-        compile_args.items,
-        work_dir,
-        link_timeout,
-    ) catch |err| {
-        log_state.stderr("zig cc link failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
-        return false;
-    };
-    defer our_compile.deinit(allocator);
-    if (our_compile.timed_out) {
-        log_state.stderr("timeout: zig cc {s}\n", .{abs_input_path});
-        cleanupWorkDir(work_dir_rel);
-        return false;
+    var link_cache_lock: ?*std.Thread.Mutex = null;
+    if (options.incremental) {
+        link_cache_lock = try dir_locks.get(test_exe_cache_path.?);
+        link_cache_lock.?.lock();
     }
-    if (!isZeroExit(our_compile.term)) {
-        log_state.stderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, our_compile.stderr });
-        return false;
+    defer if (link_cache_lock) |lock| lock.unlock();
+
+    var need_link = true;
+    if (options.incremental and fileExistsAbsolute(test_exe_cache_path.?)) {
+        if (copyFileAbsolute(test_exe_cache_path.?, test_exe)) {
+            need_link = false;
+        } else |_| {}
+    }
+
+    if (need_link) {
+        var compile_args: std.ArrayList([]const u8) = .empty;
+        defer compile_args.deinit(allocator);
+        try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, translated_obj_path });
+        try runtime_artifacts.appendToArgs(allocator, &compile_args);
+        const our_compile = runProcessCapture(
+            allocator,
+            compile_args.items,
+            work_dir,
+            link_timeout,
+        ) catch |err| {
+            log_state.stderr("zig cc link failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+            return false;
+        };
+        defer our_compile.deinit(allocator);
+        if (our_compile.timed_out) {
+            log_state.stderr("timeout: zig cc {s}\n", .{abs_input_path});
+            cleanupWorkDir(work_dir_rel);
+            return false;
+        }
+        if (!isZeroExit(our_compile.term)) {
+            log_state.stderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, our_compile.stderr });
+            return false;
+        }
+        if (options.incremental) {
+            copyFileAbsolute(test_exe, test_exe_cache_path.?) catch {};
+        }
     }
 
     const ref_run_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
