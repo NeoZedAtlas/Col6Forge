@@ -56,10 +56,26 @@ pub fn main() !void {
     try std.fs.cwd().makePath(cache_rel);
     const cache_dir = try std.fs.path.join(allocator, &.{ root_path, cache_rel });
     defer allocator.free(cache_dir);
-    const runtime_cache_key = try computeRuntimeCacheKey(allocator, root_path);
+    const runtime_cache_key = if (options.incremental)
+        try computeRuntimeCacheKey(allocator, root_path)
+    else
+        try computeRunScopedRuntimeCacheKey(allocator, root_path);
     defer allocator.free(runtime_cache_key);
     const compiler_cache_key = try computeCompilerCacheKey(allocator, root_path);
     defer allocator.free(compiler_cache_key);
+    var runtime_artifacts = prepareRuntimeArtifacts(
+        allocator,
+        root_path,
+        cache_dir,
+        options.runtime_backend,
+        options.timeout_ms,
+        runtime_cache_key,
+        true,
+    ) catch |err| {
+        log_state.stderr("runtime backend prepare failed: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    defer runtime_artifacts.deinit(allocator);
 
     var gfortran_cmd = options.gfortran_path;
     if (std.mem.eql(u8, gfortran_cmd, defaultGfortran())) {
@@ -95,6 +111,7 @@ pub fn main() !void {
                 root_path,
                 cache_dir,
                 runtime_cache_key,
+                &runtime_artifacts,
                 compiler_cache_key,
                 ref_compiler_cache_key,
                 gfortran_cmd,
@@ -136,6 +153,7 @@ pub fn main() !void {
             root_path,
             cache_dir,
             runtime_cache_key,
+            &runtime_artifacts,
             compiler_cache_key,
             ref_compiler_cache_key,
             gfortran_cmd,
@@ -652,7 +670,7 @@ fn emitPipelineToFile(
         emit,
         &out_writer.interface,
         .{
-            .coarse_source_map = true,
+            .coarse_source_map = false,
             .capture_profile = capture_profile,
         },
     );
@@ -801,6 +819,15 @@ fn computeRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) !
     }
     const final = hasher.final();
     return std.fmt.allocPrint(allocator, "{x:0>16}", .{final});
+}
+
+fn computeRunScopedRuntimeCacheKey(allocator: std.mem.Allocator, root_path: []const u8) ![]const u8 {
+    const base_key = try computeRuntimeCacheKey(allocator, root_path);
+    defer allocator.free(base_key);
+
+    var nonce: u64 = 0;
+    std.crypto.random.bytes(std.mem.asBytes(&nonce));
+    return std.fmt.allocPrint(allocator, "{s}_{x:0>16}", .{ base_key, nonce });
 }
 
 fn computeReferenceCompilerCacheKey(
@@ -1266,6 +1293,7 @@ fn processCase(
     root_path: []const u8,
     cache_dir: []const u8,
     runtime_cache_key: []const u8,
+    runtime_artifacts: *const RuntimeArtifacts,
     compiler_cache_key: []const u8,
     ref_compiler_cache_key: []const u8,
     gfortran_cmd: []const u8,
@@ -1297,21 +1325,6 @@ fn processCase(
     defer allocator.free(ref_exe);
     const test_exe = try prepareExePath(allocator, work_dir, "test");
     defer allocator.free(test_exe);
-    const runtime_output_dir = if (options.incremental) cache_dir else work_dir;
-    var runtime_artifacts = prepareRuntimeArtifacts(
-        allocator,
-        root_path,
-        runtime_output_dir,
-        options.runtime_backend,
-        options.timeout_ms,
-        runtime_cache_key,
-        options.incremental,
-    ) catch |err| {
-        log_state.stderr("runtime backend prepare failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
-        return false;
-    };
-    defer runtime_artifacts.deinit(allocator);
-
     if (isTimedOut(options.timeout_ms, &timer)) {
         log_state.stderr("timeout: {s}\n", .{abs_input_path});
         cleanupWorkDir(work_dir_rel);
@@ -1434,70 +1447,86 @@ fn processCase(
         null;
     defer if (test_exe_cache_path) |p| allocator.free(p);
 
-    if (options.incremental and fileExistsAbsolute(obj_cache_path.?)) {
-        copyFileAbsolute(obj_cache_path.?, translated_obj_path) catch |err| {
-            log_state.stderr("failed to copy cached object: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
-            return false;
-        };
-    } else {
-        if (options.incremental and fileExistsAbsolute(ll_cache_path.?)) {
-            copyFileAbsolute(ll_cache_path.?, ll_path) catch |err| {
-                log_state.stderr("failed to copy cached ll: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+    if (options.incremental) {
+        if (fileExistsAbsolute(obj_cache_path.?)) {
+            copyFileAbsolute(obj_cache_path.?, translated_obj_path) catch |err| {
+                log_state.stderr("failed to copy cached object: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
                 return false;
             };
         } else {
-            emitPipelineToFile(
-                allocator,
-                abs_input_path,
-                options.emit,
-                ll_path,
-                options.profile_summary,
-            ) catch |err| {
-                try reportPipelineError(log_state, abs_input_path, err);
-                return false;
-            };
-            if (options.profile_summary) {
-                if (Col6Forge.takeLastPipelineProfileSample()) |sample| {
-                    profile_collector.record(allocator, sample) catch |err| {
-                        log_state.stderr("profile record failed: {s}\n", .{@errorName(err)});
-                    };
+            if (fileExistsAbsolute(ll_cache_path.?)) {
+                copyFileAbsolute(ll_cache_path.?, ll_path) catch |err| {
+                    log_state.stderr("failed to copy cached ll: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+                    return false;
+                };
+            } else {
+                emitPipelineToFile(
+                    allocator,
+                    abs_input_path,
+                    options.emit,
+                    ll_path,
+                    options.profile_summary,
+                ) catch |err| {
+                    try reportPipelineError(log_state, abs_input_path, err);
+                    return false;
+                };
+                if (options.profile_summary) {
+                    if (Col6Forge.takeLastPipelineProfileSample()) |sample| {
+                        profile_collector.record(allocator, sample) catch |err| {
+                            log_state.stderr("profile record failed: {s}\n", .{@errorName(err)});
+                        };
+                    }
                 }
-            }
-            if (options.incremental) {
                 copyFileAbsolute(ll_path, ll_cache_path.?) catch |err| {
                     log_state.stderr("failed to update cached ll: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
                     return false;
                 };
             }
-        }
 
-        const object_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
-        if (object_timeout != null and object_timeout.? == 0) {
-            log_state.stderr("timeout: {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
-            return false;
+            const object_timeout = remainingTimeoutMs(options.timeout_ms, &timer);
+            if (object_timeout != null and object_timeout.? == 0) {
+                log_state.stderr("timeout: {s}\n", .{abs_input_path});
+                cleanupWorkDir(work_dir_rel);
+                return false;
+            }
+            const object_compile = runProcessCapture(
+                allocator,
+                &.{ "zig", "cc", "-O0", "-c", "-o", translated_obj_path, ll_path },
+                work_dir,
+                object_timeout,
+            ) catch |err| {
+                log_state.stderr("zig cc failed: {s} ({s})\n", .{ ll_path, @errorName(err) });
+                return false;
+            };
+            defer object_compile.deinit(allocator);
+            if (object_compile.timed_out) {
+                log_state.stderr("timeout: zig cc {s}\n", .{abs_input_path});
+                cleanupWorkDir(work_dir_rel);
+                return false;
+            }
+            if (!isZeroExit(object_compile.term)) {
+                log_state.stderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, object_compile.stderr });
+                return false;
+            }
+            copyFileAbsolute(translated_obj_path, obj_cache_path.?) catch {};
         }
-        const object_compile = runProcessCapture(
+    } else {
+        emitPipelineToFile(
             allocator,
-            &.{ "zig", "cc", "-O0", "-c", "-o", translated_obj_path, ll_path },
-            work_dir,
-            object_timeout,
+            abs_input_path,
+            options.emit,
+            ll_path,
+            options.profile_summary,
         ) catch |err| {
-            log_state.stderr("zig cc failed: {s} ({s})\n", .{ ll_path, @errorName(err) });
+            try reportPipelineError(log_state, abs_input_path, err);
             return false;
         };
-        defer object_compile.deinit(allocator);
-        if (object_compile.timed_out) {
-            log_state.stderr("timeout: zig cc {s}\n", .{abs_input_path});
-            cleanupWorkDir(work_dir_rel);
-            return false;
-        }
-        if (!isZeroExit(object_compile.term)) {
-            log_state.stderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, object_compile.stderr });
-            return false;
-        }
-        if (options.incremental) {
-            copyFileAbsolute(translated_obj_path, obj_cache_path.?) catch {};
+        if (options.profile_summary) {
+            if (Col6Forge.takeLastPipelineProfileSample()) |sample| {
+                profile_collector.record(allocator, sample) catch |err| {
+                    log_state.stderr("profile record failed: {s}\n", .{@errorName(err)});
+                };
+            }
         }
     }
 
@@ -1508,24 +1537,49 @@ fn processCase(
         return false;
     }
 
-    var link_cache_lock: ?*std.Thread.Mutex = null;
     if (options.incremental) {
+        var link_cache_lock: ?*std.Thread.Mutex = null;
         link_cache_lock = try dir_locks.get(test_exe_cache_path.?);
         link_cache_lock.?.lock();
-    }
-    defer if (link_cache_lock) |lock| lock.unlock();
+        defer if (link_cache_lock) |lock| lock.unlock();
 
-    var need_link = true;
-    if (options.incremental and fileExistsAbsolute(test_exe_cache_path.?)) {
-        if (copyFileAbsolute(test_exe_cache_path.?, test_exe)) {
-            need_link = false;
-        } else |_| {}
-    }
+        var need_link = true;
+        if (fileExistsAbsolute(test_exe_cache_path.?)) {
+            if (copyFileAbsolute(test_exe_cache_path.?, test_exe)) {
+                need_link = false;
+            } else |_| {}
+        }
 
-    if (need_link) {
+        if (need_link) {
+            var compile_args: std.ArrayList([]const u8) = .empty;
+            defer compile_args.deinit(allocator);
+            try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, translated_obj_path });
+            try runtime_artifacts.appendToArgs(allocator, &compile_args);
+            const our_compile = runProcessCapture(
+                allocator,
+                compile_args.items,
+                work_dir,
+                link_timeout,
+            ) catch |err| {
+                log_state.stderr("zig cc link failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+                return false;
+            };
+            defer our_compile.deinit(allocator);
+            if (our_compile.timed_out) {
+                log_state.stderr("timeout: zig cc {s}\n", .{abs_input_path});
+                cleanupWorkDir(work_dir_rel);
+                return false;
+            }
+            if (!isZeroExit(our_compile.term)) {
+                log_state.stderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, our_compile.stderr });
+                return false;
+            }
+            copyFileAbsolute(test_exe, test_exe_cache_path.?) catch {};
+        }
+    } else {
         var compile_args: std.ArrayList([]const u8) = .empty;
         defer compile_args.deinit(allocator);
-        try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, translated_obj_path });
+        try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path });
         try runtime_artifacts.appendToArgs(allocator, &compile_args);
         const our_compile = runProcessCapture(
             allocator,
@@ -1545,9 +1599,6 @@ fn processCase(
         if (!isZeroExit(our_compile.term)) {
             log_state.stderr("zig cc compile failed: {s}\n{s}\n", .{ ll_path, our_compile.stderr });
             return false;
-        }
-        if (options.incremental) {
-            copyFileAbsolute(test_exe, test_exe_cache_path.?) catch {};
         }
     }
 
@@ -1628,6 +1679,7 @@ fn runCaseParallel(
     root_path: []const u8,
     cache_dir: []const u8,
     runtime_cache_key: []const u8,
+    runtime_artifacts: *const RuntimeArtifacts,
     compiler_cache_key: []const u8,
     ref_compiler_cache_key: []const u8,
     gfortran_cmd: []const u8,
@@ -1645,6 +1697,7 @@ fn runCaseParallel(
         root_path,
         cache_dir,
         runtime_cache_key,
+        runtime_artifacts,
         compiler_cache_key,
         ref_compiler_cache_key,
         gfortran_cmd,
