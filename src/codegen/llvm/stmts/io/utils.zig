@@ -285,6 +285,15 @@ pub fn emitHeapBytes(ctx: *Context, builder: anytype, bytes: usize) EmitError!Va
     return .{ .name = tmp, .ty = .ptr, .is_ptr = true };
 }
 
+pub fn emitStackValue(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+    if (value.ty == .ptr) return error.UnsupportedIntrinsicType;
+    const ptr_name = try ctx.nextTemp();
+    try builder.alloca(ptr_name, value.ty);
+    const ptr = ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(value, ptr);
+    return ptr;
+}
+
 pub fn emitFreeAllocs(ctx: *Context, builder: anytype, allocs: []const ValueRef) EmitError!void {
     if (allocs.len == 0) return;
     const free_name = try ctx.ensureDeclRaw("free", .void, &[_]llvm_types.IRType{.ptr}, false);

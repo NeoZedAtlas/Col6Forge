@@ -14,10 +14,9 @@ const io_utils = @import("utils.zig");
 const expansion = @import("expansion.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
-const emitHeapBytes = io_utils.emitHeapBytes;
+const emitStackValue = io_utils.emitStackValue;
 const emitStackPointerArrayFromValues = io_utils.emitStackPointerArrayFromValues;
 const emitStackI32Array = io_utils.emitStackI32Array;
-const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
 const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
 const emitImpliedBasePtr = io_utils.emitImpliedBasePtr;
@@ -30,14 +29,12 @@ const UnformattedArgs = struct {
     ptrs: std.array_list.Managed(ValueRef),
     kinds: std.array_list.Managed(u8),
     lens: std.array_list.Managed(i32),
-    heap_allocs: std.array_list.Managed(ValueRef),
 
     fn init(allocator: std.mem.Allocator) UnformattedArgs {
         return .{
             .ptrs = std.array_list.Managed(ValueRef).init(allocator),
             .kinds = std.array_list.Managed(u8).init(allocator),
             .lens = std.array_list.Managed(i32).init(allocator),
-            .heap_allocs = std.array_list.Managed(ValueRef).init(allocator),
         };
     }
 
@@ -45,7 +42,6 @@ const UnformattedArgs = struct {
         self.ptrs.deinit();
         self.kinds.deinit();
         self.lens.deinit();
-        self.heap_allocs.deinit();
     }
 };
 
@@ -125,17 +121,7 @@ fn buildUnformattedWriteArgs(ctx: *Context, builder: anytype, expanded_args: []*
         }
 
         const kind = try kindForScalarType(value.ty);
-        const bytes: usize = switch (value.ty) {
-            .i32, .f32 => 4,
-            .f64 => 8,
-            .i1 => 1,
-            .complex_f32 => 8,
-            .complex_f64 => 16,
-            else => unreachable,
-        };
-        const ptr = try emitHeapBytes(ctx, builder, bytes);
-        try builder.store(value, ptr);
-        try out.heap_allocs.append(ptr);
+        const ptr = try emitStackValue(ctx, builder, value);
         try appendArg(&out, ptr, kind, 0);
     }
 
@@ -318,8 +304,6 @@ fn emitMixedArrayUnformattedWrite(ctx: *Context, builder: anytype, write: ast.Wr
         try ctx.constI32(mid_kind_val), mid_count, one, base_ptr,
         post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
     });
-    try emitFreeAllocs(ctx, builder, pre_args.heap_allocs.items);
-    try emitFreeAllocs(ctx, builder, post_args.heap_allocs.items);
     return true;
 }
 
@@ -365,8 +349,6 @@ fn emitMixedArrayUnformattedRead(ctx: *Context, builder: anytype, read: ast.Read
         try ctx.constI32(mid_kind_val), mid_count, one, base_ptr,
         post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
     });
-    try emitFreeAllocs(ctx, builder, pre_args.heap_allocs.items);
-    try emitFreeAllocs(ctx, builder, post_args.heap_allocs.items);
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
 }
 
@@ -395,7 +377,6 @@ pub fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStm
 
     const write_name = try ctx.ensureDeclRaw("col6forge_write_unformatted_typed", .void, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .void, write_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
-    try emitFreeAllocs(ctx, builder, args.heap_allocs.items);
 }
 
 fn emitUnformattedReadImpl(ctx: *Context, builder: anytype, read: ast.ReadStmt, needs_status: bool) EmitError!ValueRef {
@@ -428,11 +409,9 @@ fn emitUnformattedReadImpl(ctx: *Context, builder: anytype, read: ast.ReadStmt, 
     if (needs_status) {
         const tmp = try ctx.nextTemp();
         try builder.callTyped(tmp, .i32, read_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
-        try emitFreeAllocs(ctx, builder, args.heap_allocs.items);
         return .{ .name = tmp, .ty = .i32, .is_ptr = false };
     }
     try builder.callTyped(null, .i32, read_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
-    try emitFreeAllocs(ctx, builder, args.heap_allocs.items);
     return .{ .name = "0", .ty = .i32, .is_ptr = false };
 }
 
@@ -518,8 +497,6 @@ fn emitDynamicImpliedDoUnformattedWrite(
         try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
         post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
     });
-    try emitFreeAllocs(ctx, builder, pre_args.heap_allocs.items);
-    try emitFreeAllocs(ctx, builder, post_args.heap_allocs.items);
     return true;
 }
 
@@ -599,8 +576,6 @@ fn emitDynamicImpliedDoUnformattedRead(
         try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
         post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
     });
-    try emitFreeAllocs(ctx, builder, pre_args.heap_allocs.items);
-    try emitFreeAllocs(ctx, builder, post_args.heap_allocs.items);
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
 }
 

@@ -915,7 +915,7 @@ bb87:
   %t451 = fadd float %t448, %t449
   %t452 = insertvalue {float, float} undef, float %t450, 0
   %t453 = insertvalue {float, float} %t452, float %t451, 1
-  %t454 = call ptr @malloc(i64 8)
+  %t454 = alloca {float, float}
   store {float, float} %t453, ptr %t454
   %t455 = alloca ptr, i32 1
   %t456 = getelementptr ptr, ptr %t455, i32 0
@@ -925,7 +925,6 @@ bb87:
   %t459 = getelementptr i32, ptr %t458, i32 0
   store i32 0, ptr %t459
   call i32 @col6forge_write_list_v(i32 %t436, ptr %t455, ptr %t457, ptr %t458, i32 1, i32 0)
-  call void @free(ptr %t454)
   br label %bb90
 bb90:
   %t460 = load i32, ptr %t21
@@ -969,7 +968,7 @@ bb97:
   %t478 = load i32, ptr %t29
   %t479 = sitofp i32 %t478 to float
   %t480 = fdiv float %t477, %t479
-  %t481 = call ptr @malloc(i64 4)
+  %t481 = alloca float
   store float %t480, ptr %t481
   %t482 = alloca ptr, i32 1
   %t483 = getelementptr ptr, ptr %t482, i32 0
@@ -979,7 +978,6 @@ bb97:
   %t486 = getelementptr i32, ptr %t485, i32 0
   store i32 0, ptr %t486
   call i32 @col6forge_write_list_v(i32 %t476, ptr %t482, ptr %t484, ptr %t485, i32 1, i32 0)
-  call void @free(ptr %t481)
   br label %bb100
 bb100:
   %t487 = load i32, ptr %t21
@@ -1108,11 +1106,11 @@ cdiv_merge2:
   %t574 = getelementptr i8, ptr %t553, i32 6
   store i8 %t573, ptr %t574
   %t575 = getelementptr [9 x i8], ptr @str31, i32 0, i32 0
-  %t576 = call ptr @malloc(i64 8)
+  %t576 = alloca {float, float}
   store {float, float} %t549, ptr %t576
-  %t577 = call ptr @malloc(i64 1)
+  %t577 = alloca i1
   store i1 1, ptr %t577
-  %t578 = call ptr @malloc(i64 4)
+  %t578 = alloca float
   store float %t551, ptr %t578
   %t579 = alloca ptr, i32 5
   %t580 = getelementptr ptr, ptr %t579, i32 0
@@ -1138,9 +1136,6 @@ cdiv_merge2:
   %t591 = getelementptr i32, ptr %t586, i32 4
   store i32 8, ptr %t591
   call i32 @col6forge_write_list_v(i32 %t512, ptr %t579, ptr %t585, ptr %t586, i32 5, i32 0)
-  call void @free(ptr %t576)
-  call void @free(ptr %t577)
-  call void @free(ptr %t578)
   br label %bb111
 bb111:
   %t592 = load i32, ptr %t21
@@ -1466,7 +1461,5 @@ entry:
   ret i32 0
 }
 declare i32 @col6forge_write_v(i32, ptr, ptr, ptr, i32, i32)
-declare void @free(ptr)
 declare float @llvm.powi.f32(float, i32)
 declare i32 @col6forge_write_list_v(i32, ptr, ptr, ptr, i32, i32)
-declare ptr @malloc(i64)

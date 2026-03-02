@@ -15,10 +15,9 @@ const expansion = @import("expansion.zig");
 const formatted = @import("formatted/mod.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
-const emitHeapBytes = io_utils.emitHeapBytes;
+const emitStackValue = io_utils.emitStackValue;
 const emitStackPointerArrayFromValues = io_utils.emitStackPointerArrayFromValues;
 const emitStackI32Array = io_utils.emitStackI32Array;
-const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
 const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
 const emitImpliedBasePtr = io_utils.emitImpliedBasePtr;
@@ -141,14 +140,12 @@ const TypedDirectArgs = struct {
     ptrs: std.array_list.Managed(ValueRef),
     kinds: std.array_list.Managed(u8),
     lens: std.array_list.Managed(i32),
-    heap_allocs: std.array_list.Managed(ValueRef),
 
     fn init(allocator: std.mem.Allocator) TypedDirectArgs {
         return .{
             .ptrs = std.array_list.Managed(ValueRef).init(allocator),
             .kinds = std.array_list.Managed(u8).init(allocator),
             .lens = std.array_list.Managed(i32).init(allocator),
-            .heap_allocs = std.array_list.Managed(ValueRef).init(allocator),
         };
     }
 
@@ -156,7 +153,6 @@ const TypedDirectArgs = struct {
         self.ptrs.deinit();
         self.kinds.deinit();
         self.lens.deinit();
-        self.heap_allocs.deinit();
     }
 };
 
@@ -233,17 +229,7 @@ fn buildTypedWriteArgs(ctx: *Context, builder: anytype, args_nodes: []*ast.Expr)
             continue;
         }
 
-        const bytes: usize = switch (value.ty) {
-            .i32, .f32 => 4,
-            .f64 => 8,
-            .i1 => 1,
-            .complex_f32 => 8,
-            .complex_f64 => 16,
-            else => unreachable,
-        };
-        const ptr = try emitHeapBytes(ctx, builder, bytes);
-        try builder.store(value, ptr);
-        try out.heap_allocs.append(ptr);
+        const ptr = try emitStackValue(ctx, builder, value);
         try appendArg(&out, ptr, try kindForScalarType(value.ty), 0);
     }
     return out;
@@ -368,8 +354,6 @@ fn emitMixedArrayDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
         try ctx.constI32(mid_kind_val), mid_count, one, base_ptr,
         post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
     });
-    try emitFreeAllocs(ctx, builder, pre_typed.heap_allocs.items);
-    try emitFreeAllocs(ctx, builder, post_typed.heap_allocs.items);
     return true;
 }
 
@@ -418,8 +402,6 @@ fn emitMixedArrayDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt)
         try ctx.constI32(mid_kind_val), mid_count, one, base_ptr,
         post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
     });
-    try emitFreeAllocs(ctx, builder, pre_typed.heap_allocs.items);
-    try emitFreeAllocs(ctx, builder, post_typed.heap_allocs.items);
     return true;
 }
 
@@ -502,7 +484,6 @@ fn emitDirectWriteCall(
     const typed_pack = try packTypedDirectArgs(ctx, builder, &typed);
     const write_name = try ctx.ensureDeclRaw("col6forge_write_direct_typed", .void, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .void, write_name, &.{ unit_i32, rec_i32, typed_pack.ptr_array, typed_pack.kinds_ptr, typed_pack.lens_ptr, typed_pack.count });
-    try emitFreeAllocs(ctx, builder, typed.heap_allocs.items);
 }
 
 fn emitDirectReadCall(
@@ -518,7 +499,6 @@ fn emitDirectReadCall(
     const typed_pack = try packTypedDirectArgs(ctx, builder, &typed);
     const read_name = try ctx.ensureDeclRaw("col6forge_read_direct_typed", .i32, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .i32, read_name, &.{ unit_i32, rec_i32, typed_pack.ptr_array, typed_pack.kinds_ptr, typed_pack.lens_ptr, typed_pack.count });
-    try emitFreeAllocs(ctx, builder, typed.heap_allocs.items);
 }
 
 fn resolveFormatItemsForDirect(ctx: *Context, format: ast.FormatSpec) EmitError!?[]const ast.FormatItem {
@@ -629,8 +609,6 @@ fn emitDynamicImpliedDoDirectWrite(
         try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
         post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
     });
-    try emitFreeAllocs(ctx, builder, pre_typed.heap_allocs.items);
-    try emitFreeAllocs(ctx, builder, post_typed.heap_allocs.items);
     return true;
 }
 
@@ -712,8 +690,6 @@ fn emitDynamicImpliedDoDirectRead(
         try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
         post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_ptr, post_packed.count,
     });
-    try emitFreeAllocs(ctx, builder, pre_typed.heap_allocs.items);
-    try emitFreeAllocs(ctx, builder, post_typed.heap_allocs.items);
     return true;
 }
 
