@@ -45,6 +45,8 @@ const findReversionStart = io_utils.findReversionStart;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
 const countFormatDescriptors = io_utils.countFormatDescriptors;
+const emitTripletCount = io_utils.emitTripletCount;
+const emitTripletCountValues = io_utils.emitTripletCountValues;
 
 pub const emitOpen = file_control.emitOpen;
 pub const emitInquire = file_control.emitInquire;
@@ -406,7 +408,7 @@ fn resolveDVectorFromImpliedDo(
 
     const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return null;
     const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return null;
-    const count = try emitRangeCount(ctx, builder, implied.start, implied.end);
+    const count = try emitRangeCount(ctx, builder, implied.start, implied.end, implied.step);
 
     const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
     defer ctx.allocator.free(base_args);
@@ -452,7 +454,7 @@ fn resolveDVectorFromRangeSection(
     const end_expr = range.upper;
 
     const stride = impliedStrideForDim(ctx, builder, sym.dims, dim) catch return null;
-    const count = try emitRangeCount(ctx, builder, start_expr, end_expr);
+    const count = try emitRangeCount(ctx, builder, start_expr, end_expr, range.stride);
 
     const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
     defer ctx.allocator.free(base_args);
@@ -470,26 +472,14 @@ fn resolveDVectorFromRangeSection(
     return .{ .base_ptr = base_ptr, .stride = stride, .count = count };
 }
 
-fn emitRangeCount(ctx: *Context, builder: anytype, start_expr: *ast.Expr, end_expr: *ast.Expr) EmitError!ValueRef {
-    var start_val = try expr.emitExpr(ctx, builder, start_expr);
-    start_val = try expr.coerce(ctx, builder, start_val, .i32);
-    var end_val = try expr.emitExpr(ctx, builder, end_expr);
-    end_val = try expr.coerce(ctx, builder, end_val, .i32);
-
-    const diff_tmp = try ctx.nextTemp();
-    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
-    const diff = ValueRef{ .name = diff_tmp, .ty = .i32, .is_ptr = false };
-    const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-    const count_tmp = try ctx.nextTemp();
-    try builder.binary(count_tmp, "add", .i32, diff, one);
-    const count_raw = ValueRef{ .name = count_tmp, .ty = .i32, .is_ptr = false };
-    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
-    const nonpos_tmp = try ctx.nextTemp();
-    try builder.compare(nonpos_tmp, "icmp", "sle", .i32, count_raw, zero);
-    const nonpos = ValueRef{ .name = nonpos_tmp, .ty = .i1, .is_ptr = false };
-    const final_count_tmp = try ctx.nextTemp();
-    try builder.select(final_count_tmp, .i32, nonpos, zero, count_raw);
-    return .{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
+fn emitRangeCount(
+    ctx: *Context,
+    builder: anytype,
+    start_expr: *ast.Expr,
+    end_expr: *ast.Expr,
+    step_expr: ?*ast.Expr,
+) EmitError!ValueRef {
+    return emitTripletCount(ctx, builder, start_expr, end_expr, step_expr);
 }
 
 fn parseDynamicDImpliedFormat(ctx: *Context, fmt_items: []const ast.FormatItem) ?DynamicDImpliedFormatPlan {
@@ -636,7 +626,11 @@ fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
             if (range.lower) |lower| {
                 if (exprContainsIdentifier(lower, name)) break :blk true;
             }
-            break :blk exprContainsIdentifier(range.upper, name);
+            if (exprContainsIdentifier(range.upper, name)) break :blk true;
+            if (range.stride) |stride_expr| {
+                if (exprContainsIdentifier(stride_expr, name)) break :blk true;
+            }
+            break :blk false;
         },
         .implied_do => |implied| blk: {
             for (implied.items) |item| {
@@ -675,12 +669,11 @@ fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) EmitError!V
                 try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr), .i32)
             else
                 ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-            const diff_tmp = try ctx.nextTemp();
-            try builder.binary(diff_tmp, "sub", .i32, upper, lower);
-            const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-            const extent_tmp = try ctx.nextTemp();
-            try builder.binary(extent_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, one);
-            break :blk ValueRef{ .name = extent_tmp, .ty = .i32, .is_ptr = false };
+            const step = if (range.stride) |stride_expr|
+                try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr), .i32)
+            else
+                ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+            break :blk try emitTripletCountValues(ctx, builder, lower, upper, step);
         },
         .literal => |lit| {
             if (lit.kind == .assumed_size) return error.UnsupportedImpliedDo;
@@ -790,4 +783,3 @@ pub fn emitRead(
         .list_directed => unreachable,
     }
 }
-

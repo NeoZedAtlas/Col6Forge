@@ -384,6 +384,7 @@ fn emitContiguousSectionScalarAssignment(ctx: *Context, builder: anytype, assign
         const range = arg.dim_range;
         has_range = true;
         if (!rangeLowerIsOne(range)) return false;
+        if (range.stride != null) return false;
         if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return false;
         var upper = try expr.emitExpr(ctx, builder, range.upper);
         upper = try expr.coerce(ctx, builder, upper, .i64);

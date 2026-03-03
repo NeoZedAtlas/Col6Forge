@@ -411,12 +411,104 @@ pub fn emitKindArray(ctx: *Context, builder: anytype, kinds: []const u8) EmitErr
     return .{ .name = kinds_ptr, .ty = .ptr, .is_ptr = true };
 }
 
-pub fn emitImpliedFinalCount(ctx: *Context, builder: anytype, start_expr: *ast.Expr, end_expr: *ast.Expr) EmitError!ValueRef {
+pub fn emitTripletCount(
+    ctx: *Context,
+    builder: anytype,
+    start_expr: *ast.Expr,
+    end_expr: *ast.Expr,
+    step_expr: ?*ast.Expr,
+) EmitError!ValueRef {
     var start_val = try expr.emitExpr(ctx, builder, start_expr);
     start_val = try expr.coerce(ctx, builder, start_val, .i32);
     var end_val = try expr.emitExpr(ctx, builder, end_expr);
     end_val = try expr.coerce(ctx, builder, end_val, .i32);
+    if (step_expr == null) return emitUnitStepCountValues(ctx, builder, start_val, end_val);
+    const step_node = step_expr.?;
+    if ((try evalConstIntSem(ctx, step_node)) orelse intLiteralValue(step_node)) |step_const| {
+        if (step_const == 1) return emitUnitStepCountValues(ctx, builder, start_val, end_val);
+    }
+    var step_val = try expr.emitExpr(ctx, builder, step_node);
+    step_val = try expr.coerce(ctx, builder, step_val, .i32);
+    return emitTripletCountValues(ctx, builder, start_val, end_val, step_val);
+}
 
+pub fn emitImpliedFinalCount(
+    ctx: *Context,
+    builder: anytype,
+    start_expr: *ast.Expr,
+    end_expr: *ast.Expr,
+    step_expr: ?*ast.Expr,
+) EmitError!ValueRef {
+    return emitTripletCount(ctx, builder, start_expr, end_expr, step_expr);
+}
+
+pub fn emitTripletCountValues(
+    ctx: *Context,
+    builder: anytype,
+    start_val: ValueRef,
+    end_val: ValueRef,
+    step_val: ValueRef,
+) EmitError!ValueRef {
+    const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+    const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+
+    const step_nonzero_tmp = try ctx.nextTemp();
+    try builder.compare(step_nonzero_tmp, "icmp", "ne", .i32, step_val, zero);
+    const step_nonzero = ValueRef{ .name = step_nonzero_tmp, .ty = .i1, .is_ptr = false };
+
+    const step_pos_tmp = try ctx.nextTemp();
+    try builder.compare(step_pos_tmp, "icmp", "sgt", .i32, step_val, zero);
+    const step_pos = ValueRef{ .name = step_pos_tmp, .ty = .i1, .is_ptr = false };
+
+    const step_neg_tmp = try ctx.nextTemp();
+    try builder.compare(step_neg_tmp, "icmp", "slt", .i32, step_val, zero);
+    const step_neg = ValueRef{ .name = step_neg_tmp, .ty = .i1, .is_ptr = false };
+
+    const safe_step_tmp = try ctx.nextTemp();
+    try builder.select(safe_step_tmp, .i32, step_nonzero, step_val, one);
+    const safe_step = ValueRef{ .name = safe_step_tmp, .ty = .i32, .is_ptr = false };
+
+    const end_ge_start_tmp = try ctx.nextTemp();
+    try builder.compare(end_ge_start_tmp, "icmp", "sge", .i32, end_val, start_val);
+    const end_ge_start = ValueRef{ .name = end_ge_start_tmp, .ty = .i1, .is_ptr = false };
+
+    const end_le_start_tmp = try ctx.nextTemp();
+    try builder.compare(end_le_start_tmp, "icmp", "sle", .i32, end_val, start_val);
+    const end_le_start = ValueRef{ .name = end_le_start_tmp, .ty = .i1, .is_ptr = false };
+
+    const pos_range_ok_tmp = try ctx.nextTemp();
+    try builder.binary(pos_range_ok_tmp, "and", .i1, step_pos, end_ge_start);
+    const pos_range_ok = ValueRef{ .name = pos_range_ok_tmp, .ty = .i1, .is_ptr = false };
+
+    const neg_range_ok_tmp = try ctx.nextTemp();
+    try builder.binary(neg_range_ok_tmp, "and", .i1, step_neg, end_le_start);
+    const neg_range_ok = ValueRef{ .name = neg_range_ok_tmp, .ty = .i1, .is_ptr = false };
+
+    const has_values_tmp = try ctx.nextTemp();
+    try builder.binary(has_values_tmp, "or", .i1, pos_range_ok, neg_range_ok);
+    const has_values = ValueRef{ .name = has_values_tmp, .ty = .i1, .is_ptr = false };
+
+    const diff_tmp = try ctx.nextTemp();
+    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
+    const diff = ValueRef{ .name = diff_tmp, .ty = .i32, .is_ptr = false };
+    const quot_tmp = try ctx.nextTemp();
+    try builder.binary(quot_tmp, "sdiv", .i32, diff, safe_step);
+    const quot = ValueRef{ .name = quot_tmp, .ty = .i32, .is_ptr = false };
+    const count_raw_tmp = try ctx.nextTemp();
+    try builder.binary(count_raw_tmp, "add", .i32, quot, one);
+    const count_raw = ValueRef{ .name = count_raw_tmp, .ty = .i32, .is_ptr = false };
+
+    const final_count_tmp = try ctx.nextTemp();
+    try builder.select(final_count_tmp, .i32, has_values, count_raw, zero);
+    return .{ .name = final_count_tmp, .ty = .i32, .is_ptr = false };
+}
+
+fn emitUnitStepCountValues(
+    ctx: *Context,
+    builder: anytype,
+    start_val: ValueRef,
+    end_val: ValueRef,
+) EmitError!ValueRef {
     const diff_tmp = try ctx.nextTemp();
     try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
     const diff = ValueRef{ .name = diff_tmp, .ty = .i32, .is_ptr = false };

@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const ast = @import("../../../input.zig");
 const context = @import("../../codegen/context.zig");
 const expr = @import("../../codegen/expression/mod.zig");
@@ -22,6 +22,7 @@ const emitStackI32Array = io_utils.emitStackI32Array;
 const emitKindArray = io_utils.emitKindArray;
 const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
 const emitImpliedBasePtr = io_utils.emitImpliedBasePtr;
+const emitTripletCountValues = io_utils.emitTripletCountValues;
 const expandWriteArgsList = expansion.expandWriteArgsList;
 const expandReadTargets = expansion.expandReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
@@ -283,7 +284,7 @@ fn emitDynamicImpliedDoListWrite(
 
     const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return false;
 
-    const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end);
+    const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step);
     const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
 
     if (write.args.len == 1) {
@@ -310,16 +311,34 @@ fn emitDynamicImpliedDoListWrite(
     };
     const mix_decl = try ctx.ensureDeclRaw("col6forge_write_list_mix_v_n", .i32, &[_]utils.IRType{
         .i32,
-        .ptr, .ptr, .ptr, .i32,
-        .i32, .i32, .i32, .ptr,
-        .ptr, .ptr, .ptr, .i32,
+        .ptr,
+        .ptr,
+        .ptr,
+        .i32,
+        .i32,
+        .i32,
+        .i32,
+        .ptr,
+        .ptr,
+        .ptr,
+        .ptr,
+        .i32,
         .i32,
     }, false);
     try builder.callTyped(null, .i32, mix_decl, &.{
         unit_i32,
-        pre_packed.ptr_array, pre_packed.kinds_ptr, pre_packed.lens_array, pre_packed.arg_count,
-        try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
-        post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_array, post_packed.arg_count,
+        pre_packed.ptr_array,
+        pre_packed.kinds_ptr,
+        pre_packed.lens_array,
+        pre_packed.arg_count,
+        try ctx.constI32(mid_kind_val),
+        final_count,
+        stride,
+        base_ptr,
+        post_packed.ptr_array,
+        post_packed.kinds_ptr,
+        post_packed.lens_array,
+        post_packed.arg_count,
         try ctx.constI32(0),
     });
     return true;
@@ -426,7 +445,7 @@ fn emitDynamicImpliedDoListRead(
 
     const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return null;
 
-    const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end);
+    const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step);
     const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
 
     if (read.args.len == 1) {
@@ -455,17 +474,35 @@ fn emitDynamicImpliedDoListRead(
     };
     const mix_decl = try ctx.ensureDeclRaw("col6forge_read_list_mix_v_n", .i32, &[_]utils.IRType{
         .i32,
-        .ptr, .ptr, .ptr, .i32,
-        .i32, .i32, .i32, .ptr,
-        .ptr, .ptr, .ptr, .i32,
+        .ptr,
+        .ptr,
+        .ptr,
+        .i32,
+        .i32,
+        .i32,
+        .i32,
+        .ptr,
+        .ptr,
+        .ptr,
+        .ptr,
+        .i32,
         .i32,
     }, false);
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, mix_decl, &.{
         unit_i32,
-        pre_packed.ptr_array, pre_packed.kinds_ptr, pre_packed.lens_array, pre_packed.arg_count,
-        try ctx.constI32(mid_kind_val), final_count, stride, base_ptr,
-        post_packed.ptr_array, post_packed.kinds_ptr, post_packed.lens_array, post_packed.arg_count,
+        pre_packed.ptr_array,
+        pre_packed.kinds_ptr,
+        pre_packed.lens_array,
+        pre_packed.arg_count,
+        try ctx.constI32(mid_kind_val),
+        final_count,
+        stride,
+        base_ptr,
+        post_packed.ptr_array,
+        post_packed.kinds_ptr,
+        post_packed.lens_array,
+        post_packed.arg_count,
         ValueRef{ .name = "1", .ty = .i32, .is_ptr = false },
     });
 
@@ -516,7 +553,11 @@ fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
             if (range.lower) |lower| {
                 if (exprContainsIdentifier(lower, name)) break :blk true;
             }
-            break :blk exprContainsIdentifier(range.upper, name);
+            if (exprContainsIdentifier(range.upper, name)) break :blk true;
+            if (range.stride) |stride_expr| {
+                if (exprContainsIdentifier(stride_expr, name)) break :blk true;
+            }
+            break :blk false;
         },
         .implied_do => |implied| blk: {
             for (implied.items) |item| {
@@ -555,12 +596,11 @@ fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) !ValueRef {
                 try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr), .i32)
             else
                 ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-            const diff_tmp = try ctx.nextTemp();
-            try builder.binary(diff_tmp, "sub", .i32, upper, lower);
-            const one = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-            const extent_tmp = try ctx.nextTemp();
-            try builder.binary(extent_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, one);
-            break :blk ValueRef{ .name = extent_tmp, .ty = .i32, .is_ptr = false };
+            const step = if (range.stride) |stride_expr|
+                try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr), .i32)
+            else
+                ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+            break :blk try emitTripletCountValues(ctx, builder, lower, upper, step);
         },
         .literal => |lit| {
             if (lit.kind == .assumed_size) return error.UnsupportedImpliedDo;

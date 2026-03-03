@@ -502,8 +502,8 @@ fn dimensionExtent(self: *context.Context, dim: *ast.Expr) !?i64 {
         if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return null;
         const upper = (try constIntegerValue(self, range.upper)) orelse return null;
         const lower = if (range.lower) |lower_expr| (try constIntegerValue(self, lower_expr)) orelse return null else 1;
-        const extent = subNoOverflow(upper, lower) orelse return null;
-        return addNoOverflow(extent, 1) orelse null;
+        const stride = if (range.stride) |stride_expr| (try constIntegerValue(self, stride_expr)) orelse return null else 1;
+        return tripletExtent(lower, upper, stride);
     }
     return try constIntegerValue(self, dim);
 }
@@ -553,4 +553,19 @@ fn mulNoOverflow(a: i64, b: i64) ?i64 {
     const result = @mulWithOverflow(a, b);
     if (result[1] != 0) return null;
     return result[0];
+}
+
+fn divTruncNoOverflow(a: i64, b: i64) ?i64 {
+    if (b == 0) return null;
+    if (a == std.math.minInt(i64) and b == -1) return null;
+    return @divTrunc(a, b);
+}
+
+fn tripletExtent(lower: i64, upper: i64, stride: i64) ?i64 {
+    if (stride == 0) return null;
+    if (stride > 0 and upper < lower) return 0;
+    if (stride < 0 and upper > lower) return 0;
+    const delta = subNoOverflow(upper, lower) orelse return null;
+    const steps = divTruncNoOverflow(delta, stride) orelse return null;
+    return addNoOverflow(steps, 1);
 }
