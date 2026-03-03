@@ -187,6 +187,7 @@ const DimLowerExtent = struct {
 fn evalDimLowerExtent(ctx: *context.Context, dim_expr: *ast.Expr) !?DimLowerExtent {
     switch (dim_expr.*) {
         .dim_range => |range| {
+            if (range.stride != null) return null;
             const upper = (try evalConstInt(ctx, range.upper)) orelse return null;
             const lower = if (range.lower) |lower_expr|
                 (try evalConstInt(ctx, lower_expr)) orelse return null
@@ -318,7 +319,8 @@ fn cloneExprWithSubst(
         .dim_range => |range| {
             const lower = if (range.lower) |l| try cloneExprWithSubst(ctx, l, name, replacement) else null;
             const upper = try cloneExprWithSubst(ctx, range.upper, name, replacement);
-            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
+            const stride = if (range.stride) |s| try cloneExprWithSubst(ctx, s, name, replacement) else null;
+            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
         },
         .implied_do => |implied| {
             const items = try ctx.arena.alloc(*ast.Expr, implied.items.len);

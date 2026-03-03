@@ -21,6 +21,7 @@ pub const Expr = union(enum) {
 pub const DimRange = struct {
     lower: ?*Expr,
     upper: *Expr,
+    stride: ?*Expr = null,
 };
 
 pub const Literal = struct {

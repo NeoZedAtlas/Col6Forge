@@ -926,6 +926,7 @@ fn constLinearOffset(sym: sema.Symbol, call: ast.CallOrSubscript) ?i64 {
 fn dimSizeConst(expr: *ast.Expr) ?i64 {
     if (expr.* == .dim_range) {
         const range = expr.dim_range;
+        if (range.stride != null) return null;
         if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return null;
         const upper = constIndexValue(range.upper) orelse return null;
         const lower = if (range.lower) |lower_expr| constIndexValue(lower_expr) orelse return null else 1;

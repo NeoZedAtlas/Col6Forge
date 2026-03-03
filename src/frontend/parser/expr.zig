@@ -10,6 +10,16 @@ const BinaryOp = ast.BinaryOp;
 
 const ParseExprError = error{ UnexpectedEOF, UnexpectedToken, ExpressionDepthExceeded } || std.mem.Allocator.Error;
 const max_expression_depth: usize = 512;
+const prec_eqv: u8 = 0;
+const prec_or: u8 = 1;
+const prec_and: u8 = 2;
+const prec_rel: u8 = 3;
+const prec_concat: u8 = 4;
+const prec_add: u8 = 5;
+const prec_mul: u8 = 6;
+const prec_power: u8 = 7;
+
+pub const min_prec_power: u8 = prec_power;
 
 pub fn parseExpr(lp: *LineParser, arena: std.mem.Allocator, min_prec: u8) ParseExprError!*Expr {
     return parseExprDepth(lp, arena, min_prec, 0);
@@ -57,18 +67,28 @@ fn parseDimExprDepth(lp: *LineParser, arena: std.mem.Allocator, depth: usize) Pa
             const assumed = try arena.create(Expr);
             assumed.* = .{ .literal = .{ .kind = .assumed_size, .text = lp.tokenText(tok) } };
             upper = assumed;
-        } else if (lp.peekIs(.r_paren) or lp.peekIs(.comma)) {
+        } else if (lp.peekIs(.colon) or isDimRangeTerminator(lp.*)) {
             const assumed = try arena.create(Expr);
             assumed.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
             upper = assumed;
         } else {
             upper = try parseExprDepth(lp, arena, 0, depth + 1);
         }
+
+        var stride: ?*Expr = null;
+        if (lp.consume(.colon) and !isDimRangeTerminator(lp.*)) {
+            stride = try parseExprDepth(lp, arena, 0, depth + 1);
+        }
+
         const node = try arena.create(Expr);
-        node.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
+        node.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
         return node;
     }
     return lower orelse error.UnexpectedToken;
+}
+
+fn isDimRangeTerminator(lp: LineParser) bool {
+    return lp.peek() == null or lp.peekIs(.r_paren) or lp.peekIs(.comma);
 }
 
 fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseExprError!*Expr {
@@ -78,7 +98,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
             const name = lp.readName(arena) orelse return error.UnexpectedToken;
             if (lp.consume(.l_paren)) {
                 if (hasSubstringRange(lp.*)) {
-                    const args = try arena.alloc(*Expr, 0);
+                    const args = @constCast(@as([]const *Expr, &[_]*Expr{}));
                     var start_expr: ?*Expr = null;
                     if (!lp.peekIs(.colon)) {
                         start_expr = try parseExprDepth(lp, arena, 0, depth + 1);
@@ -175,14 +195,14 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
         },
         .plus => {
             _ = lp.next();
-            const expr = try parseExprDepth(lp, arena, 6, depth + 1);
+            const expr = try parseExprDepth(lp, arena, min_prec_power, depth + 1);
             const node = try arena.create(Expr);
             node.* = .{ .unary = .{ .op = .plus, .expr = expr } };
             return node;
         },
         .minus => {
             _ = lp.next();
-            const expr = try parseExprDepth(lp, arena, 6, depth + 1);
+            const expr = try parseExprDepth(lp, arena, min_prec_power, depth + 1);
             const node = try arena.create(Expr);
             node.* = .{ .unary = .{ .op = .minus, .expr = expr } };
             return node;
@@ -290,35 +310,35 @@ fn peekBinaryOp(lp: LineParser) ?BinOpInfo {
     switch (tok.kind) {
         .equals => {
             if (lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .equals) {
-                return .{ .op = .eq, .prec = 3, .right_assoc = false, .token_count = 2 };
+                return .{ .op = .eq, .prec = prec_rel, .right_assoc = false, .token_count = 2 };
             }
             return null;
         },
-        .plus => return .{ .op = .add, .prec = 4, .right_assoc = false, .token_count = 1 },
-        .minus => return .{ .op = .sub, .prec = 4, .right_assoc = false, .token_count = 1 },
-        .star => return .{ .op = .mul, .prec = 5, .right_assoc = false, .token_count = 1 },
+        .plus => return .{ .op = .add, .prec = prec_add, .right_assoc = false, .token_count = 1 },
+        .minus => return .{ .op = .sub, .prec = prec_add, .right_assoc = false, .token_count = 1 },
+        .star => return .{ .op = .mul, .prec = prec_mul, .right_assoc = false, .token_count = 1 },
         .slash => {
             if (lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .equals) {
-                return .{ .op = .ne, .prec = 3, .right_assoc = false, .token_count = 2 };
+                return .{ .op = .ne, .prec = prec_rel, .right_assoc = false, .token_count = 2 };
             }
             if (lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .slash) {
-                return .{ .op = .concat, .prec = 4, .right_assoc = false, .token_count = 2 };
+                return .{ .op = .concat, .prec = prec_concat, .right_assoc = false, .token_count = 2 };
             }
-            return .{ .op = .div, .prec = 5, .right_assoc = false, .token_count = 1 };
+            return .{ .op = .div, .prec = prec_mul, .right_assoc = false, .token_count = 1 };
         },
-        .power => return .{ .op = .power, .prec = 6, .right_assoc = true, .token_count = 1 },
+        .power => return .{ .op = .power, .prec = prec_power, .right_assoc = true, .token_count = 1 },
         .dot_op => {
             // Fortran logical equivalence/nonequivalence have the lowest logical precedence.
-            if (dotOpIs(lp, "EQV")) return .{ .op = .eqv, .prec = 0, .right_assoc = false, .token_count = 1 };
-            if (dotOpIs(lp, "NEQV")) return .{ .op = .neqv, .prec = 0, .right_assoc = false, .token_count = 1 };
-            if (dotOpIs(lp, "OR")) return .{ .op = .or_, .prec = 1, .right_assoc = false, .token_count = 1 };
-            if (dotOpIs(lp, "AND")) return .{ .op = .and_, .prec = 2, .right_assoc = false, .token_count = 1 };
-            if (dotOpIs(lp, "EQ")) return .{ .op = .eq, .prec = 3, .right_assoc = false, .token_count = 1 };
-            if (dotOpIs(lp, "NE")) return .{ .op = .ne, .prec = 3, .right_assoc = false, .token_count = 1 };
-            if (dotOpIs(lp, "LT")) return .{ .op = .lt, .prec = 3, .right_assoc = false, .token_count = 1 };
-            if (dotOpIs(lp, "LE")) return .{ .op = .le, .prec = 3, .right_assoc = false, .token_count = 1 };
-            if (dotOpIs(lp, "GT")) return .{ .op = .gt, .prec = 3, .right_assoc = false, .token_count = 1 };
-            if (dotOpIs(lp, "GE")) return .{ .op = .ge, .prec = 3, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "EQV")) return .{ .op = .eqv, .prec = prec_eqv, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "NEQV")) return .{ .op = .neqv, .prec = prec_eqv, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "OR")) return .{ .op = .or_, .prec = prec_or, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "AND")) return .{ .op = .and_, .prec = prec_and, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "EQ")) return .{ .op = .eq, .prec = prec_rel, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "NE")) return .{ .op = .ne, .prec = prec_rel, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "LT")) return .{ .op = .lt, .prec = prec_rel, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "LE")) return .{ .op = .le, .prec = prec_rel, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "GT")) return .{ .op = .gt, .prec = prec_rel, .right_assoc = false, .token_count = 1 };
+            if (dotOpIs(lp, "GE")) return .{ .op = .ge, .prec = prec_rel, .right_assoc = false, .token_count = 1 };
             return null;
         },
         else => return null,
@@ -447,6 +467,87 @@ test "parseExpr handles dim-range arguments in subscripts" {
             try testing.expectEqual(@as(usize, 2), call.args.len);
             try testing.expect(call.args[0].* == .dim_range);
             try testing.expect(call.args[1].* == .dim_range);
+            try testing.expect(call.args[0].dim_range.stride == null);
+            try testing.expect(call.args[1].dim_range.stride == null);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles dim-range triplet stride in subscripts" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A(1:10:2)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .call_or_subscript => |call| {
+            try testing.expectEqual(@as(usize, 1), call.args.len);
+            try testing.expect(call.args[0].* == .dim_range);
+            const range = call.args[0].dim_range;
+            try testing.expect(range.lower != null);
+            try testing.expect(range.stride != null);
+            try testing.expect(range.stride.?.* == .literal);
+            try testing.expectEqualStrings("2", range.stride.?.literal.text);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr gives add higher precedence than concat" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A+B//C\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .binary => |bin| {
+            try testing.expectEqual(BinaryOp.concat, bin.op);
+            try testing.expect(bin.left.* == .binary);
+            try testing.expectEqual(BinaryOp.add, bin.left.binary.op);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr keeps concat lower than add on right-hand side" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A//B+C\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .binary => |bin| {
+            try testing.expectEqual(BinaryOp.concat, bin.op);
+            try testing.expect(bin.right.* == .binary);
+            try testing.expectEqual(BinaryOp.add, bin.right.binary.op);
         },
         else => return error.UnexpectedToken,
     }

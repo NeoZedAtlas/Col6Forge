@@ -215,6 +215,7 @@ fn rewriteExpr(
         .dim_range => |*range| {
             if (range.lower) |lower| changed = (try rewriteExpr(ctx, state, lower, source_stmt, prelude, allow_prelude)) or changed;
             changed = (try rewriteExpr(ctx, state, range.upper, source_stmt, prelude, allow_prelude)) or changed;
+            if (range.stride) |stride| changed = (try rewriteExpr(ctx, state, stride, source_stmt, prelude, allow_prelude)) or changed;
         },
         .substring => |*sub| {
             for (sub.args) |arg| changed = (try rewriteExpr(ctx, state, arg, source_stmt, prelude, allow_prelude)) or changed;
@@ -640,7 +641,8 @@ fn cloneExpr(ctx: *context.Context, node: *ast.Expr) !*ast.Expr {
         .dim_range => |range| {
             const lower = if (range.lower) |l| try cloneExpr(ctx, l) else null;
             const upper = try cloneExpr(ctx, range.upper);
-            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
+            const stride = if (range.stride) |s| try cloneExpr(ctx, s) else null;
+            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
         },
         .implied_do => |implied| {
             const items = try ctx.arena.alloc(*ast.Expr, implied.items.len);

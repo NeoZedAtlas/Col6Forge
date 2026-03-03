@@ -435,6 +435,7 @@ fn commonElementCount(sem_unit: *const SemanticUnit, dims: []*ast.Expr) !usize {
 fn commonDimSize(sem_unit: *const SemanticUnit, dim_expr: *ast.Expr) !i64 {
     switch (dim_expr.*) {
         .dim_range => |range| {
+            if (range.stride != null) return error.CommonBlockMismatch;
             const upper = try evalConstInt(sem_unit, range.upper) orelse return error.CommonBlockMismatch;
             const lower = if (range.lower) |lower_expr|
                 (try evalConstInt(sem_unit, lower_expr)) orelse return error.CommonBlockMismatch

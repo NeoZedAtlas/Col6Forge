@@ -175,6 +175,10 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
             }
             const upper_ty = try checkExprType(self, range.upper);
             if (!isIntegerLike(upper_ty)) return error.InvalidSubscript;
+            if (range.stride) |stride| {
+                const stride_ty = try checkExprType(self, stride);
+                if (!isIntegerLike(stride_ty)) return error.InvalidSubscript;
+            }
             return .integer;
         },
         .substring => |sub| {

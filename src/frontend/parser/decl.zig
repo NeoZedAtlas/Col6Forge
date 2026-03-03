@@ -351,7 +351,7 @@ fn parseAttrDimensions(lp: *LineParser, arena: std.mem.Allocator) ![]*ast.Expr {
 
 fn parseOptionalKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
     if (lp.consume(.star)) {
-        return expr.parseExpr(lp, arena, 6);
+        return expr.parseExpr(lp, arena, expr.min_prec_power);
     }
     if (!lp.peekIs(.l_paren)) return null;
     return parseKindSelectorExprInParens(lp, arena);
@@ -359,7 +359,7 @@ fn parseOptionalKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.E
 
 fn parseStarOnlyKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
     if (!lp.consume(.star)) return null;
-    return expr.parseExpr(lp, arena, 6);
+    return expr.parseExpr(lp, arena, expr.min_prec_power);
 }
 
 fn parseRealKindSuffix(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
@@ -372,7 +372,7 @@ fn parseRealKindSuffix(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpe
 
 fn parseComplexKindSuffix(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
     if (lp.consume(.star)) {
-        const selector = try expr.parseExpr(lp, arena, 6);
+        const selector = try expr.parseExpr(lp, arena, expr.min_prec_power);
         return .{
             .type_kind = .complex,
             .kind_selector = selector,
@@ -533,7 +533,7 @@ pub fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
         default_len.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
         return default_len;
     }
-    return expr.parseExpr(lp, arena, 6);
+    return expr.parseExpr(lp, arena, expr.min_prec_power);
 }
 
 fn parseNameList(lp: *LineParser, arena: std.mem.Allocator) ![]const []const u8 {

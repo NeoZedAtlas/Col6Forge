@@ -540,7 +540,7 @@ fn isStandaloneEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) 
 
 fn parseComplexTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeInfo {
     if (lp.consume(.star)) {
-        const selector = try expr.parseExpr(lp, arena, 6);
+        const selector = try expr.parseExpr(lp, arena, expr.min_prec_power);
         return .{
             .type_kind = .complex,
             .kind_selector = selector,
@@ -559,7 +559,7 @@ fn parseComplexTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeIn
 
 fn parseRealTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeInfo {
     if (lp.consume(.star)) {
-        const selector = try expr.parseExpr(lp, arena, 6);
+        const selector = try expr.parseExpr(lp, arena, expr.min_prec_power);
         return .{
             .type_kind = .real,
             .kind_selector = selector,
@@ -758,6 +758,7 @@ fn evalDimValue(expr_node: *ast.Expr, param_ints: *const std.StringHashMap(i64))
             return evalParamInt(expr_node, param_ints);
         },
         .dim_range => |range| {
+            if (range.stride != null) return null;
             if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return null;
             const upper = evalParamInt(range.upper, param_ints) orelse return null;
             const lower = if (range.lower) |lower_expr|
@@ -1134,7 +1135,7 @@ test "parseProgram supports implicit main program header" {
 
 fn parseTypePrefixOptionalKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
     if (lp.consume(.star)) {
-        return expr.parseExpr(lp, arena, 6);
+        return expr.parseExpr(lp, arena, expr.min_prec_power);
     }
     if (!lp.peekIs(.l_paren)) return null;
     return parseTypePrefixKindSelectorExpr(lp, arena);

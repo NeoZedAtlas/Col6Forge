@@ -250,6 +250,7 @@ fn dimSizeValue(sem: *const input.sema.SemanticUnit, dim: *input.Expr, lookup: ?
             return evalConstInt(sem, dim, lookup);
         },
         .dim_range => |range| {
+            if (range.stride != null) return null;
             if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) {
                 return null;
             }

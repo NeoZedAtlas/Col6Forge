@@ -492,6 +492,11 @@ fn printExpr(writer: anytype, expr: *ast.Expr, depth: usize) !void {
             try printIndent(writer, depth + 1);
             try writer.writeAll("upper:\n");
             try printExpr(writer, range.upper, depth + 2);
+            if (range.stride) |stride| {
+                try printIndent(writer, depth + 1);
+                try writer.writeAll("stride:\n");
+                try printExpr(writer, stride, depth + 2);
+            }
         },
         .unary => |un| {
             try printIndent(writer, depth);

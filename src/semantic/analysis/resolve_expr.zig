@@ -141,6 +141,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         .dim_range => |range| {
             if (range.lower) |lower| try resolveExpr(self, lower);
             try resolveExpr(self, range.upper);
+            if (range.stride) |stride| try resolveExpr(self, stride);
             try cacheExprType(self, expr, .integer);
         },
         .complex_literal => |lit| {

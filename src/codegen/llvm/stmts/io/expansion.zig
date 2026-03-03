@@ -372,7 +372,11 @@ fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
             if (range.lower) |lower| {
                 if (exprContainsIdentifier(lower, name)) break :blk true;
             }
-            break :blk exprContainsIdentifier(range.upper, name);
+            if (exprContainsIdentifier(range.upper, name)) break :blk true;
+            if (range.stride) |stride_expr| {
+                if (exprContainsIdentifier(stride_expr, name)) break :blk true;
+            }
+            break :blk false;
         },
         .implied_do => |implied| blk: {
             for (implied.items) |item| {
@@ -394,6 +398,7 @@ fn staticIntValue(ctx: *Context, node: *ast.Expr) ?i64 {
 fn staticDimExtent(ctx: *Context, dim: *ast.Expr) ?i64 {
     return switch (dim.*) {
         .dim_range => |range| blk: {
+            if (range.stride != null) break :blk null;
             const upper = staticIntValue(ctx, range.upper) orelse break :blk null;
             const lower = if (range.lower) |lower_expr| staticIntValue(ctx, lower_expr) orelse break :blk null else 1;
             if (upper < lower) break :blk 0;
@@ -458,7 +463,8 @@ fn cloneExprWithSubst(
         .dim_range => |range| {
             const lower = if (range.lower) |l| try cloneExprWithSubst(ctx, allocator, l, name, replacement) else null;
             const upper = try cloneExprWithSubst(ctx, allocator, range.upper, name, replacement);
-            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper } };
+            const stride = if (range.stride) |s| try cloneExprWithSubst(ctx, allocator, s, name, replacement) else null;
+            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
         },
         .implied_do => |implied| {
             if (std.ascii.eqlIgnoreCase(implied.var_name, name)) {
