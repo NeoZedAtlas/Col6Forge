@@ -21,7 +21,7 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
             return switch (lit.kind) {
                 .integer => .{ .integer = try parseInt(lit.text) },
                 .real => .{ .real = try parseReal(lit.text) },
-                .logical => .{ .integer = try parseInt(lit.text) },
+                .logical => .{ .logical = try parseLogical(lit.text) },
                 .string, .hollerith => blk: {
                     const allocator = if (resolver) |res| res.allocator orelse break :blk null else break :blk null;
                     const bytes = (try decodeLiteralBytes(allocator, lit)) orelse break :blk null;
@@ -37,9 +37,15 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
         .unary => |un| {
             const inner = (try evalConst(un.expr, resolver)) orelse return null;
             return switch (un.op) {
-                .plus => inner,
+                .plus => switch (inner) {
+                    .integer, .real, .complex => inner,
+                    else => null,
+                },
                 .minus => negateConst(inner),
-                .not => null,
+                .not => switch (inner) {
+                    .logical => |v| .{ .logical = !v },
+                    else => null,
+                },
             };
         },
         .binary => |bin| {
@@ -248,12 +254,16 @@ fn parseReal(text: []const u8) !f64 {
     return std.fmt.parseFloat(f64, buffer[0..out]);
 }
 
-fn negateConst(value: ConstValue) ConstValue {
+fn parseLogical(text: []const u8) !bool {
+    return (try parseInt(text)) != 0;
+}
+
+fn negateConst(value: ConstValue) ?ConstValue {
     return switch (value) {
         .integer => |v| .{ .integer = -v },
         .real => |v| .{ .real = -v },
         .complex => |v| .{ .complex = .{ .real = -v.real, .imag = -v.imag } },
-        .string => value,
+        .logical, .string => null,
     };
 }
 
@@ -265,6 +275,21 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?
         return .{ .string = joined };
     }
     if (left == .string or right == .string) return null;
+
+    const left_is_logical = left == .logical;
+    const right_is_logical = right == .logical;
+    if (left_is_logical or right_is_logical) {
+        if (!(left_is_logical and right_is_logical)) return null;
+        const l = left.logical;
+        const r = right.logical;
+        return switch (op) {
+            .and_ => .{ .logical = l and r },
+            .or_ => .{ .logical = l or r },
+            .eqv, .eq => .{ .logical = l == r },
+            .neqv, .ne => .{ .logical = l != r },
+            else => null,
+        };
+    }
 
     if (left == .complex or right == .complex) {
         const l = toComplex(left) orelse return null;
@@ -284,6 +309,8 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?
                     .imag = ((l.imag * r.real) - (l.real * r.imag)) / denom,
                 } };
             },
+            .eq => .{ .logical = l.real == r.real and l.imag == r.imag },
+            .ne => .{ .logical = l.real != r.real or l.imag != r.imag },
             else => null,
         };
     }
@@ -305,6 +332,12 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?
             .mul => .{ .real = l * r },
             .div => .{ .real = l / r },
             .power => .{ .real = std.math.pow(f64, l, r) },
+            .eq => .{ .logical = l == r },
+            .ne => .{ .logical = l != r },
+            .lt => .{ .logical = l < r },
+            .le => .{ .logical = l <= r },
+            .gt => .{ .logical = l > r },
+            .ge => .{ .logical = l >= r },
             else => null,
         };
     }
@@ -319,6 +352,12 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?
             break :blk .{ .integer = @divTrunc(l, r) };
         },
         .power => .{ .integer = try intPow(l, r) },
+        .eq => .{ .logical = l == r },
+        .ne => .{ .logical = l != r },
+        .lt => .{ .logical = l < r },
+        .le => .{ .logical = l <= r },
+        .gt => .{ .logical = l > r },
+        .ge => .{ .logical = l >= r },
         else => null,
     };
 }
@@ -342,6 +381,7 @@ fn toReal(value: ConstValue) f64 {
         .real => |v| v,
         .integer => |v| @as(f64, @floatFromInt(v)),
         .complex => |v| v.real,
+        .logical => 0,
         .string => 0,
     };
 }
@@ -351,6 +391,7 @@ fn toComplex(value: ConstValue) ?ComplexConst {
         .integer => |v| .{ .real = @as(f64, @floatFromInt(v)), .imag = 0.0 },
         .real => |v| .{ .real = v, .imag = 0.0 },
         .complex => |v| v,
+        .logical => null,
         .string => null,
     };
 }

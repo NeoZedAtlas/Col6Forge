@@ -281,6 +281,7 @@ fn evalConstInt(sem: *const input.sema.SemanticUnit, expr: *input.Expr, lookup: 
         .integer => |v| v,
         .real => null,
         .complex => null,
+        .logical => null,
         .string => null,
     };
 }

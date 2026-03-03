@@ -10,37 +10,55 @@ pub fn checkParameterAssign(self: *context.Context, assign: ast.ParamAssign) !Co
     return (try constants.evalConst(self, assign.value)) orelse error.ParameterNotConstant;
 }
 
-pub fn coerceParameterValue(target: ast.TypeKind, value: ConstValue) !ConstValue {
+pub fn coerceParameterValue(
+    allocator: std.mem.Allocator,
+    target: ast.TypeKind,
+    target_char_len: ?usize,
+    value: ConstValue,
+) !ConstValue {
     switch (target) {
         .character => {
             if (value != .string) return error.ParameterTypeMismatch;
-            return value;
+            const source = value.string;
+            const out_len = target_char_len orelse source.len;
+            if (source.len == out_len) return value;
+            return .{ .string = try adjustCharacterLen(allocator, source, out_len) };
         },
         .logical => switch (value) {
-            .integer => return value,
+            .logical => return value,
             else => return error.ParameterTypeMismatch,
         },
         .integer => switch (value) {
             .integer => return value,
             .real => |v| return .{ .integer = try realToInteger(v) },
-            .complex, .string => return error.ParameterTypeMismatch,
+            .complex, .logical, .string => return error.ParameterTypeMismatch,
         },
-        .real, .double_precision => switch (value) {
+        .real => switch (value) {
+            .integer => |v| return .{ .real = try checkedRealForTarget(.real, @floatFromInt(v)) },
+            .real => |v| return .{ .real = try checkedRealForTarget(.real, v) },
+            .complex, .logical, .string => return error.ParameterTypeMismatch,
+        },
+        .double_precision => switch (value) {
             .integer => |v| return .{ .real = @as(f64, @floatFromInt(v)) },
-            .real => return value,
-            .complex, .string => return error.ParameterTypeMismatch,
+            .real => |v| return .{ .real = v },
+            .complex, .logical, .string => return error.ParameterTypeMismatch,
         },
         .complex, .complex_double => switch (value) {
             .integer => |v| return .{ .complex = .{ .real = @as(f64, @floatFromInt(v)), .imag = 0.0 } },
             .real => |v| return .{ .complex = .{ .real = v, .imag = 0.0 } },
             .complex => return value,
-            .string => return error.ParameterTypeMismatch,
+            .logical, .string => return error.ParameterTypeMismatch,
         },
     }
 }
 
-pub fn checkParameterType(target: ast.TypeKind, value: ConstValue) !void {
-    _ = try coerceParameterValue(target, value);
+pub fn checkParameterType(
+    allocator: std.mem.Allocator,
+    target: ast.TypeKind,
+    target_char_len: ?usize,
+    value: ConstValue,
+) !void {
+    _ = try coerceParameterValue(allocator, target, target_char_len, value);
 }
 
 fn realToInteger(v: f64) !i64 {
@@ -50,4 +68,21 @@ fn realToInteger(v: f64) !i64 {
     const max: f64 = @floatFromInt(std.math.maxInt(i64));
     if (truncated < min or truncated > max) return error.ParameterTypeMismatch;
     return @as(i64, @intFromFloat(truncated));
+}
+
+fn checkedRealForTarget(target: ast.TypeKind, value: f64) !f64 {
+    if (!std.math.isFinite(value)) return error.ParameterTypeMismatch;
+    if (target == .real) {
+        const narrowed: f32 = @floatCast(value);
+        if (!std.math.isFinite(narrowed)) return error.ParameterTypeMismatch;
+    }
+    return value;
+}
+
+fn adjustCharacterLen(allocator: std.mem.Allocator, source: []const u8, target_len: usize) ![]const u8 {
+    const out = try allocator.alloc(u8, target_len);
+    @memset(out, ' ');
+    const copy_len = @min(source.len, target_len);
+    @memcpy(out[0..copy_len], source[0..copy_len]);
+    return out;
 }

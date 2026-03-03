@@ -88,6 +88,16 @@ pub fn emitConstTyped(ctx: *Context, builder: anytype, value: sema.ConstValue, t
             const imag_ref = ValueRef{ .name = utils.formatFloatValue(ctx.allocator, v.imag, elem_ty), .ty = elem_ty, .is_ptr = false };
             break :blk complex.buildComplex(ctx, builder, real_ref, imag_ref, ty) catch .{ .name = "undef", .ty = ty, .is_ptr = false };
         },
+        .logical => |v| blk: {
+            const bit = if (v) "1" else "0";
+            if (ty == .i1 or ty == .i32 or ty == .i64) {
+                break :blk .{ .name = bit, .ty = ty, .is_ptr = false };
+            }
+            if (ty == .f32 or ty == .f64) {
+                break :blk .{ .name = utils.formatFloatValue(ctx.allocator, if (v) 1.0 else 0.0, ty), .ty = ty, .is_ptr = false };
+            }
+            break :blk .{ .name = bit, .ty = .i1, .is_ptr = false };
+        },
         .string => |bytes| {
             // Character parameters should behave like string literals.
             return emitStringLiteral(ctx, builder, bytes) catch .{ .name = "0", .ty = ty, .is_ptr = false };

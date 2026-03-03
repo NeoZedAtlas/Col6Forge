@@ -51,6 +51,7 @@ pub const ConstValue = union(enum) {
     integer: i64,
     real: f64,
     complex: ComplexConst,
+    logical: bool,
     // Decoded character bytes (without quotes/Hollerith prefix).
     string: []const u8,
 };

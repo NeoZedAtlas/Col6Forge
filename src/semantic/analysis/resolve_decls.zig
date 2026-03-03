@@ -62,6 +62,7 @@ pub fn applyDeclarator(
                     },
                     .real => return error.InvalidCharLen,
                     .complex => return error.InvalidCharLen,
+                    .logical => return error.InvalidCharLen,
                     .string => return error.InvalidCharLen,
                 }
             } else {

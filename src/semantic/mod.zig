@@ -929,6 +929,120 @@ test "semantic coerces numeric PARAMETER to declared type" {
     try testing.expect(found);
 }
 
+test "semantic preserves LOGICAL PARAMETER value kind" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      LOGICAL L\n" ++
+        "      PARAMETER (L=.TRUE.)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "L")) continue;
+        found = true;
+        const cv = sym.const_value orelse return error.TestExpectedEqual;
+        switch (cv) {
+            .logical => |v| try testing.expect(v),
+            else => return error.TestExpectedEqual,
+        }
+    }
+    try testing.expect(found);
+}
+
+test "semantic rejects INTEGER PARAMETER from LOGICAL constant" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER N\n" ++
+        "      PARAMETER (N=.TRUE.)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.ParameterTypeMismatch, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3112"));
+}
+
+test "semantic rejects LOGICAL PARAMETER from INTEGER constant" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      LOGICAL L\n" ++
+        "      PARAMETER (L=1)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.ParameterTypeMismatch, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3112"));
+}
+
+test "semantic applies CHARACTER PARAMETER LEN padding and truncation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*5 A\n" ++
+        "      CHARACTER*2 B\n" ++
+        "      PARAMETER (A='XY',B='WXYZ')\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found_a = false;
+    var found_b = false;
+    for (sem.units[0].symbols) |sym| {
+        const cv = sym.const_value orelse continue;
+        if (std.ascii.eqlIgnoreCase(sym.name, "A")) {
+            found_a = true;
+            try testing.expectEqual(@as(?usize, 5), sym.char_len);
+            switch (cv) {
+                .string => |bytes| try testing.expectEqualStrings("XY   ", bytes),
+                else => return error.TestExpectedEqual,
+            }
+        } else if (std.ascii.eqlIgnoreCase(sym.name, "B")) {
+            found_b = true;
+            try testing.expectEqual(@as(?usize, 2), sym.char_len);
+            switch (cv) {
+                .string => |bytes| try testing.expectEqualStrings("WX", bytes),
+                else => return error.TestExpectedEqual,
+            }
+        }
+    }
+    try testing.expect(found_a);
+    try testing.expect(found_b);
+}
+
 test "semantic accepts PARAMETER string concatenation constant fold" {
     const testing = std.testing;
     const allocator = testing.allocator;

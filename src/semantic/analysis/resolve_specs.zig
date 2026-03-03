@@ -45,6 +45,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                                 },
                                 .real => return error.InvalidCharLen,
                                 .complex => return error.InvalidCharLen,
+                                .logical => return error.InvalidCharLen,
                                 .string => return error.InvalidCharLen,
                             }
                         }
@@ -86,7 +87,9 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                     return err;
                 };
                 const const_val = check_const.coerceParameterValue(
+                    self.arena,
                     sym.type_kind,
+                    sym.char_len,
                     assigned_value,
                 ) catch |err| {
                     if (err == error.ParameterTypeMismatch) {
@@ -229,6 +232,7 @@ fn constValueKindName(value: symbols.ConstValue) []const u8 {
         .integer => "INTEGER",
         .real => "REAL",
         .complex => "COMPLEX",
+        .logical => "LOGICAL",
         .string => "CHARACTER",
     };
 }
