@@ -1106,7 +1106,7 @@ fn cleanupWorkDir(path: []const u8) void {
 }
 
 fn cleanupFortranScratchFiles(case_dir: []const u8) !void {
-    var dir = try std.fs.cwd().openDir(case_dir, .{ .iterate = true });
+    var dir = try std.fs.openDirAbsolute(case_dir, .{ .iterate = true });
     defer dir.close();
 
     var it = dir.iterate();
@@ -1115,6 +1115,29 @@ fn cleanupFortranScratchFiles(case_dir: []const u8) !void {
         if (!isFortranScratchName(entry.name)) continue;
         dir.deleteFile(entry.name) catch {};
     }
+}
+
+fn copyCaseSupportFiles(allocator: std.mem.Allocator, case_dir: []const u8, work_dir: []const u8) !void {
+    var dir = try std.fs.openDirAbsolute(case_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (isFortranSourceArtifact(entry.name)) continue;
+
+        const src_path = try std.fs.path.join(allocator, &.{ case_dir, entry.name });
+        defer allocator.free(src_path);
+        const dst_path = try std.fs.path.join(allocator, &.{ work_dir, entry.name });
+        defer allocator.free(dst_path);
+        try copyFileAbsolute(src_path, dst_path);
+    }
+}
+
+fn isFortranSourceArtifact(name: []const u8) bool {
+    return std.ascii.endsWithIgnoreCase(name, ".f") or
+        std.ascii.endsWithIgnoreCase(name, ".for") or
+        std.ascii.endsWithIgnoreCase(name, ".ll");
 }
 
 fn isFortranScratchName(name: []const u8) bool {
@@ -1537,6 +1560,11 @@ fn processCase(
         return false;
     }
 
+    copyCaseSupportFiles(allocator, abs_case_dir, work_dir) catch |err| {
+        log_state.stderr("failed to copy support files: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+        return false;
+    };
+
     if (options.incremental) {
         var link_cache_lock: ?*std.Thread.Mutex = null;
         link_cache_lock = try dir_locks.get(test_exe_cache_path.?);
@@ -1609,15 +1637,11 @@ fn processCase(
         return false;
     }
 
-    const dir_lock = try dir_locks.get(abs_case_dir);
-    dir_lock.lock();
-    defer dir_lock.unlock();
-
-    try cleanupFortranScratchFiles(abs_case_dir);
+    try cleanupFortranScratchFiles(work_dir);
     const ref_run = runProcessCapture(
         allocator,
         &.{ref_exe},
-        abs_case_dir,
+        work_dir,
         ref_run_timeout,
     ) catch |err| {
         log_state.stderr("reference run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
@@ -1637,11 +1661,11 @@ fn processCase(
         return false;
     }
 
-    try cleanupFortranScratchFiles(abs_case_dir);
+    try cleanupFortranScratchFiles(work_dir);
     const test_run = runProcessCapture(
         allocator,
         &.{test_exe},
-        abs_case_dir,
+        work_dir,
         test_run_timeout,
     ) catch |err| {
         log_state.stderr("translated run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
