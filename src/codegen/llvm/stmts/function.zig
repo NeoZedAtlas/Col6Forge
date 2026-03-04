@@ -194,7 +194,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         }
         const ty = llvm_types.typeFromKind(sym.type_kind);
         if (sym.dims.len > 0) {
-            if (isGeneratedConversionArrayName(sym.name)) {
+            if (sym.is_generated_temp) {
                 const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
                     error.ArrayDimNotConstant => null,
                     else => return err,
@@ -450,10 +450,6 @@ fn unitHasContains(unit: ast.ProgramUnit) bool {
         if (std.ascii.eqlIgnoreCase(text, "contains")) return true;
     }
     return false;
-}
-
-fn isGeneratedConversionArrayName(name: []const u8) bool {
-    return std.mem.startsWith(u8, name, "__cf_conv_arr_");
 }
 
 fn unitHasEquivalenceDecls(decls: []const ast.Decl) bool {

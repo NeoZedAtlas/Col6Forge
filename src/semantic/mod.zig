@@ -1869,7 +1869,7 @@ test "semantic does not lower conversion when callee name is user EXTERNAL" {
     try testing.expect(std.ascii.eqlIgnoreCase(call_stmt.args[0].expr.call_or_subscript.name, "REAL"));
 }
 
-test "semantic keeps LOGICAL IF form when conversion prelude would be needed" {
+test "semantic promotes LOGICAL IF to block IF when conversion prelude is needed" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -1889,8 +1889,21 @@ test "semantic keeps LOGICAL IF form when conversion prelude would be needed" {
 
     const stmts = program.units[0].stmts;
     try testing.expectEqual(@as(usize, 1), stmts.len);
-    try testing.expect(stmts[0].node == .if_single);
-    try testing.expect(stmts[0].node.if_single.stmt.* == .call);
+    try testing.expect(stmts[0].node == .if_block);
+
+    const ifb = stmts[0].node.if_block;
+    try testing.expect(ifb.then_stmts.len >= 4);
+    try testing.expect(ifb.then_stmts[0].node == .do_loop);
+    try testing.expect(ifb.then_stmts[1].node == .assignment);
+    try testing.expect(ifb.then_stmts[2].node == .cont);
+    const tail = ifb.then_stmts[ifb.then_stmts.len - 1];
+    try testing.expect(tail.node == .call);
+
+    const call_stmt = tail.node.call;
+    try testing.expectEqual(@as(usize, 1), call_stmt.args.len);
+    try testing.expect(call_stmt.args[0] == .expr);
+    try testing.expect(call_stmt.args[0].expr.* == .identifier);
+    try testing.expect(std.mem.startsWith(u8, call_stmt.args[0].expr.identifier, "__cf_conv_arr_"));
 }
 
 test "semantic rejects unsupported intrinsic array conversion expression shape" {
@@ -1901,6 +1914,48 @@ test "semantic rejects unsupported intrinsic array conversion expression shape" 
         "      SUBROUTINE S\n" ++
         "      INTEGER A(3),B(3)\n" ++
         "      CALL T(REAL(A+B))\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.UnsupportedIntrinsicType, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3127"));
+}
+
+test "semantic rejects intrinsic array conversion on deferred-shape array" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(:)\n" ++
+        "      CALL T(REAL(A))\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.UnsupportedIntrinsicType, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3127"));
+}
+
+test "semantic rejects intrinsic array conversion on triplet-stride declaration shape" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(1:5:2)\n" ++
+        "      CALL T(REAL(A))\n" ++
         "      END\n";
     const lines = try fixed_form.normalizeFixedForm(allocator, source);
     defer fixed_form.freeLogicalLines(allocator, lines);

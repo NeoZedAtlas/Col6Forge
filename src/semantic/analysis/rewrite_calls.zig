@@ -162,9 +162,21 @@ fn rewriteStmt(
             var inner_prelude = std.array_list.Managed(ast.Stmt).init(ctx.arena);
             defer inner_prelude.deinit();
 
-            // Fortran LOGICAL IF is not block IF; avoid AST kind mutation that can alter control-flow semantics.
-            const inner_changed = try rewriteStmt(ctx, state, &inner_stmt, &inner_prelude, false);
-            if (inner_prelude.items.len == 0 and inner_changed) {
+            // If lowering the logical-IF body needs prelude statements, promote to
+            // block IF so generated setup statements stay in scope and are not lost.
+            const inner_changed = try rewriteStmt(ctx, state, &inner_stmt, &inner_prelude, true);
+            if (inner_prelude.items.len > 0) {
+                const then_stmts = try prependAndAppendStmt(ctx, inner_prelude.items, inner_stmt);
+                const cond_expr = ifs.condition;
+                stmt.node = .{
+                    .if_block = .{
+                        .condition = cond_expr,
+                        .then_stmts = then_stmts,
+                        .else_stmts = &.{},
+                    },
+                };
+                changed = true;
+            } else if (inner_changed) {
                 const node_ptr = try ctx.arena.create(ast.StmtNode);
                 node_ptr.* = inner_stmt.node;
                 ifs.stmt = node_ptr;
@@ -277,7 +289,6 @@ fn buildArrayConversion(
     if (!isNumericArrayType(src_sym.type_kind)) return null;
 
     const temp_name = try nextTempArrayName(ctx, state);
-    try internGeneratedArray(ctx, temp_name, target_kind, src_sym.dims);
 
     const rank = src_sym.dims.len;
     const loop_vars = try ctx.arena.alloc([]const u8, rank);
@@ -286,7 +297,6 @@ fn buildArrayConversion(
     var dim_idx: usize = 0;
     while (dim_idx < rank) : (dim_idx += 1) {
         loop_vars[dim_idx] = try nextLoopVarName(ctx, state);
-        try internGeneratedLoopVar(ctx, loop_vars[dim_idx]);
         const bounds = try cloneDimBounds(ctx, src_sym.dims[dim_idx]);
         lowers[dim_idx] = bounds.lower;
         uppers[dim_idx] = bounds.upper;
@@ -301,6 +311,13 @@ fn buildArrayConversion(
         source_stmt,
     );
     const prelude_stmts = try wrapWithNestedLoops(ctx, state, assignment_stmt, loop_vars, lowers, uppers, source_stmt);
+
+    // Register generated symbols only after the conversion lowering succeeds,
+    // so rejected shapes do not leak partially-created symbols.
+    try internGeneratedArray(ctx, temp_name, target_kind, src_sym.dims);
+    for (loop_vars) |loop_var| {
+        try internGeneratedLoopVar(ctx, loop_var);
+    }
 
     const replacement = try ctx.arena.create(ast.Expr);
     replacement.* = .{ .identifier = temp_name };
@@ -427,6 +444,7 @@ fn internGeneratedArray(
         .storage = .local,
         .is_external = false,
         .is_intrinsic = false,
+        .is_generated_temp = true,
         .const_value = null,
         .type_explicit = true,
     };
@@ -457,6 +475,9 @@ const DimBounds = struct {
 fn cloneDimBounds(ctx: *context.Context, dim_expr: *ast.Expr) !DimBounds {
     switch (dim_expr.*) {
         .dim_range => |range| {
+            // Declaration dimensions do not support triplet stride semantics.
+            // Refuse lowering to avoid silently changing traversal behavior.
+            if (range.stride != null) return error.UnsupportedIntrinsicType;
             if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) {
                 return error.UnsupportedIntrinsicType;
             }

@@ -51,9 +51,10 @@ pub const Resolver = struct {
         try validateAssumedCharacterLengths(ctx);
         try resolve_data.lowerDataStatements(ctx);
         rewrite_calls.lowerIntrinsicArrayConversions(ctx) catch |err| switch (err) {
-            // Array-conversion lowering is an optimization/rewrite pass.
-            // If shape analysis is inconclusive, keep original AST and continue.
-            error.UnsupportedIntrinsicType, error.InvalidSubscript => {},
+            // Keep only unresolved symbol/subscript ambiguity as non-fatal.
+            // Unsupported array-conversion shapes must fail fast to avoid
+            // silently compiling scalarized intrinsics with wrong semantics.
+            error.InvalidSubscript => {},
             else => return err,
         };
         for (ctx.unit.stmts) |stmt| {
