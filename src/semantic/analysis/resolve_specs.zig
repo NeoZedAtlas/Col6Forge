@@ -230,8 +230,8 @@ fn typeKindName(kind: ast.TypeKind) []const u8 {
 fn constValueKindName(value: symbols.ConstValue) []const u8 {
     return switch (value) {
         .integer => "INTEGER",
-        .real => "REAL",
-        .complex => "COMPLEX",
+        .real => |v| if (v.is_double) "DOUBLE PRECISION" else "REAL",
+        .complex => |v| if (v.is_double) "DOUBLE COMPLEX" else "COMPLEX",
         .logical => "LOGICAL",
         .string => "CHARACTER",
     };

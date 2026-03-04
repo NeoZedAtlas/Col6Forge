@@ -3,6 +3,7 @@ pub const entity = @import("entity.zig");
 pub const SymbolKind = entity.SymbolKind;
 pub const StorageClass = entity.StorageClass;
 pub const Symbol = entity.Symbol;
+pub const RealConst = entity.RealConst;
 pub const ComplexConst = entity.ComplexConst;
 pub const ConstValue = entity.ConstValue;
 pub const ImplicitRule = entity.ImplicitRule;

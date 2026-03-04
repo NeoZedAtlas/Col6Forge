@@ -123,7 +123,7 @@ pub fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
         if (evaluator.evalConst(expr_node, null) catch null) |const_val| {
             return switch (const_val) {
                 .integer => |v| v,
-                .real => |v| @intFromFloat(v),
+                .real => |v| @intFromFloat(v.value),
                 else => null,
             };
         }

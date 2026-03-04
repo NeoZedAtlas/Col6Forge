@@ -73,11 +73,11 @@ pub fn emitConstTyped(ctx: *Context, builder: anytype, value: sema.ConstValue, t
         .real => |v| blk: {
             if (complex.isComplexType(ty)) {
                 const elem_ty: IRType = if (ty == .complex_f64) .f64 else .f32;
-                const real_ref = ValueRef{ .name = utils.formatFloatValue(ctx.allocator, v, elem_ty), .ty = elem_ty, .is_ptr = false };
+                const real_ref = ValueRef{ .name = utils.formatFloatValue(ctx.allocator, v.value, elem_ty), .ty = elem_ty, .is_ptr = false };
                 const imag_ref = utils.zeroValue(elem_ty);
                 break :blk complex.buildComplex(ctx, builder, real_ref, imag_ref, ty) catch .{ .name = "undef", .ty = ty, .is_ptr = false };
             }
-            break :blk .{ .name = utils.formatFloatValue(ctx.allocator, v, ty), .ty = ty, .is_ptr = false };
+            break :blk .{ .name = utils.formatFloatValue(ctx.allocator, v.value, ty), .ty = ty, .is_ptr = false };
         },
         .complex => |v| blk: {
             if (!complex.isComplexType(ty)) {

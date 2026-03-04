@@ -30,28 +30,28 @@ pub fn coerceParameterValue(
         },
         .integer => switch (value) {
             .integer => return value,
-            .real => |v| return .{ .integer = try realToInteger(v) },
+            .real => |v| return .{ .integer = try realToInteger(v.value) },
             .complex, .logical, .string => return error.ParameterTypeMismatch,
         },
         .real => switch (value) {
-            .integer => |v| return .{ .real = try checkedRealForTarget(.real, @floatFromInt(v)) },
-            .real => |v| return .{ .real = try checkedRealForTarget(.real, v) },
+            .integer => |v| return .{ .real = .{ .value = try checkedRealForTarget(.real, @floatFromInt(v)), .is_double = false } },
+            .real => |v| return .{ .real = .{ .value = try checkedRealForTarget(.real, v.value), .is_double = false } },
             .complex, .logical, .string => return error.ParameterTypeMismatch,
         },
         .double_precision => switch (value) {
-            .integer => |v| return .{ .real = @as(f64, @floatFromInt(v)) },
-            .real => |v| return .{ .real = v },
+            .integer => |v| return .{ .real = .{ .value = @as(f64, @floatFromInt(v)), .is_double = true } },
+            .real => |v| return .{ .real = .{ .value = v.value, .is_double = true } },
             .complex, .logical, .string => return error.ParameterTypeMismatch,
         },
         .complex => switch (value) {
             .integer => |v| return .{ .complex = try checkedComplexForTarget(.complex, @floatFromInt(v), 0.0) },
-            .real => |v| return .{ .complex = try checkedComplexForTarget(.complex, v, 0.0) },
+            .real => |v| return .{ .complex = try checkedComplexForTarget(.complex, v.value, 0.0) },
             .complex => |c| return .{ .complex = try checkedComplexForTarget(.complex, c.real, c.imag) },
             .logical, .string => return error.ParameterTypeMismatch,
         },
         .complex_double => switch (value) {
             .integer => |v| return .{ .complex = try checkedComplexForTarget(.complex_double, @floatFromInt(v), 0.0) },
-            .real => |v| return .{ .complex = try checkedComplexForTarget(.complex_double, v, 0.0) },
+            .real => |v| return .{ .complex = try checkedComplexForTarget(.complex_double, v.value, 0.0) },
             .complex => |c| return .{ .complex = try checkedComplexForTarget(.complex_double, c.real, c.imag) },
             .logical, .string => return error.ParameterTypeMismatch,
         },
@@ -90,6 +90,7 @@ fn checkedComplexForTarget(target: ast.TypeKind, real: f64, imag: f64) !symbols.
     return .{
         .real = try checkedRealForTarget(target, real),
         .imag = try checkedRealForTarget(target, imag),
+        .is_double = (target == .complex_double),
     };
 }
 

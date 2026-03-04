@@ -42,14 +42,20 @@ pub const EntityPayload = union(EntityKind) {
     unknown: void,
 };
 
+pub const RealConst = struct {
+    value: f64,
+    is_double: bool = false,
+};
+
 pub const ComplexConst = struct {
     real: f64,
     imag: f64,
+    is_double: bool = false,
 };
 
 pub const ConstValue = union(enum) {
     integer: i64,
-    real: f64,
+    real: RealConst,
     complex: ComplexConst,
     logical: bool,
     // Decoded character bytes (without quotes/Hollerith prefix).

@@ -21,30 +21,30 @@ pub fn resolveWithConst(
 
 fn resolveReal(selector: *ast.Expr, const_value: ?symbols.ConstValue) ast.TypeKind {
     if (selectorValueAsInteger(const_value)) |kind_value| {
-        if (kind_value == 8) return .double_precision;
+        if (realKindValueIsDouble(kind_value)) return .double_precision;
         return .real;
     }
     if (selectorExprAsInteger(selector)) |kind_value| {
-        if (kind_value == 8) return .double_precision;
+        if (realKindValueIsDouble(kind_value)) return .double_precision;
         return .real;
     }
     if (selectorExprAsIdentifier(selector)) |name| {
-        if (isDoublePrecisionKindName(name)) return .double_precision;
+        if (realKindNameIsDouble(name)) return .double_precision;
     }
     return .real;
 }
 
 fn resolveComplex(selector: *ast.Expr, const_value: ?symbols.ConstValue) ast.TypeKind {
     if (selectorValueAsInteger(const_value)) |kind_value| {
-        if (kind_value == 16) return .complex_double;
+        if (complexKindValueIsDouble(kind_value)) return .complex_double;
         return .complex;
     }
     if (selectorExprAsInteger(selector)) |kind_value| {
-        if (kind_value == 16) return .complex_double;
+        if (complexKindValueIsDouble(kind_value)) return .complex_double;
         return .complex;
     }
     if (selectorExprAsIdentifier(selector)) |name| {
-        if (isComplexDoubleKindName(name)) return .complex_double;
+        if (complexKindNameIsDouble(name)) return .complex_double;
     }
     return .complex;
 }
@@ -76,16 +76,26 @@ fn selectorExprAsIdentifier(selector: *ast.Expr) ?[]const u8 {
     };
 }
 
-fn isDoublePrecisionKindName(name: []const u8) bool {
+pub fn realKindValueIsDouble(kind_value: i64) bool {
+    return kind_value >= 8;
+}
+
+pub fn complexKindValueIsDouble(kind_value: i64) bool {
+    return kind_value >= 16;
+}
+
+pub fn realKindNameIsDouble(name: []const u8) bool {
     return std.ascii.eqlIgnoreCase(name, "WP") or
         std.ascii.eqlIgnoreCase(name, "REAL64") or
+        std.ascii.eqlIgnoreCase(name, "FLOAT64") or
         std.ascii.eqlIgnoreCase(name, "C_DOUBLE") or
         std.ascii.eqlIgnoreCase(name, "DP") or
         std.ascii.eqlIgnoreCase(name, "RK8") or
-        std.ascii.eqlIgnoreCase(name, "KIND8");
+        std.ascii.eqlIgnoreCase(name, "KIND8") or
+        std.ascii.eqlIgnoreCase(name, "K8");
 }
 
-fn isComplexDoubleKindName(name: []const u8) bool {
+pub fn complexKindNameIsDouble(name: []const u8) bool {
     return std.ascii.eqlIgnoreCase(name, "REAL64") or
         std.ascii.eqlIgnoreCase(name, "C_DOUBLE") or
         std.ascii.eqlIgnoreCase(name, "C_DOUBLE_COMPLEX") or
@@ -103,6 +113,9 @@ test "resolve maps REAL selector names and literals" {
 
     var lit4 = ast.Expr{ .literal = .{ .kind = .integer, .text = "4" } };
     try testing.expectEqual(ast.TypeKind.real, resolve(.real, &lit4));
+
+    var lit10 = ast.Expr{ .literal = .{ .kind = .integer, .text = "10" } };
+    try testing.expectEqual(ast.TypeKind.double_precision, resolve(.real, &lit10));
 }
 
 test "resolveWithConst uses evaluated integer selector values" {

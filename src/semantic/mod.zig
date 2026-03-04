@@ -922,7 +922,7 @@ test "semantic coerces numeric PARAMETER to declared type" {
         found = true;
         const cv = sym.const_value orelse return error.TestExpectedEqual;
         switch (cv) {
-            .real => |v| try testing.expectApproxEqAbs(@as(f64, 2.0), v, 1.0e-12),
+            .real => |v| try testing.expectApproxEqAbs(@as(f64, 2.0), v.value, 1.0e-12),
             else => return error.TestExpectedEqual,
         }
     }
@@ -1084,13 +1084,17 @@ test "semantic quantizes REAL PARAMETER precision but keeps DOUBLE PRECISION" {
 
     var r_value: ?f64 = null;
     var d_value: ?f64 = null;
+    var r_is_double = false;
+    var d_is_double = false;
     for (sem.units[0].symbols) |sym| {
         const cv = sym.const_value orelse continue;
         if (cv != .real) continue;
         if (std.ascii.eqlIgnoreCase(sym.name, "R")) {
-            r_value = cv.real;
+            r_value = cv.real.value;
+            r_is_double = cv.real.is_double;
         } else if (std.ascii.eqlIgnoreCase(sym.name, "D")) {
-            d_value = cv.real;
+            d_value = cv.real.value;
+            d_is_double = cv.real.is_double;
         }
     }
 
@@ -1100,6 +1104,8 @@ test "semantic quantizes REAL PARAMETER precision but keeps DOUBLE PRECISION" {
 
     try testing.expectApproxEqAbs(r_quantized, r, 0.0);
     try testing.expect(@abs(d - r) > 0.0);
+    try testing.expect(!r_is_double);
+    try testing.expect(d_is_double);
 }
 
 test "semantic rejects INTEGER PARAMETER assigned LOGICAL literal" {

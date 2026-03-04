@@ -1,17 +1,26 @@
 const std = @import("std");
 const ast = @import("../ast/nodes.zig");
 const symbols = @import("symbol/mod.zig");
+const type_kind_selector = @import("type_kind_selector.zig");
 
 const ConstValue = symbols.ConstValue;
 const ComplexConst = symbols.ComplexConst;
+const RealConst = symbols.RealConst;
 
 pub const ConstResolver = struct {
     ctx: *anyopaque,
     resolveFn: *const fn (ctx: *anyopaque, name: []const u8) ?ConstValue,
     allocator: ?std.mem.Allocator = null,
+    internStringFn: ?*const fn (ctx: *anyopaque, text: []const u8) anyerror![]const u8 = null,
 
     pub fn resolve(self: ConstResolver, name: []const u8) ?ConstValue {
         return self.resolveFn(self.ctx, name);
+    }
+
+    pub fn internString(self: ConstResolver, text: []const u8) anyerror![]const u8 {
+        if (self.internStringFn) |intern| return intern(self.ctx, text);
+        if (self.allocator) |alloc| return alloc.dupe(u8, text);
+        return text;
     }
 };
 
@@ -27,6 +36,9 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
                     // Allocator is only required for escaped-quote normalization and concat.
                     const maybe_allocator = if (resolver) |res| res.allocator else null;
                     const bytes = (try decodeLiteralBytes(lit, maybe_allocator)) orelse break :blk null;
+                    if (resolver) |res| {
+                        break :blk .{ .string = try res.internString(bytes) };
+                    }
                     break :blk .{ .string = bytes };
                 },
                 .assumed_size => null,
@@ -61,7 +73,11 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
             const real = toComplex(real_val) orelse return null;
             const imag = toComplex(imag_val) orelse return null;
             if (real.imag != 0.0 or imag.imag != 0.0) return null;
-            return .{ .complex = .{ .real = real.real, .imag = imag.real } };
+            return .{ .complex = .{
+                .real = real.real,
+                .imag = imag.real,
+                .is_double = real.is_double or imag.is_double,
+            } };
         },
         .substring => return null,
         .call_or_subscript => |call| return evalConstCall(call, resolver),
@@ -81,56 +97,56 @@ fn evalConstCall(call: ast.CallOrSubscript, resolver: ?ConstResolver) anyerror!?
         .sqrt => {
             if (call.args.len != 1) return null;
             const arg = (try evalConst(call.args[0], resolver)) orelse return null;
-            return .{ .real = std.math.sqrt(toReal(arg)) };
+            return .{ .real = .{ .value = std.math.sqrt(toReal(arg)), .is_double = true } };
         },
         .log10 => {
             if (call.args.len != 1) return null;
             const arg = (try evalConst(call.args[0], resolver)) orelse return null;
-            return .{ .real = std.math.log10(toReal(arg)) };
+            return .{ .real = .{ .value = std.math.log10(toReal(arg)), .is_double = true } };
         },
         .atan => {
             if (call.args.len != 1) return null;
             const arg = (try evalConst(call.args[0], resolver)) orelse return null;
-            return .{ .real = std.math.atan(toReal(arg)) };
+            return .{ .real = .{ .value = std.math.atan(toReal(arg)), .is_double = true } };
         },
         .atan2 => {
             if (call.args.len != 2) return null;
             const y = (try evalConst(call.args[0], resolver)) orelse return null;
             const x = (try evalConst(call.args[1], resolver)) orelse return null;
-            return .{ .real = std.math.atan2(toReal(y), toReal(x)) };
+            return .{ .real = .{ .value = std.math.atan2(toReal(y), toReal(x)), .is_double = true } };
         },
         .abs => {
             if (call.args.len != 1) return null;
             const arg = (try evalConst(call.args[0], resolver)) orelse return null;
             return switch (arg) {
                 .integer => |v| .{ .integer = if (v < 0) -v else v },
-                .real => |v| .{ .real = @abs(v) },
+                .real => |v| .{ .real = .{ .value = @abs(v.value), .is_double = v.is_double } },
                 else => null,
             };
         },
         .epsilon => {
             if (call.args.len != 1) return null;
             _ = (try evalConst(call.args[0], resolver)) orelse return null;
-            return .{ .real = std.math.floatEps(f64) };
+            return .{ .real = .{ .value = std.math.floatEps(f64), .is_double = true } };
         },
         .tiny => {
             if (call.args.len != 1) return null;
             _ = (try evalConst(call.args[0], resolver)) orelse return null;
-            return .{ .real = std.math.floatMin(f64) };
+            return .{ .real = .{ .value = std.math.floatMin(f64), .is_double = true } };
         },
         .huge => {
             if (call.args.len != 1) return null;
             _ = (try evalConst(call.args[0], resolver)) orelse return null;
-            return .{ .real = std.math.floatMax(f64) };
+            return .{ .real = .{ .value = std.math.floatMax(f64), .is_double = true } };
         },
         .dpmpar => {
             if (call.args.len != 1) return null;
             const arg = (try evalConst(call.args[0], resolver)) orelse return null;
             if (arg != .integer) return null;
             return switch (arg.integer) {
-                1 => .{ .real = std.math.floatEps(f64) },
-                2 => .{ .real = std.math.floatMin(f64) },
-                3 => .{ .real = std.math.floatMax(f64) },
+                1 => .{ .real = .{ .value = std.math.floatEps(f64), .is_double = true } },
+                2 => .{ .real = .{ .value = std.math.floatMin(f64), .is_double = true } },
+                3 => .{ .real = .{ .value = std.math.floatMax(f64), .is_double = true } },
                 else => null,
             };
         },
@@ -182,6 +198,7 @@ fn evalConstMinMax(args: []const *ast.Expr, resolver: ?ConstResolver, is_min: bo
     if (args.len < 2) return null;
     var any_real = false;
     var best_real: f64 = 0.0;
+    var best_real_is_double = false;
     var best_int: i64 = 0;
     var initialized = false;
     for (args) |arg_expr| {
@@ -203,14 +220,22 @@ fn evalConstMinMax(args: []const *ast.Expr, resolver: ?ConstResolver, is_min: bo
                 }
             },
             .real => |v| {
+                const rv = v.value;
                 if (!initialized) {
-                    best_real = v;
-                    best_int = @intFromFloat(v);
+                    best_real = rv;
+                    best_int = @intFromFloat(rv);
+                    best_real_is_double = v.is_double;
                     initialized = true;
                 } else if (is_min) {
-                    if (v < best_real) best_real = v;
+                    if (rv < best_real) {
+                        best_real = rv;
+                        best_real_is_double = v.is_double;
+                    }
                 } else {
-                    if (v > best_real) best_real = v;
+                    if (rv > best_real) {
+                        best_real = rv;
+                        best_real_is_double = v.is_double;
+                    }
                 }
                 any_real = true;
             },
@@ -218,7 +243,10 @@ fn evalConstMinMax(args: []const *ast.Expr, resolver: ?ConstResolver, is_min: bo
         }
     }
     if (!initialized) return null;
-    return if (any_real) .{ .real = best_real } else .{ .integer = best_int };
+    return if (any_real)
+        .{ .real = .{ .value = best_real, .is_double = best_real_is_double } }
+    else
+        .{ .integer = best_int };
 }
 
 fn parseInt(text: []const u8) !i64 {
@@ -241,7 +269,19 @@ fn parseInt(text: []const u8) !i64 {
     };
 }
 
-fn parseReal(text: []const u8) !f64 {
+fn parseReal(text: []const u8) !RealConst {
+    const is_double = realLiteralHasDoublePrecisionHint(text);
+    const value = if (is_double)
+        try parseRealFloat(f64, text)
+    else
+        @as(f64, @floatCast(try parseRealFloat(f32, text)));
+    return .{
+        .value = value,
+        .is_double = is_double,
+    };
+}
+
+fn parseRealFloat(comptime T: type, text: []const u8) !T {
     var buffer: [64]u8 = undefined;
     if (text.len > buffer.len) return error.NumberTooLong;
     var i: usize = 0;
@@ -253,7 +293,7 @@ fn parseReal(text: []const u8) !f64 {
         buffer[out] = if (ch == 'D' or ch == 'd') 'e' else ch;
         out += 1;
     }
-    return std.fmt.parseFloat(f64, buffer[0..out]);
+    return std.fmt.parseFloat(T, buffer[0..out]);
 }
 
 pub fn realLiteralHasDoublePrecisionHint(text: []const u8) bool {
@@ -267,8 +307,8 @@ fn parseLogical(text: []const u8) !bool {
 fn negateConst(value: ConstValue) ?ConstValue {
     return switch (value) {
         .integer => |v| .{ .integer = -v },
-        .real => |v| .{ .real = -v },
-        .complex => |v| .{ .complex = .{ .real = -v.real, .imag = -v.imag } },
+        .real => |v| .{ .real = .{ .value = -v.value, .is_double = v.is_double } },
+        .complex => |v| .{ .complex = .{ .real = -v.real, .imag = -v.imag, .is_double = v.is_double } },
         .logical, .string => null,
     };
 }
@@ -280,6 +320,7 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?
         if (right.string.len == 0) return left;
         const allocator = if (resolver) |res| res.allocator orelse return null else return null;
         const joined = try concatStringLiterals(allocator, left.string, right.string);
+        if (resolver) |res| return .{ .string = try res.internString(joined) };
         return .{ .string = joined };
     }
     if (left == .string or right == .string) return null;
@@ -302,19 +343,22 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?
     if (left == .complex or right == .complex) {
         const l = toComplex(left) orelse return null;
         const r = toComplex(right) orelse return null;
+        const result_is_double = l.is_double or r.is_double;
         return switch (op) {
-            .add => .{ .complex = .{ .real = l.real + r.real, .imag = l.imag + r.imag } },
-            .sub => .{ .complex = .{ .real = l.real - r.real, .imag = l.imag - r.imag } },
+            .add => .{ .complex = .{ .real = l.real + r.real, .imag = l.imag + r.imag, .is_double = result_is_double } },
+            .sub => .{ .complex = .{ .real = l.real - r.real, .imag = l.imag - r.imag, .is_double = result_is_double } },
             .mul => .{ .complex = .{
                 .real = (l.real * r.real) - (l.imag * r.imag),
                 .imag = (l.real * r.imag) + (l.imag * r.real),
+                .is_double = result_is_double,
             } },
             .div => blk: {
                 const denom = (r.real * r.real) + (r.imag * r.imag);
-                if (denom == 0.0) break :blk .{ .complex = .{ .real = 0.0, .imag = 0.0 } };
+                if (denom == 0.0) break :blk .{ .complex = .{ .real = 0.0, .imag = 0.0, .is_double = result_is_double } };
                 break :blk .{ .complex = .{
                     .real = ((l.real * r.real) + (l.imag * r.imag)) / denom,
                     .imag = ((l.imag * r.real) - (l.real * r.imag)) / denom,
+                    .is_double = result_is_double,
                 } };
             },
             .eq => .{ .logical = l.real == r.real and l.imag == r.imag },
@@ -334,12 +378,13 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?
     if (left_is_real or right_is_real) {
         const l = toReal(left);
         const r = toReal(right);
+        const result_is_double = constValueIsDoubleReal(left) or constValueIsDoubleReal(right);
         return switch (op) {
-            .add => .{ .real = l + r },
-            .sub => .{ .real = l - r },
-            .mul => .{ .real = l * r },
-            .div => .{ .real = l / r },
-            .power => .{ .real = std.math.pow(f64, l, r) },
+            .add => .{ .real = .{ .value = l + r, .is_double = result_is_double } },
+            .sub => .{ .real = .{ .value = l - r, .is_double = result_is_double } },
+            .mul => .{ .real = .{ .value = l * r, .is_double = result_is_double } },
+            .div => .{ .real = .{ .value = l / r, .is_double = result_is_double } },
+            .power => .{ .real = .{ .value = std.math.pow(f64, l, r), .is_double = true } },
             .eq => .{ .logical = l == r },
             .ne => .{ .logical = l != r },
             .lt => .{ .logical = l < r },
@@ -386,7 +431,7 @@ fn intPow(base: i64, exp: i64) !i64 {
 
 fn toReal(value: ConstValue) f64 {
     return switch (value) {
-        .real => |v| v,
+        .real => |v| v.value,
         .integer => |v| @as(f64, @floatFromInt(v)),
         .complex => |v| v.real,
         .logical => 0,
@@ -396,11 +441,21 @@ fn toReal(value: ConstValue) f64 {
 
 fn toComplex(value: ConstValue) ?ComplexConst {
     return switch (value) {
-        .integer => |v| .{ .real = @as(f64, @floatFromInt(v)), .imag = 0.0 },
-        .real => |v| .{ .real = v, .imag = 0.0 },
+        .integer => |v| .{ .real = @as(f64, @floatFromInt(v)), .imag = 0.0, .is_double = false },
+        .real => |v| .{ .real = v.value, .imag = 0.0, .is_double = v.is_double },
         .complex => |v| v,
         .logical => null,
         .string => null,
+    };
+}
+
+fn constValueIsDoubleReal(value: ConstValue) bool {
+    return switch (value) {
+        .real => |v| v.is_double,
+        .complex => |v| v.is_double,
+        .integer => false,
+        .logical => false,
+        .string => false,
     };
 }
 
@@ -556,15 +611,10 @@ fn literalKindSuggestsF64(text: []const u8) bool {
     }
     if (all_digits) {
         const kind_val = std.fmt.parseInt(i64, suffix, 10) catch return false;
-        return kind_val >= 8;
+        return type_kind_selector.realKindValueIsDouble(kind_val);
     }
 
-    return std.ascii.eqlIgnoreCase(suffix, "wp") or
-        std.ascii.eqlIgnoreCase(suffix, "dp") or
-        std.ascii.eqlIgnoreCase(suffix, "real64") or
-        std.ascii.eqlIgnoreCase(suffix, "float64") or
-        std.ascii.eqlIgnoreCase(suffix, "rk8") or
-        std.ascii.eqlIgnoreCase(suffix, "k8");
+    return type_kind_selector.realKindNameIsDouble(suffix);
 }
 
 fn nullResolveConst(_: *anyopaque, _: []const u8) ?ConstValue {
@@ -587,7 +637,7 @@ test "const call dispatch recognizes DATAN alias" {
 
     const value = (try evalConst(call, null)) orelse return error.TestExpectedEqual;
     switch (value) {
-        .real => |v| try testing.expectApproxEqAbs(@as(f64, std.math.pi / 4.0), v, 1e-12),
+        .real => |v| try testing.expectApproxEqAbs(@as(f64, std.math.pi / 4.0), v.value, 1e-12),
         else => return error.TestExpectedEqual,
     }
 }
@@ -658,6 +708,23 @@ test "real literal double-precision hint recognizes D exponent and kind suffix" 
     try testing.expect(realLiteralHasDoublePrecisionHint("1.0_8"));
     try testing.expect(realLiteralHasDoublePrecisionHint("1.0_wp"));
     try testing.expect(!realLiteralHasDoublePrecisionHint("1.0"));
+}
+
+test "evalConst marks REAL literal precision metadata" {
+    const testing = std.testing;
+    var single_expr = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0E0" } };
+    var double_expr = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0D0" } };
+
+    const single = (try evalConst(&single_expr, null)) orelse return error.TestExpectedEqual;
+    const double = (try evalConst(&double_expr, null)) orelse return error.TestExpectedEqual;
+    switch (single) {
+        .real => |v| try testing.expect(!v.is_double),
+        else => return error.TestExpectedEqual,
+    }
+    switch (double) {
+        .real => |v| try testing.expect(v.is_double),
+        else => return error.TestExpectedEqual,
+    }
 }
 
 test "evalConst decodes simple quoted string without allocator" {

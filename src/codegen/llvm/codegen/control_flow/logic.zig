@@ -142,7 +142,7 @@ fn stepSignFromExpr(expr_node: *ast.Expr) StepSign {
         if (evaluator.evalConst(expr_node, null) catch null) |const_val| {
             return switch (const_val) {
                 .integer => |v| if (v < 0) .negative else .non_negative,
-                .real => |v| if (v < 0.0) .negative else .non_negative,
+                .real => |v| if (v.value < 0.0) .negative else .non_negative,
                 else => .unknown,
             };
         }

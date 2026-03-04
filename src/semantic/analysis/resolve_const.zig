@@ -20,6 +20,7 @@ fn evalConstUncached(self: *context.Context, expr: *ast.Expr) anyerror!?ConstVal
         .ctx = @ptrCast(self),
         .resolveFn = resolveConstValue,
         .allocator = self.arena,
+        .internStringFn = internConstString,
     };
     return evaluator.evalConst(expr, resolver);
 }
@@ -32,6 +33,11 @@ fn resolveConstValue(ctx: *anyopaque, name: []const u8) ?ConstValue {
     if (!maybeBuiltinConstName(name)) return null;
     if (symbols_mod.findBuiltinConstant(self, name)) |builtin| return builtin.value;
     return null;
+}
+
+fn internConstString(ctx: *anyopaque, text: []const u8) anyerror![]const u8 {
+    const self: *context.Context = @ptrCast(@alignCast(ctx));
+    return self.internConstString(text);
 }
 
 fn maybeBuiltinConstName(name: []const u8) bool {

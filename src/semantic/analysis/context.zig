@@ -31,6 +31,7 @@ pub const Context = struct {
     known_procedure_sig_cache: std.StringHashMap(?ProcedureSig),
     intrinsic_arity_cache: std.StringHashMap(?intrinsics.Arity),
     builtin_constants: std.StringHashMap(BuiltinConstant),
+    const_string_pool: std.StringHashMap([]const u8),
     const_eval_cache: std.AutoHashMap(usize, ?symbols.ConstValue),
     expr_type_cache: std.AutoHashMap(usize, ast.TypeKind),
     common_block_names: std.StringHashMap(void),
@@ -79,6 +80,7 @@ pub const Context = struct {
             .known_procedure_sig_cache = std.StringHashMap(?ProcedureSig).init(arena),
             .intrinsic_arity_cache = std.StringHashMap(?intrinsics.Arity).init(arena),
             .builtin_constants = std.StringHashMap(BuiltinConstant).init(arena),
+            .const_string_pool = std.StringHashMap([]const u8).init(arena),
             .const_eval_cache = std.AutoHashMap(usize, ?symbols.ConstValue).init(arena),
             .expr_type_cache = std.AutoHashMap(usize, ast.TypeKind).init(arena),
             .common_block_names = std.StringHashMap(void).init(arena),
@@ -100,6 +102,13 @@ pub const Context = struct {
         };
         ctx.current_unit = &ctx.unit;
         return ctx;
+    }
+
+    pub fn internConstString(self: *Context, text: []const u8) ![]const u8 {
+        if (self.const_string_pool.get(text)) |existing| return existing;
+        const owned = try self.arena.dupe(u8, text);
+        try self.const_string_pool.put(owned, owned);
+        return owned;
     }
 
     pub fn bindUnitBacking(self: *Context, unit_ptr: *ast.ProgramUnit) void {
