@@ -1,4 +1,4 @@
-﻿//! Verification runner for the NIST F78 test suite.
+//! Verification runner for the NIST F78 test suite.
 //!
 //! Runner (IO): translates F77 sources to LLVM IR, compiles and runs both
 //! the reference compiler (gfortran) and the translated output (zig cc).
@@ -1066,9 +1066,17 @@ fn runProcessCapture(
     var done = std.atomic.Value(bool).init(false);
     var timed_out = std.atomic.Value(bool).init(false);
     var monitor: ?std.Thread = null;
+    var monitor_joined = false;
     if (timeout_ms) |limit| {
         if (limit > 0) {
             monitor = try std.Thread.spawn(.{}, timeoutMonitor, .{ &child, &done, &timed_out, limit });
+        }
+    }
+    errdefer {
+        done.store(true, .seq_cst);
+        if (!monitor_joined) {
+            if (monitor) |thread| thread.join();
+            monitor_joined = true;
         }
     }
 
@@ -1079,6 +1087,7 @@ fn runProcessCapture(
     try child.collectOutput(allocator, &stdout_buf, &stderr_buf, 64 * 1024 * 1024);
     done.store(true, .seq_cst);
     if (monitor) |thread| thread.join();
+    monitor_joined = true;
 
     return .{
         .stdout = try stdout_buf.toOwnedSlice(allocator),
@@ -1293,22 +1302,30 @@ fn allowsProcessorDependentOutputDiff(input_path: []const u8) bool {
 fn linesEquivalentIgnoringWhitespace(a: []const u8, b: []const u8) bool {
     var i: usize = 0;
     var j: usize = 0;
+
     while (true) {
-        while (i < a.len and std.ascii.isWhitespace(a[i])) : (i += 1) {}
-        while (j < b.len and std.ascii.isWhitespace(b[j])) : (j += 1) {}
-        if (i >= a.len or j >= b.len) break;
-        while (i < a.len and j < b.len and !std.ascii.isWhitespace(a[i]) and !std.ascii.isWhitespace(b[j])) : ({
-            i += 1;
-            j += 1;
-        }) {
-            if (a[i] != b[j]) return false;
-        }
-        if (i < a.len and !std.ascii.isWhitespace(a[i])) return false;
-        if (j < b.len and !std.ascii.isWhitespace(b[j])) return false;
+        const a_token = nextNonWhitespaceToken(a, &i);
+        const b_token = nextNonWhitespaceToken(b, &j);
+        if (a_token == null and b_token == null) return true;
+        if (a_token == null or b_token == null) return false;
+        if (!std.mem.eql(u8, a_token.?, b_token.?)) return false;
     }
-    while (i < a.len and std.ascii.isWhitespace(a[i])) : (i += 1) {}
-    while (j < b.len and std.ascii.isWhitespace(b[j])) : (j += 1) {}
-    return i == a.len and j == b.len;
+}
+
+fn nextNonWhitespaceToken(text: []const u8, index: *usize) ?[]const u8 {
+    while (index.* < text.len and std.ascii.isWhitespace(text[index.*])) : (index.* += 1) {}
+    if (index.* >= text.len) return null;
+    const start = index.*;
+    while (index.* < text.len and !std.ascii.isWhitespace(text[index.*])) : (index.* += 1) {}
+    return text[start..index.*];
+}
+
+test "linesEquivalentIgnoringWhitespace keeps token boundaries" {
+    const testing = std.testing;
+    try testing.expect(linesEquivalentIgnoringWhitespace("10  20", "10 20"));
+    try testing.expect(linesEquivalentIgnoringWhitespace("  A   =   B  ", "A = B"));
+    try testing.expect(!linesEquivalentIgnoringWhitespace("10 20", "1020"));
+    try testing.expect(!linesEquivalentIgnoringWhitespace("A B C", "A BC"));
 }
 
 fn processCase(
@@ -1378,17 +1395,22 @@ fn processCase(
     var ref_cache_lock: ?*std.Thread.Mutex = null;
     if (options.incremental) {
         ref_cache_lock = try dir_locks.get(ref_exe_cache_path.?);
-        ref_cache_lock.?.lock();
     }
-    defer if (ref_cache_lock) |lock| lock.unlock();
 
     var need_ref_compile = true;
-    if (options.incremental and fileExistsAbsolute(ref_exe_cache_path.?)) {
-        copyFileAbsolute(ref_exe_cache_path.?, ref_exe) catch |err| {
-            log_state.stderr("failed to copy cached reference exe: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
-            return false;
-        };
-        need_ref_compile = false;
+    if (options.incremental) {
+        const lock = ref_cache_lock.?;
+        lock.lock();
+        defer lock.unlock();
+
+        if (fileExistsAbsolute(ref_exe_cache_path.?)) {
+            if (copyFileAbsolute(ref_exe_cache_path.?, ref_exe)) {
+                need_ref_compile = false;
+            } else |err| {
+                // Cache read failure should not abort the case; fall back to rebuild.
+                log_state.stderr("failed to copy cached reference exe (rebuild): {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+            }
+        }
     }
 
     if (need_ref_compile) {
@@ -1431,7 +1453,16 @@ fn processCase(
             return false;
         }
         if (options.incremental) {
-            copyFileAbsolute(ref_exe, ref_exe_cache_path.?) catch {};
+            const lock = ref_cache_lock.?;
+            lock.lock();
+            defer lock.unlock();
+
+            // Another worker may have populated the cache while we compiled.
+            if (fileExistsAbsolute(ref_exe_cache_path.?)) {
+                copyFileAbsolute(ref_exe_cache_path.?, ref_exe) catch {};
+            } else {
+                copyFileAbsolute(ref_exe, ref_exe_cache_path.?) catch {};
+            }
         }
     }
 
