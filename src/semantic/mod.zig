@@ -1043,6 +1043,107 @@ test "semantic applies CHARACTER PARAMETER LEN padding and truncation" {
     try testing.expect(found_b);
 }
 
+test "semantic rejects REAL PARAMETER overflow on single precision coercion" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      REAL X\n" ++
+        "      PARAMETER (X=1.0E+300)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.ParameterTypeMismatch, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3112"));
+}
+
+test "semantic quantizes REAL PARAMETER precision but keeps DOUBLE PRECISION" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      REAL R\n" ++
+        "      DOUBLE PRECISION D\n" ++
+        "      PARAMETER (R=1.234567890123456D0,D=1.234567890123456D0)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var r_value: ?f64 = null;
+    var d_value: ?f64 = null;
+    for (sem.units[0].symbols) |sym| {
+        const cv = sym.const_value orelse continue;
+        if (cv != .real) continue;
+        if (std.ascii.eqlIgnoreCase(sym.name, "R")) {
+            r_value = cv.real;
+        } else if (std.ascii.eqlIgnoreCase(sym.name, "D")) {
+            d_value = cv.real;
+        }
+    }
+
+    const r = r_value orelse return error.TestExpectedEqual;
+    const d = d_value orelse return error.TestExpectedEqual;
+    const r_quantized = @as(f64, @floatCast(@as(f32, @floatCast(d))));
+
+    try testing.expectApproxEqAbs(r_quantized, r, 0.0);
+    try testing.expect(@abs(d - r) > 0.0);
+}
+
+test "semantic rejects INTEGER PARAMETER assigned LOGICAL literal" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER N\n" ++
+        "      PARAMETER (N=.TRUE.)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.ParameterTypeMismatch, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3112"));
+}
+
+test "semantic rejects LOGICAL PARAMETER assigned INTEGER literal" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      LOGICAL L\n" ++
+        "      PARAMETER (L=5)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.ParameterTypeMismatch, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3112"));
+}
+
 test "semantic accepts PARAMETER string concatenation constant fold" {
     const testing = std.testing;
     const allocator = testing.allocator;

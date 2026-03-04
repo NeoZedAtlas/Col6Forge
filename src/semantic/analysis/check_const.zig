@@ -43,10 +43,16 @@ pub fn coerceParameterValue(
             .real => |v| return .{ .real = v },
             .complex, .logical, .string => return error.ParameterTypeMismatch,
         },
-        .complex, .complex_double => switch (value) {
-            .integer => |v| return .{ .complex = .{ .real = @as(f64, @floatFromInt(v)), .imag = 0.0 } },
-            .real => |v| return .{ .complex = .{ .real = v, .imag = 0.0 } },
-            .complex => return value,
+        .complex => switch (value) {
+            .integer => |v| return .{ .complex = try checkedComplexForTarget(.complex, @floatFromInt(v), 0.0) },
+            .real => |v| return .{ .complex = try checkedComplexForTarget(.complex, v, 0.0) },
+            .complex => |c| return .{ .complex = try checkedComplexForTarget(.complex, c.real, c.imag) },
+            .logical, .string => return error.ParameterTypeMismatch,
+        },
+        .complex_double => switch (value) {
+            .integer => |v| return .{ .complex = try checkedComplexForTarget(.complex_double, @floatFromInt(v), 0.0) },
+            .real => |v| return .{ .complex = try checkedComplexForTarget(.complex_double, v, 0.0) },
+            .complex => |c| return .{ .complex = try checkedComplexForTarget(.complex_double, c.real, c.imag) },
             .logical, .string => return error.ParameterTypeMismatch,
         },
     }
@@ -57,8 +63,8 @@ pub fn checkParameterType(
     target: ast.TypeKind,
     target_char_len: ?usize,
     value: ConstValue,
-) !void {
-    _ = try coerceParameterValue(allocator, target, target_char_len, value);
+) !ConstValue {
+    return coerceParameterValue(allocator, target, target_char_len, value);
 }
 
 fn realToInteger(v: f64) !i64 {
@@ -72,11 +78,19 @@ fn realToInteger(v: f64) !i64 {
 
 fn checkedRealForTarget(target: ast.TypeKind, value: f64) !f64 {
     if (!std.math.isFinite(value)) return error.ParameterTypeMismatch;
-    if (target == .real) {
+    if (target == .real or target == .complex) {
         const narrowed: f32 = @floatCast(value);
         if (!std.math.isFinite(narrowed)) return error.ParameterTypeMismatch;
+        return @as(f64, @floatCast(narrowed));
     }
     return value;
+}
+
+fn checkedComplexForTarget(target: ast.TypeKind, real: f64, imag: f64) !symbols.ComplexConst {
+    return .{
+        .real = try checkedRealForTarget(target, real),
+        .imag = try checkedRealForTarget(target, imag),
+    };
 }
 
 fn adjustCharacterLen(allocator: std.mem.Allocator, source: []const u8, target_len: usize) ![]const u8 {
