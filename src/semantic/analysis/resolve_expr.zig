@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
+const evaluator = @import("../evaluator.zig");
 const context = @import("context.zig");
 const symbols_mod = @import("resolve_symbols.zig");
 
@@ -188,7 +189,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         .literal => |lit| {
             const ty: ast.TypeKind = switch (lit.kind) {
                 .integer => .integer,
-                .real => .real,
+                .real => realLiteralTypeKind(lit.text),
                 .logical => .logical,
                 .string, .hollerith => .character,
                 .assumed_size => .integer,
@@ -249,7 +250,7 @@ fn exprTypeUncached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.Ty
         .literal => |lit| {
             return switch (lit.kind) {
                 .integer => .integer,
-                .real => .real,
+                .real => realLiteralTypeKind(lit.text),
                 .logical => .logical,
                 .string, .hollerith => .character,
                 .assumed_size => .integer,
@@ -493,4 +494,85 @@ fn cacheExprType(self: *context.Context, expr: *ast.Expr, ty: ast.TypeKind) !voi
 fn resolvedExprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
     if (self.expr_type_cache.get(@intFromPtr(expr))) |cached| return cached;
     return exprType(self, expr);
+}
+
+fn realLiteralTypeKind(text: []const u8) ast.TypeKind {
+    return if (evaluator.realLiteralHasDoublePrecisionHint(text)) .double_precision else .real;
+}
+
+test "exprType treats D exponent real literal as DOUBLE PRECISION" {
+    const testing = std.testing;
+    var known_fn = std.StringHashMap(ast.TypeKind).init(testing.allocator);
+    defer known_fn.deinit();
+    var known_sig = std.StringHashMap(context.Context.ProcedureSig).init(testing.allocator);
+    defer known_sig.deinit();
+    var known_host = std.StringHashMap(symbols.Symbol).init(testing.allocator);
+    defer known_host.deinit();
+
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &.{},
+        .decls = &.{},
+        .decl_sources = &.{},
+        .stmts = &.{},
+    };
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn, &known_sig, &known_host, null);
+
+    var lit = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0D0" } };
+    try testing.expectEqual(ast.TypeKind.double_precision, try exprType(&ctx, &lit));
+}
+
+test "exprType treats _8 real kind suffix as DOUBLE PRECISION" {
+    const testing = std.testing;
+    var known_fn = std.StringHashMap(ast.TypeKind).init(testing.allocator);
+    defer known_fn.deinit();
+    var known_sig = std.StringHashMap(context.Context.ProcedureSig).init(testing.allocator);
+    defer known_sig.deinit();
+    var known_host = std.StringHashMap(symbols.Symbol).init(testing.allocator);
+    defer known_host.deinit();
+
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &.{},
+        .decls = &.{},
+        .decl_sources = &.{},
+        .stmts = &.{},
+    };
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn, &known_sig, &known_host, null);
+
+    var lit = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0_8" } };
+    try testing.expectEqual(ast.TypeKind.double_precision, try exprType(&ctx, &lit));
+}
+
+test "exprType promotes complex literal to COMPLEX*16 when component is DOUBLE PRECISION" {
+    const testing = std.testing;
+    var known_fn = std.StringHashMap(ast.TypeKind).init(testing.allocator);
+    defer known_fn.deinit();
+    var known_sig = std.StringHashMap(context.Context.ProcedureSig).init(testing.allocator);
+    defer known_sig.deinit();
+    var known_host = std.StringHashMap(symbols.Symbol).init(testing.allocator);
+    defer known_host.deinit();
+
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &.{},
+        .decls = &.{},
+        .decl_sources = &.{},
+        .stmts = &.{},
+    };
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn, &known_sig, &known_host, null);
+
+    var real_part = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0D0" } };
+    var imag_part = ast.Expr{ .literal = .{ .kind = .real, .text = "2.0" } };
+    var complex = ast.Expr{
+        .complex_literal = .{
+            .real = &real_part,
+            .imag = &imag_part,
+        },
+    };
+
+    try testing.expectEqual(ast.TypeKind.complex_double, try exprType(&ctx, &complex));
 }

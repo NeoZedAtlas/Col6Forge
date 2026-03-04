@@ -23,8 +23,10 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
                 .real => .{ .real = try parseReal(lit.text) },
                 .logical => .{ .logical = try parseLogical(lit.text) },
                 .string, .hollerith => blk: {
-                    const allocator = if (resolver) |res| res.allocator orelse break :blk null else break :blk null;
-                    const bytes = (try decodeLiteralBytes(allocator, lit)) orelse break :blk null;
+                    // String constants are decoded from source text directly when possible.
+                    // Allocator is only required for escaped-quote normalization and concat.
+                    const maybe_allocator = if (resolver) |res| res.allocator else null;
+                    const bytes = (try decodeLiteralBytes(lit, maybe_allocator)) orelse break :blk null;
                     break :blk .{ .string = bytes };
                 },
                 .assumed_size => null,
@@ -254,6 +256,10 @@ fn parseReal(text: []const u8) !f64 {
     return std.fmt.parseFloat(f64, buffer[0..out]);
 }
 
+pub fn realLiteralHasDoublePrecisionHint(text: []const u8) bool {
+    return hasDExponent(text) or literalKindSuggestsF64(text);
+}
+
 fn parseLogical(text: []const u8) !bool {
     return (try parseInt(text)) != 0;
 }
@@ -270,6 +276,8 @@ fn negateConst(value: ConstValue) ?ConstValue {
 fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?ConstResolver) !?ConstValue {
     if (op == .concat) {
         if (left != .string or right != .string) return null;
+        if (left.string.len == 0) return right;
+        if (right.string.len == 0) return left;
         const allocator = if (resolver) |res| res.allocator orelse return null else return null;
         const joined = try concatStringLiterals(allocator, left.string, right.string);
         return .{ .string = joined };
@@ -463,40 +471,104 @@ fn concatStringLiterals(allocator: std.mem.Allocator, left: []const u8, right: [
     return std.mem.concat(allocator, u8, &.{ left, right });
 }
 
-fn decodeLiteralBytes(allocator: std.mem.Allocator, lit: ast.Literal) !?[]u8 {
+fn decodeLiteralBytes(lit: ast.Literal, allocator: ?std.mem.Allocator) !?[]const u8 {
     return switch (lit.kind) {
-        .string => try decodeQuotedString(allocator, lit.text),
-        .hollerith => decodeHollerith(allocator, lit.text),
+        .string => try decodeQuotedString(lit.text, allocator),
+        .hollerith => decodeHollerith(lit.text),
         else => null,
     };
 }
 
-fn decodeQuotedString(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
-    if (text.len < 2) return allocator.dupe(u8, text);
+fn decodeQuotedString(text: []const u8, allocator: ?std.mem.Allocator) !?[]const u8 {
+    if (text.len < 2) return text;
     const quote = text[0];
     if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) {
-        return allocator.dupe(u8, text);
+        return text;
     }
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
-    var i: usize = 1;
+
+    // Fast-path: quoted literal without escaped quotes can be borrowed as-is.
     const end = text.len - 1;
+    var has_escaped = false;
+    var j: usize = 1;
+    while (j < end) : (j += 1) {
+        if (text[j] == quote and j + 1 < end and text[j + 1] == quote) {
+            has_escaped = true;
+            break;
+        }
+    }
+    if (!has_escaped) return text[1..end];
+
+    const alloc = allocator orelse return null;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+    var i: usize = 1;
     while (i < end) {
         if (text[i] == quote and i + 1 < end and text[i + 1] == quote) {
-            try out.append(allocator, quote);
+            try out.append(alloc, quote);
             i += 2;
             continue;
         }
-        try out.append(allocator, text[i]);
+        try out.append(alloc, text[i]);
         i += 1;
     }
-    return out.toOwnedSlice(allocator);
+    const owned = try out.toOwnedSlice(alloc);
+    return owned;
 }
 
-fn decodeHollerith(allocator: std.mem.Allocator, text: []const u8) ?[]u8 {
+fn decodeHollerith(text: []const u8) ?[]const u8 {
     const idx = std.mem.indexOfScalar(u8, text, 'H') orelse std.mem.indexOfScalar(u8, text, 'h') orelse return null;
     if (idx + 1 > text.len) return null;
-    return allocator.dupe(u8, text[idx + 1 ..]) catch null;
+    return text[idx + 1 ..];
+}
+
+fn kindUnderscoreIndex(text: []const u8) ?usize {
+    var i: usize = 0;
+    while (i + 1 < text.len) : (i += 1) {
+        if (text[i] != '_') continue;
+        if (!std.ascii.isAlphanumeric(text[i + 1])) continue;
+        return i;
+    }
+    return null;
+}
+
+fn hasDExponent(text: []const u8) bool {
+    const end = kindUnderscoreIndex(text) orelse text.len;
+    return std.mem.indexOfAny(u8, text[0..end], "Dd") != null;
+}
+
+fn literalKindSuffix(text: []const u8) ?[]const u8 {
+    const kind_start = kindUnderscoreIndex(text) orelse return null;
+    var i = kind_start + 1;
+    while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) : (i += 1) {}
+    return text[kind_start + 1 .. i];
+}
+
+fn literalKindSuggestsF64(text: []const u8) bool {
+    const suffix = literalKindSuffix(text) orelse return false;
+    if (suffix.len == 0) return false;
+
+    var all_digits = true;
+    for (suffix) |ch| {
+        if (!std.ascii.isDigit(ch)) {
+            all_digits = false;
+            break;
+        }
+    }
+    if (all_digits) {
+        const kind_val = std.fmt.parseInt(i64, suffix, 10) catch return false;
+        return kind_val >= 8;
+    }
+
+    return std.ascii.eqlIgnoreCase(suffix, "wp") or
+        std.ascii.eqlIgnoreCase(suffix, "dp") or
+        std.ascii.eqlIgnoreCase(suffix, "real64") or
+        std.ascii.eqlIgnoreCase(suffix, "float64") or
+        std.ascii.eqlIgnoreCase(suffix, "rk8") or
+        std.ascii.eqlIgnoreCase(suffix, "k8");
+}
+
+fn nullResolveConst(_: *anyopaque, _: []const u8) ?ConstValue {
+    return null;
 }
 
 test "const call dispatch recognizes DATAN alias" {
@@ -576,6 +648,40 @@ test "integer POWER const eval uses fast exponentiation" {
     const value = (try evalConst(expr, null)) orelse return error.TestExpectedEqual;
     switch (value) {
         .integer => |v| try testing.expectEqual(@as(i64, 1024), v),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "real literal double-precision hint recognizes D exponent and kind suffix" {
+    const testing = std.testing;
+    try testing.expect(realLiteralHasDoublePrecisionHint("1.0D0"));
+    try testing.expect(realLiteralHasDoublePrecisionHint("1.0_8"));
+    try testing.expect(realLiteralHasDoublePrecisionHint("1.0_wp"));
+    try testing.expect(!realLiteralHasDoublePrecisionHint("1.0"));
+}
+
+test "evalConst decodes simple quoted string without allocator" {
+    const testing = std.testing;
+    var expr = ast.Expr{ .literal = .{ .kind = .string, .text = "'ABC'" } };
+    const value = (try evalConst(&expr, null)) orelse return error.TestExpectedEqual;
+    switch (value) {
+        .string => |bytes| try testing.expectEqualStrings("ABC", bytes),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "evalConst decodes doubled-quote string when allocator is provided" {
+    const testing = std.testing;
+    var sentinel: u8 = 0;
+    const resolver = ConstResolver{
+        .ctx = &sentinel,
+        .resolveFn = nullResolveConst,
+        .allocator = testing.allocator,
+    };
+    var expr = ast.Expr{ .literal = .{ .kind = .string, .text = "'A''B'" } };
+    const value = (try evalConst(&expr, resolver)) orelse return error.TestExpectedEqual;
+    switch (value) {
+        .string => |bytes| try testing.expectEqualStrings("A'B", bytes),
         else => return error.TestExpectedEqual,
     }
 }
