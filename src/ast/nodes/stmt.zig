@@ -148,6 +148,7 @@ pub const EndfileStmt = struct {
 pub const DataInit = struct {
     target: *Expr,
     value: *Expr,
+    repeat_count: usize = 1,
 };
 
 pub const DataValueSpec = struct {

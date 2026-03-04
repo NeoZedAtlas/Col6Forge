@@ -4,13 +4,97 @@ const context = @import("context.zig");
 const resolve_const = @import("resolve_const.zig");
 const resolve_symbols = @import("resolve_symbols.zig");
 
-const max_data_inits: usize = 1_000_000;
+const min_compact_array_fill: usize = 8_192;
 
 const ArrayShape = struct {
     rank: usize,
     size: ?usize,
     lowers: []i64,
     extents: ?[]usize,
+};
+
+const DataValueSpan = struct {
+    value: *ast.Expr,
+    count: usize,
+};
+
+const DataValueCursor = struct {
+    spans: []const DataValueSpan,
+    span_idx: usize = 0,
+    span_offset: usize = 0,
+    remaining: usize,
+
+    fn init(spans: []const DataValueSpan) DataValueCursor {
+        var total: usize = 0;
+        for (spans) |span| {
+            total = std.math.add(usize, total, span.count) catch unreachable;
+        }
+        return .{
+            .spans = spans,
+            .remaining = total,
+        };
+    }
+
+    fn remainingCount(self: *const DataValueCursor) usize {
+        return self.remaining;
+    }
+
+    fn pop(self: *DataValueCursor) !*ast.Expr {
+        if (self.remaining == 0) return error.DataValueCountMismatch;
+        while (self.span_idx < self.spans.len) {
+            const span = self.spans[self.span_idx];
+            if (self.span_offset < span.count) {
+                self.span_offset += 1;
+                self.remaining -= 1;
+                if (self.span_offset == span.count) {
+                    self.span_idx += 1;
+                    self.span_offset = 0;
+                }
+                return span.value;
+            }
+            self.span_idx += 1;
+            self.span_offset = 0;
+        }
+        return error.DataValueCountMismatch;
+    }
+
+    // Consume `count` values iff they are all backed by the same expression node.
+    fn consumeUniform(self: *DataValueCursor, count: usize) ?*ast.Expr {
+        if (count == 0 or self.remaining < count) return null;
+
+        var probe_span_idx = self.span_idx;
+        var probe_span_offset = self.span_offset;
+        var probe_remaining = count;
+        var uniform_value: ?*ast.Expr = null;
+
+        while (probe_remaining > 0) {
+            if (probe_span_idx >= self.spans.len) return null;
+            const span = self.spans[probe_span_idx];
+            if (probe_span_offset >= span.count) {
+                probe_span_idx += 1;
+                probe_span_offset = 0;
+                continue;
+            }
+            const available = span.count - probe_span_offset;
+            const take = @min(available, probe_remaining);
+            if (uniform_value) |value| {
+                if (value != span.value) return null;
+            } else {
+                uniform_value = span.value;
+            }
+            probe_remaining -= take;
+            probe_span_offset += take;
+            if (probe_span_offset == span.count) {
+                probe_span_idx += 1;
+                probe_span_offset = 0;
+            }
+        }
+
+        self.span_idx = probe_span_idx;
+        self.span_offset = probe_span_offset;
+        self.remaining -= count;
+        return uniform_value;
+    }
 };
 
 pub fn lowerDataStatements(ctx: *context.Context) !void {
@@ -32,41 +116,56 @@ fn lowerDataStmt(ctx: *context.Context, data: ast.DataStmt) !ast.DataStmt {
 
     for (data.groups) |group| {
         const targets = try expandDataTargets(ctx, group.targets);
-        const values = try expandDataValues(ctx, group.values);
+        const value_spans = try buildDataValueSpans(ctx, group.values);
+        var cursor = DataValueCursor.init(value_spans);
 
-        if (values.len < targets.len) return error.DataValueCountMismatch;
-
-        var value_idx: usize = 0;
         var target_idx: usize = 0;
         while (target_idx < targets.len) : (target_idx += 1) {
-            if (value_idx >= values.len) return error.DataValueCountMismatch;
-
             const target = targets[target_idx];
             const remaining_targets = targets.len - target_idx;
-            const remaining_values = values.len - value_idx;
+            const remaining_values = cursor.remainingCount();
+            if (remaining_values == 0) return error.DataValueCountMismatch;
 
             if (target.* == .identifier) {
+                const symbol_idx = resolve_symbols.findSymbolIndex(ctx, target.identifier);
+                const symbol_type = if (symbol_idx) |idx| ctx.symbols.items[idx].type_kind else null;
                 if (try arrayShapeForName(ctx, target.identifier)) |shape| {
-                    const take = if (shape.size) |known_size| known_size else remaining_values - (remaining_targets - 1);
-                    if (value_idx + take > values.len) return error.DataValueCountMismatch;
+                    const reserved_for_rest = remaining_targets - 1;
+                    if (remaining_values <= reserved_for_rest) return error.DataValueCountMismatch;
+
+                    const take = if (shape.size) |known_size| known_size else remaining_values - reserved_for_rest;
+                    if (take == 0 or take > remaining_values) return error.DataValueCountMismatch;
+
+                    // Keep whole-array DATA initializers compact when values are uniform.
+                    if (shape.size != null and take >= min_compact_array_fill and symbol_type != null and symbol_type.? != .character) {
+                        if (cursor.consumeUniform(take)) |uniform_value| {
+                            try ensureAppendBudget(inits.items.len, 1);
+                            try inits.append(.{
+                                .target = target,
+                                .value = uniform_value,
+                                .repeat_count = take,
+                            });
+                            continue;
+                        }
+                    }
 
                     var local_idx: usize = 0;
                     while (local_idx < take) : (local_idx += 1) {
                         const elem_target = try buildArrayDataTarget(ctx, target.identifier, shape, local_idx);
+                        const value_expr = try cursor.pop();
                         try ensureAppendBudget(inits.items.len, 1);
-                        try inits.append(.{ .target = elem_target, .value = values[value_idx] });
-                        value_idx += 1;
+                        try inits.append(.{ .target = elem_target, .value = value_expr });
                     }
                     continue;
                 }
             }
 
+            const value_expr = try cursor.pop();
             try ensureAppendBudget(inits.items.len, 1);
-            try inits.append(.{ .target = target, .value = values[value_idx] });
-            value_idx += 1;
+            try inits.append(.{ .target = target, .value = value_expr });
         }
 
-        if (value_idx != values.len) return error.DataValueCountMismatch;
+        if (cursor.remainingCount() != 0) return error.DataValueCountMismatch;
     }
 
     return .{ .inits = try inits.toOwnedSlice(), .groups = &.{} };
@@ -100,7 +199,7 @@ fn expandTargetExpr(
                 while (iter <= end_val) : (iter += step_val) {
                     const iter_expr = try makeIntegerLiteral(ctx, iter);
                     for (implied.items) |item| {
-                        const expanded = try cloneExprWithSubst(ctx, item, implied.var_name, iter_expr);
+                        const expanded = try cloneExprWithSubstCheap(ctx, item, implied.var_name, iter_expr);
                         try expandTargetExpr(ctx, expanded, out);
                     }
                 }
@@ -108,7 +207,7 @@ fn expandTargetExpr(
                 while (iter >= end_val) : (iter += step_val) {
                     const iter_expr = try makeIntegerLiteral(ctx, iter);
                     for (implied.items) |item| {
-                        const expanded = try cloneExprWithSubst(ctx, item, implied.var_name, iter_expr);
+                        const expanded = try cloneExprWithSubstCheap(ctx, item, implied.var_name, iter_expr);
                         try expandTargetExpr(ctx, expanded, out);
                     }
                 }
@@ -121,19 +220,23 @@ fn expandTargetExpr(
     }
 }
 
-fn expandDataValues(ctx: *context.Context, specs: []ast.DataValueSpec) ![]*ast.Expr {
-    var out = std.array_list.Managed(*ast.Expr).init(ctx.arena);
+fn buildDataValueSpans(ctx: *context.Context, specs: []ast.DataValueSpec) ![]DataValueSpan {
+    var out = std.array_list.Managed(DataValueSpan).init(ctx.arena);
+    var total: usize = 0;
     for (specs) |spec| {
         const repeat: usize = if (spec.repeat) |repeat_expr| blk: {
             const repeat_i = (try evalConstInt(ctx, repeat_expr)) orelse return error.UnsupportedImpliedDo;
             if (repeat_i < 0) return error.UnsupportedImpliedDo;
-            break :blk @intCast(repeat_i);
+            break :blk std.math.cast(usize, repeat_i) orelse return error.DataExpansionTooLarge;
         } else 1;
+        if (repeat == 0) continue;
+        total = std.math.add(usize, total, repeat) catch return error.DataExpansionTooLarge;
 
-        try ensureAppendBudget(out.items.len, repeat);
-        var i: usize = 0;
-        while (i < repeat) : (i += 1) {
-            try out.append(spec.value);
+        if (out.items.len > 0 and out.items[out.items.len - 1].value == spec.value) {
+            const next = std.math.add(usize, out.items[out.items.len - 1].count, repeat) catch return error.DataExpansionTooLarge;
+            out.items[out.items.len - 1].count = next;
+        } else {
+            try out.append(.{ .value = spec.value, .count = repeat });
         }
     }
     return out.toOwnedSlice();
@@ -342,7 +445,102 @@ fn cloneExprWithSubst(
     return cloned;
 }
 
+fn cloneExprWithSubstCheap(
+    ctx: *context.Context,
+    node: *ast.Expr,
+    name: []const u8,
+    replacement: *ast.Expr,
+) !*ast.Expr {
+    if (try cloneSimpleCallSubscriptWithSubst(ctx, node, name, replacement)) |fast| {
+        return fast;
+    }
+    return cloneExprWithSubst(ctx, node, name, replacement);
+}
+
+fn cloneSimpleCallSubscriptWithSubst(
+    ctx: *context.Context,
+    node: *ast.Expr,
+    name: []const u8,
+    replacement: *ast.Expr,
+) !?*ast.Expr {
+    if (node.* != .call_or_subscript) return null;
+    const call = node.call_or_subscript;
+    if (call.args.len == 0) return node;
+
+    const args = try ctx.arena.alloc(*ast.Expr, call.args.len);
+    var changed = false;
+    for (call.args, 0..) |arg, idx| {
+        switch (arg.*) {
+            .identifier => |ident| {
+                if (std.ascii.eqlIgnoreCase(ident, name)) {
+                    args[idx] = replacement;
+                    changed = true;
+                } else {
+                    args[idx] = arg;
+                }
+            },
+            else => {
+                if (exprContainsIdentifier(arg, name)) return null;
+                args[idx] = arg;
+            },
+        }
+    }
+    if (!changed) return node;
+
+    const cloned = try ctx.arena.create(ast.Expr);
+    cloned.* = .{ .call_or_subscript = .{ .name = call.name, .args = args } };
+    return cloned;
+}
+
+fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
+    return switch (node.*) {
+        .identifier => |ident| std.ascii.eqlIgnoreCase(ident, name),
+        .literal => false,
+        .unary => |un| exprContainsIdentifier(un.expr, name),
+        .binary => |bin| exprContainsIdentifier(bin.left, name) or exprContainsIdentifier(bin.right, name),
+        .complex_literal => |lit| exprContainsIdentifier(lit.real, name) or exprContainsIdentifier(lit.imag, name),
+        .call_or_subscript => |call| blk: {
+            for (call.args) |arg| {
+                if (exprContainsIdentifier(arg, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .substring => |sub| blk: {
+            for (sub.args) |arg| {
+                if (exprContainsIdentifier(arg, name)) break :blk true;
+            }
+            if (sub.start) |start_expr| {
+                if (exprContainsIdentifier(start_expr, name)) break :blk true;
+            }
+            if (sub.end) |end_expr| {
+                if (exprContainsIdentifier(end_expr, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .dim_range => |range| blk: {
+            if (range.lower) |lower| {
+                if (exprContainsIdentifier(lower, name)) break :blk true;
+            }
+            if (exprContainsIdentifier(range.upper, name)) break :blk true;
+            if (range.stride) |stride| {
+                if (exprContainsIdentifier(stride, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .implied_do => |implied| blk: {
+            for (implied.items) |item| {
+                if (exprContainsIdentifier(item, name)) break :blk true;
+            }
+            if (exprContainsIdentifier(implied.start, name)) break :blk true;
+            if (exprContainsIdentifier(implied.end, name)) break :blk true;
+            if (implied.step) |step_expr| {
+                if (exprContainsIdentifier(step_expr, name)) break :blk true;
+            }
+            break :blk false;
+        },
+    };
+}
+
 fn ensureAppendBudget(current_len: usize, add_len: usize) !void {
-    const next = std.math.add(usize, current_len, add_len) catch return error.DataExpansionTooLarge;
-    if (next > max_data_inits) return error.DataExpansionTooLarge;
+    _ = std.math.add(usize, current_len, add_len) catch return error.DataExpansionTooLarge;
 }

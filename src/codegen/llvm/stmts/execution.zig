@@ -758,6 +758,11 @@ fn collectAltReturnLabels(allocator: std.mem.Allocator, call: ast.CallStmt) Emit
 
 pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!void {
     for (data.inits) |init| {
+        if (init.repeat_count > 1) {
+            if (try emitRepeatedDataInit(ctx, builder, init)) {
+                continue;
+            }
+        }
         var target_ptr: context.ValueRef = undefined;
         var target_len: ?usize = null;
         if (init.target.* == .call_or_subscript) {
@@ -809,6 +814,23 @@ pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!v
         const coerced = try expr.coerce(ctx, builder, value, sym_ty);
         try builder.store(coerced, target_ptr);
     }
+}
+
+fn emitRepeatedDataInit(ctx: *Context, builder: anytype, init: ast.DataInit) EmitError!bool {
+    if (init.target.* != .identifier) return false;
+    const name = init.target.identifier;
+    const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
+    if (sym.dims.len == 0) return false;
+    if (sym.type_kind == .character) return false;
+
+    const repeat_i64 = std.math.cast(i64, init.repeat_count) orelse return error.DataExpansionTooLarge;
+    const count = constI64(ctx, repeat_i64);
+    const base_ptr = ctx.locals.get(name) orelse return error.UnknownSymbol;
+    const elem_ty = llvm_types.typeFromKind(sym.type_kind);
+    const value = try expr.emitExpr(ctx, builder, init.value);
+    const coerced = try expr.coerce(ctx, builder, value, elem_ty);
+    try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, count, coerced);
+    return true;
 }
 
 pub fn emitReturnStmt(ctx: *Context, builder: anytype, ret: ast.ReturnStmt) EmitError!void {
