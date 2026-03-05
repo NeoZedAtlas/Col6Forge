@@ -207,7 +207,26 @@ pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
 
 pub fn findSymbolIndex(self: *context.Context, name: []const u8) ?usize {
     if (self.current_scope == null) return null;
-    return findSymbolIndexNoCache(self, name);
+    if (self.symbol_lookup_cache_scope == null or self.symbol_lookup_cache_scope.?.index != self.current_scope.?.index) {
+        self.symbol_lookup_cache.clearRetainingCapacity();
+        self.symbol_lookup_cache_scope = self.current_scope;
+    }
+    if (getLowercaseMapValue(?usize, &self.symbol_lookup_cache, name)) |cached| {
+        return cached;
+    }
+    const resolved = findSymbolIndexNoCache(self, name);
+    putSymbolLookupCache(self, name, resolved);
+    return resolved;
+}
+
+fn putSymbolLookupCache(self: *context.Context, name: []const u8, resolved: ?usize) void {
+    // Fortran identifiers are typically short; avoid arena churn for rare long keys.
+    if (name.len > MAX_IDENT_LEN) return;
+    var key_buf: [MAX_IDENT_LEN]u8 = undefined;
+    const key = toLowerInBuffer(name, &key_buf);
+    if (self.symbol_lookup_cache.contains(key)) return;
+    const owned_key = self.arena.dupe(u8, key) catch return;
+    self.symbol_lookup_cache.put(owned_key, resolved) catch {};
 }
 
 fn findSymbolIndexNoCache(self: *context.Context, name: []const u8) ?usize {
@@ -284,11 +303,43 @@ fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
 }
 
 pub fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
-    return getLowercaseMapValue(ast.TypeKind, self.known_function_types, name);
+    if (getLowercaseMapValue(?ast.TypeKind, &self.known_function_type_cache, name)) |cached| {
+        return cached;
+    }
+    const resolved = getLowercaseMapValue(ast.TypeKind, self.known_function_types, name);
+    putKnownFunctionTypeCache(self, name, resolved);
+    return resolved;
 }
 
 pub fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
-    return getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, name);
+    if (getLowercaseMapValue(?context.Context.ProcedureSig, &self.known_procedure_sig_cache, name)) |cached| {
+        return cached;
+    }
+    const resolved = getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, name);
+    putKnownProcedureSigCache(self, name, resolved);
+    return resolved;
+}
+
+fn putKnownFunctionTypeCache(self: *context.Context, name: []const u8, resolved: ?ast.TypeKind) void {
+    if (name.len > MAX_IDENT_LEN) return;
+    var key_buf: [MAX_IDENT_LEN]u8 = undefined;
+    const key = toLowerInBuffer(name, &key_buf);
+    if (self.known_function_type_cache.contains(key)) return;
+    const owned_key = self.arena.dupe(u8, key) catch return;
+    self.known_function_type_cache.put(owned_key, resolved) catch {};
+}
+
+fn putKnownProcedureSigCache(
+    self: *context.Context,
+    name: []const u8,
+    resolved: ?context.Context.ProcedureSig,
+) void {
+    if (name.len > MAX_IDENT_LEN) return;
+    var key_buf: [MAX_IDENT_LEN]u8 = undefined;
+    const key = toLowerInBuffer(name, &key_buf);
+    if (self.known_procedure_sig_cache.contains(key)) return;
+    const owned_key = self.arena.dupe(u8, key) catch return;
+    self.known_procedure_sig_cache.put(owned_key, resolved) catch {};
 }
 
 fn toLowerInBuffer(text: []const u8, buf: *[MAX_IDENT_LEN]u8) []const u8 {
