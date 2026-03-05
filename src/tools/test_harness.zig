@@ -134,6 +134,7 @@ const Options = struct {
     show_help: bool,
     verbose: bool,
     strict_diagnostics: bool,
+    strict_level: ?[]const u8,
     timeout: TimeoutConfig,
     jobs: usize,
 };
@@ -196,6 +197,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParseArgsO
     var show_help = false;
     var verbose = false;
     var strict_diagnostics = false;
+    var strict_level: ?[]const u8 = null;
     var jobs = defaultJobs();
     const default_timeout = TimeoutConfig{};
     var suite_timeout_ms: u64 = default_timeout.suite_timeout_ms;
@@ -285,6 +287,12 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParseArgsO
             strict_diagnostics = false;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--strict-level")) {
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
+            i += 1;
+            strict_level = args[i];
+            continue;
+        }
         return .{ .failure = .{ .unknown_flag = arg } };
     }
 
@@ -302,6 +310,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParseArgsO
         .show_help = show_help,
         .verbose = verbose,
         .strict_diagnostics = strict_diagnostics,
+        .strict_level = strict_level,
         .timeout = .{
             .suite_timeout_ms = suite_timeout_ms,
             .test_timeout_ms = test_timeout_ms,
@@ -369,8 +378,12 @@ fn runSuite(
     if (options.emit_llvm) {
         try argv.append(allocator, "-emit-llvm");
     }
-    if (suite.kind == .gcc_dg and options.strict_diagnostics) {
-        try argv.append(allocator, "--strict-diagnostics");
+    if (suite.kind == .gcc_dg) {
+        if (options.strict_level) |level| {
+            try argv.appendSlice(allocator, &.{ "--strict-level", level });
+        } else if (options.strict_diagnostics) {
+            try argv.append(allocator, "--strict-diagnostics");
+        }
     }
     if (options.timeout.test_timeout_ms > 0) {
         timeout_arg = try std.fmt.allocPrint(allocator, "{d}", .{options.timeout.test_timeout_ms});
@@ -485,6 +498,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  --suite-timeout <ms> Suite timeout for each runner (0 disables, default: 0)
         \\  --verbose           Print command lines and suite names
         \\  --strict-diagnostics Enable strict dg-warning checks (gcc-dg suite only)
+        \\  --strict-level <off|warning|full> Strict diagnostics level (gcc-dg suite only)
         \\  -h, --help          Show this help
         \\
     );
