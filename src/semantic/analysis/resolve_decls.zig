@@ -7,6 +7,7 @@ const constants = @import("resolve_const.zig");
 const type_kind_selector = @import("../type_kind_selector.zig");
 
 const StorageClass = symbols.StorageClass;
+const CharacterLengthKind = symbols.CharacterLengthKind;
 
 pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
     const resolved_type_kind = try resolvedDeclTypeKind(self, decl.type_kind, decl.kind_selector);
@@ -47,10 +48,16 @@ pub fn applyDeclarator(
     } else if (self.symbols.items[idx].storage != .dummy and self.symbols.items[idx].storage != .common) {
         self.symbols.items[idx].storage = storage;
     }
+    if (type_kind != .character) {
+        self.symbols.items[idx].char_len_kind = .none;
+        self.symbols.items[idx].char_len = null;
+        return;
+    }
     if (type_kind == .character) {
         var length: usize = 1;
         if (item.char_len) |len_expr| {
             if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) {
+                self.symbols.items[idx].char_len_kind = .assumed;
                 self.symbols.items[idx].char_len = null;
                 return;
             }
@@ -69,6 +76,7 @@ pub fn applyDeclarator(
                 // Keep deferred/assumed length only where the rest of the semantic
                 // pipeline already supports unknown CHARACTER size.
                 if (allowsDeferredCharacterLength(self.symbols.items[idx])) {
+                    self.symbols.items[idx].char_len_kind = .deferred;
                     self.symbols.items[idx].char_len = null;
                     return;
                 }
@@ -79,6 +87,7 @@ pub fn applyDeclarator(
                 length = implicit_len;
             }
         }
+        self.symbols.items[idx].char_len_kind = CharacterLengthKind.constant;
         self.symbols.items[idx].char_len = length;
     }
 }

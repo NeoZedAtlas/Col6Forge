@@ -6,6 +6,7 @@ const intrinsics = @import("intrinsics.zig");
 
 const SymbolKind = symbols.SymbolKind;
 const Symbol = symbols.Symbol;
+const CharacterLengthKind = symbols.CharacterLengthKind;
 const MAX_IDENT_LEN: usize = 64;
 
 pub fn initImplicitDefaults(self: *context.Context) !void {
@@ -55,6 +56,7 @@ pub fn installUnitSymbol(self: *context.Context) !void {
     const info = if (self.unit.kind == .function)
         ImplicitInfo{
             .type_kind = lookupKnownFunctionType(self, self.unit.name) orelse implicitInfo(self, self.unit.name).type_kind,
+            .char_len_kind = .none,
             .char_len = null,
         }
     else
@@ -63,6 +65,7 @@ pub fn installUnitSymbol(self: *context.Context) !void {
         .name = self.unit.name,
         .type_kind = info.type_kind,
         .dims = &.{},
+        .char_len_kind = info.char_len_kind,
         .char_len = info.char_len,
         .kind = kind,
         .storage = .local,
@@ -82,6 +85,7 @@ pub fn installDummyArgs(self: *context.Context) !void {
             .name = arg,
             .type_kind = info.type_kind,
             .dims = &.{},
+            .char_len_kind = info.char_len_kind,
             .char_len = info.char_len,
             .kind = .variable,
             .storage = .dummy,
@@ -118,6 +122,7 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
             .name = name,
             .type_kind = proc_type,
             .dims = &.{},
+            .char_len_kind = .none,
             .char_len = null,
             .kind = proc_kind,
             .storage = .local,
@@ -130,13 +135,14 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
     }
     const known_fn_type = lookupKnownFunctionType(self, name);
     const info = if (known_fn_type) |known_ty|
-        ImplicitInfo{ .type_kind = known_ty, .char_len = null }
+        ImplicitInfo{ .type_kind = known_ty, .char_len_kind = .none, .char_len = null }
     else
         implicitInfo(self, name);
     const symbol = Symbol{
         .name = name,
         .type_kind = info.type_kind,
         .dims = &.{},
+        .char_len_kind = info.char_len_kind,
         .char_len = info.char_len,
         .kind = if (known_fn_type != null) .function else .variable,
         .storage = .local,
@@ -162,6 +168,7 @@ pub fn ensureDeclaredSymbol(self: *context.Context, name: []const u8) !usize {
         .name = name,
         .type_kind = info.type_kind,
         .dims = &.{},
+        .char_len_kind = info.char_len_kind,
         .char_len = info.char_len,
         .kind = .variable,
         .storage = .local,
@@ -219,11 +226,12 @@ fn findCurrentScopeSymbolIndex(self: *context.Context, name: []const u8) ?usize 
 
 const ImplicitInfo = struct {
     type_kind: ast.TypeKind,
+    char_len_kind: CharacterLengthKind,
     char_len: ?usize,
 };
 
 fn implicitInfo(self: *context.Context, name: []const u8) ImplicitInfo {
-    if (name.len == 0) return .{ .type_kind = .real, .char_len = null };
+    if (name.len == 0) return .{ .type_kind = .real, .char_len_kind = .none, .char_len = null };
     const first = std.ascii.toUpper(name[0]);
     var idx = self.implicit.items.len;
     while (idx > 0) {
@@ -231,10 +239,11 @@ fn implicitInfo(self: *context.Context, name: []const u8) ImplicitInfo {
         const rule = self.implicit.items[idx];
         if (first >= rule.start and first <= rule.end) {
             const char_len = if (rule.type_kind == .character) rule.char_len orelse 1 else null;
-            return .{ .type_kind = rule.type_kind, .char_len = char_len };
+            const char_len_kind: CharacterLengthKind = if (rule.type_kind == .character) .constant else .none;
+            return .{ .type_kind = rule.type_kind, .char_len_kind = char_len_kind, .char_len = char_len };
         }
     }
-    return .{ .type_kind = .real, .char_len = null };
+    return .{ .type_kind = .real, .char_len_kind = .none, .char_len = null };
 }
 
 pub fn implicitType(self: *context.Context, name: []const u8) ast.TypeKind {

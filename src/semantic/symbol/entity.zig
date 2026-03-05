@@ -13,10 +13,18 @@ pub const StorageClass = enum {
     dummy,
 };
 
+pub const CharacterLengthKind = enum {
+    none,
+    constant,
+    assumed,
+    deferred,
+};
+
 pub const Symbol = struct {
     name: []const u8,
     type_kind: ast.TypeKind,
     dims: []*ast.Expr,
+    char_len_kind: CharacterLengthKind = .none,
     char_len: ?usize,
     kind: SymbolKind,
     storage: StorageClass,

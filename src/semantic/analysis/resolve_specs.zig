@@ -99,11 +99,16 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 };
                 sym.const_value = const_val;
 
-                if (sym.type_kind == .character and sym.char_len == null) {
-                    sym.char_len = switch (const_val) {
-                        .string => |bytes| bytes.len,
-                        else => null,
-                    };
+                if (sym.type_kind == .character and sym.char_len_kind != .constant) {
+                    switch (const_val) {
+                        .string => |bytes| {
+                            sym.char_len_kind = .constant;
+                            sym.char_len = bytes.len;
+                        },
+                        else => {
+                            sym.char_len = null;
+                        },
+                    }
                 }
             }
         },
@@ -254,10 +259,13 @@ fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.Impl
         const first = std.ascii.toUpper(sym.name[0]);
         if (first < rule.start or first > rule.end) continue;
         sym.type_kind = rule.type_kind;
-        sym.char_len = switch (rule.type_kind) {
-            .character => rule.char_len orelse 1,
-            else => null,
-        };
+        if (rule.type_kind == .character) {
+            sym.char_len_kind = .constant;
+            sym.char_len = rule.char_len orelse 1;
+        } else {
+            sym.char_len_kind = .none;
+            sym.char_len = null;
+        }
     }
 }
 

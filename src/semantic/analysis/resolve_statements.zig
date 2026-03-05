@@ -217,6 +217,7 @@ fn bindBuiltinUseImport(
     sym.name = local_name;
     sym.type_kind = builtin.type_kind;
     sym.dims = &.{};
+    sym.char_len_kind = .none;
     sym.char_len = null;
     sym.kind = .parameter;
     sym.storage = .local;

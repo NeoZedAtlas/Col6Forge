@@ -77,8 +77,8 @@ fn unitScopeKind(kind: ast.ProgramUnitKind) scope.ScopeKind {
 
 fn validateAssumedCharacterLengths(ctx: *context.Context) !void {
     for (ctx.symbols.items) |sym| {
-        if (sym.type_kind != .character or sym.char_len != null) continue;
-        if (!isAssumedSizeCharacterDecl(ctx, sym.name)) continue;
+        if (sym.type_kind != .character) continue;
+        if (sym.char_len_kind != .assumed) continue;
         if (sym.storage == .dummy) continue;
         if (sym.kind == .parameter) continue;
         if (sym.kind == .function) continue;
@@ -100,20 +100,6 @@ fn findTypeDeclSource(ctx: *context.Context, target_name: []const u8) ?ast.DeclS
         }
     }
     return null;
-}
-
-fn isAssumedSizeCharacterDecl(ctx: *context.Context, target_name: []const u8) bool {
-    for (ctx.unit.decls) |decl| {
-        if (decl != .type_decl) continue;
-        const type_decl = decl.type_decl;
-        if (type_decl.type_kind != .character) continue;
-        for (type_decl.items) |item| {
-            if (!std.ascii.eqlIgnoreCase(item.name, target_name)) continue;
-            const len_expr = item.char_len orelse continue;
-            if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) return true;
-        }
-    }
-    return false;
 }
 
 fn clearStmtResolutionCaches(ctx: *context.Context) void {

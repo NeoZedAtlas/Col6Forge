@@ -1552,6 +1552,35 @@ test "semantic accepts deferred CHARACTER length for dummy argument" {
         found = true;
         try testing.expectEqual(ast.TypeKind.character, sym.type_kind);
         try testing.expectEqual(symbols.StorageClass.dummy, sym.storage);
+        try testing.expectEqual(symbols.CharacterLengthKind.deferred, sym.char_len_kind);
+        try testing.expect(sym.char_len == null);
+    }
+    try testing.expect(found);
+}
+
+test "semantic accepts assumed CHARACTER*(*) for dummy argument" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S(STR)\n" ++
+        "      CHARACTER*(*) STR\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "STR")) continue;
+        found = true;
+        try testing.expectEqual(ast.TypeKind.character, sym.type_kind);
+        try testing.expectEqual(symbols.StorageClass.dummy, sym.storage);
+        try testing.expectEqual(symbols.CharacterLengthKind.assumed, sym.char_len_kind);
         try testing.expect(sym.char_len == null);
     }
     try testing.expect(found);
