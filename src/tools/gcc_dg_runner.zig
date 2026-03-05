@@ -53,9 +53,10 @@ pub fn main() !void {
     const expected_error_cases = countExpectedErrorCases(cases);
     const expected_warning_cases = countExpectedWarningCases(cases);
     const expected_aux_cases = countExpectedAuxCases(cases);
+    const expected_output_cases = countExpectedOutputCases(cases);
 
     if (cases.len == 0) {
-        printSummary(&log_state, cases.len, 0, 0, expected_error_cases, expected_warning_cases, expected_aux_cases, options, skips);
+        printSummary(&log_state, cases.len, 0, 0, expected_error_cases, expected_warning_cases, expected_aux_cases, expected_output_cases, options, skips);
         return;
     }
 
@@ -75,7 +76,7 @@ pub fn main() !void {
             _ = progress.completed.fetchAdd(1, .seq_cst);
         }
         const passed = cases.len - failures;
-        printSummary(&log_state, cases.len, passed, failures, expected_error_cases, expected_warning_cases, expected_aux_cases, options, skips);
+        printSummary(&log_state, cases.len, passed, failures, expected_error_cases, expected_warning_cases, expected_aux_cases, expected_output_cases, options, skips);
         if (failures > 0) return error.GccDgVerificationFailed;
         return;
     }
@@ -104,7 +105,7 @@ pub fn main() !void {
 
     const failure_count = failures.load(.seq_cst);
     const passed_count = cases.len - failure_count;
-    printSummary(&log_state, cases.len, passed_count, failure_count, expected_error_cases, expected_warning_cases, expected_aux_cases, options, skips);
+    printSummary(&log_state, cases.len, passed_count, failure_count, expected_error_cases, expected_warning_cases, expected_aux_cases, expected_output_cases, options, skips);
     if (failure_count > 0) return error.GccDgVerificationFailed;
 }
 
@@ -269,6 +270,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  - `dg-error` expectations are checked against failure diagnostics.
         \\  - `dg-warning` expectations are enforced in strict-level warning/full.
         \\  - `dg-message`/`dg-note`/`dg-bogus` expectations are enforced in strict-level full.
+        \\  - `dg-output`/`dg-prune-output` expectations are enforced in strict-level full.
         \\  - Tests that require unsupported dejagnu diagnostics/target predicates/multi-source
         \\    orchestration are skipped and reported in summary.
         \\
@@ -340,6 +342,8 @@ const TestCase = struct {
     expected_error_patterns: []ExpectedErrorPattern,
     expected_warning_patterns: []ExpectedWarningPattern,
     expected_aux_patterns: []ExpectedAuxPattern,
+    expected_output_patterns: []ExpectedOutputPattern,
+    prune_output_patterns: []PruneOutputPattern,
 };
 
 const ExpectedErrorPattern = struct {
@@ -364,11 +368,23 @@ const ExpectedAuxPattern = struct {
     kind: AuxDiagKind,
 };
 
+const ExpectedOutputPattern = struct {
+    pattern: []const u8,
+    line_no: usize,
+};
+
+const PruneOutputPattern = struct {
+    pattern: []const u8,
+    line_no: usize,
+};
+
 const CaseExpectations = struct {
     expect_compile_error: bool,
     expected_error_patterns: []ExpectedErrorPattern,
     expected_warning_patterns: []ExpectedWarningPattern,
     expected_aux_patterns: []ExpectedAuxPattern,
+    expected_output_patterns: []ExpectedOutputPattern,
+    prune_output_patterns: []PruneOutputPattern,
 };
 
 const CaseClassification = union(enum) {
@@ -378,10 +394,11 @@ const CaseClassification = union(enum) {
 
 const ParsedDiagDirectives = struct {
     has_error: bool = false,
-    has_output_expectation: bool = false,
     error_patterns: []ExpectedErrorPattern,
     warning_patterns: []ExpectedWarningPattern,
     aux_patterns: []ExpectedAuxPattern,
+    output_patterns: []ExpectedOutputPattern,
+    prune_output_patterns: []PruneOutputPattern,
 };
 
 fn collectRunnableCases(
@@ -427,6 +444,8 @@ fn collectRunnableCases(
             .expected_error_patterns = expectations.expected_error_patterns,
             .expected_warning_patterns = expectations.expected_warning_patterns,
             .expected_aux_patterns = expectations.expected_aux_patterns,
+            .expected_output_patterns = expectations.expected_output_patterns,
+            .prune_output_patterns = expectations.prune_output_patterns,
         });
     }
 
@@ -464,13 +483,14 @@ fn classifyCase(
     if (hasUnsupportedDejagnu(bytes)) return .{ .skip = .unsupported_dejagnu };
 
     const parsed_diag = try parseDiagDirectives(persist_allocator, bytes);
-    if (parsed_diag.has_output_expectation) return .{ .skip = .expected_diagnostics };
 
     return .{ .runnable = .{
         .expect_compile_error = parsed_diag.has_error,
         .expected_error_patterns = parsed_diag.error_patterns,
         .expected_warning_patterns = parsed_diag.warning_patterns,
         .expected_aux_patterns = parsed_diag.aux_patterns,
+        .expected_output_patterns = parsed_diag.output_patterns,
+        .prune_output_patterns = parsed_diag.prune_output_patterns,
     } };
 }
 
@@ -528,6 +548,8 @@ fn parseDiagDirectives(allocator: std.mem.Allocator, text: []const u8) !ParsedDi
     var errors: std.ArrayList(ExpectedErrorPattern) = .empty;
     var warnings: std.ArrayList(ExpectedWarningPattern) = .empty;
     var aux: std.ArrayList(ExpectedAuxPattern) = .empty;
+    var outputs: std.ArrayList(ExpectedOutputPattern) = .empty;
+    var prune_outputs: std.ArrayList(PruneOutputPattern) = .empty;
     errdefer {
         for (errors.items) |item| allocator.free(item.pattern);
         errors.deinit(allocator);
@@ -535,10 +557,13 @@ fn parseDiagDirectives(allocator: std.mem.Allocator, text: []const u8) !ParsedDi
         warnings.deinit(allocator);
         for (aux.items) |item| allocator.free(item.pattern);
         aux.deinit(allocator);
+        for (outputs.items) |item| allocator.free(item.pattern);
+        outputs.deinit(allocator);
+        for (prune_outputs.items) |item| allocator.free(item.pattern);
+        prune_outputs.deinit(allocator);
     }
 
     var has_error = false;
-    var has_output_expectation = false;
 
     var line_no: usize = 1;
     var it = std.mem.splitScalar(u8, text, '\n');
@@ -595,18 +620,33 @@ fn parseDiagDirectives(allocator: std.mem.Allocator, text: []const u8) !ParsedDi
             });
             continue;
         }
-        if (containsNoCase(line, "dg-output") or containsNoCase(line, "dg-prune-output")) {
-            has_output_expectation = true;
+        if (containsNoCase(line, "dg-output")) {
+            const pattern_text = extractDirectivePattern(line, "dg-output") orelse "";
+            const cleaned = try normalizeExpectedPattern(allocator, pattern_text);
+            try outputs.append(allocator, .{
+                .pattern = cleaned,
+                .line_no = line_no,
+            });
+            continue;
+        }
+        if (containsNoCase(line, "dg-prune-output")) {
+            const pattern_text = extractDirectivePattern(line, "dg-prune-output") orelse "";
+            const cleaned = try normalizeExpectedPattern(allocator, pattern_text);
+            try prune_outputs.append(allocator, .{
+                .pattern = cleaned,
+                .line_no = line_no,
+            });
             continue;
         }
     }
 
     return .{
         .has_error = has_error,
-        .has_output_expectation = has_output_expectation,
         .error_patterns = try errors.toOwnedSlice(allocator),
         .warning_patterns = try warnings.toOwnedSlice(allocator),
         .aux_patterns = try aux.toOwnedSlice(allocator),
+        .output_patterns = try outputs.toOwnedSlice(allocator),
+        .prune_output_patterns = try prune_outputs.toOwnedSlice(allocator),
     };
 }
 
@@ -852,6 +892,14 @@ fn countExpectedAuxCases(cases: []const TestCase) usize {
     return count;
 }
 
+fn countExpectedOutputCases(cases: []const TestCase) usize {
+    var count: usize = 0;
+    for (cases) |case| {
+        if (case.expected_output_patterns.len > 0 or case.prune_output_patterns.len > 0) count += 1;
+    }
+    return count;
+}
+
 fn strictLevelLabel(level: StrictLevel) []const u8 {
     return switch (level) {
         .off => "off",
@@ -1082,6 +1130,66 @@ fn matchExpectedAux(
     return true;
 }
 
+fn replaceAllLiteralAlloc(allocator: std.mem.Allocator, haystack: []const u8, needle: []const u8, replacement: []const u8) ![]const u8 {
+    if (needle.len == 0) return try allocator.dupe(u8, haystack);
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    var cursor: usize = 0;
+    while (true) {
+        const idx = std.mem.indexOfPos(u8, haystack, cursor, needle) orelse {
+            try out.appendSlice(allocator, haystack[cursor..]);
+            break;
+        };
+        try out.appendSlice(allocator, haystack[cursor..idx]);
+        try out.appendSlice(allocator, replacement);
+        cursor = idx + needle.len;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn pruneOutputText(allocator: std.mem.Allocator, case: TestCase, source_text: []const u8) ![]const u8 {
+    var current: []const u8 = try allocator.dupe(u8, source_text);
+    for (case.prune_output_patterns) |prune| {
+        if (prune.pattern.len == 0) continue;
+        var literal = prune.pattern;
+        var owned_literal: ?[]const u8 = null;
+        defer if (owned_literal) |value| allocator.free(value);
+        if (patternHasRegexMeta(prune.pattern)) {
+            owned_literal = try stripRegexMeta(allocator, prune.pattern);
+            literal = owned_literal.?;
+        }
+        if (literal.len == 0) continue;
+        const replaced = try replaceAllLiteralAlloc(allocator, current, literal, "");
+        allocator.free(current);
+        current = replaced;
+    }
+    return current;
+}
+
+fn matchExpectedOutput(
+    allocator: std.mem.Allocator,
+    case: TestCase,
+    diag_text: []const u8,
+    log_state: *LogState,
+) !bool {
+    const pruned = try pruneOutputText(allocator, case, diag_text);
+    defer allocator.free(pruned);
+    for (case.expected_output_patterns) |expected| {
+        if (expected.pattern.len == 0) continue;
+        const ok = try matchExpectedPattern(allocator, expected.pattern, pruned);
+        if (!ok) {
+            log_state.stderr(
+                "dg-output mismatch: {s} (directive line {d})\nexpected pattern: {s}\nactual diagnostic(after prune): {s}\n",
+                .{ case.rel_path, expected.line_no, expected.pattern, pruned },
+            );
+            return false;
+        }
+    }
+    return true;
+}
+
 fn joinDiagnosticStreams(allocator: std.mem.Allocator, stderr_text: []const u8, stdout_text: []const u8) ![]const u8 {
     if (stderr_text.len == 0 and stdout_text.len == 0) return try allocator.dupe(u8, "");
     if (stderr_text.len == 0) return try allocator.dupe(u8, stdout_text);
@@ -1102,6 +1210,7 @@ fn processCase(
 ) !bool {
     const check_warnings = options.strict_level == .warning or options.strict_level == .full;
     const check_aux = options.strict_level == .full;
+    const check_output = options.strict_level == .full;
 
     const abs_input_path = try std.fs.path.join(allocator, &.{ root_path, case.input_path });
     defer allocator.free(abs_input_path);
@@ -1152,7 +1261,11 @@ fn processCase(
             if (!case.expect_compile_error) {
                 log_state.stderr("compile failed: {s}\n{s}\n", .{ case.rel_path, short });
             }
-        } else if (!case.expect_compile_error and ((check_warnings and case.expected_warning_patterns.len > 0) or (check_aux and case.expected_aux_patterns.len > 0))) {
+        } else if (!case.expect_compile_error and
+            ((check_warnings and case.expected_warning_patterns.len > 0) or
+                (check_aux and case.expected_aux_patterns.len > 0) or
+                (check_output and (case.expected_output_patterns.len > 0 or case.prune_output_patterns.len > 0))))
+        {
             warning_diag_text = try joinDiagnosticStreams(allocator, compile.stderr, compile.stdout);
         }
     }
@@ -1177,6 +1290,12 @@ fn processCase(
         } else if (case.expected_aux_patterns.len > 0 and options.verbose) {
             log_state.stdout("strict-level not full: skipping dg-message/note/bogus checks for {s}\n", .{case.rel_path});
         }
+        if (check_output and case.expected_output_patterns.len > 0) {
+            const out_ok = try matchExpectedOutput(allocator, case, diag_text, log_state);
+            if (!out_ok) return false;
+        } else if ((case.expected_output_patterns.len > 0 or case.prune_output_patterns.len > 0) and options.verbose) {
+            log_state.stdout("strict-level not full: skipping dg-output/prune-output checks for {s}\n", .{case.rel_path});
+        }
     } else {
         if (diag_text.len > 0) allocator.free(diag_text);
         if (compile_failed) return false;
@@ -1196,6 +1315,16 @@ fn processCase(
             } else if (options.verbose) {
                 log_state.stdout("strict-level not full: skipping dg-message/note/bogus checks for {s}\n", .{case.rel_path});
             }
+        }
+        if (case.expected_output_patterns.len > 0) {
+            if (check_output) {
+                const out_ok = try matchExpectedOutput(allocator, case, warning_diag_text, log_state);
+                if (!out_ok) return false;
+            } else if (options.verbose) {
+                log_state.stdout("strict-level not full: skipping dg-output/prune-output checks for {s}\n", .{case.rel_path});
+            }
+        } else if (case.prune_output_patterns.len > 0 and options.verbose and !check_output) {
+            log_state.stdout("strict-level not full: skipping dg-output/prune-output checks for {s}\n", .{case.rel_path});
         }
     }
 
@@ -1235,6 +1364,7 @@ fn printSummary(
     expected_error_cases: usize,
     expected_warning_cases: usize,
     expected_aux_cases: usize,
+    expected_output_cases: usize,
     options: Options,
     skips: SkipCounts,
 ) void {
@@ -1245,6 +1375,7 @@ fn printSummary(
     log_state.stdout("  runnable with dg-error expectation: {d}\n", .{expected_error_cases});
     log_state.stdout("  runnable with dg-warning expectation: {d}\n", .{expected_warning_cases});
     log_state.stdout("  runnable with dg-message/note/bogus expectation: {d}\n", .{expected_aux_cases});
+    log_state.stdout("  runnable with dg-output/prune-output expectation: {d}\n", .{expected_output_cases});
     log_state.stdout("  skipped: {d}\n", .{skips.totalSkipped()});
     log_state.stdout("    no dg-do: {d}\n", .{skips.no_dg_do});
     log_state.stdout("    dg-do not compile: {d}\n", .{skips.do_not_compile});
