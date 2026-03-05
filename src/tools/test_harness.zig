@@ -46,7 +46,7 @@ pub fn main() !void {
     defer selected_suites.deinit(allocator);
 
     for (available_suites) |suite| {
-        if (!suiteSelected(options.suite_names, suite.name)) continue;
+        if (!suiteSelected(options.suite_names, suite)) continue;
         try selected_suites.append(allocator, suite);
     }
 
@@ -110,6 +110,7 @@ pub fn main() !void {
 const SuiteKind = enum {
     golden,
     nist,
+    gcc_dg,
 };
 
 const Suite = struct {
@@ -118,6 +119,7 @@ const Suite = struct {
     exe_name: []const u8,
     description: []const u8,
     kind: SuiteKind,
+    enabled_by_default: bool,
 };
 
 const Options = struct {
@@ -155,6 +157,7 @@ const suites = [_]Suite{
         .exe_name = exeName("golden_runner"),
         .description = "Golden file tests",
         .kind = .golden,
+        .enabled_by_default = true,
     },
     .{
         .name = "nist",
@@ -162,6 +165,15 @@ const suites = [_]Suite{
         .exe_name = exeName("verify_runner"),
         .description = "NIST F78 verification tests",
         .kind = .nist,
+        .enabled_by_default = true,
+    },
+    .{
+        .name = "gcc-dg",
+        .build_step = "gcc-dg-verify",
+        .exe_name = exeName("gcc_dg_runner"),
+        .description = "GCC gfortran.dg compile-only subset",
+        .kind = .gcc_dg,
+        .enabled_by_default = false,
     },
 };
 
@@ -295,10 +307,10 @@ fn appendSuites(allocator: std.mem.Allocator, list: *std.ArrayList([]const u8), 
     }
 }
 
-fn suiteSelected(requested: []const []const u8, name: []const u8) bool {
-    if (requested.len == 0) return true;
+fn suiteSelected(requested: []const []const u8, suite: Suite) bool {
+    if (requested.len == 0) return suite.enabled_by_default;
     for (requested) |item| {
-        if (std.mem.eql(u8, item, name)) return true;
+        if (std.mem.eql(u8, item, suite.name)) return true;
     }
     return false;
 }

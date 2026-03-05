@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
     const tools_optimize = b.option(
         std.builtin.OptimizeMode,
         "tools_optimize",
-        "Optimization mode for build tools (golden/verify/blas/lapack/test-harness/perf tools)",
+        "Optimization mode for build tools (golden/verify/gcc-dg/blas/lapack/test-harness/perf tools)",
     ) orelse .Debug;
     const run_from_install = b.option(
         bool,
@@ -147,6 +147,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const gcc_dg_runner = b.addExecutable(.{
+        .name = "gcc_dg_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/gcc_dg_runner.zig"),
+            .target = target,
+            .optimize = tools_optimize,
+            .imports = &.{
+                .{ .name = "Col6Forge", .module = mod },
+            },
+        }),
+    });
+
     const blas_runner = b.addExecutable(.{
         .name = "blas_runner",
         .root_module = b.createModule(.{
@@ -214,6 +226,7 @@ pub fn build(b: *std.Build) void {
 
     const install_golden_runner = b.addInstallArtifact(golden_runner, .{});
     const install_verify_runner = b.addInstallArtifact(verify_runner, .{});
+    const install_gcc_dg_runner = b.addInstallArtifact(gcc_dg_runner, .{});
     const install_blas_runner = b.addInstallArtifact(blas_runner, .{});
     const install_lapack_runner = b.addInstallArtifact(lapack_runner, .{});
     const install_test_harness = b.addInstallArtifact(test_harness, .{});
@@ -223,6 +236,7 @@ pub fn build(b: *std.Build) void {
     const tools_step = b.step("tools", "Install all developer runner tools");
     tools_step.dependOn(&install_golden_runner.step);
     tools_step.dependOn(&install_verify_runner.step);
+    tools_step.dependOn(&install_gcc_dg_runner.step);
     tools_step.dependOn(&install_blas_runner.step);
     tools_step.dependOn(&install_lapack_runner.step);
     tools_step.dependOn(&install_test_harness.step);
@@ -312,6 +326,7 @@ pub fn build(b: *std.Build) void {
     const tools_check_step = b.step("tools-check", "Compile developer runner tools without install");
     tools_check_step.dependOn(&golden_runner.step);
     tools_check_step.dependOn(&verify_runner.step);
+    tools_check_step.dependOn(&gcc_dg_runner.step);
     tools_check_step.dependOn(&blas_runner.step);
     tools_check_step.dependOn(&lapack_runner.step);
     tools_check_step.dependOn(&test_harness.step);
@@ -340,6 +355,13 @@ pub fn build(b: *std.Build) void {
     }
     if (b.args) |args| {
         run_verify.addArgs(args);
+    }
+
+    const gcc_dg_verify_step = b.step("gcc-dg-verify", "Run GCC gfortran.dg compile verification tests");
+    const run_gcc_dg_verify = b.addRunArtifact(gcc_dg_runner);
+    gcc_dg_verify_step.dependOn(&run_gcc_dg_verify.step);
+    if (b.args) |args| {
+        run_gcc_dg_verify.addArgs(args);
     }
 
     const blas_verify_step = b.step("blas-verify", "Run BLAS 3.12.0 verification tests");
