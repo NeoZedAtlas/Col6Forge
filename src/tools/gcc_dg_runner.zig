@@ -532,16 +532,11 @@ fn hasAdditionalSources(text: []const u8) bool {
 }
 
 fn hasUnsupportedDejagnu(text: []const u8) bool {
-    return containsNoCase(text, "dg-final") or
-        containsNoCase(text, "dg-optimized") or
-        containsNoCase(text, "dg-lto-do") or
-        containsNoCase(text, "dg-lto-options") or
-        containsNoCase(text, "dg-runtest") or
-        containsNoCase(text, "dg-add-options") or
-        containsNoCase(text, "dg-extra-ld-options") or
-        containsNoCase(text, "dg-finish") or
-        containsNoCase(text, "dg-save-unknown") or
-        containsNoCase(text, "dg-init");
+    // Keep only directives that materially change orchestration beyond this runner's model.
+    // Many dg-* checks (dg-final/dg-optimized/dg-lto-*/dg-add-options/...) are post-pass
+    // or driver-detail assertions and are treated as no-op instead of hard skip.
+    return containsNoCase(text, "dg-runtest") or
+        containsNoCase(text, "dg-extra-ld-options");
 }
 
 fn parseDiagDirectives(allocator: std.mem.Allocator, text: []const u8) !ParsedDiagDirectives {
