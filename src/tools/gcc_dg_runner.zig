@@ -51,9 +51,10 @@ pub fn main() !void {
         log_state.stdout("selected {d} runnable cases from {d} source files\n", .{ cases.len, skips.total_sources });
     }
     const expected_error_cases = countExpectedErrorCases(cases);
+    const expected_warning_cases = countExpectedWarningCases(cases);
 
     if (cases.len == 0) {
-        printSummary(&log_state, cases.len, 0, 0, expected_error_cases, skips);
+        printSummary(&log_state, cases.len, 0, 0, expected_error_cases, expected_warning_cases, options, skips);
         return;
     }
 
@@ -73,7 +74,7 @@ pub fn main() !void {
             _ = progress.completed.fetchAdd(1, .seq_cst);
         }
         const passed = cases.len - failures;
-        printSummary(&log_state, cases.len, passed, failures, expected_error_cases, skips);
+        printSummary(&log_state, cases.len, passed, failures, expected_error_cases, expected_warning_cases, options, skips);
         if (failures > 0) return error.GccDgVerificationFailed;
         return;
     }
@@ -102,7 +103,7 @@ pub fn main() !void {
 
     const failure_count = failures.load(.seq_cst);
     const passed_count = cases.len - failure_count;
-    printSummary(&log_state, cases.len, passed_count, failure_count, expected_error_cases, skips);
+    printSummary(&log_state, cases.len, passed_count, failure_count, expected_error_cases, expected_warning_cases, options, skips);
     if (failure_count > 0) return error.GccDgVerificationFailed;
 }
 
@@ -115,6 +116,7 @@ const Options = struct {
     show_help: bool,
     verbose: bool,
     keep_work: bool,
+    strict_diagnostics: bool,
 };
 
 const ParseArgError = union(enum) {
@@ -138,6 +140,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var show_help = false;
     var verbose = false;
     var keep_work = false;
+    var strict_diagnostics = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -187,6 +190,14 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
             keep_work = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--strict-diagnostics")) {
+            strict_diagnostics = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-strict-diagnostics")) {
+            strict_diagnostics = false;
+            continue;
+        }
         return .{ .failure = .{ .unknown_flag = arg } };
     }
 
@@ -199,6 +210,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
         .show_help = show_help,
         .verbose = verbose,
         .keep_work = keep_work,
+        .strict_diagnostics = strict_diagnostics,
     } };
 }
 
@@ -216,13 +228,15 @@ fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: gcc_dg_runner [--tests-dir <dir>] [--filter <text>] [--timeout <ms>] [--jobs <n>] [--keep-work] [-emit-llvm]
+        \\Usage: gcc_dg_runner [--tests-dir <dir>] [--filter <text>] [--timeout <ms>] [--jobs <n>] [--keep-work] [--strict-diagnostics] [-emit-llvm]
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for GCC gfortran.dg tests (default: tests/gcc-tests/gfortran.dg)
         \\  --filter <text>    Only run tests whose relative path contains this text
         \\  --timeout <ms>     Per-test timeout in milliseconds (default: 120000)
         \\  --jobs <n>, -j <n> Parallel job count (default: min(CPU cores, 4))
         \\  --keep-work        Keep zig-cache/gcc-dg/<case> work directories after each case
+        \\  --strict-diagnostics    Fail on dg-warning mismatch (default: off)
+        \\  --no-strict-diagnostics Disable strict warning matching
         \\  --verbose          Print additional skip/selection context
         \\  -emit-llvm         Emit LLVM IR (default)
         \\  -h, --help         Show this help
@@ -230,6 +244,8 @@ fn printUsage(file: std.fs.File) !void {
         \\Notes:
         \\  - Phase-1 executes `dg-do compile` tests.
         \\  - `dg-error` expectations are checked against failure diagnostics.
+        \\  - `dg-warning` expectations run in non-strict mode by default and
+        \\    are enforced only with --strict-diagnostics.
         \\  - Tests that require unsupported dejagnu diagnostics/target predicates/multi-source
         \\    orchestration are skipped and reported in summary.
         \\
@@ -299,6 +315,7 @@ const TestCase = struct {
     work_name: []const u8,
     expect_compile_error: bool,
     expected_error_patterns: []ExpectedErrorPattern,
+    expected_warning_patterns: []ExpectedWarningPattern,
 };
 
 const ExpectedErrorPattern = struct {
@@ -306,9 +323,15 @@ const ExpectedErrorPattern = struct {
     line_no: usize,
 };
 
+const ExpectedWarningPattern = struct {
+    pattern: []const u8,
+    line_no: usize,
+};
+
 const CaseExpectations = struct {
     expect_compile_error: bool,
     expected_error_patterns: []ExpectedErrorPattern,
+    expected_warning_patterns: []ExpectedWarningPattern,
 };
 
 const CaseClassification = union(enum) {
@@ -318,9 +341,9 @@ const CaseClassification = union(enum) {
 
 const ParsedDiagDirectives = struct {
     has_error: bool = false,
-    has_warning: bool = false,
     has_unsupported: bool = false,
     error_patterns: []ExpectedErrorPattern,
+    warning_patterns: []ExpectedWarningPattern,
 };
 
 fn collectRunnableCases(
@@ -364,6 +387,7 @@ fn collectRunnableCases(
             .work_name = work_name,
             .expect_compile_error = expectations.expect_compile_error,
             .expected_error_patterns = expectations.expected_error_patterns,
+            .expected_warning_patterns = expectations.expected_warning_patterns,
         });
     }
 
@@ -402,11 +426,11 @@ fn classifyCase(
 
     const parsed_diag = try parseDiagDirectives(persist_allocator, bytes);
     if (parsed_diag.has_unsupported) return .{ .skip = .expected_diagnostics };
-    if (parsed_diag.has_warning and !parsed_diag.has_error) return .{ .skip = .expected_diagnostics };
 
     return .{ .runnable = .{
         .expect_compile_error = parsed_diag.has_error,
         .expected_error_patterns = parsed_diag.error_patterns,
+        .expected_warning_patterns = parsed_diag.warning_patterns,
     } };
 }
 
@@ -462,13 +486,15 @@ fn hasUnsupportedDejagnu(text: []const u8) bool {
 
 fn parseDiagDirectives(allocator: std.mem.Allocator, text: []const u8) !ParsedDiagDirectives {
     var errors: std.ArrayList(ExpectedErrorPattern) = .empty;
+    var warnings: std.ArrayList(ExpectedWarningPattern) = .empty;
     errdefer {
         for (errors.items) |item| allocator.free(item.pattern);
         errors.deinit(allocator);
+        for (warnings.items) |item| allocator.free(item.pattern);
+        warnings.deinit(allocator);
     }
 
     var has_error = false;
-    var has_warning = false;
     var has_unsupported = false;
 
     var line_no: usize = 1;
@@ -488,7 +514,12 @@ fn parseDiagDirectives(allocator: std.mem.Allocator, text: []const u8) !ParsedDi
             continue;
         }
         if (containsNoCase(line, "dg-warning")) {
-            has_warning = true;
+            const pattern_text = extractDirectivePattern(line, "dg-warning") orelse "";
+            const cleaned = try normalizeExpectedPattern(allocator, pattern_text);
+            try warnings.append(allocator, .{
+                .pattern = cleaned,
+                .line_no = line_no,
+            });
             continue;
         }
         if (containsNoCase(line, "dg-message") or
@@ -504,9 +535,9 @@ fn parseDiagDirectives(allocator: std.mem.Allocator, text: []const u8) !ParsedDi
 
     return .{
         .has_error = has_error,
-        .has_warning = has_warning,
         .has_unsupported = has_unsupported,
         .error_patterns = try errors.toOwnedSlice(allocator),
+        .warning_patterns = try warnings.toOwnedSlice(allocator),
     };
 }
 
@@ -736,6 +767,14 @@ fn countExpectedErrorCases(cases: []const TestCase) usize {
     return count;
 }
 
+fn countExpectedWarningCases(cases: []const TestCase) usize {
+    var count: usize = 0;
+    for (cases) |case| {
+        if (case.expected_warning_patterns.len > 0) count += 1;
+    }
+    return count;
+}
+
 const ProcessResult = struct {
     stdout: []const u8,
     stderr: []const u8,
@@ -897,6 +936,33 @@ fn matchExpectedErrors(
     return true;
 }
 
+fn matchExpectedWarnings(
+    allocator: std.mem.Allocator,
+    case: TestCase,
+    warning_text: []const u8,
+    log_state: *LogState,
+) !bool {
+    for (case.expected_warning_patterns) |expected| {
+        if (expected.pattern.len == 0) continue;
+        const ok = try matchExpectedPattern(allocator, expected.pattern, warning_text);
+        if (!ok) {
+            log_state.stderr(
+                "dg-warning mismatch: {s} (directive line {d})\nexpected pattern: {s}\nactual diagnostic: {s}\n",
+                .{ case.rel_path, expected.line_no, expected.pattern, warning_text },
+            );
+            return false;
+        }
+    }
+    return true;
+}
+
+fn joinDiagnosticStreams(allocator: std.mem.Allocator, stderr_text: []const u8, stdout_text: []const u8) ![]const u8 {
+    if (stderr_text.len == 0 and stdout_text.len == 0) return try allocator.dupe(u8, "");
+    if (stderr_text.len == 0) return try allocator.dupe(u8, stdout_text);
+    if (stdout_text.len == 0) return try allocator.dupe(u8, stderr_text);
+    return std.fmt.allocPrint(allocator, "{s}\n{s}", .{ stderr_text, stdout_text });
+}
+
 fn cleanupWorkDir(path: []const u8) void {
     std.fs.cwd().deleteTree(path) catch {};
 }
@@ -926,6 +992,7 @@ fn processCase(
 
     var compile_failed = false;
     var diag_text: []const u8 = "";
+    var warning_diag_text: []const u8 = "";
 
     emitPipelineToFile(allocator, abs_input_path, options.emit, ll_path) catch |err| {
         compile_failed = true;
@@ -956,6 +1023,8 @@ fn processCase(
             if (!case.expect_compile_error) {
                 log_state.stderr("compile failed: {s}\n{s}\n", .{ case.rel_path, short });
             }
+        } else if (!case.expect_compile_error and case.expected_warning_patterns.len > 0 and options.strict_diagnostics) {
+            warning_diag_text = try joinDiagnosticStreams(allocator, compile.stderr, compile.stdout);
         }
     }
 
@@ -970,6 +1039,15 @@ fn processCase(
     } else {
         if (diag_text.len > 0) allocator.free(diag_text);
         if (compile_failed) return false;
+        defer if (warning_diag_text.len > 0) allocator.free(warning_diag_text);
+        if (case.expected_warning_patterns.len > 0) {
+            if (options.strict_diagnostics) {
+                const warnings_ok = try matchExpectedWarnings(allocator, case, warning_diag_text, log_state);
+                if (!warnings_ok) return false;
+            } else if (options.verbose) {
+                log_state.stdout("non-strict diagnostics: skipping dg-warning check for {s}\n", .{case.rel_path});
+            }
+        }
     }
 
     if (!options.keep_work) {
@@ -1006,12 +1084,16 @@ fn printSummary(
     passed: usize,
     failed: usize,
     expected_error_cases: usize,
+    expected_warning_cases: usize,
+    options: Options,
     skips: SkipCounts,
 ) void {
     log_state.stdout("gcc-dg compile summary\n", .{});
     log_state.stdout("  scanned fortran sources: {d}\n", .{skips.total_sources});
     log_state.stdout("  runnable: {d}, passed: {d}, failed: {d}\n", .{ runnable, passed, failed });
+    log_state.stdout("  strict diagnostics mode: {s}\n", .{if (options.strict_diagnostics) "on" else "off"});
     log_state.stdout("  runnable with dg-error expectation: {d}\n", .{expected_error_cases});
+    log_state.stdout("  runnable with dg-warning expectation: {d}\n", .{expected_warning_cases});
     log_state.stdout("  skipped: {d}\n", .{skips.totalSkipped()});
     log_state.stdout("    no dg-do: {d}\n", .{skips.no_dg_do});
     log_state.stdout("    dg-do not compile: {d}\n", .{skips.do_not_compile});

@@ -133,6 +133,7 @@ const Options = struct {
     list_suites: bool,
     show_help: bool,
     verbose: bool,
+    strict_diagnostics: bool,
     timeout: TimeoutConfig,
     jobs: usize,
 };
@@ -194,6 +195,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParseArgsO
     var list_suites = false;
     var show_help = false;
     var verbose = false;
+    var strict_diagnostics = false;
     var jobs = defaultJobs();
     const default_timeout = TimeoutConfig{};
     var suite_timeout_ms: u64 = default_timeout.suite_timeout_ms;
@@ -275,6 +277,14 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParseArgsO
             verbose = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--strict-diagnostics")) {
+            strict_diagnostics = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-strict-diagnostics")) {
+            strict_diagnostics = false;
+            continue;
+        }
         return .{ .failure = .{ .unknown_flag = arg } };
     }
 
@@ -291,6 +301,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParseArgsO
         .list_suites = list_suites,
         .show_help = show_help,
         .verbose = verbose,
+        .strict_diagnostics = strict_diagnostics,
         .timeout = .{
             .suite_timeout_ms = suite_timeout_ms,
             .test_timeout_ms = test_timeout_ms,
@@ -357,6 +368,9 @@ fn runSuite(
     }
     if (options.emit_llvm) {
         try argv.append(allocator, "-emit-llvm");
+    }
+    if (suite.kind == .gcc_dg and options.strict_diagnostics) {
+        try argv.append(allocator, "--strict-diagnostics");
     }
     if (options.timeout.test_timeout_ms > 0) {
         timeout_arg = try std.fmt.allocPrint(allocator, "{d}", .{options.timeout.test_timeout_ms});
@@ -470,6 +484,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  --timeout <ms>      Per-test timeout passed to suite runners
         \\  --suite-timeout <ms> Suite timeout for each runner (0 disables, default: 0)
         \\  --verbose           Print command lines and suite names
+        \\  --strict-diagnostics Enable strict dg-warning checks (gcc-dg suite only)
         \\  -h, --help          Show this help
         \\
     );
