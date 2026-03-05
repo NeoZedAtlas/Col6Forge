@@ -275,6 +275,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  - `dg-warning` expectations are enforced in strict-level warning/full.
         \\  - `dg-message`/`dg-note`/`dg-bogus` expectations are enforced in strict-level full.
         \\  - `dg-output`/`dg-prune-output` expectations are enforced in strict-level full.
+        \\  - Tests with unsupported `dg-options` language/runtime switches are skipped.
         \\  - Tests that require unsupported dejagnu diagnostics/target predicates/multi-source
         \\    orchestration are skipped and reported in summary.
         \\
@@ -298,6 +299,7 @@ const SkipReason = enum {
     expected_diagnostics,
     target_predicate,
     additional_sources,
+    unsupported_dg_options,
     unsupported_dejagnu,
     preprocessed_source,
 };
@@ -310,6 +312,7 @@ const SkipCounts = struct {
     expected_diagnostics: usize = 0,
     target_predicate: usize = 0,
     additional_sources: usize = 0,
+    unsupported_dg_options: usize = 0,
     unsupported_dejagnu: usize = 0,
     preprocessed_source: usize = 0,
 
@@ -321,6 +324,7 @@ const SkipCounts = struct {
             .expected_diagnostics => self.expected_diagnostics += 1,
             .target_predicate => self.target_predicate += 1,
             .additional_sources => self.additional_sources += 1,
+            .unsupported_dg_options => self.unsupported_dg_options += 1,
             .unsupported_dejagnu => self.unsupported_dejagnu += 1,
             .preprocessed_source => self.preprocessed_source += 1,
         }
@@ -333,6 +337,7 @@ const SkipCounts = struct {
             self.expected_diagnostics +
             self.target_predicate +
             self.additional_sources +
+            self.unsupported_dg_options +
             self.unsupported_dejagnu +
             self.preprocessed_source;
     }
@@ -488,6 +493,7 @@ fn classifyCase(
     if (dgDoHasTargetGuard(bytes)) return .{ .skip = .dg_do_target_guarded };
     if (hasTargetPredicates(bytes)) return .{ .skip = .target_predicate };
     if (hasAdditionalSources(bytes)) return .{ .skip = .additional_sources };
+    if (hasUnsupportedDgOptions(bytes)) return .{ .skip = .unsupported_dg_options };
     if (hasUnsupportedDejagnu(bytes)) return .{ .skip = .unsupported_dejagnu };
 
     const parsed_diag = try parseDiagDirectives(persist_allocator, bytes);
@@ -561,10 +567,17 @@ fn extractTargetExpr(line: []const u8) ?[]const u8 {
 
 fn isUniversalTargetExpr(expr: []const u8) bool {
     var buf: [64]u8 = undefined;
-    if (expr.len > buf.len) return false;
     var n: usize = 0;
-    for (expr) |ch| {
-        if (ch == ' ' or ch == '\t') continue;
+    var i: usize = 0;
+    while (i < expr.len) : (i += 1) {
+        const ch = expr[i];
+        if (ch == ' ' or ch == '\t' or ch == '"' or ch == '\'') continue;
+        if (ch == '\\' and i + 1 < expr.len) {
+            const next = expr[i + 1];
+            if (next == '*' or next == '-') continue;
+        }
+        if (ch == '{' or ch == '}') continue;
+        if (n >= buf.len) return false;
         buf[n] = ch;
         n += 1;
     }
@@ -588,6 +601,38 @@ fn hasUnsupportedDejagnu(text: []const u8) bool {
     // or driver-detail assertions and are treated as no-op instead of hard skip.
     return containsNoCase(text, "dg-runtest") or
         containsNoCase(text, "dg-extra-ld-options");
+}
+
+fn hasUnsupportedDgOptions(text: []const u8) bool {
+    if (containsNoCase(text, "dg-add-options")) return true;
+
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |raw_line| {
+        const line = trimCr(raw_line);
+        if (!containsNoCase(line, "dg-options") and !containsNoCase(line, "dg-additional-options")) continue;
+
+        if (containsNoCase(line, "dg-options")) {
+            const payload = extractDirectivePattern(line, "dg-options") orelse return true;
+            if (optionsTextHasUnsupportedFlags(payload)) return true;
+        }
+        if (containsNoCase(line, "dg-additional-options")) {
+            const payload = extractDirectivePattern(line, "dg-additional-options") orelse return true;
+            if (optionsTextHasUnsupportedFlags(payload)) return true;
+        }
+    }
+    return false;
+}
+
+fn optionsTextHasUnsupportedFlags(text: []const u8) bool {
+    return containsNoCase(text, "-std=") or
+        containsNoCase(text, "-fopenmp") or
+        containsNoCase(text, "-fopenacc") or
+        containsNoCase(text, "-fcoarray") or
+        containsNoCase(text, "-cpp") or
+        containsNoCase(text, "-nocpp") or
+        containsNoCase(text, "-ffixed-form") or
+        containsNoCase(text, "-ffree-form") or
+        containsNoCase(text, "-fdec");
 }
 
 fn parseDiagDirectives(allocator: std.mem.Allocator, text: []const u8) !ParsedDiagDirectives {
@@ -1462,6 +1507,7 @@ fn printSummary(
     log_state.stdout("    expected diagnostics: {d}\n", .{skips.expected_diagnostics});
     log_state.stdout("    target predicates: {d}\n", .{skips.target_predicate});
     log_state.stdout("    additional sources/modules: {d}\n", .{skips.additional_sources});
+    log_state.stdout("    unsupported dg-options: {d}\n", .{skips.unsupported_dg_options});
     log_state.stdout("    unsupported dejagnu directives: {d}\n", .{skips.unsupported_dejagnu});
     log_state.stdout("    preprocessed source (.F*): {d}\n", .{skips.preprocessed_source});
 }
