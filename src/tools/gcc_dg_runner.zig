@@ -2,7 +2,8 @@
 //!
 //! Phase-1 scope:
 //! - run only `dg-do compile` tests
-//! - skip target-guarded / diagnostic-expectation / multi-source tests
+//! - support `dg-error` compile-failure expectations
+//! - skip target-guarded / unsupported dejagnu / multi-source tests
 //! - compile translated LLVM IR with `zig cc -c`
 const std = @import("std");
 const Col6Forge = @import("Col6Forge");
@@ -49,9 +50,10 @@ pub fn main() !void {
     if (options.verbose) {
         log_state.stdout("selected {d} runnable cases from {d} source files\n", .{ cases.len, skips.total_sources });
     }
+    const expected_error_cases = countExpectedErrorCases(cases);
 
     if (cases.len == 0) {
-        printSummary(&log_state, cases.len, 0, 0, skips);
+        printSummary(&log_state, cases.len, 0, 0, expected_error_cases, skips);
         return;
     }
 
@@ -71,7 +73,7 @@ pub fn main() !void {
             _ = progress.completed.fetchAdd(1, .seq_cst);
         }
         const passed = cases.len - failures;
-        printSummary(&log_state, cases.len, passed, failures, skips);
+        printSummary(&log_state, cases.len, passed, failures, expected_error_cases, skips);
         if (failures > 0) return error.GccDgVerificationFailed;
         return;
     }
@@ -100,7 +102,7 @@ pub fn main() !void {
 
     const failure_count = failures.load(.seq_cst);
     const passed_count = cases.len - failure_count;
-    printSummary(&log_state, cases.len, passed_count, failure_count, skips);
+    printSummary(&log_state, cases.len, passed_count, failure_count, expected_error_cases, skips);
     if (failure_count > 0) return error.GccDgVerificationFailed;
 }
 
@@ -226,8 +228,9 @@ fn printUsage(file: std.fs.File) !void {
         \\  -h, --help         Show this help
         \\
         \\Notes:
-        \\  - Phase-1 only executes `dg-do compile` tests.
-        \\  - Tests that require dejagnu diagnostics/target predicates/multi-source
+        \\  - Phase-1 executes `dg-do compile` tests.
+        \\  - `dg-error` expectations are checked against failure diagnostics.
+        \\  - Tests that require unsupported dejagnu diagnostics/target predicates/multi-source
         \\    orchestration are skipped and reported in summary.
         \\
     );
@@ -294,6 +297,30 @@ const TestCase = struct {
     input_path: []const u8,
     rel_path: []const u8,
     work_name: []const u8,
+    expect_compile_error: bool,
+    expected_error_patterns: []ExpectedErrorPattern,
+};
+
+const ExpectedErrorPattern = struct {
+    pattern: []const u8,
+    line_no: usize,
+};
+
+const CaseExpectations = struct {
+    expect_compile_error: bool,
+    expected_error_patterns: []ExpectedErrorPattern,
+};
+
+const CaseClassification = union(enum) {
+    runnable: CaseExpectations,
+    skip: SkipReason,
+};
+
+const ParsedDiagDirectives = struct {
+    has_error: bool = false,
+    has_warning: bool = false,
+    has_unsupported: bool = false,
+    error_patterns: []ExpectedErrorPattern,
 };
 
 fn collectRunnableCases(
@@ -319,11 +346,14 @@ fn collectRunnableCases(
 
         skips.total_sources += 1;
 
-        const reason = try classifyCase(temp_allocator, tests_dir, entry.path);
-        if (reason) |skip_reason| {
-            skips.add(skip_reason);
-            continue;
-        }
+        const classification = try classifyCase(persist_allocator, temp_allocator, tests_dir, entry.path);
+        const expectations = switch (classification) {
+            .skip => |skip_reason| {
+                skips.add(skip_reason);
+                continue;
+            },
+            .runnable => |value| value,
+        };
 
         const input_path = try std.fs.path.join(persist_allocator, &.{ tests_dir, entry.path });
         const rel_path = try persist_allocator.dupe(u8, entry.path);
@@ -332,6 +362,8 @@ fn collectRunnableCases(
             .input_path = input_path,
             .rel_path = rel_path,
             .work_name = work_name,
+            .expect_compile_error = expectations.expect_compile_error,
+            .expected_error_patterns = expectations.expected_error_patterns,
         });
     }
 
@@ -344,32 +376,38 @@ fn testCaseLessThan(_: void, a: TestCase, b: TestCase) bool {
 }
 
 fn classifyCase(
-    allocator: std.mem.Allocator,
+    persist_allocator: std.mem.Allocator,
+    temp_allocator: std.mem.Allocator,
     tests_dir: []const u8,
     rel_path: []const u8,
-) !?SkipReason {
-    if (isPreprocessedFortran(rel_path)) return .preprocessed_source;
+) !CaseClassification {
+    if (isPreprocessedFortran(rel_path)) return .{ .skip = .preprocessed_source };
 
-    const input_path = try std.fs.path.join(allocator, &.{ tests_dir, rel_path });
-    defer allocator.free(input_path);
+    const input_path = try std.fs.path.join(temp_allocator, &.{ tests_dir, rel_path });
+    defer temp_allocator.free(input_path);
 
-    const bytes = std.fs.cwd().readFileAlloc(allocator, input_path, 8 * 1024 * 1024) catch |err| switch (err) {
-        error.FileTooBig => return .unsupported_dejagnu,
+    const bytes = std.fs.cwd().readFileAlloc(temp_allocator, input_path, 8 * 1024 * 1024) catch |err| switch (err) {
+        error.FileTooBig => return .{ .skip = .unsupported_dejagnu },
         else => return err,
     };
-    defer allocator.free(bytes);
+    defer temp_allocator.free(bytes);
 
     const dg_do = parseDgDoKind(bytes);
-    if (dg_do == .none) return .no_dg_do;
-    if (dg_do != .compile) return .do_not_compile;
-    if (dgDoHasTargetGuard(bytes)) return .dg_do_target_guarded;
+    if (dg_do == .none) return .{ .skip = .no_dg_do };
+    if (dg_do != .compile) return .{ .skip = .do_not_compile };
+    if (dgDoHasTargetGuard(bytes)) return .{ .skip = .dg_do_target_guarded };
+    if (hasTargetPredicates(bytes)) return .{ .skip = .target_predicate };
+    if (hasAdditionalSources(bytes)) return .{ .skip = .additional_sources };
+    if (hasUnsupportedDejagnu(bytes)) return .{ .skip = .unsupported_dejagnu };
 
-    if (hasExpectedDiagnostics(bytes)) return .expected_diagnostics;
-    if (hasTargetPredicates(bytes)) return .target_predicate;
-    if (hasAdditionalSources(bytes)) return .additional_sources;
-    if (hasUnsupportedDejagnu(bytes)) return .unsupported_dejagnu;
+    const parsed_diag = try parseDiagDirectives(persist_allocator, bytes);
+    if (parsed_diag.has_unsupported) return .{ .skip = .expected_diagnostics };
+    if (parsed_diag.has_warning and !parsed_diag.has_error) return .{ .skip = .expected_diagnostics };
 
-    return null;
+    return .{ .runnable = .{
+        .expect_compile_error = parsed_diag.has_error,
+        .expected_error_patterns = parsed_diag.error_patterns,
+    } };
 }
 
 fn parseDgDoKind(text: []const u8) DgDoKind {
@@ -398,16 +436,6 @@ fn dgDoHasTargetGuard(text: []const u8) bool {
     return false;
 }
 
-fn hasExpectedDiagnostics(text: []const u8) bool {
-    return containsNoCase(text, "dg-error") or
-        containsNoCase(text, "dg-warning") or
-        containsNoCase(text, "dg-message") or
-        containsNoCase(text, "dg-note") or
-        containsNoCase(text, "dg-bogus") or
-        containsNoCase(text, "dg-output") or
-        containsNoCase(text, "dg-prune-output");
-}
-
 fn hasTargetPredicates(text: []const u8) bool {
     return containsNoCase(text, "dg-skip-if") or
         containsNoCase(text, "dg-require-effective-target") or
@@ -430,6 +458,102 @@ fn hasUnsupportedDejagnu(text: []const u8) bool {
         containsNoCase(text, "dg-finish") or
         containsNoCase(text, "dg-save-unknown") or
         containsNoCase(text, "dg-init");
+}
+
+fn parseDiagDirectives(allocator: std.mem.Allocator, text: []const u8) !ParsedDiagDirectives {
+    var errors: std.ArrayList(ExpectedErrorPattern) = .empty;
+    errdefer {
+        for (errors.items) |item| allocator.free(item.pattern);
+        errors.deinit(allocator);
+    }
+
+    var has_error = false;
+    var has_warning = false;
+    var has_unsupported = false;
+
+    var line_no: usize = 1;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |raw_line| : (line_no += 1) {
+        const line = trimCr(raw_line);
+        if (!containsNoCase(line, "dg-")) continue;
+
+        if (containsNoCase(line, "dg-error")) {
+            has_error = true;
+            const pattern_text = extractDirectivePattern(line, "dg-error") orelse "";
+            const cleaned = try normalizeExpectedPattern(allocator, pattern_text);
+            try errors.append(allocator, .{
+                .pattern = cleaned,
+                .line_no = line_no,
+            });
+            continue;
+        }
+        if (containsNoCase(line, "dg-warning")) {
+            has_warning = true;
+            continue;
+        }
+        if (containsNoCase(line, "dg-message") or
+            containsNoCase(line, "dg-note") or
+            containsNoCase(line, "dg-bogus") or
+            containsNoCase(line, "dg-output") or
+            containsNoCase(line, "dg-prune-output"))
+        {
+            has_unsupported = true;
+            continue;
+        }
+    }
+
+    return .{
+        .has_error = has_error,
+        .has_warning = has_warning,
+        .has_unsupported = has_unsupported,
+        .error_patterns = try errors.toOwnedSlice(allocator),
+    };
+}
+
+fn extractDirectivePattern(line: []const u8, directive: []const u8) ?[]const u8 {
+    const idx = indexOfNoCase(line, directive) orelse return null;
+    var i = idx + directive.len;
+    while (i < line.len and line[i] != '"') : (i += 1) {}
+    if (i >= line.len) return null;
+    i += 1;
+    const start = i;
+    while (i < line.len) : (i += 1) {
+        if (line[i] == '\\') {
+            if (i + 1 < line.len) i += 1;
+            continue;
+        }
+        if (line[i] == '"') return line[start..i];
+    }
+    return null;
+}
+
+fn normalizeExpectedPattern(allocator: std.mem.Allocator, pattern: []const u8) ![]const u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, pattern.len);
+    errdefer out.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < pattern.len) : (i += 1) {
+        const ch = pattern[i];
+        if (ch == '\\' and i + 1 < pattern.len) {
+            const next = pattern[i + 1];
+            switch (next) {
+                '\\', '"' => {
+                    try out.append(allocator, next);
+                    i += 1;
+                    continue;
+                },
+                else => {},
+            }
+        }
+        try out.append(allocator, ch);
+    }
+
+    const owned = try out.toOwnedSlice(allocator);
+    const trimmed = std.mem.trim(u8, owned, " \t");
+    if (trimmed.ptr == owned.ptr and trimmed.len == owned.len) return owned;
+    const result = try allocator.dupe(u8, trimmed);
+    allocator.free(owned);
+    return result;
 }
 
 fn trimCr(line: []const u8) []const u8 {
@@ -459,6 +583,103 @@ fn eqlNoCase(a: []const u8, b: []const u8) bool {
         if (std.ascii.toLower(a[i]) != std.ascii.toLower(b[i])) return false;
     }
     return true;
+}
+
+fn normalizeForMatch(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var prev_space = true;
+    for (text) |ch_raw| {
+        const ch = std.ascii.toLower(ch_raw);
+        const is_space = ch == ' ' or ch == '\t' or ch == '\r' or ch == '\n';
+        if (is_space) {
+            if (!prev_space) {
+                try out.append(allocator, ' ');
+                prev_space = true;
+            }
+            continue;
+        }
+        try out.append(allocator, ch);
+        prev_space = false;
+    }
+    const owned = try out.toOwnedSlice(allocator);
+    const trimmed = std.mem.trim(u8, owned, " ");
+    if (trimmed.ptr == owned.ptr and trimmed.len == owned.len) return owned;
+    const result = try allocator.dupe(u8, trimmed);
+    allocator.free(owned);
+    return result;
+}
+
+fn patternHasRegexMeta(pattern: []const u8) bool {
+    for (pattern) |ch| {
+        switch (ch) {
+            '.', '^', '$', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '\\' => return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn orderedTokensMatch(allocator: std.mem.Allocator, actual: []const u8, pattern: []const u8) !bool {
+    var tokens: std.ArrayList([]const u8) = .empty;
+    defer tokens.deinit(allocator);
+    var i: usize = 0;
+    while (i < pattern.len) : (i += 1) {
+        if (!(std.ascii.isAlphabetic(pattern[i]) or std.ascii.isDigit(pattern[i]) or pattern[i] == '_')) continue;
+        const start = i;
+        i += 1;
+        while (i < pattern.len and (std.ascii.isAlphabetic(pattern[i]) or std.ascii.isDigit(pattern[i]) or pattern[i] == '_')) : (i += 1) {}
+        const token = pattern[start..i];
+        if (token.len >= 3) try tokens.append(allocator, token);
+        if (i == 0) break;
+        i -= 1;
+    }
+
+    if (tokens.items.len == 0) {
+        const bare = try stripRegexMeta(allocator, pattern);
+        defer allocator.free(bare);
+        if (bare.len == 0) return true;
+        return std.mem.indexOf(u8, actual, bare) != null;
+    }
+
+    var cursor: usize = 0;
+    for (tokens.items) |token| {
+        const found = std.mem.indexOfPos(u8, actual, cursor, token) orelse return false;
+        cursor = found + token.len;
+    }
+    return true;
+}
+
+fn stripRegexMeta(allocator: std.mem.Allocator, pattern: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (pattern) |ch| {
+        switch (ch) {
+            '.', '^', '$', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '\\' => {},
+            else => try out.append(allocator, ch),
+        }
+    }
+    const owned = try out.toOwnedSlice(allocator);
+    const trimmed = std.mem.trim(u8, owned, " ");
+    if (trimmed.ptr == owned.ptr and trimmed.len == owned.len) return owned;
+    const result = try allocator.dupe(u8, trimmed);
+    allocator.free(owned);
+    return result;
+}
+
+fn matchExpectedPattern(allocator: std.mem.Allocator, pattern: []const u8, actual: []const u8) !bool {
+    if (pattern.len == 0) return true;
+    const pattern_norm = try normalizeForMatch(allocator, pattern);
+    defer allocator.free(pattern_norm);
+    if (pattern_norm.len == 0) return true;
+
+    const actual_norm = try normalizeForMatch(allocator, actual);
+    defer allocator.free(actual_norm);
+
+    if (!patternHasRegexMeta(pattern_norm)) {
+        return std.mem.indexOf(u8, actual_norm, pattern_norm) != null;
+    }
+    return orderedTokensMatch(allocator, actual_norm, pattern_norm);
 }
 
 fn isFortranSource(path: []const u8) bool {
@@ -505,6 +726,14 @@ fn makeWorkName(allocator: std.mem.Allocator, rel_path: []const u8) ![]const u8 
     hasher.update(rel_path);
     const digest = hasher.final();
     return std.fmt.allocPrint(allocator, "{x:0>16}", .{digest});
+}
+
+fn countExpectedErrorCases(cases: []const TestCase) usize {
+    var count: usize = 0;
+    for (cases) |case| {
+        if (case.expect_compile_error) count += 1;
+    }
+    return count;
 }
 
 const ProcessResult = struct {
@@ -617,14 +846,55 @@ fn emitPipelineToFile(
     try out_writer.interface.flush();
 }
 
-fn reportPipelineError(log_state: *LogState, input_path: []const u8, err: anyerror) !void {
-    var stderr = std.fs.File.stderr();
-    var buffer: [4096]u8 = undefined;
-    var writer = stderr.writer(&buffer);
-    log_state.lock();
-    defer log_state.unlock();
-    try Col6Forge.writePipelineErrorDiagnostic(&writer.interface, input_path, err);
-    try writer.interface.flush();
+fn formatPipelineFailureText(
+    allocator: std.mem.Allocator,
+    log_state: *LogState,
+    input_path: []const u8,
+    err: anyerror,
+    log_output: bool,
+) ![]const u8 {
+    if (Col6Forge.takeLastPipelineDiagnostic()) |d| {
+        if (log_output) {
+            log_state.stderr("{s}:{d}:{d}: error[{s}]: {s}\n", .{ d.file_path, d.line, d.column, d.code, d.message });
+            if (d.code.len > 0) {
+                log_state.stderr("help: see docs/errors.md#{s}\n", .{d.code});
+            }
+            if (d.line_text.len > 0) {
+                log_state.stderr("{s}\n", .{d.line_text});
+                const caret_col = if (d.column == 0) 1 else d.column;
+                var i: usize = 1;
+                while (i < caret_col) : (i += 1) {
+                    log_state.stderr(" ", .{});
+                }
+                log_state.stderr("^\n", .{});
+            }
+        }
+        return std.fmt.allocPrint(allocator, "{s}", .{d.message});
+    }
+
+    const fallback = try std.fmt.allocPrint(allocator, "pipeline error: {s}", .{@errorName(err)});
+    if (log_output) log_state.stderr("{s}:1:1: error[CF0000]: {s}\n", .{ input_path, fallback });
+    return fallback;
+}
+
+fn matchExpectedErrors(
+    allocator: std.mem.Allocator,
+    case: TestCase,
+    diag_text: []const u8,
+    log_state: *LogState,
+) !bool {
+    for (case.expected_error_patterns) |expected| {
+        if (expected.pattern.len == 0) continue;
+        const ok = try matchExpectedPattern(allocator, expected.pattern, diag_text);
+        if (!ok) {
+            log_state.stderr(
+                "dg-error mismatch: {s} (directive line {d})\nexpected pattern: {s}\nactual diagnostic: {s}\n",
+                .{ case.rel_path, expected.line_no, expected.pattern, diag_text },
+            );
+            return false;
+        }
+    }
+    return true;
 }
 
 fn cleanupWorkDir(path: []const u8) void {
@@ -654,31 +924,52 @@ fn processCase(
     const obj_path = try std.fs.path.join(allocator, &.{ work_dir, "translated.o" });
     defer allocator.free(obj_path);
 
+    var compile_failed = false;
+    var diag_text: []const u8 = "";
+
     emitPipelineToFile(allocator, abs_input_path, options.emit, ll_path) catch |err| {
-        try reportPipelineError(log_state, abs_input_path, err);
-        return false;
+        compile_failed = true;
+        diag_text = try formatPipelineFailureText(allocator, log_state, abs_input_path, err, !case.expect_compile_error);
     };
 
-    const compile = runProcessCapture(
-        allocator,
-        &.{ "zig", "cc", "-O0", "-c", "-o", obj_path, ll_path },
-        work_dir,
-        options.timeout_ms,
-    ) catch |err| {
-        log_state.stderr("zig cc failed: {s} ({s})\n", .{ case.rel_path, @errorName(err) });
-        return false;
-    };
-    defer compile.deinit(allocator);
+    if (!compile_failed) {
+        const compile = runProcessCapture(
+            allocator,
+            &.{ "zig", "cc", "-O0", "-c", "-o", obj_path, ll_path },
+            work_dir,
+            options.timeout_ms,
+        ) catch |err| {
+            log_state.stderr("zig cc failed: {s} ({s})\n", .{ case.rel_path, @errorName(err) });
+            return false;
+        };
+        defer compile.deinit(allocator);
 
-    if (compile.timed_out) {
-        log_state.stderr("timeout: {s}\n", .{case.rel_path});
-        return false;
+        if (compile.timed_out) {
+            log_state.stderr("timeout: {s}\n", .{case.rel_path});
+            return false;
+        }
+        if (!isZeroExit(compile.term)) {
+            compile_failed = true;
+            const err_text = if (compile.stderr.len > 0) compile.stderr else compile.stdout;
+            const short = if (err_text.len > 16 * 1024) err_text[0 .. 16 * 1024] else err_text;
+            diag_text = try allocator.dupe(u8, short);
+            if (!case.expect_compile_error) {
+                log_state.stderr("compile failed: {s}\n{s}\n", .{ case.rel_path, short });
+            }
+        }
     }
-    if (!isZeroExit(compile.term)) {
-        const err_text = if (compile.stderr.len > 0) compile.stderr else compile.stdout;
-        const short = if (err_text.len > 16 * 1024) err_text[0 .. 16 * 1024] else err_text;
-        log_state.stderr("compile failed: {s}\n{s}\n", .{ case.rel_path, short });
-        return false;
+
+    if (case.expect_compile_error) {
+        defer if (diag_text.len > 0) allocator.free(diag_text);
+        if (!compile_failed) {
+            log_state.stderr("expected compile failure but succeeded: {s}\n", .{case.rel_path});
+            return false;
+        }
+        const matched = try matchExpectedErrors(allocator, case, diag_text, log_state);
+        if (!matched) return false;
+    } else {
+        if (diag_text.len > 0) allocator.free(diag_text);
+        if (compile_failed) return false;
     }
 
     if (!options.keep_work) {
@@ -709,10 +1000,18 @@ fn runCaseParallel(
     _ = progress.completed.fetchAdd(1, .seq_cst);
 }
 
-fn printSummary(log_state: *LogState, runnable: usize, passed: usize, failed: usize, skips: SkipCounts) void {
+fn printSummary(
+    log_state: *LogState,
+    runnable: usize,
+    passed: usize,
+    failed: usize,
+    expected_error_cases: usize,
+    skips: SkipCounts,
+) void {
     log_state.stdout("gcc-dg compile summary\n", .{});
     log_state.stdout("  scanned fortran sources: {d}\n", .{skips.total_sources});
     log_state.stdout("  runnable: {d}, passed: {d}, failed: {d}\n", .{ runnable, passed, failed });
+    log_state.stdout("  runnable with dg-error expectation: {d}\n", .{expected_error_cases});
     log_state.stdout("  skipped: {d}\n", .{skips.totalSkipped()});
     log_state.stdout("    no dg-do: {d}\n", .{skips.no_dg_do});
     log_state.stdout("    dg-do not compile: {d}\n", .{skips.do_not_compile});
