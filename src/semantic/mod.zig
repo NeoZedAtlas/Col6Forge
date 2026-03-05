@@ -1869,6 +1869,41 @@ test "semantic does not lower conversion when callee name is user EXTERNAL" {
     try testing.expect(std.ascii.eqlIgnoreCase(call_stmt.args[0].expr.call_or_subscript.name, "REAL"));
 }
 
+test "semantic does not lower intrinsic conversion for statement-function REAL" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(3)\n" ++
+        "      REAL(X)=X\n" ++
+        "      CALL T(REAL(A))\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    const stmts = program.units[0].stmts;
+    try testing.expectEqual(@as(usize, 2), stmts.len);
+    try testing.expect(stmts[0].node == .assignment);
+    try testing.expect(stmts[1].node == .call);
+
+    const call_stmt = stmts[1].node.call;
+    try testing.expectEqual(@as(usize, 1), call_stmt.args.len);
+    try testing.expect(call_stmt.args[0] == .expr);
+    try testing.expect(call_stmt.args[0].expr.* == .call_or_subscript);
+    try testing.expect(std.ascii.eqlIgnoreCase(call_stmt.args[0].expr.call_or_subscript.name, "REAL"));
+
+    for (sem.units[0].symbols) |sym| {
+        try testing.expect(!std.mem.startsWith(u8, sym.name, "__cf_conv_arr_"));
+    }
+}
+
 test "semantic promotes LOGICAL IF to block IF when conversion prelude is needed" {
     const testing = std.testing;
     const allocator = testing.allocator;

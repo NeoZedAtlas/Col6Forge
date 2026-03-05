@@ -50,13 +50,18 @@ pub const Resolver = struct {
         }
         try validateAssumedCharacterLengths(ctx);
         try resolve_data.lowerDataStatements(ctx);
-        rewrite_calls.lowerIntrinsicArrayConversions(ctx) catch |err| switch (err) {
-            // Keep only unresolved symbol/subscript ambiguity as non-fatal.
-            // Unsupported array-conversion shapes must fail fast to avoid
-            // silently compiling scalarized intrinsics with wrong semantics.
-            error.InvalidSubscript => {},
-            else => return err,
-        };
+        // First pass resolves statement-level symbol/shape ambiguity (e.g. statement
+        // function disambiguation) before intrinsic-array conversion lowering.
+        for (ctx.unit.stmts) |stmt| {
+            try statements.resolveStmt(ctx, stmt);
+        }
+        // Intrinsic array-conversion lowering is mandatory for currently supported
+        // backend forms. Unsupported shapes must remain fatal here.
+        try rewrite_calls.lowerIntrinsicArrayConversions(ctx);
+
+        // Re-resolve rewritten statements and refresh reference/type caches against
+        // the final lowered AST.
+        clearStmtResolutionCaches(ctx);
         for (ctx.unit.stmts) |stmt| {
             try statements.resolveStmt(ctx, stmt);
         }
@@ -73,6 +78,7 @@ fn unitScopeKind(kind: ast.ProgramUnitKind) scope.ScopeKind {
 fn validateAssumedCharacterLengths(ctx: *context.Context) !void {
     for (ctx.symbols.items) |sym| {
         if (sym.type_kind != .character or sym.char_len != null) continue;
+        if (!isAssumedSizeCharacterDecl(ctx, sym.name)) continue;
         if (sym.storage == .dummy) continue;
         if (sym.kind == .parameter) continue;
         if (sym.kind == .function) continue;
@@ -94,4 +100,25 @@ fn findTypeDeclSource(ctx: *context.Context, target_name: []const u8) ?ast.DeclS
         }
     }
     return null;
+}
+
+fn isAssumedSizeCharacterDecl(ctx: *context.Context, target_name: []const u8) bool {
+    for (ctx.unit.decls) |decl| {
+        if (decl != .type_decl) continue;
+        const type_decl = decl.type_decl;
+        if (type_decl.type_kind != .character) continue;
+        for (type_decl.items) |item| {
+            if (!std.ascii.eqlIgnoreCase(item.name, target_name)) continue;
+            const len_expr = item.char_len orelse continue;
+            if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) return true;
+        }
+    }
+    return false;
+}
+
+fn clearStmtResolutionCaches(ctx: *context.Context) void {
+    ctx.refs.clearRetainingCapacity();
+    ctx.ref_kind_index.clearRetainingCapacity();
+    ctx.ref_symbol_index.clearRetainingCapacity();
+    ctx.expr_type_cache.clearRetainingCapacity();
 }
