@@ -163,7 +163,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             continue;
         }
         if (sym.type_kind == .character) {
-            const char_len = sym.char_len orelse 1;
+            const char_len = try common.requireConstantCharacterLen(sym);
             const alloca_name = try ctx.nextTemp();
             if (sym.dims.len > 0) {
                 const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
@@ -618,7 +618,7 @@ fn installHostAssocGlobals(
         var total_size: usize = 1;
         var alignment: usize = 1;
         if (sym.type_kind == .character) {
-            const char_len = sym.char_len orelse 1;
+            const char_len = try common.requireConstantCharacterLen(sym);
             const elem_count = ctx.arrayElemCountForSymbol(sym) catch continue;
             total_size = elem_count * char_len;
             alignment = 1;
@@ -689,7 +689,7 @@ fn installSavedGlobals(ctx: *Context, builder: anytype, save_info: *const SaveIn
         var total_size: usize = 1;
         var alignment: usize = 1;
         if (sym.type_kind == .character) {
-            const char_len = sym.char_len orelse 1;
+            const char_len = try common.requireConstantCharacterLen(sym);
             const elem_count = try ctx.arrayElemCountForSymbol(sym);
             total_size = elem_count * char_len;
             alignment = 1;
@@ -779,7 +779,7 @@ fn equivalenceItemSize(ctx: *Context, item: *ast.Expr) ?usize {
 
 fn symbolElemSize(sym: sema.Symbol) ?usize {
     if (sym.type_kind == .character) {
-        return sym.char_len orelse 1;
+        return common.constantCharacterLen(sym);
     }
     const ty = llvm_types.typeFromKind(sym.type_kind);
     return sizeAlignForType(ty).size;
@@ -794,7 +794,8 @@ fn symbolTotalSize(ctx: *Context, sym: sema.Symbol) ?usize {
 fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     const sym = ctx.findSymbol(sub.name) orelse return null;
     if (sym.type_kind != .character) return null;
-    const base_len: i64 = @intCast(sym.char_len orelse 1);
+    const base_len_usize = common.constantCharacterLen(sym) orelse return null;
+    const base_len: i64 = @intCast(base_len_usize);
     const start_val = if (sub.start) |start_expr| constIndexValue(start_expr) orelse return null else 1;
     const end_val = if (sub.end) |end_expr| constIndexValue(end_expr) orelse return null else base_len;
     const length = end_val - start_val + 1;

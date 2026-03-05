@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../input.zig");
 const ir = @import("../../../ir.zig");
 const llvm_types = @import("../../types.zig");
+const common = @import("../common.zig");
 const context = @import("../context.zig");
 const utils = @import("../utils.zig");
 
@@ -165,7 +166,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             const ret_ty = llvm_types.typeFromKind(sym.type_kind);
             const is_character_function = sym.kind == .function and sym.type_kind == .character;
             if (is_character_function) {
-                const result_len = sym.char_len orelse 1;
+                const result_len = common.constantCharacterLen(sym) orelse return error.NonConstantCharacterLength;
                 if (sym.storage == .dummy) {
                     const fn_ptr = try ctx.getPointer(call_or_sub.name);
                     return call.emitIndirectCharacterCall(ctx, builder, fn_ptr, result_len, call_or_sub.args);
@@ -287,7 +288,7 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return null;
             if (sym.type_kind != .character) return null;
-            const len = sym.char_len orelse 1;
+            const len = common.constantCharacterLen(sym) orelse return null;
             return len;
         },
         .call_or_subscript => |call_or_sub| {
@@ -295,7 +296,7 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
             if (sym.type_kind != .character) return null;
             if (kind == .subscript or kind == .call) {
-                return sym.char_len orelse 1;
+                return common.constantCharacterLen(sym);
             }
             return null;
         },
@@ -346,7 +347,8 @@ fn emitSubstringPtr(ctx: *Context, builder: anytype, sub: ast.SubstringExpr) !Va
 fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     const sym = ctx.findSymbol(sub.name) orelse return null;
     if (sym.type_kind != .character) return null;
-    const base_len: i64 = @intCast(sym.char_len orelse 1);
+    const base_len_usize = common.constantCharacterLen(sym) orelse return null;
+    const base_len: i64 = @intCast(base_len_usize);
     const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;
     const end_val = if (sub.end) |end_expr| intLiteralValue(end_expr) orelse return null else base_len;
     const length = end_val - start_val + 1;

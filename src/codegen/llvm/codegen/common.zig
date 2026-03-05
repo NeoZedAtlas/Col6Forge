@@ -121,7 +121,10 @@ pub fn buildUnitCommonLayoutsWithOptions(
             const sym = findSymbol(sem, name, &symbol_lookup) orelse return error.UnknownSymbol;
             if (sym.storage != .common) return error.InvalidCommonSymbol;
             const ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
-            const sa = if (sym.type_kind == .character) SizeAlign{ .size = sym.char_len orelse 1, .alignment = 1 } else try sizeAlign(ty);
+            const sa = if (sym.type_kind == .character)
+                SizeAlign{ .size = try requireConstantCharacterLen(sym), .alignment = 1 }
+            else
+                try sizeAlign(ty);
             const elem_count = if (sym.dims.len > 0) try arrayElementCountWithLookup(sem, sym.dims, &symbol_lookup) else 1;
             const elem_size = sa.size;
             const size_mul = @mulWithOverflow(elem_size, elem_count);
@@ -161,6 +164,21 @@ const SizeAlign = struct {
     size: usize,
     alignment: usize,
 };
+
+pub fn constantCharacterLen(sym: input.sema.Symbol) ?usize {
+    if (sym.type_kind != .character) return null;
+    return switch (sym.char_len_kind) {
+        .constant => sym.char_len,
+        // Backward-compat/default CHARACTER semantics:
+        // no explicit LEN means LEN=1 in fixed-form code paths.
+        .none => sym.char_len orelse 1,
+        .assumed, .deferred => null,
+    };
+}
+
+pub fn requireConstantCharacterLen(sym: input.sema.Symbol) !usize {
+    return constantCharacterLen(sym) orelse error.NonConstantCharacterLength;
+}
 
 fn sizeAlign(ty: ir.IRType) !SizeAlign {
     return switch (ty) {

@@ -66,12 +66,12 @@ pub fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return null;
             if (sym.type_kind != .character) return null;
-            return sym.char_len orelse 1;
+            return common.constantCharacterLen(sym);
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return null;
             if (sym.type_kind != .character) return null;
-            return sym.char_len orelse 1;
+            return common.constantCharacterLen(sym);
         },
         .substring => |sub| {
             return substringLen(ctx, sub);
@@ -107,7 +107,7 @@ pub fn internalUnitRecordCount(ctx: *Context, expr_node: *ast.Expr) ?usize {
 fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     const sym = ctx.findSymbol(sub.name) orelse return null;
     if (sym.type_kind != .character) return null;
-    const base_len_usize = sym.char_len orelse 1;
+    const base_len_usize = common.constantCharacterLen(sym) orelse return null;
     if (base_len_usize > @as(usize, @intCast(std.math.maxInt(i64)))) return null;
     const base_len: i64 = @intCast(base_len_usize);
     const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;

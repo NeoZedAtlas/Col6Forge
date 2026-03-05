@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../input.zig");
+const common = @import("../codegen/common.zig");
 const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
 const expr_call = @import("../codegen/expression/call.zig");
@@ -141,7 +142,7 @@ fn emitAllocateSpecFromText(ctx: *Context, builder: anytype, spec: []const u8) E
     // descriptor slots; release previous allocation before replacing the base.
     try freeManagedArrayPointerIfAllocated(ctx, builder, name);
 
-    const elem_size = constI64(ctx, @intCast(elementByteSize(sym)));
+    const elem_size = constI64(ctx, @intCast(try elementByteSize(sym)));
     const total_bytes = try expr.emitMul(ctx, builder, extent_product, elem_size);
     const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &.{.i64}, false);
     const ptr_tmp = try ctx.nextTemp();
@@ -275,7 +276,7 @@ fn topLevelColonIndex(text: []const u8) ?usize {
     return null;
 }
 
-fn elementByteSize(sym: ast.sema.Symbol) usize {
+fn elementByteSize(sym: ast.sema.Symbol) EmitError!usize {
     return switch (sym.type_kind) {
         .integer => 4,
         .real => 4,
@@ -283,7 +284,7 @@ fn elementByteSize(sym: ast.sema.Symbol) usize {
         .complex => 8,
         .complex_double => 16,
         .logical => 4,
-        .character => sym.char_len orelse 1,
+        .character => try common.requireConstantCharacterLen(sym),
     };
 }
 
@@ -769,7 +770,7 @@ pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!v
             const call = init.target.call_or_subscript;
             const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
             if (sym.type_kind == .character) {
-                target_len = sym.char_len orelse 1;
+                target_len = common.constantCharacterLen(sym) orelse return error.NonConstantCharacterLength;
             }
             if (sym.dims.len > 1 and call.args.len == 1) {
                 target_ptr = try expr.emitLinearSubscriptPtr(ctx, builder, call);
@@ -1104,9 +1105,9 @@ fn constI64(ctx: *Context, value: i64) ValueRef {
 }
 
 fn emitCharSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) EmitError!ValueRef {
-    if (sym.char_len) |len| return constI32(ctx, @intCast(len));
+    if (common.constantCharacterLen(sym)) |len| return constI32(ctx, @intCast(len));
     if (ctx.char_arg_lens.get(name)) |len_val| return len_val;
-    return constI32(ctx, 1);
+    return error.NonConstantCharacterLength;
 }
 
 fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
@@ -1114,12 +1115,12 @@ fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return null;
             if (sym.type_kind != .character) return null;
-            return sym.char_len orelse 1;
+            return common.constantCharacterLen(sym);
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return null;
             if (sym.type_kind != .character) return null;
-            return sym.char_len orelse 1;
+            return common.constantCharacterLen(sym);
         },
         .substring => |sub| {
             return substringLen(ctx, sub);
@@ -1145,7 +1146,8 @@ fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
 fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     const sym = ctx.findSymbol(sub.name) orelse return null;
     if (sym.type_kind != .character) return null;
-    const base_len: i64 = @intCast(sym.char_len orelse 1);
+    const base_len_usize = common.constantCharacterLen(sym) orelse return null;
+    const base_len: i64 = @intCast(base_len_usize);
     const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;
     const end_val = if (sub.end) |end_expr| intLiteralValue(end_expr) orelse return null else base_len;
     const length = end_val - start_val + 1;
