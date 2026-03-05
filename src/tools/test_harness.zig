@@ -498,7 +498,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  --suite-timeout <ms> Suite timeout for each runner (0 disables, default: 0)
         \\  --verbose           Print command lines and suite names
         \\  --strict-diagnostics Enable strict dg-warning checks (gcc-dg suite only)
-        \\  --strict-level <off|warning|full> Strict diagnostics level (gcc-dg suite only)
+        \\  --strict-level <off|error|warning|full> Strict diagnostics level (gcc-dg suite only)
         \\  -h, --help          Show this help
         \\
     );
