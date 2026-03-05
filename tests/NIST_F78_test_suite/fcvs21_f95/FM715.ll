@@ -16175,10 +16175,7 @@ define void @cf717_(ptr %arg0, ptr %arg1, i32 %arg2, i32 %arg3) {
 entry:
   br label %bb0
 bb0:
-  %t0 = getelementptr i8, ptr %arg0, i32 0
-  %t1 = getelementptr i8, ptr %arg1, i32 0
-  %t2 = load i8, ptr %t1
-  store i8 %t2, ptr %t0
+  store ptr %arg1, ptr %arg0
   ret void
 exit:
   ret void

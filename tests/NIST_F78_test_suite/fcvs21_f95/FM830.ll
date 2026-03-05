@@ -76,10 +76,10 @@ entry:
   %t28 = alloca i32
   %t29 = alloca float
   %t30 = alloca float
-  %t31 = alloca float
+  %t31 = alloca {float, float}
   %t32 = alloca float
   %t33 = alloca float
-  %t34 = alloca float
+  %t34 = alloca double
   br label %bb0
 bb0:
   %t35 = getelementptr i8, ptr %t5, i32 0

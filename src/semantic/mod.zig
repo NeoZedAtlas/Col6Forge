@@ -43,6 +43,7 @@ test {
     _ = @import("tests/legacy_declaration_parameter_tests.zig");
     _ = @import("tests/legacy_common_equivalence_tests.zig");
     _ = @import("tests/legacy_lowering_and_control_tests.zig");
+    _ = @import("tests/resolve_expr_intrinsic_disambiguation_tests.zig");
     _ = @import("tests/invariants_common_equivalence_tests.zig");
     _ = @import("tests/invariants_implicit_tests.zig");
     _ = @import("tests/invariants_call_arity_tests.zig");

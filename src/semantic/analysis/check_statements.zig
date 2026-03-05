@@ -182,6 +182,17 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
             return .integer;
         },
         .substring => |sub| {
+            const resolved_ty = try resolve_expr.exprType(self, expr);
+            if (resolved_ty != .character) {
+                if (sub.args.len != 0) return error.InvalidSubscript;
+                const start_expr = sub.start orelse return error.InvalidSubscript;
+                const end_expr = sub.end orelse return error.InvalidSubscript;
+                const start_ty = try checkExprType(self, start_expr);
+                if (!isIntegerLike(start_ty)) return error.InvalidSubscript;
+                const end_ty = try checkExprType(self, end_expr);
+                if (!isIntegerLike(end_ty)) return error.InvalidSubscript;
+                return resolved_ty;
+            }
             for (sub.args) |arg| _ = try checkExprType(self, arg);
             if (sub.start) |start| {
                 const start_ty = try checkExprType(self, start);

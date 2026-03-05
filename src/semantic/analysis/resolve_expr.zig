@@ -47,7 +47,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     self.symbols.items[idx] = sym;
                 }
                 if (sym.is_intrinsic) {
-                    sym.type_kind = intrinsicReturnType(call.name, sym.type_kind);
+                    sym.type_kind = try intrinsicReturnType(self, call.name, sym.type_kind, call.args);
                     self.symbols.items[idx] = sym;
                 }
                 if (sym.dims.len > 0) {
@@ -120,16 +120,20 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             const idx = try symbols_mod.ensureSymbol(self, sub.name);
             try self.ref_symbol_index.put(@intFromPtr(expr), idx);
             const sym = self.symbols.items[idx];
-            // Disambiguate `A(1:N)` style array sections from character substring syntax.
-            // If the base symbol is non-character and parser produced a bare substring node,
-            // reinterpret it as a subscript with a single dim-range argument.
-            if (sym.type_kind != .character and sub.args.len == 0 and sub.start != null and sub.end != null) {
-                const dim = try self.arena.create(ast.Expr);
-                dim.* = .{ .dim_range = .{ .lower = sub.start, .upper = sub.end.? } };
-                const args = try self.arena.alloc(*ast.Expr, 1);
-                args[0] = dim;
-                expr.* = .{ .call_or_subscript = .{ .name = sub.name, .args = args } };
-                try resolveExpr(self, expr);
+            // Disambiguate `A(1:N)` style array sections from character substring syntax
+            // without mutating AST node variants in-place.
+            if (isArraySectionSubstring(sym, sub)) {
+                if (sym.dims.len == 0) return error.InvalidSubscript;
+                const start_expr = sub.start orelse return error.InvalidSubscript;
+                const end_expr = sub.end orelse return error.InvalidSubscript;
+                try resolveExpr(self, start_expr);
+                try resolveExpr(self, end_expr);
+                const start_ty = try resolvedExprType(self, start_expr);
+                const end_ty = try resolvedExprType(self, end_expr);
+                if (start_ty != .integer or end_ty != .integer) return error.InvalidSubscript;
+
+                try recordResolvedRef(self, expr, sub.name, .subscript, idx);
+                try cacheExprType(self, expr, sym.type_kind);
                 return;
             }
             for (sub.args) |arg| {
@@ -137,6 +141,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             }
             if (sub.start) |start| try resolveExpr(self, start);
             if (sub.end) |end| try resolveExpr(self, end);
+            try recordResolvedRef(self, expr, sub.name, .call, idx);
             try cacheExprType(self, expr, .character);
         },
         .dim_range => |range| {
@@ -243,7 +248,13 @@ fn exprTypeUncached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.Ty
             return self.symbols.items[idx].type_kind;
         },
         .substring => |sub| {
-            _ = try symbols_mod.ensureSymbol(self, sub.name);
+            if (self.ref_symbol_index.get(@intFromPtr(expr))) |idx| {
+                const sym = self.symbols.items[idx];
+                if (isArraySectionSubstring(sym, sub)) return sym.type_kind;
+            }
+            const idx = try symbols_mod.ensureSymbol(self, sub.name);
+            const sym = self.symbols.items[idx];
+            if (isArraySectionSubstring(sym, sub)) return sym.type_kind;
             return .character;
         },
         .dim_range => return .integer,
@@ -285,6 +296,7 @@ fn exprTypeUncached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.Ty
 }
 
 pub fn promoteNumericType(left: ast.TypeKind, right: ast.TypeKind) ast.TypeKind {
+    if (!isNumericType(left) or !isNumericType(right)) return .integer;
     if (left == .complex_double or right == .complex_double) return .complex_double;
     if (left == .complex or right == .complex) {
         if (left == .double_precision or right == .double_precision) return .complex_double;
@@ -292,8 +304,6 @@ pub fn promoteNumericType(left: ast.TypeKind, right: ast.TypeKind) ast.TypeKind 
     }
     if (left == .double_precision or right == .double_precision) return .double_precision;
     if (left == .real or right == .real) return .real;
-    if (left == .character or right == .character) return .character;
-    if (left == .logical and right == .logical) return .logical;
     return .integer;
 }
 
@@ -429,8 +439,6 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
     .{ "AINT", .real },
     .{ "ANINT", .real },
     .{ "AMOD", .real },
-    .{ "SIGN", .real },
-    .{ "DIM", .real },
     .{ "AMIN0", .real },
     .{ "AMIN1", .real },
     .{ "AMAX0", .real },
@@ -442,29 +450,106 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
     .{ "EXP", .real },
     .{ "ALOG", .real },
     .{ "ALOG10", .real },
-    .{ "LOG", .real },
-    .{ "LOG10", .real },
-    .{ "SIN", .real },
-    .{ "COS", .real },
-    .{ "TAN", .real },
-    .{ "ASIN", .real },
-    .{ "ACOS", .real },
-    .{ "ATAN", .real },
     .{ "ATAN2", .real },
-    .{ "SINH", .real },
-    .{ "COSH", .real },
-    .{ "TANH", .real },
-    .{ "ABS", .real },
-    .{ "SQRT", .real },
 });
 
-fn intrinsicReturnType(name: []const u8, current: ast.TypeKind) ast.TypeKind {
+const IntrinsicSameArgMap = std.StaticStringMap(void).initComptime(.{
+    .{ "SQRT", {} },
+    .{ "EXP", {} },
+    .{ "ALOG", {} },
+    .{ "ALOG10", {} },
+    .{ "LOG", {} },
+    .{ "LOG10", {} },
+    .{ "SIN", {} },
+    .{ "COS", {} },
+    .{ "TAN", {} },
+    .{ "ASIN", {} },
+    .{ "ACOS", {} },
+    .{ "ATAN", {} },
+    .{ "SINH", {} },
+    .{ "COSH", {} },
+    .{ "TANH", {} },
+    .{ "AINT", {} },
+    .{ "ANINT", {} },
+});
+
+const IntrinsicPromoteArgsMap = std.StaticStringMap(void).initComptime(.{
+    .{ "MAX", {} },
+    .{ "MIN", {} },
+    .{ "MOD", {} },
+    .{ "SIGN", {} },
+    .{ "DIM", {} },
+});
+
+fn intrinsicReturnType(
+    self: *context.Context,
+    name: []const u8,
+    current: ast.TypeKind,
+    args: []*ast.Expr,
+) ResolveError!ast.TypeKind {
     var upper_buf: [64]u8 = undefined;
     if (name.len <= upper_buf.len) {
         for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
-        if (IntrinsicReturnTypeMap.get(upper_buf[0..name.len])) |ty| return ty;
+        const upper = upper_buf[0..name.len];
+
+        if (IntrinsicReturnTypeMap.get(upper)) |ty| return ty;
+
+        if (std.mem.eql(u8, upper, "ABS")) {
+            if (args.len == 0) return current;
+            return absReturnType(try exprTypeCached(self, args[0]));
+        }
+
+        if (IntrinsicSameArgMap.has(upper)) {
+            if (args.len == 0) return current;
+            return sameArgReturnType(try exprTypeCached(self, args[0]), current);
+        }
+
+        if (IntrinsicPromoteArgsMap.has(upper)) {
+            return promotedArgsReturnType(self, args, current);
+        }
     }
     return current;
+}
+
+fn absReturnType(arg_ty: ast.TypeKind) ast.TypeKind {
+    return switch (arg_ty) {
+        .integer => .integer,
+        .real => .real,
+        .double_precision => .double_precision,
+        .complex => .real,
+        .complex_double => .double_precision,
+        else => .real,
+    };
+}
+
+fn sameArgReturnType(arg_ty: ast.TypeKind, current: ast.TypeKind) ast.TypeKind {
+    return switch (arg_ty) {
+        .integer => .real,
+        .real => .real,
+        .double_precision => .double_precision,
+        .complex => .complex,
+        .complex_double => .complex_double,
+        else => current,
+    };
+}
+
+fn promotedArgsReturnType(
+    self: *context.Context,
+    args: []*ast.Expr,
+    current: ast.TypeKind,
+) ResolveError!ast.TypeKind {
+    if (args.len == 0) return current;
+    var ty = try exprTypeCached(self, args[0]);
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const next_ty = try exprTypeCached(self, args[i]);
+        ty = promoteNumericType(ty, next_ty);
+    }
+    return ty;
+}
+
+fn isArraySectionSubstring(sym: symbols.Symbol, sub: ast.SubstringExpr) bool {
+    return sym.type_kind != .character and sub.args.len == 0 and sub.start != null and sub.end != null;
 }
 
 fn invalidateExprTypeCache(self: *context.Context, expr: *ast.Expr) void {
