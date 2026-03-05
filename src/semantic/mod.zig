@@ -1810,3 +1810,694 @@ test "semantic reports CF3130 for REAL DO WHILE condition" {
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.eql(u8, diag.code, "CF3130"));
 }
+
+fn expectSemanticErrorInvariant(source: []const u8, expected_err: anyerror, expected_code: []const u8) !void {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(expected_err, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, expected_code));
+}
+
+fn expectSemanticSuccessInvariant(source: []const u8) !void {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+    try testing.expect(takeDiagnostic() == null);
+}
+
+fn expectSymbolTypeInvariant(
+    source: []const u8,
+    unit_name: []const u8,
+    symbol_name: []const u8,
+    expected_type: ast.TypeKind,
+) !void {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found_unit = false;
+    var found_symbol = false;
+    for (sem.units) |unit| {
+        if (!std.ascii.eqlIgnoreCase(unit.name, unit_name)) continue;
+        found_unit = true;
+        for (unit.symbols) |sym| {
+            if (!std.ascii.eqlIgnoreCase(sym.name, symbol_name)) continue;
+            found_symbol = true;
+            try testing.expectEqual(expected_type, sym.type_kind);
+            break;
+        }
+        break;
+    }
+    try testing.expect(found_unit);
+    try testing.expect(found_symbol);
+}
+
+fn expectSymbolCharLenInvariant(
+    source: []const u8,
+    unit_name: []const u8,
+    symbol_name: []const u8,
+    expected_len_kind: symbols.CharacterLengthKind,
+    expected_len: ?usize,
+) !void {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found = false;
+    for (sem.units) |unit| {
+        if (!std.ascii.eqlIgnoreCase(unit.name, unit_name)) continue;
+        for (unit.symbols) |sym| {
+            if (!std.ascii.eqlIgnoreCase(sym.name, symbol_name)) continue;
+            found = true;
+            try std.testing.expectEqual(ast.TypeKind.character, sym.type_kind);
+            try std.testing.expectEqual(expected_len_kind, sym.char_len_kind);
+            try std.testing.expectEqual(expected_len, sym.char_len);
+            break;
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "invariant COMMON/EQUIVALENCE 01 named COMMON identical layout succeeds" {
+    const source =
+        "      SUBROUTINE S1\n" ++
+        "      INTEGER A,B\n" ++
+        "      COMMON /BLK1/ A,B\n" ++
+        "      END\n" ++
+        "      SUBROUTINE S2\n" ++
+        "      INTEGER A,B\n" ++
+        "      COMMON /BLK1/ A,B\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
+test "invariant COMMON/EQUIVALENCE 02 named COMMON equivalent size succeeds" {
+    const source =
+        "      SUBROUTINE S1\n" ++
+        "      INTEGER A(2)\n" ++
+        "      COMMON /BLK2/ A\n" ++
+        "      END\n" ++
+        "      SUBROUTINE S2\n" ++
+        "      INTEGER A,B\n" ++
+        "      COMMON /BLK2/ A,B\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
+test "invariant COMMON/EQUIVALENCE 03 COMMON ignores variable naming" {
+    const source =
+        "      SUBROUTINE S1\n" ++
+        "      INTEGER A\n" ++
+        "      COMMON /BLK3/ A\n" ++
+        "      END\n" ++
+        "      SUBROUTINE S2\n" ++
+        "      INTEGER X\n" ++
+        "      COMMON /BLK3/ X\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
+test "invariant COMMON/EQUIVALENCE 04 COMMON type mismatch fails" {
+    const source =
+        "      SUBROUTINE S1\n" ++
+        "      INTEGER A\n" ++
+        "      COMMON /BLK4/ A\n" ++
+        "      END\n" ++
+        "      SUBROUTINE S2\n" ++
+        "      REAL A\n" ++
+        "      COMMON /BLK4/ A\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.CommonBlockMismatch, "CF3115");
+}
+
+test "invariant COMMON/EQUIVALENCE 05 COMMON character length mismatch fails" {
+    const source =
+        "      SUBROUTINE S1\n" ++
+        "      CHARACTER*2 A\n" ++
+        "      COMMON /BLK5/ A\n" ++
+        "      END\n" ++
+        "      SUBROUTINE S2\n" ++
+        "      CHARACTER*3 A\n" ++
+        "      COMMON /BLK5/ A\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.CommonBlockMismatch, "CF3115");
+}
+
+test "invariant COMMON/EQUIVALENCE 06 COMMON non-constant dimension fails" {
+    const source =
+        "      SUBROUTINE S1\n" ++
+        "      INTEGER N\n" ++
+        "      INTEGER A(N)\n" ++
+        "      COMMON /BLK6/ A\n" ++
+        "      END\n" ++
+        "      SUBROUTINE S2\n" ++
+        "      INTEGER A(4)\n" ++
+        "      COMMON /BLK6/ A\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.CommonBlockMismatch, "CF3115");
+}
+
+test "invariant COMMON/EQUIVALENCE 07 COMMON stride declaration shape fails" {
+    const source =
+        "      SUBROUTINE S1\n" ++
+        "      INTEGER A(1:5:2)\n" ++
+        "      COMMON /BLK7/ A\n" ++
+        "      END\n" ++
+        "      SUBROUTINE S2\n" ++
+        "      INTEGER A(3)\n" ++
+        "      COMMON /BLK7/ A\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.CommonBlockMismatch, "CF3115");
+}
+
+test "invariant COMMON/EQUIVALENCE 08 COMMON non-positive extent fails" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(5:1)\n" ++
+        "      COMMON /BLK8/ A\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.CommonBlockMismatch, "CF3115");
+}
+
+test "invariant COMMON/EQUIVALENCE 09 EQUIVALENCE chained constant offsets succeeds" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(3),B(3),C(3)\n" ++
+        "      EQUIVALENCE (A(2),B(1)),(B(3),C(2))\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
+test "invariant COMMON/EQUIVALENCE 10 EQUIVALENCE character substring succeeds" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*4 C1,C2\n" ++
+        "      EQUIVALENCE (C1(2:3),C2(1:2))\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
+test "invariant COMMON/EQUIVALENCE 11 EQUIVALENCE non-constant subscript fails" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(2),I\n" ++
+        "      EQUIVALENCE (A(I),A(1))\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidEquivalence, "CF3113");
+}
+
+test "invariant COMMON/EQUIVALENCE 12 EQUIVALENCE duplicate designator fails" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A\n" ++
+        "      EQUIVALENCE (A,A)\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidEquivalence, "CF3113");
+}
+
+test "invariant implicit 01 default I is INTEGER" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      I=1\n" ++
+        "      END\n";
+    try expectSymbolTypeInvariant(source, "P", "I", .integer);
+}
+
+test "invariant implicit 02 default N is INTEGER" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      N=1\n" ++
+        "      END\n";
+    try expectSymbolTypeInvariant(source, "P", "N", .integer);
+}
+
+test "invariant implicit 03 default A is REAL" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      A=1.0\n" ++
+        "      END\n";
+    try expectSymbolTypeInvariant(source, "P", "A", .real);
+}
+
+test "invariant implicit 04 default Z is REAL" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      Z=1.0\n" ++
+        "      END\n";
+    try expectSymbolTypeInvariant(source, "P", "Z", .real);
+}
+
+test "invariant implicit 05 explicit declaration overrides default" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      REAL I\n" ++
+        "      I=1.0\n" ++
+        "      END\n";
+    try expectSymbolTypeInvariant(source, "S", "I", .real);
+}
+
+test "invariant implicit 06 explicit IMPLICIT INTEGER range applies" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      IMPLICIT INTEGER (A-C)\n" ++
+        "      B=1\n" ++
+        "      END\n";
+    try expectSymbolTypeInvariant(source, "S", "B", .integer);
+}
+
+test "invariant implicit 07 implicit CHARACTER length metadata is preserved" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      IMPLICIT CHARACTER*3 (Q-Q)\n" ++
+        "      Q='AB'\n" ++
+        "      END\n";
+    try expectSymbolCharLenInvariant(source, "S", "Q", .constant, 3);
+}
+
+test "invariant implicit 08 implicit LOGICAL range applies" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      IMPLICIT LOGICAL (L-L)\n" ++
+        "      L=.TRUE.\n" ++
+        "      END\n";
+    try expectSymbolTypeInvariant(source, "S", "L", .logical);
+}
+
+test "invariant implicit 09 lowercase names still follow default typing" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      m=1\n" ++
+        "      END\n";
+    try expectSymbolTypeInvariant(source, "P", "m", .integer);
+}
+
+test "invariant implicit 10 IMPLICIT rules are unit-local in multi-unit program" {
+    const source =
+        "      SUBROUTINE S1\n" ++
+        "      IMPLICIT INTEGER (A-A)\n" ++
+        "      A=1\n" ++
+        "      END\n" ++
+        "      SUBROUTINE S2\n" ++
+        "      A=1.0\n" ++
+        "      END\n";
+    try expectSymbolTypeInvariant(source, "S2", "A", .real);
+}
+
+test "invariant implicit 11 undeclared dummy argument uses implicit typing" {
+    const source =
+        "      SUBROUTINE S(X)\n" ++
+        "      X=1.0\n" ++
+        "      END\n";
+    try expectSymbolTypeInvariant(source, "S", "X", .real);
+}
+
+test "invariant implicit 12 touching IMPLICIT ranges are still overlapping" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      IMPLICIT INTEGER (A-C)\n" ++
+        "      IMPLICIT REAL (C-E)\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidImplicitRule, "CF3126");
+}
+
+fn expectGeneratedTempCountInvariant(source: []const u8, unit_name: []const u8, expected_count: usize) !void {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found_unit = false;
+    for (sem.units) |unit| {
+        if (!std.ascii.eqlIgnoreCase(unit.name, unit_name)) continue;
+        found_unit = true;
+        var count: usize = 0;
+        for (unit.symbols) |sym| {
+            if (sym.is_generated_temp) count += 1;
+        }
+        try testing.expectEqual(expected_count, count);
+        break;
+    }
+    try testing.expect(found_unit);
+}
+
+fn expectFirstTopLevelCallArgGeneratedTempInvariant(source: []const u8, unit_name: []const u8) !void {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+
+    var found_unit = false;
+    var found_call = false;
+    for (program.units) |unit| {
+        if (!std.ascii.eqlIgnoreCase(unit.name, unit_name)) continue;
+        found_unit = true;
+        for (unit.stmts) |stmt| {
+            if (stmt.node != .call) continue;
+            const call_stmt = stmt.node.call;
+            try testing.expect(call_stmt.args.len > 0);
+            try testing.expect(call_stmt.args[0] == .expr);
+            try testing.expect(call_stmt.args[0].expr.* == .identifier);
+            try testing.expect(std.mem.startsWith(u8, call_stmt.args[0].expr.identifier, "__cf_conv_arr_"));
+            found_call = true;
+            break;
+        }
+        break;
+    }
+    try testing.expect(found_unit);
+    try testing.expect(found_call);
+}
+
+fn expectFirstTopLevelCallArgCallExprInvariant(
+    source: []const u8,
+    unit_name: []const u8,
+    expected_callee: []const u8,
+) !void {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+
+    var found_unit = false;
+    var found_call = false;
+    for (program.units) |unit| {
+        if (!std.ascii.eqlIgnoreCase(unit.name, unit_name)) continue;
+        found_unit = true;
+        for (unit.stmts) |stmt| {
+            if (stmt.node != .call) continue;
+            const call_stmt = stmt.node.call;
+            try testing.expect(call_stmt.args.len > 0);
+            try testing.expect(call_stmt.args[0] == .expr);
+            try testing.expect(call_stmt.args[0].expr.* == .call_or_subscript);
+            try testing.expect(std.ascii.eqlIgnoreCase(call_stmt.args[0].expr.call_or_subscript.name, expected_callee));
+            found_call = true;
+            break;
+        }
+        break;
+    }
+    try testing.expect(found_unit);
+    try testing.expect(found_call);
+}
+
+test "invariant call arity 01 subroutine call too few args fails" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CALL T()\n" ++
+        "      END\n" ++
+        "      SUBROUTINE T(A)\n" ++
+        "      INTEGER A\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
+}
+
+test "invariant call arity 02 subroutine call too many args fails" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CALL T(1,2)\n" ++
+        "      END\n" ++
+        "      SUBROUTINE T(A)\n" ++
+        "      INTEGER A\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
+}
+
+test "invariant call arity 03 function call too few args fails" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER X\n" ++
+        "      X=F()\n" ++
+        "      END\n" ++
+        "      INTEGER FUNCTION F(A)\n" ++
+        "      INTEGER A\n" ++
+        "      F=A\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
+}
+
+test "invariant call arity 04 function call too many args fails" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER X\n" ++
+        "      X=F(1,2)\n" ++
+        "      END\n" ++
+        "      INTEGER FUNCTION F(A)\n" ++
+        "      INTEGER A\n" ++
+        "      F=A\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
+}
+
+test "invariant call arity 05 CALLing a function fails" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CALL F(1)\n" ++
+        "      END\n" ++
+        "      INTEGER FUNCTION F(A)\n" ++
+        "      INTEGER A\n" ++
+        "      F=A\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
+}
+
+test "invariant call arity 06 using subroutine as function fails" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER X\n" ++
+        "      X=T(1)\n" ++
+        "      END\n" ++
+        "      SUBROUTINE T(A)\n" ++
+        "      INTEGER A\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
+}
+
+test "invariant call arity 07 intrinsic SIN needs at least one arg" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      REAL X\n" ++
+        "      X=SIN()\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
+}
+
+test "invariant call arity 08 intrinsic SIN rejects too many args" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      REAL X\n" ++
+        "      X=SIN(1.0,2.0)\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
+}
+
+test "invariant call arity 09 intrinsic MAX needs at least two args" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER X\n" ++
+        "      X=MAX(1)\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
+}
+
+test "invariant call arity 10 intrinsic MAX with two args succeeds" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER X\n" ++
+        "      X=MAX(1,2)\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
+test "invariant call arity 11 alternate return does not count as expr arg" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CALL T(*10,1)\n" ++
+        " 10   CONTINUE\n" ++
+        "      END\n" ++
+        "      SUBROUTINE T(A)\n" ++
+        "      INTEGER A\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
+test "invariant call arity 12 dummy procedure argument skips global arity checks" {
+    const source =
+        "      SUBROUTINE S(FCN)\n" ++
+        "      EXTERNAL FCN\n" ++
+        "      CALL FCN(1,2,3,4)\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
+test "invariant array lowering 01 REAL(array) lowers to generated temp" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(3)\n" ++
+        "      CALL U(REAL(A))\n" ++
+        "      END\n";
+    try expectGeneratedTempCountInvariant(source, "S", 1);
+    try expectFirstTopLevelCallArgGeneratedTempInvariant(source, "S");
+}
+
+test "invariant array lowering 02 DBLE(array) lowers to generated temp" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      REAL A(3)\n" ++
+        "      CALL U(DBLE(A))\n" ++
+        "      END\n";
+    try expectGeneratedTempCountInvariant(source, "S", 1);
+    try expectFirstTopLevelCallArgGeneratedTempInvariant(source, "S");
+}
+
+test "invariant array lowering 03 INT(array) lowers to generated temp" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      REAL A(3)\n" ++
+        "      CALL U(INT(A))\n" ++
+        "      END\n";
+    try expectGeneratedTempCountInvariant(source, "S", 1);
+    try expectFirstTopLevelCallArgGeneratedTempInvariant(source, "S");
+}
+
+test "invariant array lowering 04 scalar conversion call does not allocate temp" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A\n" ++
+        "      CALL U(REAL(A))\n" ++
+        "      END\n";
+    try expectGeneratedTempCountInvariant(source, "S", 0);
+    try expectFirstTopLevelCallArgCallExprInvariant(source, "S", "REAL");
+}
+
+test "invariant array lowering 05 EXTERNAL shadow of REAL prevents lowering" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(3)\n" ++
+        "      EXTERNAL REAL,U\n" ++
+        "      CALL U(REAL(A))\n" ++
+        "      END\n";
+    try expectGeneratedTempCountInvariant(source, "S", 0);
+    try expectFirstTopLevelCallArgCallExprInvariant(source, "S", "REAL");
+}
+
+test "invariant array lowering 06 statement-function shadow prevents lowering" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(3)\n" ++
+        "      REAL(X)=X\n" ++
+        "      CALL U(REAL(A))\n" ++
+        "      END\n";
+    try expectGeneratedTempCountInvariant(source, "S", 0);
+    try expectFirstTopLevelCallArgCallExprInvariant(source, "S", "REAL");
+}
+
+test "invariant array lowering 07 LOGICAL IF body is promoted when prelude needed" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      REAL A(3)\n" ++
+        "      IF (.TRUE.) CALL U(DBLE(A))\n" ++
+        "      END\n";
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    _ = try analyzeProgram(arena.allocator(), program);
+
+    try testing.expectEqual(@as(usize, 1), program.units[0].stmts.len);
+    try testing.expect(program.units[0].stmts[0].node == .if_block);
+    const ifb = program.units[0].stmts[0].node.if_block;
+    try testing.expect(ifb.then_stmts.len >= 4);
+    try testing.expect(ifb.then_stmts[0].node == .do_loop);
+    try testing.expect(ifb.then_stmts[ifb.then_stmts.len - 1].node == .call);
+}
+
+test "invariant array lowering 08 conversion over expression shape is rejected" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      REAL A(3),B(3)\n" ++
+        "      CALL U(INT(A+B))\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.UnsupportedIntrinsicType, "CF3127");
+}
+
+test "invariant array lowering 09 conversion on assumed-size array is rejected" {
+    const source =
+        "      SUBROUTINE S(A)\n" ++
+        "      INTEGER A(*)\n" ++
+        "      CALL U(REAL(A))\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.UnsupportedIntrinsicType, "CF3127");
+}
+
+test "invariant array lowering 10 conversion on array section is rejected" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(3)\n" ++
+        "      CALL U(REAL(A(1:3)))\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.UnsupportedIntrinsicType, "CF3127");
+}
+
+test "invariant array lowering 11 conversion on triplet-stride declared array is rejected" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A(1:5:2)\n" ++
+        "      CALL U(REAL(A))\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.UnsupportedIntrinsicType, "CF3127");
+}
