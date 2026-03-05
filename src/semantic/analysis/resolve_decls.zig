@@ -48,48 +48,54 @@ pub fn applyDeclarator(
     } else if (self.symbols.items[idx].storage != .dummy and self.symbols.items[idx].storage != .common) {
         self.symbols.items[idx].storage = storage;
     }
-    if (type_kind != .character) {
+
+    // Use the resolved symbol type after declaration merge. Non-type declarations
+    // (e.g. COMMON/DIMENSION) must not accidentally erase CHARACTER length.
+    const effective_type = self.symbols.items[idx].type_kind;
+    if (effective_type != .character) {
         self.symbols.items[idx].char_len_kind = .none;
         self.symbols.items[idx].char_len = null;
         return;
     }
-    if (type_kind == .character) {
-        var length: usize = 1;
-        if (item.char_len) |len_expr| {
-            if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) {
-                self.symbols.items[idx].char_len_kind = .assumed;
+
+    var length: usize = if (self.symbols.items[idx].char_len_kind == .constant)
+        self.symbols.items[idx].char_len orelse 1
+    else
+        1;
+    if (item.char_len) |len_expr| {
+        if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) {
+            self.symbols.items[idx].char_len_kind = .assumed;
+            self.symbols.items[idx].char_len = null;
+            return;
+        }
+        if (try constants.evalConst(self, len_expr)) |value| {
+            switch (value) {
+                .integer => |int_val| {
+                    if (int_val <= 0) return error.InvalidCharLen;
+                    length = @intCast(int_val);
+                },
+                .real => return error.InvalidCharLen,
+                .complex => return error.InvalidCharLen,
+                .logical => return error.InvalidCharLen,
+                .string => return error.InvalidCharLen,
+            }
+        } else {
+            // Keep deferred/assumed length only where the rest of the semantic
+            // pipeline already supports unknown CHARACTER size.
+            if (allowsDeferredCharacterLength(self.symbols.items[idx])) {
+                self.symbols.items[idx].char_len_kind = .deferred;
                 self.symbols.items[idx].char_len = null;
                 return;
             }
-            if (try constants.evalConst(self, len_expr)) |value| {
-                switch (value) {
-                    .integer => |int_val| {
-                        if (int_val <= 0) return error.InvalidCharLen;
-                        length = @intCast(int_val);
-                    },
-                    .real => return error.InvalidCharLen,
-                    .complex => return error.InvalidCharLen,
-                    .logical => return error.InvalidCharLen,
-                    .string => return error.InvalidCharLen,
-                }
-            } else {
-                // Keep deferred/assumed length only where the rest of the semantic
-                // pipeline already supports unknown CHARACTER size.
-                if (allowsDeferredCharacterLength(self.symbols.items[idx])) {
-                    self.symbols.items[idx].char_len_kind = .deferred;
-                    self.symbols.items[idx].char_len = null;
-                    return;
-                }
-                return error.InvalidCharLen;
-            }
-        } else if (!explicit_type) {
-            if (symbols_mod.implicitCharLen(self, item.name)) |implicit_len| {
-                length = implicit_len;
-            }
+            return error.InvalidCharLen;
         }
-        self.symbols.items[idx].char_len_kind = CharacterLengthKind.constant;
-        self.symbols.items[idx].char_len = length;
+    } else if (!explicit_type and self.symbols.items[idx].char_len_kind != .constant) {
+        if (symbols_mod.implicitCharLen(self, item.name)) |implicit_len| {
+            length = implicit_len;
+        }
     }
+    self.symbols.items[idx].char_len_kind = CharacterLengthKind.constant;
+    self.symbols.items[idx].char_len = length;
 }
 
 fn allowsDeferredCharacterLength(sym: symbols.Symbol) bool {

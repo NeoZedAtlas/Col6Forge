@@ -869,8 +869,7 @@ fn applyEquivalencePair(ctx: *Context, builder: anytype, anchor: *ast.Expr, othe
 
 fn applyEquivalenceSubscriptScalar(ctx: *Context, builder: anytype, sub_expr: *ast.Expr, scalar_name: []const u8) EmitError!void {
     const call = sub_expr.call_or_subscript;
-    const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(sub_expr))) orelse .unknown;
-    if (kind != .subscript) return;
+    if (!isEquivalenceSubscriptDesignator(ctx, sub_expr, call)) return;
     const scalar_sym = ctx.findSymbol(scalar_name) orelse return;
     if (scalar_sym.dims.len != 0) return;
     const ptr = try expression.emitSubscriptPtr(ctx, builder, call);
@@ -879,12 +878,21 @@ fn applyEquivalenceSubscriptScalar(ctx: *Context, builder: anytype, sub_expr: *a
 
 fn applyEquivalenceSubscriptArray(ctx: *Context, builder: anytype, sub_expr: *ast.Expr, array_name: []const u8) EmitError!void {
     const call = sub_expr.call_or_subscript;
-    const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(sub_expr))) orelse .unknown;
-    if (kind != .subscript) return;
+    if (!isEquivalenceSubscriptDesignator(ctx, sub_expr, call)) return;
     const array_sym = ctx.findSymbol(array_name) orelse return;
     if (array_sym.dims.len == 0) return;
     const ptr = try expression.emitSubscriptPtr(ctx, builder, call);
     try ctx.locals.put(array_name, ptr);
+}
+
+fn isEquivalenceSubscriptDesignator(ctx: *Context, sub_expr: *ast.Expr, call: ast.CallOrSubscript) bool {
+    const expr_key = @as(usize, @intFromPtr(sub_expr));
+    if (ctx.ref_kinds.get(expr_key)) |kind| {
+        if (kind == .subscript) return true;
+        if (kind != .unknown) return false;
+    }
+    const sym = ctx.findSymbol(call.name) orelse return false;
+    return sym.dims.len > 0 and call.args.len == sym.dims.len;
 }
 
 fn argsEqual(a: []*ast.Expr, b: []*ast.Expr) bool {

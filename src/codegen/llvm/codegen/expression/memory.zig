@@ -1,6 +1,7 @@
 const ast = @import("../../../input.zig");
 const ir = @import("../../../ir.zig");
 const llvm_types = @import("../../types.zig");
+const common = @import("../common.zig");
 const context = @import("../context.zig");
 const utils = @import("../utils.zig");
 
@@ -25,7 +26,7 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     var offset = try emitColumnMajorOffset(ctx, builder, sym, call.args);
 
     if (sym.type_kind == .character) {
-        const char_len = sym.char_len orelse return error.ArraysUnsupported;
+        const char_len = common.constantCharacterLen(sym) orelse return error.ArraysUnsupported;
         if (char_len != 1) {
             const scale = ValueRef{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = offset.ty, .is_ptr = false };
             offset = try binary.emitMul(ctx, builder, offset, scale);
@@ -86,7 +87,7 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
     }
     var idx1_adj = try binary.emitSub(ctx, builder, idx1, oneIndexValue());
     if (sym.type_kind == .character) {
-        const char_len = sym.char_len orelse return error.ArraysUnsupported;
+        const char_len = common.constantCharacterLen(sym) orelse return error.ArraysUnsupported;
         if (char_len != 1) {
             const scale = ValueRef{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = idx1_adj.ty, .is_ptr = false };
             idx1_adj = try binary.emitMul(ctx, builder, idx1_adj, scale);

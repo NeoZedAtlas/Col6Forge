@@ -1586,6 +1586,35 @@ test "semantic accepts assumed CHARACTER*(*) for dummy argument" {
     try testing.expect(found);
 }
 
+test "semantic COMMON declaration does not erase explicit CHARACTER length" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      CHARACTER*2 D2Z1K(2)\n" ++
+        "      COMMON /BLK6/ D2Z1K\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "D2Z1K")) continue;
+        found = true;
+        try testing.expectEqual(ast.TypeKind.character, sym.type_kind);
+        try testing.expectEqual(symbols.StorageClass.common, sym.storage);
+        try testing.expectEqual(symbols.CharacterLengthKind.constant, sym.char_len_kind);
+        try testing.expectEqual(@as(?usize, 2), sym.char_len);
+    }
+    try testing.expect(found);
+}
+
 test "semantic reports CF3117 for divide-by-zero in const expression" {
     const testing = std.testing;
     const allocator = testing.allocator;
