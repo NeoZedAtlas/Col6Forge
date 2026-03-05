@@ -199,7 +199,10 @@ fn expandTargetExpr(
                 while (iter <= end_val) : (iter += step_val) {
                     const iter_expr = try makeIntegerLiteral(ctx, iter);
                     for (implied.items) |item| {
-                        const expanded = try cloneExprWithSubstCheap(ctx, item, implied.var_name, iter_expr);
+                        const expanded = if (exprContainsIdentifier(item, implied.var_name))
+                            try cloneExprWithSubstCheap(ctx, item, implied.var_name, iter_expr)
+                        else
+                            item;
                         try expandTargetExpr(ctx, expanded, out);
                     }
                 }
@@ -207,7 +210,10 @@ fn expandTargetExpr(
                 while (iter >= end_val) : (iter += step_val) {
                     const iter_expr = try makeIntegerLiteral(ctx, iter);
                     for (implied.items) |item| {
-                        const expanded = try cloneExprWithSubstCheap(ctx, item, implied.var_name, iter_expr);
+                        const expanded = if (exprContainsIdentifier(item, implied.var_name))
+                            try cloneExprWithSubstCheap(ctx, item, implied.var_name, iter_expr)
+                        else
+                            item;
                         try expandTargetExpr(ctx, expanded, out);
                     }
                 }
@@ -377,38 +383,47 @@ fn cloneExprWithSubst(
     name: []const u8,
     replacement: *ast.Expr,
 ) !*ast.Expr {
-    const cloned = try ctx.arena.create(ast.Expr);
+    if (!exprContainsIdentifier(node, name)) return node;
     switch (node.*) {
         .identifier => |ident| {
             if (std.ascii.eqlIgnoreCase(ident, name)) {
-                cloned.* = replacement.*;
-                return cloned;
+                return replacement;
             }
-            cloned.* = .{ .identifier = ident };
+            return node;
         },
         .literal => |lit| {
+            const cloned = try ctx.arena.create(ast.Expr);
             cloned.* = .{ .literal = lit };
+            return cloned;
         },
         .unary => |un| {
             const expr_node = try cloneExprWithSubst(ctx, un.expr, name, replacement);
+            const cloned = try ctx.arena.create(ast.Expr);
             cloned.* = .{ .unary = .{ .op = un.op, .expr = expr_node } };
+            return cloned;
         },
         .binary => |bin| {
             const left = try cloneExprWithSubst(ctx, bin.left, name, replacement);
             const right = try cloneExprWithSubst(ctx, bin.right, name, replacement);
+            const cloned = try ctx.arena.create(ast.Expr);
             cloned.* = .{ .binary = .{ .op = bin.op, .left = left, .right = right } };
+            return cloned;
         },
         .complex_literal => |lit| {
             const real = try cloneExprWithSubst(ctx, lit.real, name, replacement);
             const imag = try cloneExprWithSubst(ctx, lit.imag, name, replacement);
+            const cloned = try ctx.arena.create(ast.Expr);
             cloned.* = .{ .complex_literal = .{ .real = real, .imag = imag } };
+            return cloned;
         },
         .call_or_subscript => |call| {
             const args = try ctx.arena.alloc(*ast.Expr, call.args.len);
             for (call.args, 0..) |arg, idx| {
                 args[idx] = try cloneExprWithSubst(ctx, arg, name, replacement);
             }
+            const cloned = try ctx.arena.create(ast.Expr);
             cloned.* = .{ .call_or_subscript = .{ .name = call.name, .args = args } };
+            return cloned;
         },
         .substring => |sub| {
             const args = try ctx.arena.alloc(*ast.Expr, sub.args.len);
@@ -417,13 +432,17 @@ fn cloneExprWithSubst(
             }
             const start_expr = if (sub.start) |s| try cloneExprWithSubst(ctx, s, name, replacement) else null;
             const end_expr = if (sub.end) |e| try cloneExprWithSubst(ctx, e, name, replacement) else null;
+            const cloned = try ctx.arena.create(ast.Expr);
             cloned.* = .{ .substring = .{ .name = sub.name, .args = args, .start = start_expr, .end = end_expr } };
+            return cloned;
         },
         .dim_range => |range| {
             const lower = if (range.lower) |l| try cloneExprWithSubst(ctx, l, name, replacement) else null;
             const upper = try cloneExprWithSubst(ctx, range.upper, name, replacement);
             const stride = if (range.stride) |s| try cloneExprWithSubst(ctx, s, name, replacement) else null;
+            const cloned = try ctx.arena.create(ast.Expr);
             cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
+            return cloned;
         },
         .implied_do => |implied| {
             const items = try ctx.arena.alloc(*ast.Expr, implied.items.len);
@@ -433,6 +452,7 @@ fn cloneExprWithSubst(
             const start = try cloneExprWithSubst(ctx, implied.start, name, replacement);
             const end = try cloneExprWithSubst(ctx, implied.end, name, replacement);
             const step = if (implied.step) |s| try cloneExprWithSubst(ctx, s, name, replacement) else null;
+            const cloned = try ctx.arena.create(ast.Expr);
             cloned.* = .{ .implied_do = .{
                 .items = items,
                 .var_name = implied.var_name,
@@ -440,9 +460,9 @@ fn cloneExprWithSubst(
                 .end = end,
                 .step = step,
             } };
+            return cloned;
         },
     }
-    return cloned;
 }
 
 fn cloneExprWithSubstCheap(
