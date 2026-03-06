@@ -2,8 +2,8 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
-const resolve = @import("../resolve.zig");
-const check = @import("../check.zig");
+const resolve_units = @import("resolve_units.zig");
+const check_units = @import("check_units.zig");
 const diag = @import("../diagnostic.zig");
 
 pub const UnitAnalyzer = struct {
@@ -36,12 +36,12 @@ pub const UnitAnalyzer = struct {
 
     pub fn analyze(self: *UnitAnalyzer) !symbols.SemanticUnit {
         var ctx = &self.ctx;
-        var resolver = resolve.Resolver.init(ctx, self.initial_implicit);
+        var resolver = resolve_units.Resolver.init(ctx, self.initial_implicit);
         resolver.run() catch |err| {
             recordSemanticError(ctx, err);
             return err;
         };
-        var checker = check.Checker.init(ctx);
+        var checker = check_units.Checker.init(ctx);
         checker.run() catch |err| {
             recordSemanticError(ctx, err);
             return err;
