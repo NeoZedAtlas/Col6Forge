@@ -45,7 +45,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             for (call.args) |arg| {
                 switch (arg) {
                     .expr => |expr_node| try checkExpr(self, expr_node),
-                    .alt_return => {},
+                    .alt_return => |label| try checkCallAltReturnLabel(self, label),
                 }
             }
         },
@@ -232,7 +232,21 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                     if (!isIntegerLike(arg_ty)) return error.InvalidSubscript;
                 }
             } else {
-                for (call.args) |arg| _ = try checkExprType(self, arg);
+                const check_homogeneous = sym.is_intrinsic and isHomogeneousMaxMinIntrinsic(call.name);
+                var first_ty: ?ast.TypeKind = null;
+                for (call.args) |arg| {
+                    const arg_ty = try checkExprType(self, arg);
+                    if (check_homogeneous) {
+                        if (first_ty == null) {
+                            if (!isNumeric(arg_ty) or arg_ty == .complex or arg_ty == .complex_double) {
+                                return error.InvalidArithmeticOperands;
+                            }
+                            first_ty = arg_ty;
+                        } else if (arg_ty != first_ty.?) {
+                            return error.InvalidArithmeticOperands;
+                        }
+                    }
+                }
                 try checkKnownProcedureCallArity(self, call.name, call.args.len, 0, false, idx);
             }
             return sym.type_kind;
@@ -358,10 +372,38 @@ fn controlLiteralText(expr_node: *ast.Expr) ?[]const u8 {
             if (text.len >= 2 and text[0] == text[text.len - 1] and (text[0] == '\'' or text[0] == '"')) {
                 text = text[1 .. text.len - 1];
             }
-            return text;
+            return std.mem.trim(u8, text, " \t");
         },
         else => return null,
     }
+}
+
+fn checkCallAltReturnLabel(self: *context.Context, label: []const u8) CheckError!void {
+    if (!stmtListHasLabel(self.unit.stmts, label)) return error.InvalidArgumentCount;
+}
+
+fn stmtListHasLabel(stmts: []const ast.Stmt, label: []const u8) bool {
+    for (stmts) |stmt| {
+        if (stmt.label) |stmt_label| {
+            if (std.mem.eql(u8, stmt_label, label)) return true;
+        }
+        switch (stmt.node) {
+            .if_block => |ifb| {
+                if (stmtListHasLabel(ifb.then_stmts, label)) return true;
+                if (stmtListHasLabel(ifb.else_stmts, label)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn isHomogeneousMaxMinIntrinsic(name: []const u8) bool {
+    var upper_buf: [64]u8 = undefined;
+    if (name.len > upper_buf.len) return false;
+    for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
+    const upper = upper_buf[0..name.len];
+    return std.mem.eql(u8, upper, "MAX") or std.mem.eql(u8, upper, "MIN");
 }
 
 fn textInSet(text: []const u8, allowed: []const []const u8) bool {

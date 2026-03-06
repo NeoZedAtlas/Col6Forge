@@ -298,6 +298,24 @@ test "semantic reports CF3125 for invalid OPEN control literal value" {
     try testing.expect(std.mem.eql(u8, diag.code, "CF3125"));
 }
 
+test "semantic accepts OPEN control literal with trailing blanks" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      OPEN(UNIT=10,STATUS='OLD       ')\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+}
+
 test "semantic reports CF3130 for INTEGER IF condition" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -167,3 +167,24 @@ test "invariant call arity 15 unresolved EXTERNAL with alternate return is trust
         "      END\n";
     try expectSemanticSuccessInvariant(source);
 }
+
+test "invariant call arity 16 alternate return label must exist in caller" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CALL T(*10,1)\n" ++
+        "      END\n" ++
+        "      SUBROUTINE T(A,*)\n" ++
+        "      INTEGER A\n" ++
+        "      RETURN\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
+}
+
+test "invariant call arity 17 intrinsic MAX rejects heterogeneous argument types" {
+    const source =
+        "      PROGRAM P\n" ++
+        "      REAL X\n" ++
+        "      X=MAX(1,2.0,3)\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArithmeticOperands, "CF3119");
+}

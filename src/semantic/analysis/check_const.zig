@@ -11,6 +11,8 @@ pub fn checkParameterAssign(self: *context.Context, assign: ast.ParamAssign) !Co
 }
 
 pub fn coerceParameterValue(
+    // Caller must provide a compilation-lifetime allocator (arena) because
+    // CHARACTER length coercion may allocate adjusted constant bytes.
     allocator: std.mem.Allocator,
     target: ast.TypeKind,
     target_char_len: ?usize,
@@ -30,7 +32,7 @@ pub fn coerceParameterValue(
         },
         .integer => switch (value) {
             .integer => return value,
-            .real => |v| return .{ .integer = try realToInteger(v.value) },
+            .real => |v| return .{ .integer = try realToIntegerForTarget(target, v.value) },
             .complex, .logical, .string => return error.ParameterTypeMismatch,
         },
         .real => switch (value) {
@@ -67,13 +69,33 @@ pub fn checkParameterType(
     return coerceParameterValue(allocator, target, target_char_len, value);
 }
 
-fn realToInteger(v: f64) !i64 {
+fn realToIntegerForTarget(target: ast.TypeKind, v: f64) !i64 {
     if (!std.math.isFinite(v)) return error.ParameterTypeMismatch;
     const truncated = @trunc(v);
-    const min: f64 = @floatFromInt(std.math.minInt(i64));
-    const max: f64 = @floatFromInt(std.math.maxInt(i64));
+    const bounds = integerBoundsForTarget(target);
+    const min: f64 = @floatFromInt(bounds.min);
+    const max: f64 = @floatFromInt(bounds.max);
     if (truncated < min or truncated > max) return error.ParameterTypeMismatch;
     return @as(i64, @intFromFloat(truncated));
+}
+
+const IntegerBounds = struct {
+    min: i64,
+    max: i64,
+};
+
+fn integerBoundsForTarget(target: ast.TypeKind) IntegerBounds {
+    return switch (target) {
+        // Default Fortran INTEGER lowering is i32 in current backend.
+        .integer => .{
+            .min = std.math.minInt(i32),
+            .max = std.math.maxInt(i32),
+        },
+        else => .{
+            .min = std.math.minInt(i64),
+            .max = std.math.maxInt(i64),
+        },
+    };
 }
 
 fn checkedRealForTarget(target: ast.TypeKind, value: f64) !f64 {
