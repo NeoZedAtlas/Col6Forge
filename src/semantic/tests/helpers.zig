@@ -93,6 +93,71 @@ pub fn expectSemanticErrorNoGeneratedTempLeakInvariant(
     try testing.expect(found);
 }
 
+pub fn expectSemanticErrorNoTempLeakAndFirstCallArgCallExprInvariant(
+    source: []const u8,
+    unit_name: []const u8,
+    expected_err: anyerror,
+    expected_code: []const u8,
+    expected_callee: []const u8,
+) !void {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expect(program.units.len > 0);
+
+    var known_function_types = std.StringHashMap(ast.TypeKind).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(analysis_context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+
+    clearDiagnostic();
+    var found = false;
+    for (program.units) |*unit| {
+        if (!std.ascii.eqlIgnoreCase(unit.name, unit_name)) continue;
+        found = true;
+
+        var unit_analyzer = analysis.UnitAnalyzer.init(
+            arena.allocator(),
+            unit,
+            &.{},
+            &known_function_types,
+            &known_procedure_sigs,
+            &known_host_parameters,
+            null,
+        );
+        try testing.expectError(expected_err, unit_analyzer.analyze());
+        const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+        try testing.expect(std.mem.eql(u8, diag.code, expected_code));
+
+        var generated_temp_count: usize = 0;
+        for (unit_analyzer.ctx.symbols.items) |sym| {
+            if (sym.is_generated_temp) generated_temp_count += 1;
+        }
+        try testing.expectEqual(@as(usize, 0), generated_temp_count);
+
+        var found_call = false;
+        for (unit.stmts) |stmt| {
+            if (stmt.node != .call) continue;
+            const call_stmt = stmt.node.call;
+            try testing.expect(call_stmt.args.len > 0);
+            try testing.expect(call_stmt.args[0] == .expr);
+            try testing.expect(call_stmt.args[0].expr.* == .call_or_subscript);
+            try testing.expect(std.ascii.eqlIgnoreCase(call_stmt.args[0].expr.call_or_subscript.name, expected_callee));
+            found_call = true;
+            break;
+        }
+        try testing.expect(found_call);
+        break;
+    }
+    try testing.expect(found);
+}
+
 pub fn expectSemanticSuccessInvariant(source: []const u8) !void {
     const testing = std.testing;
     const allocator = testing.allocator;
