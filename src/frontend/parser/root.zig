@@ -8,6 +8,7 @@ const parse_diag = @import("diagnostic.zig");
 const decl = @import("decl.zig");
 const expr = @import("expr.zig");
 const stmt = @import("stmt/mod.zig");
+const stmt_helpers = @import("stmt/helpers.zig");
 const array_info = @import("array_info.zig");
 
 const Program = ast.Program;
@@ -195,6 +196,9 @@ const Parser = struct {
         };
         var lp = LineParser.init(header_line, header_tokens);
         var parsed_implicit_program = false;
+        if (stmt_helpers.looksLikeBlankInsensitiveAssignment(lp)) {
+            parsed_implicit_program = true;
+        }
         const header = parseProgramUnitHeader(self.arena, &lp, &self.block_data_counter) catch |err| switch (err) {
             error.ExpectedProgramUnit => blk: {
                 parsed_implicit_program = true;
@@ -205,10 +209,22 @@ const Parser = struct {
                 return err;
             },
         };
+        if (parsed_implicit_program) {
+            const implicit = try self.syntheticProgramHeader();
+            return self.parseProgramUnitBody(implicit, false, header_line);
+        }
         if (!parsed_implicit_program) {
             self.index += 1;
         }
+        return self.parseProgramUnitBody(header, true, header_line);
+    }
 
+    fn parseProgramUnitBody(
+        self: *Parser,
+        header: ProgramUnitHeader,
+        skip_duplicate_header: bool,
+        header_line: logical_line.LogicalLine,
+    ) !ProgramUnit {
         var decls = std.array_list.Managed(Decl).init(self.arena);
         var decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
         var stmts = std.array_list.Managed(Stmt).init(self.arena);
@@ -227,7 +243,7 @@ const Parser = struct {
                 return err;
             };
             var stmt_lp = LineParser.init(line, tokens);
-            if (decls.items.len == 0 and stmts.items.len == 0) {
+            if (skip_duplicate_header and decls.items.len == 0 and stmts.items.len == 0) {
                 if (isDuplicateProgramUnitTokens(self.arena, line, tokens, header)) {
                     self.index += 1;
                     continue;
@@ -1190,7 +1206,8 @@ fn isModuleHeaderTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) b
     const next = lp.peek() orelse return false;
     if (next.kind != .identifier) return false;
     if (context.eqNoCase(lp.tokenText(next), "PROCEDURE")) return false;
-    return true;
+    _ = lp.next();
+    return lp.peek() == null;
 }
 
 fn isModuleEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
@@ -1305,4 +1322,24 @@ test "parseProgram prepends supported module declarations to contained procedure
     try testing.expectEqualStrings("FOO", unit.name);
     try testing.expectEqual(@as(usize, 1), unit.decls.len);
     try testing.expect(unit.decls[0] == .parameter);
+}
+
+test "parseProgram keeps split PROGRAMX assignment in implicit main" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      P R O G R A M X = 1\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    try testing.expectEqual(@as(usize, 1), program.units[0].stmts.len);
+    try testing.expect(program.units[0].stmts[0].node == .assignment);
+    try testing.expectEqualStrings("PROGRAMX", program.units[0].stmts[0].node.assignment.target.identifier);
 }

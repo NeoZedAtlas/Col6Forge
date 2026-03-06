@@ -81,6 +81,24 @@ pub fn lineHasEquals(lp: LineParser) bool {
     return false;
 }
 
+pub fn looksLikeBlankInsensitiveAssignment(lp: LineParser) bool {
+    var eq_idx: ?usize = null;
+    var i: usize = lp.index;
+    while (i < lp.tokens.len) : (i += 1) {
+        if (lp.tokens[i].kind == .equals) {
+            eq_idx = i;
+            break;
+        }
+    }
+    const idx = eq_idx orelse return false;
+    if (idx == lp.index) return false;
+
+    for (lp.tokens[lp.index..idx]) |tok| {
+        if (tok.kind != .identifier and tok.kind != .integer) return false;
+    }
+    return true;
+}
+
 pub fn labelFollowedByEquals(lp: LineParser) bool {
     if (lp.index + 2 >= lp.tokens.len) return false;
     const first = lp.tokens[lp.index + 1];
@@ -102,20 +120,13 @@ pub fn hasCommaAfterEquals(lp: LineParser) bool {
 }
 
 pub fn tryParseBlankInsensitiveAssignment(arena: std.mem.Allocator, line: logical_line.LogicalLine, lp: LineParser) ?StmtNode {
-    var eq_idx: ?usize = null;
-    var i: usize = lp.index;
-    while (i < lp.tokens.len) : (i += 1) {
-        if (lp.tokens[i].kind == .equals) {
-            eq_idx = i;
-            break;
-        }
-    }
-    const idx = eq_idx orelse return null;
-    if (idx == lp.index) return null;
+    if (!looksLikeBlankInsensitiveAssignment(lp)) return null;
+
+    var idx: usize = lp.index;
+    while (lp.tokens[idx].kind != .equals) : (idx += 1) {}
 
     var name_buf = std.array_list.Managed(u8).init(arena);
     for (lp.tokens[lp.index..idx]) |tok| {
-        if (tok.kind != .identifier and tok.kind != .integer) return null;
         appendSansBlanks(&name_buf, lp.tokenText(tok), tok.kind) catch return null;
     }
     const target_name = name_buf.toOwnedSlice() catch return null;

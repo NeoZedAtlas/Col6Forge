@@ -310,23 +310,9 @@ fn tryParseAmbiguousAssignment(
     lp: LineParser,
     mode: ActionParseMode,
 ) ?StmtNode {
-    if (!helpers.lineHasEquals(lp)) return null;
-    if (lp.isKeywordSplit("IF") and !helpers.tokenAfterKeywordIs(lp, "IF", .l_paren)) {
-        return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
-    }
-    if (lp.isKeywordSplit("CALL")) {
-        return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
-    }
-    if (helpers.isGotoStart(lp)) {
-        return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
-    }
-    if (mode == .top_level and lp.isKeywordSplit("DO") and shouldTreatDoAsAssignment(lp)) {
-        return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
-    }
-    if (mode == .top_level and helpers.isSplitDo(lp) and shouldTreatSplitDoAsAssignment(lp)) {
-        return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
-    }
-    return null;
+    _ = mode;
+    if (!helpers.looksLikeBlankInsensitiveAssignment(lp)) return null;
+    return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
 }
 
 fn consumeDoubleColon(lp: *LineParser) bool {
