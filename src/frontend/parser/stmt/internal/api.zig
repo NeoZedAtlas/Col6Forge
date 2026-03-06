@@ -56,6 +56,7 @@ pub fn parseStatement(
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
 ) anyerror!Stmt {
     if (do_ctx.popPending()) |pending| {
+        try control_flow_bridge.closeCompletedLabeledDoLoops(do_ctx, pending.label);
         return pending;
     }
     const line = lines[index.*];

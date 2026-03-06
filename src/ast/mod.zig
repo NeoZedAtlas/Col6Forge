@@ -63,6 +63,7 @@ pub const CharFormat = nodes.CharFormat;
 pub const LogicalFormat = nodes.LogicalFormat;
 pub const IfSingle = nodes.IfSingle;
 pub const IfBlock = nodes.IfBlock;
+pub const WhereStmt = nodes.WhereStmt;
 pub const ArithIfStmt = nodes.ArithIfStmt;
 pub const PauseStmt = nodes.PauseStmt;
 pub const GotoStmt = nodes.GotoStmt;

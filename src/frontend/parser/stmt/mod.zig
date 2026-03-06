@@ -265,6 +265,47 @@ test "parseStatement preserves labeled END IF as pending continue" {
     try testing.expectEqual(@as(usize, 4), idx);
 }
 
+test "parseStatement closes labeled DO when pending END IF continue shares terminator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      DO 10 I = 1, 5\n" ++
+        "      IF (A .GT. 0) THEN\n" ++
+        "      X = 1\n" ++
+        " 0010 END IF\n" ++
+        "      Y = 2\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt1 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt1.node == .do_loop);
+    try testing.expectEqualStrings("10", stmt1.node.do_loop.end_label);
+    try testing.expectEqual(@as(usize, 1), idx);
+
+    const stmt2 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt2.node == .if_block);
+    try testing.expectEqual(@as(usize, 4), idx);
+
+    const stmt3 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt3.node == .cont);
+    try testing.expectEqualStrings("0010", stmt3.label.?);
+    try testing.expectEqual(@as(usize, 4), idx);
+    try testing.expect(do_ctx.peekTopLoop() == null);
+
+    const stmt4 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt4.node == .assignment);
+    try testing.expectEqual(@as(usize, 5), idx);
+}
+
 test "parseStatement logical IF advances by one line and does not skip follower" {
     const testing = std.testing;
     const allocator = testing.allocator;
