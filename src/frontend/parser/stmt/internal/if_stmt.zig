@@ -19,6 +19,10 @@ const DoContext = control_flow.DoContext;
 const ElseIfBlock = struct {
     cond: *Expr,
     stmts: []Stmt,
+    label: ?[]const u8,
+    source_line: usize,
+    source_column: usize,
+    source_text: []const u8,
 };
 
 pub const ParseStatementFn = *const fn (
@@ -40,6 +44,26 @@ fn setStmtSourceIfMissing(stmt: *Stmt, line: logical_line.LogicalLine) void {
     stmt.source_line = line.span.start_line;
     stmt.source_column = defaultSourceColumn(line);
     stmt.source_text = line.text;
+}
+
+fn prependLabeledContinue(
+    arena: std.mem.Allocator,
+    line: logical_line.LogicalLine,
+    stmts: []Stmt,
+) std.mem.Allocator.Error![]Stmt {
+    const line_label = line.label orelse return stmts;
+    const out = try arena.alloc(Stmt, stmts.len + 1);
+    out[0] = .{
+        .label = line_label,
+        .node = .{ .cont = {} },
+        .source_line = line.span.start_line,
+        .source_column = defaultSourceColumn(line),
+        .source_text = line.text,
+    };
+    if (stmts.len > 0) {
+        @memcpy(out[1 .. 1 + stmts.len], stmts);
+    }
+    return out;
 }
 
 pub fn parseIfStatement(
@@ -104,7 +128,8 @@ pub fn parseIfStatement(
                 continue;
             }
             index.* += 1;
-            else_block = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parse_statement_fn);
+            const parsed_else = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parse_statement_fn);
+            else_block = try prependLabeledContinue(arena, next_line, parsed_else);
             break;
         }
 
@@ -118,8 +143,11 @@ pub fn parseIfStatement(
                 i -= 1;
                 const block = else_if_blocks.items[i];
                 const stmt = Stmt{
-                    .label = null,
+                    .label = block.label,
                     .node = .{ .if_block = .{ .condition = block.cond, .then_stmts = block.stmts, .else_stmts = tail } },
+                    .source_line = block.source_line,
+                    .source_column = block.source_column,
+                    .source_text = block.source_text,
                 };
                 const slice = try arena.alloc(Stmt, 1);
                 slice[0] = stmt;
@@ -144,6 +172,8 @@ pub fn parseIfStatement(
     }
 
     const stmt_node = try action_stmt.parseInlineStmtNode(lp, arena, do_ctx, action_callbacks);
+    // Logical IF bodies are parsed from the current logical line only.
+    // This parser owns advancing the line cursor by exactly one line.
     index.* += 1;
     return .{ .label = label, .node = .{ .if_single = .{ .condition = cond, .stmt = stmt_node } } };
 }
@@ -175,7 +205,14 @@ pub fn parseElseIfBlock(
     _ = lp.consumeKeyword("THEN");
     index.* += 1;
     const stmts = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parse_statement_fn);
-    return .{ .cond = cond, .stmts = stmts };
+    return .{
+        .cond = cond,
+        .stmts = stmts,
+        .label = line.label,
+        .source_line = line.span.start_line,
+        .source_column = defaultSourceColumn(line),
+        .source_text = line.text,
+    };
 }
 
 pub fn parseIfBlock(

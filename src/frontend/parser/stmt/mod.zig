@@ -265,6 +265,101 @@ test "parseStatement preserves labeled END IF as pending continue" {
     try testing.expectEqual(@as(usize, 4), idx);
 }
 
+test "parseStatement logical IF advances by one line and does not skip follower" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      IF (A .GT. 0) GOTO 10\n" ++
+        "      X=1\n" ++
+        " 0010 CONTINUE\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt1 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt1.node == .if_single);
+    try testing.expectEqual(@as(usize, 1), idx);
+
+    const stmt2 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt2.node == .assignment);
+    try testing.expectEqual(@as(usize, 2), idx);
+
+    const stmt3 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt3.node == .cont);
+    try testing.expectEqualStrings("0010", stmt3.label.?);
+    try testing.expectEqual(@as(usize, 3), idx);
+}
+
+test "parseStatement preserves labeled ELSE as in-branch continue target" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      IF (A .GT. 0) THEN\n" ++
+        "      X=1\n" ++
+        " 0010 ELSE\n" ++
+        "      X=2\n" ++
+        "      END IF\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt.node == .if_block);
+    try testing.expectEqual(@as(usize, 5), idx);
+
+    const else_stmts = stmt.node.if_block.else_stmts;
+    try testing.expect(else_stmts.len >= 1);
+    try testing.expect(else_stmts[0].node == .cont);
+    try testing.expectEqualStrings("0010", else_stmts[0].label.?);
+}
+
+test "parseStatement preserves labeled ELSE IF as nested branch target" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      IF (A .GT. 0) THEN\n" ++
+        "      X=1\n" ++
+        " 0010 ELSE IF (B .GT. 0) THEN\n" ++
+        "      X=2\n" ++
+        "      END IF\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt.node == .if_block);
+    try testing.expectEqual(@as(usize, 5), idx);
+
+    const else_stmts = stmt.node.if_block.else_stmts;
+    try testing.expectEqual(@as(usize, 1), else_stmts.len);
+    try testing.expect(else_stmts[0].node == .if_block);
+    try testing.expectEqualStrings("0010", else_stmts[0].label.?);
+}
+
 test "parseStatement handles SELECT CASE and lowers to if_block chain" {
     const testing = std.testing;
     const allocator = testing.allocator;
