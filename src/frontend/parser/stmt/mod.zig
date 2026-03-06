@@ -801,7 +801,7 @@ test "parseStatement accepts ALLOCATE as no-op" {
     try testing.expectEqual(@as(usize, 1), idx);
 }
 
-test "parseStatement parses WHERE as conditional assignment" {
+test "parseStatement parses WHERE as where_stmt" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -818,8 +818,8 @@ test "parseStatement parses WHERE as conditional assignment" {
     var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
 
     const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
-    try testing.expect(stmt_node.node == .if_single);
-    try testing.expect(stmt_node.node.if_single.stmt.* == .assignment);
+    try testing.expect(stmt_node.node == .where_stmt);
+    try testing.expect(stmt_node.node.where_stmt.target.* != .implied_do);
     try testing.expectEqual(@as(usize, 1), idx);
 }
 

@@ -142,6 +142,11 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             for (ifb.then_stmts) |inner| try resolveStmt(self, inner);
             for (ifb.else_stmts) |inner| try resolveStmt(self, inner);
         },
+        .where_stmt => |where| {
+            try expressions.resolveExpr(self, where.mask);
+            try expressions.resolveExpr(self, where.target);
+            try expressions.resolveExpr(self, where.value);
+        },
         .ret => |ret| {
             if (ret.value) |value| {
                 try expressions.resolveExpr(self, value);

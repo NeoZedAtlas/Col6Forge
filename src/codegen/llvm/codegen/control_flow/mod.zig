@@ -16,6 +16,7 @@ pub const emitAssignedGoto = branch.emitAssignedGoto;
 pub const emitArithIf = conditional.emitArithIf;
 pub const emitIfSingle = conditional.emitIfSingle;
 pub const emitIfBlock = conditional.emitIfBlock;
+pub const emitWhere = conditional.emitWhere;
 
 pub const ArithIfStrategy = logic.ArithIfStrategy;
 pub const GotoTargetMode = logic.GotoTargetMode;

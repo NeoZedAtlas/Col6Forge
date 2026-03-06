@@ -565,6 +565,33 @@ fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const input.FormatIt
     return buffer.toOwnedSlice();
 }
 
+fn makeIdentExpr(arena: std.mem.Allocator, name: []const u8) !*input.Expr {
+    const node = try arena.create(input.Expr);
+    node.* = .{ .identifier = name };
+    return node;
+}
+
+fn makeLiteralExpr(arena: std.mem.Allocator, kind: input.LiteralKind, text: []const u8) !*input.Expr {
+    const node = try arena.create(input.Expr);
+    node.* = .{ .literal = .{ .kind = kind, .text = text } };
+    return node;
+}
+
+fn makeLocalArraySymbol(name: []const u8, ty: input.TypeKind, dims: []*input.Expr) input.sema.Symbol {
+    return .{
+        .name = name,
+        .type_kind = ty,
+        .dims = dims,
+        .char_len = null,
+        .kind = .variable,
+        .storage = .local,
+        .is_external = false,
+        .is_intrinsic = false,
+        .const_value = null,
+        .type_explicit = true,
+    };
+}
+
 test "emitModuleToWriter emits module header and empty function" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -768,4 +795,132 @@ test "ASSIGN plus no-list assigned GOTO lowers to blockaddress indirectbr path" 
     const output = buffer.items;
     try testing.expect(std.mem.indexOf(u8, output, "store ptr blockaddress(@") != null);
     try testing.expect(std.mem.indexOf(u8, output, "indirectbr ptr %") != null);
+}
+
+test "WHERE lowering rejects rank-mismatched mask and target arrays" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mask_expr = try makeIdentExpr(a, "MASK");
+    const target_expr = try makeIdentExpr(a, "A");
+    const value_expr = try makeLiteralExpr(a, .real, "1.0");
+
+    const stmts_list = try a.alloc(input.Stmt, 1);
+    stmts_list[0] = .{
+        .label = null,
+        .node = .{ .where_stmt = .{
+            .mask = mask_expr,
+            .target = target_expr,
+            .value = value_expr,
+        } },
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmts_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const dim4 = try makeLiteralExpr(a, .integer, "4");
+    const dim2 = try makeLiteralExpr(a, .integer, "2");
+    const dim3 = try makeLiteralExpr(a, .integer, "3");
+    const mask_dims = try a.alloc(*input.Expr, 1);
+    mask_dims[0] = dim4;
+    const target_dims = try a.alloc(*input.Expr, 2);
+    target_dims[0] = dim2;
+    target_dims[1] = dim3;
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 2);
+    sem_symbols[0] = makeLocalArraySymbol("MASK", .logical, mask_dims);
+    sem_symbols[1] = makeLocalArraySymbol("A", .real, target_dims);
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try testing.expectError(error.InvalidSubscript, emitModuleToWriter(&writer, allocator, program, sem_prog, "where_rank_mismatch.f", .{}));
+}
+
+test "WHERE lowering inserts runtime shape guard for extent mismatch" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const mask_expr = try makeIdentExpr(a, "MASK");
+    const target_expr = try makeIdentExpr(a, "A");
+    const value_expr = try makeLiteralExpr(a, .real, "1.0");
+
+    const stmts_list = try a.alloc(input.Stmt, 1);
+    stmts_list[0] = .{
+        .label = null,
+        .node = .{ .where_stmt = .{
+            .mask = mask_expr,
+            .target = target_expr,
+            .value = value_expr,
+        } },
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmts_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const dim3 = try makeLiteralExpr(a, .integer, "3");
+    const dim4 = try makeLiteralExpr(a, .integer, "4");
+    const mask_dims = try a.alloc(*input.Expr, 1);
+    mask_dims[0] = dim4;
+    const target_dims = try a.alloc(*input.Expr, 1);
+    target_dims[0] = dim3;
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 2);
+    sem_symbols[0] = makeLocalArraySymbol("MASK", .logical, mask_dims);
+    sem_symbols[1] = makeLocalArraySymbol("A", .real, target_dims);
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "where_extent_guard.f", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "where_shape_fail") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "@llvm.trap") != null);
 }

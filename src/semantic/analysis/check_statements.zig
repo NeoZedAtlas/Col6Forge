@@ -131,6 +131,13 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             for (ifb.then_stmts) |inner| try checkStmt(self, inner);
             for (ifb.else_stmts) |inner| try checkStmt(self, inner);
         },
+        .where_stmt => |where| {
+            try checkLogicalConditionExpr(self, where.mask);
+            const target_ty = try checkExprType(self, where.target);
+            const value_ty = try checkExprType(self, where.value);
+            if (!isAssignmentTarget(self, where.target)) return error.AssignmentTypeMismatch;
+            if (!isAssignmentCompatible(target_ty, value_ty)) return error.AssignmentTypeMismatch;
+        },
         .ret => |ret| {
             if (ret.value) |value| try checkExpr(self, value);
         },

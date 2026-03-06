@@ -42,6 +42,7 @@ pub const StmtNode = union(enum) {
     entry: EntryStmt,
     if_single: IfSingle,
     if_block: IfBlock,
+    where_stmt: WhereStmt,
 };
 
 pub const Assignment = struct {
@@ -180,6 +181,12 @@ pub const IfBlock = struct {
     condition: *Expr,
     then_stmts: []Stmt,
     else_stmts: []Stmt,
+};
+
+pub const WhereStmt = struct {
+    mask: *Expr,
+    target: *Expr,
+    value: *Expr,
 };
 
 pub const ArithIfStmt = struct {

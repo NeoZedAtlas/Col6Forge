@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../input.zig");
 const sema = @import("../../../../semantic/mod.zig");
 const context = @import("../context.zig");
+const llvm_types = @import("../../types.zig");
 const expr = @import("../expression/mod.zig");
 const cfg = @import("../../stmts/cfg.zig");
 const utils = @import("../utils.zig");
@@ -153,6 +154,224 @@ pub fn emitIfBlock(
         try emit_stmt_list_range(ctx, builder, ifb.else_stmts, blocks.names, &blocks.label_map, &blocks.label_index, 0, blocks.names.len - 1, next_block);
     }
     return true;
+}
+
+pub fn emitWhere(
+    ctx: *Context,
+    builder: anytype,
+    where: ast.WhereStmt,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+    comptime emit_stmt_fn: anytype,
+) EmitError!bool {
+    if (!isArrayValuedExpr(ctx, where.mask)) {
+        const assign_node = ast.StmtNode{
+            .assignment = .{
+                .target = where.target,
+                .value = where.value,
+            },
+        };
+        const assign_ptr = try ctx.allocator.create(ast.StmtNode);
+        assign_ptr.* = assign_node;
+        const lowered = ast.IfSingle{
+            .condition = where.mask,
+            .stmt = assign_ptr,
+        };
+        return emitIfSingle(ctx, builder, lowered, next_block, local_label_map, emit_stmt_fn);
+    }
+
+    const mask_name = switch (where.mask.*) {
+        .identifier => |name| name,
+        else => return error.ControlFlowUnsupported,
+    };
+    const mask_sym = ctx.findSymbol(mask_name) orelse return error.UnknownSymbol;
+    if (mask_sym.type_kind != .logical or mask_sym.dims.len == 0) return error.ControlFlowUnsupported;
+
+    const target_name = switch (where.target.*) {
+        .identifier => |name| name,
+        else => return error.ControlFlowUnsupported,
+    };
+    const target_sym = ctx.findSymbol(target_name) orelse return error.UnknownSymbol;
+    if (target_sym.dims.len == 0 or target_sym.type_kind == .character) return error.ControlFlowUnsupported;
+
+    const value_array_name: ?[]const u8 = switch (where.value.*) {
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse break :blk null;
+            if (sym.dims.len == 0) break :blk null;
+            if (sym.type_kind == .character) return error.ControlFlowUnsupported;
+            break :blk name;
+        },
+        else => null,
+    };
+
+    if (target_sym.dims.len != mask_sym.dims.len) return error.InvalidSubscript;
+
+    const total_count = try emitArrayElemCount(ctx, builder, target_sym);
+    if (value_array_name) |arr_name| {
+        const value_sym = ctx.findSymbol(arr_name) orelse return error.UnknownSymbol;
+        if (value_sym.dims.len != target_sym.dims.len) return error.InvalidSubscript;
+        const value_count = try emitArrayElemCount(ctx, builder, value_sym);
+        try ensureCompatibleArrayExtents(ctx, builder, total_count, value_count);
+    }
+    const mask_count = try emitArrayElemCount(ctx, builder, mask_sym);
+    try ensureCompatibleArrayExtents(ctx, builder, total_count, mask_count);
+
+    const mask_base = ctx.locals.get(mask_name) orelse return error.UnknownSymbol;
+    const target_base = ctx.locals.get(target_name) orelse return error.UnknownSymbol;
+    const target_ty = llvm_types.typeFromKind(target_sym.type_kind);
+    const value_base: ?ValueRef = if (value_array_name) |arr_name| ctx.locals.get(arr_name) orelse return error.UnknownSymbol else null;
+
+    const idx_ptr = try ctx.nextTemp();
+    try builder.alloca(idx_ptr, .i64);
+    try builder.store(constI64(ctx, 0), .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+
+    const loop_cond = try ctx.nextLabel("where_cond");
+    const loop_body = try ctx.nextLabel("where_body");
+    const loop_then = try ctx.nextLabel("where_then");
+    const loop_else = try ctx.nextLabel("where_else");
+    const loop_inc = try ctx.nextLabel("where_inc");
+    const loop_end = try ctx.nextLabel("where_end");
+
+    try builder.br(loop_cond);
+
+    try builder.label(loop_cond);
+    const idx_tmp = try ctx.nextTemp();
+    try builder.load(idx_tmp, .i64, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    const idx_val = ValueRef{ .name = idx_tmp, .ty = .i64, .is_ptr = false };
+    const cond_tmp = try ctx.nextTemp();
+    try builder.compare(cond_tmp, "icmp", "slt", .i64, idx_val, total_count);
+    try builder.brCond(.{ .name = cond_tmp, .ty = .i1, .is_ptr = false }, loop_body, loop_end);
+
+    try builder.label(loop_body);
+    const mask_gep = try ctx.nextTemp();
+    try builder.gep(mask_gep, .i1, mask_base, idx_val);
+    const mask_val_tmp = try ctx.nextTemp();
+    try builder.load(mask_val_tmp, .i1, .{ .name = mask_gep, .ty = .ptr, .is_ptr = true });
+    try builder.brCond(.{ .name = mask_val_tmp, .ty = .i1, .is_ptr = false }, loop_then, loop_else);
+
+    try builder.label(loop_then);
+    const target_gep = try ctx.nextTemp();
+    try builder.gep(target_gep, target_ty, target_base, idx_val);
+    const target_ptr = ValueRef{ .name = target_gep, .ty = .ptr, .is_ptr = true };
+
+    var rhs: ValueRef = undefined;
+    if (value_base) |base| {
+        const rhs_gep = try ctx.nextTemp();
+        try builder.gep(rhs_gep, target_ty, base, idx_val);
+        const rhs_tmp = try ctx.nextTemp();
+        try builder.load(rhs_tmp, target_ty, .{ .name = rhs_gep, .ty = .ptr, .is_ptr = true });
+        rhs = .{ .name = rhs_tmp, .ty = target_ty, .is_ptr = false };
+    } else {
+        rhs = try expr.emitExpr(ctx, builder, where.value);
+        rhs = try expr.coerce(ctx, builder, rhs, target_ty);
+    }
+    try builder.store(rhs, target_ptr);
+    try builder.br(loop_inc);
+
+    try builder.label(loop_else);
+    try builder.br(loop_inc);
+
+    try builder.label(loop_inc);
+    const next_idx = try expr.emitAdd(ctx, builder, idx_val, constI64(ctx, 1));
+    try builder.store(next_idx, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.br(loop_cond);
+
+    try builder.label(loop_end);
+    try builder.br(next_block);
+    return true;
+}
+
+fn constI64(ctx: *Context, value: i64) ValueRef {
+    return .{
+        .name = ctx.intLiteral(value) catch unreachable,
+        .ty = .i64,
+        .is_ptr = false,
+    };
+}
+
+fn emitArrayElemCount(ctx: *Context, builder: anytype, sym: sema.Symbol) EmitError!ValueRef {
+    var total = constI64(ctx, 1);
+    for (sym.dims, 0..) |dim, dim_idx| {
+        var extent = expr.emitSymbolDimExtent(ctx, builder, sym, dim_idx) catch |err| switch (err) {
+            error.UnknownSymbol => expr.emitDimValue(ctx, builder, dim) catch |inner| switch (inner) {
+                error.UnknownSymbol => constI64(ctx, 1),
+                else => return inner,
+            },
+            else => return err,
+        };
+        if (extent.ty != .i64) {
+            extent = try expr.coerce(ctx, builder, extent, .i64);
+        }
+        total = try expr.emitMul(ctx, builder, total, extent);
+    }
+    return total;
+}
+
+fn ensureCompatibleArrayExtents(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!void {
+    if (std.mem.eql(u8, lhs.name, rhs.name)) return;
+
+    const mismatch_name = try ctx.nextTemp();
+    try builder.compare(mismatch_name, "icmp", "ne", .i64, lhs, rhs);
+    const mismatch = ValueRef{ .name = mismatch_name, .ty = .i1, .is_ptr = false };
+
+    const fail_label = try ctx.nextLabel("where_shape_fail");
+    const ok_label = try ctx.nextLabel("where_shape_ok");
+    try builder.brCond(mismatch, fail_label, ok_label);
+
+    try builder.label(fail_label);
+    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, &.{}, false);
+    try builder.callTyped(null, .void, trap_name, &.{});
+    try builder.emitUnreachable();
+
+    try builder.label(ok_label);
+}
+
+fn isArrayValuedExpr(ctx: *Context, expr_node: *ast.Expr) bool {
+    switch (expr_node.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return false;
+            return sym.dims.len > 0;
+        },
+        .unary => |un| return isArrayValuedExpr(ctx, un.expr),
+        .binary => |bin| return isArrayValuedExpr(ctx, bin.left) or isArrayValuedExpr(ctx, bin.right),
+        .complex_literal => |lit| return isArrayValuedExpr(ctx, lit.real) or isArrayValuedExpr(ctx, lit.imag),
+        .substring => |sub| {
+            for (sub.args) |arg| {
+                if (isArrayValuedExpr(ctx, arg)) return true;
+            }
+            if (sub.start) |start| {
+                if (isArrayValuedExpr(ctx, start)) return true;
+            }
+            if (sub.end) |end_expr| {
+                if (isArrayValuedExpr(ctx, end_expr)) return true;
+            }
+            return false;
+        },
+        .dim_range => return true,
+        .call_or_subscript => |call_or_sub| {
+            const sym = ctx.findSymbol(call_or_sub.name) orelse return false;
+            var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr_node))) orelse .unknown;
+            if (kind == .unknown) {
+                if (sym.dims.len > 0) {
+                    kind = .subscript;
+                } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                    kind = .call;
+                }
+            }
+            if (kind == .subscript) {
+                if (call_or_sub.args.len != sym.dims.len) return true;
+                for (call_or_sub.args) |arg| {
+                    if (isArrayValuedExpr(ctx, arg)) return true;
+                }
+                return false;
+            }
+            for (call_or_sub.args) |arg| {
+                if (isArrayValuedExpr(ctx, arg)) return true;
+            }
+            return false;
+        },
+        else => return false,
+    }
 }
 
 const TestHarness = struct {

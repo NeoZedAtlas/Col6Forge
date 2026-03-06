@@ -250,6 +250,9 @@ fn emitStmtInner(
         .if_block => |ifb| {
             return control.emitIfBlock(ctx, builder, ifb, next_block, local_label_map, emitStmtListRange);
         },
+        .where_stmt => |where| {
+            return control.emitWhere(ctx, builder, where, next_block, local_label_map, emitStmt);
+        },
     }
     try brIfNeeded(builder, next_block);
     return true;

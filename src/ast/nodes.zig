@@ -52,6 +52,7 @@ pub const DataStmt = stmt_nodes.DataStmt;
 pub const FormatStmt = stmt_nodes.FormatStmt;
 pub const IfSingle = stmt_nodes.IfSingle;
 pub const IfBlock = stmt_nodes.IfBlock;
+pub const WhereStmt = stmt_nodes.WhereStmt;
 pub const ArithIfStmt = stmt_nodes.ArithIfStmt;
 pub const PauseStmt = stmt_nodes.PauseStmt;
 pub const GotoStmt = stmt_nodes.GotoStmt;

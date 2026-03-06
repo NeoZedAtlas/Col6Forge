@@ -239,6 +239,18 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         .if_block => |ifb| {
             try writer.print(";   stmt label={s} if-block then({d}) else({d})\n", .{ label_text, ifb.then_stmts.len, ifb.else_stmts.len });
         },
+        .where_stmt => |where| {
+            try writer.print(";   stmt label={s} where\n", .{label_text});
+            try printIndent(writer, 2);
+            try writer.writeAll("mask:\n");
+            try printExpr(writer, where.mask, 3);
+            try printIndent(writer, 2);
+            try writer.writeAll("target:\n");
+            try printExpr(writer, where.target, 3);
+            try printIndent(writer, 2);
+            try writer.writeAll("value:\n");
+            try printExpr(writer, where.value, 3);
+        },
     }
 }
 
@@ -585,6 +597,7 @@ fn stmtNodeName(node: ast.StmtNode) []const u8 {
         .entry => "entry",
         .if_single => "if-single",
         .if_block => "if-block",
+        .where_stmt => "where",
     };
 }
 

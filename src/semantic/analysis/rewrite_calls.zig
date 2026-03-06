@@ -193,6 +193,11 @@ fn rewriteStmt(
                 changed = true;
             }
         },
+        .where_stmt => |*where| {
+            changed = (try rewriteExpr(ctx, state, where.mask, stmt.*, prelude, allow_prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, where.target, stmt.*, prelude, allow_prelude)) or changed;
+            changed = (try rewriteExpr(ctx, state, where.value, stmt.*, prelude, allow_prelude)) or changed;
+        },
         .ret => |*ret| {
             if (ret.value) |value| changed = (try rewriteExpr(ctx, state, value, stmt.*, prelude, allow_prelude)) or changed;
         },

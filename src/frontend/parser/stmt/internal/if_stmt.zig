@@ -251,8 +251,11 @@ pub fn parseWhereAsIfSingle(arena: std.mem.Allocator, lp: *LineParser) anyerror!
     const target = try expr.parseExpr(lp, arena, 0);
     _ = lp.expect(.equals) orelse return error.UnexpectedToken;
     const value = try expr.parseExpr(lp, arena, 0);
-
-    const assign_node = try arena.create(StmtNode);
-    assign_node.* = .{ .assignment = .{ .target = target, .value = value } };
-    return .{ .if_single = .{ .condition = cond, .stmt = assign_node } };
+    return .{
+        .where_stmt = .{
+            .mask = cond,
+            .target = target,
+            .value = value,
+        },
+    };
 }
