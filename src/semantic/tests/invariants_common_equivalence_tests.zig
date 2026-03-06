@@ -3,6 +3,7 @@ const helpers = @import("helpers.zig");
 
 const expectSemanticErrorInvariant = helpers.expectSemanticErrorInvariant;
 const expectSemanticSuccessInvariant = helpers.expectSemanticSuccessInvariant;
+const expectParseErrorInvariant = helpers.expectParseErrorInvariant;
 
 test "invariant COMMON/EQUIVALENCE 01 named COMMON identical layout succeeds" {
     const source =
@@ -93,7 +94,7 @@ test "invariant COMMON/EQUIVALENCE 07 COMMON stride declaration shape fails" {
         "      INTEGER A(3)\n" ++
         "      COMMON /BLK7/ A\n" ++
         "      END\n";
-    try expectSemanticErrorInvariant(source, error.CommonBlockMismatch, "CF3115");
+    try expectParseErrorInvariant(source, error.UnexpectedToken, "CF2001");
 }
 
 test "invariant COMMON/EQUIVALENCE 08 COMMON non-positive extent fails" {

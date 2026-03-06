@@ -6,6 +6,7 @@ const helpers = @import("helpers.zig");
 const analyzeProgram = api.analyzeProgram;
 
 const expectSemanticErrorInvariant = helpers.expectSemanticErrorInvariant;
+const expectParseErrorInvariant = helpers.expectParseErrorInvariant;
 const expectGeneratedTempCountInvariant = helpers.expectGeneratedTempCountInvariant;
 const expectFirstTopLevelCallArgGeneratedTempInvariant = helpers.expectFirstTopLevelCallArgGeneratedTempInvariant;
 const expectFirstTopLevelCallArgCallExprInvariant = helpers.expectFirstTopLevelCallArgCallExprInvariant;
@@ -131,5 +132,5 @@ test "invariant array lowering 11 conversion on triplet-stride declared array is
         "      INTEGER A(1:5:2)\n" ++
         "      CALL U(REAL(A))\n" ++
         "      END\n";
-    try expectSemanticErrorInvariant(source, error.UnsupportedIntrinsicType, "CF3127");
+    try expectParseErrorInvariant(source, error.UnexpectedToken, "CF2001");
 }

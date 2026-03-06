@@ -188,7 +188,7 @@ test "semantic rejects intrinsic array conversion on deferred-shape array" {
     try testing.expect(std.mem.eql(u8, diag.code, "CF3127"));
 }
 
-test "semantic rejects intrinsic array conversion on triplet-stride declaration shape" {
+test "parser rejects triplet-stride declaration shape" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -202,11 +202,9 @@ test "semantic rejects intrinsic array conversion on triplet-stride declaration 
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const program = try parser.parseProgram(arena.allocator(), lines);
-
-    try testing.expectError(error.UnsupportedIntrinsicType, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
-    try testing.expect(std.mem.eql(u8, diag.code, "CF3127"));
+    try testing.expectError(error.UnexpectedToken, parser.parseProgram(arena.allocator(), lines));
+    const diag = parser.takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF2001"));
 }
 
 test "semantic reports CF3123 for nested logical IF" {

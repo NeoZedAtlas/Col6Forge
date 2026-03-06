@@ -342,11 +342,21 @@ fn parseAttrDimensions(lp: *LineParser, arena: std.mem.Allocator) ![]*ast.Expr {
     var dims = std.array_list.Managed(*ast.Expr).init(arena);
     while (!lp.peekIs(.r_paren)) {
         const dim = try expr.parseDimExpr(lp, arena);
+        try validateDeclarationDimExpr(dim);
         try dims.append(dim);
         _ = lp.consume(.comma);
     }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     return dims.toOwnedSlice();
+}
+
+fn validateDeclarationDimExpr(dim: *ast.Expr) !void {
+    switch (dim.*) {
+        .dim_range => |range| {
+            if (range.stride != null) return error.UnexpectedToken;
+        },
+        else => {},
+    }
 }
 
 fn parseOptionalKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
@@ -435,6 +445,7 @@ fn parseDeclarators(
         if (lp.consume(.l_paren)) {
             while (!lp.peekIs(.r_paren)) {
                 const dim = try expr.parseDimExpr(lp, arena);
+                try validateDeclarationDimExpr(dim);
                 try dims.append(dim);
                 _ = lp.consume(.comma);
             }
@@ -474,6 +485,7 @@ fn parseCommonDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_cha
         if (lp.consume(.l_paren)) {
             while (!lp.peekIs(.r_paren)) {
                 const dim = try expr.parseDimExpr(lp, arena);
+                try validateDeclarationDimExpr(dim);
                 try dims.append(dim);
                 _ = lp.consume(.comma);
             }
@@ -570,6 +582,22 @@ test "parseDecl handles simple type declaration" {
         },
         else => return error.UnexpectedToken,
     }
+}
+
+test "parseDecl rejects triplet stride in declaration dimensions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      INTEGER A(1:5:2)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    try testing.expectError(error.UnexpectedToken, parseDecl(&lp, arena.allocator()));
 }
 
 test "parseDecl captures declarator initializers" {

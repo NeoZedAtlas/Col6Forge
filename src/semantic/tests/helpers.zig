@@ -24,6 +24,21 @@ pub fn expectSemanticErrorInvariant(source: []const u8, expected_err: anyerror, 
     try testing.expect(std.mem.eql(u8, diag.code, expected_code));
 }
 
+pub fn expectParseErrorInvariant(source: []const u8, expected_err: anyerror, expected_code: []const u8) !void {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    try testing.expectError(expected_err, parser.parseProgram(arena.allocator(), lines));
+    const diag = parser.takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, expected_code));
+}
+
 pub fn expectSemanticSuccessInvariant(source: []const u8) !void {
     const testing = std.testing;
     const allocator = testing.allocator;
