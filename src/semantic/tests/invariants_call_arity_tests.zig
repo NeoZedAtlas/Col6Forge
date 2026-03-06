@@ -112,7 +112,7 @@ test "invariant call arity 10 intrinsic MAX with two args succeeds" {
     try expectSemanticSuccessInvariant(source);
 }
 
-test "invariant call arity 11 alternate return does not count as expr arg" {
+test "invariant call arity 11 alternate return requires matching dummy star" {
     const source =
         "      SUBROUTINE S\n" ++
         "      CALL T(*10,1)\n" ++
@@ -121,7 +121,7 @@ test "invariant call arity 11 alternate return does not count as expr arg" {
         "      SUBROUTINE T(A)\n" ++
         "      INTEGER A\n" ++
         "      END\n";
-    try expectSemanticSuccessInvariant(source);
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
 }
 
 test "invariant call arity 12 dummy procedure argument skips global arity checks" {
@@ -129,6 +129,41 @@ test "invariant call arity 12 dummy procedure argument skips global arity checks
         "      SUBROUTINE S(FCN)\n" ++
         "      EXTERNAL FCN\n" ++
         "      CALL FCN(1,2,3,4)\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
+test "invariant call arity 13 alternate return succeeds when callee declares star dummy" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CALL T(*10,1)\n" ++
+        " 10   CONTINUE\n" ++
+        "      END\n" ++
+        "      SUBROUTINE T(A,*)\n" ++
+        "      INTEGER A\n" ++
+        "      RETURN\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}
+
+test "invariant call arity 14 missing alternate return label is rejected" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CALL T(1)\n" ++
+        "      END\n" ++
+        "      SUBROUTINE T(A,*)\n" ++
+        "      INTEGER A\n" ++
+        "      RETURN\n" ++
+        "      END\n";
+    try expectSemanticErrorInvariant(source, error.InvalidArgumentCount, "CF3110");
+}
+
+test "invariant call arity 15 unresolved EXTERNAL with alternate return is trusted" {
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      EXTERNAL T\n" ++
+        "      CALL T(*10,1)\n" ++
+        " 10   CONTINUE\n" ++
         "      END\n";
     try expectSemanticSuccessInvariant(source);
 }

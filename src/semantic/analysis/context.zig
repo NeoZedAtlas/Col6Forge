@@ -8,6 +8,7 @@ pub const Context = struct {
     pub const ProcedureSig = struct {
         kind: ast.ProgramUnitKind,
         arg_count: usize,
+        alt_return_count: usize = 0,
     };
 
     pub const BuiltinConstant = struct {

@@ -900,6 +900,7 @@ fn functionReturnSymbolName(unit: ast.ProgramUnit) []const u8 {
 }
 
 pub fn unitHasAltReturn(unit: ast.ProgramUnit) bool {
+    if (unit.alt_return_dummy_count != 0) return true;
     for (unit.stmts) |stmt| {
         if (stmtHasAltReturn(stmt)) return true;
     }

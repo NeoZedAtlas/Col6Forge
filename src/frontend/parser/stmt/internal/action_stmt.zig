@@ -133,9 +133,11 @@ pub fn parseActionStmtNode(
                 _ = lp.consumeKeyword("ENTRY");
                 const name = lp.readName(arena) orelse return error.MissingName;
                 var args = std.array_list.Managed([]const u8).init(arena);
+                var alt_return_dummy_count: usize = 0;
                 if (lp.consume(.l_paren)) {
                     while (!lp.peekIs(.r_paren)) {
                         if (lp.consume(.star)) {
+                            alt_return_dummy_count += 1;
                             _ = lp.consume(.comma);
                             continue;
                         }
@@ -145,7 +147,13 @@ pub fn parseActionStmtNode(
                     }
                     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
                 }
-                return .{ .entry = .{ .name = name, .args = try args.toOwnedSlice() } };
+                return .{
+                    .entry = .{
+                        .name = name,
+                        .args = try args.toOwnedSlice(),
+                        .alt_return_dummy_count = alt_return_dummy_count,
+                    },
+                };
             }
             if (isErrorStopStart(lp.*)) {
                 if (!lp.consumeKeyword("ERRORSTOP")) {

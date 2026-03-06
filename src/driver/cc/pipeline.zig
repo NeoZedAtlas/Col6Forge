@@ -38,7 +38,14 @@ pub fn collectFortranKnownSymbols(
                 try upsertKnownFunctionType(allocator, &function_types, unit.name, fn_ty);
             }
             if (unit.kind == .function or unit.kind == .subroutine) {
-                try upsertKnownProcedureSig(allocator, &procedure_sigs, unit.name, unit.kind, unit.args.len);
+                try upsertKnownProcedureSig(
+                    allocator,
+                    &procedure_sigs,
+                    unit.name,
+                    unit.kind,
+                    unit.args.len,
+                    unit.alt_return_dummy_count,
+                );
             }
         }
     }
@@ -136,16 +143,19 @@ fn upsertKnownProcedureSig(
     name: []const u8,
     kind: Col6Forge.ast.ProgramUnitKind,
     arg_count: usize,
+    alt_return_count: usize,
 ) !void {
     if (indexOfKnownProcedureSig(list.items, name)) |idx| {
         list.items[idx].kind = kind;
         list.items[idx].arg_count = arg_count;
+        list.items[idx].alt_return_count = alt_return_count;
         return;
     }
     try list.append(allocator, .{
         .name = try allocator.dupe(u8, name),
         .kind = kind,
         .arg_count = arg_count,
+        .alt_return_count = alt_return_count,
     });
 }
 

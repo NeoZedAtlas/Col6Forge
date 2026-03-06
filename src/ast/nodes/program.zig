@@ -17,6 +17,7 @@ pub const ProgramUnit = struct {
     name: []const u8,
     result_name: ?[]const u8 = null,
     args: []const []const u8,
+    alt_return_dummy_count: usize = 0,
     decls: []decl_nodes.Decl,
     decl_sources: []DeclSource = &.{},
     stmts: []stmt_nodes.Stmt,

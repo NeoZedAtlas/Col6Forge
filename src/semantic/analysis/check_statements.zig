@@ -34,7 +34,14 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
         .use_stmt => {},
         .call => |call| {
             const call_idx = resolve_symbols.findSymbolIndex(self, call.name);
-            try checkKnownProcedureCallArity(self, call.name, countCallExprArgs(call.args), true, call_idx);
+            try checkKnownProcedureCallArity(
+                self,
+                call.name,
+                countCallExprArgs(call.args),
+                countCallAltReturnArgs(call.args),
+                true,
+                call_idx,
+            );
             for (call.args) |arg| {
                 switch (arg) {
                     .expr => |expr_node| try checkExpr(self, expr_node),
@@ -219,7 +226,7 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                 }
             } else {
                 for (call.args) |arg| _ = try checkExprType(self, arg);
-                try checkKnownProcedureCallArity(self, call.name, call.args.len, false, idx);
+                try checkKnownProcedureCallArity(self, call.name, call.args.len, 0, false, idx);
             }
             return sym.type_kind;
         },
@@ -282,10 +289,19 @@ fn countCallExprArgs(args: []ast.CallArg) usize {
     return count;
 }
 
+fn countCallAltReturnArgs(args: []ast.CallArg) usize {
+    var count: usize = 0;
+    for (args) |arg| {
+        if (arg == .alt_return) count += 1;
+    }
+    return count;
+}
+
 fn checkKnownProcedureCallArity(
     self: *context.Context,
     name: []const u8,
-    got: usize,
+    got_expr: usize,
+    got_alt_return: usize,
     is_call_stmt: bool,
     symbol_idx: ?usize,
 ) CheckError!void {
@@ -299,14 +315,17 @@ fn checkKnownProcedureCallArity(
     if (resolve_symbols.lookupKnownProcedureSig(self, name)) |sig| {
         if (is_call_stmt and sig.kind != .subroutine) return error.InvalidArgumentCount;
         if (!is_call_stmt and sig.kind != .function) return error.InvalidArgumentCount;
-        if (got != sig.arg_count) return error.InvalidArgumentCount;
+        if (got_expr != sig.arg_count) return error.InvalidArgumentCount;
+        if (is_call_stmt and got_alt_return != sig.alt_return_count) return error.InvalidArgumentCount;
+        if (!is_call_stmt and got_alt_return != 0) return error.InvalidArgumentCount;
         return;
     }
 
     if (lookupIntrinsicArity(self, name)) |arity| {
-        if (got < arity.min) return error.InvalidArgumentCount;
+        if (got_alt_return != 0) return error.InvalidArgumentCount;
+        if (got_expr < arity.min) return error.InvalidArgumentCount;
         if (arity.max) |max| {
-            if (got > max) return error.InvalidArgumentCount;
+            if (got_expr > max) return error.InvalidArgumentCount;
         }
     }
 }

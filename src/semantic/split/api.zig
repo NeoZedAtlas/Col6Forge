@@ -20,6 +20,7 @@ pub const KnownProcedureSig = struct {
     name: []const u8,
     kind: ast.ProgramUnitKind,
     arg_count: usize,
+    alt_return_count: usize = 0,
 };
 
 pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticProgram {
@@ -48,6 +49,7 @@ pub fn analyzeProgramWithKnown(
         try known_procedure_sigs.put(key, .{
             .kind = known.kind,
             .arg_count = known.arg_count,
+            .alt_return_count = known.alt_return_count,
         });
     }
 
@@ -58,7 +60,11 @@ pub fn analyzeProgramWithKnown(
         }
         if (unit.kind == .function or unit.kind == .subroutine) {
             const key = try symbol_lookup.lowerDup(arena, unit.name);
-            try known_procedure_sigs.put(key, .{ .kind = unit.kind, .arg_count = unit.args.len });
+            try known_procedure_sigs.put(key, .{
+                .kind = unit.kind,
+                .arg_count = unit.args.len,
+                .alt_return_count = unit.alt_return_dummy_count,
+            });
         }
     }
 

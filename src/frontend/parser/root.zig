@@ -273,6 +273,7 @@ const Parser = struct {
             .name = header.name,
             .result_name = header.result_name,
             .args = header.args,
+            .alt_return_dummy_count = header.alt_return_dummy_count,
             .decls = try decls.toOwnedSlice(),
             .decl_sources = try decl_sources.toOwnedSlice(),
             .stmts = try stmts.toOwnedSlice(),
@@ -287,6 +288,7 @@ const Parser = struct {
             .name = name,
             .result_name = null,
             .args = &.{},
+            .alt_return_dummy_count = 0,
             .type_decl = null,
         };
     }
@@ -303,6 +305,7 @@ const ProgramUnitHeader = struct {
     name: []const u8,
     result_name: ?[]const u8,
     args: []const []const u8,
+    alt_return_dummy_count: usize,
     type_decl: ?Decl,
 };
 
@@ -341,9 +344,11 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
         break :blk synthetic;
     };
     var args_list = std.array_list.Managed([]const u8).init(arena);
+    var alt_return_dummy_count: usize = 0;
     if (lp.consume(.l_paren)) {
         while (!lp.peekIs(.r_paren)) {
             if (lp.consume(.star)) {
+                alt_return_dummy_count += 1;
                 _ = lp.consume(.comma);
                 continue;
             }
@@ -380,6 +385,7 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
         .name = name,
         .result_name = result_name,
         .args = try args_list.toOwnedSlice(),
+        .alt_return_dummy_count = alt_return_dummy_count,
         .type_decl = type_decl,
     };
 }
@@ -804,6 +810,7 @@ fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {
                 .kind = unit.kind,
                 .name = unit.name,
                 .args = unit.args,
+                .alt_return_dummy_count = unit.alt_return_dummy_count,
                 .decls = unit.decls,
                 .decl_sources = unit.decl_sources,
                 .stmts = unit.stmts[0..idx],
@@ -829,6 +836,7 @@ fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {
                 .kind = unit.kind,
                 .name = entry.name,
                 .args = entry.args,
+                .alt_return_dummy_count = entry.alt_return_dummy_count,
                 .decls = unit.decls,
                 .decl_sources = unit.decl_sources,
                 .stmts = unit.stmts[idx..end_idx],
@@ -922,6 +930,7 @@ test "parseProgram accepts alternate return dummies in subroutine header" {
     try testing.expectEqualStrings("FOO", unit.name);
     try testing.expectEqual(@as(usize, 1), unit.args.len);
     try testing.expectEqualStrings("A", unit.args[0]);
+    try testing.expectEqual(@as(usize, 2), unit.alt_return_dummy_count);
 }
 
 test "parseProgram handles CONTAINS internal function blocks" {

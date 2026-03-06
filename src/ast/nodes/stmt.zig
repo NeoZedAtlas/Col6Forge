@@ -81,6 +81,7 @@ pub const ReturnStmt = struct {
 pub const EntryStmt = struct {
     name: []const u8,
     args: []const []const u8,
+    alt_return_dummy_count: usize = 0,
 };
 
 pub const WriteStmt = struct {
