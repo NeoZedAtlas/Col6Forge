@@ -35,6 +35,28 @@ test "parseStatement parses assignment" {
     try testing.expect(stmt_node.node == .assignment);
 }
 
+test "parseStatement treats split IFX name as assignment target" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      I F X = 1\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+
+    try testing.expectEqual(@as(usize, 1), idx);
+    try testing.expect(stmt_node.node == .assignment);
+    try testing.expectEqualStrings("IFX", stmt_node.node.assignment.target.identifier);
+}
+
 test "parseStatement handles READ with UNIT equals star" {
     const testing = std.testing;
     const allocator = testing.allocator;

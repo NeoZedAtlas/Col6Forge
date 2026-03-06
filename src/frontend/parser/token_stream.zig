@@ -52,10 +52,14 @@ pub const TokenStream = struct {
     pub fn readName(self: *TokenStream, arena: std.mem.Allocator) ?[]const u8 {
         const first = self.peek() orelse return null;
         if (first.kind != .identifier) return null;
+        if (!hasNameContinuation(self.tokens, self.index + 1)) {
+            self.index += 1;
+            return self.tokenText(first);
+        }
         var buf = std.array_list.Managed(u8).init(arena);
         while (self.index < self.tokens.len) {
             const tok = self.tokens[self.index];
-            if (tok.kind != .identifier and tok.kind != .integer) break;
+            if (!isNameContinuationToken(tok.kind)) break;
             buf.appendSlice(self.tokenText(tok)) catch return null;
             self.index += 1;
         }
@@ -65,7 +69,7 @@ pub const TokenStream = struct {
     pub fn isKeyword(self: TokenStream, text: []const u8) bool {
         const tok = self.peek() orelse return false;
         if (tok.kind != .identifier) return false;
-        return eqNoCase(self.tokenText(tok), text);
+        return std.ascii.eqlIgnoreCase(self.tokenText(tok), text);
     }
 
     pub fn keywordSpan(self: TokenStream, text: []const u8) ?usize {
@@ -102,10 +106,57 @@ pub const TokenStream = struct {
 pub const LineParser = TokenStream;
 
 pub fn eqNoCase(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    var i: usize = 0;
-    while (i < a.len) : (i += 1) {
-        if (std.ascii.toLower(a[i]) != std.ascii.toLower(b[i])) return false;
-    }
-    return true;
+    return std.ascii.eqlIgnoreCase(a, b);
+}
+
+fn hasNameContinuation(tokens: []const lexer.Token, index: usize) bool {
+    if (index >= tokens.len) return false;
+    return isNameContinuationToken(tokens[index].kind);
+}
+
+fn isNameContinuationToken(kind: lexer.TokenKind) bool {
+    return kind == .identifier or kind == .integer;
+}
+
+fn makeTestLine(allocator: std.mem.Allocator, text: []const u8) !logical_line.LogicalLine {
+    return .{
+        .label = null,
+        .text = try allocator.dupe(u8, text),
+        .span = .{ .start_line = 1, .end_line = 1 },
+        .segments = try allocator.alloc(logical_line.Segment, 0),
+    };
+}
+
+test "readName joins split identifier and integer suffix" {
+    const allocator = std.testing.allocator;
+    var line = try makeTestLine(allocator, "A 1 = 2");
+    defer line.deinit(allocator);
+
+    const tokens = try lexer.lexLogicalLine(allocator, line);
+    defer allocator.free(tokens);
+
+    var ts = TokenStream.init(line, tokens);
+    const name = ts.readName(allocator) orelse return error.TestUnexpectedResult;
+    defer allocator.free(name);
+
+    try std.testing.expectEqualStrings("A1", name);
+    try std.testing.expectEqual(@as(usize, 2), ts.index);
+}
+
+test "readName uses zero-copy fast path for single identifier tokens" {
+    const allocator = std.testing.allocator;
+    var line = try makeTestLine(allocator, "COUNT = 1");
+    defer line.deinit(allocator);
+
+    const tokens = try lexer.lexLogicalLine(allocator, line);
+    defer allocator.free(tokens);
+
+    var ts = TokenStream.init(line, tokens);
+    var arena_buf: [0]u8 = [_]u8{};
+    var fba = std.heap.FixedBufferAllocator.init(&arena_buf);
+    const name = ts.readName(fba.allocator()) orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqualStrings("COUNT", name);
+    try std.testing.expectEqual(@as(usize, 1), ts.index);
+    try std.testing.expect(name.ptr == ts.tokenText(tokens[0]).ptr);
 }
