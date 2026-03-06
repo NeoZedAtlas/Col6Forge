@@ -5,8 +5,8 @@ const api = @import("../split/api.zig");
 const helpers = @import("helpers.zig");
 const analyzeProgram = api.analyzeProgram;
 
-const expectSemanticErrorInvariant = helpers.expectSemanticErrorInvariant;
 const expectParseErrorInvariant = helpers.expectParseErrorInvariant;
+const expectSemanticErrorNoGeneratedTempLeakInvariant = helpers.expectSemanticErrorNoGeneratedTempLeakInvariant;
 const expectGeneratedTempCountInvariant = helpers.expectGeneratedTempCountInvariant;
 const expectFirstTopLevelCallArgGeneratedTempInvariant = helpers.expectFirstTopLevelCallArgGeneratedTempInvariant;
 const expectFirstTopLevelCallArgCallExprInvariant = helpers.expectFirstTopLevelCallArgCallExprInvariant;
@@ -105,7 +105,12 @@ test "invariant array lowering 08 conversion over expression shape is rejected" 
         "      REAL A(3),B(3)\n" ++
         "      CALL U(INT(A+B))\n" ++
         "      END\n";
-    try expectSemanticErrorInvariant(source, error.UnsupportedIntrinsicType, "CF3127");
+    try expectSemanticErrorNoGeneratedTempLeakInvariant(
+        source,
+        "S",
+        error.UnsupportedIntrinsicType,
+        "CF3127",
+    );
 }
 
 test "invariant array lowering 09 conversion on assumed-size array is rejected" {
@@ -114,7 +119,12 @@ test "invariant array lowering 09 conversion on assumed-size array is rejected" 
         "      INTEGER A(*)\n" ++
         "      CALL U(REAL(A))\n" ++
         "      END\n";
-    try expectSemanticErrorInvariant(source, error.UnsupportedIntrinsicType, "CF3127");
+    try expectSemanticErrorNoGeneratedTempLeakInvariant(
+        source,
+        "S",
+        error.UnsupportedIntrinsicType,
+        "CF3127",
+    );
 }
 
 test "invariant array lowering 10 conversion on array section is rejected" {
@@ -123,7 +133,12 @@ test "invariant array lowering 10 conversion on array section is rejected" {
         "      INTEGER A(3)\n" ++
         "      CALL U(REAL(A(1:3)))\n" ++
         "      END\n";
-    try expectSemanticErrorInvariant(source, error.UnsupportedIntrinsicType, "CF3127");
+    try expectSemanticErrorNoGeneratedTempLeakInvariant(
+        source,
+        "S",
+        error.UnsupportedIntrinsicType,
+        "CF3127",
+    );
 }
 
 test "invariant array lowering 11 conversion on triplet-stride declared array is rejected" {

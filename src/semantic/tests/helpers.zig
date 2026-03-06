@@ -2,11 +2,14 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const fixed_form = @import("../../frontend/fixed_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
+const analysis = @import("../analysis/mod.zig");
+const analysis_context = @import("../analysis/context.zig");
 const symbols = @import("../symbol/mod.zig");
 
 const api = @import("../split/api.zig");
 const analyzeProgram = api.analyzeProgram;
 const takeDiagnostic = api.takeDiagnostic;
+const clearDiagnostic = api.clearDiagnostic;
 
 pub fn expectSemanticErrorInvariant(source: []const u8, expected_err: anyerror, expected_code: []const u8) !void {
     const testing = std.testing;
@@ -37,6 +40,57 @@ pub fn expectParseErrorInvariant(source: []const u8, expected_err: anyerror, exp
     try testing.expectError(expected_err, parser.parseProgram(arena.allocator(), lines));
     const diag = parser.takeDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.eql(u8, diag.code, expected_code));
+}
+
+pub fn expectSemanticErrorNoGeneratedTempLeakInvariant(
+    source: []const u8,
+    unit_name: []const u8,
+    expected_err: anyerror,
+    expected_code: []const u8,
+) !void {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expect(program.units.len > 0);
+
+    var known_function_types = std.StringHashMap(ast.TypeKind).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(analysis_context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+
+    clearDiagnostic();
+    var found = false;
+    for (program.units) |*unit| {
+        if (!std.ascii.eqlIgnoreCase(unit.name, unit_name)) continue;
+        found = true;
+
+        var unit_analyzer = analysis.UnitAnalyzer.init(
+            arena.allocator(),
+            unit,
+            &.{},
+            &known_function_types,
+            &known_procedure_sigs,
+            &known_host_parameters,
+            null,
+        );
+        try testing.expectError(expected_err, unit_analyzer.analyze());
+        const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+        try testing.expect(std.mem.eql(u8, diag.code, expected_code));
+
+        var generated_temp_count: usize = 0;
+        for (unit_analyzer.ctx.symbols.items) |sym| {
+            if (sym.is_generated_temp) generated_temp_count += 1;
+        }
+        try testing.expectEqual(@as(usize, 0), generated_temp_count);
+        break;
+    }
+    try testing.expect(found);
 }
 
 pub fn expectSemanticSuccessInvariant(source: []const u8) !void {
