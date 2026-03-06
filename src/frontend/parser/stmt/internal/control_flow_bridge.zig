@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
-const context = @import("../../context.zig");
+const context = @import("../../token_stream.zig");
 const helpers = @import("../helpers.zig");
 const control_flow = @import("../control_flow.zig");
 

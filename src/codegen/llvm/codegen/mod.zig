@@ -4,7 +4,7 @@ const context = @import("context.zig");
 const builder_mod = @import("builder.zig");
 const common = @import("common.zig");
 const codegen_diag = @import("../../diagnostic.zig");
-const stmts = @import("../stmts/mod.zig");
+const stmts = @import("../stmts/function.zig");
 const utils = @import("utils.zig");
 const format_items = @import("../../../format/items.zig");
 

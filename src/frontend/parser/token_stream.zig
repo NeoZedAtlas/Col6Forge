@@ -99,6 +99,8 @@ pub const TokenStream = struct {
     }
 };
 
+pub const LineParser = TokenStream;
+
 pub fn eqNoCase(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     var i: usize = 0;

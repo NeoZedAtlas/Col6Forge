@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
-const context = @import("context.zig");
+const context = @import("token_stream.zig");
 const fixed_form = @import("../fixed_form.zig");
 const lexer = @import("../lexer.zig");
 
