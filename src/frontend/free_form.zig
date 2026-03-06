@@ -182,12 +182,6 @@ fn rewriteAndAppend(
         kind_state.* = .single;
         return;
     }
-    if (std.mem.startsWith(u8, compact_stmt, "USEMINPACK_MODULE")) {
-        if (std.mem.indexOf(u8, compact_stmt, ":WP") != null) {
-            kind_state.* = .double;
-        }
-    }
-
     if (semicolonOutsideStrings(stmt)) |semi_idx| {
         const head = std.mem.trim(u8, stmt[0..semi_idx], " \t");
         const tail_raw = std.mem.trim(u8, stmt[semi_idx + 1 ..], " \t");
@@ -195,9 +189,7 @@ fn rewriteAndAppend(
             try appendLogicalLine(list, try allocator.dupe(u8, head), start_line, end_line);
         }
         if (tail_raw.len > 0) {
-            const tail = try collapseArrayCtorAssignToFirstElement(allocator, tail_raw);
-            defer allocator.free(tail);
-            try appendLogicalLine(list, try allocator.dupe(u8, tail), start_line, end_line);
+            try rewriteAndAppend(allocator, list, tail_raw, start_line, end_line, kind_state);
         }
         return;
     }
@@ -228,49 +220,41 @@ fn rewriteAndAppend(
                 var scalar_assigns = std.array_list.Managed(u8).init(allocator);
                 defer scalar_assigns.deinit();
 
-                var depth: i32 = 0;
-                var start: usize = 0;
-                var seg_i: usize = 0;
-                while (seg_i <= simplified.len) : (seg_i += 1) {
-                    const at_end = seg_i == simplified.len;
-                    const ch: u8 = if (at_end) 0 else simplified[seg_i];
-                    if (!at_end) {
-                        if (ch == '(' or ch == '[') depth += 1;
-                        if (ch == ')' or ch == ']') depth -= 1;
-                    }
-                    if (at_end or (ch == ',' and depth == 0)) {
-                        const seg = std.mem.trim(u8, simplified[start..seg_i], " \t");
-                        if (seg.len != 0) {
-                            if (std.mem.indexOfScalar(u8, seg, '=')) |eq_idx| {
-                                const name = std.mem.trim(u8, seg[0..eq_idx], " \t");
-                                const value = std.mem.trim(u8, seg[eq_idx + 1 ..], " \t");
-                                if (isArrayConstructor(value)) {
-                                    const elems = std.mem.trim(u8, value[1 .. value.len - 1], " \t");
-                                    const count = countTopLevelElements(elems);
-                                    const lparen_idx = std.mem.indexOfScalar(u8, name, '(');
-                                    const base_name = if (lparen_idx) |idx|
-                                        std.mem.trim(u8, name[0..idx], " \t")
-                                    else
-                                        name;
-                                    const decl_text = if (lparen_idx != null)
-                                        try std.fmt.allocPrint(allocator, "{s} {s}", .{ mapped, name })
-                                    else
-                                        try std.fmt.allocPrint(allocator, "{s} {s}({d})", .{ mapped, base_name, count });
-                                    try appendLogicalLine(list, decl_text, start_line, end_line);
-                                    const data_text = try std.fmt.allocPrint(allocator, "DATA {s} /{s}/", .{ base_name, elems });
-                                    try appendLogicalLine(list, data_text, start_line, end_line);
-                                } else {
-                                    if (scalar_names.items.len > 0) try scalar_names.appendSlice(", ");
-                                    try scalar_names.appendSlice(name);
-                                    if (scalar_assigns.items.len > 0) try scalar_assigns.appendSlice(", ");
-                                    try scalar_assigns.appendSlice(name);
-                                    try scalar_assigns.appendSlice(" = ");
-                                    try scalar_assigns.appendSlice(value);
-                                }
+                var rest = simplified;
+                while (true) {
+                    const next_idx = indexOfTopLevelScalar(rest, ',') orelse rest.len;
+                    const seg = std.mem.trim(u8, rest[0..next_idx], " \t");
+                    if (seg.len != 0) {
+                        if (std.mem.indexOfScalar(u8, seg, '=')) |eq_idx| {
+                            const name = std.mem.trim(u8, seg[0..eq_idx], " \t");
+                            const value = std.mem.trim(u8, seg[eq_idx + 1 ..], " \t");
+                            if (isArrayConstructor(value)) {
+                                const elems = std.mem.trim(u8, value[1 .. value.len - 1], " \t");
+                                const count = countTopLevelElements(elems);
+                                const lparen_idx = std.mem.indexOfScalar(u8, name, '(');
+                                const base_name = if (lparen_idx) |idx|
+                                    std.mem.trim(u8, name[0..idx], " \t")
+                                else
+                                    name;
+                                const decl_text = if (lparen_idx != null)
+                                    try std.fmt.allocPrint(allocator, "{s} {s}", .{ mapped, name })
+                                else
+                                    try std.fmt.allocPrint(allocator, "{s} {s}({d})", .{ mapped, base_name, count });
+                                try appendLogicalLine(list, decl_text, start_line, end_line);
+                                const data_text = try std.fmt.allocPrint(allocator, "DATA {s} /{s}/", .{ base_name, elems });
+                                try appendLogicalLine(list, data_text, start_line, end_line);
+                            } else {
+                                if (scalar_names.items.len > 0) try scalar_names.appendSlice(", ");
+                                try scalar_names.appendSlice(name);
+                                if (scalar_assigns.items.len > 0) try scalar_assigns.appendSlice(", ");
+                                try scalar_assigns.appendSlice(name);
+                                try scalar_assigns.appendSlice(" = ");
+                                try scalar_assigns.appendSlice(value);
                             }
                         }
-                        start = seg_i + 1;
                     }
+                    if (next_idx == rest.len) break;
+                    rest = rest[next_idx + 1 ..];
                 }
 
                 if (scalar_names.items.len > 0) {
@@ -305,36 +289,28 @@ fn rewriteAndAppend(
 
 fn simplifyParameterAssigns(allocator: std.mem.Allocator, assigns: []const u8, kind_state: KindState) ![]const u8 {
     var out = std.array_list.Managed(u8).init(allocator);
-    var depth: i32 = 0;
-    var start: usize = 0;
-    var i: usize = 0;
-    while (i <= assigns.len) : (i += 1) {
-        const at_end = i == assigns.len;
-        const ch: u8 = if (at_end) 0 else assigns[i];
-        if (!at_end) {
-            if (ch == '(' or ch == '[') depth += 1;
-            if (ch == ')' or ch == ']') depth -= 1;
-        }
-        if (at_end or (ch == ',' and depth == 0)) {
-            const seg = std.mem.trim(u8, assigns[start..i], " \t");
-            if (seg.len > 0) {
-                if (out.items.len > 0) try out.appendSlice(", ");
-                if (std.mem.indexOfScalar(u8, seg, '=')) |eq_idx| {
-                    const name = std.mem.trim(u8, seg[0..eq_idx], " \t");
-                    const value = std.mem.trim(u8, seg[eq_idx + 1 ..], " \t");
-                    const repl = if (kind_state == .unknown)
-                        value
-                    else
-                        replacementForParam(name, kind_state) orelse value;
-                    try out.appendSlice(name);
-                    try out.appendSlice(" = ");
-                    try out.appendSlice(repl);
-                } else {
-                    try out.appendSlice(seg);
-                }
+    var rest = assigns;
+    while (true) {
+        const next_idx = indexOfTopLevelScalar(rest, ',') orelse rest.len;
+        const seg = std.mem.trim(u8, rest[0..next_idx], " \t");
+        if (seg.len > 0) {
+            if (out.items.len > 0) try out.appendSlice(", ");
+            if (std.mem.indexOfScalar(u8, seg, '=')) |eq_idx| {
+                const name = std.mem.trim(u8, seg[0..eq_idx], " \t");
+                const value = std.mem.trim(u8, seg[eq_idx + 1 ..], " \t");
+                const repl = if (kind_state == .unknown)
+                    value
+                else
+                    replacementForParam(name, kind_state) orelse value;
+                try out.appendSlice(name);
+                try out.appendSlice(" = ");
+                try out.appendSlice(repl);
+            } else {
+                try out.appendSlice(seg);
             }
-            start = i + 1;
         }
+        if (next_idx == rest.len) break;
+        rest = rest[next_idx + 1 ..];
     }
     return out.toOwnedSlice();
 }
@@ -483,43 +459,24 @@ fn mapTypeBase(allocator: std.mem.Allocator, base_raw: []const u8, kind_state: K
 }
 
 fn topLevelCommaIndex(text: []const u8) ?usize {
-    var depth: i32 = 0;
-    for (text, 0..) |ch, i| {
-        switch (ch) {
-            '(' => depth += 1,
-            ')' => {
-                if (depth > 0) depth -= 1;
-            },
-            ',' => if (depth == 0) return i,
-            else => {},
-        }
-    }
-    return null;
+    return indexOfTopLevelScalar(text, ',');
 }
 
 fn extractAssignNames(allocator: std.mem.Allocator, assigns: []const u8) ![]const u8 {
     var out = std.array_list.Managed(u8).init(allocator);
-    var depth: i32 = 0;
-    var start: usize = 0;
-    var i: usize = 0;
-    while (i <= assigns.len) : (i += 1) {
-        const at_end = i == assigns.len;
-        const ch: u8 = if (at_end) 0 else assigns[i];
-        if (!at_end) {
-            if (ch == '(' or ch == '[') depth += 1;
-            if (ch == ')' or ch == ']') depth -= 1;
-        }
-        if (at_end or (ch == ',' and depth == 0)) {
-            const seg = std.mem.trim(u8, assigns[start..i], " \t");
-            if (std.mem.indexOfScalar(u8, seg, '=')) |eq_idx| {
-                const name = std.mem.trim(u8, seg[0..eq_idx], " \t");
-                if (name.len > 0) {
-                    if (out.items.len > 0) try out.appendSlice(", ");
-                    try out.appendSlice(name);
-                }
+    var rest = assigns;
+    while (true) {
+        const next_idx = indexOfTopLevelScalar(rest, ',') orelse rest.len;
+        const seg = std.mem.trim(u8, rest[0..next_idx], " \t");
+        if (std.mem.indexOfScalar(u8, seg, '=')) |eq_idx| {
+            const name = std.mem.trim(u8, seg[0..eq_idx], " \t");
+            if (name.len > 0) {
+                if (out.items.len > 0) try out.appendSlice(", ");
+                try out.appendSlice(name);
             }
-            start = i + 1;
         }
+        if (next_idx == rest.len) break;
+        rest = rest[next_idx + 1 ..];
     }
     return out.toOwnedSlice();
 }
@@ -612,18 +569,11 @@ fn isArrayConstructor(value: []const u8) bool {
 fn countTopLevelElements(text: []const u8) usize {
     const trimmed = std.mem.trim(u8, text, " \t");
     if (trimmed.len == 0) return 0;
-    var depth: i32 = 0;
     var count: usize = 1;
-    for (trimmed) |ch| {
-        if (ch == '(' or ch == '[') {
-            depth += 1;
-            continue;
-        }
-        if (ch == ')' or ch == ']') {
-            if (depth > 0) depth -= 1;
-            continue;
-        }
-        if (ch == ',' and depth == 0) count += 1;
+    var rest = trimmed;
+    while (indexOfTopLevelScalar(rest, ',')) |comma_idx| {
+        count += 1;
+        rest = rest[comma_idx + 1 ..];
     }
     return count;
 }
@@ -667,34 +617,49 @@ fn semicolonOutsideStrings(text: []const u8) ?usize {
     return null;
 }
 
-fn collapseArrayCtorAssignToFirstElement(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
-    const eq_idx = std.mem.indexOfScalar(u8, text, '=') orelse return allocator.dupe(u8, text);
-    const lhs = std.mem.trim(u8, text[0..eq_idx], " \t");
-    const rhs = std.mem.trim(u8, text[eq_idx + 1 ..], " \t");
-    if (!isArrayConstructor(rhs)) return allocator.dupe(u8, text);
-    const inside = std.mem.trim(u8, rhs[1 .. rhs.len - 1], " \t");
-    if (inside.len == 0) return std.fmt.allocPrint(allocator, "{s} = 0", .{lhs});
-
+fn indexOfTopLevelScalar(text: []const u8, needle: u8) ?usize {
     var depth: i32 = 0;
-    var first_end = inside.len;
+    var in_single = false;
+    var in_double = false;
     var i: usize = 0;
-    while (i < inside.len) : (i += 1) {
-        const ch = inside[i];
-        if (ch == '(' or ch == '[') {
-            depth += 1;
+    while (i < text.len) : (i += 1) {
+        const ch = text[i];
+        if (in_single) {
+            if (ch == '\'') {
+                if (i + 1 < text.len and text[i + 1] == '\'') {
+                    i += 1;
+                    continue;
+                }
+                in_single = false;
+            }
             continue;
         }
-        if (ch == ')' or ch == ']') {
-            if (depth > 0) depth -= 1;
+        if (in_double) {
+            if (ch == '"') {
+                if (i + 1 < text.len and text[i + 1] == '"') {
+                    i += 1;
+                    continue;
+                }
+                in_double = false;
+            }
             continue;
         }
-        if (ch == ',' and depth == 0) {
-            first_end = i;
-            break;
+        switch (ch) {
+            '\'' => in_single = true,
+            '"' => in_double = true,
+            '(',
+            '[',
+            => depth += 1,
+            ')',
+            ']',
+            => {
+                if (depth > 0) depth -= 1;
+            },
+            else => {},
         }
+        if (ch == needle and depth == 0) return i;
     }
-    const first = std.mem.trim(u8, inside[0..first_end], " \t");
-    return std.fmt.allocPrint(allocator, "{s} = {s}", .{ lhs, first });
+    return null;
 }
 
 test "normalizeFreeForm rewrites PARAMETER array constructors to DATA init" {
@@ -723,7 +688,7 @@ test "normalizeFreeForm keeps declarator dims and data base name for PARAMETER a
     try testing.expectEqualStrings("DATA y /1,2,3/", lines[1].text);
 }
 
-test "normalizeFreeForm splits semicolon case assignment and keeps first array ctor element" {
+test "normalizeFreeForm splits semicolon case assignment without truncating array ctor" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -733,7 +698,7 @@ test "normalizeFreeForm splits semicolon case assignment and keeps first array c
 
     try testing.expectEqual(@as(usize, 2), lines.len);
     try testing.expectEqualStrings("case(1)", lines[0].text);
-    try testing.expectEqualStrings("x = 10", lines[1].text);
+    try testing.expectEqualStrings("x = [10,20,30]", lines[1].text);
 }
 
 test "normalizeFreeForm keeps REAL(WP) parameter type when WP kind is unknown" {
@@ -762,7 +727,7 @@ test "normalizeFreeForm preserves DIMENSION attribute for scalar PARAMETER rewri
     try testing.expectEqualStrings("PARAMETER (info_original = 1)", lines[1].text);
 }
 
-test "normalizeFreeForm infers WP kind from minpack_module use for parameter rewrite" {
+test "normalizeFreeForm does not infer WP kind from unrelated module use" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -774,6 +739,19 @@ test "normalizeFreeForm infers WP kind from minpack_module use for parameter rew
 
     try testing.expectEqual(@as(usize, 3), lines.len);
     try testing.expectEqualStrings("use minpack_module, only: wp", lines[0].text);
-    try testing.expectEqualStrings("DOUBLE PRECISION one", lines[1].text);
-    try testing.expectEqualStrings("PARAMETER (one = 1.0D0)", lines[2].text);
+    try testing.expectEqualStrings("REAL(WP) one", lines[1].text);
+    try testing.expectEqualStrings("PARAMETER (one = 1.0_wp)", lines[2].text);
+}
+
+test "normalizeFreeForm keeps parameter strings with commas intact" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "character(*), parameter :: str = \"Hello, World!\", msg = \"A, B\"\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expectEqualStrings("character(*) str, msg", lines[0].text);
+    try testing.expectEqualStrings("PARAMETER (str = \"Hello, World!\", msg = \"A, B\")", lines[1].text);
 }
