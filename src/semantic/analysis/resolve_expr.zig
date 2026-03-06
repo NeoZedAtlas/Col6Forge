@@ -505,6 +505,10 @@ fn intrinsicReturnType(
         }
 
         if (IntrinsicPromoteArgsMap.has(upper)) {
+            if (args.len < 2) return error.InvalidArgumentCount;
+            if (std.mem.eql(u8, upper, "MAX") or std.mem.eql(u8, upper, "MIN")) {
+                return homogeneousArgsReturnType(self, args, current);
+            }
             return promotedArgsReturnType(self, args, current);
         }
     }
@@ -546,6 +550,25 @@ fn promotedArgsReturnType(
         ty = promoteNumericType(ty, next_ty);
     }
     return ty;
+}
+
+fn homogeneousArgsReturnType(
+    self: *context.Context,
+    args: []*ast.Expr,
+    current: ast.TypeKind,
+) ResolveError!ast.TypeKind {
+    if (args.len == 0) return current;
+    const first_ty = try exprTypeCached(self, args[0]);
+    if (!isNumericType(first_ty) or first_ty == .complex or first_ty == .complex_double) {
+        return error.InvalidArithmeticOperands;
+    }
+
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const next_ty = try exprTypeCached(self, args[i]);
+        if (next_ty != first_ty) return error.InvalidArithmeticOperands;
+    }
+    return first_ty;
 }
 
 fn isArraySectionSubstring(sym: symbols.Symbol, sub: ast.SubstringExpr) bool {

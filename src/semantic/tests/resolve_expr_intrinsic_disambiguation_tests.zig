@@ -85,12 +85,48 @@ test "resolve_expr intrinsic SQRT preserves double precision argument kind" {
     try testing.expect(found);
 }
 
-test "resolve_expr intrinsic MAX promotes argument types" {
+test "resolve_expr intrinsic MAX requires homogeneous argument type/kind" {
     const testing = std.testing;
+    const allocator = testing.allocator;
     const source =
         "      SUBROUTINE S\n" ++
         "      REAL R\n" ++
         "      R=MAX(1,2.0)\n" ++
+        "      END\n";
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectError(error.InvalidArithmeticOperands, analyzeProgram(arena.allocator(), program));
+}
+
+test "resolve_expr intrinsic MAX requires at least two arguments" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER I\n" ++
+        "      I=MAX(1)\n" ++
+        "      END\n";
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
+}
+
+test "resolve_expr intrinsic MAX keeps INTEGER type for homogeneous INTEGER args" {
+    const testing = std.testing;
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER I\n" ++
+        "      I=MAX(1,2)\n" ++
         "      END\n";
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -102,7 +138,7 @@ test "resolve_expr intrinsic MAX promotes argument types" {
         if (!std.ascii.eqlIgnoreCase(sym.name, "MAX")) continue;
         found = true;
         try testing.expect(sym.is_intrinsic);
-        try testing.expectEqual(ast.TypeKind.real, sym.type_kind);
+        try testing.expectEqual(ast.TypeKind.integer, sym.type_kind);
     }
     try testing.expect(found);
 }
