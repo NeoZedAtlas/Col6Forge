@@ -40,6 +40,39 @@ fn setStmtSourceIfMissing(stmt: *Stmt, line: logical_line.LogicalLine) void {
     stmt.source_text = line.text;
 }
 
+fn prependLabeledContinue(
+    arena: std.mem.Allocator,
+    line: logical_line.LogicalLine,
+    stmts: []Stmt,
+) std.mem.Allocator.Error![]Stmt {
+    const line_label = line.label orelse return stmts;
+    const out = try arena.alloc(Stmt, stmts.len + 1);
+    out[0] = .{
+        .label = line_label,
+        .node = .{ .cont = {} },
+        .source_line = line.span.start_line,
+        .source_column = defaultSourceColumn(line),
+        .source_text = line.text,
+    };
+    if (stmts.len > 0) {
+        @memcpy(out[1 .. 1 + stmts.len], stmts);
+    }
+    return out;
+}
+
+fn selectorNeedsHoist(selector: *Expr) bool {
+    return switch (selector.*) {
+        .identifier, .literal => false,
+        else => true,
+    };
+}
+
+fn makeIdentifierExpr(arena: std.mem.Allocator, name: []const u8) std.mem.Allocator.Error!*Expr {
+    const node = try arena.create(Expr);
+    node.* = .{ .identifier = name };
+    return node;
+}
+
 pub fn isSelectCaseStart(lp: LineParser) bool {
     if (lp.isKeywordSplit("SELECTCASE")) return true;
     if (!lp.isKeywordSplit("SELECT")) return false;
@@ -82,6 +115,16 @@ pub fn parseSelectCaseStatement(
     const selector = try expr.parseExpr(lp, arena, 0);
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
 
+    const hoist_selector = selectorNeedsHoist(selector);
+    const selector_tmp_name: ?[]const u8 = if (hoist_selector)
+        try std.fmt.allocPrint(arena, "__cf_select_case_sel_{d}", .{index.*})
+    else
+        null;
+    const selector_for_clauses = if (selector_tmp_name) |tmp_name|
+        try makeIdentifierExpr(arena, tmp_name)
+    else
+        selector;
+
     index.* += 1;
 
     var clauses = std.array_list.Managed(CaseClause).init(arena);
@@ -103,9 +146,10 @@ pub fn parseSelectCaseStatement(
         }
         if (!isCaseLine(case_lp)) return error.UnexpectedToken;
 
-        const case_cond = try parseCaseHeader(arena, &case_lp, selector);
+        const case_cond = try parseCaseHeader(arena, &case_lp, selector_for_clauses);
         index.* += 1;
-        const block_stmts = try parseSelectCaseBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parse_statement_fn);
+        const parsed_block_stmts = try parseSelectCaseBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parse_statement_fn);
+        const block_stmts = try prependLabeledContinue(arena, line, parsed_block_stmts);
         if (case_cond) |condition| {
             try clauses.append(.{ .condition = condition, .stmts = block_stmts });
         } else {
@@ -134,8 +178,31 @@ pub fn parseSelectCaseStatement(
         tail = slice;
     }
 
-    if (tail.len == 0) return error.UnexpectedToken;
-    return .{ .label = label, .node = tail[0].node };
+    if (tail.len == 0) {
+        return .{ .label = label, .node = .{ .cont = {} } };
+    }
+
+    if (!hoist_selector) {
+        return .{ .label = label, .node = tail[0].node };
+    }
+
+    const lowered_stmt = Stmt{
+        .label = null,
+        .node = tail[0].node,
+        .source_line = lp.line.span.start_line,
+        .source_column = defaultSourceColumn(lp.line),
+        .source_text = lp.line.text,
+    };
+    try do_ctx.pushPending(lowered_stmt);
+
+    const tmp_target = try makeIdentifierExpr(arena, selector_tmp_name.?);
+    return .{
+        .label = label,
+        .node = .{ .assignment = .{
+            .target = tmp_target,
+            .value = selector,
+        } },
+    };
 }
 
 pub fn parseCaseHeader(arena: std.mem.Allocator, lp: *LineParser, selector: *Expr) anyerror!?*Expr {

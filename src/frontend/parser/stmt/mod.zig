@@ -430,6 +430,98 @@ test "parseStatement preserves labeled END SELECT as pending continue" {
     try testing.expectEqual(@as(usize, 5), idx);
 }
 
+test "parseStatement allows empty SELECT CASE and lowers to cont" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SELECT CASE (I)\n" ++
+        "      END SELECT\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt.node == .cont);
+    try testing.expectEqual(@as(usize, 2), idx);
+}
+
+test "parseStatement preserves labeled CASE as in-branch continue target" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SELECT CASE (I)\n" ++
+        " 0010 CASE (1)\n" ++
+        "      A=1\n" ++
+        "      END SELECT\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt.node == .if_block);
+    try testing.expectEqual(@as(usize, 4), idx);
+    const then_stmts = stmt.node.if_block.then_stmts;
+    try testing.expectEqual(@as(usize, 2), then_stmts.len);
+    try testing.expectEqualStrings("0010", then_stmts[0].label.?);
+    try testing.expect(then_stmts[0].node == .cont);
+    try testing.expect(then_stmts[1].node == .assignment);
+}
+
+test "parseStatement hoists non-trivial SELECT CASE selector into temp assignment" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SELECT CASE (NEXT())\n" ++
+        "      CASE (1)\n" ++
+        "      A=1\n" ++
+        "      CASE DEFAULT\n" ++
+        "      A=2\n" ++
+        "      END SELECT\n" ++
+        "      A=3\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt1 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt1.node == .assignment);
+    try testing.expect(stmt1.node.assignment.target.* == .identifier);
+    try testing.expect(std.mem.startsWith(u8, stmt1.node.assignment.target.identifier, "__cf_select_case_sel_"));
+    try testing.expect(stmt1.node.assignment.value.* == .call_or_subscript);
+    try testing.expectEqual(@as(usize, 6), idx);
+
+    const stmt2 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt2.node == .if_block);
+    try testing.expectEqual(@as(usize, 6), idx);
+
+    const stmt3 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt3.node == .assignment);
+    try testing.expectEqual(@as(usize, 7), idx);
+}
+
 test "parseStatement handles block DO with END DO" {
     const testing = std.testing;
     const allocator = testing.allocator;
