@@ -159,12 +159,7 @@ fn makeSegmentsOwned(
 }
 
 pub fn freeLogicalLines(allocator: std.mem.Allocator, lines: []LogicalLine) void {
-    for (lines) |line| {
-        allocator.free(line.text);
-        allocator.free(line.segments);
-        if (line.label) |label| allocator.free(label);
-    }
-    allocator.free(lines);
+    logical_line.freeLogicalLines(allocator, lines);
 }
 
 fn isCommentLine(line: []const u8) bool {

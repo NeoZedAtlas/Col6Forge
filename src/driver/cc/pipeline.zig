@@ -24,9 +24,8 @@ pub fn collectFortranKnownSymbols(
         const contents = std.fs.cwd().readFileAlloc(allocator, input_path, max_size) catch continue;
         defer allocator.free(contents);
 
-        const form = detectFortranSourceForm(input_path);
-        const logical_lines = Col6Forge.frontend.normalizeSourceForm(form, allocator, contents, true) catch continue;
-        defer Col6Forge.frontend.freeSourceFormLines(form, allocator, logical_lines);
+        const logical_lines = Col6Forge.frontend.normalizeSourcePath(.auto, allocator, input_path, contents, true) catch continue;
+        defer Col6Forge.frontend.freeSourceFormLines(allocator, logical_lines);
 
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
@@ -107,18 +106,6 @@ pub fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
     var writer = stderr.writer(&buffer);
     try Col6Forge.writePipelineErrorDiagnostic(&writer.interface, input_path, err);
     try writer.interface.flush();
-}
-
-fn detectFortranSourceForm(input_path: []const u8) Col6Forge.frontend.SourceForm {
-    const ext = std.fs.path.extension(input_path);
-    if (std.ascii.eqlIgnoreCase(ext, ".f90") or
-        std.ascii.eqlIgnoreCase(ext, ".f95") or
-        std.ascii.eqlIgnoreCase(ext, ".f03") or
-        std.ascii.eqlIgnoreCase(ext, ".f08"))
-    {
-        return .free;
-    }
-    return .fixed;
 }
 
 fn upsertKnownFunctionType(

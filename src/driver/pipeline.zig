@@ -211,16 +211,15 @@ pub fn runPipelineWithOptions(
     profile.read_ns = elapsedNs(read_start);
     defer allocator.free(contents);
 
-    const form = detectSourceForm(input_path);
     const normalize_start = nowNs();
-    const logical_lines = source_form.normalize(form, allocator, contents, options.coarse_source_map) catch |err| {
+    const logical_lines = source_form.normalizePath(.auto, allocator, input_path, contents, options.coarse_source_map) catch |err| {
         profile.normalize_ns = elapsedNs(normalize_start);
         profile.markFailure(.normalize);
         setDefaultDiagnostic(input_path, contents, "CF0002", "failed to normalize source form", err);
         return err;
     };
     profile.normalize_ns = elapsedNs(normalize_start);
-    defer source_form.freeLogicalLines(form, allocator, logical_lines);
+    defer source_form.freeLogicalLines(allocator, logical_lines);
 
     const output = emitLlvmModule(allocator, input_path, contents, logical_lines, options, &profile) catch |err| {
         profile.markFailure(.pipeline);
@@ -272,16 +271,15 @@ pub fn runPipelineToWriterWithOptions(
     profile.read_ns = elapsedNs(read_start);
     defer allocator.free(contents);
 
-    const form = detectSourceForm(input_path);
     const normalize_start = nowNs();
-    const logical_lines = source_form.normalize(form, allocator, contents, options.coarse_source_map) catch |err| {
+    const logical_lines = source_form.normalizePath(.auto, allocator, input_path, contents, options.coarse_source_map) catch |err| {
         profile.normalize_ns = elapsedNs(normalize_start);
         profile.markFailure(.normalize);
         setDefaultDiagnostic(input_path, contents, "CF0002", "failed to normalize source form", err);
         return err;
     };
     profile.normalize_ns = elapsedNs(normalize_start);
-    defer source_form.freeLogicalLines(form, allocator, logical_lines);
+    defer source_form.freeLogicalLines(allocator, logical_lines);
 
     emitLlvmModuleToWriter(allocator, input_path, contents, logical_lines, writer, options, &profile) catch |err| {
         profile.markFailure(.pipeline);
@@ -334,18 +332,6 @@ pub fn writePipelineErrorDiagnostic(writer: *std.Io.Writer, input_path: []const 
         .message = message,
         .line_text = "",
     });
-}
-
-fn detectSourceForm(input_path: []const u8) source_form.SourceForm {
-    const ext = std.fs.path.extension(input_path);
-    if (std.ascii.eqlIgnoreCase(ext, ".f90") or
-        std.ascii.eqlIgnoreCase(ext, ".f95") or
-        std.ascii.eqlIgnoreCase(ext, ".f03") or
-        std.ascii.eqlIgnoreCase(ext, ".f08"))
-    {
-        return .free;
-    }
-    return .fixed;
 }
 
 fn emitLlvmModule(

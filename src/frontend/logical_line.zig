@@ -1,3 +1,4 @@
+const std = @import("std");
 const source = @import("../common/source.zig");
 
 pub const Segment = struct {
@@ -11,6 +12,12 @@ pub const LogicalLine = struct {
     text: []const u8,
     span: source.SourceSpan,
     segments: []Segment,
+
+    pub fn deinit(self: LogicalLine, allocator: std.mem.Allocator) void {
+        allocator.free(self.text);
+        allocator.free(self.segments);
+        if (self.label) |label| allocator.free(label);
+    }
 };
 
 pub fn mapIndexToPos(line: LogicalLine, index: usize) source.SourcePos {
@@ -36,4 +43,11 @@ pub fn mapIndexToPosExclusive(line: LogicalLine, index: usize) source.SourcePos 
         offset += segment.length;
     }
     return .{ .line = line.span.end_line, .column = 1 };
+}
+
+pub fn freeLogicalLines(allocator: std.mem.Allocator, lines: []LogicalLine) void {
+    for (lines) |line| {
+        line.deinit(allocator);
+    }
+    allocator.free(lines);
 }
