@@ -1,11 +1,13 @@
 const write = @import("write.zig");
 const read = @import("read.zig");
+const stream_write = @import("stream_write.zig");
 const dynamic_mod = @import("dynamic.zig");
 const char_format = @import("char_format.zig");
 const format_expr = @import("format_expr.zig");
 
 pub const emitWriteFormatted = write.emitWriteFormatted;
 pub const emitWriteFormattedDirect = write.emitWriteFormattedDirect;
+pub const emitWriteFormattedStreamStatic = stream_write.emitWriteFormattedStreamStatic;
 pub const emitReadFormatted = read.emitReadFormatted;
 pub const emitReadFormattedStatus = read.emitReadFormattedStatus;
 pub const emitReadFormattedDirect = read.emitReadFormattedDirect;

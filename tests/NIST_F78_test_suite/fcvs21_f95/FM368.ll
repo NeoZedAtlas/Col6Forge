@@ -1546,101 +1546,102 @@ bb184:
 bb185:
   %t796 = load i32, ptr %t18
   %t797 = load i32, ptr %t15
-  %t798 = load i32, ptr %t14
-  %t799 = getelementptr [49 x i8], ptr @str20, i32 0, i32 0
-  %t800 = alloca i32, i32 2
-  %t801 = getelementptr i32, ptr %t800, i32 0
-  store i32 %t797, ptr %t801
-  %t802 = getelementptr i32, ptr %t800, i32 1
+  %t798 = load i32, ptr %t15
+  %t799 = load i32, ptr %t14
+  %t800 = getelementptr [49 x i8], ptr @str20, i32 0, i32 0
+  %t801 = alloca i32, i32 2
+  %t802 = getelementptr i32, ptr %t801, i32 0
   store i32 %t798, ptr %t802
-  %t803 = alloca ptr, i32 2
-  %t804 = getelementptr ptr, ptr %t803, i32 0
-  store ptr %t801, ptr %t804
-  %t805 = getelementptr ptr, ptr %t803, i32 1
+  %t803 = getelementptr i32, ptr %t801, i32 1
+  store i32 %t799, ptr %t803
+  %t804 = alloca ptr, i32 2
+  %t805 = getelementptr ptr, ptr %t804, i32 0
   store ptr %t802, ptr %t805
-  %t806 = getelementptr [3 x i8], ptr @str21, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t796, ptr %t799, ptr %t803, ptr %t806, i32 2, i32 0)
+  %t806 = getelementptr ptr, ptr %t804, i32 1
+  store ptr %t803, ptr %t806
+  %t807 = getelementptr [3 x i8], ptr @str21, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t796, ptr %t800, ptr %t804, ptr %t807, i32 2, i32 0)
   br label %bb186
 bb186:
-  %t807 = load i32, ptr %t18
-  %t808 = getelementptr [49 x i8], ptr @str22, i32 0, i32 0
-  %t809 = alloca i32, i32 4
-  %t810 = getelementptr i32, ptr %t809, i32 0
-  store i32 5, ptr %t810
-  %t811 = getelementptr i32, ptr %t809, i32 1
+  %t808 = load i32, ptr %t18
+  %t809 = getelementptr [49 x i8], ptr @str22, i32 0, i32 0
+  %t810 = alloca i32, i32 4
+  %t811 = getelementptr i32, ptr %t810, i32 0
   store i32 5, ptr %t811
-  %t812 = getelementptr i32, ptr %t809, i32 2
+  %t812 = getelementptr i32, ptr %t810, i32 1
   store i32 5, ptr %t812
-  %t813 = getelementptr i32, ptr %t809, i32 3
+  %t813 = getelementptr i32, ptr %t810, i32 2
   store i32 5, ptr %t813
-  %t814 = alloca ptr, i32 6
-  %t815 = getelementptr ptr, ptr %t814, i32 0
-  store ptr %t810, ptr %t815
-  %t816 = getelementptr ptr, ptr %t814, i32 1
+  %t814 = getelementptr i32, ptr %t810, i32 3
+  store i32 5, ptr %t814
+  %t815 = alloca ptr, i32 6
+  %t816 = getelementptr ptr, ptr %t815, i32 0
   store ptr %t811, ptr %t816
-  %t817 = getelementptr ptr, ptr %t814, i32 2
-  store ptr %t3, ptr %t817
-  %t818 = getelementptr ptr, ptr %t814, i32 3
-  store ptr %t812, ptr %t818
-  %t819 = getelementptr ptr, ptr %t814, i32 4
+  %t817 = getelementptr ptr, ptr %t815, i32 1
+  store ptr %t812, ptr %t817
+  %t818 = getelementptr ptr, ptr %t815, i32 2
+  store ptr %t3, ptr %t818
+  %t819 = getelementptr ptr, ptr %t815, i32 3
   store ptr %t813, ptr %t819
-  %t820 = getelementptr ptr, ptr %t814, i32 5
-  store ptr %t3, ptr %t820
-  %t821 = getelementptr [7 x i8], ptr @str4, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t807, ptr %t808, ptr %t814, ptr %t821, i32 6, i32 0)
+  %t820 = getelementptr ptr, ptr %t815, i32 4
+  store ptr %t814, ptr %t820
+  %t821 = getelementptr ptr, ptr %t815, i32 5
+  store ptr %t3, ptr %t821
+  %t822 = getelementptr [7 x i8], ptr @str4, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t808, ptr %t809, ptr %t815, ptr %t822, i32 6, i32 0)
   br label %bb187
 bb187:
-  %t822 = load i32, ptr %t18
-  %t823 = getelementptr [44 x i8], ptr @str23, i32 0, i32 0
-  %t824 = alloca i32, i32 8
-  %t825 = getelementptr i32, ptr %t824, i32 0
-  store i32 13, ptr %t825
-  %t826 = getelementptr i32, ptr %t824, i32 1
+  %t823 = load i32, ptr %t18
+  %t824 = getelementptr [44 x i8], ptr @str23, i32 0, i32 0
+  %t825 = alloca i32, i32 8
+  %t826 = getelementptr i32, ptr %t825, i32 0
   store i32 13, ptr %t826
-  %t827 = getelementptr i32, ptr %t824, i32 2
-  store i32 20, ptr %t827
-  %t828 = getelementptr i32, ptr %t824, i32 3
+  %t827 = getelementptr i32, ptr %t825, i32 1
+  store i32 13, ptr %t827
+  %t828 = getelementptr i32, ptr %t825, i32 2
   store i32 20, ptr %t828
-  %t829 = getelementptr i32, ptr %t824, i32 4
-  store i32 10, ptr %t829
-  %t830 = getelementptr i32, ptr %t824, i32 5
+  %t829 = getelementptr i32, ptr %t825, i32 3
+  store i32 20, ptr %t829
+  %t830 = getelementptr i32, ptr %t825, i32 4
   store i32 10, ptr %t830
-  %t831 = getelementptr i32, ptr %t824, i32 6
-  store i32 13, ptr %t831
-  %t832 = getelementptr i32, ptr %t824, i32 7
+  %t831 = getelementptr i32, ptr %t825, i32 5
+  store i32 10, ptr %t831
+  %t832 = getelementptr i32, ptr %t825, i32 6
   store i32 13, ptr %t832
-  %t833 = alloca ptr, i32 12
-  %t834 = getelementptr ptr, ptr %t833, i32 0
-  store ptr %t825, ptr %t834
-  %t835 = getelementptr ptr, ptr %t833, i32 1
+  %t833 = getelementptr i32, ptr %t825, i32 7
+  store i32 13, ptr %t833
+  %t834 = alloca ptr, i32 12
+  %t835 = getelementptr ptr, ptr %t834, i32 0
   store ptr %t826, ptr %t835
-  %t836 = getelementptr ptr, ptr %t833, i32 2
-  store ptr %t7, ptr %t836
-  %t837 = getelementptr ptr, ptr %t833, i32 3
-  store ptr %t827, ptr %t837
-  %t838 = getelementptr ptr, ptr %t833, i32 4
+  %t836 = getelementptr ptr, ptr %t834, i32 1
+  store ptr %t827, ptr %t836
+  %t837 = getelementptr ptr, ptr %t834, i32 2
+  store ptr %t7, ptr %t837
+  %t838 = getelementptr ptr, ptr %t834, i32 3
   store ptr %t828, ptr %t838
-  %t839 = getelementptr ptr, ptr %t833, i32 5
-  store ptr %t5, ptr %t839
-  %t840 = getelementptr ptr, ptr %t833, i32 6
-  store ptr %t829, ptr %t840
-  %t841 = getelementptr ptr, ptr %t833, i32 7
+  %t839 = getelementptr ptr, ptr %t834, i32 4
+  store ptr %t829, ptr %t839
+  %t840 = getelementptr ptr, ptr %t834, i32 5
+  store ptr %t5, ptr %t840
+  %t841 = getelementptr ptr, ptr %t834, i32 6
   store ptr %t830, ptr %t841
-  %t842 = getelementptr ptr, ptr %t833, i32 8
-  store ptr %t6, ptr %t842
-  %t843 = getelementptr ptr, ptr %t833, i32 9
-  store ptr %t831, ptr %t843
-  %t844 = getelementptr ptr, ptr %t833, i32 10
+  %t842 = getelementptr ptr, ptr %t834, i32 7
+  store ptr %t831, ptr %t842
+  %t843 = getelementptr ptr, ptr %t834, i32 8
+  store ptr %t6, ptr %t843
+  %t844 = getelementptr ptr, ptr %t834, i32 9
   store ptr %t832, ptr %t844
-  %t845 = getelementptr ptr, ptr %t833, i32 11
-  store ptr %t9, ptr %t845
-  %t846 = getelementptr [13 x i8], ptr @str24, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t822, ptr %t823, ptr %t833, ptr %t846, i32 12, i32 0)
+  %t845 = getelementptr ptr, ptr %t834, i32 10
+  store ptr %t833, ptr %t845
+  %t846 = getelementptr ptr, ptr %t834, i32 11
+  store ptr %t9, ptr %t846
+  %t847 = getelementptr [13 x i8], ptr @str24, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t823, ptr %t824, ptr %t834, ptr %t847, i32 12, i32 0)
   br label %bb188
 bb188:
-  %t847 = load i32, ptr %t18
-  %t848 = getelementptr [79 x i8], ptr @str25, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t847, ptr %t848, ptr null, ptr null, i32 0, i32 0)
+  %t848 = load i32, ptr %t18
+  %t849 = getelementptr [79 x i8], ptr @str25, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t848, ptr %t849, ptr null, ptr null, i32 0, i32 0)
   br label %L80000
 L80000:
   br label %L80002

@@ -75,6 +75,7 @@ const runtime_formatting = @import("col6forge_rt/formatting.zig");
 const runtime_complex_math = @import("col6forge_rt/complex_math.zig");
 const runtime_integer_math = @import("col6forge_rt/integer_math.zig");
 const runtime_io_write_v = @import("col6forge_rt/io_write_v.zig");
+const runtime_io_formatted_write = @import("col6forge_rt/io_formatted_write.zig");
 const runtime_io_binary_v = @import("col6forge_rt/io_binary_v.zig");
 const runtime_io_formatted_read = @import("col6forge_rt/io_formatted_read.zig");
 const runtime_io_control = @import("col6forge_rt/io_control.zig");
@@ -96,6 +97,7 @@ comptime {
     _ = runtime_complex_math;
     _ = runtime_integer_math;
     _ = runtime_io_write_v;
+    _ = runtime_io_formatted_write;
     _ = runtime_io_binary_v;
     _ = runtime_io_formatted_read;
     _ = runtime_io_control;

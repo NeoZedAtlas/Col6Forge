@@ -2062,7 +2062,107 @@ test "formatted d implied write uses dimension multiplier and signed implied-do 
     try testing.expect(std.mem.indexOf(u8, output, ", i32 -8, ptr %") != null);
 }
 
-test "formatted write rejects runtime implied-do fallback expansion" {
+test "formatted integer implied write lowers to stream helper" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const unit_expr = try makeLiteralExpr(a, .integer, "6");
+    const title_expr = try makeLiteralExpr(a, .string, "'M   '");
+    const n_expr = try makeIdentExpr(a, "N");
+    const i_expr = try makeIdentExpr(a, "I");
+    const one_expr = try makeLiteralExpr(a, .integer, "1");
+
+    const arr_dims = try a.alloc(*input.Expr, 1);
+    arr_dims[0] = try makeLiteralExpr(a, .integer, "32");
+
+    const arr_args = try a.alloc(*input.Expr, 1);
+    arr_args[0] = i_expr;
+    const arr_ref = try a.create(input.Expr);
+    arr_ref.* = .{ .call_or_subscript = .{ .name = "A", .args = arr_args } };
+
+    const implied_items = try a.alloc(*input.Expr, 1);
+    implied_items[0] = arr_ref;
+    const implied = try a.create(input.Expr);
+    implied.* = .{ .implied_do = .{
+        .items = implied_items,
+        .var_name = "I",
+        .start = one_expr,
+        .end = n_expr,
+        .step = null,
+    } };
+
+    const write_args = try a.alloc(*input.Expr, 2);
+    write_args[0] = title_expr;
+    write_args[1] = implied;
+
+    const fmt_items = try a.alloc(input.FormatItem, 7);
+    fmt_items[0] = .{ .spaces = 4 };
+    fmt_items[1] = .{ .char = .{ .width = 4 } };
+    fmt_items[2] = .{ .literal = ":  " };
+    const rep_items = try a.alloc(input.FormatItem, 1);
+    rep_items[0] = .{ .int = .{ .width = 6, .min_digits = 0 } };
+    fmt_items[3] = .{ .repeat_group = .{ .count = 10, .items = rep_items } };
+    fmt_items[4] = .{ .reversion_offset = 4 };
+    fmt_items[5] = .{ .spaces = 11 };
+    const rep_items_cont = try a.alloc(input.FormatItem, 1);
+    rep_items_cont[0] = .{ .int = .{ .width = 6, .min_digits = 0 } };
+    fmt_items[6] = .{ .repeat_group = .{ .count = 10, .items = rep_items_cont } };
+
+    const stmt_list = try a.alloc(input.Stmt, 1);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .write = .{
+            .unit = unit_expr,
+            .format = .{ .inline_items = fmt_items },
+            .rec = null,
+            .args = write_args,
+            .err_label = null,
+            .iostat = null,
+        } },
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 2);
+    sem_symbols[0] = makeLocalScalarSymbol("N", .integer);
+    sem_symbols[1] = makeLocalArraySymbol("A", .integer, arr_dims);
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "fmt_i_implied_stride.f", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "call ptr @col6forge_formatted_write_stream_begin") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call i32 @col6forge_formatted_write_stream_next") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call i32 @col6forge_formatted_write_stream_finish") != null);
+}
+
+test "formatted write uses stream lowering for runtime implied-do with static format" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -2091,11 +2191,23 @@ test "formatted write rejects runtime implied-do fallback expansion" {
         .step = null,
     } };
 
-    const write_args = try a.alloc(*input.Expr, 1);
-    write_args[0] = implied;
+    const title_expr = try makeLiteralExpr(a, .string, "'M   '");
+    const write_args = try a.alloc(*input.Expr, 2);
+    write_args[0] = title_expr;
+    write_args[1] = implied;
 
-    const fmt_items = try a.alloc(input.FormatItem, 1);
-    fmt_items[0] = .{ .int = .{ .width = 5, .min_digits = 0 } };
+    const fmt_items = try a.alloc(input.FormatItem, 7);
+    fmt_items[0] = .{ .spaces = 4 };
+    fmt_items[1] = .{ .char = .{ .width = 4 } };
+    fmt_items[2] = .{ .literal = ":  " };
+    const rep_items = try a.alloc(input.FormatItem, 1);
+    rep_items[0] = .{ .int = .{ .width = 6, .min_digits = 0 } };
+    fmt_items[3] = .{ .repeat_group = .{ .count = 10, .items = rep_items } };
+    fmt_items[4] = .{ .reversion_offset = 4 };
+    fmt_items[5] = .{ .spaces = 11 };
+    const rep_items_cont = try a.alloc(input.FormatItem, 1);
+    rep_items_cont[0] = .{ .int = .{ .width = 6, .min_digits = 0 } };
+    fmt_items[6] = .{ .repeat_group = .{ .count = 10, .items = rep_items_cont } };
 
     const stmt_list = try a.alloc(input.Stmt, 1);
     stmt_list[0] = .{
@@ -2143,10 +2255,12 @@ test "formatted write rejects runtime implied-do fallback expansion" {
     var sink = std.array_list.Managed(u8).init(allocator);
     defer sink.deinit();
     var writer = sink.writer();
-    try testing.expectError(
-        error.UnsupportedImpliedDo,
-        emitModuleToWriter(&writer, allocator, program, sem_prog, "fmt_runtime_implied_do.f", .{}),
-    );
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "fmt_runtime_implied_do.f", .{});
+
+    const output = sink.items;
+    try testing.expect(std.mem.indexOf(u8, output, "call ptr @col6forge_formatted_write_stream_begin") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call i32 @col6forge_formatted_write_stream_next") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call i32 @col6forge_formatted_write_stream_finish") != null);
 }
 
 test "formatted read uses stream lowering for runtime implied-do with runtime format expr" {

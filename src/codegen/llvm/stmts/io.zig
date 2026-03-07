@@ -19,6 +19,7 @@ const file_control = @import("io/file_control.zig");
 const format_items = @import("../../../format/items.zig");
 
 const emitWriteFormatted = formatted.emitWriteFormatted;
+const emitWriteFormattedStreamStatic = formatted.emitWriteFormattedStreamStatic;
 const emitWriteDynamicFormat = formatted.emitWriteDynamicFormat;
 const emitWriteFormatExpr = formatted.emitWriteFormatExpr;
 const emitReadFormatted = formatted.emitReadFormatted;
@@ -85,66 +86,140 @@ pub fn emitWrite(
         try emitUnformattedWrite(ctx, builder, write);
         return false;
     }
+    const prepared = try prepareWriteContext(ctx, builder, write);
+    try emitPreparedFormattedWrite(ctx, builder, write, prepared);
+    return false;
+}
+
+const PreparedWriteContext = struct {
+    has_runtime_implied_do: bool,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+};
+
+const WriteFormatDispatch = union(enum) {
+    static_items: []const ast.FormatItem,
+    dynamic_label_var: []const u8,
+    runtime_expr: *ast.Expr,
+};
+
+fn prepareWriteContext(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!PreparedWriteContext {
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
     const unit_char_len = charLenForExpr(ctx, write.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
-    const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, write.unit) else null;
-    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value);
+    return .{
+        .has_runtime_implied_do = hasRuntimeImpliedDoArgs(ctx, write.args),
+        .unit_value = unit_value,
+        .unit_char_len = unit_char_len,
+        .unit_record_count = if (is_internal) internalUnitRecordCount(ctx, write.unit) else null,
+        .is_internal = is_internal,
+        .unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value),
+    };
+}
 
-    switch (write.format) {
+fn resolveWriteFormatDispatch(ctx: *Context, write: ast.WriteStmt) EmitError!WriteFormatDispatch {
+    return switch (write.format) {
         .label => |label| {
-            if (ctx.formats.get(label)) |fmt_info| {
-                if (try emitTrailingDVectorFormattedWrite(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items)) {
-                    return false;
-                }
-                if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, unit_i32, is_internal, fmt_info.items)) {
-                    return false;
-                }
-                if (hasRuntimeImpliedDoArgs(ctx, write.args)) return error.UnsupportedImpliedDo;
-                var expanded_values = try expandWriteArgs(ctx, builder, write.args);
-                defer expanded_values.deinit();
-                try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded_values);
-                return false;
-            }
+            if (ctx.formats.get(label)) |fmt_info| return .{ .static_items = fmt_info.items };
             if (ctx.findSymbol(label)) |sym| {
-                if (hasRuntimeImpliedDoArgs(ctx, write.args)) return error.UnsupportedImpliedDo;
-                var expanded_values = try expandWriteArgs(ctx, builder, write.args);
-                defer expanded_values.deinit();
                 if (sym.type_kind == .character) {
-                    if (try formatFromCharArrayData(ctx, label)) |items| {
-                        try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, &expanded_values);
-                        return false;
-                    }
+                    if (try formatFromCharArrayData(ctx, label)) |items| return .{ .static_items = items };
                     return error.MissingFormatLabel;
                 }
-                // Assigned FORMAT via a label variable: select at runtime by value.
-                try emitWriteDynamicFormat(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, label, &expanded_values);
-                return false;
+                return .{ .dynamic_label_var = label };
             }
             return error.MissingFormatLabel;
         },
-        .inline_items => |items| {
-            if (try emitTrailingDVectorFormattedWrite(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items)) {
-                return false;
-            }
-            if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, unit_i32, is_internal, items)) {
-                return false;
-            }
-            if (hasRuntimeImpliedDoArgs(ctx, write.args)) return error.UnsupportedImpliedDo;
-            var expanded_values = try expandWriteArgs(ctx, builder, write.args);
-            defer expanded_values.deinit();
-            try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, &expanded_values);
-            return false;
-        },
-        .expr => |fmt_expr| {
-            if (hasRuntimeImpliedDoArgs(ctx, write.args)) return error.UnsupportedImpliedDo;
-            var expanded_values = try expandWriteArgs(ctx, builder, write.args);
-            defer expanded_values.deinit();
-            try emitWriteFormatExpr(ctx, builder, write, fmt_expr, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, &expanded_values);
-            return false;
-        },
+        .inline_items => |items| .{ .static_items = items },
+        .expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
         .none => unreachable,
         .list_directed => unreachable,
+    };
+}
+
+fn emitPreparedFormattedWrite(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    prepared: PreparedWriteContext,
+) EmitError!void {
+    const dispatch = try resolveWriteFormatDispatch(ctx, write);
+
+    if (prepared.has_runtime_implied_do) {
+        switch (dispatch) {
+            .static_items => |items| return emitWriteFormattedStreamStatic(
+                ctx,
+                builder,
+                write,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                items,
+            ),
+            .runtime_expr, .dynamic_label_var => return error.UnsupportedImpliedDo,
+        }
+    }
+
+    switch (dispatch) {
+        .static_items => |items| {
+            if (try emitTrailingDVectorFormattedWrite(ctx, builder, write, prepared.unit_value, prepared.unit_char_len, prepared.unit_record_count, prepared.is_internal, prepared.unit_i32, items)) {
+                return;
+            }
+            if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, prepared.unit_i32, prepared.is_internal, items)) {
+                return;
+            }
+            var expanded_values = try expandWriteArgs(ctx, builder, write.args);
+            defer expanded_values.deinit();
+            return emitWriteFormatted(
+                ctx,
+                builder,
+                write,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                items,
+                &expanded_values,
+            );
+        },
+        .dynamic_label_var => |label| {
+            var expanded_values = try expandWriteArgs(ctx, builder, write.args);
+            defer expanded_values.deinit();
+            return emitWriteDynamicFormat(
+                ctx,
+                builder,
+                write,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                label,
+                &expanded_values,
+            );
+        },
+        .runtime_expr => |fmt_expr| {
+            var expanded_values = try expandWriteArgs(ctx, builder, write.args);
+            defer expanded_values.deinit();
+            return emitWriteFormatExpr(
+                ctx,
+                builder,
+                write,
+                fmt_expr,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                &expanded_values,
+            );
+        },
     }
 }
 
@@ -320,6 +395,15 @@ const DynamicDImpliedFormatPlan = struct {
     precision: usize,
 };
 
+const DynamicIntegerImpliedFormatPlan = struct {
+    pre: []u8,
+    post: []u8,
+    first_per_line: usize,
+    indent: usize,
+    per_line: usize,
+    width: usize,
+};
+
 fn emitDynamicImpliedDoFormattedWrite(
     ctx: *Context,
     builder: anytype,
@@ -333,52 +417,97 @@ fn emitDynamicImpliedDoFormattedWrite(
     const prepared_fmt = try format_items.ensureFlatWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
     defer prepared_fmt.deinit(ctx.allocator);
     const flat_fmt_items = prepared_fmt.items;
-    const vector_source = try resolveDVectorSource(ctx, builder, write.args[1]) orelse return false;
-
-    const plan = parseDynamicDImpliedFormat(ctx, flat_fmt_items) orelse return false;
-    defer {
-        ctx.allocator.free(plan.pre);
-        ctx.allocator.free(plan.post);
-    }
 
     const title_arg = write.args[0];
     const title_ptr = try expr.emitExpr(ctx, builder, title_arg);
     if (title_ptr.ty != .ptr) return false;
     const title_len = charLenForExpr(ctx, title_arg) orelse return false;
 
-    const pre_ptr = try emitStaticStringPtr(ctx, builder, plan.pre);
-    const post_ptr = try emitStaticStringPtr(ctx, builder, plan.post);
+    if (try resolveDVectorSource(ctx, builder, write.args[1])) |vector_source| {
+        const plan = parseDynamicDImpliedFormat(ctx, flat_fmt_items) orelse return false;
+        defer {
+            ctx.allocator.free(plan.pre);
+            ctx.allocator.free(plan.post);
+        }
 
-    const decl = try ctx.ensureDeclRaw(
-        "col6forge_write_fmt_d_implied",
-        .i32,
-        &[_]llvm_types.IRType{
-            .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .i32, .i32, .ptr, .i32, .i32, .i32, .i32,
-        },
-        false,
-    );
-    try builder.callTyped(
-        null,
-        .i32,
-        decl,
-        &.{
-            unit_i32,
-            pre_ptr,
-            try ctx.constI32(@intCast(plan.pre.len)),
-            .{ .name = title_ptr.name, .ty = .ptr, .is_ptr = true },
-            try ctx.constI32(@intCast(title_len)),
-            post_ptr,
-            try ctx.constI32(@intCast(plan.post.len)),
-            vector_source.count,
-            vector_source.stride,
-            vector_source.base_ptr,
-            try ctx.constI32(@intCast(plan.indent)),
-            try ctx.constI32(@intCast(plan.per_line)),
-            try ctx.constI32(@intCast(plan.width)),
-            try ctx.constI32(@intCast(plan.precision)),
-        },
-    );
-    return true;
+        const pre_ptr = try emitStaticStringPtr(ctx, builder, plan.pre);
+        const post_ptr = try emitStaticStringPtr(ctx, builder, plan.post);
+
+        const decl = try ctx.ensureDeclRaw(
+            "col6forge_write_fmt_d_implied",
+            .i32,
+            &[_]llvm_types.IRType{
+                .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .i32, .i32, .ptr, .i32, .i32, .i32, .i32,
+            },
+            false,
+        );
+        try builder.callTyped(
+            null,
+            .i32,
+            decl,
+            &.{
+                unit_i32,
+                pre_ptr,
+                try ctx.constI32(@intCast(plan.pre.len)),
+                .{ .name = title_ptr.name, .ty = .ptr, .is_ptr = true },
+                try ctx.constI32(@intCast(title_len)),
+                post_ptr,
+                try ctx.constI32(@intCast(plan.post.len)),
+                vector_source.count,
+                vector_source.stride,
+                vector_source.base_ptr,
+                try ctx.constI32(@intCast(plan.indent)),
+                try ctx.constI32(@intCast(plan.per_line)),
+                try ctx.constI32(@intCast(plan.width)),
+                try ctx.constI32(@intCast(plan.precision)),
+            },
+        );
+        return true;
+    }
+
+    if (try resolveIntegerVectorSource(ctx, builder, write.args[1])) |vector_source| {
+        const plan = parseDynamicIntegerImpliedFormat(ctx, flat_fmt_items) orelse return false;
+        defer {
+            ctx.allocator.free(plan.pre);
+            ctx.allocator.free(plan.post);
+        }
+
+        const pre_ptr = try emitStaticStringPtr(ctx, builder, plan.pre);
+        const post_ptr = try emitStaticStringPtr(ctx, builder, plan.post);
+        const helper_name = if (ctx.defaultIntegerIRType() == .i64) "col6forge_write_fmt_i64_implied" else "col6forge_write_fmt_i32_implied";
+        const decl = try ctx.ensureDeclRaw(
+            helper_name,
+            .i32,
+            &[_]llvm_types.IRType{
+                .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .i32, .i32, .ptr, .i32, .i32, .i32, .i32,
+            },
+            false,
+        );
+        try builder.callTyped(
+            null,
+            .i32,
+            decl,
+            &.{
+                unit_i32,
+                pre_ptr,
+                try ctx.constI32(@intCast(plan.pre.len)),
+                .{ .name = title_ptr.name, .ty = .ptr, .is_ptr = true },
+                try ctx.constI32(@intCast(title_len)),
+                post_ptr,
+                try ctx.constI32(@intCast(plan.post.len)),
+                vector_source.count,
+                vector_source.stride,
+                vector_source.base_ptr,
+                try ctx.constI32(@intCast(plan.first_per_line)),
+                try ctx.constI32(@intCast(plan.indent)),
+                try ctx.constI32(@intCast(plan.per_line)),
+                try ctx.constI32(@intCast(plan.width)),
+            },
+        );
+        return true;
+    }
+
+    return false;
 }
 
 const DVectorSource = struct {
@@ -474,6 +603,82 @@ fn resolveDVectorFromRangeSection(
             .args = base_args,
         },
     };
+    const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
+    return .{ .base_ptr = base_ptr, .stride = stride, .count = count };
+}
+
+fn resolveIntegerVectorSource(
+    ctx: *Context,
+    builder: anytype,
+    node: *ast.Expr,
+) EmitError!?DVectorSource {
+    return switch (node.*) {
+        .implied_do => |implied| try resolveIntegerVectorFromImpliedDo(ctx, builder, implied),
+        .call_or_subscript => |call| try resolveIntegerVectorFromRangeSection(ctx, builder, call),
+        else => null,
+    };
+}
+
+fn resolveIntegerVectorFromImpliedDo(
+    ctx: *Context,
+    builder: anytype,
+    implied: ast.ImpliedDo,
+) EmitError!?DVectorSource {
+    if (implied.items.len != 1) return null;
+    if (implied.items[0].* != .call_or_subscript) return null;
+
+    const call = implied.items[0].call_or_subscript;
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.type_kind != .integer) return null;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
+
+    const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return null;
+    const stride = impliedStrideForDim(ctx, builder, sym, loop_dim, implied.step) catch return null;
+    const count = try emitRangeCount(ctx, builder, implied.start, implied.end, implied.step);
+
+    const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
+    defer ctx.allocator.free(base_args);
+    for (call.args, 0..) |arg, idx| base_args[idx] = arg;
+    base_args[loop_dim] = implied.start;
+    var base_expr = ast.Expr{ .call_or_subscript = .{ .name = call.name, .args = base_args } };
+    const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
+    return .{ .base_ptr = base_ptr, .stride = stride, .count = count };
+}
+
+fn resolveIntegerVectorFromRangeSection(
+    ctx: *Context,
+    builder: anytype,
+    call: ast.CallOrSubscript,
+) EmitError!?DVectorSource {
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.type_kind != .integer) return null;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
+
+    var loop_dim: ?usize = null;
+    for (call.args, 0..) |arg, idx| {
+        if (arg.* != .dim_range) continue;
+        if (loop_dim != null) return null;
+        const range = arg.dim_range;
+        if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return null;
+        loop_dim = idx;
+    }
+    const dim = loop_dim orelse return null;
+    const range = call.args[dim].dim_range;
+    const start_expr = range.lower orelse blk: {
+        const one = try ctx.allocator.create(ast.Expr);
+        one.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+        break :blk one;
+    };
+    defer if (range.lower == null) ctx.allocator.destroy(start_expr);
+
+    const stride = impliedStrideForDim(ctx, builder, sym, dim, range.stride) catch return null;
+    const count = try emitRangeCount(ctx, builder, start_expr, range.upper, range.stride);
+
+    const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
+    defer ctx.allocator.free(base_args);
+    for (call.args, 0..) |arg, idx| base_args[idx] = arg;
+    base_args[dim] = start_expr;
+    var base_expr = ast.Expr{ .call_or_subscript = .{ .name = call.name, .args = base_args } };
     const base_ptr = try expr.emitLValue(ctx, builder, &base_expr);
     return .{ .base_ptr = base_ptr, .stride = stride, .count = count };
 }
@@ -577,6 +782,104 @@ fn parseDynamicDImpliedFormat(ctx: *Context, fmt_items: []const ast.FormatItem) 
         .per_line = per_line,
         .width = width,
         .precision = precision,
+    };
+}
+
+fn parseDynamicIntegerImpliedFormat(ctx: *Context, fmt_items: []const ast.FormatItem) ?DynamicIntegerImpliedFormatPlan {
+    const reversion_start = findReversionStart(fmt_items);
+    if (reversion_start == 0 or reversion_start > fmt_items.len) return null;
+
+    var pre_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer pre_buf.deinit();
+    var post_buf = std.array_list.Managed(u8).init(ctx.allocator);
+    defer post_buf.deinit();
+
+    var seen_char = false;
+    var seen_descriptor = false;
+    var first_per_line: usize = 0;
+    var width: usize = 0;
+    for (fmt_items[0..reversion_start]) |item| {
+        switch (item) {
+            .literal => |lit| {
+                if (seen_char) {
+                    post_buf.appendSlice(lit) catch return null;
+                } else {
+                    pre_buf.appendSlice(lit) catch return null;
+                }
+            },
+            .spaces => |count| {
+                var i: usize = 0;
+                while (i < count) : (i += 1) {
+                    if (seen_char) {
+                        post_buf.append(' ') catch return null;
+                    } else {
+                        pre_buf.append(' ') catch return null;
+                    }
+                }
+            },
+            .char => {
+                if (seen_char or seen_descriptor) return null;
+                seen_char = true;
+            },
+            .int => |spec| {
+                if (!seen_char or spec.min_digits != 0 or spec.width == 0) return null;
+                if (!seen_descriptor) {
+                    width = spec.width;
+                    seen_descriptor = true;
+                } else if (spec.width != width) {
+                    return null;
+                }
+                first_per_line += 1;
+            },
+            else => return null,
+        }
+    }
+    if (!seen_char or first_per_line == 0) return null;
+
+    var indent: usize = 0;
+    var per_line: usize = 0;
+    seen_descriptor = false;
+    for (fmt_items[reversion_start..]) |item| {
+        switch (item) {
+            .reversion_anchor => {},
+            .spaces => |count| {
+                if (seen_descriptor) return null;
+                indent += count;
+            },
+            .literal => |lit| {
+                if (seen_descriptor) return null;
+                for (lit) |ch| {
+                    if (ch != ' ') return null;
+                }
+                indent += lit.len;
+            },
+            .int => |spec| {
+                if (spec.min_digits != 0 or spec.width == 0) return null;
+                if (!seen_descriptor) {
+                    width = spec.width;
+                    seen_descriptor = true;
+                } else if (spec.width != width) {
+                    return null;
+                }
+                per_line += 1;
+            },
+            else => return null,
+        }
+    }
+    if (!seen_descriptor or per_line == 0) return null;
+
+    const pre = pre_buf.toOwnedSlice() catch return null;
+    const post = post_buf.toOwnedSlice() catch {
+        ctx.allocator.free(pre);
+        return null;
+    };
+    return .{
+        .pre = pre,
+        .post = post,
+        .first_per_line = first_per_line,
+        .indent = indent,
+        .per_line = per_line,
+        .width = width,
     };
 }
 
