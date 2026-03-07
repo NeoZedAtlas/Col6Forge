@@ -1465,3 +1465,26 @@ test "streamed unformatted io preserves mixed typed, character array and repeate
     try std.testing.expectEqualSlices(c_int, vals_in[0..], vals_out[0..]);
     try std.testing.expectEqual(post_in, post_out);
 }
+
+test "streamed unformatted io preserves strided block transfers" {
+    const unit: c_int = 40;
+
+    var vals_in: [4]c_int = .{ 11, 22, 33, 44 };
+    const record_size: c_int = 2 * @sizeOf(c_int);
+
+    const write_state = col6forge_unformatted_write_stream_begin(unit, record_size);
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_unformatted_write_stream_n(write_state, 'i', 0, 2, 2, @ptrCast(&vals_in)));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_unformatted_write_stream_finish(write_state));
+
+    _ = col6forge_rewind(unit);
+
+    var vals_out: [4]c_int = .{ 0, 0, 0, 0 };
+    const read_state = col6forge_unformatted_read_stream_begin(unit, record_size);
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_unformatted_read_stream_n(read_state, 'i', 0, 2, 2, @ptrCast(&vals_out)));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_unformatted_read_stream_finish(read_state));
+
+    try std.testing.expectEqual(@as(c_int, 11), vals_out[0]);
+    try std.testing.expectEqual(@as(c_int, 33), vals_out[2]);
+    try std.testing.expectEqual(@as(c_int, 0), vals_out[1]);
+    try std.testing.expectEqual(@as(c_int, 0), vals_out[3]);
+}

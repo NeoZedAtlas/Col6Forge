@@ -367,6 +367,52 @@ fn emitDynamicImpliedDoTransfer(
     };
 }
 
+fn emitRangeSectionTransfer(
+    ctx: *Context,
+    builder: anytype,
+    arg: *ast.Expr,
+) EmitError!?BlockTransfer {
+    if (arg.* != .call_or_subscript) return null;
+
+    const call = arg.call_or_subscript;
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
+
+    var loop_dim: ?usize = null;
+    for (call.args, 0..) |sub_arg, idx| {
+        if (sub_arg.* != .dim_range) continue;
+        if (loop_dim != null) return null;
+        const range = sub_arg.dim_range;
+        if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return null;
+        loop_dim = idx;
+    }
+    const dim = loop_dim orelse return null;
+    const range = call.args[dim].dim_range;
+
+    const start_expr = range.lower orelse blk: {
+        const one = try ctx.allocator.create(ast.Expr);
+        one.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+        break :blk one;
+    };
+    defer if (range.lower == null) ctx.allocator.destroy(start_expr);
+
+    var stride = try impliedStrideForSymbolDim(ctx, builder, sym, dim);
+    if (range.stride) |stride_expr| {
+        const step_const = (try evalConstIntSem(ctx, stride_expr)) orelse intLiteralValue(stride_expr) orelse return null;
+        if (step_const <= 0) return null;
+        stride = try mulI32ByConst(ctx, builder, stride, step_const);
+    }
+
+    const kind_info = blockTransferKindForSymbol(sym) orelse return null;
+    return .{
+        .kind = kind_info.kind,
+        .elem_len = kind_info.elem_len,
+        .count = try emitImpliedFinalCount(ctx, builder, start_expr, range.upper, range.stride),
+        .stride = stride,
+        .base_ptr = try emitImpliedBasePtr(ctx, builder, call, dim, start_expr),
+    };
+}
+
 fn emitWholeArrayTransfer(
     ctx: *Context,
     builder: anytype,
@@ -392,11 +438,21 @@ fn emitBlockTransferIfPossible(
     arg: *ast.Expr,
 ) EmitError!?BlockTransfer {
     if (try emitWholeArrayTransfer(ctx, builder, arg)) |transfer| return transfer;
+    if (try emitRangeSectionTransfer(ctx, builder, arg)) |transfer| return transfer;
     return emitDynamicImpliedDoTransfer(ctx, builder, arg);
 }
 
 fn emitUnformattedArgByteSize(ctx: *Context, builder: anytype, arg: *ast.Expr) EmitError!ValueRef {
     if (try emitWholeArrayTransfer(ctx, builder, arg)) |transfer| {
+        return mulI32ByConst(ctx, builder, transfer.count, if (transfer.elem_len != 0) transfer.elem_len else switch (transfer.kind) {
+            'i', 'f' => 4,
+            'd', 'c' => 8,
+            'z' => 16,
+            'l' => 1,
+            else => return error.UnsupportedIntrinsicType,
+        });
+    }
+    if (try emitRangeSectionTransfer(ctx, builder, arg)) |transfer| {
         return mulI32ByConst(ctx, builder, transfer.count, if (transfer.elem_len != 0) transfer.elem_len else switch (transfer.kind) {
             'i', 'f' => 4,
             'd', 'c' => 8,
