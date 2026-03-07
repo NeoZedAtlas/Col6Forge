@@ -123,6 +123,12 @@ fn parseIntegerField(field: []const u8) ?c_int {
     return @intCast(parsed);
 }
 
+fn parseInteger64Field(field: []const u8) ?i64 {
+    const trimmed = trimAsciiSpace(field);
+    if (trimmed.len == 0) return null;
+    return std.fmt.parseInt(i64, trimmed, 10) catch null;
+}
+
 fn isAllAsterisksField(field: []const u8) bool {
     const trimmed = trimAsciiSpace(field);
     if (trimmed.len == 0) return false;
@@ -327,6 +333,18 @@ pub export fn col6forge_formatted_read_core(
             const out: *c_int = @ptrCast(@alignCast(arg));
             const view = field[0..@intCast(@max(used, 0))];
             if (parseIntegerField(view)) |parsed| {
+                out.* = parsed;
+            } else if (isAllAsterisksField(view)) {
+                out.* = 0;
+            } else {
+                return failRead(unit, status_mode, 1, is_stdin, managed_read_stream, stream, start_pos, &commit_stream_pos);
+            }
+            assigned += 1;
+        } else if (conv == 'd' and kind == 'j') {
+            col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
+            const out: *i64 = @ptrCast(@alignCast(arg));
+            const view = field[0..@intCast(@max(used, 0))];
+            if (parseInteger64Field(view)) |parsed| {
                 out.* = parsed;
             } else if (isAllAsterisksField(view)) {
                 out.* = 0;

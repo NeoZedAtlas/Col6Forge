@@ -24,6 +24,8 @@ const emitImpliedBasePtr = io_utils.emitImpliedBasePtr;
 const emitTripletCountValues = io_utils.emitTripletCountValues;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
+const defaultIntegerKind = io_utils.defaultIntegerKind;
+const scalarRuntimeKind = io_utils.scalarRuntimeKind;
 const expandIoArgs = expansion.expandIoArgs;
 const ExpandedIoArgs = expansion.ExpandedIoArgs;
 const expandWriteArgs = expansion.expandWriteArgs;
@@ -157,16 +159,8 @@ const TypedDirectArgs = struct {
     }
 };
 
-fn kindForScalarType(ty: utils.IRType) EmitError!u8 {
-    return switch (ty) {
-        .i32 => 'i',
-        .f32 => 'f',
-        .f64 => 'd',
-        .i1 => 'l',
-        .complex_f32 => 'c',
-        .complex_f64 => 'z',
-        else => error.UnsupportedIntrinsicType,
-    };
+fn kindForScalarType(ctx: *Context, ty: utils.IRType) EmitError!u8 {
+    return scalarRuntimeKind(ctx, ty);
 }
 
 fn appendArg(args: *TypedDirectArgs, ptr: ValueRef, kind: u8, len: i32) EmitError!void {
@@ -199,7 +193,7 @@ fn appendArrayArgs(ctx: *Context, builder: anytype, args: *TypedDirectArgs, sym:
             if (char_len > std.math.maxInt(i32)) return error.IntegerOverflow;
             try appendArg(args, ptr, 's', @intCast(char_len));
         } else {
-            try appendArg(args, ptr, try kindForScalarType(elem_ty), 0);
+            try appendArg(args, ptr, try kindForScalarType(ctx, elem_ty), 0);
         }
     }
 }
@@ -226,19 +220,21 @@ fn buildTypedWriteArgs(ctx: *Context, builder: anytype, args_nodes: []*ast.Expr)
             continue;
         }
         if (source_ptr) |ptr| {
-            try appendArg(&out, ptr, try kindForScalarType(value.ty), 0);
+            try appendArg(&out, ptr, try kindForScalarType(ctx, value.ty), 0);
             continue;
         }
 
         const ptr = try emitStackValue(ctx, builder, value);
-        try appendArg(&out, ptr, try kindForScalarType(value.ty), 0);
+        try appendArg(&out, ptr, try kindForScalarType(ctx, value.ty), 0);
     }
     return out;
 }
 
-fn helperNameForDirectArray(sym: anytype, is_write: bool) ?[]const u8 {
+fn helperNameForDirectArray(ctx: *Context, sym: anytype, is_write: bool) ?[]const u8 {
     return switch (sym.type_kind) {
-        .integer => if (is_write) "col6forge_write_direct_i32_n" else "col6forge_read_direct_i32_n",
+        .integer => if (is_write)
+            if (ctx.defaultIntegerIRType() == .i64) "col6forge_write_direct_i64_n" else "col6forge_write_direct_i32_n"
+        else if (ctx.defaultIntegerIRType() == .i64) "col6forge_read_direct_i64_n" else "col6forge_read_direct_i32_n",
         .real => if (is_write) "col6forge_write_direct_f32_n" else "col6forge_read_direct_f32_n",
         .double_precision => if (is_write) "col6forge_write_direct_f64_n" else "col6forge_read_direct_f64_n",
         .complex => if (is_write) "col6forge_write_direct_c32_n" else "col6forge_read_direct_c32_n",
@@ -253,7 +249,7 @@ fn emitWholeArrayDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
     if (write.args.len != 1 or write.args[0].* != .identifier) return false;
     const sym = ctx.findSymbol(write.args[0].identifier) orelse return false;
     if (sym.dims.len == 0 or sym.type_kind == .character) return false;
-    const helper = helperNameForDirectArray(sym, true) orelse return false;
+    const helper = helperNameForDirectArray(ctx, sym, true) orelse return false;
 
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch return false;
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
@@ -273,7 +269,7 @@ fn emitWholeArrayDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt)
     if (read.args.len != 1 or read.args[0].* != .identifier) return false;
     const sym = ctx.findSymbol(read.args[0].identifier) orelse return false;
     if (sym.dims.len == 0 or sym.type_kind == .character) return false;
-    const helper = helperNameForDirectArray(sym, false) orelse return false;
+    const helper = helperNameForDirectArray(ctx, sym, false) orelse return false;
 
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch return false;
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
@@ -332,7 +328,7 @@ fn emitMixedArrayDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
     const rec_value = try expr.emitExpr(ctx, builder, write.rec.?);
     const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
     const mid_kind_val: i64 = switch (sym.type_kind) {
-        .integer => 'i',
+        .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',
         .complex => 'c',
@@ -386,7 +382,7 @@ fn emitMixedArrayDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt)
     const rec_value = try expr.emitExpr(ctx, builder, read.rec.?);
     const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
     const mid_kind_val: i64 = switch (sym.type_kind) {
-        .integer => 'i',
+        .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',
         .complex => 'c',
@@ -440,7 +436,7 @@ fn buildTypedReadArgs(ctx: *Context, builder: anytype, args_nodes: []*ast.Expr) 
             continue;
         }
 
-        try appendArg(&out, ptr, try kindForScalarType(ty), 0);
+        try appendArg(&out, ptr, try kindForScalarType(ctx, ty), 0);
     }
     return out;
 }
@@ -567,7 +563,7 @@ fn emitDynamicImpliedDoDirectWrite(
     if (step_val != 1) return false;
 
     const helper_name = switch (sym.type_kind) {
-        .integer => "col6forge_write_direct_i32_n",
+        .integer => if (ctx.defaultIntegerIRType() == .i64) "col6forge_write_direct_i64_n" else "col6forge_write_direct_i32_n",
         .real => "col6forge_write_direct_f32_n",
         .double_precision => "col6forge_write_direct_f64_n",
         .complex => "col6forge_write_direct_c32_n",
@@ -602,7 +598,7 @@ fn emitDynamicImpliedDoDirectWrite(
     const post_packed = try packTypedDirectArgs(ctx, builder, &post_typed);
 
     const mid_kind_val: i64 = switch (sym.type_kind) {
-        .integer => 'i',
+        .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',
         .complex => 'c',
@@ -654,7 +650,7 @@ fn emitDynamicImpliedDoDirectRead(
     if (step_val != 1) return false;
 
     const helper_name = switch (sym.type_kind) {
-        .integer => "col6forge_read_direct_i32_n",
+        .integer => if (ctx.defaultIntegerIRType() == .i64) "col6forge_read_direct_i64_n" else "col6forge_read_direct_i32_n",
         .real => "col6forge_read_direct_f32_n",
         .double_precision => "col6forge_read_direct_f64_n",
         .complex => "col6forge_read_direct_c32_n",
@@ -689,7 +685,7 @@ fn emitDynamicImpliedDoDirectRead(
     const post_packed = try packTypedDirectArgs(ctx, builder, &post_typed);
 
     const mid_kind_val: i64 = switch (sym.type_kind) {
-        .integer => 'i',
+        .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',
         .complex => 'c',

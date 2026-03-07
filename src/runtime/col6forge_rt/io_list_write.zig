@@ -106,6 +106,11 @@ fn formatI32(value: c_int, tmp: *[64]u8) ?[]const u8 {
     return tmp[0..n];
 }
 
+fn formatI64(value: i64, tmp: *[96]u8) ?[]const u8 {
+    const n = snprintfCount(snprintf(&tmp[0], tmp.len, "%lld", @as(c_longlong, @intCast(value))), tmp.len) orelse return null;
+    return tmp[0..n];
+}
+
 fn formatF32(value: f32, tmp: *[96]u8) ?[]const u8 {
     const n = snprintfCount(snprintf(&tmp[0], tmp.len, "%.9g", @as(f64, @floatCast(value))), tmp.len) orelse return null;
     return tmp[0..n];
@@ -134,6 +139,12 @@ fn writeEmptyLine(unit: c_int, strict_status: c_int) c_int {
 fn writeTokenI32(writer: *ListWriter, value: c_int, with_separator: bool) bool {
     var tmp: [64]u8 = [_]u8{0} ** 64;
     const token = formatI32(value, &tmp) orelse return false;
+    return writer.appendToken(token, with_separator);
+}
+
+fn writeTokenI64(writer: *ListWriter, value: i64, with_separator: bool) bool {
+    var tmp: [96]u8 = [_]u8{0} ** 96;
+    const token = formatI64(value, &tmp) orelse return false;
     return writer.appendToken(token, with_separator);
 }
 
@@ -167,6 +178,10 @@ fn appendRuntimeArgToken(writer: *ListWriter, kind: u8, arg: ?*anyopaque, len_ra
         'i' => {
             const p: *const c_int = @ptrCast(@alignCast(ptr));
             return if (writeTokenI32(writer, p.*, with_separator)) 0 else statusError(strict_status);
+        },
+        'j' => {
+            const p: *const i64 = @ptrCast(@alignCast(ptr));
+            return if (writeTokenI64(writer, p.*, with_separator)) 0 else statusError(strict_status);
         },
         'f' => {
             const p: *const f32 = @ptrCast(@alignCast(ptr));
@@ -211,6 +226,20 @@ pub export fn col6forge_write_list_i32_n(unit: c_int, count: c_int, stride: c_in
     while (i < count) : (i += 1) {
         const idx = offsetIndex(i, stride) orelse return 1;
         if (!writeTokenI32(&writer, data[idx], i != 0)) return 1;
+    }
+    return if (writer.flush()) 0 else 1;
+}
+
+pub export fn col6forge_write_list_i64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const i64) callconv(.c) c_int {
+    if (count <= 0) return writeEmptyLine(unit, 1);
+    if (base == null or stride <= 0) return 1;
+
+    var writer = ListWriter.init(unit, 1);
+    const data = base.?;
+    var i: c_int = 0;
+    while (i < count) : (i += 1) {
+        const idx = offsetIndex(i, stride) orelse return 1;
+        if (!writeTokenI64(&writer, data[idx], i != 0)) return 1;
     }
     return if (writer.flush()) 0 else 1;
 }
@@ -361,6 +390,15 @@ pub export fn col6forge_write_list_mix_v_n(
                 while (j < mid_n) : (j += 1) {
                     const idx = checkedMul(j, stride) orelse return statusError(strict_status);
                     if (!writeTokenI32(&writer, base[idx], with_separator)) return statusError(strict_status);
+                    with_separator = true;
+                }
+            },
+            'j' => {
+                const base: [*]const i64 = @ptrCast(@alignCast(mid_base.?));
+                var j: usize = 0;
+                while (j < mid_n) : (j += 1) {
+                    const idx = checkedMul(j, stride) orelse return statusError(strict_status);
+                    if (!writeTokenI64(&writer, base[idx], with_separator)) return statusError(strict_status);
                     with_separator = true;
                 }
             },

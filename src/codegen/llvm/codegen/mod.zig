@@ -1231,3 +1231,77 @@ test "unformatted io lowering streams negative-stride array sections" {
     try testing.expect(std.mem.indexOf(u8, output, ", i32 -2, ptr %") != null);
     try testing.expect(std.mem.indexOf(u8, output, "col6forge_write_unformatted_i32_n") == null);
 }
+
+test "unformatted whole-array integer io uses i64 helpers under widened default integer layout" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const unit_expr = try makeLiteralExpr(a, .integer, "10");
+    const arr_expr = try a.create(input.Expr);
+    arr_expr.* = .{ .identifier = "A" };
+
+    const write_args = try a.alloc(*input.Expr, 1);
+    write_args[0] = arr_expr;
+
+    const stmt_list = try a.alloc(input.Stmt, 1);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .write = .{
+            .unit = unit_expr,
+            .format = .none,
+            .rec = null,
+            .args = write_args,
+            .err_label = null,
+            .iostat = null,
+        } },
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const dim4 = try makeLiteralExpr(a, .integer, "4");
+    const arr_dims = try a.alloc(*input.Expr, 1);
+    arr_dims[0] = dim4;
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 1);
+    sem_symbols[0] = makeLocalArraySymbol("A", .integer, arr_dims);
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(
+        &writer,
+        allocator,
+        program,
+        sem_prog,
+        "unformatted_i64_whole_array.f",
+        .{ .target_layout = .{ .default_integer_bits = 64 } },
+    );
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "col6forge_write_unformatted_i64_n") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "col6forge_write_unformatted_i32_n") == null);
+}

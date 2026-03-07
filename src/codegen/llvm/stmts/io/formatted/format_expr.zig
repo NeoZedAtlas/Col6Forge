@@ -28,6 +28,8 @@ const emitReadFormatted = read_mod.emitReadFormatted;
 const emitReadFormattedStatus = read_mod.emitReadFormattedStatus;
 const resolveCharFormatItemsFromExpr = char_format.resolveCharFormatItemsFromExpr;
 const emitKindArray = io_utils.emitKindArray;
+const defaultIntegerKind = io_utils.defaultIntegerKind;
+const defaultIntegerReadKind = io_utils.defaultIntegerReadKind;
 
 const FormatExprResolution = union(enum) {
     dynamic_label_var: []const u8,
@@ -170,16 +172,16 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
     var f64_slots: usize = 0;
     for (expanded_values.values.items) |value| {
         switch (value.ty) {
-            .i32, .i1 => i32_slots += 1,
+            .i32, .i64, .i1 => i32_slots += 1,
             .f32, .f64 => f64_slots += 1,
             .ptr => {},
             else => return error.UnsupportedIntrinsicType,
         }
     }
 
-    const i32_pool: ?ValueRef = if (i32_slots > 0) blk: {
+    const int_pool: ?ValueRef = if (i32_slots > 0) blk: {
         const ptr_name = try ctx.nextTemp();
-        try builder.allocaArray(ptr_name, .i32, i32_slots);
+        try builder.allocaArray(ptr_name, ctx.defaultIntegerIRType(), i32_slots);
         break :blk ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
     } else null;
     const f64_pool: ?ValueRef = if (f64_slots > 0) blk: {
@@ -197,28 +199,32 @@ fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *Expa
                 try ptr_args.append(.{ .name = value.name, .ty = .ptr, .is_ptr = true });
                 try arg_kinds.append('s');
             },
-            .i32 => {
-                const base_ptr = i32_pool orelse return error.InternalCompilerError;
+            .i32, .i64 => {
+                const coerced = try expr.coerce(ctx, builder, value, ctx.defaultIntegerIRType());
+                const base_ptr = int_pool orelse return error.InternalCompilerError;
                 const gep_name = try ctx.nextTemp();
-                try builder.gep(gep_name, .i32, base_ptr, try constI32(ctx, @intCast(i32_index)));
+                try builder.gep(gep_name, ctx.defaultIntegerIRType(), base_ptr, try constI32(ctx, @intCast(i32_index)));
                 i32_index += 1;
                 const slot_ptr = ValueRef{ .name = gep_name, .ty = .ptr, .is_ptr = true };
-                try builder.store(value, slot_ptr);
+                try builder.store(coerced, slot_ptr);
                 try ptr_args.append(slot_ptr);
-                try arg_kinds.append('i');
+                try arg_kinds.append(defaultIntegerKind(ctx));
             },
             .i1 => {
                 const select_tmp = try ctx.nextTemp();
-                try builder.select(select_tmp, .i32, value, try constI32(ctx, 1), try constI32(ctx, 0));
-                const select_val = ValueRef{ .name = select_tmp, .ty = .i32, .is_ptr = false };
-                const base_ptr = i32_pool orelse return error.InternalCompilerError;
+                const int_ty = ctx.defaultIntegerIRType();
+                const one = try expr.coerce(ctx, builder, try constI32(ctx, 1), int_ty);
+                const zero = try expr.coerce(ctx, builder, try constI32(ctx, 0), int_ty);
+                try builder.select(select_tmp, int_ty, value, one, zero);
+                const select_val = ValueRef{ .name = select_tmp, .ty = int_ty, .is_ptr = false };
+                const base_ptr = int_pool orelse return error.InternalCompilerError;
                 const gep_name = try ctx.nextTemp();
-                try builder.gep(gep_name, .i32, base_ptr, try constI32(ctx, @intCast(i32_index)));
+                try builder.gep(gep_name, int_ty, base_ptr, try constI32(ctx, @intCast(i32_index)));
                 i32_index += 1;
                 const slot_ptr = ValueRef{ .name = gep_name, .ty = .ptr, .is_ptr = true };
                 try builder.store(select_val, slot_ptr);
                 try ptr_args.append(slot_ptr);
-                try arg_kinds.append('i');
+                try arg_kinds.append(defaultIntegerKind(ctx));
             },
             .f32, .f64 => {
                 const f64_val = try expr.coerce(ctx, builder, value, .f64);
@@ -252,7 +258,7 @@ fn buildReadRuntimeArgs(ctx: *Context, builder: anytype, expanded: *ExpandedRead
 
     for (expanded.types.items) |ty| {
         switch (ty) {
-            .i32 => try arg_kinds.append('d'),
+            .i32, .i64 => try arg_kinds.append(defaultIntegerReadKind(ctx)),
             .f32 => try arg_kinds.append('f'),
             .f64 => try arg_kinds.append('D'),
             .ptr => try arg_kinds.append('c'),

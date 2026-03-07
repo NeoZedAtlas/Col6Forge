@@ -302,6 +302,51 @@ pub fn emitFreeAllocs(ctx: *Context, builder: anytype, allocs: []const ValueRef)
     }
 }
 
+pub fn defaultIntegerKind(ctx: *Context) u8 {
+    return switch (ctx.defaultIntegerIRType()) {
+        .i64 => 'j',
+        else => 'i',
+    };
+}
+
+pub fn defaultIntegerReadKind(ctx: *Context) u8 {
+    return switch (ctx.defaultIntegerIRType()) {
+        .i64 => 'j',
+        else => 'd',
+    };
+}
+
+pub fn defaultIntegerHelperSuffix(ctx: *Context) []const u8 {
+    return switch (ctx.defaultIntegerIRType()) {
+        .i64 => "i64",
+        else => "i32",
+    };
+}
+
+pub fn scalarRuntimeKind(ctx: *Context, ty: llvm_types.IRType) EmitError!u8 {
+    _ = ctx;
+    return switch (ty) {
+        .i32 => 'i',
+        .i64 => 'j',
+        .f32 => 'f',
+        .f64 => 'd',
+        .i1 => 'l',
+        .complex_f32 => 'c',
+        .complex_f64 => 'z',
+        else => error.UnsupportedIntrinsicType,
+    };
+}
+
+pub fn scalarByteSize(ty: llvm_types.IRType) ?i64 {
+    return switch (ty) {
+        .i32, .f32 => 4,
+        .i64, .f64, .complex_f32 => 8,
+        .complex_f64 => 16,
+        .i1 => 1,
+        else => null,
+    };
+}
+
 pub fn emitHeapPointerArrayFromValues(ctx: *Context, builder: anytype, ptrs: []const ValueRef) EmitError!ValueRef {
     if (ptrs.len == 0) {
         return .{ .name = "null", .ty = .ptr, .is_ptr = false };

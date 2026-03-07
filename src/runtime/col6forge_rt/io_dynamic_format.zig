@@ -385,7 +385,7 @@ fn lowerWrite(allocator: std.mem.Allocator, tokens: []const Token, arg_kinds: ?[
             .char => |s| {
                 if (arg_i >= nargs) break;
                 const k = kindAt(arg_kinds, arg_i, nargs);
-                if (k == 'i') {
+                if (k == 'i' or k == 'j') {
                     if (s.width > 0) try out.writer().print("%{d}d", .{s.width}) else try out.appendSlice("%d");
                 } else if (isFloatKind(k)) {
                     if (s.width > 0) try out.writer().print("%{d}.0f", .{s.width}) else try out.appendSlice("%.0f");

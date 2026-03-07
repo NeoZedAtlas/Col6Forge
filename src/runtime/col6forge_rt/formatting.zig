@@ -235,6 +235,49 @@ pub export fn col6forge_fmt_i(width: c_int, min_digits: c_int, sign_plus: c_int,
     return asConstCStr(out);
 }
 
+pub export fn col6forge_fmt_i64(width: c_int, min_digits: c_int, sign_plus: c_int, value: i64) callconv(.c) [*:0]const u8 {
+    var tmp: [160]u8 = [_]u8{0} ** 160;
+    var digits: [160]u8 = [_]u8{0} ** 160;
+    const out = nextFmtBuffer();
+    const abs_u: u64 = if (value < 0)
+        @intCast(-@as(i128, value))
+    else
+        @intCast(value);
+
+    if (min_digits <= 0) {
+        _ = snprintf(&digits[0], digits.len, "%llu", @as(c_ulonglong, @intCast(abs_u)));
+    } else {
+        _ = snprintf(&digits[0], digits.len, "%0*llu", min_digits, @as(c_ulonglong, @intCast(abs_u)));
+    }
+    if (value < 0) {
+        _ = snprintf(&tmp[0], tmp.len, "-%s", asConstCStr(&digits));
+    } else if (sign_plus != 0) {
+        _ = snprintf(&tmp[0], tmp.len, "+%s", asConstCStr(&digits));
+    } else {
+        _ = snprintf(&tmp[0], tmp.len, "%s", asConstCStr(&digits));
+    }
+
+    const len = cstrlenRaw(tmp[0..]);
+    if (width <= 0 or @as(usize, @intCast(width)) <= len) {
+        _ = snprintf(&out[0], out.len, "%s", asConstCStr(&tmp));
+        return asConstCStr(out);
+    }
+
+    var pad: usize = @as(usize, @intCast(width)) - len;
+    if (pad >= out.len) pad = out.len - 1;
+    var i: usize = 0;
+    while (i < pad) : (i += 1) {
+        out[i] = ' ';
+    }
+    const copy_len = @min(len, (out.len - 1) - pad);
+    i = 0;
+    while (i < copy_len) : (i += 1) {
+        out[pad + i] = tmp[i];
+    }
+    out[pad + copy_len] = 0;
+    return asConstCStr(out);
+}
+
 pub export fn col6forge_fmt_list_g(precision: c_int, exp_width: c_int, value: f64) callconv(.c) [*:0]const u8 {
     const out = nextFmtBuffer();
     var p = precision;

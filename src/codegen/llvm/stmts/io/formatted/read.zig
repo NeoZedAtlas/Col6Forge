@@ -21,6 +21,7 @@ const emitHeapBytes = io_utils.emitHeapBytes;
 const emitStackPointerArrayFromNames = io_utils.emitStackPointerArrayFromNames;
 const emitFreeAllocs = io_utils.emitFreeAllocs;
 const emitKindArray = io_utils.emitKindArray;
+const defaultIntegerReadKind = io_utils.defaultIntegerReadKind;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
 
@@ -150,7 +151,7 @@ fn emitReadFormattedImpl(
                             try fmt_buf.appendSlice("%d");
                         }
                         try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
-                        try arg_kinds.append('d');
+                        try arg_kinds.append(defaultIntegerReadKind(ctx));
                         arg_index += 1;
                     },
                     .real, .real_fixed => |spec| {

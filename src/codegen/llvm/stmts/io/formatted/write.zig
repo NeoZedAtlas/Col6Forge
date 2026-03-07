@@ -21,6 +21,7 @@ const findReversionStart = io_utils.findReversionStart;
 const appendIntFormat = io_utils.appendIntFormat;
 const emitStackPointerArrayFromValues = io_utils.emitStackPointerArrayFromValues;
 const emitKindArray = io_utils.emitKindArray;
+const defaultIntegerKind = io_utils.defaultIntegerKind;
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 
 const DirectIoSpec = struct {
@@ -298,12 +299,18 @@ fn emitWriteFormattedImpl(
                         if (arg_index >= expanded_values.values.items.len) break;
                         try flushPendingSpaces(&fmt_buf, &pending_spaces);
                         const value = expanded_values.values.items[arg_index];
-                        const coerced = try expr.coerce(ctx, builder, value, .i32);
+                        const int_ty = ctx.defaultIntegerIRType();
+                        const coerced = try expr.coerce(ctx, builder, value, int_ty);
                         if (spec.min_digits == 0) {
                             try appendIntFormat(&fmt_buf, spec.width, sign_plus);
-                            try args.append(.{ .ty = .i32, .name = coerced.name });
+                            try args.append(.{ .ty = int_ty, .name = coerced.name });
                         } else {
-                            const fmt_i_name = try ctx.ensureDeclRaw("col6forge_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
+                            const fmt_i_name = try ctx.ensureDeclRaw(
+                                if (int_ty == .i64) "col6forge_fmt_i64" else "col6forge_fmt_i",
+                                .ptr,
+                                &[_]llvm_types.IRType{ .i32, .i32, .i32, int_ty },
+                                false,
+                            );
                             const tmp = try ctx.nextTemp();
                             const width_val = try ctx.constI32(@intCast(spec.width));
                             const min_val = try ctx.constI32(@intCast(spec.min_digits));
@@ -380,26 +387,39 @@ fn emitWriteFormattedImpl(
                             // numeric values through A editing at runtime.
                             const width_val = try ctx.constI32(@intCast(field_width));
                             switch (value.ty) {
-                                .i32 => {
-                                    const fmt_i_name = try ctx.ensureDeclRaw("col6forge_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
+                                .i32, .i64 => {
+                                    const int_ty = ctx.defaultIntegerIRType();
+                                    const int_value = try expr.coerce(ctx, builder, value, int_ty);
+                                    const fmt_i_name = try ctx.ensureDeclRaw(
+                                        if (int_ty == .i64) "col6forge_fmt_i64" else "col6forge_fmt_i",
+                                        .ptr,
+                                        &[_]llvm_types.IRType{ .i32, .i32, .i32, int_ty },
+                                        false,
+                                    );
                                     const tmp = try ctx.nextTemp();
                                     try builder.callTyped(tmp, .ptr, fmt_i_name, &.{
                                         width_val,
                                         ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
                                         ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
-                                        value,
+                                        int_value,
                                     });
                                     try fmt_buf.appendSlice("%s");
                                     try args.append(.{ .ty = .ptr, .name = tmp });
                                 },
                                 .i1 => {
                                     const select_tmp = try ctx.nextTemp();
-                                    const one_val = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-                                    const zero_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
-                                    try builder.select(select_tmp, .i32, value, one_val, zero_val);
-                                    const fmt_i_name = try ctx.ensureDeclRaw("col6forge_fmt_i", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32 }, false);
+                                    const int_ty = ctx.defaultIntegerIRType();
+                                    const one_val = try expr.coerce(ctx, builder, ValueRef{ .name = "1", .ty = .i32, .is_ptr = false }, int_ty);
+                                    const zero_val = try expr.coerce(ctx, builder, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false }, int_ty);
+                                    try builder.select(select_tmp, int_ty, value, one_val, zero_val);
+                                    const fmt_i_name = try ctx.ensureDeclRaw(
+                                        if (int_ty == .i64) "col6forge_fmt_i64" else "col6forge_fmt_i",
+                                        .ptr,
+                                        &[_]llvm_types.IRType{ .i32, .i32, .i32, int_ty },
+                                        false,
+                                    );
                                     const tmp = try ctx.nextTemp();
-                                    const select_val = ValueRef{ .name = select_tmp, .ty = .i32, .is_ptr = false };
+                                    const select_val = ValueRef{ .name = select_tmp, .ty = int_ty, .is_ptr = false };
                                     try builder.callTyped(tmp, .ptr, fmt_i_name, &.{
                                         width_val,
                                         ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
@@ -500,7 +520,7 @@ fn emitWriteFormattedImpl(
     var f64_slots: usize = 0;
     for (args.items) |arg| {
         switch (arg.ty) {
-            .i32 => i32_slots += 1,
+            .i32, .i64 => i32_slots += 1,
             .f64 => f64_slots += 1,
             .ptr => {},
             else => return error.UnsupportedIntrinsicType,
@@ -509,7 +529,7 @@ fn emitWriteFormattedImpl(
 
     const i32_pool: ?ValueRef = if (i32_slots > 0) blk: {
         const ptr_name = try ctx.nextTemp();
-        try builder.allocaArray(ptr_name, .i32, i32_slots);
+        try builder.allocaArray(ptr_name, ctx.defaultIntegerIRType(), i32_slots);
         break :blk ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
     } else null;
     const f64_pool: ?ValueRef = if (f64_slots > 0) blk: {
@@ -526,16 +546,16 @@ fn emitWriteFormattedImpl(
                 try ptr_args.append(.{ .name = arg.name, .ty = .ptr, .is_ptr = true });
                 try arg_kinds.append('s');
             },
-            .i32 => {
-                const val = ValueRef{ .name = arg.name, .ty = .i32, .is_ptr = false };
+            .i32, .i64 => {
+                const val = ValueRef{ .name = arg.name, .ty = arg.ty, .is_ptr = false };
                 const base_ptr = i32_pool orelse return error.InternalCompilerError;
                 const gep_name = try ctx.nextTemp();
-                try builder.gep(gep_name, .i32, base_ptr, try ctx.constI32(@intCast(i32_index)));
+                try builder.gep(gep_name, ctx.defaultIntegerIRType(), base_ptr, try ctx.constI32(@intCast(i32_index)));
                 i32_index += 1;
                 const slot_ptr = ValueRef{ .name = gep_name, .ty = .ptr, .is_ptr = true };
                 try builder.store(val, slot_ptr);
                 try ptr_args.append(slot_ptr);
-                try arg_kinds.append('i');
+                try arg_kinds.append(defaultIntegerKind(ctx));
             },
             .f64 => {
                 const val = ValueRef{ .name = arg.name, .ty = .f64, .is_ptr = false };

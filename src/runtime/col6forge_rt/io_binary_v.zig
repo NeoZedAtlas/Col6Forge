@@ -34,7 +34,7 @@ fn runtimeArgLenAt(arg_lens: ?[*]const c_int, idx: usize, total: usize) c_int {
 fn typedFieldSize(kind: u8, len_in: c_int) ?usize {
     return switch (kind) {
         'i', 'f' => 4,
-        'd', 'c' => 8,
+        'j', 'd', 'c' => 8,
         'z' => 16,
         'l' => 1,
         's' => blk: {
@@ -1220,6 +1220,14 @@ pub export fn col6forge_read_direct_i32_n(unit: c_int, rec: c_int, count: c_int,
     return directReadScalarN(c_int, unit, rec, count, stride, base);
 }
 
+pub export fn col6forge_write_direct_i64_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const i64) callconv(.c) c_int {
+    return directWriteScalarN(i64, unit, rec, count, stride, base);
+}
+
+pub export fn col6forge_read_direct_i64_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]i64) callconv(.c) c_int {
+    return directReadScalarN(i64, unit, rec, count, stride, base);
+}
+
 pub export fn col6forge_write_direct_f32_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
     return directWriteScalarN(f32, unit, rec, count, stride, base);
 }
@@ -1266,6 +1274,14 @@ pub export fn col6forge_write_unformatted_i32_n(unit: c_int, count: c_int, strid
 
 pub export fn col6forge_read_unformatted_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
     return unformattedReadScalarN(c_int, unit, count, stride, base);
+}
+
+pub export fn col6forge_write_unformatted_i64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const i64) callconv(.c) c_int {
+    return unformattedWriteScalarN(i64, unit, count, stride, base);
+}
+
+pub export fn col6forge_read_unformatted_i64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]i64) callconv(.c) c_int {
+    return unformattedReadScalarN(i64, unit, count, stride, base);
 }
 
 pub export fn col6forge_write_unformatted_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const f32) callconv(.c) c_int {
@@ -1494,4 +1510,27 @@ test "streamed unformatted io preserves negative-stride block transfers" {
     try std.testing.expectEqual(@as(c_int, 44), vals_out[3]);
     try std.testing.expectEqual(@as(c_int, 0), vals_out[0]);
     try std.testing.expectEqual(@as(c_int, 0), vals_out[2]);
+}
+
+test "typed direct and unformatted io support i64 payloads" {
+    const direct_unit: c_int = 59;
+    const rec: c_int = 1;
+    col6forge_open_direct(direct_unit, 8);
+
+    var direct_in: i64 = 3000000000;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_write_direct_i64_n(direct_unit, rec, 1, 1, &direct_in));
+    var direct_out: i64 = 0;
+    try std.testing.expectEqual(@as(c_int, 1), col6forge_read_direct_i64_n(direct_unit, rec, 1, 1, &direct_out));
+    try std.testing.expectEqual(direct_in, direct_out);
+
+    const unformatted_unit: c_int = 60;
+    var write_args: [1]?*anyopaque = .{@ptrCast(&direct_in)};
+    const kinds: [1]u8 = .{'j'};
+    const lens: [1]c_int = .{0};
+    col6forge_write_unformatted_typed(unformatted_unit, &write_args, &kinds, &lens, 1);
+    _ = col6forge_rewind(unformatted_unit);
+    var unformatted_out: i64 = 0;
+    var read_args: [1]?*anyopaque = .{@ptrCast(&unformatted_out)};
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_read_unformatted_typed(unformatted_unit, &read_args, &kinds, &lens, 1));
+    try std.testing.expectEqual(direct_in, unformatted_out);
 }

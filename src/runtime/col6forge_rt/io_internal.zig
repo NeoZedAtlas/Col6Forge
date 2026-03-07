@@ -59,6 +59,12 @@ fn parseIntegerSlice(text: []const u8) ?c_int {
     return @intCast(parsed);
 }
 
+fn parseInteger64Slice(text: []const u8) ?i64 {
+    const trimmed = trimAsciiSpace(text);
+    if (trimmed.len == 0) return null;
+    return std.fmt.parseInt(i64, trimmed, 10) catch null;
+}
+
 fn parseFloatCString(text: []const u8) ?f64 {
     const n = cstrlenRaw(text);
     return parseFloatSlice(text[0..n]);
@@ -67,6 +73,11 @@ fn parseFloatCString(text: []const u8) ?f64 {
 fn parseIntegerCString(text: []const u8) ?c_int {
     const n = cstrlenRaw(text);
     return parseIntegerSlice(text[0..n]);
+}
+
+fn parseInteger64CString(text: []const u8) ?i64 {
+    const n = cstrlenRaw(text);
+    return parseInteger64Slice(text[0..n]);
 }
 
 fn isAllAsterisksSlice(text: []const u8) bool {
@@ -139,6 +150,12 @@ const InternalListWriter = struct {
 fn appendListI32(out: *InternalListWriter, value: c_int) void {
     var tmp: [64]u8 = [_]u8{0} ** 64;
     _ = snprintf(&tmp[0], tmp.len, "%d", value);
+    out.writeSlice(tmp[0..cstrlenRaw(tmp[0..])]);
+}
+
+fn appendListI64(out: *InternalListWriter, value: i64) void {
+    var tmp: [96]u8 = [_]u8{0} ** 96;
+    _ = snprintf(&tmp[0], tmp.len, "%lld", @as(c_longlong, @intCast(value)));
     out.writeSlice(tmp[0..cstrlenRaw(tmp[0..])]);
 }
 
@@ -297,6 +314,10 @@ pub export fn col6forge_write_internal_list_v(
                 const ptr: *const c_int = @ptrCast(@alignCast(arg));
                 appendListI32(&writer, ptr.*);
             },
+            'j' => {
+                const ptr: *const i64 = @ptrCast(@alignCast(arg));
+                appendListI64(&writer, ptr.*);
+            },
             'f' => {
                 const ptr: *const f32 = @ptrCast(@alignCast(arg));
                 appendListF32(&writer, ptr.*);
@@ -366,6 +387,13 @@ pub export fn col6forge_read_internal_list_v(
                 }
                 const out: *c_int = @ptrCast(@alignCast(arg));
                 out.* = parseIntegerCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
+            },
+            'j' => {
+                if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
+                    return if (status_mode != 0) -1 else 0;
+                }
+                const out: *i64 = @ptrCast(@alignCast(arg));
+                out.* = parseInteger64CString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
             },
             'f' => {
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
@@ -600,6 +628,18 @@ fn readInternalCoreWithProvider(
             const out: *c_int = @ptrCast(@alignCast(arg_any));
             const view = field[0..@intCast(@max(used, 0))];
             if (parseIntegerSlice(view)) |parsed| {
+                out.* = parsed;
+            } else if (isAllAsterisksSlice(view)) {
+                out.* = 0;
+            } else {
+                return null;
+            }
+            assigned += 1;
+        } else if (conv == 'd' and kind == 'j') {
+            col6forge_apply_blank_mode(asCStr(&field), &used, blank_mode);
+            const out: *i64 = @ptrCast(@alignCast(arg_any));
+            const view = field[0..@intCast(@max(used, 0))];
+            if (parseInteger64Slice(view)) |parsed| {
                 out.* = parsed;
             } else if (isAllAsterisksSlice(view)) {
                 out.* = 0;

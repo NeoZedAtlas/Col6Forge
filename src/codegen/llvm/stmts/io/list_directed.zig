@@ -26,6 +26,8 @@ const emitTripletCountValues = io_utils.emitTripletCountValues;
 const expandWriteArgsList = expansion.expandWriteArgsList;
 const expandReadTargets = expansion.expandReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
+const defaultIntegerKind = io_utils.defaultIntegerKind;
+const scalarRuntimeKind = io_utils.scalarRuntimeKind;
 
 const PackedWriteArgs = struct {
     ptr_array: ValueRef,
@@ -51,32 +53,16 @@ fn packWriteArgs(ctx: *Context, builder: anytype, expanded_values: *const expans
 
     for (expanded_values.values.items, 0..) |value, idx| {
         switch (value.ty) {
-            .i32, .f32, .f64, .i1, .complex_f32, .complex_f64 => {
+            .i32, .i64, .f32, .f64, .i1, .complex_f32, .complex_f64 => {
                 if (expanded_values.source_ptrs.items[idx]) |src_ptr| {
                     try ptr_args.append(src_ptr);
-                    try arg_kinds.append(switch (value.ty) {
-                        .i32 => 'i',
-                        .f32 => 'f',
-                        .f64 => 'd',
-                        .i1 => 'l',
-                        .complex_f32 => 'c',
-                        .complex_f64 => 'z',
-                        else => unreachable,
-                    });
+                    try arg_kinds.append(try scalarRuntimeKind(ctx, value.ty));
                     try arg_lens.append(0);
                     continue;
                 }
                 const ptr = try emitStackValue(ctx, builder, value);
                 try ptr_args.append(ptr);
-                try arg_kinds.append(switch (value.ty) {
-                    .i32 => 'i',
-                    .f32 => 'f',
-                    .f64 => 'd',
-                    .i1 => 'l',
-                    .complex_f32 => 'c',
-                    .complex_f64 => 'z',
-                    else => unreachable,
-                });
+                try arg_kinds.append(try scalarRuntimeKind(ctx, value.ty));
                 try arg_lens.append(0);
             },
             .ptr => {
@@ -109,8 +95,8 @@ fn packReadTargets(ctx: *Context, builder: anytype, expanded: *const expansion.E
 
     for (expanded.types.items, 0..) |ty, idx| {
         switch (ty) {
-            .i32 => {
-                try arg_kinds.append('i');
+            .i32, .i64 => {
+                try arg_kinds.append(try scalarRuntimeKind(ctx, ty));
                 try arg_lens.append(0);
             },
             .f32 => {
@@ -273,7 +259,7 @@ fn emitDynamicImpliedDoListWrite(
     if (step_val != 1) return false;
 
     const helper_name = switch (sym.type_kind) {
-        .integer => "col6forge_write_list_i32_n",
+        .integer => if (ctx.defaultIntegerIRType() == .i64) "col6forge_write_list_i64_n" else "col6forge_write_list_i32_n",
         .real => "col6forge_write_list_f32_n",
         .double_precision => "col6forge_write_list_f64_n",
         .complex => "col6forge_write_list_c32_n",
@@ -301,7 +287,7 @@ fn emitDynamicImpliedDoListWrite(
     const post_packed = try packWriteArgs(ctx, builder, &post_expanded);
 
     const mid_kind_val: i64 = switch (sym.type_kind) {
-        .integer => 'i',
+        .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',
         .complex => 'c',
@@ -434,7 +420,7 @@ fn emitDynamicImpliedDoListRead(
     if (step_val != 1) return null;
 
     const helper_name = switch (sym.type_kind) {
-        .integer => "col6forge_read_list_i32_n",
+        .integer => if (ctx.defaultIntegerIRType() == .i64) "col6forge_read_list_i64_n" else "col6forge_read_list_i32_n",
         .real => "col6forge_read_list_f32_n",
         .double_precision => "col6forge_read_list_f64_n",
         .complex => "col6forge_read_list_c32_n",
@@ -464,7 +450,7 @@ fn emitDynamicImpliedDoListRead(
     const post_packed = packReadTargets(ctx, builder, &post_expanded) catch return null;
 
     const mid_kind_val: i64 = switch (sym.type_kind) {
-        .integer => 'i',
+        .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',
         .complex => 'c',

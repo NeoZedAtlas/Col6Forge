@@ -118,14 +118,34 @@ fn usizeToCInt(n: usize) ?c_int {
     return @intCast(n);
 }
 
-fn consumeIntArg(arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_index: *usize, total: usize) c_int {
+const IntegerArg = struct {
+    value: i64,
+    wide: bool,
+};
+
+fn consumeIntegerArg(arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_index: *usize, total: usize) IntegerArg {
     const idx = arg_index.*;
     arg_index.* += 1;
     const kind = runtimeArgKindAt(arg_kinds, idx, total);
-    if (kind != 0 and kind != 'i') return 0;
-    const arg_any = runtimeArgPtrAt(arg_ptrs, idx, total) orelse return 0;
-    const ptr: *const c_int = @ptrCast(@alignCast(arg_any));
-    return ptr.*;
+    const arg_any = runtimeArgPtrAt(arg_ptrs, idx, total) orelse return .{ .value = 0, .wide = false };
+    return switch (kind) {
+        'j' => blk: {
+            const ptr: *const i64 = @ptrCast(@alignCast(arg_any));
+            break :blk .{ .value = ptr.*, .wide = true };
+        },
+        0, 'i' => blk: {
+            const ptr: *const c_int = @ptrCast(@alignCast(arg_any));
+            break :blk .{ .value = ptr.*, .wide = false };
+        },
+        else => .{ .value = 0, .wide = false },
+    };
+}
+
+fn consumeWidthArg(arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_index: *usize, total: usize) c_int {
+    const arg = consumeIntegerArg(arg_ptrs, arg_kinds, arg_index, total);
+    if (arg.value < std.math.minInt(c_int)) return std.math.minInt(c_int);
+    if (arg.value > std.math.maxInt(c_int)) return std.math.maxInt(c_int);
+    return @intCast(arg.value);
 }
 
 fn consumeFloatArg(arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_index: *usize, total: usize) f64 {
@@ -201,14 +221,23 @@ fn callSnprintfNumeric(
     precision_set: bool,
     width_val: c_int,
     precision_val: c_int,
-    i_val: c_int,
+    i_val: i64,
+    i_wide: bool,
     f_val: f64,
 ) c_int {
     if (is_int_like) {
-        if (width_set and precision_set) return snprintf(dst, dst_len, spec, width_val, precision_val, i_val);
-        if (width_set) return snprintf(dst, dst_len, spec, width_val, i_val);
-        if (precision_set) return snprintf(dst, dst_len, spec, precision_val, i_val);
-        return snprintf(dst, dst_len, spec, i_val);
+        if (i_wide) {
+            const wide_val: c_longlong = @intCast(i_val);
+            if (width_set and precision_set) return snprintf(dst, dst_len, spec, width_val, precision_val, wide_val);
+            if (width_set) return snprintf(dst, dst_len, spec, width_val, wide_val);
+            if (precision_set) return snprintf(dst, dst_len, spec, precision_val, wide_val);
+            return snprintf(dst, dst_len, spec, wide_val);
+        }
+        const narrow_val: c_int = @intCast(i_val);
+        if (width_set and precision_set) return snprintf(dst, dst_len, spec, width_val, precision_val, narrow_val);
+        if (width_set) return snprintf(dst, dst_len, spec, width_val, narrow_val);
+        if (precision_set) return snprintf(dst, dst_len, spec, precision_val, narrow_val);
+        return snprintf(dst, dst_len, spec, narrow_val);
     }
     if (width_set and precision_set) return snprintf(dst, dst_len, spec, width_val, precision_val, f_val);
     if (width_set) return snprintf(dst, dst_len, spec, width_val, f_val);
@@ -225,7 +254,8 @@ fn appendFormattedNumeric(
     width_set: bool,
     precision_val: c_int,
     precision_set: bool,
-    i_val: c_int,
+    i_val: i64,
+    i_wide: bool,
     f_val: f64,
 ) bool {
     const is_int_like = conv == 'd' or conv == 'c';
@@ -253,6 +283,12 @@ fn appendFormattedNumeric(
         spec[sp] = '*';
         sp += 1;
     }
+    if (conv == 'd' and i_wide) {
+        spec[sp] = 'l';
+        sp += 1;
+        spec[sp] = 'l';
+        sp += 1;
+    }
     spec[sp] = conv;
     sp += 1;
     spec[sp] = 0;
@@ -268,6 +304,7 @@ fn appendFormattedNumeric(
         width_val,
         precision_val,
         i_val,
+        i_wide and conv == 'd',
         f_val,
     );
     if (written < 0) return false;
@@ -289,6 +326,7 @@ fn appendFormattedNumeric(
         width_val,
         precision_val,
         i_val,
+        i_wide and conv == 'd',
         f_val,
     ) < 0) return false;
     return out.appendSlice(heap_buf[0..need]);
@@ -367,8 +405,8 @@ fn renderWriteFormatted(
         if (conv == 0) break;
         i += 1;
 
-        const width_runtime = if (width_star) consumeIntArg(arg_ptrs, arg_kinds, &arg_index, total) else width_val;
-        const precision_runtime = if (precision_star) consumeIntArg(arg_ptrs, arg_kinds, &arg_index, total) else precision_val;
+        const width_runtime = if (width_star) consumeWidthArg(arg_ptrs, arg_kinds, &arg_index, total) else width_val;
+        const precision_runtime = if (precision_star) consumeWidthArg(arg_ptrs, arg_kinds, &arg_index, total) else precision_val;
 
         switch (conv) {
             's' => {
@@ -377,16 +415,16 @@ fn renderWriteFormatted(
                 if (!appendPaddedString(&out, text, if (width_set) width_runtime else 0, precision_opt)) return null;
             },
             'd' => {
-                const v = consumeIntArg(arg_ptrs, arg_kinds, &arg_index, total);
-                if (!appendFormattedNumeric(&out, 'd', plus_flag, alt_flag, width_runtime, width_set, precision_runtime, precision_set, v, 0.0)) return null;
+                const v = consumeIntegerArg(arg_ptrs, arg_kinds, &arg_index, total);
+                if (!appendFormattedNumeric(&out, 'd', plus_flag, alt_flag, width_runtime, width_set, precision_runtime, precision_set, v.value, v.wide, 0.0)) return null;
             },
             'c' => {
-                const v = consumeIntArg(arg_ptrs, arg_kinds, &arg_index, total);
-                if (!appendFormattedNumeric(&out, 'c', plus_flag, alt_flag, width_runtime, width_set, precision_runtime, precision_set, v, 0.0)) return null;
+                const v = consumeIntegerArg(arg_ptrs, arg_kinds, &arg_index, total);
+                if (!appendFormattedNumeric(&out, 'c', plus_flag, alt_flag, width_runtime, width_set, precision_runtime, precision_set, v.value, false, 0.0)) return null;
             },
             'f' => {
                 const v = consumeFloatArg(arg_ptrs, arg_kinds, &arg_index, total);
-                if (!appendFormattedNumeric(&out, 'f', plus_flag, alt_flag, width_runtime, width_set, precision_runtime, precision_set, 0, v)) return null;
+                if (!appendFormattedNumeric(&out, 'f', plus_flag, alt_flag, width_runtime, width_set, precision_runtime, precision_set, 0, false, v)) return null;
             },
             else => {
                 if (!out.appendByte('%')) return null;
@@ -452,6 +490,16 @@ test "renderWriteFormatted accepts F kind for float arguments" {
     defer free(@ptrCast(rendered.ptr));
 
     try std.testing.expectEqualStrings("   1.250", rendered.ptr[0..rendered.len]);
+}
+
+test "renderWriteFormatted preserves 64-bit integer arguments" {
+    var value: i64 = 3000000000;
+    var args: [1]?*anyopaque = .{@ptrCast(&value)};
+    var kinds: [1]u8 = .{'j'};
+    const rendered = renderWriteFormatted("%12d", &args, &kinds, 1) orelse return error.OutOfMemory;
+    defer free(@ptrCast(rendered.ptr));
+
+    try std.testing.expectEqualStrings("  3000000000", rendered.ptr[0..rendered.len]);
 }
 
 pub export fn col6forge_write_v(
