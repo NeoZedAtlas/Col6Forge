@@ -355,6 +355,7 @@ fn emitLlvmModule(
                 .pause_mode = options.pause_mode,
                 .target = options.target,
                 .target_layout = options.semantic_target_layout,
+                .known_procedure_sigs = options.known_procedure_sigs,
             },
         ) catch |err| {
             if (profile) |p| {
@@ -412,6 +413,7 @@ fn emitLlvmModule(
             .pause_mode = options.pause_mode,
             .target = options.target,
             .target_layout = options.semantic_target_layout,
+            .known_procedure_sigs = options.known_procedure_sigs,
         },
     ) catch |err| {
         if (profile) |p| {
@@ -451,6 +453,7 @@ fn emitLlvmModuleToWriter(
                 .pause_mode = options.pause_mode,
                 .target = options.target,
                 .target_layout = options.semantic_target_layout,
+                .known_procedure_sigs = options.known_procedure_sigs,
             },
         ) catch |err| {
             if (profile) |p| {
@@ -509,6 +512,7 @@ fn emitLlvmModuleToWriter(
             .pause_mode = options.pause_mode,
             .target = options.target,
             .target_layout = options.semantic_target_layout,
+            .known_procedure_sigs = options.known_procedure_sigs,
         },
     ) catch |err| {
         if (profile) |p| {

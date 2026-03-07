@@ -41,6 +41,7 @@ pub const analyzeProgramWithOptions = api.analyzeProgramWithOptions;
 pub const analyzeProgramWithKnownAndOptions = api.analyzeProgramWithKnownAndOptions;
 pub const inferFunctionType = function_type.inferFunctionType;
 pub const inferFunctionTypeSpec = function_type.inferFunctionTypeSpec;
+pub const inferProcedureArgSigs = api.inferProcedureArgSigs;
 pub const printSemantic = printer.printSemantic;
 pub const takeDiagnostic = api.takeDiagnostic;
 pub const clearDiagnostic = api.clearDiagnostic;
@@ -54,4 +55,5 @@ test {
     _ = @import("tests/invariants_implicit_tests.zig");
     _ = @import("tests/invariants_call_arity_tests.zig");
     _ = @import("tests/invariants_array_lowering_tests.zig");
+    _ = @import("tests/procedure_sig_metadata_tests.zig");
 }

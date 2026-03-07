@@ -41,9 +41,15 @@ pub const Context = struct {
     };
 
     pub const ProcedureSig = struct {
+        pub const ArgSig = struct {
+            type_spec: symbols.TypeSpec = symbols.TypeSpec.fromResolvedKind(.real, .real, null),
+            requires_descriptor: bool = false,
+        };
+
         kind: ast.ProgramUnitKind,
         arg_count: usize,
         alt_return_count: usize = 0,
+        args: []const ArgSig = &.{},
     };
 
     pub const BuiltinConstant = struct {

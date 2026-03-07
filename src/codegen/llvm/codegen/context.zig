@@ -47,6 +47,7 @@ pub const CodegenOptions = struct {
     pause_mode: PauseMode = .auto,
     target: ?[]const u8 = null,
     target_layout: input.sema.TargetLayout = .{},
+    known_procedure_sigs: []const input.sema.KnownProcedureSig = &.{},
 };
 
 pub const FormatInfo = struct {
@@ -151,6 +152,7 @@ pub const Context = struct {
     runtime_array_descs: std.AutoHashMap(usize, RuntimeArrayDescriptor),
     int_literal_cache: std.AutoHashMap(i64, []const u8),
     heap_temps_to_free: std.array_list.Managed(ValueRef),
+    known_procedure_sigs: *const CaseInsensitiveStringHashMap(input.sema.KnownProcedureSig),
     options: CodegenOptions,
     current_stmt: ?input.Stmt,
 
@@ -164,6 +166,7 @@ pub const Context = struct {
         inline_formats: *const std.AutoHashMap(usize, FormatInfo),
         string_pool: *StringPool,
         intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
+        known_procedure_sigs: *const CaseInsensitiveStringHashMap(input.sema.KnownProcedureSig),
         options: CodegenOptions,
     ) !Context {
         var ctx = Context{
@@ -199,6 +202,7 @@ pub const Context = struct {
             .runtime_array_descs = std.AutoHashMap(usize, RuntimeArrayDescriptor).init(allocator),
             .int_literal_cache = std.AutoHashMap(i64, []const u8).init(allocator),
             .heap_temps_to_free = std.array_list.Managed(ValueRef).init(allocator),
+            .known_procedure_sigs = known_procedure_sigs,
             .options = options,
             .current_stmt = null,
         };
@@ -217,6 +221,10 @@ pub const Context = struct {
             }
         }
         return ctx;
+    }
+
+    pub fn lookupKnownProcedureSig(self: *const Context, name: []const u8) ?input.sema.KnownProcedureSig {
+        return self.known_procedure_sigs.get(name);
     }
 
     pub fn deinit(self: *Context) void {

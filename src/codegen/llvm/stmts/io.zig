@@ -28,7 +28,10 @@ const emitReadDynamicFormat = formatted.emitReadDynamicFormat;
 const emitReadDynamicFormatStatus = formatted.emitReadDynamicFormatStatus;
 const emitReadFormatExpr = formatted.emitReadFormatExpr;
 const emitReadFormatExprStatus = formatted.emitReadFormatExprStatus;
-const formatFromCharArrayData = formatted.formatFromCharArrayData;
+const FormatDispatch = formatted.FormatDispatch;
+const PreparedUnitContext = formatted.PreparedUnitContext;
+const prepareUnitContext = formatted.prepareUnitContext;
+const resolveFormatDispatch = formatted.resolveFormatDispatch;
 const stream_read = @import("io/formatted/stream_read.zig");
 const emitDirectWrite = direct.emitDirectWrite;
 const emitDirectRead = direct.emitDirectRead;
@@ -41,7 +44,6 @@ const emitUnformattedReadStatus = unformatted.emitUnformattedReadStatus;
 const expandWriteArgs = expansion.expandWriteArgs;
 const expandReadTargets = expansion.expandReadTargets;
 const charLenForExpr = io_utils.charLenForExpr;
-const internalUnitRecordCount = io_utils.internalUnitRecordCount;
 const emitIoStatusBranches = io_utils.emitIoStatusBranches;
 const findReversionStart = io_utils.findReversionStart;
 const evalConstIntSem = io_utils.evalConstIntSem;
@@ -93,50 +95,13 @@ pub fn emitWrite(
 
 const PreparedWriteContext = struct {
     has_runtime_implied_do: bool,
-    unit_value: ValueRef,
-    unit_char_len: ?usize,
-    unit_record_count: ?usize,
-    is_internal: bool,
-    unit_i32: ValueRef,
-};
-
-const WriteFormatDispatch = union(enum) {
-    static_items: []const ast.FormatItem,
-    dynamic_label_var: []const u8,
-    runtime_expr: *ast.Expr,
+    unit: PreparedUnitContext,
 };
 
 fn prepareWriteContext(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!PreparedWriteContext {
-    const unit_value = try expr.emitExpr(ctx, builder, write.unit);
-    const unit_char_len = charLenForExpr(ctx, write.unit);
-    const is_internal = unit_char_len != null and unit_value.ty == .ptr;
     return .{
         .has_runtime_implied_do = hasRuntimeImpliedDoArgs(ctx, write.args),
-        .unit_value = unit_value,
-        .unit_char_len = unit_char_len,
-        .unit_record_count = if (is_internal) internalUnitRecordCount(ctx, write.unit) else null,
-        .is_internal = is_internal,
-        .unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value),
-    };
-}
-
-fn resolveWriteFormatDispatch(ctx: *Context, write: ast.WriteStmt) EmitError!WriteFormatDispatch {
-    return switch (write.format) {
-        .label => |label| {
-            if (ctx.formats.get(label)) |fmt_info| return .{ .static_items = fmt_info.items };
-            if (ctx.findSymbol(label)) |sym| {
-                if (sym.type_kind == .character) {
-                    if (try formatFromCharArrayData(ctx, label)) |items| return .{ .static_items = items };
-                    return error.MissingFormatLabel;
-                }
-                return .{ .dynamic_label_var = label };
-            }
-            return error.MissingFormatLabel;
-        },
-        .inline_items => |items| .{ .static_items = items },
-        .expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
-        .none => unreachable,
-        .list_directed => unreachable,
+        .unit = try prepareUnitContext(ctx, builder, write.unit),
     };
 }
 
@@ -146,7 +111,7 @@ fn emitPreparedFormattedWrite(
     write: ast.WriteStmt,
     prepared: PreparedWriteContext,
 ) EmitError!void {
-    const dispatch = try resolveWriteFormatDispatch(ctx, write);
+    const dispatch: FormatDispatch = try resolveFormatDispatch(ctx, write.format);
 
     if (prepared.has_runtime_implied_do) {
         switch (dispatch) {
@@ -154,11 +119,11 @@ fn emitPreparedFormattedWrite(
                 ctx,
                 builder,
                 write,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 items,
             ),
             .runtime_expr, .dynamic_label_var => return error.UnsupportedImpliedDo,
@@ -167,10 +132,10 @@ fn emitPreparedFormattedWrite(
 
     switch (dispatch) {
         .static_items => |items| {
-            if (try emitTrailingDVectorFormattedWrite(ctx, builder, write, prepared.unit_value, prepared.unit_char_len, prepared.unit_record_count, prepared.is_internal, prepared.unit_i32, items)) {
+            if (try emitTrailingDVectorFormattedWrite(ctx, builder, write, prepared.unit.unit_value, prepared.unit.unit_char_len, prepared.unit.unit_record_count, prepared.unit.is_internal, prepared.unit.unit_i32, items)) {
                 return;
             }
-            if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, prepared.unit_i32, prepared.is_internal, items)) {
+            if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, prepared.unit.unit_i32, prepared.unit.is_internal, items)) {
                 return;
             }
             var expanded_values = try expandWriteArgs(ctx, builder, write.args);
@@ -179,11 +144,11 @@ fn emitPreparedFormattedWrite(
                 ctx,
                 builder,
                 write,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 items,
                 &expanded_values,
             );
@@ -195,11 +160,11 @@ fn emitPreparedFormattedWrite(
                 ctx,
                 builder,
                 write,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 label,
                 &expanded_values,
             );
@@ -212,11 +177,11 @@ fn emitPreparedFormattedWrite(
                 builder,
                 write,
                 fmt_expr,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 &expanded_values,
             );
         },
@@ -1076,51 +1041,14 @@ pub fn emitRead(
 const PreparedReadContext = struct {
     needs_status: bool,
     has_runtime_implied_do: bool,
-    unit_value: ValueRef,
-    unit_char_len: ?usize,
-    unit_record_count: ?usize,
-    is_internal: bool,
-    unit_i32: ValueRef,
-};
-
-const ReadFormatDispatch = union(enum) {
-    static_items: []const ast.FormatItem,
-    dynamic_label_var: []const u8,
-    runtime_expr: *ast.Expr,
+    unit: PreparedUnitContext,
 };
 
 fn prepareReadContext(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!PreparedReadContext {
-    const unit_value = try expr.emitExpr(ctx, builder, read.unit);
-    const unit_char_len = charLenForExpr(ctx, read.unit);
-    const is_internal = unit_char_len != null and unit_value.ty == .ptr;
     return .{
         .needs_status = read.iostat != null or read.err_label != null or read.end_label != null,
         .has_runtime_implied_do = hasRuntimeImpliedDoArgs(ctx, read.args),
-        .unit_value = unit_value,
-        .unit_char_len = unit_char_len,
-        .unit_record_count = if (is_internal) internalUnitRecordCount(ctx, read.unit) else null,
-        .is_internal = is_internal,
-        .unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value),
-    };
-}
-
-fn resolveReadFormatDispatch(ctx: *Context, read: ast.ReadStmt) EmitError!ReadFormatDispatch {
-    return switch (read.format) {
-        .label => |label| {
-            if (ctx.formats.get(label)) |fmt_info| return .{ .static_items = fmt_info.items };
-            if (ctx.findSymbol(label)) |sym| {
-                if (sym.type_kind == .character) {
-                    if (try formatFromCharArrayData(ctx, label)) |items| return .{ .static_items = items };
-                    return error.MissingFormatLabel;
-                }
-                return .{ .dynamic_label_var = label };
-            }
-            return error.MissingFormatLabel;
-        },
-        .inline_items => |items| .{ .static_items = items },
-        .expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
-        .none => unreachable,
-        .list_directed => unreachable,
+        .unit = try prepareUnitContext(ctx, builder, read.unit),
     };
 }
 
@@ -1130,7 +1058,7 @@ fn emitPreparedFormattedRead(
     read: ast.ReadStmt,
     prepared: PreparedReadContext,
 ) EmitError!ValueRef {
-    const dispatch = try resolveReadFormatDispatch(ctx, read);
+    const dispatch: FormatDispatch = try resolveFormatDispatch(ctx, read.format);
 
     if (prepared.has_runtime_implied_do) {
         return switch (dispatch) {
@@ -1138,11 +1066,11 @@ fn emitPreparedFormattedRead(
                 ctx,
                 builder,
                 read,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 items,
                 prepared.needs_status,
             ),
@@ -1151,11 +1079,11 @@ fn emitPreparedFormattedRead(
                 builder,
                 read,
                 fmt_expr,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 prepared.needs_status,
             ),
             .dynamic_label_var => error.UnsupportedImpliedDo,
@@ -1171,11 +1099,11 @@ fn emitPreparedFormattedRead(
                 ctx,
                 builder,
                 read,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 items,
                 &expanded,
             )
@@ -1184,11 +1112,11 @@ fn emitPreparedFormattedRead(
                 ctx,
                 builder,
                 read,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 items,
                 &expanded,
             );
@@ -1199,11 +1127,11 @@ fn emitPreparedFormattedRead(
                 ctx,
                 builder,
                 read,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 label,
                 &expanded,
             )
@@ -1212,11 +1140,11 @@ fn emitPreparedFormattedRead(
                 ctx,
                 builder,
                 read,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 label,
                 &expanded,
             );
@@ -1228,11 +1156,11 @@ fn emitPreparedFormattedRead(
                 builder,
                 read,
                 fmt_expr,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 &expanded,
             )
         else blk: {
@@ -1241,11 +1169,11 @@ fn emitPreparedFormattedRead(
                 builder,
                 read,
                 fmt_expr,
-                prepared.unit_value,
-                prepared.unit_char_len,
-                prepared.unit_record_count,
-                prepared.is_internal,
-                prepared.unit_i32,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
                 &expanded,
             );
             break :blk ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };

@@ -58,6 +58,7 @@ pub const KnownFortranSymbols = struct {
 
         for (self.procedure_sigs) |entry| {
             allocator.free(entry.name);
+            if (entry.args.len != 0) allocator.free(entry.args);
         }
         allocator.free(self.procedure_sigs);
     }

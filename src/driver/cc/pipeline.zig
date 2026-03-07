@@ -37,6 +37,8 @@ pub fn collectFortranKnownSymbols(
                 try upsertKnownFunctionType(allocator, &function_types, unit.name, fn_spec);
             }
             if (unit.kind == .function or unit.kind == .subroutine) {
+                const arg_sigs = try Col6Forge.sema.inferProcedureArgSigs(allocator, unit);
+                defer allocator.free(arg_sigs);
                 try upsertKnownProcedureSig(
                     allocator,
                     &procedure_sigs,
@@ -44,6 +46,7 @@ pub fn collectFortranKnownSymbols(
                     unit.kind,
                     unit.args.len,
                     unit.alt_return_dummy_count,
+                    arg_sigs,
                 );
             }
         }
@@ -133,11 +136,14 @@ fn upsertKnownProcedureSig(
     kind: Col6Forge.ast.ProgramUnitKind,
     arg_count: usize,
     alt_return_count: usize,
+    args: []const Col6Forge.sema.KnownProcedureSig.ArgSig,
 ) !void {
     if (indexOfKnownProcedureSig(list.items, name)) |idx| {
+        if (list.items[idx].args.len != 0) allocator.free(list.items[idx].args);
         list.items[idx].kind = kind;
         list.items[idx].arg_count = arg_count;
         list.items[idx].alt_return_count = alt_return_count;
+        list.items[idx].args = if (args.len == 0) &.{} else try allocator.dupe(Col6Forge.sema.KnownProcedureSig.ArgSig, args);
         return;
     }
     try list.append(allocator, .{
@@ -145,6 +151,7 @@ fn upsertKnownProcedureSig(
         .kind = kind,
         .arg_count = arg_count,
         .alt_return_count = alt_return_count,
+        .args = if (args.len == 0) &.{} else try allocator.dupe(Col6Forge.sema.KnownProcedureSig.ArgSig, args),
     });
 }
 

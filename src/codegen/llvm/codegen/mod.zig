@@ -138,11 +138,16 @@ pub fn emitModuleToWriter(
     defer decls.deinit();
     var defined = std.StringHashMap(void).init(scratch);
     defer defined.deinit();
+    var known_procedure_sigs = context.CaseInsensitiveStringHashMap(input.sema.KnownProcedureSig).initContext(scratch, .{});
+    defer known_procedure_sigs.deinit();
 
     var sem_map = std.StringHashMap(*const input.sema.SemanticUnit).init(scratch);
     defer sem_map.deinit();
     for (sem.units) |*unit| {
         try sem_map.put(unit.name, unit);
+    }
+    for (options.known_procedure_sigs) |sig| {
+        try known_procedure_sigs.put(sig.name, sig);
     }
     var program_mangled: ?[]const u8 = null;
     var block_data_mangled = std.array_list.Managed([]const u8).init(scratch);
@@ -161,7 +166,15 @@ pub fn emitModuleToWriter(
             .block_data => {
                 try block_data_mangled.append(mangled);
             },
-            else => {},
+            .function, .subroutine => {
+                try known_procedure_sigs.put(unit.name, .{
+                    .name = unit.name,
+                    .kind = unit.kind,
+                    .arg_count = unit.args.len,
+                    .alt_return_count = unit.alt_return_dummy_count,
+                    .args = try input.sema.inferProcedureArgSigs(scratch, unit),
+                });
+            },
         }
     }
     breakdown.prelude_ns = elapsedNs(prelude_start);
@@ -235,6 +248,7 @@ pub fn emitModuleToWriter(
             &format_maps.inline_items,
             &string_pool,
             &intrinsic_wrappers,
+            &known_procedure_sigs,
             options,
         );
         defer ctx.deinit();
