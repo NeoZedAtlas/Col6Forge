@@ -724,6 +724,100 @@ test "emitModuleToWriter adds hidden descriptor args for deferred-shape dummy ar
     try testing.expect(std.mem.indexOf(u8, output, "define void @s_(ptr %arg0, ptr %arg1, ptr %arg2)") != null);
 }
 
+test "emitModuleToWriter declares external subroutine with descriptor-aware ABI" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const dim = try a.create(input.Expr);
+    dim.* = .{ .literal = .{ .kind = .integer, .text = "4" } };
+    const dims = try a.alloc(*input.Expr, 1);
+    dims[0] = dim;
+
+    const arg_expr = try a.create(input.Expr);
+    arg_expr.* = .{ .identifier = "A" };
+    const call_args = try a.alloc(input.CallArg, 1);
+    call_args[0] = .{ .expr = arg_expr };
+    const stmt_list = try a.alloc(input.Stmt, 1);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{
+            .call = .{
+                .name = "FOO",
+                .args = call_args,
+            },
+        },
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const symbols = try a.alloc(input.sema.Symbol, 2);
+    symbols[0] = makeLocalArraySymbol("A", .integer, dims);
+    symbols[1] = .{
+        .name = "FOO",
+        .type_kind = .real,
+        .type_spec = input.sema.TypeSpec.fromResolvedKind(.real, .real, null),
+        .dims = &[_]*input.Expr{},
+        .char_len_kind = .none,
+        .char_len = null,
+        .kind = .subroutine,
+        .storage = .local,
+        .is_external = true,
+        .is_intrinsic = false,
+        .const_value = null,
+        .type_explicit = true,
+    };
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    const known_proc_sigs = [_]input.sema.KnownProcedureSig{
+        .{
+            .name = "FOO",
+            .kind = .subroutine,
+            .arg_count = 1,
+            .alt_return_count = 0,
+            .args = &.{
+                .{
+                    .type_spec = input.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+                    .requires_descriptor = true,
+                    .rank = 1,
+                },
+            },
+        },
+    };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "external_desc_call.f", .{
+        .known_procedure_sigs = &known_proc_sigs,
+    });
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "declare void @foo_(ptr, ptr, ptr)") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call void @foo_(ptr %t") != null);
+}
+
 test "PAUSE lowers to runtime call with configured mode" {
     const testing = std.testing;
     const allocator = testing.allocator;

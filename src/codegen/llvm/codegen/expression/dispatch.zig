@@ -202,7 +202,7 @@ fn ensureExternalDeclForCall(
 
     if (ctx.decls.get(mangled)) |existing| {
         if (!existing.varargs) return mangled;
-        const param_types = try buildAbiParamTypes(ctx, ret_ty, args, has_character_result);
+        const param_types = try buildAbiParamTypes(ctx, name, ret_ty, args, has_character_result);
 
         try ctx.decls.put(mangled, .{
             .ret_type = context.fortranAbiReturnType(ret_ty),
@@ -212,7 +212,7 @@ fn ensureExternalDeclForCall(
         return mangled;
     }
 
-    const param_types = try buildAbiParamTypes(ctx, ret_ty, args, has_character_result);
+    const param_types = try buildAbiParamTypes(ctx, name, ret_ty, args, has_character_result);
     return ctx.ensureDeclRaw(
         mangled,
         context.fortranAbiReturnType(ret_ty),
@@ -223,6 +223,7 @@ fn ensureExternalDeclForCall(
 
 fn buildAbiParamTypes(
     ctx: *Context,
+    name: []const u8,
     ret_ty: ir.IRType,
     args: []*Expr,
     has_character_result: bool,
@@ -234,7 +235,16 @@ fn buildAbiParamTypes(
     if (has_hidden_result_ptr) {
         try tys.append(.ptr);
     }
-    for (args) |_| try tys.append(.ptr);
+    const proc_sig = ctx.lookupKnownProcedureSig(name);
+    for (args, 0..) |_, idx| {
+        try tys.append(.ptr);
+        if (proc_sig) |sig| {
+            if (idx < sig.args.len and sig.args[idx].requires_descriptor) {
+                try tys.append(.ptr);
+                try tys.append(.ptr);
+            }
+        }
+    }
     if (has_character_result) {
         try tys.append(.i32);
     }

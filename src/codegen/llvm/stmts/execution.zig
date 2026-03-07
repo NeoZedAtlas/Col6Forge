@@ -541,7 +541,7 @@ fn ensureTypedExternalDeclForCall(
 
     if (ctx.decls.get(mangled)) |existing| {
         if (!existing.varargs) return mangled;
-        const param_types = try buildSubroutineAbiParamTypes(ctx, args);
+        const param_types = try buildSubroutineAbiParamTypes(ctx, name, args);
         try ctx.decls.put(mangled, .{
             .ret_type = context.fortranAbiReturnType(ret_ty),
             .sig = try formatParamSig(ctx, param_types),
@@ -550,7 +550,7 @@ fn ensureTypedExternalDeclForCall(
         return mangled;
     }
 
-    const param_types = try buildSubroutineAbiParamTypes(ctx, args);
+    const param_types = try buildSubroutineAbiParamTypes(ctx, name, args);
     return ctx.ensureDeclRaw(
         mangled,
         context.fortranAbiReturnType(ret_ty),
@@ -561,12 +561,22 @@ fn ensureTypedExternalDeclForCall(
 
 fn buildSubroutineAbiParamTypes(
     ctx: *Context,
+    name: []const u8,
     args: []*ast.Expr,
 ) EmitError![]const llvm_types.IRType {
     var tys = std.array_list.Managed(llvm_types.IRType).init(ctx.allocator);
     defer tys.deinit();
 
-    for (args) |_| try tys.append(.ptr);
+    const proc_sig = ctx.lookupKnownProcedureSig(name);
+    for (args, 0..) |_, idx| {
+        try tys.append(.ptr);
+        if (proc_sig) |sig| {
+            if (idx < sig.args.len and sig.args[idx].requires_descriptor) {
+                try tys.append(.ptr);
+                try tys.append(.ptr);
+            }
+        }
+    }
     for (args) |arg| {
         if (expr_call.isCharacterActualArg(ctx, arg)) {
             try tys.append(.i32);

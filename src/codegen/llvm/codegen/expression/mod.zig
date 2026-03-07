@@ -65,8 +65,11 @@ const TestHarness = struct {
         dim_expr.* = .{ .literal = .{ .kind = .integer, .text = "4" } };
         const arr_dims = try a.alloc(*ast.Expr, 1);
         arr_dims[0] = dim_expr;
+        const arr2_dims = try a.alloc(*ast.Expr, 2);
+        arr2_dims[0] = dim_expr;
+        arr2_dims[1] = dim_expr;
 
-        const symbols = try a.alloc(sema.Symbol, 2);
+        const symbols = try a.alloc(sema.Symbol, 3);
         symbols[0] = .{
             .name = "A",
             .type_kind = .integer,
@@ -83,6 +86,18 @@ const TestHarness = struct {
             .name = "ARR",
             .type_kind = .integer,
             .dims = arr_dims,
+            .char_len = null,
+            .kind = .variable,
+            .storage = .local,
+            .is_external = false,
+            .is_intrinsic = false,
+            .const_value = null,
+            .type_explicit = true,
+        };
+        symbols[2] = .{
+            .name = "ARR2",
+            .type_kind = .integer,
+            .dims = arr2_dims,
             .char_len = null,
             .kind = .variable,
             .storage = .local,
@@ -117,6 +132,7 @@ const TestHarness = struct {
         var ctx = try Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{});
         try ctx.locals.put("A", .{ .name = "%a", .ty = .ptr, .is_ptr = true });
         try ctx.locals.put("ARR", .{ .name = "%arr", .ty = .ptr, .is_ptr = true });
+        try ctx.locals.put("ARR2", .{ .name = "%arr2", .ty = .ptr, .is_ptr = true });
 
         return .{
             .arena = arena,
@@ -501,6 +517,48 @@ test "emitCall materializes descriptor arrays for triplet array section actual" 
     _ = try emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{section}), true);
 
     try testing.expect(std.mem.indexOf(u8, buffer.items, "getelementptr i32, ptr %arr, i64 0") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "store i64 2") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
+}
+
+test "emitCall materializes descriptor arrays for mixed-rank multidimensional section actual" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+                .requires_descriptor = true,
+                .rank = 1,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const scalar_idx = try makeLiteral(harness.arena.allocator(), .integer, "2");
+    const lower = try makeLiteral(harness.arena.allocator(), .integer, "1");
+    const upper = try makeLiteral(harness.arena.allocator(), .integer, "4");
+    const stride = try makeLiteral(harness.arena.allocator(), .integer, "2");
+    const range = try harness.arena.allocator().create(Expr);
+    range.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
+    const section = try harness.arena.allocator().create(Expr);
+    section.* = .{ .call_or_subscript = .{ .name = "ARR2", .args = @constCast(&[_]*Expr{ scalar_idx, range }) } };
+    _ = try emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{section}), true);
+
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "getelementptr i32, ptr %arr2") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "mul i64") != null);
     try testing.expect(std.mem.indexOf(u8, buffer.items, "store i64 2") != null);
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
 }
