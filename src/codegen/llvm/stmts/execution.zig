@@ -59,88 +59,36 @@ fn emitPausePayloadFromBytes(ctx: *Context, builder: anytype, bytes: []const u8)
 }
 
 pub fn emitContinuationDirective(ctx: *Context, builder: anytype, stmt: ast.Stmt) EmitError!bool {
-    const text = std.mem.trim(u8, stmt.source_text, " \t");
-    if (startsWithNoCase(text, "allocate(") and text.len > "allocate(".len and text[text.len - 1] == ')') {
-        const body = text["allocate(".len .. text.len - 1];
-        try emitAllocateListFromText(ctx, builder, body);
-        return true;
-    }
-    if (startsWithNoCase(text, "deallocate(") and text.len > "deallocate(".len and text[text.len - 1] == ')') {
-        const body = text["deallocate(".len .. text.len - 1];
-        try emitDeallocateListFromText(ctx, builder, body);
-        return true;
-    }
+    _ = ctx;
+    _ = builder;
+    _ = stmt;
     return false;
 }
 
-fn emitAllocateListFromText(ctx: *Context, builder: anytype, text: []const u8) EmitError!void {
-    var depth: usize = 0;
-    var start: usize = 0;
-    var i: usize = 0;
-    while (i <= text.len) : (i += 1) {
-        const ch: u8 = if (i < text.len) text[i] else ',';
-        switch (ch) {
-            '(' => depth += 1,
-            ')' => {
-                if (depth > 0) depth -= 1;
-            },
-            ',' => {
-                if (depth == 0) {
-                    const spec = std.mem.trim(u8, text[start..i], " \t");
-                    if (spec.len > 0) try emitAllocateSpecFromText(ctx, builder, spec);
-                    start = i + 1;
-                }
-            },
-            else => {},
-        }
+pub fn emitAllocate(ctx: *Context, builder: anytype, allocate: ast.AllocateStmt) EmitError!void {
+    for (allocate.items) |item| {
+        try emitAllocateItem(ctx, builder, item);
     }
 }
 
-fn emitAllocateSpecFromText(ctx: *Context, builder: anytype, spec: []const u8) EmitError!void {
-    const sym_lparen = std.mem.indexOfScalar(u8, spec, '(') orelse return error.UnsupportedAllocateSyntax;
-    const sym_rparen = std.mem.lastIndexOfScalar(u8, spec, ')') orelse return error.UnsupportedAllocateSyntax;
-    if (sym_rparen <= sym_lparen) return error.UnsupportedAllocateSyntax;
-
-    const name = std.mem.trim(u8, spec[0..sym_lparen], " \t");
-    const extents_text = spec[sym_lparen + 1 .. sym_rparen];
-    if (name.len == 0) return error.UnsupportedAllocateSyntax;
-
+fn emitAllocateItem(ctx: *Context, builder: anytype, item: ast.AllocateItem) EmitError!void {
     var dim_specs = std.array_list.Managed(AllocateDimSpec).init(ctx.allocator);
     defer dim_specs.deinit();
 
     var extent_product = constI64(ctx, 1);
-    var depth: usize = 0;
-    var start: usize = 0;
-    var i: usize = 0;
-    while (i <= extents_text.len) : (i += 1) {
-        const ch: u8 = if (i < extents_text.len) extents_text[i] else ',';
-        switch (ch) {
-            '(' => depth += 1,
-            ')' => {
-                if (depth > 0) depth -= 1;
-            },
-            ',' => {
-                if (depth == 0) {
-                    const extent_text = std.mem.trim(u8, extents_text[start..i], " \t");
-                    if (extent_text.len > 0) {
-                        const dim_spec = try emitAllocateDimSpecFromText(ctx, builder, extent_text);
-                        try dim_specs.append(dim_spec);
-                        extent_product = try expr.emitMul(ctx, builder, extent_product, dim_spec.extent);
-                    }
-                    start = i + 1;
-                }
-            },
-            else => {},
-        }
+    for (item.dims) |dim| {
+        const dim_spec = try emitAllocateDimSpec(ctx, builder, dim);
+        try dim_specs.append(dim_spec);
+        extent_product = try expr.emitMul(ctx, builder, extent_product, dim_spec.extent);
     }
 
-    const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
-    const desc = ctx.runtimeArrayDescriptor(name) orelse return error.UnsupportedAllocateSyntax;
+    const sym = ctx.findSymbol(item.name) orelse return error.UnknownSymbol;
+    const desc = ctx.runtimeArrayDescriptor(item.name) orelse return error.UnsupportedAllocateSyntax;
     if (desc.rank != dim_specs.items.len) return error.InvalidSubscript;
 
     // ALLOCATE currently targets deferred-shape arrays backed by runtime
     // descriptor slots; release previous allocation before replacing the base.
-    try freeManagedArrayPointerIfAllocated(ctx, builder, name);
+    try freeManagedArrayPointerIfAllocated(ctx, builder, item.name);
 
     const elem_size = constI64(ctx, @intCast(try elementByteSize(sym)));
     const total_bytes = try expr.emitMul(ctx, builder, extent_product, elem_size);
@@ -148,8 +96,8 @@ fn emitAllocateSpecFromText(ctx: *Context, builder: anytype, spec: []const u8) E
     const ptr_tmp = try ctx.nextTemp();
     try builder.callTyped(ptr_tmp, .ptr, malloc_name, &.{total_bytes});
     const base_ptr = ValueRef{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true };
-    try ctx.locals.put(name, base_ptr);
-    try ctx.markManagedAllocation(name);
+    try ctx.locals.put(item.name, base_ptr);
+    try ctx.markManagedAllocation(item.name);
     var running_multiplier = constI64(ctx, 1);
     for (dim_specs.items, 0..) |dim_spec, dim_idx| {
         try builder.store(dim_spec.lower, desc.lower_slots[dim_idx]);
@@ -159,35 +107,13 @@ fn emitAllocateSpecFromText(ctx: *Context, builder: anytype, spec: []const u8) E
     }
 }
 
-fn emitDeallocateListFromText(ctx: *Context, builder: anytype, text: []const u8) EmitError!void {
-    var depth: usize = 0;
-    var start: usize = 0;
-    var i: usize = 0;
-    while (i <= text.len) : (i += 1) {
-        const ch: u8 = if (i < text.len) text[i] else ',';
-        switch (ch) {
-            '(' => depth += 1,
-            ')' => {
-                if (depth > 0) depth -= 1;
-            },
-            ',' => {
-                if (depth == 0) {
-                    const item = std.mem.trim(u8, text[start..i], " \t");
-                    if (item.len > 0) try emitDeallocateSpecFromText(ctx, builder, item);
-                    start = i + 1;
-                }
-            },
-            else => {},
-        }
+pub fn emitDeallocate(ctx: *Context, builder: anytype, deallocate: ast.DeallocateStmt) EmitError!void {
+    for (deallocate.items) |item| {
+        try emitDeallocateItem(ctx, builder, item);
     }
 }
 
-fn emitDeallocateSpecFromText(ctx: *Context, builder: anytype, spec: []const u8) EmitError!void {
-    const name = if (std.mem.indexOfScalar(u8, spec, '(')) |idx|
-        std.mem.trim(u8, spec[0..idx], " \t")
-    else
-        std.mem.trim(u8, spec, " \t");
-    if (name.len == 0) return error.UnsupportedAllocateSyntax;
+fn emitDeallocateItem(ctx: *Context, builder: anytype, name: []const u8) EmitError!void {
     const desc = ctx.runtimeArrayDescriptor(name) orelse return error.UnsupportedAllocateSyntax;
 
     try freeManagedArrayPointerIfAllocated(ctx, builder, name);
@@ -214,70 +140,40 @@ fn freeManagedArrayPointerIfAllocated(ctx: *Context, builder: anytype, name: []c
     try ctx.locals.put(name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
 }
 
-fn emitExtentFromText(ctx: *Context, builder: anytype, text: []const u8) EmitError!ValueRef {
-    const trimmed = std.mem.trim(u8, text, " \t");
-    if (trimmed.len == 0) return error.UnsupportedAllocateSyntax;
-
-    const int_value = std.fmt.parseInt(i64, trimmed, 10) catch null;
-    if (int_value) |v| return constI64(ctx, v);
-
-    const sym = ctx.findSymbol(trimmed) orelse return error.UnknownSymbol;
-    if (sym.kind == .parameter and sym.const_value != null) {
-        switch (sym.const_value.?) {
-            .integer => |v| return constI64(ctx, v),
-            else => return error.UnsupportedAllocateSyntax,
-        }
-    }
-
-    const ptr = try ctx.getPointer(trimmed);
-    const ty = ctx.typeFromKind(sym.type_kind);
-    const tmp = try ctx.nextTemp();
-    try builder.load(tmp, ty, ptr);
-    const loaded = ValueRef{ .name = tmp, .ty = ty, .is_ptr = false };
-    return expr.coerce(ctx, builder, loaded, .i64);
-}
-
 const AllocateDimSpec = struct {
     lower: ValueRef,
     extent: ValueRef,
 };
 
-fn emitAllocateDimSpecFromText(ctx: *Context, builder: anytype, text: []const u8) EmitError!AllocateDimSpec {
-    const trimmed = std.mem.trim(u8, text, " \t");
-    if (trimmed.len == 0) return error.UnsupportedAllocateSyntax;
-
-    if (topLevelColonIndex(trimmed)) |idx| {
-        const lower_text = std.mem.trim(u8, trimmed[0..idx], " \t");
-        const upper_text = std.mem.trim(u8, trimmed[idx + 1 ..], " \t");
-        if (upper_text.len == 0) return error.UnsupportedAllocateSyntax;
-        var lower = if (lower_text.len == 0) constI64(ctx, 1) else try emitExtentFromText(ctx, builder, lower_text);
-        var upper = try emitExtentFromText(ctx, builder, upper_text);
-        if (lower.ty != .i64) lower = try expr.coerce(ctx, builder, lower, .i64);
-        if (upper.ty != .i64) upper = try expr.coerce(ctx, builder, upper, .i64);
-        const diff = try expr.emitSub(ctx, builder, upper, lower);
-        const extent = try expr.emitAdd(ctx, builder, diff, constI64(ctx, 1));
-        return .{ .lower = lower, .extent = extent };
+fn emitAllocateDimSpec(ctx: *Context, builder: anytype, dim: *ast.Expr) EmitError!AllocateDimSpec {
+    switch (dim.*) {
+        .dim_range => |range| {
+            if (range.stride != null) return error.UnsupportedAllocateSyntax;
+            var lower = if (range.lower) |lower_expr|
+                try emitAllocateExtentExpr(ctx, builder, lower_expr)
+            else
+                constI64(ctx, 1);
+            var upper = try emitAllocateExtentExpr(ctx, builder, range.upper);
+            if (lower.ty != .i64) lower = try expr.coerce(ctx, builder, lower, .i64);
+            if (upper.ty != .i64) upper = try expr.coerce(ctx, builder, upper, .i64);
+            const diff = try expr.emitSub(ctx, builder, upper, lower);
+            const extent = try expr.emitAdd(ctx, builder, diff, constI64(ctx, 1));
+            return .{ .lower = lower, .extent = extent };
+        },
+        else => {
+            var extent = try emitAllocateExtentExpr(ctx, builder, dim);
+            if (extent.ty != .i64) extent = try expr.coerce(ctx, builder, extent, .i64);
+            return .{ .lower = constI64(ctx, 1), .extent = extent };
+        },
     }
-
-    var extent = try emitExtentFromText(ctx, builder, trimmed);
-    if (extent.ty != .i64) extent = try expr.coerce(ctx, builder, extent, .i64);
-    return .{ .lower = constI64(ctx, 1), .extent = extent };
 }
 
-fn topLevelColonIndex(text: []const u8) ?usize {
-    var depth: usize = 0;
-    var i: usize = 0;
-    while (i < text.len) : (i += 1) {
-        switch (text[i]) {
-            '(' => depth += 1,
-            ')' => {
-                if (depth > 0) depth -= 1;
-            },
-            ':' => if (depth == 0) return i,
-            else => {},
-        }
+fn emitAllocateExtentExpr(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitError!ValueRef {
+    var value = try expr.emitExpr(ctx, builder, expr_node);
+    if (value.ty != .i64) {
+        value = try expr.coerce(ctx, builder, value, .i64);
     }
-    return null;
+    return value;
 }
 
 fn elementByteSize(sym: ast.sema.Symbol) EmitError!usize {
@@ -290,11 +186,6 @@ fn elementByteSize(sym: ast.sema.Symbol) EmitError!usize {
         .logical => 4,
         .character => try common.requireConstantCharacterLen(sym),
     };
-}
-
-fn startsWithNoCase(text: []const u8, prefix: []const u8) bool {
-    if (text.len < prefix.len) return false;
-    return std.ascii.eqlIgnoreCase(text[0..prefix.len], prefix);
 }
 
 pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!void {

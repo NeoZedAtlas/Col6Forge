@@ -180,6 +180,12 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         .close => |cls| {
             try writer.print(";   stmt label={s} close controls({d})\n", .{ label_text, cls.controls.len });
         },
+        .allocate => |allocate| {
+            try writer.print(";   stmt label={s} allocate items({d})\n", .{ label_text, allocate.items.len });
+        },
+        .deallocate => |deallocate| {
+            try writer.print(";   stmt label={s} deallocate items({d})\n", .{ label_text, deallocate.items.len });
+        },
         .data => |data| {
             try writer.print(";   stmt label={s} data inits({d})\n", .{ label_text, data.inits.len });
         },
@@ -584,6 +590,8 @@ fn stmtNodeName(node: ast.StmtNode) []const u8 {
         .open => "open",
         .inquire => "inquire",
         .close => "close",
+        .allocate => "allocate",
+        .deallocate => "deallocate",
         .data => "data",
         .format => "format",
         .arith_if => "arith-if",

@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../input.zig");
 const ir = @import("../../../ir.zig");
 const context = @import("../context.zig");
+const common = @import("../common.zig");
 const memory = @import("memory.zig");
 const dispatch = @import("dispatch.zig");
 const utils = @import("../utils.zig");
@@ -329,7 +330,7 @@ fn emitSubstringLengthValue(ctx: *Context, builder: anytype, sub: ast.SubstringE
 }
 
 fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) !ValueRef {
-    if (sym.char_len) |char_len| {
+    if (common.constantCharacterLen(sym)) |char_len| {
         return try i32Const(ctx, @intCast(char_len));
     }
     if (ctx.char_arg_lens.get(name)) |len_val| return len_val;

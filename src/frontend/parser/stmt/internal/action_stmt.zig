@@ -14,6 +14,7 @@ const StmtNode = ast.StmtNode;
 const Expr = ast.Expr;
 const CallArg = ast.CallArg;
 const UseOnlyItem = ast.UseOnlyItem;
+const AllocateItem = ast.AllocateItem;
 const DoContext = control_flow.DoContext;
 
 pub const ActionParseMode = enum { top_level, inline_if };
@@ -49,9 +50,8 @@ pub fn parseActionStmtNode(
 
     switch (lead) {
         'A' => {
-            if (lp.isKeywordSplit("ALLOCATE") or lp.isKeywordSplit("DEALLOCATE")) {
-                return .{ .cont = {} };
-            }
+            if (lp.isKeywordSplit("ALLOCATE")) return try parseAllocateStatement(arena, lp);
+            if (lp.isKeywordSplit("DEALLOCATE")) return try parseDeallocateStatement(arena, lp);
             if (lp.isKeywordSplit("ASSIGN")) {
                 return try helpers.parseAssignStatement(arena, lp);
             }
@@ -242,6 +242,45 @@ pub fn parsePauseStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!S
         payload = try expr.parseExpr(lp, arena, 0);
     }
     return .{ .pause = .{ .value = payload } };
+}
+
+pub fn parseAllocateStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!StmtNode {
+    if (!lp.consumeKeyword("ALLOCATE")) return error.UnexpectedToken;
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+
+    var items = std.array_list.Managed(AllocateItem).init(arena);
+    while (!lp.peekIs(.r_paren)) {
+        const name = lp.readName(arena) orelse return error.MissingName;
+        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+
+        var dims = std.array_list.Managed(*Expr).init(arena);
+        while (!lp.peekIs(.r_paren)) {
+            try dims.append(try expr.parseDimExpr(lp, arena));
+            if (!lp.consume(.comma)) break;
+        }
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        try items.append(.{
+            .name = name,
+            .dims = try dims.toOwnedSlice(),
+        });
+        if (!lp.consume(.comma)) break;
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return .{ .allocate = .{ .items = try items.toOwnedSlice() } };
+}
+
+pub fn parseDeallocateStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!StmtNode {
+    if (!lp.consumeKeyword("DEALLOCATE")) return error.UnexpectedToken;
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+
+    var items = std.array_list.Managed([]const u8).init(arena);
+    while (!lp.peekIs(.r_paren)) {
+        const name = lp.readName(arena) orelse return error.MissingName;
+        try items.append(name);
+        if (!lp.consume(.comma)) break;
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return .{ .deallocate = .{ .items = try items.toOwnedSlice() } };
 }
 
 pub fn parseUseStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!StmtNode {

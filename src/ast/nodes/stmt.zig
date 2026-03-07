@@ -29,6 +29,8 @@ pub const StmtNode = union(enum) {
     open: OpenStmt,
     inquire: InquireStmt,
     close: CloseStmt,
+    allocate: AllocateStmt,
+    deallocate: DeallocateStmt,
     data: DataStmt,
     format: FormatStmt,
     arith_if: ArithIfStmt,
@@ -122,6 +124,19 @@ pub const InquireStmt = struct {
 
 pub const CloseStmt = struct {
     controls: []ControlItem,
+};
+
+pub const AllocateStmt = struct {
+    items: []AllocateItem,
+};
+
+pub const AllocateItem = struct {
+    name: []const u8,
+    dims: []*Expr,
+};
+
+pub const DeallocateStmt = struct {
+    items: []const []const u8,
 };
 
 pub const ControlItem = struct {

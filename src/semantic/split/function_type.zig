@@ -18,11 +18,11 @@ pub fn inferFunctionTypeSpec(unit: ast.ProgramUnit) symbols.TypeSpec {
                 for (type_decl.items) |item| {
                     if (explicit_result_name) |result_name| {
                         if (std.ascii.eqlIgnoreCase(item.name, result_name)) {
-                            return type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector);
+                            return applyDeclaratorLen(type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector), item);
                         }
                     }
                     if (std.ascii.eqlIgnoreCase(item.name, unit.name)) {
-                        return type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector);
+                        return applyDeclaratorLen(type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector), item);
                     }
                 }
             },
@@ -33,4 +33,24 @@ pub fn inferFunctionTypeSpec(unit: ast.ProgramUnit) symbols.TypeSpec {
     const first = std.ascii.toUpper(unit.name[0]);
     if (first >= 'I' and first <= 'N') return symbols.TypeSpec.fromResolvedKind(.integer, .integer, null);
     return symbols.TypeSpec.fromResolvedKind(.real, .real, null);
+}
+
+fn applyDeclaratorLen(type_spec: symbols.TypeSpec, item: ast.Declarator) symbols.TypeSpec {
+    if (type_spec.lowered_kind != .character) return type_spec.withCharacterLength(.none, null);
+    const char_len = inferConstantCharLen(item.char_len);
+    return type_spec.withCharacterLength(
+        if (char_len != null) .constant else if (item.char_len != null) .deferred else .constant,
+        char_len orelse if (item.char_len == null) 1 else null,
+    );
+}
+
+fn inferConstantCharLen(len_expr: ?*ast.Expr) ?usize {
+    const expr_node = len_expr orelse return null;
+    return switch (expr_node.*) {
+        .literal => |lit| switch (lit.kind) {
+            .integer => std.fmt.parseInt(usize, lit.text, 10) catch null,
+            else => null,
+        },
+        else => null,
+    };
 }

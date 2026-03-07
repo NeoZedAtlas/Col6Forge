@@ -123,6 +123,14 @@ fn rewriteStmt(
                 changed = (try rewriteExpr(ctx, state, ctrl.value, stmt.*, prelude, allow_prelude)) or changed;
             }
         },
+        .allocate => |*allocate| {
+            for (allocate.items) |*item| {
+                for (item.dims) |dim| {
+                    changed = (try rewriteExpr(ctx, state, dim, stmt.*, prelude, allow_prelude)) or changed;
+                }
+            }
+        },
+        .deallocate => {},
         .data => |*data| {
             for (data.inits) |*init| {
                 changed = (try rewriteExpr(ctx, state, init.target, stmt.*, prelude, allow_prelude)) or changed;

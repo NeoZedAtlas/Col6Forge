@@ -292,9 +292,16 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
             return len;
         },
         .call_or_subscript => |call_or_sub| {
-            const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
             if (sym.type_kind != .character) return null;
+            if (kind == .unknown) {
+                if (sym.dims.len > 0) {
+                    kind = .subscript;
+                } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                    kind = .call;
+                }
+            }
             if (kind == .subscript or kind == .call) {
                 return common.constantCharacterLen(sym);
             }

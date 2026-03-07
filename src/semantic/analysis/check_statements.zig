@@ -95,6 +95,24 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 }
             }
         },
+        .allocate => |allocate| {
+            for (allocate.items) |item| {
+                const idx = resolve_symbols.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
+                const sym = self.symbols.items[idx];
+                if (sym.dims.len == 0) return error.UnsupportedAllocateSyntax;
+                if (sym.dims.len != item.dims.len) return error.InvalidSubscript;
+                for (item.dims) |dim| {
+                    try checkAllocateDim(self, dim);
+                }
+            }
+        },
+        .deallocate => |deallocate| {
+            for (deallocate.items) |name| {
+                const idx = resolve_symbols.findSymbolIndex(self, name) orelse return error.UnknownSymbol;
+                const sym = self.symbols.items[idx];
+                if (sym.dims.len == 0) return error.UnsupportedAllocateSyntax;
+            }
+        },
         .data => |data| {
             for (data.inits) |init| {
                 try checkExpr(self, init.target);
@@ -158,6 +176,24 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
 
 fn checkExpr(self: *context.Context, expr: *ast.Expr) CheckError!void {
     _ = try checkExprType(self, expr);
+}
+
+fn checkAllocateDim(self: *context.Context, expr: *ast.Expr) CheckError!void {
+    switch (expr.*) {
+        .dim_range => |range| {
+            if (range.lower) |lower| {
+                const lower_ty = try checkExprType(self, lower);
+                if (!isIntegerLike(lower_ty)) return error.InvalidSubscript;
+            }
+            const upper_ty = try checkExprType(self, range.upper);
+            if (!isIntegerLike(upper_ty)) return error.InvalidSubscript;
+            if (range.stride != null) return error.UnsupportedAllocateSyntax;
+        },
+        else => {
+            const ty = try checkExprType(self, expr);
+            if (!isIntegerLike(ty)) return error.InvalidSubscript;
+        },
+    }
 }
 
 fn checkLogicalConditionExpr(self: *context.Context, expr: *ast.Expr) CheckError!void {

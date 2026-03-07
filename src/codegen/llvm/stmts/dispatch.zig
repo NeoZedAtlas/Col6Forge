@@ -174,6 +174,16 @@ fn emitStmtInner(
             }
             return true;
         },
+        .allocate => |allocate| {
+            try execution.emitAllocate(ctx, builder, allocate);
+            try brIfNeeded(builder, next_block);
+            return true;
+        },
+        .deallocate => |deallocate| {
+            try execution.emitDeallocate(ctx, builder, deallocate);
+            try brIfNeeded(builder, next_block);
+            return true;
+        },
         .rewind => |rewind| {
             const terminated = try io.emitRewind(ctx, builder, rewind, next_block, local_label_map);
             if (!terminated) {

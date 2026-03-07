@@ -82,6 +82,40 @@ test "inferFunctionType resolves COMPLEX kind selector from declaration" {
     try testing.expectEqual(@as(?i64, 16), inferred.kind_value);
 }
 
+test "inferFunctionTypeSpec preserves CHARACTER result length" {
+    const testing = std.testing;
+
+    var char_len = ast.Expr{ .literal = .{ .kind = .integer, .text = "10" } };
+    const items = [_]ast.Declarator{
+        .{
+            .name = "CF716",
+            .dims = &.{},
+            .char_len = &char_len,
+        },
+    };
+    const decls = [_]ast.Decl{
+        .{ .type_decl = .{
+            .type_kind = .character,
+            .kind_selector = null,
+            .items = &items,
+        } },
+    };
+    const unit = ast.ProgramUnit{
+        .kind = .function,
+        .name = "CF716",
+        .args = &.{},
+        .decls = &decls,
+        .decl_sources = &.{},
+        .stmts = &.{},
+    };
+
+    const inferred = inferFunctionTypeSpec(unit);
+    try testing.expectEqual(ast.TypeKind.character, inferred.declared_kind);
+    try testing.expectEqual(ast.TypeKind.character, inferred.lowered_kind);
+    try testing.expectEqual(symbols.CharacterLengthKind.constant, inferred.char_len_kind);
+    try testing.expectEqual(@as(?usize, 10), inferred.char_len);
+}
+
 test "semantic declaration error reports declaration source line" {
     const testing = std.testing;
     const allocator = testing.allocator;

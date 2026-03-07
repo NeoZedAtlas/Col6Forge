@@ -105,6 +105,19 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
                 try expressions.resolveExpr(self, ctrl.value);
             }
         },
+        .allocate => |allocate| {
+            for (allocate.items) |item| {
+                _ = try symbols_mod.ensureSymbol(self, item.name);
+                for (item.dims) |dim| {
+                    try expressions.resolveExpr(self, dim);
+                }
+            }
+        },
+        .deallocate => |deallocate| {
+            for (deallocate.items) |name| {
+                _ = try symbols_mod.ensureSymbol(self, name);
+            }
+        },
         .data => |data| {
             for (data.inits) |data_init| {
                 try expressions.resolveExpr(self, data_init.target);

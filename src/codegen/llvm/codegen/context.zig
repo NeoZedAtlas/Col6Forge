@@ -559,7 +559,7 @@ fn canonicalNumericLabel(label: []const u8) []const u8 {
 
 fn stmtCanFallthroughInBlock(stmt: ast.Stmt) bool {
     return switch (stmt.node) {
-        .assignment, .assign_label, .use_stmt, .data, .format => true,
+        .assignment, .assign_label, .use_stmt, .allocate, .deallocate, .data, .format => true,
         else => false,
     };
 }

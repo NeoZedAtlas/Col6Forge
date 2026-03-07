@@ -67,11 +67,13 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                         if (!sym.is_intrinsic and sym.storage != .dummy) {
                             sym.is_external = true;
                         }
-                        if (symbols_mod.lookupKnownFunctionType(self, call.name)) |fn_ty| {
-                            sym.type_kind = fn_ty;
-                            sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, call.name) orelse
-                                symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(fn_ty), fn_ty, null);
-                            sym.type_explicit = true;
+                        if (!sym.type_explicit) {
+                            if (symbols_mod.lookupKnownFunctionType(self, call.name)) |fn_ty| {
+                                sym.type_kind = fn_ty;
+                                sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, call.name) orelse
+                                    symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(fn_ty), fn_ty, null);
+                                sym.type_explicit = true;
+                            }
                         }
                         self.symbols.items[idx] = sym;
                     } else {
@@ -86,10 +88,12 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     if (!sym.is_intrinsic and sym.storage != .dummy) {
                         sym.is_external = true;
                     }
-                    sym.type_kind = fn_ty;
-                    sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, call.name) orelse
-                        symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(fn_ty), fn_ty, null);
-                    sym.type_explicit = true;
+                    if (!sym.type_explicit) {
+                        sym.type_kind = fn_ty;
+                        sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, call.name) orelse
+                            symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(fn_ty), fn_ty, null);
+                        sym.type_explicit = true;
+                    }
                     self.symbols.items[idx] = sym;
                 } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
                     kind = .call;

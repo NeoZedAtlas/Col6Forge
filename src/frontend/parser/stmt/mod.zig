@@ -935,11 +935,11 @@ test "parseStatement handles ERROR STOP" {
     try testing.expectEqual(@as(usize, 1), idx);
 }
 
-test "parseStatement accepts ALLOCATE as no-op" {
+test "parseStatement parses ALLOCATE items" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    const source = "      ALLOCATE(A(10))\n";
+    const source = "      ALLOCATE(A(10), B(1:N))\n";
     const lines = try fixed_form.normalizeFixedForm(allocator, source);
     defer fixed_form.freeLogicalLines(allocator, lines);
 
@@ -952,7 +952,37 @@ test "parseStatement accepts ALLOCATE as no-op" {
     var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
 
     const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
-    try testing.expect(stmt_node.node == .cont);
+    try testing.expect(stmt_node.node == .allocate);
+    try testing.expectEqual(@as(usize, 2), stmt_node.node.allocate.items.len);
+    try testing.expectEqualStrings("A", stmt_node.node.allocate.items[0].name);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.allocate.items[0].dims.len);
+    try testing.expect(stmt_node.node.allocate.items[0].dims[0].* == .literal);
+    try testing.expectEqualStrings("B", stmt_node.node.allocate.items[1].name);
+    try testing.expect(stmt_node.node.allocate.items[1].dims[0].* == .dim_range);
+    try testing.expectEqual(@as(usize, 1), idx);
+}
+
+test "parseStatement parses DEALLOCATE items" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      DEALLOCATE(A, B)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .deallocate);
+    try testing.expectEqual(@as(usize, 2), stmt_node.node.deallocate.items.len);
+    try testing.expectEqualStrings("A", stmt_node.node.deallocate.items[0]);
+    try testing.expectEqualStrings("B", stmt_node.node.deallocate.items[1]);
     try testing.expectEqual(@as(usize, 1), idx);
 }
 
