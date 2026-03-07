@@ -78,20 +78,20 @@ entry:
   %t30 = alloca i32
   %t31 = alloca i32
   %t32 = alloca i32
-  %t33 = alloca i32
+  %t33 = alloca float
   %t34 = alloca i32
   %t35 = alloca float
   %t36 = alloca float
   %t37 = alloca float
   %t38 = alloca float
-  %t39 = alloca float
+  %t39 = alloca i32
   %t40 = alloca float
   %t41 = alloca double
   %t42 = alloca float
   %t43 = alloca double
-  %t44 = alloca double
+  %t44 = alloca float
   %t45 = alloca double
-  %t46 = alloca double
+  %t46 = alloca float
   %t47 = alloca double
   %t48 = alloca float
   %t49 = alloca double
@@ -99,11 +99,11 @@ entry:
   %t51 = alloca float
   %t52 = alloca float
   %t53 = alloca {float, float}
-  %t54 = alloca {float, float}
+  %t54 = alloca float
   %t55 = alloca {float, float}
-  %t56 = alloca {float, float}
+  %t56 = alloca i32
   %t57 = alloca {float, float}
-  %t58 = alloca {float, float}
+  %t58 = alloca float
   br label %bb0
 bb0:
   %t59 = getelementptr i8, ptr %t8, i32 0

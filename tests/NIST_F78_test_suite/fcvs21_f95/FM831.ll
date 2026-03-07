@@ -75,18 +75,18 @@ entry:
   %t27 = alloca i32
   %t28 = alloca i32
   %t29 = alloca i32
-  %t30 = alloca i32
-  %t31 = alloca double
+  %t30 = alloca float
+  %t31 = alloca float
   %t32 = alloca i32
   %t33 = alloca float
   %t34 = alloca i32
   %t35 = alloca float
   %t36 = alloca float
-  %t37 = alloca {float, float}
+  %t37 = alloca float
   %t38 = alloca float
-  %t39 = alloca double
-  %t40 = alloca double
-  %t41 = alloca double
+  %t39 = alloca float
+  %t40 = alloca float
+  %t41 = alloca float
   %t42 = alloca float
   br label %bb0
 bb0:

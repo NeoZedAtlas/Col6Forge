@@ -249,7 +249,7 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                 }
                 try checkKnownProcedureCallArity(self, call.name, call.args.len, 0, false, idx);
             }
-            return sym.type_kind;
+            return try resolve_expr.exprType(self, expr);
         },
         .implied_do => |implied| {
             _ = try checkExprType(self, implied.start);

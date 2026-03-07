@@ -43,11 +43,11 @@ entry:
   %t18 = alloca i32
   %t19 = alloca float
   %t20 = alloca float
-  %t21 = alloca float
+  %t21 = alloca i8, i32 14
   %t22 = alloca float
   %t23 = alloca float
   %t24 = alloca float
-  %t25 = alloca float
+  %t25 = alloca i8, i32 14
   br label %bb0
 bb0:
   store float 3.1415927410125732e0, ptr %t2

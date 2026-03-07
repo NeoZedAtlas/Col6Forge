@@ -25,6 +25,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             const idx = try symbols_mod.ensureSymbol(self, call.name);
             var sym = self.symbols.items[idx];
             var kind: ResolvedRefKind = .unknown;
+            var resolved_ty = sym.type_kind;
             if (sym.storage == .dummy) {
                 if (sym.dims.len > 0) {
                     kind = .subscript;
@@ -47,8 +48,11 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     self.symbols.items[idx] = sym;
                 }
                 if (sym.is_intrinsic) {
-                    sym.type_kind = try intrinsicReturnType(self, call.name, sym.type_kind, call.args);
-                    self.symbols.items[idx] = sym;
+                    resolved_ty = try intrinsicReturnType(self, call.name, sym.type_kind, call.args);
+                    if (!intrinsicResultDependsOnArgs(call.name)) {
+                        sym.type_kind = resolved_ty;
+                        self.symbols.items[idx] = sym;
+                    }
                 }
                 if (sym.dims.len > 0) {
                     kind = .subscript;
@@ -112,9 +116,10 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     const arg_ty = try resolvedExprType(self, arg);
                     if (arg_ty != .integer) return error.InvalidSubscript;
                 }
+                resolved_ty = sym.type_kind;
             }
             try recordResolvedRef(self, expr, call.name, kind, idx);
-            try cacheExprType(self, expr, sym.type_kind);
+            try cacheExprType(self, expr, resolved_ty);
         },
         .substring => |sub| {
             const idx = try symbols_mod.ensureSymbol(self, sub.name);
@@ -242,10 +247,19 @@ fn exprTypeUncached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.Ty
         },
         .call_or_subscript => |call| {
             if (self.ref_symbol_index.get(@intFromPtr(expr))) |idx| {
-                return self.symbols.items[idx].type_kind;
+                const sym = self.symbols.items[idx];
+                const kind = refKindIndex(self, @intFromPtr(expr)) orelse if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call;
+                if (kind == .call and sym.is_intrinsic) {
+                    return intrinsicReturnType(self, call.name, sym.type_kind, call.args);
+                }
+                return sym.type_kind;
             }
             const idx = try symbols_mod.ensureSymbol(self, call.name);
-            return self.symbols.items[idx].type_kind;
+            const sym = self.symbols.items[idx];
+            if (sym.is_intrinsic) {
+                return intrinsicReturnType(self, call.name, sym.type_kind, call.args);
+            }
+            return sym.type_kind;
         },
         .substring => |sub| {
             if (self.ref_symbol_index.get(@intFromPtr(expr))) |idx| {
@@ -515,6 +529,18 @@ fn intrinsicReturnType(
     return current;
 }
 
+fn intrinsicResultDependsOnArgs(name: []const u8) bool {
+    var upper_buf: [64]u8 = undefined;
+    if (name.len > upper_buf.len) return false;
+    for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
+    const upper = upper_buf[0..name.len];
+
+    if (std.mem.eql(u8, upper, "ABS")) return true;
+    if (IntrinsicSameArgMap.has(upper)) return true;
+    if (IntrinsicPromoteArgsMap.has(upper)) return true;
+    return false;
+}
+
 fn absReturnType(arg_ty: ast.TypeKind) ast.TypeKind {
     return switch (arg_ty) {
         .integer => .integer,
@@ -589,6 +615,10 @@ fn recordResolvedRef(
     try self.refs.append(.{ .expr = expr, .name = name, .kind = kind });
     try self.ref_kind_index.put(@intFromPtr(expr), kind);
     try self.ref_symbol_index.put(@intFromPtr(expr), symbol_idx);
+}
+
+fn refKindIndex(self: *context.Context, key: usize) ?ResolvedRefKind {
+    return self.ref_kind_index.get(key);
 }
 
 fn cacheExprType(self: *context.Context, expr: *ast.Expr, ty: ast.TypeKind) !void {

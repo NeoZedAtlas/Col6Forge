@@ -165,6 +165,40 @@ test "resolve_expr intrinsic LOG preserves double precision argument kind" {
     try testing.expect(found);
 }
 
+test "resolve_expr generic MAX and MIN use per-call types after mixed intrinsic uses" {
+    const testing = std.testing;
+    const source =
+        "      SUBROUTINE S(A,NBLOCK,NMAX)\n" ++
+        "      INTEGER A(10), NBLOCK, NMAX, I\n" ++
+        "      REAL R\n" ++
+        "      R = MAX(1.0E+0, 2.0E+0)\n" ++
+        "      NBLOCK = MIN( NMAX, MAX( 1, NBLOCK ) )\n" ++
+        "      I = A( MAX( 1, NBLOCK ) )\n" ++
+        "      END\n";
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try parseAndAnalyze(arena.allocator(), source);
+
+    try testing.expect(result.program.units.len == 1);
+    try testing.expect(result.program.units[0].stmts.len == 3);
+}
+
+test "resolve_expr generic MAX does not poison later integer subscripts" {
+    const testing = std.testing;
+    const source =
+        "      SUBROUTINE S(I)\n" ++
+        "      INTEGER I, A(10)\n" ++
+        "      REAL R\n" ++
+        "      R = MAX(1.0E+0, 2.0E+0)\n" ++
+        "      I = A( MAX( 1, I ) )\n" ++
+        "      END\n";
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    _ = try parseAndAnalyze(arena.allocator(), source);
+}
+
 test "resolve_expr disambiguates A(1:3) as array section without mutating AST variant" {
     const testing = std.testing;
     const source =

@@ -47,7 +47,7 @@ entry:
   %t21 = alloca float
   %t22 = alloca float
   %t23 = alloca float
-  %t24 = alloca float
+  %t24 = alloca i8, i32 14
   %t25 = alloca i32
   %t26 = alloca float
   %t27 = alloca i32
@@ -57,7 +57,7 @@ entry:
   %t31 = alloca float
   %t32 = alloca float
   %t33 = alloca float
-  %t34 = alloca float
+  %t34 = alloca i8, i32 14
   %t35 = alloca i32
   %t36 = alloca float
   %t37 = alloca float
@@ -74,7 +74,7 @@ entry:
   %t48 = alloca float
   %t49 = alloca float
   %t50 = alloca i32
-  %t51 = alloca float
+  %t51 = alloca i32
   %t52 = alloca i32
   %t53 = getelementptr i8, ptr @common_blank_, i32 0
   br label %bb0
