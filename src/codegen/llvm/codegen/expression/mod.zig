@@ -465,6 +465,46 @@ test "emitCall appends descriptor arrays for known deferred-shape dummy" {
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %arr, ptr %t") != null);
 }
 
+test "emitCall materializes descriptor arrays for triplet array section actual" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+                .requires_descriptor = true,
+                .rank = 1,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lower = try makeLiteral(harness.arena.allocator(), .integer, "1");
+    const upper = try makeLiteral(harness.arena.allocator(), .integer, "4");
+    const stride = try makeLiteral(harness.arena.allocator(), .integer, "2");
+    const range = try harness.arena.allocator().create(Expr);
+    range.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
+    const section = try harness.arena.allocator().create(Expr);
+    section.* = .{ .call_or_subscript = .{ .name = "ARR", .args = @constCast(&[_]*Expr{range}) } };
+    _ = try emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{section}), true);
+
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "getelementptr i32, ptr %arr, i64 0") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "store i64 2") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
+}
+
 test "emitSubscriptPtr, emitIndex, and emitDimValue enforce subscripts" {
     const testing = std.testing;
     const allocator = testing.allocator;

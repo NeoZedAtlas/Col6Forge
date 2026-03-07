@@ -24,6 +24,12 @@ const MaterializedDescriptor = struct {
     multiplier_ptr: ValueRef,
 };
 
+const SectionActualInfo = struct {
+    base_ptr: ValueRef,
+    extents: []ValueRef,
+    multipliers: []ValueRef,
+};
+
 pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
     const abi_ret_ty = context.fortranAbiReturnType(ret_ty);
     var complex_result_ptr: ?ValueRef = null;
@@ -184,6 +190,9 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
             return .{ .ptr = try ctx.getPointer(name) };
         },
         .call_or_subscript => |call| {
+            if (try analyzeSectionActual(ctx, builder, expr)) |section| {
+                return .{ .ptr = section.base_ptr };
+            }
             const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
             if (kind == .subscript) {
                 return .{ .ptr = try memory.emitSubscriptPtr(ctx, builder, call) };
@@ -253,34 +262,23 @@ fn materializeActualDescriptor(
     arg_sig: ast.sema.KnownProcedureSig.ArgSig,
 ) !MaterializedDescriptor {
     if (arg_sig.rank == 0) return error.UnsupportedDescriptorActualArgument;
+    const actual = (try analyzeSectionActual(ctx, builder, expr)) orelse return error.UnsupportedDescriptorActualArgument;
+    if (actual.extents.len != arg_sig.rank) return error.UnsupportedDescriptorActualArgument;
 
-    const actual_name = switch (expr.*) {
-        .identifier => |name| name,
-        else => return error.UnsupportedDescriptorActualArgument,
-    };
-    const sym = ctx.findSymbol(actual_name) orelse return error.UnknownSymbol;
-    if (sym.dims.len < arg_sig.rank) return error.UnsupportedDescriptorActualArgument;
-
-    const extent_ptr = try allocaDescriptorArray(ctx, builder, sym, arg_sig.rank, .extent);
-    const multiplier_ptr = try allocaDescriptorArray(ctx, builder, sym, arg_sig.rank, .multiplier);
+    const extent_ptr = try materializeDescriptorValues(ctx, builder, actual.extents);
+    const multiplier_ptr = try materializeDescriptorValues(ctx, builder, actual.multipliers);
     return .{
         .extent_ptr = extent_ptr,
         .multiplier_ptr = multiplier_ptr,
     };
 }
 
-const DescriptorArrayKind = enum {
-    extent,
-    multiplier,
-};
-
-fn allocaDescriptorArray(
+fn materializeDescriptorValues(
     ctx: *Context,
     builder: anytype,
-    sym: ast.sema.Symbol,
-    rank: usize,
-    kind: DescriptorArrayKind,
+    values: []const ValueRef,
 ) !ValueRef {
+    const rank = values.len;
     const base_name = try ctx.nextTemp();
     if (rank == 1) {
         try builder.alloca(base_name, .i64);
@@ -289,8 +287,7 @@ fn allocaDescriptorArray(
     }
     const base_ptr = ValueRef{ .name = base_name, .ty = .ptr, .is_ptr = true };
 
-    var dim_idx: usize = 0;
-    while (dim_idx < rank) : (dim_idx += 1) {
+    for (values, 0..) |value, dim_idx| {
         const offset_ptr = if (dim_idx == 0)
             base_ptr
         else blk: {
@@ -298,13 +295,67 @@ fn allocaDescriptorArray(
             try builder.gep(ptr_name, .i64, base_ptr, i64Const(ctx, @intCast(dim_idx)));
             break :blk ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
         };
-        const value = switch (kind) {
-            .extent => try memory.emitSymbolDimExtent(ctx, builder, sym, dim_idx),
-            .multiplier => try memory.emitSymbolDimMultiplier(ctx, builder, sym, dim_idx),
-        };
         try builder.store(value, offset_ptr);
     }
     return base_ptr;
+}
+
+fn analyzeSectionActual(ctx: *Context, builder: anytype, expr: *Expr) !?SectionActualInfo {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse break :blk null;
+            if (sym.dims.len == 0) break :blk null;
+            const extents = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+            const multipliers = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+            for (sym.dims, 0..) |_, idx| {
+                extents[idx] = try memory.emitSymbolDimExtent(ctx, builder, sym, idx);
+                multipliers[idx] = try memory.emitSymbolDimMultiplier(ctx, builder, sym, idx);
+            }
+            break :blk .{
+                .base_ptr = try ctx.getPointer(name),
+                .extents = extents,
+                .multipliers = multipliers,
+            };
+        },
+        .call_or_subscript => |call| blk: {
+            const sym = ctx.findSymbol(call.name) orelse break :blk null;
+            if (sym.dims.len == 0 or call.args.len != sym.dims.len) break :blk null;
+
+            var section_rank: usize = 0;
+            for (call.args) |arg| {
+                if (arg.* == .dim_range) section_rank += 1;
+            }
+            if (section_rank == 0) break :blk null;
+
+            const extents = try ctx.allocator.alloc(ValueRef, section_rank);
+            const multipliers = try ctx.allocator.alloc(ValueRef, section_rank);
+            var out_idx: usize = 0;
+            for (call.args, 0..) |arg, idx| {
+                if (arg.* != .dim_range) continue;
+                const range = arg.dim_range;
+                const lower = if (range.lower) |lower_expr|
+                    try emitIndexI64(ctx, builder, lower_expr)
+                else
+                    try memory.emitSymbolDimLower(ctx, builder, sym, idx);
+                const upper = try emitIndexI64(ctx, builder, range.upper);
+                const step = if (range.stride) |step_expr|
+                    try emitIndexI64(ctx, builder, step_expr)
+                else
+                    i64Const(ctx, 1);
+
+                extents[out_idx] = try emitTripletCountI64(ctx, builder, lower, upper, step);
+                const sym_multiplier = try memory.emitSymbolDimMultiplier(ctx, builder, sym, idx);
+                multipliers[out_idx] = try emitMulI64(ctx, builder, sym_multiplier, step);
+                out_idx += 1;
+            }
+            break :blk .{
+                .base_ptr = try emitSectionBasePtr(ctx, builder, sym, call),
+                .extents = extents,
+                .multipliers = multipliers,
+            };
+        },
+        else => null,
+    };
 }
 
 fn emitOwnedHeapArgFrees(ctx: *Context, builder: anytype, owned_heap_args: []const ValueRef) !void {
@@ -491,6 +542,123 @@ fn emitMulI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !Va
     const tmp = try ctx.nextTemp();
     try builder.binary(tmp, "mul", .i64, lhs, rhs);
     return .{ .name = tmp, .ty = .i64, .is_ptr = false };
+}
+
+fn emitAddI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
+    const tmp = try ctx.nextTemp();
+    try builder.binary(tmp, "add", .i64, lhs, rhs);
+    return .{ .name = tmp, .ty = .i64, .is_ptr = false };
+}
+
+fn emitSubI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
+    const tmp = try ctx.nextTemp();
+    try builder.binary(tmp, "sub", .i64, lhs, rhs);
+    return .{ .name = tmp, .ty = .i64, .is_ptr = false };
+}
+
+fn emitSectionBasePtr(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, call: ast.CallOrSubscript) !ValueRef {
+    var offset = i64Const(ctx, 0);
+    for (call.args, 0..) |arg, idx| {
+        const idx_val = if (arg.* == .dim_range)
+            if (arg.dim_range.lower) |lower_expr|
+                try emitIndexI64(ctx, builder, lower_expr)
+            else
+                try memory.emitSymbolDimLower(ctx, builder, sym, idx)
+        else
+            try emitIndexI64(ctx, builder, arg);
+        const lb = try memory.emitSymbolDimLower(ctx, builder, sym, idx);
+        const idx_adj = try emitSubI64(ctx, builder, idx_val, lb);
+        const stride = try memory.emitSymbolDimMultiplier(ctx, builder, sym, idx);
+        const term = try emitMulI64(ctx, builder, idx_adj, stride);
+        offset = try emitAddI64(ctx, builder, offset, term);
+    }
+
+    const base_ptr = try ctx.getPointer(call.name);
+    const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else ctx.typeFromKind(sym.type_kind);
+    if (sym.type_kind == .character) {
+        const char_len = common.constantCharacterLen(sym) orelse return error.UnsupportedDescriptorActualArgument;
+        if (char_len != 1) {
+            offset = try emitMulI64(ctx, builder, offset, i64Const(ctx, @intCast(char_len)));
+        }
+    }
+    const gep = try ctx.nextTemp();
+    try builder.gep(gep, elem_ty, base_ptr, offset);
+    return .{ .name = gep, .ty = .ptr, .is_ptr = true };
+}
+
+fn emitIndexI64(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
+    const value = try dispatch.emitExpr(ctx, builder, expr);
+    return casting.coerce(ctx, builder, value, .i64);
+}
+
+fn emitTripletCountI64(
+    ctx: *Context,
+    builder: anytype,
+    start_val: ValueRef,
+    end_val: ValueRef,
+    step_val: ValueRef,
+) !ValueRef {
+    const zero = i64Const(ctx, 0);
+    const one = i64Const(ctx, 1);
+
+    const step_nonzero_tmp = try ctx.nextTemp();
+    try builder.compare(step_nonzero_tmp, "icmp", "ne", .i64, step_val, zero);
+    const step_nonzero = ValueRef{ .name = step_nonzero_tmp, .ty = .i1, .is_ptr = false };
+
+    const step_pos_tmp = try ctx.nextTemp();
+    try builder.compare(step_pos_tmp, "icmp", "sgt", .i64, step_val, zero);
+    const step_pos = ValueRef{ .name = step_pos_tmp, .ty = .i1, .is_ptr = false };
+
+    const step_neg_tmp = try ctx.nextTemp();
+    try builder.compare(step_neg_tmp, "icmp", "slt", .i64, step_val, zero);
+    const step_neg = ValueRef{ .name = step_neg_tmp, .ty = .i1, .is_ptr = false };
+
+    const safe_step_tmp = try ctx.nextTemp();
+    try builder.select(safe_step_tmp, .i64, step_nonzero, step_val, one);
+    const safe_step = ValueRef{ .name = safe_step_tmp, .ty = .i64, .is_ptr = false };
+
+    const end_ge_start_tmp = try ctx.nextTemp();
+    try builder.compare(end_ge_start_tmp, "icmp", "sge", .i64, end_val, start_val);
+    const end_ge_start = ValueRef{ .name = end_ge_start_tmp, .ty = .i1, .is_ptr = false };
+
+    const end_le_start_tmp = try ctx.nextTemp();
+    try builder.compare(end_le_start_tmp, "icmp", "sle", .i64, end_val, start_val);
+    const end_le_start = ValueRef{ .name = end_le_start_tmp, .ty = .i1, .is_ptr = false };
+
+    const valid_pos_tmp = try ctx.nextTemp();
+    try builder.binary(valid_pos_tmp, "and", .i1, step_pos, end_ge_start);
+    const valid_pos = ValueRef{ .name = valid_pos_tmp, .ty = .i1, .is_ptr = false };
+
+    const valid_neg_tmp = try ctx.nextTemp();
+    try builder.binary(valid_neg_tmp, "and", .i1, step_neg, end_le_start);
+    const valid_neg = ValueRef{ .name = valid_neg_tmp, .ty = .i1, .is_ptr = false };
+
+    const valid_step_tmp = try ctx.nextTemp();
+    try builder.binary(valid_step_tmp, "or", .i1, valid_pos, valid_neg);
+    const valid_step = ValueRef{ .name = valid_step_tmp, .ty = .i1, .is_ptr = false };
+
+    const span = try emitSubI64(ctx, builder, end_val, start_val);
+    const abs_span = try emitAbsI64(ctx, builder, span);
+    const abs_step = try emitAbsI64(ctx, builder, safe_step);
+    const q_tmp = try ctx.nextTemp();
+    try builder.binary(q_tmp, "udiv", .i64, abs_span, abs_step);
+    const quotient = ValueRef{ .name = q_tmp, .ty = .i64, .is_ptr = false };
+    const candidate = try emitAddI64(ctx, builder, quotient, one);
+
+    const count_tmp = try ctx.nextTemp();
+    try builder.select(count_tmp, .i64, valid_step, candidate, zero);
+    return .{ .name = count_tmp, .ty = .i64, .is_ptr = false };
+}
+
+fn emitAbsI64(ctx: *Context, builder: anytype, value: ValueRef) !ValueRef {
+    const neg_tmp = try ctx.nextTemp();
+    try builder.binary(neg_tmp, "sub", .i64, i64Const(ctx, 0), value);
+    const is_neg_tmp = try ctx.nextTemp();
+    try builder.compare(is_neg_tmp, "icmp", "slt", .i64, value, i64Const(ctx, 0));
+    const is_neg = ValueRef{ .name = is_neg_tmp, .ty = .i1, .is_ptr = false };
+    const abs_tmp = try ctx.nextTemp();
+    try builder.select(abs_tmp, .i64, is_neg, .{ .name = neg_tmp, .ty = .i64, .is_ptr = false }, value);
+    return .{ .name = abs_tmp, .ty = .i64, .is_ptr = false };
 }
 
 fn emitDynamicElemCountForSymbol(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) !ValueRef {
