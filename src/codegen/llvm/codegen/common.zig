@@ -53,6 +53,7 @@ pub const CommonBlockInfo = struct {
 
 pub const CommonLayoutOptions = struct {
     align_items: bool = true,
+    target_layout: input.sema.TargetLayout = .{},
 };
 
 pub fn deinitCommonLayouts(allocator: std.mem.Allocator, layouts: []CommonBlockLayout) void {
@@ -120,7 +121,7 @@ pub fn buildUnitCommonLayoutsWithOptions(
         for (list.items) |name| {
             const sym = findSymbol(sem, name, &symbol_lookup) orelse return error.UnknownSymbol;
             if (sym.storage != .common) return error.InvalidCommonSymbol;
-            const ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
+            const ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKindWithLayout(sym.type_kind, options.target_layout);
             const sa = if (sym.type_kind == .character)
                 SizeAlign{ .size = try requireConstantCharacterLen(sym), .alignment = 1 }
             else
@@ -380,6 +381,74 @@ test "buildUnitCommonLayouts computes offsets and alignment" {
     try testing.expectEqual(@as(usize, 0), layout.items[0].offset);
     try testing.expectEqualStrings("B", layout.items[1].name);
     try testing.expectEqual(@as(usize, 4), layout.items[1].offset);
+}
+
+test "buildUnitCommonLayouts widens INTEGER storage with target layout" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const empty_exprs = try a.alloc(*input.Expr, 0);
+    const decl_items = try a.alloc(input.Declarator, 2);
+    decl_items[0] = .{ .name = "A", .dims = empty_exprs, .char_len = null };
+    decl_items[1] = .{ .name = "B", .dims = empty_exprs, .char_len = null };
+    const blocks = try a.alloc(input.CommonBlock, 1);
+    blocks[0] = .{ .name = "BLK", .items = decl_items };
+    const decls = try a.alloc(input.Decl, 1);
+    decls[0] = .{ .common = .{ .blocks = blocks } };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = decls,
+        .stmts = try a.alloc(input.Stmt, 0),
+    };
+
+    const symbols = try a.alloc(input.sema.Symbol, 2);
+    symbols[0] = .{
+        .name = "A",
+        .type_kind = .integer,
+        .dims = empty_exprs,
+        .char_len = null,
+        .kind = .variable,
+        .storage = .common,
+        .is_external = false,
+        .is_intrinsic = false,
+        .const_value = null,
+        .type_explicit = true,
+    };
+    symbols[1] = .{
+        .name = "B",
+        .type_kind = .real,
+        .dims = empty_exprs,
+        .char_len = null,
+        .kind = .variable,
+        .storage = .common,
+        .is_external = false,
+        .is_intrinsic = false,
+        .const_value = null,
+        .type_explicit = true,
+    };
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+
+    const layouts = try buildUnitCommonLayoutsWithOptions(a, unit, &sem_unit, .{
+        .target_layout = .{ .default_integer_bits = 64 },
+    });
+    try testing.expectEqual(@as(usize, 1), layouts.len);
+    const layout = layouts[0];
+    try testing.expectEqual(@as(usize, 16), layout.size);
+    try testing.expectEqual(@as(usize, 8), layout.alignment);
+    try testing.expectEqual(@as(usize, 8), layout.items[1].offset);
 }
 
 test "commonGlobalName formats blank blocks" {

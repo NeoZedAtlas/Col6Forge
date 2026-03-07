@@ -5,6 +5,41 @@ const scope = @import("../scope.zig");
 const intrinsics = @import("intrinsics.zig");
 
 pub const Context = struct {
+    pub const IntegerBounds = struct {
+        min: i64,
+        max: i64,
+    };
+
+    pub const TargetLayout = struct {
+        default_integer_bits: u16 = 32,
+
+        pub fn integerBounds(self: TargetLayout, target: ast.TypeKind) IntegerBounds {
+            return switch (target) {
+                .integer => signedIntegerBounds(self.default_integer_bits),
+                else => .{
+                    .min = std.math.minInt(i64),
+                    .max = std.math.maxInt(i64),
+                },
+            };
+        }
+
+        fn signedIntegerBounds(bits: u16) IntegerBounds {
+            const normalized: u16 = if (bits == 0) 32 else @min(bits, 64);
+            if (normalized >= 64) {
+                return .{
+                    .min = std.math.minInt(i64),
+                    .max = std.math.maxInt(i64),
+                };
+            }
+            const shift_amt: u7 = @intCast(normalized - 1);
+            const limit: i128 = @as(i128, 1) << shift_amt;
+            return .{
+                .min = @intCast(-limit),
+                .max = @intCast(limit - 1),
+            };
+        }
+    };
+
     pub const ProcedureSig = struct {
         kind: ast.ProgramUnitKind,
         arg_count: usize,
@@ -50,6 +85,7 @@ pub const Context = struct {
     known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
     known_host_parameters: *const std.StringHashMap(symbols.Symbol),
     known_host_owner: ?[]const u8,
+    target_layout: TargetLayout,
     use_imports_preinstalled: bool,
 
     pub const Owner = struct {
@@ -64,6 +100,7 @@ pub const Context = struct {
         known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
         known_host_owner: ?[]const u8,
+        target_layout: TargetLayout,
     ) Context {
         var ctx = Context{
             .arena = arena,
@@ -99,6 +136,7 @@ pub const Context = struct {
             .known_procedure_sigs = known_procedure_sigs,
             .known_host_parameters = known_host_parameters,
             .known_host_owner = known_host_owner,
+            .target_layout = target_layout,
             .use_imports_preinstalled = false,
         };
         ctx.current_unit = &ctx.unit;

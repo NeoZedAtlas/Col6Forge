@@ -1,6 +1,7 @@
 const std = @import("std");
 const input = @import("../../input.zig");
 const context = @import("context.zig");
+const llvm_types = @import("../types.zig");
 const builder_mod = @import("builder.zig");
 const common = @import("common.zig");
 const codegen_diag = @import("../../diagnostic.zig");
@@ -174,7 +175,9 @@ pub fn emitModuleToWriter(
             setCodegenDiagForUnit(unit, error.MissingSemanticUnit);
             return error.MissingSemanticUnit;
         };
-        const layouts = try common.buildUnitCommonLayouts(scratch, unit, sem_unit);
+        const layouts = try common.buildUnitCommonLayoutsWithOptions(scratch, unit, sem_unit, .{
+            .target_layout = options.target_layout,
+        });
         for (layouts) |layout| {
             if (common_blocks.getPtr(layout.key)) |info| {
                 if (!commonLayoutsCompatible(info.items, layout.items)) {
@@ -250,7 +253,7 @@ pub fn emitModuleToWriter(
     }
 
     const wrappers_start = nowNs();
-    try emitIntrinsicWrappers(&builder, &intrinsic_wrappers);
+    try emitIntrinsicWrappers(&builder, &intrinsic_wrappers, options);
     breakdown.intrinsic_wrappers_ns = elapsedNs(wrappers_start);
 
     const strings_start = nowNs();
@@ -285,30 +288,31 @@ pub fn emitModuleToWriter(
     return;
 }
 
-fn emitIntrinsicWrappers(builder: anytype, wrappers: *const std.StringHashMap(context.IntrinsicWrapperKind)) !void {
+fn emitIntrinsicWrappers(builder: anytype, wrappers: *const std.StringHashMap(context.IntrinsicWrapperKind), options: CodegenOptions) !void {
     var it = wrappers.iterator();
     while (it.next()) |entry| {
         switch (entry.value_ptr.*) {
-            .iabs => try emitIabsWrapper(builder, entry.key_ptr.*),
+            .iabs => try emitIabsWrapper(builder, entry.key_ptr.*, options),
         }
     }
 }
 
-fn emitIabsWrapper(builder: anytype, name: []const u8) !void {
-    try builder.defineStartWithRet(.i32, name);
+fn emitIabsWrapper(builder: anytype, name: []const u8, options: CodegenOptions) !void {
+    const int_ty = llvm_types.defaultIntegerType(options.target_layout);
+    try builder.defineStartWithRet(int_ty, name);
     try builder.defineArgPtr("%arg0", true);
     try builder.defineEnd();
     try builder.entryLabel();
     const arg_ptr = context.ValueRef{ .name = "%arg0", .ty = .ptr, .is_ptr = true };
-    try builder.load("%t0", .i32, arg_ptr);
-    const value = context.ValueRef{ .name = "%t0", .ty = .i32, .is_ptr = false };
-    const zero = context.ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
-    try builder.compare("%t1", "icmp", "slt", .i32, value, zero);
+    try builder.load("%t0", int_ty, arg_ptr);
+    const value = context.ValueRef{ .name = "%t0", .ty = int_ty, .is_ptr = false };
+    const zero = context.ValueRef{ .name = "0", .ty = int_ty, .is_ptr = false };
+    try builder.compare("%t1", "icmp", "slt", int_ty, value, zero);
     const cond = context.ValueRef{ .name = "%t1", .ty = .i1, .is_ptr = false };
-    try builder.binary("%t2", "sub", .i32, zero, value);
-    const neg = context.ValueRef{ .name = "%t2", .ty = .i32, .is_ptr = false };
-    try builder.select("%t3", .i32, cond, neg, value);
-    try builder.retValue(.i32, "%t3");
+    try builder.binary("%t2", "sub", int_ty, zero, value);
+    const neg = context.ValueRef{ .name = "%t2", .ty = int_ty, .is_ptr = false };
+    try builder.select("%t3", int_ty, cond, neg, value);
+    try builder.retValue(int_ty, "%t3");
     try builder.functionEnd();
 }
 

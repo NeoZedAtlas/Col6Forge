@@ -31,9 +31,13 @@ pub const SemanticDiagnostic = diagnostic.SemanticDiagnostic;
 
 pub const KnownFunctionType = api.KnownFunctionType;
 pub const KnownProcedureSig = api.KnownProcedureSig;
+pub const AnalyzeOptions = api.AnalyzeOptions;
+pub const TargetLayout = context.TargetLayout;
 
 pub const analyzeProgram = api.analyzeProgram;
 pub const analyzeProgramWithKnown = api.analyzeProgramWithKnown;
+pub const analyzeProgramWithOptions = api.analyzeProgramWithOptions;
+pub const analyzeProgramWithKnownAndOptions = api.analyzeProgramWithKnownAndOptions;
 pub const inferFunctionType = function_type.inferFunctionType;
 pub const printSemantic = printer.printSemantic;
 pub const takeDiagnostic = api.takeDiagnostic;

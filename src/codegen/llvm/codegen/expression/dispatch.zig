@@ -74,7 +74,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                 return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
             }
             const ptr = try ctx.getPointer(name);
-            const ty = llvm_types.typeFromKind(sym.type_kind);
+            const ty = ctx.typeFromKind(sym.type_kind);
             const tmp = try ctx.nextTemp();
             try builder.load(tmp, ty, ptr);
             return .{ .name = tmp, .ty = ty, .is_ptr = false };
@@ -151,7 +151,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                 if (sym.type_kind == .character) {
                     return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
                 }
-                const ty = llvm_types.typeFromKind(sym.type_kind);
+                const ty = ctx.typeFromKind(sym.type_kind);
                 const tmp = try ctx.nextTemp();
                 try builder.load(tmp, ty, ptr);
                 return .{ .name = tmp, .ty = ty, .is_ptr = false };
@@ -163,7 +163,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             if (sym.is_intrinsic) {
                 return intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args);
             }
-            const ret_ty = llvm_types.typeFromKind(sym.type_kind);
+            const ret_ty = ctx.typeFromKind(sym.type_kind);
             const is_character_function = sym.kind == .function and sym.type_kind == .character;
             if (is_character_function) {
                 const result_len = common.constantCharacterLen(sym) orelse return error.NonConstantCharacterLength;
@@ -270,7 +270,7 @@ fn emitStatementFunctionCall(
     defer _ = ctx.stmt_func_stack.pop();
     var value = try emitExprImpl(ctx, builder, def.expr, ctx.stmt_func_stack.items.len);
     if (ctx.findSymbol(name)) |sym| {
-        const target_ty = llvm_types.typeFromKind(sym.type_kind);
+        const target_ty = ctx.typeFromKind(sym.type_kind);
         value = try casting.coerce(ctx, builder, value, target_ty);
     }
     return value;

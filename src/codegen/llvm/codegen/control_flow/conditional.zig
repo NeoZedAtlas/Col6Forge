@@ -218,7 +218,7 @@ pub fn emitWhere(
 
     const mask_base = ctx.locals.get(mask_name) orelse return error.UnknownSymbol;
     const target_base = ctx.locals.get(target_name) orelse return error.UnknownSymbol;
-    const target_ty = llvm_types.typeFromKind(target_sym.type_kind);
+    const target_ty = ctx.typeFromKind(target_sym.type_kind);
     const value_base: ?ValueRef = if (value_array_name) |arr_name| ctx.locals.get(arr_name) orelse return error.UnknownSymbol else null;
 
     const idx_ptr = try ctx.nextTemp();

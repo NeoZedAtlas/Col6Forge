@@ -21,7 +21,7 @@ pub fn emitLiteral(ctx: *Context, builder: anytype, lit: Literal) !ValueRef {
     switch (lit.kind) {
         .integer => {
             const normalized = try utils.normalizeIntLiteral(ctx.allocator, lit.text);
-            return .{ .name = normalized, .ty = .i32, .is_ptr = false };
+            return .{ .name = normalized, .ty = ctx.defaultIntegerIRType(), .is_ptr = false };
         },
         .real => {
             const ty: IRType = utils.realLiteralType(lit.text);
@@ -51,7 +51,7 @@ fn emitStringLiteral(ctx: *Context, builder: anytype, bytes: []const u8) !ValueR
 }
 
 pub fn emitConstTyped(ctx: *Context, builder: anytype, value: sema.ConstValue, type_kind: TypeKind) ValueRef {
-    const ty = llvm_types.typeFromKind(type_kind);
+    const ty = ctx.typeFromKind(type_kind);
     return switch (value) {
         .integer => |v| blk: {
             if (complex.isComplexType(ty)) {
@@ -177,10 +177,10 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
     switch (expr.*) {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
-            return llvm_types.typeFromKind(sym.type_kind);
+            return ctx.typeFromKind(sym.type_kind);
         },
         .literal => |lit| return switch (lit.kind) {
-            .integer => .i32,
+            .integer => ctx.defaultIntegerIRType(),
             .real => utils.realLiteralType(lit.text),
             .logical => .i1,
             .string, .hollerith => .ptr,
@@ -214,11 +214,11 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
             }
             if (kind == .subscript) {
                 const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-                return llvm_types.typeFromKind(sym.type_kind);
+                return ctx.typeFromKind(sym.type_kind);
             }
             if (kind != .call) return error.AmbiguousCallOrSubscript;
             const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-            return llvm_types.typeFromKind(sym.type_kind);
+            return ctx.typeFromKind(sym.type_kind);
         },
         .implied_do => return error.UnsupportedImpliedDo,
     }

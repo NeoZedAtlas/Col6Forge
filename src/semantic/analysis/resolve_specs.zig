@@ -87,7 +87,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                     return err;
                 };
                 const const_val = check_const.coerceParameterValue(
-                    self.arena,
+                    self,
                     sym.type_kind,
                     sym.char_len,
                     assigned_value,

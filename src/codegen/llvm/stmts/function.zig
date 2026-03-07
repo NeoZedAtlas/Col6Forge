@@ -42,7 +42,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         is_character_function = sym.type_kind == .character;
         is_complex_sret_function = sym.type_kind == .complex_double;
         if (!is_character_function) {
-            const nominal_ret_ty = llvm_types.typeFromKind(sym.type_kind);
+            const nominal_ret_ty = ctx.typeFromKind(sym.type_kind);
             return_ty = context.fortranAbiReturnType(nominal_ret_ty);
         }
     } else if (has_alt_return) {
@@ -152,7 +152,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         if (isSaved(&save_info, sym.name) and !is_return_symbol) continue;
         if (symbolHasDeferredDims(sym)) {
             if (is_return_symbol and ctx.unit.kind == .function and !is_character_function and !is_complex_sret_function) {
-                const ty = llvm_types.typeFromKind(sym.type_kind);
+                const ty = ctx.typeFromKind(sym.type_kind);
                 const alloca_name = try ctx.nextTemp();
                 try builder.alloca(alloca_name, ty);
                 try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
@@ -192,7 +192,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
             continue;
         }
-        const ty = llvm_types.typeFromKind(sym.type_kind);
+        const ty = ctx.typeFromKind(sym.type_kind);
         if (sym.dims.len > 0) {
             if (sym.is_generated_temp) {
                 const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
@@ -631,7 +631,7 @@ fn installHostAssocGlobals(
             total_size = elem_count * char_len;
             alignment = 1;
         } else {
-            const ty = llvm_types.typeFromKind(sym.type_kind);
+            const ty = ctx.typeFromKind(sym.type_kind);
             const sa = sizeAlignForType(ty);
             const elem_count = ctx.arrayElemCountForSymbol(sym) catch continue;
             total_size = sa.size * elem_count;
@@ -702,7 +702,7 @@ fn installSavedGlobals(ctx: *Context, builder: anytype, save_info: *const SaveIn
             total_size = elem_count * char_len;
             alignment = 1;
         } else {
-            const ty = llvm_types.typeFromKind(sym.type_kind);
+            const ty = ctx.typeFromKind(sym.type_kind);
             const sa = sizeAlignForType(ty);
             const elem_count = try ctx.arrayElemCountForSymbol(sym);
             total_size = sa.size * elem_count;
@@ -775,7 +775,7 @@ fn equivalenceItemSize(ctx: *Context, item: *ast.Expr) ?usize {
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return null;
             if (sym.dims.len == 0) return symbolTotalSize(ctx, sym);
-            return symbolElemSize(sym);
+            return symbolElemSize(ctx, sym);
         },
         .substring => |sub| {
             const len = substringLen(ctx, sub) orelse return null;
@@ -785,17 +785,17 @@ fn equivalenceItemSize(ctx: *Context, item: *ast.Expr) ?usize {
     }
 }
 
-fn symbolElemSize(sym: sema.Symbol) ?usize {
+fn symbolElemSize(ctx: *Context, sym: sema.Symbol) ?usize {
     if (sym.type_kind == .character) {
         return common.constantCharacterLen(sym);
     }
-    const ty = llvm_types.typeFromKind(sym.type_kind);
+    const ty = ctx.typeFromKind(sym.type_kind);
     return sizeAlignForType(ty).size;
 }
 
 fn symbolTotalSize(ctx: *Context, sym: sema.Symbol) ?usize {
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch return null;
-    const elem_size = symbolElemSize(sym) orelse return null;
+    const elem_size = symbolElemSize(ctx, sym) orelse return null;
     return elem_count * elem_size;
 }
 
@@ -831,7 +831,7 @@ fn applyEquivalencePair(ctx: *Context, builder: anytype, anchor: *ast.Expr, othe
             const neg_text = try ctx.intLiteral(-b_offset);
             const neg_val = ValueRef{ .name = neg_text, .ty = .i32, .is_ptr = false };
             const ptr_name = try ctx.nextTemp();
-            const elem_ty = llvm_types.typeFromKind(a_sym.type_kind);
+            const elem_ty = ctx.typeFromKind(a_sym.type_kind);
             try builder.gep(ptr_name, elem_ty, anchor_ptr, neg_val);
             base_ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
         }
@@ -1056,4 +1056,78 @@ test "emitFunction emits a simple assignment" {
     const output = buffer.items;
     try testing.expect(std.mem.indexOf(u8, output, "alloca") != null);
     try testing.expect(std.mem.indexOf(u8, output, "store i32 1") != null);
+}
+
+test "emitFunction lowers default INTEGER to i64 when target layout widens it" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const target = try a.create(ast.Expr);
+    target.* = .{ .identifier = "A" };
+    const value = try a.create(ast.Expr);
+    value.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+    const stmt_node = ast.Stmt{
+        .label = null,
+        .node = .{ .assignment = .{ .target = target, .value = value } },
+    };
+    const stmts = try a.alloc(ast.Stmt, 1);
+    stmts[0] = stmt_node;
+
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(ast.Decl, 0),
+        .stmts = stmts,
+    };
+
+    const symbols = try a.alloc(sema.Symbol, 1);
+    symbols[0] = .{
+        .name = "A",
+        .type_kind = .integer,
+        .dims = try a.alloc(*ast.Expr, 0),
+        .char_len = null,
+        .kind = .variable,
+        .storage = .local,
+        .is_external = false,
+        .is_intrinsic = false,
+        .const_value = null,
+        .type_explicit = true,
+    };
+    const sem_unit = sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(sema.ResolvedRef, 0),
+    };
+
+    var decls = std.StringHashMap(context.IRDecl).init(a);
+    defer decls.deinit();
+    var defined = std.StringHashMap(void).init(a);
+    defer defined.deinit();
+    var formats = std.StringHashMap(context.FormatInfo).init(a);
+    var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
+    var string_pool = context.StringPool.init(a);
+    var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
+    defer intrinsic_wrappers.deinit();
+    var ctx = try Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, .{
+        .target_layout = .{ .default_integer_bits = 64 },
+    });
+    defer ctx.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    try emitFunction(&ctx, &builder);
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "alloca i64") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "store i64 1") != null);
 }

@@ -203,6 +203,7 @@ test "invariant array lowering 13 failed LOGICAL IF conversion keeps AST and sym
         &known_procedure_sigs,
         &known_host_parameters,
         null,
+        .{},
     );
     try testing.expectError(error.UnsupportedIntrinsicType, unit_analyzer.analyze());
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;

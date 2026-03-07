@@ -8,6 +8,7 @@ const api = @import("../split/api.zig");
 const function_type = @import("../split/function_type.zig");
 const analyzeProgram = api.analyzeProgram;
 const analyzeProgramWithKnown = api.analyzeProgramWithKnown;
+const analyzeProgramWithOptions = api.analyzeProgramWithOptions;
 const takeDiagnostic = api.takeDiagnostic;
 const clearDiagnostic = api.clearDiagnostic;
 const inferFunctionType = function_type.inferFunctionType;
@@ -556,6 +557,38 @@ test "semantic rejects INTEGER to INTEGER PARAMETER overflow for default i32 tar
     try testing.expectError(error.ParameterTypeMismatch, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.eql(u8, diag.code, "CF3112"));
+}
+
+test "semantic accepts large INTEGER PARAMETER with widened target layout" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER N\n" ++
+        "      PARAMETER (N=3000000000)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgramWithOptions(arena.allocator(), program, .{
+        .target_layout = .{ .default_integer_bits = 64 },
+    });
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "N")) continue;
+        found = true;
+        const cv = sym.const_value orelse return error.TestExpectedEqual;
+        switch (cv) {
+            .integer => |v| try testing.expectEqual(@as(i64, 3000000000), v),
+            else => return error.TestExpectedEqual,
+        }
+    }
+    try testing.expect(found);
 }
 
 test "semantic preserves LOGICAL PARAMETER value kind" {

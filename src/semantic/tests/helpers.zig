@@ -78,6 +78,7 @@ pub fn expectSemanticErrorNoGeneratedTempLeakInvariant(
             &known_procedure_sigs,
             &known_host_parameters,
             null,
+            .{},
         );
         try testing.expectError(expected_err, unit_analyzer.analyze());
         const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
@@ -130,6 +131,7 @@ pub fn expectSemanticErrorNoTempLeakAndFirstCallArgCallExprInvariant(
             &known_procedure_sigs,
             &known_host_parameters,
             null,
+            .{},
         );
         try testing.expectError(expected_err, unit_analyzer.analyze());
         const diag = takeDiagnostic() orelse return error.TestExpectedEqual;

@@ -21,7 +21,7 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     if (call.args.len == 0) return error.InvalidSubscript;
     if (call.args.len != sym.dims.len) return error.InvalidSubscript;
     const base_ptr = try ctx.getPointer(call.name);
-    const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
+    const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else ctx.typeFromKind(sym.type_kind);
 
     var offset = try emitColumnMajorOffset(ctx, builder, sym, call.args);
 
@@ -69,7 +69,7 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
     if (sym.dims.len == 0) return error.ArraysUnsupported;
     const base_ptr = try ctx.getPointer(call.name);
-    const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKind(sym.type_kind);
+    const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else ctx.typeFromKind(sym.type_kind);
 
     if (call.args.len != 1) return error.InvalidSubscript;
     const idx1 = try emitIndex(ctx, builder, call.args[0]);

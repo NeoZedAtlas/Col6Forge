@@ -188,7 +188,7 @@ fn emitDoImpl(
     const stmt = stmts[do_idx];
     const loop = stmt.node.do_loop;
     const sym = ctx.findSymbol(loop.var_name) orelse return error.UnknownSymbol;
-    const config = logic.analyzeLoopConfig(loop, sym.type_kind);
+    const config = logic.analyzeLoopConfig(ctx, loop, sym.type_kind);
     const is_float = config.var_type == .f32 or config.var_type == .f64;
     const cmp_instr = if (is_float) "fcmp" else "icmp";
     const pred_ge = if (is_float) "oge" else "sge";

@@ -91,7 +91,7 @@ pub fn emitAssignedGoto(
     const sym = ctx.findSymbol(gt.var_name) orelse return error.UnknownSymbol;
     const ptr = try ctx.getPointer(gt.var_name);
     const tmp = try ctx.nextTemp();
-    const ty = llvm_types.typeFromKind(sym.type_kind);
+    const ty = ctx.typeFromKind(sym.type_kind);
     try builder.load(tmp, ty, ptr);
     var sel = ValueRef{ .name = tmp, .ty = ty, .is_ptr = false };
     sel = try expr.coerce(ctx, builder, sel, .i32);

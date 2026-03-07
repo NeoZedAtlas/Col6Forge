@@ -16,6 +16,7 @@ pub const PipelineOptions = struct {
     bounds_check: bool = false,
     pause_mode: PauseMode = .auto,
     target: ?[]const u8 = null,
+    semantic_target_layout: semantic.TargetLayout = .{},
     time_report: bool = false,
     coarse_source_map: bool = false,
     capture_profile: bool = false,
@@ -353,6 +354,7 @@ fn emitLlvmModule(
                 .bounds_check = options.bounds_check,
                 .pause_mode = options.pause_mode,
                 .target = options.target,
+                .target_layout = options.semantic_target_layout,
             },
         ) catch |err| {
             if (profile) |p| {
@@ -383,11 +385,12 @@ fn emitLlvmModule(
     if (profile) |p| p.parse_ns = elapsedNs(parse_start);
 
     const semantic_start = nowNs();
-    const sem = semantic.analyzeProgramWithKnown(
+    const sem = semantic.analyzeProgramWithKnownAndOptions(
         arena.allocator(),
         program,
         options.known_function_types,
         options.known_procedure_sigs,
+        .{ .target_layout = options.semantic_target_layout },
     ) catch |err| {
         if (profile) |p| {
             p.semantic_ns = elapsedNs(semantic_start);
@@ -408,6 +411,7 @@ fn emitLlvmModule(
             .bounds_check = options.bounds_check,
             .pause_mode = options.pause_mode,
             .target = options.target,
+            .target_layout = options.semantic_target_layout,
         },
     ) catch |err| {
         if (profile) |p| {
@@ -446,6 +450,7 @@ fn emitLlvmModuleToWriter(
                 .bounds_check = options.bounds_check,
                 .pause_mode = options.pause_mode,
                 .target = options.target,
+                .target_layout = options.semantic_target_layout,
             },
         ) catch |err| {
             if (profile) |p| {
@@ -476,11 +481,12 @@ fn emitLlvmModuleToWriter(
     if (profile) |p| p.parse_ns = elapsedNs(parse_start);
 
     const semantic_start = nowNs();
-    const sem = semantic.analyzeProgramWithKnown(
+    const sem = semantic.analyzeProgramWithKnownAndOptions(
         arena.allocator(),
         program,
         options.known_function_types,
         options.known_procedure_sigs,
+        .{ .target_layout = options.semantic_target_layout },
     ) catch |err| {
         if (profile) |p| {
             p.semantic_ns = elapsedNs(semantic_start);
@@ -502,6 +508,7 @@ fn emitLlvmModuleToWriter(
             .bounds_check = options.bounds_check,
             .pause_mode = options.pause_mode,
             .target = options.target,
+            .target_layout = options.semantic_target_layout,
         },
     ) catch |err| {
         if (profile) |p| {

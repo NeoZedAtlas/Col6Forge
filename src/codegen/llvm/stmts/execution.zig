@@ -230,7 +230,7 @@ fn emitExtentFromText(ctx: *Context, builder: anytype, text: []const u8) EmitErr
     }
 
     const ptr = try ctx.getPointer(trimmed);
-    const ty = llvm_types.typeFromKind(sym.type_kind);
+    const ty = ctx.typeFromKind(sym.type_kind);
     const tmp = try ctx.nextTemp();
     try builder.load(tmp, ty, ptr);
     const loaded = ValueRef{ .name = tmp, .ty = ty, .is_ptr = false };
@@ -338,7 +338,7 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
 pub fn emitAssignLabel(ctx: *Context, builder: anytype, assign: ast.AssignLabelStmt) EmitError!void {
     const target_ptr = try ctx.getPointer(assign.target);
     const sym = ctx.findSymbol(assign.target) orelse return error.UnknownSymbol;
-    const target_ty = llvm_types.typeFromKind(sym.type_kind);
+    const target_ty = ctx.typeFromKind(sym.type_kind);
     _ = std.fmt.parseInt(i64, assign.label, 10) catch return error.InvalidAssignedLabel;
     var value = ValueRef{ .name = assign.label, .ty = .i32, .is_ptr = false };
     if (target_ty != value.ty) {
@@ -400,7 +400,7 @@ fn emitContiguousSectionScalarAssignment(ctx: *Context, builder: anytype, assign
     if (!has_range) return false;
 
     const base_ptr = ctx.locals.get(call.name) orelse return error.UnknownSymbol;
-    const elem_ty = llvm_types.typeFromKind(sym.type_kind);
+    const elem_ty = ctx.typeFromKind(sym.type_kind);
     const value = try expr.emitExpr(ctx, builder, assign.value);
     const coerced = try expr.coerce(ctx, builder, value, elem_ty);
     try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, total_count, coerced);
@@ -415,7 +415,7 @@ fn emitWholeArrayScalarAssignment(ctx: *Context, builder: anytype, assign: ast.A
     if (sym.type_kind == .character) return false;
 
     const base_ptr = ctx.locals.get(name) orelse return error.UnknownSymbol;
-    const elem_ty = llvm_types.typeFromKind(sym.type_kind);
+    const elem_ty = ctx.typeFromKind(sym.type_kind);
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
         error.ArrayDimNotConstant => null,
         else => return err,
@@ -831,7 +831,7 @@ fn emitRepeatedDataInit(ctx: *Context, builder: anytype, init: ast.DataInit) Emi
     const repeat_i64 = std.math.cast(i64, init.repeat_count) orelse return error.DataExpansionTooLarge;
     const count = constI64(ctx, repeat_i64);
     const base_ptr = ctx.locals.get(name) orelse return error.UnknownSymbol;
-    const elem_ty = llvm_types.typeFromKind(sym.type_kind);
+    const elem_ty = ctx.typeFromKind(sym.type_kind);
     const value = try expr.emitExpr(ctx, builder, init.value);
     const coerced = try expr.coerce(ctx, builder, value, elem_ty);
     try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, count, coerced);
@@ -860,7 +860,7 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
             try builder.retVoid();
             return;
         }
-        const ret_ty = llvm_types.typeFromKind(sym.type_kind);
+        const ret_ty = ctx.typeFromKind(sym.type_kind);
         const ret_ptr = ctx.locals.get(return_symbol_name) orelse return error.UnknownSymbol;
         if (ret_ty == .complex_f64) {
             // COMPLEX*16 is returned via hidden sret pointer; function returns void.

@@ -23,8 +23,12 @@ pub const KnownProcedureSig = struct {
     alt_return_count: usize = 0,
 };
 
+pub const AnalyzeOptions = struct {
+    target_layout: context.Context.TargetLayout = .{},
+};
+
 pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticProgram {
-    return analyzeProgramWithKnown(arena, program, &.{}, &.{});
+    return analyzeProgramWithOptions(arena, program, .{});
 }
 
 pub fn analyzeProgramWithKnown(
@@ -32,6 +36,24 @@ pub fn analyzeProgramWithKnown(
     program: ast.Program,
     known_fn_types: []const KnownFunctionType,
     known_proc_sigs: []const KnownProcedureSig,
+) !SemanticProgram {
+    return analyzeProgramWithKnownAndOptions(arena, program, known_fn_types, known_proc_sigs, .{});
+}
+
+pub fn analyzeProgramWithOptions(
+    arena: std.mem.Allocator,
+    program: ast.Program,
+    options: AnalyzeOptions,
+) !SemanticProgram {
+    return analyzeProgramWithKnownAndOptions(arena, program, &.{}, &.{}, options);
+}
+
+pub fn analyzeProgramWithKnownAndOptions(
+    arena: std.mem.Allocator,
+    program: ast.Program,
+    known_fn_types: []const KnownFunctionType,
+    known_proc_sigs: []const KnownProcedureSig,
+    options: AnalyzeOptions,
 ) !SemanticProgram {
     diagnostic.clear();
     const mutable_program = program;
@@ -78,6 +100,7 @@ pub fn analyzeProgramWithKnown(
             &known_procedure_sigs,
             &known_host_symbols,
             active_host_owner,
+            options.target_layout,
         );
         const sem_unit = try unit_analyzer.analyze();
         try units.append(sem_unit);

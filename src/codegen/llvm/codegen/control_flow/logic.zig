@@ -103,9 +103,9 @@ fn appendAssignedTargetFromEntry(
     });
 }
 
-pub fn analyzeLoopConfig(loop: ast.DoLoopStmt, var_kind: ast.TypeKind) LoopConfig {
+pub fn analyzeLoopConfig(ctx: *const @import("../context.zig").Context, loop: ast.DoLoopStmt, var_kind: ast.TypeKind) LoopConfig {
     return .{
-        .var_type = llvm_types.typeFromKind(var_kind),
+        .var_type = ctx.typeFromKind(var_kind),
         .step_sign = determineStepSign(loop.step),
         .test_label_prefix = "do_test",
         .inc_label_prefix = "do_inc",

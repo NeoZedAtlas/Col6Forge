@@ -11,9 +11,7 @@ pub fn checkParameterAssign(self: *context.Context, assign: ast.ParamAssign) !Co
 }
 
 pub fn coerceParameterValue(
-    // Caller must provide a compilation-lifetime allocator (arena) because
-    // CHARACTER length coercion may allocate adjusted constant bytes.
-    allocator: std.mem.Allocator,
+    self: *context.Context,
     target: ast.TypeKind,
     target_char_len: ?usize,
     value: ConstValue,
@@ -24,15 +22,15 @@ pub fn coerceParameterValue(
             const source = value.string;
             const out_len = target_char_len orelse source.len;
             if (source.len == out_len) return value;
-            return .{ .string = try adjustCharacterLen(allocator, source, out_len) };
+            return .{ .string = try adjustCharacterLen(self.arena, source, out_len) };
         },
         .logical => switch (value) {
             .logical => return value,
             else => return error.ParameterTypeMismatch,
         },
         .integer => switch (value) {
-            .integer => |v| return .{ .integer = try checkedIntegerForTarget(target, v) },
-            .real => |v| return .{ .integer = try realToIntegerForTarget(target, v.value) },
+            .integer => |v| return .{ .integer = try checkedIntegerForTarget(self, target, v) },
+            .real => |v| return .{ .integer = try realToIntegerForTarget(self, target, v.value) },
             .complex, .logical, .string => return error.ParameterTypeMismatch,
         },
         .real => switch (value) {
@@ -61,47 +59,28 @@ pub fn coerceParameterValue(
 }
 
 pub fn checkParameterType(
-    allocator: std.mem.Allocator,
+    self: *context.Context,
     target: ast.TypeKind,
     target_char_len: ?usize,
     value: ConstValue,
 ) !ConstValue {
-    return coerceParameterValue(allocator, target, target_char_len, value);
+    return coerceParameterValue(self, target, target_char_len, value);
 }
 
-fn realToIntegerForTarget(target: ast.TypeKind, v: f64) !i64 {
+fn realToIntegerForTarget(self: *context.Context, target: ast.TypeKind, v: f64) !i64 {
     if (!std.math.isFinite(v)) return error.ParameterTypeMismatch;
     const truncated = @trunc(v);
-    const bounds = integerBoundsForTarget(target);
+    const bounds = self.target_layout.integerBounds(target);
     const min: f64 = @floatFromInt(bounds.min);
     const max: f64 = @floatFromInt(bounds.max);
     if (truncated < min or truncated > max) return error.ParameterTypeMismatch;
     return @as(i64, @intFromFloat(truncated));
 }
 
-fn checkedIntegerForTarget(target: ast.TypeKind, v: i64) !i64 {
-    const bounds = integerBoundsForTarget(target);
+fn checkedIntegerForTarget(self: *context.Context, target: ast.TypeKind, v: i64) !i64 {
+    const bounds = self.target_layout.integerBounds(target);
     if (v < bounds.min or v > bounds.max) return error.ParameterTypeMismatch;
     return v;
-}
-
-const IntegerBounds = struct {
-    min: i64,
-    max: i64,
-};
-
-fn integerBoundsForTarget(target: ast.TypeKind) IntegerBounds {
-    return switch (target) {
-        // Default Fortran INTEGER lowering is i32 in current backend.
-        .integer => .{
-            .min = std.math.minInt(i32),
-            .max = std.math.maxInt(i32),
-        },
-        else => .{
-            .min = std.math.minInt(i64),
-            .max = std.math.maxInt(i64),
-        },
-    };
 }
 
 fn checkedRealForTarget(target: ast.TypeKind, value: f64) !f64 {

@@ -156,7 +156,7 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
                 }
                 if (sym.kind == .parameter) {
                     if (sym.const_value) |cv| {
-                        const ty = llvm_types.typeFromKind(sym.type_kind);
+                        const ty = ctx.typeFromKind(sym.type_kind);
                         const tmp = try ctx.nextTemp();
                         try builder.alloca(tmp, ty);
                         const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
@@ -169,7 +169,7 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
                     return .{ .ptr = try ctx.getPointer(name) };
                 }
                 if (sym.is_external) {
-                    const ret_ty = if (sym.kind == .function) llvm_types.typeFromKind(sym.type_kind) else .void;
+                    const ret_ty = if (sym.kind == .function) ctx.typeFromKind(sym.type_kind) else .void;
                     const mangled = try ctx.ensureDecl(name, ret_ty);
                     const ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{mangled});
                     return .{ .ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true } };
@@ -354,7 +354,7 @@ fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call:
     };
     const src_sym = ctx.findSymbol(src_name) orelse return error.UnknownSymbol;
     if (src_sym.dims.len == 0) return error.UnsupportedIntrinsicType;
-    const src_ty = llvm_types.typeFromKind(src_sym.type_kind);
+    const src_ty = ctx.typeFromKind(src_sym.type_kind);
 
     const src_ptr = try ctx.getPointer(src_name);
     const elem_count_const = ctx.arrayElemCountForSymbol(src_sym) catch |err| switch (err) {

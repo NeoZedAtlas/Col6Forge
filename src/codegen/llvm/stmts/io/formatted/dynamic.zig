@@ -56,7 +56,7 @@ fn emitFormatSelector(ctx: *Context, builder: anytype, label_var: []const u8) Em
     const sym = ctx.findSymbol(label_var) orelse return error.UnknownSymbol;
     const ptr = try ctx.getPointer(label_var);
     const tmp = try ctx.nextTemp();
-    const ty = llvm_types.typeFromKind(sym.type_kind);
+    const ty = ctx.typeFromKind(sym.type_kind);
     try builder.load(tmp, ty, ptr);
     const value = ValueRef{ .name = tmp, .ty = ty, .is_ptr = false };
     return expr.coerce(ctx, builder, value, .i32);

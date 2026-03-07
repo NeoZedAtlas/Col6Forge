@@ -46,6 +46,7 @@ pub const CodegenOptions = struct {
     bounds_check: bool = false,
     pause_mode: PauseMode = .auto,
     target: ?[]const u8 = null,
+    target_layout: input.sema.TargetLayout = .{},
 };
 
 pub const FormatInfo = struct {
@@ -437,6 +438,18 @@ pub const Context = struct {
 
     pub fn constI32(self: *Context, value: i64) !ValueRef {
         return .{ .name = try self.intLiteral(value), .ty = .i32, .is_ptr = false };
+    }
+
+    pub fn defaultIntegerIRType(self: *const Context) IRType {
+        return llvm_types.defaultIntegerType(self.options.target_layout);
+    }
+
+    pub fn typeFromKind(self: *const Context, kind: TypeKind) IRType {
+        return llvm_types.typeFromKindWithLayout(kind, self.options.target_layout);
+    }
+
+    pub fn constDefaultInteger(self: *Context, value: i64) !ValueRef {
+        return .{ .name = try self.intLiteral(value), .ty = self.defaultIntegerIRType(), .is_ptr = false };
     }
 
     pub fn setRuntimeArrayDescriptor(
