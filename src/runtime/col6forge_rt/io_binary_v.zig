@@ -57,6 +57,12 @@ fn checkedMul(lhs: usize, rhs: usize) ?usize {
     return out[0];
 }
 
+fn checkedMulI64(lhs: i64, rhs: i64) ?i64 {
+    const out = @mulWithOverflow(lhs, rhs);
+    if (out[1] != 0) return null;
+    return out[0];
+}
+
 fn offsetIndex(i: c_int, stride: c_int) ?usize {
     if (i < 0 or stride <= 0) return null;
     const iu: usize = @intCast(i);
@@ -71,6 +77,20 @@ fn complexOffsetIndex(i: c_int, stride: c_int) ?usize {
 
 fn copyRawBytes(dst: [*]u8, src: [*]const u8, n: usize) void {
     @memcpy(dst[0..n], src[0..n]);
+}
+
+fn offsetBytes(ptr: [*]u8, delta: i64) ?[*]u8 {
+    const base_addr: i128 = @intCast(@intFromPtr(ptr));
+    const out_addr = base_addr + delta;
+    if (out_addr < 0 or out_addr > std.math.maxInt(usize)) return null;
+    return @ptrFromInt(@as(usize, @intCast(out_addr)));
+}
+
+fn offsetConstBytes(ptr: [*]const u8, delta: i64) ?[*]const u8 {
+    const base_addr: i128 = @intCast(@intFromPtr(ptr));
+    const out_addr = base_addr + delta;
+    if (out_addr < 0 or out_addr > std.math.maxInt(usize)) return null;
+    return @ptrFromInt(@as(usize, @intCast(out_addr)));
 }
 
 const UnformattedStreamState = struct {
@@ -191,7 +211,7 @@ fn unformattedStreamTransferN(
         stream.status = 1;
         return stream.status;
     };
-    if (base == null or stride <= 0) {
+    if (base == null or stride == 0) {
         stream.status = 1;
         return stream.status;
     }
@@ -214,10 +234,9 @@ fn unformattedStreamTransferN(
         return stream.status;
     }
 
-    const stride_u: usize = @intCast(stride);
     switch (kind_u8) {
-        'i', 'f', 'd', 'l', 's' => {
-            const byte_stride = checkedMul(stride_u, elem_size) orelse {
+        'i', 'f', 'd', 'l', 's', 'c', 'z' => {
+            const byte_stride = checkedMulI64(stride, @as(i64, @intCast(elem_size))) orelse {
                 stream.status = 1;
                 return stream.status;
             };
@@ -225,7 +244,7 @@ fn unformattedStreamTransferN(
                 const src_base: [*]const u8 = @ptrCast(base.?);
                 var i: usize = 0;
                 while (i < @as(usize, @intCast(count))) : (i += 1) {
-                    const src_off = checkedMul(i, byte_stride) orelse {
+                    const src_off = checkedMulI64(@intCast(i), byte_stride) orelse {
                         stream.status = 1;
                         return stream.status;
                     };
@@ -233,13 +252,17 @@ fn unformattedStreamTransferN(
                         stream.status = 1;
                         return stream.status;
                     };
-                    copyRawBytes(record + stream.pos + dst_off, src_base + src_off, elem_size);
+                    const src_ptr = offsetConstBytes(src_base, src_off) orelse {
+                        stream.status = 1;
+                        return stream.status;
+                    };
+                    copyRawBytes(record + stream.pos + dst_off, src_ptr, elem_size);
                 }
             } else {
                 const dst_base: [*]u8 = @ptrCast(base.?);
                 var i: usize = 0;
                 while (i < @as(usize, @intCast(count))) : (i += 1) {
-                    const dst_off = checkedMul(i, byte_stride) orelse {
+                    const dst_off = checkedMulI64(@intCast(i), byte_stride) orelse {
                         stream.status = 1;
                         return stream.status;
                     };
@@ -247,50 +270,11 @@ fn unformattedStreamTransferN(
                         stream.status = 1;
                         return stream.status;
                     };
-                    copyRawBytes(dst_base + dst_off, record + stream.pos + src_off, elem_size);
-                }
-            }
-        },
-        'c', 'z' => {
-            const scalar_size: usize = switch (kind_u8) {
-                'c' => @sizeOf(f32),
-                'z' => @sizeOf(f64),
-                else => unreachable,
-            };
-            const byte_stride = checkedMul(checkedMul(stride_u, 2) orelse {
-                stream.status = 1;
-                return stream.status;
-            }, scalar_size) orelse {
-                stream.status = 1;
-                return stream.status;
-            };
-            if (is_write) {
-                const src_base: [*]const u8 = @ptrCast(base.?);
-                var i: usize = 0;
-                while (i < @as(usize, @intCast(count))) : (i += 1) {
-                    const src_off = checkedMul(i, byte_stride) orelse {
+                    const dst_ptr = offsetBytes(dst_base, dst_off) orelse {
                         stream.status = 1;
                         return stream.status;
                     };
-                    const dst_off = checkedMul(i, elem_size) orelse {
-                        stream.status = 1;
-                        return stream.status;
-                    };
-                    copyRawBytes(record + stream.pos + dst_off, src_base + src_off, elem_size);
-                }
-            } else {
-                const dst_base: [*]u8 = @ptrCast(base.?);
-                var i: usize = 0;
-                while (i < @as(usize, @intCast(count))) : (i += 1) {
-                    const dst_off = checkedMul(i, byte_stride) orelse {
-                        stream.status = 1;
-                        return stream.status;
-                    };
-                    const src_off = checkedMul(i, elem_size) orelse {
-                        stream.status = 1;
-                        return stream.status;
-                    };
-                    copyRawBytes(dst_base + dst_off, record + stream.pos + src_off, elem_size);
+                    copyRawBytes(dst_ptr, record + stream.pos + src_off, elem_size);
                 }
             }
         },
@@ -1487,4 +1471,27 @@ test "streamed unformatted io preserves strided block transfers" {
     try std.testing.expectEqual(@as(c_int, 33), vals_out[2]);
     try std.testing.expectEqual(@as(c_int, 0), vals_out[1]);
     try std.testing.expectEqual(@as(c_int, 0), vals_out[3]);
+}
+
+test "streamed unformatted io preserves negative-stride block transfers" {
+    const unit: c_int = 41;
+
+    var vals_in: [4]c_int = .{ 11, 22, 33, 44 };
+    const record_size: c_int = 2 * @sizeOf(c_int);
+
+    const write_state = col6forge_unformatted_write_stream_begin(unit, record_size);
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_unformatted_write_stream_n(write_state, 'i', 0, 2, -2, @ptrCast(&vals_in[3])));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_unformatted_write_stream_finish(write_state));
+
+    _ = col6forge_rewind(unit);
+
+    var vals_out: [4]c_int = .{ 0, 0, 0, 0 };
+    const read_state = col6forge_unformatted_read_stream_begin(unit, record_size);
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_unformatted_read_stream_n(read_state, 'i', 0, 2, -2, @ptrCast(&vals_out[3])));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_unformatted_read_stream_finish(read_state));
+
+    try std.testing.expectEqual(@as(c_int, 22), vals_out[1]);
+    try std.testing.expectEqual(@as(c_int, 44), vals_out[3]);
+    try std.testing.expectEqual(@as(c_int, 0), vals_out[0]);
+    try std.testing.expectEqual(@as(c_int, 0), vals_out[2]);
 }

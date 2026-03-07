@@ -398,9 +398,11 @@ fn emitRangeSectionTransfer(
 
     var stride = try impliedStrideForSymbolDim(ctx, builder, sym, dim);
     if (range.stride) |stride_expr| {
-        const step_const = (try evalConstIntSem(ctx, stride_expr)) orelse intLiteralValue(stride_expr) orelse return null;
-        if (step_const <= 0) return null;
-        stride = try mulI32ByConst(ctx, builder, stride, step_const);
+        var step = try expr.emitExpr(ctx, builder, stride_expr);
+        if (step.ty != .i32) step = try expr.coerce(ctx, builder, step, .i32);
+        const mul_tmp = try ctx.nextTemp();
+        try builder.binary(mul_tmp, "mul", .i32, stride, step);
+        stride = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
     }
 
     const kind_info = blockTransferKindForSymbol(sym) orelse return null;
