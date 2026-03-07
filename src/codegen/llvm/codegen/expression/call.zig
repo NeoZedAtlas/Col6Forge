@@ -309,7 +309,7 @@ fn emitSubstringLengthValue(ctx: *Context, builder: anytype, sub: ast.SubstringE
     if (sub.end) |end_expr| {
         end_val = try dispatch.emitExpr(ctx, builder, end_expr);
         if (end_val.ty != .i32) {
-            end_val = try casting.coerce(ctx, builder, end_val, .i32);
+            end_val = try casting.coerceCheckedI32(ctx, builder, end_val);
         }
     }
 
@@ -317,7 +317,7 @@ fn emitSubstringLengthValue(ctx: *Context, builder: anytype, sub: ast.SubstringE
     if (sub.start) |start_expr| {
         start_val = try dispatch.emitExpr(ctx, builder, start_expr);
         if (start_val.ty != .i32) {
-            start_val = try casting.coerce(ctx, builder, start_val, .i32);
+            start_val = try casting.coerceCheckedI32(ctx, builder, start_val);
         }
     }
 

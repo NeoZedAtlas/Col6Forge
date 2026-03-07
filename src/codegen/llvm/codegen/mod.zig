@@ -816,6 +816,122 @@ test "ASSIGN plus no-list assigned GOTO lowers to blockaddress indirectbr path" 
     try testing.expect(std.mem.indexOf(u8, output, "indirectbr ptr %") != null);
 }
 
+test "computed GOTO narrows widened selector through checked i32 path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const selector_expr = try makeIdentExpr(a, "I");
+    const labels = &[_][]const u8{ "0010", "0020" };
+
+    const stmt_list = try a.alloc(input.Stmt, 4);
+    stmt_list[0] = .{ .label = null, .node = .{ .computed_goto = .{ .labels = labels, .selector = selector_expr } } };
+    stmt_list[1] = .{ .label = "0010", .node = .{ .cont = {} } };
+    stmt_list[2] = .{ .label = "0020", .node = .{ .cont = {} } };
+    stmt_list[3] = .{ .label = null, .node = .{ .cont = {} } };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const symbols = try a.alloc(input.sema.Symbol, 1);
+    symbols[0] = makeLocalScalarSymbol("I", .integer);
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(
+        &writer,
+        allocator,
+        program,
+        sem_prog,
+        "computed_goto_i64.f",
+        .{ .target_layout = .{ .default_integer_bits = 64 } },
+    );
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "@llvm.trap") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "switch i32 %") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "switch i64 %") == null);
+}
+
+test "assigned GOTO narrows widened selector through checked i32 path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const labels = &[_][]const u8{"0012"};
+
+    const stmt_list = try a.alloc(input.Stmt, 3);
+    stmt_list[0] = .{ .label = null, .node = .{ .assigned_goto = .{ .var_name = "I", .labels = labels } } };
+    stmt_list[1] = .{ .label = "0012", .node = .{ .cont = {} } };
+    stmt_list[2] = .{ .label = null, .node = .{ .cont = {} } };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const symbols = try a.alloc(input.sema.Symbol, 1);
+    symbols[0] = makeLocalScalarSymbol("I", .integer);
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(
+        &writer,
+        allocator,
+        program,
+        sem_prog,
+        "assigned_goto_i64.f",
+        .{ .target_layout = .{ .default_integer_bits = 64 } },
+    );
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "@llvm.trap") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "switch i32 %") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "switch i64 %") == null);
+}
+
 test "WHERE lowering rejects rank-mismatched mask and target arrays" {
     const testing = std.testing;
     const allocator = testing.allocator;

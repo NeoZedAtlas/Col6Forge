@@ -16,6 +16,7 @@ pub const emitCond = binary.emitCond;
 pub const emitLiteral = casting.emitLiteral;
 pub const emitConstTyped = casting.emitConstTyped;
 pub const coerce = casting.coerce;
+pub const coerceCheckedI32 = casting.coerceCheckedI32;
 pub const exprType = casting.exprType;
 
 pub const emitSubscriptPtr = memory.emitSubscriptPtr;
@@ -299,6 +300,46 @@ test "emitBinary real power with integer exponent uses llvm powi intrinsic" {
     const pow = try emitBinary(&harness.ctx, &builder, .power, lhs, rhs);
     try testing.expectEqual(IRType.f32, pow.ty);
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call float @llvm.powi.f32") != null);
+}
+
+test "coerceCheckedI32 traps on overflowing i64" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const value = ValueRef{ .name = "%wide", .ty = .i64, .is_ptr = false };
+    const narrowed = try coerceCheckedI32(&harness.ctx, &builder, value);
+    try testing.expectEqual(IRType.i32, narrowed.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "@llvm.trap") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "trunc i64 %wide to i32") != null);
+}
+
+test "emitBinary real power with i64 exponent narrows through checked trap path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lhs = ValueRef{ .name = "2.0", .ty = .f32, .is_ptr = false };
+    const rhs = ValueRef{ .name = "%exp", .ty = .i64, .is_ptr = false };
+    const pow = try emitBinary(&harness.ctx, &builder, .power, lhs, rhs);
+    try testing.expectEqual(IRType.f32, pow.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call float @llvm.powi.f32") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "@llvm.trap") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "trunc i64 %exp to i32") != null);
 }
 
 test "emitBinary integer power supports i64 and rejects negative constants" {

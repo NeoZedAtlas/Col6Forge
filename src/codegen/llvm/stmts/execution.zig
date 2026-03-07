@@ -842,7 +842,7 @@ pub fn emitReturnStmt(ctx: *Context, builder: anytype, ret: ast.ReturnStmt) Emit
     if (ret.value) |value| {
         if (ctx.unit.kind == .subroutine) {
             const raw = try expr.emitExpr(ctx, builder, value);
-            const coerced = try expr.coerce(ctx, builder, raw, .i32);
+            const coerced = try expr.coerceCheckedI32(ctx, builder, raw);
             try ctx.emitHeapTempFrees(builder);
             try builder.retValue(.i32, coerced.name);
             return;
@@ -995,12 +995,12 @@ fn storeCharacterValueDynamic(
     const src_ptr = try expr.emitExpr(ctx, builder, value_expr);
     var target_len_i32 = target_len;
     if (target_len_i32.ty != .i32) {
-        target_len_i32 = try expr.coerce(ctx, builder, target_len_i32, .i32);
+        target_len_i32 = try expr.coerceCheckedI32(ctx, builder, target_len_i32);
     }
 
     var src_len = (try emitCharLenValue(ctx, builder, value_expr)) orelse constI32(ctx, 1);
     if (src_len.ty != .i32) {
-        src_len = try expr.coerce(ctx, builder, src_len, .i32);
+        src_len = try expr.coerceCheckedI32(ctx, builder, src_len);
     }
 
     const idx_ptr = try ctx.nextTemp();

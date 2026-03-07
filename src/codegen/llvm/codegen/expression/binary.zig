@@ -138,7 +138,7 @@ fn emitPower(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) Emit
     if (complex.isComplexType(rhs.ty)) return error.UnsupportedComplexOp;
     if (isFloatTy(lhs.ty) and isIntegerTy(rhs.ty) and !rhs.is_ptr) {
         const left = try casting.coerce(ctx, builder, lhs, lhs.ty);
-        const exp_i32 = try casting.coerce(ctx, builder, rhs, .i32);
+        const exp_i32 = try casting.coerceCheckedI32(ctx, builder, rhs);
         return intrinsics.emitIntrinsicPowiFloatIntValue(ctx, builder, left, exp_i32);
     }
     const common_ty = ir.commonType(lhs.ty, rhs.ty);
@@ -169,7 +169,7 @@ fn emitIntegerPow(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef,
         return emitIntPowConst(ctx, builder, base, @intCast(exp_const), ty);
     }
 
-    const exp_i32 = try casting.coerce(ctx, builder, exp_in, .i32);
+    const exp_i32 = try casting.coerceCheckedI32(ctx, builder, exp_in);
     return emitRuntimeIntegerPow(ctx, builder, base, exp_i32, ty);
 }
 
@@ -224,7 +224,7 @@ fn constInt(ctx: *Context, ty: IRType, value: i64) EmitError!ValueRef {
 fn emitComplexPowI(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
     const base_ty: IRType = if (lhs.ty == .complex_f64) .complex_f64 else .complex_f32;
     const base = try complex.coerceToComplex(ctx, builder, lhs, base_ty);
-    const exp_in = try casting.coerce(ctx, builder, rhs, .i32);
+    const exp_in = try casting.coerceCheckedI32(ctx, builder, rhs);
     const elem_ty = complex.complexElemType(base_ty) orelse return error.UnsupportedComplexType;
 
     const zero_i32 = utils.zeroValue(.i32);

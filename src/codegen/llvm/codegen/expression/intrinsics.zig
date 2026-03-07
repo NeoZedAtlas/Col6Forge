@@ -49,8 +49,7 @@ fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) 
 }
 
 fn coerceToI32(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
-    if (value.ty == .i32) return value;
-    return casting.coerce(ctx, builder, value, .i32);
+    return casting.coerceCheckedI32(ctx, builder, value);
 }
 
 fn emitLenValue(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?ValueRef {
@@ -319,7 +318,7 @@ fn emitIntrinsicIchar(ctx: *Context, builder: anytype, args: []*Expr) EmitError!
 fn emitIntrinsicAchar(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     var value = try dispatch.emitExpr(ctx, builder, args[0]);
-    value = try casting.coerce(ctx, builder, value, .i32);
+    value = try casting.coerceCheckedI32(ctx, builder, value);
 
     const ch_tmp = try ctx.nextTemp();
     try builder.cast(ch_tmp, "trunc", .i32, value, .i8);

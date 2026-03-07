@@ -22,7 +22,7 @@ pub fn emitComputedGoto(
         return;
     }
     const selector = try expr.emitExpr(ctx, builder, gt.selector);
-    const sel_i32 = try expr.coerce(ctx, builder, selector, .i32);
+    const sel_i32 = try expr.coerceCheckedI32(ctx, builder, selector);
 
     const plan = try logic.resolveGotoTargets(ctx.allocator, gt.labels, local_label_map, &ctx.label_map, .computed);
     defer ctx.allocator.free(plan);
@@ -94,7 +94,7 @@ pub fn emitAssignedGoto(
     const ty = ctx.typeFromKind(sym.type_kind);
     try builder.load(tmp, ty, ptr);
     var sel = ValueRef{ .name = tmp, .ty = ty, .is_ptr = false };
-    sel = try expr.coerce(ctx, builder, sel, .i32);
+    sel = try expr.coerceCheckedI32(ctx, builder, sel);
 
     const plan = if (gt.labels.len == 0)
         try logic.resolveAssignedGotoTargetsNoList(ctx.allocator, local_label_map, &ctx.label_map)
