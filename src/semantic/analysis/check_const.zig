@@ -31,7 +31,7 @@ pub fn coerceParameterValue(
             else => return error.ParameterTypeMismatch,
         },
         .integer => switch (value) {
-            .integer => return value,
+            .integer => |v| return .{ .integer = try checkedIntegerForTarget(target, v) },
             .real => |v| return .{ .integer = try realToIntegerForTarget(target, v.value) },
             .complex, .logical, .string => return error.ParameterTypeMismatch,
         },
@@ -77,6 +77,12 @@ fn realToIntegerForTarget(target: ast.TypeKind, v: f64) !i64 {
     const max: f64 = @floatFromInt(bounds.max);
     if (truncated < min or truncated > max) return error.ParameterTypeMismatch;
     return @as(i64, @intFromFloat(truncated));
+}
+
+fn checkedIntegerForTarget(target: ast.TypeKind, v: i64) !i64 {
+    const bounds = integerBoundsForTarget(target);
+    if (v < bounds.min or v > bounds.max) return error.ParameterTypeMismatch;
+    return v;
 }
 
 const IntegerBounds = struct {

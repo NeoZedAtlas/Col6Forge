@@ -537,6 +537,27 @@ test "semantic rejects REAL to INTEGER PARAMETER overflow for default i32 target
     try testing.expect(std.mem.eql(u8, diag.code, "CF3112"));
 }
 
+test "semantic rejects INTEGER to INTEGER PARAMETER overflow for default i32 target" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER N\n" ++
+        "      PARAMETER (N=3000000000)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.ParameterTypeMismatch, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3112"));
+}
+
 test "semantic preserves LOGICAL PARAMETER value kind" {
     const testing = std.testing;
     const allocator = testing.allocator;
