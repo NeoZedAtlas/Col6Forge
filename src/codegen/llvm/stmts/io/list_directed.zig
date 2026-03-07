@@ -22,7 +22,6 @@ const emitStackI32Array = io_utils.emitStackI32Array;
 const emitKindArray = io_utils.emitKindArray;
 const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
 const emitImpliedBasePtr = io_utils.emitImpliedBasePtr;
-const emitTripletCountValues = io_utils.emitTripletCountValues;
 const expandWriteArgsList = expansion.expandWriteArgsList;
 const expandReadTargets = expansion.expandReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
@@ -253,12 +252,6 @@ fn emitDynamicImpliedDoListWrite(
     if (sym.dims.len == 0 or call.args.len != sym.dims.len) return false;
 
     const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return false;
-    const step_val = if (implied.step) |step_expr|
-        (try evalConstIntSem(ctx, step_expr)) orelse io_utils.intLiteralValue(step_expr) orelse return false
-    else
-        1;
-    if (step_val != 1) return false;
-
     const helper_name = switch (sym.type_kind) {
         .integer => if (ctx.defaultIntegerIRType() == .i64) "col6forge_write_list_i64_n" else "col6forge_write_list_i32_n",
         .real => "col6forge_write_list_f32_n",
@@ -269,7 +262,7 @@ fn emitDynamicImpliedDoListWrite(
         else => return false,
     };
 
-    const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return false;
+    const stride = impliedStrideForDim(ctx, builder, sym, loop_dim, implied.step) catch return false;
 
     const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step);
     const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
@@ -414,12 +407,6 @@ fn emitDynamicImpliedDoListRead(
 
     const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return null;
 
-    const step_val = if (implied.step) |step_expr|
-        (try evalConstIntSem(ctx, step_expr)) orelse io_utils.intLiteralValue(step_expr) orelse return null
-    else
-        1;
-    if (step_val != 1) return null;
-
     const helper_name = switch (sym.type_kind) {
         .integer => if (ctx.defaultIntegerIRType() == .i64) "col6forge_read_list_i64_n" else "col6forge_read_list_i32_n",
         .real => "col6forge_read_list_f32_n",
@@ -430,7 +417,7 @@ fn emitDynamicImpliedDoListRead(
         else => return null,
     };
 
-    const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return null;
+    const stride = impliedStrideForDim(ctx, builder, sym, loop_dim, implied.step) catch return null;
 
     const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step);
     const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
@@ -561,44 +548,20 @@ fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
     };
 }
 
-fn impliedStrideForDim(ctx: *Context, builder: anytype, dims: []*ast.Expr, loop_dim: usize) !ValueRef {
-    var stride = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-    var idx: usize = 0;
-    while (idx < loop_dim) : (idx += 1) {
-        const extent = try impliedDimExtent(ctx, builder, dims[idx]);
+fn impliedStrideForDim(
+    ctx: *Context,
+    builder: anytype,
+    sym: ast.sema.Symbol,
+    loop_dim: usize,
+    step_expr: ?*ast.Expr,
+) !ValueRef {
+    var stride = try expr.emitSymbolDimMultiplier(ctx, builder, sym, loop_dim);
+    stride = try coerceRuntimeI32(ctx, builder, stride);
+    if (step_expr) |step_node| {
+        const step = try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, step_node));
         const mul_tmp = try ctx.nextTemp();
-        try builder.binary(mul_tmp, "mul", .i32, stride, extent);
+        try builder.binary(mul_tmp, "mul", .i32, stride, step);
         stride = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
     }
     return stride;
-}
-
-fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) !ValueRef {
-    return switch (dim.*) {
-        .dim_range => |range| blk: {
-            if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return error.UnsupportedImpliedDo;
-            var upper = try expr.emitExpr(ctx, builder, range.upper);
-            upper = try coerceRuntimeI32(ctx, builder, upper);
-            const lower = if (range.lower) |lower_expr|
-                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr))
-            else
-                ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-            const step = if (range.stride) |stride_expr|
-                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr))
-            else
-                ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-            break :blk try emitTripletCountValues(ctx, builder, lower, upper, step);
-        },
-        .literal => |lit| {
-            if (lit.kind == .assumed_size) return error.UnsupportedImpliedDo;
-            var value = try expr.emitExpr(ctx, builder, dim);
-            value = try coerceRuntimeI32(ctx, builder, value);
-            return value;
-        },
-        else => {
-            var value = try expr.emitExpr(ctx, builder, dim);
-            value = try coerceRuntimeI32(ctx, builder, value);
-            return value;
-        },
-    };
 }

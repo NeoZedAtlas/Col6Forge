@@ -466,7 +466,6 @@ pub export fn col6forge_write_direct_mix_v_n(
     const pre_total = runtimeArgCount(pre_count);
     const post_total = runtimeArgCount(post_count);
     const mid_n: usize = @intCast(@max(mid_count, 0));
-    const mid_stride_u: usize = @intCast(@max(mid_stride, 0));
     const mid_kind_u8: u8 = @intCast(mid_kind);
 
     var pre_size: usize = 0;
@@ -508,16 +507,17 @@ pub export fn col6forge_write_direct_mix_v_n(
     }
 
     if (mid_n > 0) {
-        if (mid_base == null or mid_stride_u == 0) return 1;
+        if (mid_base == null or mid_stride == 0) return 1;
         switch (mid_kind_u8) {
             'i', 'f', 'd', 'l' => {
                 const base: [*]const u8 = @ptrCast(mid_base.?);
-                const byte_stride = checkedMul(mid_stride_u, mid_elem_size) orelse return 1;
+                const byte_stride = checkedMulI64(mid_stride, @as(i64, @intCast(mid_elem_size))) orelse return 1;
                 var j: usize = 0;
                 while (j < mid_n) : (j += 1) {
-                    const src_off = checkedMul(j, byte_stride) orelse return 1;
+                    const src_off = checkedMulI64(@intCast(j), byte_stride) orelse return 1;
+                    const src_ptr = offsetConstBytes(base, src_off) orelse return 1;
                     if (pos + mid_elem_size <= recl) {
-                        copyRawBytes(record + pos, base + src_off, mid_elem_size);
+                        copyRawBytes(record + pos, src_ptr, mid_elem_size);
                     }
                     pos += mid_elem_size;
                 }
@@ -530,12 +530,13 @@ pub export fn col6forge_write_direct_mix_v_n(
                 };
                 const complex_size = checkedMul(scalar_size, 2) orelse return 1;
                 const base: [*]const u8 = @ptrCast(mid_base.?);
-                const byte_stride = checkedMul(checkedMul(mid_stride_u, 2) orelse return 1, scalar_size) orelse return 1;
+                const byte_stride = checkedMulI64(mid_stride, @as(i64, @intCast(complex_size))) orelse return 1;
                 var j: usize = 0;
                 while (j < mid_n) : (j += 1) {
-                    const src_off = checkedMul(j, byte_stride) orelse return 1;
+                    const src_off = checkedMulI64(@intCast(j), byte_stride) orelse return 1;
+                    const src_ptr = offsetConstBytes(base, src_off) orelse return 1;
                     if (pos + complex_size <= recl) {
-                        copyRawBytes(record + pos, base + src_off, complex_size);
+                        copyRawBytes(record + pos, src_ptr, complex_size);
                     }
                     pos += complex_size;
                 }
@@ -581,7 +582,6 @@ pub export fn col6forge_read_direct_mix_v_n(
     const pre_total = runtimeArgCount(pre_count);
     const post_total = runtimeArgCount(post_count);
     const mid_n: usize = @intCast(@max(mid_count, 0));
-    const mid_stride_u: usize = @intCast(@max(mid_stride, 0));
     const mid_kind_u8: u8 = @intCast(mid_kind);
 
     var pre_size: usize = 0;
@@ -623,16 +623,17 @@ pub export fn col6forge_read_direct_mix_v_n(
     }
 
     if (mid_n > 0) {
-        if (mid_base == null or mid_stride_u == 0) return 0;
+        if (mid_base == null or mid_stride == 0) return 0;
         switch (mid_kind_u8) {
             'i', 'f', 'd', 'l' => {
                 const base: [*]u8 = @ptrCast(mid_base.?);
-                const byte_stride = checkedMul(mid_stride_u, mid_elem_size) orelse return 0;
+                const byte_stride = checkedMulI64(mid_stride, @as(i64, @intCast(mid_elem_size))) orelse return 0;
                 var j: usize = 0;
                 while (j < mid_n) : (j += 1) {
-                    const dst_off = checkedMul(j, byte_stride) orelse return 0;
+                    const dst_off = checkedMulI64(@intCast(j), byte_stride) orelse return 0;
+                    const dst_ptr = offsetBytes(base, dst_off) orelse return 0;
                     if (pos + mid_elem_size <= recl) {
-                        copyRawBytes(base + dst_off, record + pos, mid_elem_size);
+                        copyRawBytes(dst_ptr, record + pos, mid_elem_size);
                         assigned += 1;
                     }
                     pos += mid_elem_size;
@@ -646,12 +647,13 @@ pub export fn col6forge_read_direct_mix_v_n(
                 };
                 const complex_size = checkedMul(scalar_size, 2) orelse return 0;
                 const base: [*]u8 = @ptrCast(mid_base.?);
-                const byte_stride = checkedMul(checkedMul(mid_stride_u, 2) orelse return 0, scalar_size) orelse return 0;
+                const byte_stride = checkedMulI64(mid_stride, @as(i64, @intCast(complex_size))) orelse return 0;
                 var j: usize = 0;
                 while (j < mid_n) : (j += 1) {
-                    const dst_off = checkedMul(j, byte_stride) orelse return 0;
+                    const dst_off = checkedMulI64(@intCast(j), byte_stride) orelse return 0;
+                    const dst_ptr = offsetBytes(base, dst_off) orelse return 0;
                     if (pos + complex_size <= recl) {
-                        copyRawBytes(base + dst_off, record + pos, complex_size);
+                        copyRawBytes(dst_ptr, record + pos, complex_size);
                         assigned += 1;
                     }
                     pos += complex_size;
@@ -983,7 +985,7 @@ pub export fn col6forge_read_unformatted_mix_v_n(
 fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const T) c_int {
     if (rec <= 0) return 1;
     if (count <= 0) return 0;
-    if (base == null or stride <= 0) return 1;
+    if (base == null or stride == 0) return 1;
     const count_u: usize = @intCast(count);
     const field_size = @sizeOf(T);
     const record_size = checkedMul(count_u, field_size) orelse return 1;
@@ -997,12 +999,13 @@ fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
     var z: usize = 0;
     while (z < recl) : (z += 1) record[z] = 0;
 
-    const src_data = base.?;
+    const src_data: [*]const u8 = @ptrCast(base.?);
+    const byte_stride = checkedMulI64(stride, @as(i64, @intCast(field_size))) orelse return 1;
     var pos: usize = 0;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        const elem_idx = offsetIndex(i, stride) orelse return 1;
-        const src: [*]const u8 = @ptrCast(&src_data[elem_idx]);
+        const src_off = checkedMulI64(i, byte_stride) orelse return 1;
+        const src = offsetConstBytes(src_data, src_off) orelse return 1;
         if (pos + field_size > recl) return 1;
         copyRawBytes(record + pos, src, field_size);
         pos += field_size;
@@ -1014,7 +1017,7 @@ fn directWriteScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
 fn directReadScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]T) c_int {
     if (rec <= 0) return 0;
     if (count <= 0) return 0;
-    if (base == null or stride <= 0) return 0;
+    if (base == null or stride == 0) return 0;
     const count_u: usize = @intCast(count);
     const field_size = @sizeOf(T);
     const expected_size = checkedMul(count_u, field_size) orelse return 0;
@@ -1025,14 +1028,15 @@ fn directReadScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, st
     if (recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
 
     const record = col6forge_direct_record_ptr_ro(unit, rec, recl_i32) orelse return 0;
-    const dst_data = base.?;
+    const dst_data: [*]u8 = @ptrCast(base.?);
+    const byte_stride = checkedMulI64(stride, @as(i64, @intCast(field_size))) orelse return 0;
     var assigned: c_int = 0;
     var pos: usize = 0;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        const elem_idx = offsetIndex(i, stride) orelse return 0;
+        const dst_off = checkedMulI64(i, byte_stride) orelse return 0;
+        const dst = offsetBytes(dst_data, dst_off) orelse return 0;
         if (pos + field_size > recl) return 0;
-        const dst: [*]u8 = @ptrCast(&dst_data[elem_idx]);
         copyRawBytes(dst, record + pos, field_size);
         assigned += 1;
         pos += field_size;
@@ -1044,7 +1048,7 @@ fn directReadScalarN(comptime T: type, unit: c_int, rec: c_int, count: c_int, st
 fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const T) c_int {
     if (rec <= 0) return 1;
     if (count <= 0) return 0;
-    if (base == null or stride <= 0) return 1;
+    if (base == null or stride == 0) return 1;
     const count_u: usize = @intCast(count);
     const field_size = checkedMul(@sizeOf(T), 2) orelse return 1;
     const record_size = checkedMul(count_u, field_size) orelse return 1;
@@ -1058,12 +1062,13 @@ fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, 
     var z: usize = 0;
     while (z < recl) : (z += 1) record[z] = 0;
 
-    const src_data = base.?;
+    const src_data: [*]const u8 = @ptrCast(base.?);
+    const byte_stride = checkedMulI64(stride, @as(i64, @intCast(field_size))) orelse return 1;
     var pos: usize = 0;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        const elem_idx = complexOffsetIndex(i, stride) orelse return 1;
-        const src: [*]const u8 = @ptrCast(&src_data[elem_idx]);
+        const src_off = checkedMulI64(i, byte_stride) orelse return 1;
+        const src = offsetConstBytes(src_data, src_off) orelse return 1;
         if (pos + field_size > recl) return 1;
         copyRawBytes(record + pos, src, field_size);
         pos += field_size;
@@ -1075,7 +1080,7 @@ fn directWriteComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, 
 fn directReadComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]T) c_int {
     if (rec <= 0) return 0;
     if (count <= 0) return 0;
-    if (base == null or stride <= 0) return 0;
+    if (base == null or stride == 0) return 0;
     const count_u: usize = @intCast(count);
     const field_size = checkedMul(@sizeOf(T), 2) orelse return 0;
     const expected_size = checkedMul(count_u, field_size) orelse return 0;
@@ -1086,14 +1091,15 @@ fn directReadComplexN(comptime T: type, unit: c_int, rec: c_int, count: c_int, s
     if (recl > @as(usize, @intCast(std.math.maxInt(c_int)))) return 0;
 
     const record = col6forge_direct_record_ptr_ro(unit, rec, recl_i32) orelse return 0;
-    const dst_data = base.?;
+    const dst_data: [*]u8 = @ptrCast(base.?);
+    const byte_stride = checkedMulI64(stride, @as(i64, @intCast(field_size))) orelse return 0;
     var assigned: c_int = 0;
     var pos: usize = 0;
     var i: c_int = 0;
     while (i < count) : (i += 1) {
-        const elem_idx = complexOffsetIndex(i, stride) orelse return 0;
+        const dst_off = checkedMulI64(i, byte_stride) orelse return 0;
+        const dst = offsetBytes(dst_data, dst_off) orelse return 0;
         if (pos + field_size > recl) return 0;
-        const dst: [*]u8 = @ptrCast(&dst_data[elem_idx]);
         copyRawBytes(dst, record + pos, field_size);
         assigned += 1;
         pos += field_size;
@@ -1510,6 +1516,90 @@ test "streamed unformatted io preserves negative-stride block transfers" {
     try std.testing.expectEqual(@as(c_int, 44), vals_out[3]);
     try std.testing.expectEqual(@as(c_int, 0), vals_out[0]);
     try std.testing.expectEqual(@as(c_int, 0), vals_out[2]);
+}
+
+test "direct io preserves negative-stride block transfers" {
+    const unit: c_int = 61;
+    const rec: c_int = 1;
+    col6forge_open_direct(unit, 2 * @sizeOf(c_int));
+
+    var vals_in: [4]c_int = .{ 11, 22, 33, 44 };
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_write_direct_i32_n(unit, rec, 2, -2, &vals_in[3]));
+
+    var vals_out: [4]c_int = .{ 0, 0, 0, 0 };
+    try std.testing.expectEqual(@as(c_int, 2), col6forge_read_direct_i32_n(unit, rec, 2, -2, &vals_out[3]));
+
+    try std.testing.expectEqual(@as(c_int, 22), vals_out[1]);
+    try std.testing.expectEqual(@as(c_int, 44), vals_out[3]);
+    try std.testing.expectEqual(@as(c_int, 0), vals_out[0]);
+    try std.testing.expectEqual(@as(c_int, 0), vals_out[2]);
+}
+
+test "direct mix io preserves negative-stride mid blocks" {
+    const unit: c_int = 62;
+    const rec: c_int = 1;
+    col6forge_open_direct(unit, 4 * @sizeOf(c_int));
+
+    var pre_in: c_int = 7;
+    var mid_in: [4]c_int = .{ 11, 22, 33, 44 };
+    var post_in: c_int = 99;
+    var pre_write_ptrs: [1]?*anyopaque = .{@ptrCast(&pre_in)};
+    var post_write_ptrs: [1]?*anyopaque = .{@ptrCast(&post_in)};
+    const scalar_kinds: [1]u8 = .{'i'};
+    const scalar_lens: [1]c_int = .{0};
+
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        col6forge_write_direct_mix_v_n(
+            unit,
+            rec,
+            &pre_write_ptrs,
+            &scalar_kinds,
+            &scalar_lens,
+            1,
+            'i',
+            2,
+            -2,
+            @ptrCast(&mid_in[3]),
+            &post_write_ptrs,
+            &scalar_kinds,
+            &scalar_lens,
+            1,
+        ),
+    );
+
+    var pre_out: c_int = 0;
+    var mid_out: [4]c_int = .{ 0, 0, 0, 0 };
+    var post_out: c_int = 0;
+    var pre_read_ptrs: [1]?*anyopaque = .{@ptrCast(&pre_out)};
+    var post_read_ptrs: [1]?*anyopaque = .{@ptrCast(&post_out)};
+
+    try std.testing.expectEqual(
+        @as(c_int, 4),
+        col6forge_read_direct_mix_v_n(
+            unit,
+            rec,
+            &pre_read_ptrs,
+            &scalar_kinds,
+            &scalar_lens,
+            1,
+            'i',
+            2,
+            -2,
+            @ptrCast(&mid_out[3]),
+            &post_read_ptrs,
+            &scalar_kinds,
+            &scalar_lens,
+            1,
+        ),
+    );
+
+    try std.testing.expectEqual(pre_in, pre_out);
+    try std.testing.expectEqual(post_in, post_out);
+    try std.testing.expectEqual(@as(c_int, 22), mid_out[1]);
+    try std.testing.expectEqual(@as(c_int, 44), mid_out[3]);
+    try std.testing.expectEqual(@as(c_int, 0), mid_out[0]);
+    try std.testing.expectEqual(@as(c_int, 0), mid_out[2]);
 }
 
 test "typed direct and unformatted io support i64 payloads" {

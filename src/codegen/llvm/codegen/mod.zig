@@ -1348,6 +1348,183 @@ test "unformatted io lowering streams negative-stride array sections" {
     try testing.expect(std.mem.indexOf(u8, output, "col6forge_write_unformatted_i32_n") == null);
 }
 
+test "direct io lowering uses dimension multiplier and signed implied-do step" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const unit_expr = try makeLiteralExpr(a, .integer, "10");
+    const rec_expr = try makeLiteralExpr(a, .integer, "3");
+    const i_expr = try makeIdentExpr(a, "I");
+    const one_expr = try makeLiteralExpr(a, .integer, "1");
+    const eight_expr = try makeLiteralExpr(a, .integer, "8");
+    const minus_two_expr = try makeLiteralExpr(a, .integer, "-2");
+
+    const arr_args = try a.alloc(*input.Expr, 2);
+    arr_args[0] = one_expr;
+    arr_args[1] = i_expr;
+    const arr_ref = try a.create(input.Expr);
+    arr_ref.* = .{ .call_or_subscript = .{ .name = "A", .args = arr_args } };
+
+    const implied_items = try a.alloc(*input.Expr, 1);
+    implied_items[0] = arr_ref;
+    const implied = try a.create(input.Expr);
+    implied.* = .{ .implied_do = .{
+        .items = implied_items,
+        .var_name = "I",
+        .start = eight_expr,
+        .end = one_expr,
+        .step = minus_two_expr,
+    } };
+
+    const write_args = try a.alloc(*input.Expr, 1);
+    write_args[0] = implied;
+
+    const stmt_list = try a.alloc(input.Stmt, 1);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .write = .{
+            .unit = unit_expr,
+            .format = .none,
+            .rec = rec_expr,
+            .args = write_args,
+            .err_label = null,
+            .iostat = null,
+        } },
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const dim4 = try makeLiteralExpr(a, .integer, "4");
+    const dim8 = try makeLiteralExpr(a, .integer, "8");
+    const arr_dims = try a.alloc(*input.Expr, 2);
+    arr_dims[0] = dim4;
+    arr_dims[1] = dim8;
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 1);
+    sem_symbols[0] = makeLocalArraySymbol("A", .integer, arr_dims);
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "direct_implied_stride.f", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "col6forge_write_direct_i32_n") != null);
+    try testing.expect(std.mem.indexOf(u8, output, ", i32 -8, ptr %") != null);
+}
+
+test "list-directed io lowering uses dimension multiplier and signed implied-do step" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const unit_expr = try makeLiteralExpr(a, .integer, "6");
+    const i_expr = try makeIdentExpr(a, "I");
+    const one_expr = try makeLiteralExpr(a, .integer, "1");
+    const eight_expr = try makeLiteralExpr(a, .integer, "8");
+    const minus_two_expr = try makeLiteralExpr(a, .integer, "-2");
+
+    const arr_args = try a.alloc(*input.Expr, 2);
+    arr_args[0] = one_expr;
+    arr_args[1] = i_expr;
+    const arr_ref = try a.create(input.Expr);
+    arr_ref.* = .{ .call_or_subscript = .{ .name = "A", .args = arr_args } };
+
+    const implied_items = try a.alloc(*input.Expr, 1);
+    implied_items[0] = arr_ref;
+    const implied = try a.create(input.Expr);
+    implied.* = .{ .implied_do = .{
+        .items = implied_items,
+        .var_name = "I",
+        .start = eight_expr,
+        .end = one_expr,
+        .step = minus_two_expr,
+    } };
+
+    const write_args = try a.alloc(*input.Expr, 1);
+    write_args[0] = implied;
+
+    const stmt_list = try a.alloc(input.Stmt, 1);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .write = .{
+            .unit = unit_expr,
+            .format = .list_directed,
+            .rec = null,
+            .args = write_args,
+            .err_label = null,
+            .iostat = null,
+        } },
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const dim4 = try makeLiteralExpr(a, .integer, "4");
+    const dim8 = try makeLiteralExpr(a, .integer, "8");
+    const arr_dims = try a.alloc(*input.Expr, 2);
+    arr_dims[0] = dim4;
+    arr_dims[1] = dim8;
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 1);
+    sem_symbols[0] = makeLocalArraySymbol("A", .integer, arr_dims);
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "list_implied_stride.f", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "col6forge_write_list_i32_n") != null);
+    try testing.expect(std.mem.indexOf(u8, output, ", i32 -8, ptr %") != null);
+}
+
 test "unformatted whole-array integer io uses i64 helpers under widened default integer layout" {
     const testing = std.testing;
     const allocator = testing.allocator;
