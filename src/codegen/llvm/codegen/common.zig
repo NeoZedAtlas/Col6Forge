@@ -167,12 +167,12 @@ const SizeAlign = struct {
 };
 
 pub fn constantCharacterLen(sym: input.sema.Symbol) ?usize {
-    if (sym.type_kind != .character) return null;
-    return switch (sym.char_len_kind) {
-        .constant => sym.char_len,
+    if (sym.type_spec.lowered_kind != .character and sym.type_kind != .character) return null;
+    return switch (sym.type_spec.char_len_kind) {
+        .constant => sym.type_spec.char_len orelse sym.char_len,
         // Backward-compat/default CHARACTER semantics:
         // no explicit LEN means LEN=1 in fixed-form code paths.
-        .none => sym.char_len orelse 1,
+        .none => sym.type_spec.char_len orelse sym.char_len orelse 1,
         .assumed, .deferred => null,
     };
 }

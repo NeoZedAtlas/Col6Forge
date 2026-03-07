@@ -10,6 +10,7 @@ pub const Symbol = symbols.Symbol;
 
 pub const CommonItemSig = struct {
     type_kind: ast.TypeKind,
+    type_spec: symbols.TypeSpec,
     size: usize,
 };
 
@@ -57,6 +58,7 @@ pub fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_
                             const size = try commonItemSize(sem_unit, sym);
                             try sig_ptr.items.append(.{
                                 .type_kind = sym.type_kind,
+                                .type_spec = sym.type_spec,
                                 .size = size,
                             });
                         }
@@ -125,6 +127,7 @@ pub fn commonSigsCompatible(a: []const CommonItemSig, b: []const CommonItemSig) 
         const seg_a = a[idx_a];
         const seg_b = b[idx_b];
         if (seg_a.type_kind != seg_b.type_kind) return false;
+        if (!std.meta.eql(seg_a.type_spec, seg_b.type_spec)) return false;
 
         const consume = @min(rem_a, rem_b);
         rem_a -= consume;
@@ -166,7 +169,7 @@ fn commonItemSize(sem_unit: *const SemanticUnit, sym: Symbol) !usize {
         .complex => 8,
         .complex_double => 16,
         .logical => 4,
-        .character => sym.char_len orelse 1,
+        .character => sym.type_spec.char_len orelse sym.char_len orelse 1,
     };
     const count = try const_eval_bridge.commonElementCount(sem_unit, sym.dims);
     const mul = @mulWithOverflow(elem_size, count);

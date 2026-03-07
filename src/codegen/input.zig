@@ -5,6 +5,7 @@ pub const Program = ast.Program;
 pub const ProgramUnit = ast.ProgramUnit;
 pub const ProgramUnitKind = ast.ProgramUnitKind;
 pub const TypeKind = ast.TypeKind;
+pub const TypeSpec = sema.TypeSpec;
 
 pub const Decl = ast.Decl;
 pub const TypeDecl = ast.TypeDecl;
