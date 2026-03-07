@@ -140,6 +140,7 @@ pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![
         out[idx] = .{
             .type_spec = type_spec,
             .requires_descriptor = dummyArgRequiresDescriptor(dims),
+            .rank = dims.len,
         };
     }
     return out;

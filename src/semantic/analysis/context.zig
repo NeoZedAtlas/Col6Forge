@@ -44,6 +44,7 @@ pub const Context = struct {
         pub const ArgSig = struct {
             type_spec: symbols.TypeSpec = symbols.TypeSpec.fromResolvedKind(.real, .real, null),
             requires_descriptor: bool = false,
+            rank: usize = 0,
         };
 
         kind: ast.ProgramUnitKind,

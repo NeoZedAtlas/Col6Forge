@@ -62,6 +62,12 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     defer ptr_arg_names.deinit();
     var char_dummy_names = std.array_list.Managed([]const u8).init(ctx.allocator);
     defer char_dummy_names.deinit();
+    var descriptor_dummy_names = std.array_list.Managed([]const u8).init(ctx.allocator);
+    defer descriptor_dummy_names.deinit();
+    var descriptor_extent_args = std.array_list.Managed([]const u8).init(ctx.allocator);
+    defer descriptor_extent_args.deinit();
+    var descriptor_multiplier_args = std.array_list.Managed([]const u8).init(ctx.allocator);
+    defer descriptor_multiplier_args.deinit();
     var char_dummy_len_args = std.array_list.Managed([]const u8).init(ctx.allocator);
     defer char_dummy_len_args.deinit();
     var result_len_arg_name: ?[]const u8 = null;
@@ -84,7 +90,22 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             if (sym.storage == .dummy and sym.type_kind == .character) {
                 try char_dummy_names.append(formal_name);
             }
+            if (sym.storage == .dummy and symbolHasDeferredDims(sym)) {
+                try descriptor_dummy_names.append(formal_name);
+            }
         }
+        next_arg_index += 1;
+    }
+
+    for (descriptor_dummy_names.items) |_| {
+        const extent_name = try utils.formatTempName(ctx.allocator, "arg", next_arg_index);
+        try builder.defineArgPtr(extent_name, next_arg_index == 0);
+        try descriptor_extent_args.append(extent_name);
+        next_arg_index += 1;
+
+        const multiplier_name = try utils.formatTempName(ctx.allocator, "arg", next_arg_index);
+        try builder.defineArgPtr(multiplier_name, next_arg_index == 0);
+        try descriptor_multiplier_args.append(multiplier_name);
         next_arg_index += 1;
     }
 
@@ -134,6 +155,16 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             .is_ptr = true,
         };
         try ctx.locals.put(arg, val);
+    }
+    for (descriptor_dummy_names.items, 0..) |formal_name, idx| {
+        const sym = ctx.findSymbol(formal_name) orelse return error.UnknownSymbol;
+        try installIncomingArrayDescriptor(
+            ctx,
+            builder,
+            sym,
+            .{ .name = descriptor_extent_args.items[idx], .ty = .ptr, .is_ptr = true },
+            .{ .name = descriptor_multiplier_args.items[idx], .ty = .ptr, .is_ptr = true },
+        );
     }
 
     for (ctx.sem.symbols) |sym| {
@@ -506,6 +537,41 @@ fn installDeferredArrayDescriptor(ctx: *Context, builder: anytype, sym: ast.sema
         const multiplier_ptr = ValueRef{ .name = multiplier_name, .ty = .ptr, .is_ptr = true };
         try builder.store(constI64(ctx, if (idx == 0) 1 else 0), multiplier_ptr);
         multiplier_slots[idx] = multiplier_ptr;
+    }
+
+    try ctx.setRuntimeArrayDescriptor(sym.name, lower_slots, extent_slots, multiplier_slots);
+}
+
+fn installIncomingArrayDescriptor(
+    ctx: *Context,
+    builder: anytype,
+    sym: ast.sema.Symbol,
+    extent_base: ValueRef,
+    multiplier_base: ValueRef,
+) EmitError!void {
+    if (sym.dims.len == 0) return;
+    var lower_slots = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    errdefer ctx.allocator.free(lower_slots);
+    var extent_slots = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    errdefer ctx.allocator.free(extent_slots);
+    var multiplier_slots = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    errdefer ctx.allocator.free(multiplier_slots);
+
+    for (sym.dims, 0..) |_, idx| {
+        const offset = constI64(ctx, @intCast(idx));
+
+        const lower_name = try ctx.nextTemp();
+        try builder.alloca(lower_name, .i64);
+        lower_slots[idx] = .{ .name = lower_name, .ty = .ptr, .is_ptr = true };
+        try builder.store(try expression.emitSymbolDimLower(ctx, builder, sym, idx), lower_slots[idx]);
+
+        const extent_name = try ctx.nextTemp();
+        try builder.gep(extent_name, .i64, extent_base, offset);
+        extent_slots[idx] = .{ .name = extent_name, .ty = .ptr, .is_ptr = true };
+
+        const multiplier_name = try ctx.nextTemp();
+        try builder.gep(multiplier_name, .i64, multiplier_base, offset);
+        multiplier_slots[idx] = .{ .name = multiplier_name, .ty = .ptr, .is_ptr = true };
     }
 
     try ctx.setRuntimeArrayDescriptor(sym.name, lower_slots, extent_slots, multiplier_slots);

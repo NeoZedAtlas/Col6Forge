@@ -53,6 +53,7 @@ const TestHarness = struct {
     decls: std.StringHashMap(context.IRDecl),
     defined: std.StringHashMap(void),
     intrinsic_wrappers: std.StringHashMap(context.IntrinsicWrapperKind),
+    known_procedure_sigs: context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig),
     ctx: Context,
 
     fn init(allocator: std.mem.Allocator) !TestHarness {
@@ -112,7 +113,8 @@ const TestHarness = struct {
         var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
         var string_pool = context.StringPool.init(a);
         var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
-        var ctx = try Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, .{});
+        var known_procedure_sigs = context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig).initContext(a, .{});
+        var ctx = try Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{});
         try ctx.locals.put("A", .{ .name = "%a", .ty = .ptr, .is_ptr = true });
         try ctx.locals.put("ARR", .{ .name = "%arr", .ty = .ptr, .is_ptr = true });
 
@@ -123,6 +125,7 @@ const TestHarness = struct {
             .decls = decls,
             .defined = defined,
             .intrinsic_wrappers = intrinsic_wrappers,
+            .known_procedure_sigs = known_procedure_sigs,
             .ctx = ctx,
         };
     }
@@ -132,6 +135,7 @@ const TestHarness = struct {
         self.decls.deinit();
         self.defined.deinit();
         self.intrinsic_wrappers.deinit();
+        self.known_procedure_sigs.deinit();
         self.arena.deinit();
     }
 };
@@ -424,6 +428,41 @@ test "emitCall complex_f64 uses hidden sret pointer and void call ABI" {
     try testing.expectEqual(IRType.complex_f64, call_val.ty);
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call void @zfun_(ptr") != null);
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call ptr @zfun_") == null);
+}
+
+test "emitCall appends descriptor arrays for known deferred-shape dummy" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+                .requires_descriptor = true,
+                .rank = 1,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const arg_expr = try makeIdent(harness.arena.allocator(), "ARR");
+    const arg_list = @constCast(&[_]*Expr{arg_expr});
+    _ = try emitCall(&harness.ctx, &builder, "foo_", .void, arg_list, true);
+
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "alloca i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "store i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %arr, ptr %t") != null);
 }
 
 test "emitSubscriptPtr, emitIndex, and emitDimValue enforce subscripts" {

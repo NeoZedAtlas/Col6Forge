@@ -26,7 +26,9 @@ test "inferProcedureArgSigs captures descriptor-bearing dummy arrays" {
     const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[0]);
     try testing.expectEqual(@as(usize, 3), arg_sigs.len);
     try testing.expect(arg_sigs[0].requires_descriptor);
+    try testing.expectEqual(@as(usize, 1), arg_sigs[0].rank);
     try testing.expect(arg_sigs[1].requires_descriptor);
+    try testing.expectEqual(@as(usize, 1), arg_sigs[1].rank);
     try testing.expectEqual(ast.TypeKind.character, arg_sigs[2].type_spec.lowered_kind);
     try testing.expectEqual(@as(?usize, null), arg_sigs[2].type_spec.char_len);
 }
@@ -53,5 +55,6 @@ test "inferProcedureArgSigs merges DIMENSION declarations for dummy arrays" {
     const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[0]);
     try testing.expectEqual(@as(usize, 1), arg_sigs.len);
     try testing.expect(arg_sigs[0].requires_descriptor);
+    try testing.expectEqual(@as(usize, 1), arg_sigs[0].rank);
     try testing.expectEqual(ast.TypeKind.integer, arg_sigs[0].type_spec.lowered_kind);
 }

@@ -19,6 +19,11 @@ const ArgPointerResult = struct {
     owned_heap_ptr: ?ValueRef = null,
 };
 
+const MaterializedDescriptor = struct {
+    extent_ptr: ValueRef,
+    multiplier_ptr: ValueRef,
+};
+
 pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
     const abi_ret_ty = context.fortranAbiReturnType(ret_ty);
     var complex_result_ptr: ?ValueRef = null;
@@ -36,7 +41,7 @@ pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IR
     if (complex_result_ptr) |result_ptr| {
         try abi_args.append(result_ptr);
     }
-    try appendAbiActualArgs(ctx, builder, &abi_args, &owned_heap_args, args, null);
+    try appendAbiActualArgs(ctx, builder, &abi_args, &owned_heap_args, args, ctx.lookupKnownProcedureSig(fn_name), null);
 
     if (discard or ret_ty == .void) {
         try builder.callTyped(null, abi_ret_ty, fn_name, abi_args.items);
@@ -82,7 +87,7 @@ pub fn emitIndirectCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, ret_t
     if (complex_result_ptr) |result_ptr| {
         try abi_args.append(result_ptr);
     }
-    try appendAbiActualArgs(ctx, builder, &abi_args, &owned_heap_args, args, null);
+    try appendAbiActualArgs(ctx, builder, &abi_args, &owned_heap_args, args, null, null);
 
     if (discard or ret_ty == .void) {
         try builder.callIndirectTyped(null, abi_ret_ty, fn_ptr.name, abi_args.items);
@@ -119,7 +124,7 @@ pub fn emitCharacterCall(ctx: *Context, builder: anytype, fn_name: []const u8, r
     defer owned_heap_args.deinit();
     try abi_args.append(result_ptr);
     const result_len_val = try i32Const(ctx, @intCast(result_len));
-    try appendAbiActualArgs(ctx, builder, &abi_args, &owned_heap_args, args, result_len_val);
+    try appendAbiActualArgs(ctx, builder, &abi_args, &owned_heap_args, args, ctx.lookupKnownProcedureSig(fn_name), result_len_val);
 
     try builder.callTyped(null, .void, fn_name, abi_args.items);
     try emitOwnedHeapArgFrees(ctx, builder, owned_heap_args.items);
@@ -134,7 +139,7 @@ pub fn emitIndirectCharacterCall(ctx: *Context, builder: anytype, fn_ptr: ValueR
     defer owned_heap_args.deinit();
     try abi_args.append(result_ptr);
     const result_len_val = try i32Const(ctx, @intCast(result_len));
-    try appendAbiActualArgs(ctx, builder, &abi_args, &owned_heap_args, args, result_len_val);
+    try appendAbiActualArgs(ctx, builder, &abi_args, &owned_heap_args, args, null, result_len_val);
 
     try builder.callIndirectTyped(null, .void, fn_ptr.name, abi_args.items);
     try emitOwnedHeapArgFrees(ctx, builder, owned_heap_args.items);
@@ -212,6 +217,7 @@ fn appendAbiActualArgs(
     abi_args: *std.array_list.Managed(ValueRef),
     owned_heap_args: *std.array_list.Managed(ValueRef),
     args: []*Expr,
+    proc_sig: ?ast.sema.KnownProcedureSig,
     result_len: ?ValueRef,
 ) !void {
     for (args) |arg| {
@@ -219,6 +225,15 @@ fn appendAbiActualArgs(
         try abi_args.append(resolved.ptr);
         if (resolved.owned_heap_ptr) |heap_ptr| {
             try owned_heap_args.append(heap_ptr);
+        }
+    }
+    if (proc_sig) |sig| {
+        for (args, 0..) |arg, idx| {
+            if (idx >= sig.args.len) break;
+            if (!sig.args[idx].requires_descriptor) continue;
+            const desc = try materializeActualDescriptor(ctx, builder, arg, sig.args[idx]);
+            try abi_args.append(desc.extent_ptr);
+            try abi_args.append(desc.multiplier_ptr);
         }
     }
     if (result_len) |len_val| {
@@ -229,6 +244,67 @@ fn appendAbiActualArgs(
             try abi_args.append(len_val);
         }
     }
+}
+
+fn materializeActualDescriptor(
+    ctx: *Context,
+    builder: anytype,
+    expr: *Expr,
+    arg_sig: ast.sema.KnownProcedureSig.ArgSig,
+) !MaterializedDescriptor {
+    if (arg_sig.rank == 0) return error.UnsupportedDescriptorActualArgument;
+
+    const actual_name = switch (expr.*) {
+        .identifier => |name| name,
+        else => return error.UnsupportedDescriptorActualArgument,
+    };
+    const sym = ctx.findSymbol(actual_name) orelse return error.UnknownSymbol;
+    if (sym.dims.len < arg_sig.rank) return error.UnsupportedDescriptorActualArgument;
+
+    const extent_ptr = try allocaDescriptorArray(ctx, builder, sym, arg_sig.rank, .extent);
+    const multiplier_ptr = try allocaDescriptorArray(ctx, builder, sym, arg_sig.rank, .multiplier);
+    return .{
+        .extent_ptr = extent_ptr,
+        .multiplier_ptr = multiplier_ptr,
+    };
+}
+
+const DescriptorArrayKind = enum {
+    extent,
+    multiplier,
+};
+
+fn allocaDescriptorArray(
+    ctx: *Context,
+    builder: anytype,
+    sym: ast.sema.Symbol,
+    rank: usize,
+    kind: DescriptorArrayKind,
+) !ValueRef {
+    const base_name = try ctx.nextTemp();
+    if (rank == 1) {
+        try builder.alloca(base_name, .i64);
+    } else {
+        try builder.allocaArray(base_name, .i64, rank);
+    }
+    const base_ptr = ValueRef{ .name = base_name, .ty = .ptr, .is_ptr = true };
+
+    var dim_idx: usize = 0;
+    while (dim_idx < rank) : (dim_idx += 1) {
+        const offset_ptr = if (dim_idx == 0)
+            base_ptr
+        else blk: {
+            const ptr_name = try ctx.nextTemp();
+            try builder.gep(ptr_name, .i64, base_ptr, i64Const(ctx, @intCast(dim_idx)));
+            break :blk ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+        };
+        const value = switch (kind) {
+            .extent => try memory.emitSymbolDimExtent(ctx, builder, sym, dim_idx),
+            .multiplier => try memory.emitSymbolDimMultiplier(ctx, builder, sym, dim_idx),
+        };
+        try builder.store(value, offset_ptr);
+    }
+    return base_ptr;
 }
 
 fn emitOwnedHeapArgFrees(ctx: *Context, builder: anytype, owned_heap_args: []const ValueRef) !void {
