@@ -242,6 +242,285 @@ fn emitArrayElemCountI32(ctx: *Context, builder: anytype, sym: anytype) EmitErro
     return total;
 }
 
+const BlockTransfer = struct {
+    kind: u8,
+    elem_len: i32,
+    count: ValueRef,
+    stride: ValueRef,
+    base_ptr: ValueRef,
+};
+
+fn scalarByteSizeForType(ty: utils.IRType) ?i64 {
+    return switch (ty) {
+        .i32, .f32 => 4,
+        .f64, .complex_f32 => 8,
+        .complex_f64 => 16,
+        .i1 => 1,
+        else => null,
+    };
+}
+
+fn byteSizeForSymbol(sym: anytype) ?i64 {
+    return switch (sym.type_kind) {
+        .integer, .real => 4,
+        .double_precision, .complex => 8,
+        .complex_double => 16,
+        .logical => 1,
+        .character => @as(i64, @intCast(sym.char_len orelse 1)),
+    };
+}
+
+fn blockTransferKindForSymbol(sym: anytype) ?struct { kind: u8, elem_len: i32 } {
+    return switch (sym.type_kind) {
+        .integer => .{ .kind = 'i', .elem_len = 0 },
+        .real => .{ .kind = 'f', .elem_len = 0 },
+        .double_precision => .{ .kind = 'd', .elem_len = 0 },
+        .complex => .{ .kind = 'c', .elem_len = 0 },
+        .complex_double => .{ .kind = 'z', .elem_len = 0 },
+        .logical => .{ .kind = 'l', .elem_len = 0 },
+        .character => blk: {
+            const char_len = sym.char_len orelse 1;
+            if (char_len > std.math.maxInt(i32)) return null;
+            break :blk .{ .kind = 's', .elem_len = @intCast(char_len) };
+        },
+    };
+}
+
+fn mulI32ByConst(ctx: *Context, builder: anytype, value: ValueRef, factor: i64) EmitError!ValueRef {
+    if (factor == 0) return ctx.constI32(0);
+    if (factor == 1) return value;
+    const mul_tmp = try ctx.nextTemp();
+    try builder.binary(mul_tmp, "mul", .i32, value, try ctx.constI32(factor));
+    return .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
+}
+
+fn addI32Values(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!ValueRef {
+    if (std.mem.eql(u8, lhs.name, "0")) return rhs;
+    if (std.mem.eql(u8, rhs.name, "0")) return lhs;
+    const add_tmp = try ctx.nextTemp();
+    try builder.binary(add_tmp, "add", .i32, lhs, rhs);
+    return .{ .name = add_tmp, .ty = .i32, .is_ptr = false };
+}
+
+fn emitExpandedArgByteSize(ctx: *Context, builder: anytype, arg: *ast.Expr) EmitError!ValueRef {
+    if (arg.* == .identifier) {
+        const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
+        if (sym.dims.len > 0) {
+            const elem_count = try emitArrayElemCountI32(ctx, builder, sym);
+            const elem_size = byteSizeForSymbol(sym) orelse return error.UnsupportedIntrinsicType;
+            return mulI32ByConst(ctx, builder, elem_count, elem_size);
+        }
+    }
+
+    const ty = try expr.exprType(ctx, arg);
+    if (ty == .ptr) {
+        const char_len = charLenForExpr(ctx, arg) orelse 1;
+        return ctx.constI32(@intCast(char_len));
+    }
+    const byte_size = scalarByteSizeForType(ty) orelse return error.UnsupportedIntrinsicType;
+    return ctx.constI32(byte_size);
+}
+
+fn emitExpandedArgsByteSize(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ValueRef {
+    var total = try ctx.constI32(0);
+    for (args) |arg| {
+        total = try addI32Values(ctx, builder, total, try emitExpandedArgByteSize(ctx, builder, arg));
+    }
+    return total;
+}
+
+fn emitStaticSliceByteSize(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ValueRef {
+    var expanded = try expandIoArgs(ctx, args);
+    defer expanded.deinit(ctx.allocator);
+    return emitExpandedArgsByteSize(ctx, builder, expanded.items);
+}
+
+fn emitDynamicImpliedDoTransfer(
+    ctx: *Context,
+    builder: anytype,
+    arg: *ast.Expr,
+) EmitError!?BlockTransfer {
+    if (arg.* != .implied_do) return null;
+
+    const implied = arg.implied_do;
+    if (implied.items.len != 1) return null;
+    if (implied.items[0].* != .call_or_subscript) return null;
+
+    const call = implied.items[0].call_or_subscript;
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
+
+    const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return null;
+    const step_val: i64 = if (implied.step) |step_expr|
+        (try evalConstIntSem(ctx, step_expr)) orelse intLiteralValue(step_expr) orelse return null
+    else
+        1;
+    if (step_val != 1) return null;
+
+    const kind_info = blockTransferKindForSymbol(sym) orelse return null;
+    return .{
+        .kind = kind_info.kind,
+        .elem_len = kind_info.elem_len,
+        .count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step),
+        .stride = try impliedStrideForSymbolDim(ctx, builder, sym, loop_dim),
+        .base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start),
+    };
+}
+
+fn emitWholeArrayTransfer(
+    ctx: *Context,
+    builder: anytype,
+    arg: *ast.Expr,
+) EmitError!?BlockTransfer {
+    if (arg.* != .identifier) return null;
+    const sym = ctx.findSymbol(arg.identifier) orelse return null;
+    if (sym.dims.len == 0) return null;
+
+    const kind_info = blockTransferKindForSymbol(sym) orelse return null;
+    return .{
+        .kind = kind_info.kind,
+        .elem_len = kind_info.elem_len,
+        .count = try emitArrayElemCountI32(ctx, builder, sym),
+        .stride = try ctx.constI32(1),
+        .base_ptr = try ctx.getPointer(sym.name),
+    };
+}
+
+fn emitBlockTransferIfPossible(
+    ctx: *Context,
+    builder: anytype,
+    arg: *ast.Expr,
+) EmitError!?BlockTransfer {
+    if (try emitWholeArrayTransfer(ctx, builder, arg)) |transfer| return transfer;
+    return emitDynamicImpliedDoTransfer(ctx, builder, arg);
+}
+
+fn emitUnformattedArgByteSize(ctx: *Context, builder: anytype, arg: *ast.Expr) EmitError!ValueRef {
+    if (try emitWholeArrayTransfer(ctx, builder, arg)) |transfer| {
+        return mulI32ByConst(ctx, builder, transfer.count, if (transfer.elem_len != 0) transfer.elem_len else switch (transfer.kind) {
+            'i', 'f' => 4,
+            'd', 'c' => 8,
+            'z' => 16,
+            'l' => 1,
+            else => return error.UnsupportedIntrinsicType,
+        });
+    }
+    if (try emitDynamicImpliedDoTransfer(ctx, builder, arg)) |transfer| {
+        return mulI32ByConst(ctx, builder, transfer.count, if (transfer.elem_len != 0) transfer.elem_len else switch (transfer.kind) {
+            'i', 'f' => 4,
+            'd', 'c' => 8,
+            'z' => 16,
+            'l' => 1,
+            else => return error.UnsupportedIntrinsicType,
+        });
+    }
+    var one_arg = [_]*ast.Expr{arg};
+    return emitStaticSliceByteSize(ctx, builder, one_arg[0..]);
+}
+
+fn emitUnformattedRecordSize(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ValueRef {
+    var total = try ctx.constI32(0);
+    for (args) |arg| {
+        total = try addI32Values(ctx, builder, total, try emitUnformattedArgByteSize(ctx, builder, arg));
+    }
+    return total;
+}
+
+fn emitUnformattedWriteTypedSlice(
+    ctx: *Context,
+    builder: anytype,
+    state: ValueRef,
+    args: []*ast.Expr,
+) EmitError!void {
+    if (args.len == 0) return;
+    var expanded = try expandIoArgs(ctx, args);
+    defer expanded.deinit(ctx.allocator);
+    var packed_args = try buildUnformattedWriteArgs(ctx, builder, expanded.items);
+    defer packed_args.deinit();
+    const packed_args_ref = try packUnformattedArgs(ctx, builder, &packed_args);
+    const decl = try ctx.ensureDeclRaw("col6forge_unformatted_write_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
+    try builder.callTyped(null, .i32, decl, &.{ state, packed_args_ref.ptr_array, packed_args_ref.kinds_ptr, packed_args_ref.lens_ptr, packed_args_ref.count });
+}
+
+fn emitUnformattedReadTypedSlice(
+    ctx: *Context,
+    builder: anytype,
+    state: ValueRef,
+    args: []*ast.Expr,
+) EmitError!void {
+    if (args.len == 0) return;
+    var expanded = try expandIoArgs(ctx, args);
+    defer expanded.deinit(ctx.allocator);
+    var packed_args = try buildUnformattedReadArgs(ctx, builder, expanded.items);
+    defer packed_args.deinit();
+    const packed_args_ref = try packUnformattedArgs(ctx, builder, &packed_args);
+    const decl = try ctx.ensureDeclRaw("col6forge_unformatted_read_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
+    try builder.callTyped(null, .i32, decl, &.{ state, packed_args_ref.ptr_array, packed_args_ref.kinds_ptr, packed_args_ref.lens_ptr, packed_args_ref.count });
+}
+
+fn emitUnformattedWriteBlockTransfer(ctx: *Context, builder: anytype, state: ValueRef, transfer: BlockTransfer) EmitError!void {
+    const decl = try ctx.ensureDeclRaw("col6forge_unformatted_write_stream_n", .i32, &[_]utils.IRType{ .ptr, .i32, .i32, .i32, .i32, .ptr }, false);
+    try builder.callTyped(null, .i32, decl, &.{
+        state,
+        try ctx.constI32(transfer.kind),
+        try ctx.constI32(transfer.elem_len),
+        transfer.count,
+        transfer.stride,
+        transfer.base_ptr,
+    });
+}
+
+fn emitUnformattedReadBlockTransfer(ctx: *Context, builder: anytype, state: ValueRef, transfer: BlockTransfer) EmitError!void {
+    const decl = try ctx.ensureDeclRaw("col6forge_unformatted_read_stream_n", .i32, &[_]utils.IRType{ .ptr, .i32, .i32, .i32, .i32, .ptr }, false);
+    try builder.callTyped(null, .i32, decl, &.{
+        state,
+        try ctx.constI32(transfer.kind),
+        try ctx.constI32(transfer.elem_len),
+        transfer.count,
+        transfer.stride,
+        transfer.base_ptr,
+    });
+}
+
+fn emitUnformattedWriteStream(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
+    var chunk_start: usize = 0;
+    var idx: usize = 0;
+    while (idx < args.len) : (idx += 1) {
+        if (try emitBlockTransferIfPossible(ctx, builder, args[idx])) |transfer| {
+            try emitUnformattedWriteTypedSlice(ctx, builder, state, args[chunk_start..idx]);
+            try emitUnformattedWriteBlockTransfer(ctx, builder, state, transfer);
+            chunk_start = idx + 1;
+        }
+    }
+    try emitUnformattedWriteTypedSlice(ctx, builder, state, args[chunk_start..]);
+}
+
+fn emitUnformattedReadStream(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
+    var chunk_start: usize = 0;
+    var idx: usize = 0;
+    while (idx < args.len) : (idx += 1) {
+        if (try emitBlockTransferIfPossible(ctx, builder, args[idx])) |transfer| {
+            try emitUnformattedReadTypedSlice(ctx, builder, state, args[chunk_start..idx]);
+            try emitUnformattedReadBlockTransfer(ctx, builder, state, transfer);
+            chunk_start = idx + 1;
+        }
+    }
+    try emitUnformattedReadTypedSlice(ctx, builder, state, args[chunk_start..]);
+}
+
+fn impliedStrideForSymbolDim(ctx: *Context, builder: anytype, sym: anytype, loop_dim: usize) EmitError!ValueRef {
+    var stride = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
+    var idx: usize = 0;
+    while (idx < loop_dim) : (idx += 1) {
+        var extent = try expr.emitSymbolDimExtent(ctx, builder, sym, idx);
+        if (extent.ty != .i32) extent = try expr.coerce(ctx, builder, extent, .i32);
+        const mul_tmp = try ctx.nextTemp();
+        try builder.binary(mul_tmp, "mul", .i32, stride, extent);
+        stride = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
+    }
+    return stride;
+}
+
 fn findSingleArrayArg(ctx: *Context, args: []*ast.Expr) ?usize {
     var found: ?usize = null;
     for (args, 0..) |arg, idx| {
@@ -392,63 +671,30 @@ fn emitMixedArrayUnformattedRead(ctx: *Context, builder: anytype, read: ast.Read
 pub fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
-
-    if (try emitWholeArrayUnformattedWrite(ctx, builder, write, unit_i32)) {
-        return;
-    }
-    if (try emitMixedArrayUnformattedWrite(ctx, builder, write, unit_i32)) {
-        return;
-    }
-
-    if (try emitDynamicImpliedDoUnformattedWrite(ctx, builder, write, unit_i32)) {
-        return;
-    }
-
-    var expanded_args = try expandIoArgs(ctx, write.args);
-    defer expanded_args.deinit(ctx.allocator);
-
-    var args = try buildUnformattedWriteArgs(ctx, builder, expanded_args.items);
-    defer args.deinit();
-
-    const packed_args = try packUnformattedArgs(ctx, builder, &args);
-
-    const write_name = try ctx.ensureDeclRaw("col6forge_write_unformatted_typed", .void, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32 }, false);
-    try builder.callTyped(null, .void, write_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
+    const record_size = try emitUnformattedRecordSize(ctx, builder, write.args);
+    const begin_decl = try ctx.ensureDeclRaw("col6forge_unformatted_write_stream_begin", .ptr, &[_]utils.IRType{ .i32, .i32 }, false);
+    const state_tmp = try ctx.nextTemp();
+    try builder.callTyped(state_tmp, .ptr, begin_decl, &.{ unit_i32, record_size });
+    const state = ValueRef{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
+    try emitUnformattedWriteStream(ctx, builder, state, write.args);
+    const finish_decl = try ctx.ensureDeclRaw("col6forge_unformatted_write_stream_finish", .i32, &[_]utils.IRType{.ptr}, false);
+    try builder.callTyped(null, .i32, finish_decl, &.{state});
 }
 
 fn emitUnformattedReadImpl(ctx: *Context, builder: anytype, read: ast.ReadStmt, needs_status: bool) EmitError!ValueRef {
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
     const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
-
-    if (try emitWholeArrayUnformattedRead(ctx, builder, read, unit_i32)) |status| {
-        if (needs_status) return status;
-        return .{ .name = "0", .ty = .i32, .is_ptr = false };
-    }
-    if (try emitMixedArrayUnformattedRead(ctx, builder, read, unit_i32)) |status| {
-        if (needs_status) return status;
-        return .{ .name = "0", .ty = .i32, .is_ptr = false };
-    }
-
-    if (try emitDynamicImpliedDoUnformattedRead(ctx, builder, read, unit_i32)) |status| {
-        if (needs_status) return status;
-        return .{ .name = "0", .ty = .i32, .is_ptr = false };
-    }
-
-    var expanded_args = try expandIoArgs(ctx, read.args);
-    defer expanded_args.deinit(ctx.allocator);
-
-    var args = try buildUnformattedReadArgs(ctx, builder, expanded_args.items);
-    defer args.deinit();
-
-    const packed_args = try packUnformattedArgs(ctx, builder, &args);
-
-    const read_name = try ctx.ensureDeclRaw("col6forge_read_unformatted_typed", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32 }, false);
-    if (needs_status) {
-        const tmp = try ctx.nextTemp();
-        try builder.callTyped(tmp, .i32, read_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
-        return .{ .name = tmp, .ty = .i32, .is_ptr = false };
-    }
-    try builder.callTyped(null, .i32, read_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
+    const record_size = try emitUnformattedRecordSize(ctx, builder, read.args);
+    const begin_decl = try ctx.ensureDeclRaw("col6forge_unformatted_read_stream_begin", .ptr, &[_]utils.IRType{ .i32, .i32 }, false);
+    const state_tmp = try ctx.nextTemp();
+    try builder.callTyped(state_tmp, .ptr, begin_decl, &.{ unit_i32, record_size });
+    const state = ValueRef{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
+    try emitUnformattedReadStream(ctx, builder, state, read.args);
+    const finish_decl = try ctx.ensureDeclRaw("col6forge_unformatted_read_stream_finish", .i32, &[_]utils.IRType{.ptr}, false);
+    const status_tmp = try ctx.nextTemp();
+    try builder.callTyped(status_tmp, .i32, finish_decl, &.{state});
+    const status = ValueRef{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+    if (needs_status) return status;
     return .{ .name = "0", .ty = .i32, .is_ptr = false };
 }
 
