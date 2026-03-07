@@ -46,7 +46,6 @@ const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
 const countFormatDescriptors = io_utils.countFormatDescriptors;
 const emitTripletCount = io_utils.emitTripletCount;
-const emitTripletCountValues = io_utils.emitTripletCountValues;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const storeRuntimeI32Value = io_utils.storeRuntimeI32Value;
 
@@ -88,8 +87,6 @@ pub fn emitWrite(
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
     const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, write.unit) else null;
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value);
-    var expanded_values = try expandWriteArgs(ctx, builder, write.args);
-    defer expanded_values.deinit();
 
     switch (write.format) {
         .label => |label| {
@@ -100,10 +97,16 @@ pub fn emitWrite(
                 if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, unit_i32, is_internal, fmt_info.items)) {
                     return false;
                 }
+                if (hasRuntimeImpliedDoArgs(ctx, write.args)) return error.UnsupportedImpliedDo;
+                var expanded_values = try expandWriteArgs(ctx, builder, write.args);
+                defer expanded_values.deinit();
                 try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded_values);
                 return false;
             }
             if (ctx.findSymbol(label)) |sym| {
+                if (hasRuntimeImpliedDoArgs(ctx, write.args)) return error.UnsupportedImpliedDo;
+                var expanded_values = try expandWriteArgs(ctx, builder, write.args);
+                defer expanded_values.deinit();
                 if (sym.type_kind == .character) {
                     if (try formatFromCharArrayData(ctx, label)) |items| {
                         try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, &expanded_values);
@@ -124,10 +127,16 @@ pub fn emitWrite(
             if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, unit_i32, is_internal, items)) {
                 return false;
             }
+            if (hasRuntimeImpliedDoArgs(ctx, write.args)) return error.UnsupportedImpliedDo;
+            var expanded_values = try expandWriteArgs(ctx, builder, write.args);
+            defer expanded_values.deinit();
             try emitWriteFormatted(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, &expanded_values);
             return false;
         },
         .expr => |fmt_expr| {
+            if (hasRuntimeImpliedDoArgs(ctx, write.args)) return error.UnsupportedImpliedDo;
+            var expanded_values = try expandWriteArgs(ctx, builder, write.args);
+            defer expanded_values.deinit();
             try emitWriteFormatExpr(ctx, builder, write, fmt_expr, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, &expanded_values);
             return false;
         },
@@ -395,19 +404,13 @@ fn resolveDVectorFromImpliedDo(
     if (implied.items.len != 1) return null;
     if (implied.items[0].* != .call_or_subscript) return null;
 
-    const step_val: i64 = if (implied.step) |step_expr|
-        (try evalConstIntSem(ctx, step_expr)) orelse intLiteralValue(step_expr) orelse return null
-    else
-        1;
-    if (step_val != 1) return null;
-
     const call = implied.items[0].call_or_subscript;
     const sym = ctx.findSymbol(call.name) orelse return null;
     if (sym.type_kind != .double_precision) return null;
     if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
 
     const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return null;
-    const stride = impliedStrideForDim(ctx, builder, sym.dims, loop_dim) catch return null;
+    const stride = impliedStrideForDim(ctx, builder, sym, loop_dim, implied.step) catch return null;
     const count = try emitRangeCount(ctx, builder, implied.start, implied.end, implied.step);
 
     const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
@@ -453,7 +456,7 @@ fn resolveDVectorFromRangeSection(
     defer if (range.lower == null) ctx.allocator.destroy(start_expr);
     const end_expr = range.upper;
 
-    const stride = impliedStrideForDim(ctx, builder, sym.dims, dim) catch return null;
+    const stride = impliedStrideForDim(ctx, builder, sym, dim, range.stride) catch return null;
     const count = try emitRangeCount(ctx, builder, start_expr, end_expr, range.stride);
 
     const base_args = try ctx.allocator.alloc(*ast.Expr, call.args.len);
@@ -647,46 +650,81 @@ fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
     };
 }
 
-fn impliedStrideForDim(ctx: *Context, builder: anytype, dims: []*ast.Expr, loop_dim: usize) EmitError!ValueRef {
-    var stride = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-    var idx: usize = 0;
-    while (idx < loop_dim) : (idx += 1) {
-        const extent = try impliedDimExtent(ctx, builder, dims[idx]);
+fn impliedStrideForDim(
+    ctx: *Context,
+    builder: anytype,
+    sym: ast.sema.Symbol,
+    loop_dim: usize,
+    step_expr: ?*ast.Expr,
+) EmitError!ValueRef {
+    var stride = try expr.emitSymbolDimMultiplier(ctx, builder, sym, loop_dim);
+    stride = try coerceRuntimeI32(ctx, builder, stride);
+    if (step_expr) |step_node| {
+        const step = try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, step_node));
         const mul_tmp = try ctx.nextTemp();
-        try builder.binary(mul_tmp, "mul", .i32, stride, extent);
+        try builder.binary(mul_tmp, "mul", .i32, stride, step);
         stride = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
     }
     return stride;
 }
 
-fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) EmitError!ValueRef {
-    return switch (dim.*) {
+fn hasRuntimeImpliedDoArgs(ctx: *Context, args: []*ast.Expr) bool {
+    for (args) |arg| {
+        if (hasRuntimeImpliedDoExpr(ctx, arg)) return true;
+    }
+    return false;
+}
+
+fn hasRuntimeImpliedDoExpr(ctx: *Context, node: *ast.Expr) bool {
+    return switch (node.*) {
+        .unary => |un| hasRuntimeImpliedDoExpr(ctx, un.expr),
+        .binary => |bin| hasRuntimeImpliedDoExpr(ctx, bin.left) or hasRuntimeImpliedDoExpr(ctx, bin.right),
+        .complex_literal => |lit| hasRuntimeImpliedDoExpr(ctx, lit.real) or hasRuntimeImpliedDoExpr(ctx, lit.imag),
+        .call_or_subscript => |call| blk: {
+            for (call.args) |arg| {
+                if (hasRuntimeImpliedDoExpr(ctx, arg)) break :blk true;
+            }
+            break :blk false;
+        },
+        .substring => |sub| blk: {
+            for (sub.args) |arg| {
+                if (hasRuntimeImpliedDoExpr(ctx, arg)) break :blk true;
+            }
+            if (sub.start) |start_expr| {
+                if (hasRuntimeImpliedDoExpr(ctx, start_expr)) break :blk true;
+            }
+            if (sub.end) |end_expr| {
+                if (hasRuntimeImpliedDoExpr(ctx, end_expr)) break :blk true;
+            }
+            break :blk false;
+        },
         .dim_range => |range| blk: {
-            if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return error.UnsupportedImpliedDo;
-            var upper = try expr.emitExpr(ctx, builder, range.upper);
-            upper = try coerceRuntimeI32(ctx, builder, upper);
-            const lower = if (range.lower) |lower_expr|
-                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr))
-            else
-                ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-            const step = if (range.stride) |stride_expr|
-                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr))
-            else
-                ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-            break :blk try emitTripletCountValues(ctx, builder, lower, upper, step);
+            if (range.lower) |lower| {
+                if (hasRuntimeImpliedDoExpr(ctx, lower)) break :blk true;
+            }
+            if (hasRuntimeImpliedDoExpr(ctx, range.upper)) break :blk true;
+            if (range.stride) |stride_expr| {
+                if (hasRuntimeImpliedDoExpr(ctx, stride_expr)) break :blk true;
+            }
+            break :blk false;
         },
-        .literal => |lit| {
-            if (lit.kind == .assumed_size) return error.UnsupportedImpliedDo;
-            var value = try expr.emitExpr(ctx, builder, dim);
-            value = try coerceRuntimeI32(ctx, builder, value);
-            return value;
+        .implied_do => |implied| blk: {
+            if (!isStaticImpliedDoBound(ctx, implied.start)) break :blk true;
+            if (!isStaticImpliedDoBound(ctx, implied.end)) break :blk true;
+            if (implied.step) |step_expr| {
+                if (!isStaticImpliedDoBound(ctx, step_expr)) break :blk true;
+            }
+            for (implied.items) |item| {
+                if (hasRuntimeImpliedDoExpr(ctx, item)) break :blk true;
+            }
+            break :blk false;
         },
-        else => {
-            var value = try expr.emitExpr(ctx, builder, dim);
-            value = try coerceRuntimeI32(ctx, builder, value);
-            return value;
-        },
+        else => false,
     };
+}
+
+fn isStaticImpliedDoBound(ctx: *Context, node: *ast.Expr) bool {
+    return (evalConstIntSem(ctx, node) catch null) != null or intLiteralValue(node) != null;
 }
 
 pub fn emitRead(

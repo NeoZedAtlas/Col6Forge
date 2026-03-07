@@ -3,6 +3,8 @@ const std = @import("std");
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) void;
 
+extern fn col6forge_open(unit: c_int, file: ?[*]const u8, file_len: c_int, access: c_int, form: c_int, blank: c_int, status: c_int) void;
+extern fn col6forge_close(unit: c_int, status: c_int) void;
 extern fn col6forge_write_rendered_line_n(unit: c_int, text: ?[*]const u8, text_len: c_int, strict_status: c_int) c_int;
 extern fn col6forge_fmt_d(width: c_int, precision: c_int, exp_width: c_int, scale: c_int, sign_flag: c_int, value: f64) ?[*:0]u8;
 extern fn col6forge_fmt_release_all() void;
@@ -41,13 +43,6 @@ const LineBuffer = struct {
         return true;
     }
 
-    fn appendByte(self: *LineBuffer, ch: u8) bool {
-        if (!self.ensure(1)) return false;
-        self.data.?[self.len] = ch;
-        self.len += 1;
-        return true;
-    }
-
     fn appendRepeat(self: *LineBuffer, ch: u8, count: usize) bool {
         if (count == 0) return true;
         if (!self.ensure(count)) return false;
@@ -82,10 +77,12 @@ fn appendLenSlice(out: *LineBuffer, ptr: ?[*]const u8, len_in: c_int) bool {
     return out.appendSlice(ptr.?[0..len]);
 }
 
-fn checkedMul(a: usize, b: usize) ?usize {
-    const out = @mulWithOverflow(a, b);
-    if (out[1] != 0) return null;
-    return out[0];
+fn checkedDataElemPtr(base: [*]const f64, index: usize, stride: c_int) ?*const f64 {
+    const elem_off = std.math.mul(i128, @as(i128, @intCast(index)), @as(i128, stride)) catch return null;
+    const byte_off = std.math.mul(i128, elem_off, @sizeOf(f64)) catch return null;
+    const addr = std.math.add(i128, @as(i128, @intCast(@intFromPtr(base))), byte_off) catch return null;
+    if (addr < 0 or addr > std.math.maxInt(usize)) return null;
+    return @ptrFromInt(@as(usize, @intCast(addr)));
 }
 
 fn flushLine(unit: c_int, out: *LineBuffer) c_int {
@@ -123,9 +120,8 @@ pub export fn col6forge_write_fmt_d_implied(
         return flushLine(unit, &out);
     }
 
-    if (base == null or stride <= 0 or per_line <= 0) return 1;
+    if (base == null or stride == 0 or per_line <= 0) return 1;
     const n: usize = @intCast(count);
-    const stride_u: usize = @intCast(stride);
     const per_line_u: usize = @intCast(per_line);
     const indent_u: usize = @intCast(@max(indent, 0));
     const data = base.?;
@@ -140,8 +136,8 @@ pub export fn col6forge_write_fmt_d_implied(
             if (!out.appendRepeat(' ', indent_u)) return 1;
         }
 
-        const idx = checkedMul(i, stride_u) orelse return 1;
-        const txt = col6forge_fmt_d(width, precision, 0, 0, 0, data[idx]) orelse return 1;
+        const value_ptr = checkedDataElemPtr(data, i, stride) orelse return 1;
+        const txt = col6forge_fmt_d(width, precision, 0, 0, 0, value_ptr.*) orelse return 1;
         if (!out.appendSlice(txt[0..cstrlen(txt)])) return 1;
 
         const line_end = ((i + 1) % per_line_u) == 0 or (i + 1) == n;
@@ -152,4 +148,50 @@ pub export fn col6forge_write_fmt_d_implied(
     }
 
     return 0;
+}
+
+test "col6forge_write_fmt_d_implied honors signed stride" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    const file_name = "fmt_d_implied_neg.txt";
+    const file_path = try std.fs.path.join(allocator, &.{ dir_path, file_name });
+    defer allocator.free(file_path);
+
+    const unit: c_int = 41;
+    col6forge_open(unit, file_path.ptr, @intCast(file_path.len), 0, 0, 0, 0);
+
+    const values = [_]f64{ 11.0, 22.0, 33.0, 44.0 };
+    try testing.expectEqual(
+        @as(c_int, 0),
+        col6forge_write_fmt_d_implied(
+            unit,
+            null,
+            0,
+            null,
+            0,
+            null,
+            0,
+            2,
+            -2,
+            @ptrCast(&values[3]),
+            0,
+            4,
+            0,
+            2,
+        ),
+    );
+
+    col6forge_close(unit, 0);
+    const written = try tmp.dir.readFileAlloc(allocator, file_name, 256);
+    defer allocator.free(written);
+
+    const first = std.mem.indexOf(u8, written, "0.44D+02") orelse return error.TestUnexpectedResult;
+    const second = std.mem.indexOf(u8, written, "0.22D+02") orelse return error.TestUnexpectedResult;
+    try testing.expect(first < second);
 }
