@@ -461,13 +461,13 @@ fn parseTokens(a: std.mem.Allocator, trimmed: []const u8) ![]Token {
     return toks;
 }
 
-const LowerMode = enum {
+pub const LowerMode = enum {
     write_external,
     write_internal,
     read_any,
 };
 
-const LoweredFormat = struct {
+pub const LoweredFormat = struct {
     bytes: []u8,
     heap_owned: bool,
 };
@@ -490,7 +490,7 @@ fn lowerFormatWithAlloc(
     };
 }
 
-fn lowerFormat(
+pub fn lowerFormat(
     mode: LowerMode,
     fmt_ptr: ?[*]const u8,
     fmt_len: c_int,

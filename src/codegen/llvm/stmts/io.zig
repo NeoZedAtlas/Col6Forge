@@ -28,6 +28,7 @@ const emitReadDynamicFormatStatus = formatted.emitReadDynamicFormatStatus;
 const emitReadFormatExpr = formatted.emitReadFormatExpr;
 const emitReadFormatExprStatus = formatted.emitReadFormatExprStatus;
 const formatFromCharArrayData = formatted.formatFromCharArrayData;
+const stream_read = @import("io/formatted/stream_read.zig");
 const emitDirectWrite = direct.emitDirectWrite;
 const emitDirectRead = direct.emitDirectRead;
 const emitListDirectedWrite = list_directed.emitListDirectedWrite;
@@ -48,6 +49,8 @@ const countFormatDescriptors = io_utils.countFormatDescriptors;
 const emitTripletCount = io_utils.emitTripletCount;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const storeRuntimeI32Value = io_utils.storeRuntimeI32Value;
+const emitReadFormattedStreamStatic = stream_read.emitReadFormattedStreamStatic;
+const emitReadFormattedStreamExpr = stream_read.emitReadFormattedStreamExpr;
 
 pub const emitOpen = file_control.emitOpen;
 pub const emitInquire = file_control.emitInquire;
@@ -734,18 +737,18 @@ pub fn emitRead(
     next_block: []const u8,
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!bool {
-    const needs_status = read.iostat != null or read.err_label != null or read.end_label != null;
+    const prepared = try prepareReadContext(ctx, builder, read);
 
     if (read.rec != null) {
         try emitDirectRead(ctx, builder, read);
-        if (needs_status) {
+        if (prepared.needs_status) {
             const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
             return emitIoStatusBranches(ctx, builder, read, zero, next_block, local_label_map);
         }
         return false;
     }
     if (read.format == .list_directed) {
-        if (needs_status) {
+        if (prepared.needs_status) {
             const status = try emitListDirectedReadStatus(ctx, builder, read);
             return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
         }
@@ -753,71 +756,196 @@ pub fn emitRead(
         return false;
     }
     if (read.format == .none) {
-        if (needs_status) {
+        if (prepared.needs_status) {
             const status = try emitUnformattedReadStatus(ctx, builder, read);
             return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
         }
         try emitUnformattedRead(ctx, builder, read);
         return false;
     }
+    const status = try emitPreparedFormattedRead(ctx, builder, read, prepared);
+    if (prepared.needs_status) {
+        return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
+    }
+    return false;
+}
 
+const PreparedReadContext = struct {
+    needs_status: bool,
+    has_runtime_implied_do: bool,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+};
+
+const ReadFormatDispatch = union(enum) {
+    static_items: []const ast.FormatItem,
+    dynamic_label_var: []const u8,
+    runtime_expr: *ast.Expr,
+};
+
+fn prepareReadContext(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!PreparedReadContext {
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
     const unit_char_len = charLenForExpr(ctx, read.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
-    const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, read.unit) else null;
-    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value);
-    var expanded = try expandReadTargets(ctx, builder, read.args);
-    defer expanded.deinit();
+    return .{
+        .needs_status = read.iostat != null or read.err_label != null or read.end_label != null,
+        .has_runtime_implied_do = hasRuntimeImpliedDoArgs(ctx, read.args),
+        .unit_value = unit_value,
+        .unit_char_len = unit_char_len,
+        .unit_record_count = if (is_internal) internalUnitRecordCount(ctx, read.unit) else null,
+        .is_internal = is_internal,
+        .unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value),
+    };
+}
 
-    switch (read.format) {
+fn resolveReadFormatDispatch(ctx: *Context, read: ast.ReadStmt) EmitError!ReadFormatDispatch {
+    return switch (read.format) {
         .label => |label| {
-            if (ctx.formats.get(label)) |fmt_info| {
-                if (needs_status) {
-                    const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded);
-                    return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
-                }
-                try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_info.items, &expanded);
-                return false;
-            }
+            if (ctx.formats.get(label)) |fmt_info| return .{ .static_items = fmt_info.items };
             if (ctx.findSymbol(label)) |sym| {
                 if (sym.type_kind == .character) {
-                    if (try formatFromCharArrayData(ctx, label)) |items| {
-                        if (needs_status) {
-                            const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, &expanded);
-                            return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
-                        }
-                        try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, items, &expanded);
-                        return false;
-                    }
+                    if (try formatFromCharArrayData(ctx, label)) |items| return .{ .static_items = items };
                     return error.MissingFormatLabel;
                 }
-                if (needs_status) {
-                    const status = try emitReadDynamicFormatStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, label, &expanded);
-                    return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
-                }
-                try emitReadDynamicFormat(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, label, &expanded);
-                return false;
+                return .{ .dynamic_label_var = label };
             }
             return error.MissingFormatLabel;
         },
-        .inline_items => |items| {
-            const fmt_items = items;
-            if (needs_status) {
-                const status = try emitReadFormattedStatus(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_items, &expanded);
-                return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
-            }
-            try emitReadFormatted(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, fmt_items, &expanded);
-            return false;
-        },
-        .expr => |fmt_expr| {
-            if (needs_status) {
-                const status = try emitReadFormatExprStatus(ctx, builder, read, fmt_expr, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, &expanded);
-                return emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
-            }
-            try emitReadFormatExpr(ctx, builder, read, fmt_expr, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, &expanded);
-            return false;
-        },
+        .inline_items => |items| .{ .static_items = items },
+        .expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
         .none => unreachable,
         .list_directed => unreachable,
+    };
+}
+
+fn emitPreparedFormattedRead(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    prepared: PreparedReadContext,
+) EmitError!ValueRef {
+    const dispatch = try resolveReadFormatDispatch(ctx, read);
+
+    if (prepared.has_runtime_implied_do) {
+        return switch (dispatch) {
+            .static_items => |items| emitReadFormattedStreamStatic(
+                ctx,
+                builder,
+                read,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                items,
+                prepared.needs_status,
+            ),
+            .runtime_expr => |fmt_expr| emitReadFormattedStreamExpr(
+                ctx,
+                builder,
+                read,
+                fmt_expr,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                prepared.needs_status,
+            ),
+            .dynamic_label_var => error.UnsupportedImpliedDo,
+        };
     }
+
+    var expanded = try expandReadTargets(ctx, builder, read.args);
+    defer expanded.deinit();
+
+    return switch (dispatch) {
+        .static_items => |items| if (prepared.needs_status)
+            try emitReadFormattedStatus(
+                ctx,
+                builder,
+                read,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                items,
+                &expanded,
+            )
+        else blk: {
+            try emitReadFormatted(
+                ctx,
+                builder,
+                read,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                items,
+                &expanded,
+            );
+            break :blk ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+        },
+        .dynamic_label_var => |label| if (prepared.needs_status)
+            try emitReadDynamicFormatStatus(
+                ctx,
+                builder,
+                read,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                label,
+                &expanded,
+            )
+        else blk: {
+            try emitReadDynamicFormat(
+                ctx,
+                builder,
+                read,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                label,
+                &expanded,
+            );
+            break :blk ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+        },
+        .runtime_expr => |fmt_expr| if (prepared.needs_status)
+            try emitReadFormatExprStatus(
+                ctx,
+                builder,
+                read,
+                fmt_expr,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                &expanded,
+            )
+        else blk: {
+            try emitReadFormatExpr(
+                ctx,
+                builder,
+                read,
+                fmt_expr,
+                prepared.unit_value,
+                prepared.unit_char_len,
+                prepared.unit_record_count,
+                prepared.is_internal,
+                prepared.unit_i32,
+                &expanded,
+            );
+            break :blk ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+        },
+    };
 }

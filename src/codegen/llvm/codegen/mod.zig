@@ -2148,3 +2148,100 @@ test "formatted write rejects runtime implied-do fallback expansion" {
         emitModuleToWriter(&writer, allocator, program, sem_prog, "fmt_runtime_implied_do.f", .{}),
     );
 }
+
+test "formatted read uses stream lowering for runtime implied-do with runtime format expr" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const unit_expr = try makeLiteralExpr(a, .integer, "5");
+    const fmt_expr = try makeIdentExpr(a, "FMT");
+    const n_expr = try makeIdentExpr(a, "N");
+    const i_expr = try makeIdentExpr(a, "I");
+    const one_expr = try makeLiteralExpr(a, .integer, "1");
+
+    const arr_args = try a.alloc(*input.Expr, 1);
+    arr_args[0] = i_expr;
+    const arr_ref = try a.create(input.Expr);
+    arr_ref.* = .{ .call_or_subscript = .{ .name = "A", .args = arr_args } };
+
+    const implied_items = try a.alloc(*input.Expr, 1);
+    implied_items[0] = arr_ref;
+    const implied = try a.create(input.Expr);
+    implied.* = .{ .implied_do = .{
+        .items = implied_items,
+        .var_name = "I",
+        .start = one_expr,
+        .end = n_expr,
+        .step = null,
+    } };
+
+    const read_args = try a.alloc(*input.Expr, 2);
+    read_args[0] = n_expr;
+    read_args[1] = implied;
+
+    const stmt_list = try a.alloc(input.Stmt, 1);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .read = .{
+            .unit = unit_expr,
+            .format = .{ .expr = fmt_expr },
+            .rec = null,
+            .args = read_args,
+            .err_label = null,
+            .iostat = null,
+            .end_label = null,
+        } },
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const dim32 = try makeLiteralExpr(a, .integer, "32");
+    const arr_dims = try a.alloc(*input.Expr, 1);
+    arr_dims[0] = dim32;
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 4);
+    sem_symbols[0] = makeLocalScalarSymbol("N", .integer);
+    sem_symbols[1] = makeLocalScalarSymbol("I", .integer);
+    sem_symbols[2] = makeLocalArraySymbol("A", .integer, arr_dims);
+    sem_symbols[3] = .{
+        .name = "FMT",
+        .type_kind = .character,
+        .dims = &[_]input.ArrayDim{},
+        .storage = .local,
+        .char_len = 32,
+    };
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "fmt_runtime_implied_read.f", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "call ptr @col6forge_formatted_read_stream_begin_dynamic") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call i32 @col6forge_formatted_read_stream_next") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call i32 @col6forge_formatted_read_stream_finish") != null);
+}
