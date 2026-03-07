@@ -10,9 +10,9 @@ const StorageClass = symbols.StorageClass;
 const CharacterLengthKind = symbols.CharacterLengthKind;
 
 pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
-    const resolved_type_kind = try resolvedDeclTypeKind(self, decl.type_kind, decl.kind_selector);
+    const resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.kind_selector);
     for (decl.items) |item| {
-        try applyDeclarator(self, resolved_type_kind, item, .local, true);
+        try applyDeclarator(self, resolved_type, item, .local, true);
     }
 }
 
@@ -21,7 +21,7 @@ pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
 // on declaration context.
 pub fn applyDeclarator(
     self: *context.Context,
-    type_kind: ast.TypeKind,
+    type_spec: symbols.TypeSpec,
     item: ast.Declarator,
     storage: StorageClass,
     explicit_type: bool,
@@ -31,10 +31,12 @@ pub fn applyDeclarator(
         return error.DuplicateDeclaration;
     }
     if (explicit_type) {
-        self.symbols.items[idx].type_kind = type_kind;
+        self.symbols.items[idx].type_kind = type_spec.lowered_kind;
+        self.symbols.items[idx].type_spec = type_spec;
         self.symbols.items[idx].type_explicit = true;
     } else if (!self.symbols.items[idx].type_explicit) {
-        self.symbols.items[idx].type_kind = type_kind;
+        self.symbols.items[idx].type_kind = type_spec.lowered_kind;
+        self.symbols.items[idx].type_spec = type_spec;
     }
     if (item.dims.len > 0) {
         if (self.symbols.items[idx].dims.len > 0) {
@@ -55,6 +57,7 @@ pub fn applyDeclarator(
     if (effective_type != .character) {
         self.symbols.items[idx].char_len_kind = .none;
         self.symbols.items[idx].char_len = null;
+        self.symbols.items[idx].type_spec = self.symbols.items[idx].type_spec.withCharacterLength(.none, null);
         return;
     }
 
@@ -66,6 +69,7 @@ pub fn applyDeclarator(
         if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) {
             self.symbols.items[idx].char_len_kind = .assumed;
             self.symbols.items[idx].char_len = null;
+            self.symbols.items[idx].type_spec = self.symbols.items[idx].type_spec.withCharacterLength(.assumed, null);
             return;
         }
         if (try constants.evalConst(self, len_expr)) |value| {
@@ -85,6 +89,7 @@ pub fn applyDeclarator(
             if (allowsDeferredCharacterLength(self.symbols.items[idx])) {
                 self.symbols.items[idx].char_len_kind = .deferred;
                 self.symbols.items[idx].char_len = null;
+                self.symbols.items[idx].type_spec = self.symbols.items[idx].type_spec.withCharacterLength(.deferred, null);
                 return;
             }
             return error.InvalidCharLen;
@@ -96,6 +101,7 @@ pub fn applyDeclarator(
     }
     self.symbols.items[idx].char_len_kind = CharacterLengthKind.constant;
     self.symbols.items[idx].char_len = length;
+    self.symbols.items[idx].type_spec = self.symbols.items[idx].type_spec.withCharacterLength(.constant, length);
 }
 
 fn allowsDeferredCharacterLength(sym: symbols.Symbol) bool {
@@ -104,12 +110,12 @@ fn allowsDeferredCharacterLength(sym: symbols.Symbol) bool {
     return false;
 }
 
-fn resolvedDeclTypeKind(
+fn resolvedDeclTypeSpec(
     self: *context.Context,
     base_type_kind: ast.TypeKind,
     kind_selector: ?*ast.Expr,
-) !ast.TypeKind {
-    if (kind_selector == null) return base_type_kind;
+) !symbols.TypeSpec {
+    if (kind_selector == null) return symbols.TypeSpec.fromResolvedKind(base_type_kind, base_type_kind, null);
     const selector_value = try constants.evalConst(self, kind_selector.?);
-    return type_kind_selector.resolveWithConst(base_type_kind, kind_selector, selector_value);
+    return type_kind_selector.resolveSpecWithConst(base_type_kind, kind_selector, selector_value);
 }

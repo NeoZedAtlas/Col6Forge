@@ -14,6 +14,7 @@ pub const SemanticUnit = symbols.SemanticUnit;
 pub const KnownFunctionType = struct {
     name: []const u8,
     type_kind: ast.TypeKind,
+    type_spec: symbols.TypeSpec = symbols.TypeSpec.fromResolvedKind(.real, .real, null),
 };
 
 pub const KnownProcedureSig = struct {
@@ -58,6 +59,7 @@ pub fn analyzeProgramWithKnownAndOptions(
     diagnostic.clear();
     const mutable_program = program;
     var known_function_types = std.StringHashMap(ast.TypeKind).init(arena);
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena);
     var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena);
     var known_host_symbols = std.StringHashMap(symbols.Symbol).init(arena);
     var host_symbols_active = false;
@@ -65,6 +67,7 @@ pub fn analyzeProgramWithKnownAndOptions(
     for (known_fn_types) |known| {
         const key = try symbol_lookup.lowerDup(arena, known.name);
         try known_function_types.put(key, known.type_kind);
+        try known_function_type_specs.put(key, known.type_spec);
     }
     for (known_proc_sigs) |known| {
         const key = try symbol_lookup.lowerDup(arena, known.name);
@@ -78,7 +81,9 @@ pub fn analyzeProgramWithKnownAndOptions(
     for (mutable_program.units) |unit| {
         if (unit.kind == .function) {
             const key = try symbol_lookup.lowerDup(arena, unit.name);
-            try known_function_types.put(key, function_type.inferFunctionType(unit));
+            const inferred = function_type.inferFunctionTypeSpec(unit);
+            try known_function_types.put(key, inferred.lowered_kind);
+            try known_function_type_specs.put(key, inferred);
         }
         if (unit.kind == .function or unit.kind == .subroutine) {
             const key = try symbol_lookup.lowerDup(arena, unit.name);
@@ -97,6 +102,7 @@ pub fn analyzeProgramWithKnownAndOptions(
             unit,
             &.{},
             &known_function_types,
+            &known_function_type_specs,
             &known_procedure_sigs,
             &known_host_symbols,
             active_host_owner,

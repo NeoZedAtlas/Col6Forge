@@ -139,6 +139,8 @@ test "resolve_expr intrinsic MAX keeps INTEGER type for homogeneous INTEGER args
         found = true;
         try testing.expect(sym.is_intrinsic);
         try testing.expectEqual(ast.TypeKind.integer, sym.type_kind);
+        try testing.expectEqual(ast.TypeKind.integer, sym.type_spec.declared_kind);
+        try testing.expectEqual(ast.TypeKind.integer, sym.type_spec.lowered_kind);
     }
     try testing.expect(found);
 }

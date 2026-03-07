@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const expressions = @import("resolve_expr.zig");
 const symbols_mod = @import("resolve_symbols.zig");
@@ -188,26 +189,30 @@ fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_nam
     const sym = &self.symbols.items[idx];
     sym.name = local_name;
 
-    if (symbols_mod.lookupKnownProcedureSig(self, remote_name)) |sig| {
-        sym.is_external = true;
-        sym.kind = switch (sig.kind) {
-            .function => .function,
-            .subroutine => .subroutine,
-            else => sym.kind,
-        };
-        if (sig.kind == .function) {
-            if (symbols_mod.lookupKnownFunctionType(self, remote_name)) |type_kind| {
-                sym.type_kind = type_kind;
-                sym.type_explicit = true;
+        if (symbols_mod.lookupKnownProcedureSig(self, remote_name)) |sig| {
+            sym.is_external = true;
+            sym.kind = switch (sig.kind) {
+                .function => .function,
+                .subroutine => .subroutine,
+                else => sym.kind,
+            };
+            if (sig.kind == .function) {
+                if (symbols_mod.lookupKnownFunctionType(self, remote_name)) |type_kind| {
+                    sym.type_kind = type_kind;
+                    sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, remote_name) orelse
+                        symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(type_kind), type_kind, null);
+                    sym.type_explicit = true;
+                }
             }
+            return;
         }
-        return;
-    }
 
     if (symbols_mod.lookupKnownFunctionType(self, remote_name)) |type_kind| {
         sym.is_external = true;
         sym.kind = .function;
         sym.type_kind = type_kind;
+        sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, remote_name) orelse
+            symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(type_kind), type_kind, null);
         sym.type_explicit = true;
     }
 }
@@ -221,9 +226,11 @@ fn bindBuiltinUseImport(
     const sym = &self.symbols.items[idx];
     sym.name = local_name;
     sym.type_kind = builtin.type_kind;
+    sym.type_spec = symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(builtin.type_kind), builtin.type_kind, null);
     sym.dims = &.{};
     sym.char_len_kind = .none;
     sym.char_len = null;
+    sym.type_spec = sym.type_spec.withCharacterLength(.none, null);
     sym.kind = .parameter;
     sym.storage = .local;
     sym.const_value = builtin.value;

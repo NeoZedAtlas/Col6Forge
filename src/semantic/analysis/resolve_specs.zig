@@ -27,7 +27,8 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {
         .implicit => |imp| {
             for (imp.rules) |rule| {
-                const resolved_rule_kind = try resolvedDeclTypeKind(self, rule.type_kind, rule.kind_selector);
+                const resolved_rule_type = try resolvedDeclTypeSpec(self, rule.type_kind, rule.kind_selector);
+                const resolved_rule_kind = resolved_rule_type.lowered_kind;
                 try ensureImplicitRuleNoOverlap(self, rule.start, rule.end);
                 var char_len: ?usize = null;
                 if (resolved_rule_kind == .character) {
@@ -55,12 +56,20 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                     .start = rule.start,
                     .end = rule.end,
                     .type_kind = resolved_rule_kind,
+                    .type_spec = resolved_rule_type.withCharacterLength(
+                        if (resolved_rule_kind == .character) .constant else .none,
+                        if (resolved_rule_kind == .character) char_len orelse 1 else null,
+                    ),
                     .char_len = char_len,
                 });
                 applyImplicitRuleToExistingSymbols(self, .{
                     .start = rule.start,
                     .end = rule.end,
                     .type_kind = resolved_rule_kind,
+                    .type_spec = resolved_rule_type.withCharacterLength(
+                        if (resolved_rule_kind == .character) .constant else .none,
+                        if (resolved_rule_kind == .character) char_len orelse 1 else null,
+                    ),
                     .char_len = char_len,
                 });
             }
@@ -104,9 +113,11 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                         .string => |bytes| {
                             sym.char_len_kind = .constant;
                             sym.char_len = bytes.len;
+                            sym.type_spec = sym.type_spec.withCharacterLength(.constant, bytes.len);
                         },
                         else => {
                             sym.char_len = null;
+                            sym.type_spec = sym.type_spec.withCharacterLength(sym.char_len_kind, null);
                         },
                     }
                 }
@@ -115,7 +126,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         .common => |common| {
             for (common.blocks) |block| {
                 for (block.items) |item| {
-                    try decls.applyDeclarator(self, symbols_mod.implicitType(self, item.name), item, .common, false);
+                    try decls.applyDeclarator(self, symbols_mod.implicitTypeSpec(self, item.name), item, .common, false);
                 }
             }
         },
@@ -242,14 +253,14 @@ fn constValueKindName(value: symbols.ConstValue) []const u8 {
     };
 }
 
-fn resolvedDeclTypeKind(
+fn resolvedDeclTypeSpec(
     self: *context.Context,
     base_type_kind: ast.TypeKind,
     kind_selector: ?*ast.Expr,
-) !ast.TypeKind {
-    if (kind_selector == null) return base_type_kind;
+) !symbols.TypeSpec {
+    if (kind_selector == null) return symbols.TypeSpec.fromResolvedKind(base_type_kind, base_type_kind, null);
     const selector_value = try constants.evalConst(self, kind_selector.?);
-    return type_kind_selector.resolveWithConst(base_type_kind, kind_selector, selector_value);
+    return type_kind_selector.resolveSpecWithConst(base_type_kind, kind_selector, selector_value);
 }
 
 fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.ImplicitRule) void {
@@ -259,12 +270,15 @@ fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.Impl
         const first = std.ascii.toUpper(sym.name[0]);
         if (first < rule.start or first > rule.end) continue;
         sym.type_kind = rule.type_kind;
+        sym.type_spec = rule.type_spec;
         if (rule.type_kind == .character) {
             sym.char_len_kind = .constant;
             sym.char_len = rule.char_len orelse 1;
+            sym.type_spec = sym.type_spec.withCharacterLength(.constant, sym.char_len);
         } else {
             sym.char_len_kind = .none;
             sym.char_len = null;
+            sym.type_spec = sym.type_spec.withCharacterLength(.none, null);
         }
     }
 }

@@ -107,4 +107,5 @@ fn clearStmtResolutionCaches(ctx: *context.Context) void {
     ctx.ref_kind_index.clearRetainingCapacity();
     ctx.ref_symbol_index.clearRetainingCapacity();
     ctx.expr_type_cache.clearRetainingCapacity();
+    ctx.expr_type_spec_cache.clearRetainingCapacity();
 }

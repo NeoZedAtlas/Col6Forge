@@ -19,6 +19,7 @@ pub const const_eval_bridge = @import("split/const_eval_bridge.zig");
 
 pub const SymbolKind = symbols.SymbolKind;
 pub const StorageClass = symbols.StorageClass;
+pub const TypeSpec = symbols.TypeSpec;
 pub const Symbol = symbols.Symbol;
 pub const ConstValue = symbols.ConstValue;
 pub const ImplicitRule = symbols.ImplicitRule;
@@ -39,6 +40,7 @@ pub const analyzeProgramWithKnown = api.analyzeProgramWithKnown;
 pub const analyzeProgramWithOptions = api.analyzeProgramWithOptions;
 pub const analyzeProgramWithKnownAndOptions = api.analyzeProgramWithKnownAndOptions;
 pub const inferFunctionType = function_type.inferFunctionType;
+pub const inferFunctionTypeSpec = function_type.inferFunctionTypeSpec;
 pub const printSemantic = printer.printSemantic;
 pub const takeDiagnostic = api.takeDiagnostic;
 pub const clearDiagnostic = api.clearDiagnostic;

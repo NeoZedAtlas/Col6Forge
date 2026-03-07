@@ -1,4 +1,5 @@
 const ast = @import("../../ast/nodes.zig");
+const type_spec = @import("../type_spec.zig");
 
 pub const SymbolKind = enum {
     variable,
@@ -13,16 +14,13 @@ pub const StorageClass = enum {
     dummy,
 };
 
-pub const CharacterLengthKind = enum {
-    none,
-    constant,
-    assumed,
-    deferred,
-};
+pub const CharacterLengthKind = type_spec.CharacterLengthKind;
+pub const TypeSpec = type_spec.TypeSpec;
 
 pub const Symbol = struct {
     name: []const u8,
     type_kind: ast.TypeKind,
+    type_spec: TypeSpec = TypeSpec.fromKind(.real),
     dims: []*ast.Expr,
     char_len_kind: CharacterLengthKind = .none,
     char_len: ?usize,
@@ -77,6 +75,7 @@ pub const ImplicitRule = struct {
     start: u8,
     end: u8,
     type_kind: ast.TypeKind,
+    type_spec: TypeSpec = TypeSpec.fromKind(.real),
     char_len: ?usize,
 };
 

@@ -3,7 +3,7 @@ const ast = @import("../../../../input.zig");
 const llvm_types = @import("../../../types.zig");
 const context = @import("../../../codegen/context.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
-const format_items = @import("../../../../../format/items.zig");
+const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -72,7 +72,7 @@ fn lowerStaticWriteStreamFormatWithBuilder(
     fmt_items: []const ast.FormatItem,
     is_internal: bool,
 ) EmitError!ValueRef {
-    const prepared = try format_items.ensureFlatWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    const prepared = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
     defer prepared.deinit(ctx.allocator);
 
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
@@ -80,7 +80,7 @@ fn lowerStaticWriteStreamFormatWithBuilder(
 
     var sign_plus = false;
     var scale_factor: i32 = 0;
-    for (prepared.items) |item| {
+    for (prepared.ops) |item| {
         switch (item) {
             .literal => |text| try appendEscapedLiteral(&fmt_buf, text),
             .spaces => |count| {
@@ -107,29 +107,29 @@ fn lowerStaticWriteStreamFormatWithBuilder(
                     }
                 }
             },
-            .int => |spec| try appendIntDescriptor(&fmt_buf, spec.width, spec.min_digits, sign_plus),
-            .real_fixed => |spec| try appendFixedDescriptor(&fmt_buf, spec.width, spec.precision, sign_plus),
-            .real => |spec| try appendRealDescriptor(
-                &fmt_buf,
-                switch (spec.kind) {
-                    .e => 'E',
-                    .d => 'D',
-                    .g => 'G',
-                },
-                spec.width,
-                spec.precision,
-                spec.exp_width,
-                scale_factor,
-                sign_plus,
-            ),
-            .char => |spec| try fmt_buf.writer().print("%S{d};", .{spec.width}),
-            .logical => |spec| try fmt_buf.writer().print("%L{d};", .{spec.width}),
+            .descriptor => |descriptor| switch (descriptor) {
+                .int => |spec| try appendIntDescriptor(&fmt_buf, spec.width, spec.min_digits, sign_plus),
+                .real_fixed => |spec| try appendFixedDescriptor(&fmt_buf, spec.width, spec.precision, sign_plus),
+                .real => |spec| try appendRealDescriptor(
+                    &fmt_buf,
+                    switch (spec.kind) {
+                        .e => 'E',
+                        .d => 'D',
+                        .g => 'G',
+                    },
+                    spec.width,
+                    spec.precision,
+                    spec.exp_width,
+                    scale_factor,
+                    sign_plus,
+                ),
+                .char => |spec| try fmt_buf.writer().print("%S{d};", .{spec.width}),
+                .logical => |spec| try fmt_buf.writer().print("%L{d};", .{spec.width}),
+            },
             .sign_control => |ctrl| sign_plus = (ctrl == .plus),
             .scale => |value| scale_factor = value,
             .blank_control => {},
             .colon => {},
-            .repeat_group => unreachable,
-            .reversion_offset => unreachable,
             .reversion_anchor => try fmt_buf.append(0x03),
         }
     }

@@ -3,7 +3,7 @@ const ast = @import("../ast/nodes.zig");
 const symbols = @import("symbol/mod.zig");
 
 pub fn resolve(base: ast.TypeKind, selector: ?*ast.Expr) ast.TypeKind {
-    return resolveWithConst(base, selector, null);
+    return resolveSpecWithConst(base, selector, null).lowered_kind;
 }
 
 pub fn resolveWithConst(
@@ -11,11 +11,44 @@ pub fn resolveWithConst(
     selector: ?*ast.Expr,
     const_value: ?symbols.ConstValue,
 ) ast.TypeKind {
-    if (selector == null) return base;
+    return resolveSpecWithConst(base, selector, const_value).lowered_kind;
+}
+
+pub fn resolveSpec(base: ast.TypeKind, selector: ?*ast.Expr) symbols.TypeSpec {
+    return resolveSpecWithConst(base, selector, null);
+}
+
+pub fn resolveSpecWithConst(
+    base: ast.TypeKind,
+    selector: ?*ast.Expr,
+    const_value: ?symbols.ConstValue,
+) symbols.TypeSpec {
+    if (selector == null) return symbols.TypeSpec.fromResolvedKind(base, base, null);
+    const kind_value = selectorValueAsInteger(const_value) orelse selectorExprAsInteger(selector.?);
     return switch (base) {
-        .real => resolveReal(selector.?, const_value),
-        .complex => resolveComplex(selector.?, const_value),
-        else => base,
+        .real => .{
+            .declared_kind = .real,
+            .lowered_kind = resolveReal(selector.?, const_value),
+            .kind_value = kind_value,
+            .char_len_kind = .none,
+            .char_len = null,
+        },
+        .complex => .{
+            .declared_kind = .complex,
+            .lowered_kind = resolveComplex(selector.?, const_value),
+            .kind_value = kind_value,
+            .char_len_kind = .none,
+            .char_len = null,
+        },
+        .integer, .logical => .{
+            .declared_kind = base,
+            .lowered_kind = base,
+            .kind_value = kind_value,
+            .char_len_kind = .none,
+            .char_len = null,
+        },
+        .character => symbols.TypeSpec.fromResolvedKind(.character, .character, kind_value),
+        else => symbols.TypeSpec.fromResolvedKind(base, base, kind_value),
     };
 }
 

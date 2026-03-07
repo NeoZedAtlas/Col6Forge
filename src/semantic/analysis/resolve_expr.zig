@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const evaluator = @import("../evaluator.zig");
+const intrinsic_signature = @import("../intrinsic_signature.zig");
 const context = @import("context.zig");
 const symbols_mod = @import("resolve_symbols.zig");
 
@@ -15,7 +16,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         .identifier => |name| {
             const idx = try symbols_mod.ensureSymbol(self, name);
             try self.ref_symbol_index.put(@intFromPtr(expr), idx);
-            try cacheExprType(self, expr, self.symbols.items[idx].type_kind);
+            try cacheExprType(self, expr, self.symbols.items[idx].type_spec);
         },
         .call_or_subscript => |call| {
             for (call.args) |arg| {
@@ -25,7 +26,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             const idx = try symbols_mod.ensureSymbol(self, call.name);
             var sym = self.symbols.items[idx];
             var kind: ResolvedRefKind = .unknown;
-            var resolved_ty = sym.type_kind;
+            var resolved_spec = sym.type_spec;
             if (sym.storage == .dummy) {
                 if (sym.dims.len > 0) {
                     kind = .subscript;
@@ -48,9 +49,10 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     self.symbols.items[idx] = sym;
                 }
                 if (sym.is_intrinsic) {
-                    resolved_ty = try intrinsicReturnType(self, call.name, sym.type_kind, call.args);
-                    if (!intrinsicResultDependsOnArgs(call.name)) {
-                        sym.type_kind = resolved_ty;
+                    resolved_spec = try intrinsicReturnType(self, call.name, sym.type_spec, call.args);
+                    if (!intrinsic_signature.resultDependsOnArgs(call.name)) {
+                        sym.type_kind = resolved_spec.lowered_kind;
+                        sym.type_spec = resolved_spec;
                         self.symbols.items[idx] = sym;
                     }
                 }
@@ -67,6 +69,8 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                         }
                         if (symbols_mod.lookupKnownFunctionType(self, call.name)) |fn_ty| {
                             sym.type_kind = fn_ty;
+                            sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, call.name) orelse
+                                symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(fn_ty), fn_ty, null);
                             sym.type_explicit = true;
                         }
                         self.symbols.items[idx] = sym;
@@ -83,6 +87,8 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                         sym.is_external = true;
                     }
                     sym.type_kind = fn_ty;
+                    sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, call.name) orelse
+                        symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(fn_ty), fn_ty, null);
                     sym.type_explicit = true;
                     self.symbols.items[idx] = sym;
                 } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
@@ -116,10 +122,10 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     const arg_ty = try resolvedExprType(self, arg);
                     if (arg_ty != .integer) return error.InvalidSubscript;
                 }
-                resolved_ty = sym.type_kind;
+                resolved_spec = sym.type_spec;
             }
             try recordResolvedRef(self, expr, call.name, kind, idx);
-            try cacheExprType(self, expr, resolved_ty);
+            try cacheExprType(self, expr, resolved_spec);
         },
         .substring => |sub| {
             const idx = try symbols_mod.ensureSymbol(self, sub.name);
@@ -138,7 +144,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                 if (start_ty != .integer or end_ty != .integer) return error.InvalidSubscript;
 
                 try recordResolvedRef(self, expr, sub.name, .subscript, idx);
-                try cacheExprType(self, expr, sym.type_kind);
+                try cacheExprType(self, expr, sym.type_spec);
                 return;
             }
             for (sub.args) |arg| {
@@ -147,23 +153,23 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             if (sub.start) |start| try resolveExpr(self, start);
             if (sub.end) |end| try resolveExpr(self, end);
             try recordResolvedRef(self, expr, sub.name, .call, idx);
-            try cacheExprType(self, expr, .character);
+            try cacheExprType(self, expr, symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null));
         },
         .dim_range => |range| {
             if (range.lower) |lower| try resolveExpr(self, lower);
             try resolveExpr(self, range.upper);
             if (range.stride) |stride| try resolveExpr(self, stride);
-            try cacheExprType(self, expr, .integer);
+            try cacheExprType(self, expr, symbols.TypeSpec.fromResolvedKind(.integer, .integer, null));
         },
         .complex_literal => |lit| {
             try resolveExpr(self, lit.real);
             try resolveExpr(self, lit.imag);
-            const real_kind = try resolvedExprType(self, lit.real);
-            const imag_kind = try resolvedExprType(self, lit.imag);
-            if (real_kind == .double_precision or imag_kind == .double_precision or real_kind == .complex_double or imag_kind == .complex_double) {
-                try cacheExprType(self, expr, .complex_double);
+            const real_spec = try exprTypeSpecCached(self, lit.real);
+            const imag_spec = try exprTypeSpecCached(self, lit.imag);
+            if (real_spec.lowered_kind == .double_precision or imag_spec.lowered_kind == .double_precision or real_spec.lowered_kind == .complex_double or imag_spec.lowered_kind == .complex_double) {
+                try cacheExprType(self, expr, symbols.TypeSpec.fromResolvedKind(.complex, .complex_double, 16));
             } else {
-                try cacheExprType(self, expr, .complex);
+                try cacheExprType(self, expr, symbols.TypeSpec.fromResolvedKind(.complex, .complex, 8));
             }
         },
         .implied_do => |implied| {
@@ -178,8 +184,8 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         .unary => |un| {
             try resolveExpr(self, un.expr);
             const ty = switch (un.op) {
-                .not => ast.TypeKind.logical,
-                .plus, .minus => try resolvedExprType(self, un.expr),
+                .not => symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
+                .plus, .minus => try exprTypeSpecCached(self, un.expr),
             };
             try cacheExprType(self, expr, ty);
         },
@@ -190,20 +196,14 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             const right_kind = try resolvedExprType(self, bin.right);
             try validateBinaryOperands(bin.op, left_kind, right_kind);
             const ty = switch (bin.op) {
-                .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => ast.TypeKind.logical,
-                .concat => ast.TypeKind.character,
-                else => promoteNumericType(left_kind, right_kind),
+                .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
+                .concat => symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null),
+                else => try promoteNumericTypeSpec(self, bin.left, bin.right),
             };
             try cacheExprType(self, expr, ty);
         },
         .literal => |lit| {
-            const ty: ast.TypeKind = switch (lit.kind) {
-                .integer => .integer,
-                .real => realLiteralTypeKind(lit.text),
-                .logical => .logical,
-                .string, .hollerith => .character,
-                .assumed_size => .integer,
-            };
+            const ty = literalTypeSpec(lit);
             try cacheExprType(self, expr, ty);
         },
     }
@@ -225,85 +225,86 @@ fn isStatementFunctionDefinitionTarget(
 }
 
 pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
-    return exprTypeCached(self, expr);
+    return (try exprTypeSpecCached(self, expr)).lowered_kind;
 }
 
 fn exprTypeCached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
+    return (try exprTypeSpecCached(self, expr)).lowered_kind;
+}
+
+pub fn exprTypeSpec(self: *context.Context, expr: *ast.Expr) ResolveError!symbols.TypeSpec {
+    return exprTypeSpecCached(self, expr);
+}
+
+fn exprTypeSpecCached(self: *context.Context, expr: *ast.Expr) ResolveError!symbols.TypeSpec {
     const key: usize = @intFromPtr(expr);
-    if (self.expr_type_cache.get(key)) |cached| return cached;
-    const computed = try exprTypeUncached(self, expr);
-    try self.expr_type_cache.put(key, computed);
+    if (self.expr_type_spec_cache.get(key)) |cached| return cached;
+    const computed = try exprTypeSpecUncached(self, expr);
+    try self.expr_type_spec_cache.put(key, computed);
+    try self.expr_type_cache.put(key, computed.lowered_kind);
     return computed;
 }
 
-fn exprTypeUncached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
+fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!symbols.TypeSpec {
     switch (expr.*) {
         .identifier => |name| {
             if (self.ref_symbol_index.get(@intFromPtr(expr))) |idx| {
-                return self.symbols.items[idx].type_kind;
+                return self.symbols.items[idx].type_spec;
             }
             const idx = try symbols_mod.ensureSymbol(self, name);
-            return self.symbols.items[idx].type_kind;
+            return self.symbols.items[idx].type_spec;
         },
         .call_or_subscript => |call| {
             if (self.ref_symbol_index.get(@intFromPtr(expr))) |idx| {
                 const sym = self.symbols.items[idx];
                 const kind = refKindIndex(self, @intFromPtr(expr)) orelse if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call;
                 if (kind == .call and sym.is_intrinsic) {
-                    return intrinsicReturnType(self, call.name, sym.type_kind, call.args);
+                    return intrinsicReturnType(self, call.name, sym.type_spec, call.args);
                 }
-                return sym.type_kind;
+                return sym.type_spec;
             }
             const idx = try symbols_mod.ensureSymbol(self, call.name);
             const sym = self.symbols.items[idx];
             if (sym.is_intrinsic) {
-                return intrinsicReturnType(self, call.name, sym.type_kind, call.args);
+                return intrinsicReturnType(self, call.name, sym.type_spec, call.args);
             }
-            return sym.type_kind;
+            return sym.type_spec;
         },
         .substring => |sub| {
             if (self.ref_symbol_index.get(@intFromPtr(expr))) |idx| {
                 const sym = self.symbols.items[idx];
-                if (isArraySectionSubstring(sym, sub)) return sym.type_kind;
+                if (isArraySectionSubstring(sym, sub)) return sym.type_spec;
             }
             const idx = try symbols_mod.ensureSymbol(self, sub.name);
             const sym = self.symbols.items[idx];
-            if (isArraySectionSubstring(sym, sub)) return sym.type_kind;
-            return .character;
+            if (isArraySectionSubstring(sym, sub)) return sym.type_spec;
+            return symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null);
         },
-        .dim_range => return .integer,
+        .dim_range => return symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
         .literal => |lit| {
-            return switch (lit.kind) {
-                .integer => .integer,
-                .real => realLiteralTypeKind(lit.text),
-                .logical => .logical,
-                .string, .hollerith => .character,
-                .assumed_size => .integer,
-            };
+            return literalTypeSpec(lit);
         },
         .complex_literal => |lit| {
-            const real_kind = try exprTypeCached(self, lit.real);
-            const imag_kind = try exprTypeCached(self, lit.imag);
-            if (real_kind == .double_precision or imag_kind == .double_precision or real_kind == .complex_double or imag_kind == .complex_double) {
-                return .complex_double;
+            const real_spec = try exprTypeSpecCached(self, lit.real);
+            const imag_spec = try exprTypeSpecCached(self, lit.imag);
+            if (real_spec.lowered_kind == .double_precision or imag_spec.lowered_kind == .double_precision or real_spec.lowered_kind == .complex_double or imag_spec.lowered_kind == .complex_double) {
+                return symbols.TypeSpec.fromResolvedKind(.complex, .complex_double, 16);
             }
-            return .complex;
+            return symbols.TypeSpec.fromResolvedKind(.complex, .complex, 8);
         },
         .unary => |un| {
             return switch (un.op) {
-                .not => .logical,
-                .plus, .minus => exprTypeCached(self, un.expr),
+                .not => symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
+                .plus, .minus => exprTypeSpecCached(self, un.expr),
             };
         },
         .binary => |bin| {
             switch (bin.op) {
-                .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => return .logical,
-                .concat => return .character,
+                .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => return symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
+                .concat => return symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null),
                 else => {},
             }
-            const left = try exprTypeCached(self, bin.left);
-            const right = try exprTypeCached(self, bin.right);
-            return promoteNumericType(left, right);
+            return promoteNumericTypeSpec(self, bin.left, bin.right);
         },
         .implied_do => return error.UnsupportedImpliedDo,
     }
@@ -391,210 +392,25 @@ fn validateBinaryOperands(op: ast.BinaryOp, left_kind: ast.TypeKind, right_kind:
     }
 }
 
-const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
-    .{ "CMPLX", .complex },
-    .{ "CONJG", .complex },
-    .{ "CSIN", .complex },
-    .{ "CCOS", .complex },
-    .{ "CEXP", .complex },
-    .{ "CLOG", .complex },
-    .{ "CSQRT", .complex },
-    .{ "DCMPLX", .complex_double },
-    .{ "DCONJG", .complex_double },
-    .{ "ANY", .logical },
-    .{ "ALLOCATED", .logical },
-    .{ "INT", .integer },
-    .{ "IFIX", .integer },
-    .{ "IDINT", .integer },
-    .{ "NINT", .integer },
-    .{ "IDNINT", .integer },
-    .{ "IABS", .integer },
-    .{ "MOD", .integer },
-    .{ "ISIGN", .integer },
-    .{ "IDIM", .integer },
-    .{ "MIN0", .integer },
-    .{ "MIN1", .integer },
-    .{ "MAX0", .integer },
-    .{ "MAX1", .integer },
-    .{ "ICHAR", .integer },
-    .{ "IACHAR", .integer },
-    .{ "LEN", .integer },
-    .{ "ACHAR", .character },
-    .{ "DBLE", .double_precision },
-    .{ "DINT", .double_precision },
-    .{ "DNINT", .double_precision },
-    .{ "DMOD", .double_precision },
-    .{ "DSIGN", .double_precision },
-    .{ "DDIM", .double_precision },
-    .{ "DMIN1", .double_precision },
-    .{ "DMAX1", .double_precision },
-    .{ "DABS", .double_precision },
-    .{ "DSQRT", .double_precision },
-    .{ "DEXP", .double_precision },
-    .{ "DLOG", .double_precision },
-    .{ "DLOG10", .double_precision },
-    .{ "DSIN", .double_precision },
-    .{ "DCOS", .double_precision },
-    .{ "DTAN", .double_precision },
-    .{ "DASIN", .double_precision },
-    .{ "DACOS", .double_precision },
-    .{ "DATAN", .double_precision },
-    .{ "DATAN2", .double_precision },
-    .{ "DSINH", .double_precision },
-    .{ "DCOSH", .double_precision },
-    .{ "DTANH", .double_precision },
-    .{ "DIMAG", .double_precision },
-    .{ "DPROD", .double_precision },
-    .{ "FLOAT", .real },
-    .{ "REAL", .real },
-    .{ "DPMPAR", .real },
-    .{ "SNGL", .real },
-    .{ "RAND", .real },
-    .{ "AINT", .real },
-    .{ "ANINT", .real },
-    .{ "AMOD", .real },
-    .{ "AMIN0", .real },
-    .{ "AMIN1", .real },
-    .{ "AMAX0", .real },
-    .{ "AMAX1", .real },
-    .{ "AIMAG", .real },
-    .{ "CABS", .real },
-    .{ "EPSILON", .real },
-    .{ "HUGE", .real },
-    .{ "EXP", .real },
-    .{ "ALOG", .real },
-    .{ "ALOG10", .real },
-    .{ "ATAN2", .real },
-});
-
-const IntrinsicSameArgMap = std.StaticStringMap(void).initComptime(.{
-    .{ "SQRT", {} },
-    .{ "EXP", {} },
-    .{ "ALOG", {} },
-    .{ "ALOG10", {} },
-    .{ "LOG", {} },
-    .{ "LOG10", {} },
-    .{ "SIN", {} },
-    .{ "COS", {} },
-    .{ "TAN", {} },
-    .{ "ASIN", {} },
-    .{ "ACOS", {} },
-    .{ "ATAN", {} },
-    .{ "SINH", {} },
-    .{ "COSH", {} },
-    .{ "TANH", {} },
-    .{ "AINT", {} },
-    .{ "ANINT", {} },
-});
-
-const IntrinsicPromoteArgsMap = std.StaticStringMap(void).initComptime(.{
-    .{ "MAX", {} },
-    .{ "MIN", {} },
-    .{ "MOD", {} },
-    .{ "SIGN", {} },
-    .{ "DIM", {} },
-});
-
 fn intrinsicReturnType(
     self: *context.Context,
     name: []const u8,
-    current: ast.TypeKind,
+    current: symbols.TypeSpec,
     args: []*ast.Expr,
-) ResolveError!ast.TypeKind {
-    var upper_buf: [64]u8 = undefined;
-    if (name.len <= upper_buf.len) {
-        for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
-        const upper = upper_buf[0..name.len];
-
-        if (IntrinsicReturnTypeMap.get(upper)) |ty| return ty;
-
-        if (std.mem.eql(u8, upper, "ABS")) {
-            if (args.len == 0) return current;
-            return absReturnType(try exprTypeCached(self, args[0]));
+) ResolveError!symbols.TypeSpec {
+    var arg_types_buf: [8]symbols.TypeSpec = undefined;
+    if (args.len <= arg_types_buf.len) {
+        var arg_types = arg_types_buf[0..args.len];
+        for (args, 0..) |arg, idx| {
+            arg_types[idx] = try exprTypeSpecCached(self, arg);
         }
-
-        if (IntrinsicSameArgMap.has(upper)) {
-            if (args.len == 0) return current;
-            return sameArgReturnType(try exprTypeCached(self, args[0]), current);
-        }
-
-        if (IntrinsicPromoteArgsMap.has(upper)) {
-            if (args.len < 2) return error.InvalidArgumentCount;
-            if (std.mem.eql(u8, upper, "MAX") or std.mem.eql(u8, upper, "MIN")) {
-                return homogeneousArgsReturnType(self, args, current);
-            }
-            return promotedArgsReturnType(self, args, current);
-        }
+        return intrinsic_signature.inferResultType(name, current, arg_types);
     }
-    return current;
-}
-
-fn intrinsicResultDependsOnArgs(name: []const u8) bool {
-    var upper_buf: [64]u8 = undefined;
-    if (name.len > upper_buf.len) return false;
-    for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
-    const upper = upper_buf[0..name.len];
-
-    if (std.mem.eql(u8, upper, "ABS")) return true;
-    if (IntrinsicSameArgMap.has(upper)) return true;
-    if (IntrinsicPromoteArgsMap.has(upper)) return true;
-    return false;
-}
-
-fn absReturnType(arg_ty: ast.TypeKind) ast.TypeKind {
-    return switch (arg_ty) {
-        .integer => .integer,
-        .real => .real,
-        .double_precision => .double_precision,
-        .complex => .real,
-        .complex_double => .double_precision,
-        else => .real,
-    };
-}
-
-fn sameArgReturnType(arg_ty: ast.TypeKind, current: ast.TypeKind) ast.TypeKind {
-    return switch (arg_ty) {
-        .integer => .real,
-        .real => .real,
-        .double_precision => .double_precision,
-        .complex => .complex,
-        .complex_double => .complex_double,
-        else => current,
-    };
-}
-
-fn promotedArgsReturnType(
-    self: *context.Context,
-    args: []*ast.Expr,
-    current: ast.TypeKind,
-) ResolveError!ast.TypeKind {
-    if (args.len == 0) return current;
-    var ty = try exprTypeCached(self, args[0]);
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const next_ty = try exprTypeCached(self, args[i]);
-        ty = promoteNumericType(ty, next_ty);
+    var dynamic_args = try self.arena.alloc(symbols.TypeSpec, args.len);
+    for (args, 0..) |arg, idx| {
+        dynamic_args[idx] = try exprTypeSpecCached(self, arg);
     }
-    return ty;
-}
-
-fn homogeneousArgsReturnType(
-    self: *context.Context,
-    args: []*ast.Expr,
-    current: ast.TypeKind,
-) ResolveError!ast.TypeKind {
-    if (args.len == 0) return current;
-    const first_ty = try exprTypeCached(self, args[0]);
-    if (!isNumericType(first_ty) or first_ty == .complex or first_ty == .complex_double) {
-        return error.InvalidArithmeticOperands;
-    }
-
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const next_ty = try exprTypeCached(self, args[i]);
-        if (next_ty != first_ty) return error.InvalidArithmeticOperands;
-    }
-    return first_ty;
+    return intrinsic_signature.inferResultType(name, current, dynamic_args);
 }
 
 fn isArraySectionSubstring(sym: symbols.Symbol, sub: ast.SubstringExpr) bool {
@@ -603,6 +419,7 @@ fn isArraySectionSubstring(sym: symbols.Symbol, sub: ast.SubstringExpr) bool {
 
 fn invalidateExprTypeCache(self: *context.Context, expr: *ast.Expr) void {
     _ = self.expr_type_cache.remove(@intFromPtr(expr));
+    _ = self.expr_type_spec_cache.remove(@intFromPtr(expr));
 }
 
 fn recordResolvedRef(
@@ -621,12 +438,13 @@ fn refKindIndex(self: *context.Context, key: usize) ?ResolvedRefKind {
     return self.ref_kind_index.get(key);
 }
 
-fn cacheExprType(self: *context.Context, expr: *ast.Expr, ty: ast.TypeKind) !void {
+fn cacheExprType(self: *context.Context, expr: *ast.Expr, ty: symbols.TypeSpec) !void {
     const key = @intFromPtr(expr);
-    if (self.expr_type_cache.get(key)) |current| {
-        if (current == ty) return;
+    if (self.expr_type_spec_cache.get(key)) |current| {
+        if (std.meta.eql(current, ty)) return;
     }
-    try self.expr_type_cache.put(key, ty);
+    try self.expr_type_spec_cache.put(key, ty);
+    try self.expr_type_cache.put(key, ty.lowered_kind);
 }
 
 fn resolvedExprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
@@ -634,14 +452,64 @@ fn resolvedExprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.Ty
     return exprType(self, expr);
 }
 
+fn promoteNumericTypeSpec(
+    self: *context.Context,
+    left: *ast.Expr,
+    right: *ast.Expr,
+) ResolveError!symbols.TypeSpec {
+    const left_spec = try exprTypeSpecCached(self, left);
+    const right_spec = try exprTypeSpecCached(self, right);
+    return switch (promoteNumericType(left_spec.lowered_kind, right_spec.lowered_kind)) {
+        .complex_double => symbols.TypeSpec.fromResolvedKind(.complex, .complex_double, 16),
+        .complex => if (left_spec.lowered_kind == .complex or left_spec.lowered_kind == .complex_double) left_spec else right_spec,
+        .double_precision => if (left_spec.lowered_kind == .double_precision) left_spec else right_spec,
+        .real => if (left_spec.lowered_kind == .real) left_spec else right_spec,
+        .integer => if (left_spec.lowered_kind == .integer) left_spec else right_spec,
+        else => symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
+    };
+}
+
+fn literalTypeSpec(lit: ast.Literal) symbols.TypeSpec {
+    return switch (lit.kind) {
+        .integer => symbols.TypeSpec.fromResolvedKind(.integer, .integer, integerLiteralKindValue(lit.text)),
+        .real => realLiteralTypeSpec(lit.text),
+        .logical => symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
+        .string, .hollerith => symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, lit.text.len),
+        .assumed_size => symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
+    };
+}
+
 fn realLiteralTypeKind(text: []const u8) ast.TypeKind {
     return if (evaluator.realLiteralHasDoublePrecisionHint(text)) .double_precision else .real;
+}
+
+fn realLiteralTypeSpec(text: []const u8) symbols.TypeSpec {
+    const kind = realLiteralTypeKind(text);
+    return symbols.TypeSpec.fromResolvedKind(
+        .real,
+        kind,
+        if (kind == .double_precision) 8 else realLiteralKindSuffix(text),
+    );
+}
+
+fn realLiteralKindSuffix(text: []const u8) ?i64 {
+    const underscore = std.mem.lastIndexOfScalar(u8, text, '_') orelse return null;
+    if (underscore + 1 >= text.len) return null;
+    return std.fmt.parseInt(i64, text[underscore + 1 ..], 10) catch null;
+}
+
+fn integerLiteralKindValue(text: []const u8) ?i64 {
+    const underscore = std.mem.lastIndexOfScalar(u8, text, '_') orelse return null;
+    if (underscore + 1 >= text.len) return null;
+    return std.fmt.parseInt(i64, text[underscore + 1 ..], 10) catch null;
 }
 
 test "exprType treats D exponent real literal as DOUBLE PRECISION" {
     const testing = std.testing;
     var known_fn = std.StringHashMap(ast.TypeKind).init(testing.allocator);
     defer known_fn.deinit();
+    var known_fn_specs = std.StringHashMap(symbols.TypeSpec).init(testing.allocator);
+    defer known_fn_specs.deinit();
     var known_sig = std.StringHashMap(context.Context.ProcedureSig).init(testing.allocator);
     defer known_sig.deinit();
     var known_host = std.StringHashMap(symbols.Symbol).init(testing.allocator);
@@ -655,7 +523,7 @@ test "exprType treats D exponent real literal as DOUBLE PRECISION" {
         .decl_sources = &.{},
         .stmts = &.{},
     };
-    var ctx = context.Context.init(testing.allocator, unit, &known_fn, &known_sig, &known_host, null, .{});
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn, &known_fn_specs, &known_sig, &known_host, null, .{});
 
     var lit = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0D0" } };
     try testing.expectEqual(ast.TypeKind.double_precision, try exprType(&ctx, &lit));
@@ -665,6 +533,8 @@ test "exprType treats _8 real kind suffix as DOUBLE PRECISION" {
     const testing = std.testing;
     var known_fn = std.StringHashMap(ast.TypeKind).init(testing.allocator);
     defer known_fn.deinit();
+    var known_fn_specs = std.StringHashMap(symbols.TypeSpec).init(testing.allocator);
+    defer known_fn_specs.deinit();
     var known_sig = std.StringHashMap(context.Context.ProcedureSig).init(testing.allocator);
     defer known_sig.deinit();
     var known_host = std.StringHashMap(symbols.Symbol).init(testing.allocator);
@@ -678,7 +548,7 @@ test "exprType treats _8 real kind suffix as DOUBLE PRECISION" {
         .decl_sources = &.{},
         .stmts = &.{},
     };
-    var ctx = context.Context.init(testing.allocator, unit, &known_fn, &known_sig, &known_host, null, .{});
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn, &known_fn_specs, &known_sig, &known_host, null, .{});
 
     var lit = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0_8" } };
     try testing.expectEqual(ast.TypeKind.double_precision, try exprType(&ctx, &lit));
@@ -688,6 +558,8 @@ test "exprType promotes complex literal to COMPLEX*16 when component is DOUBLE P
     const testing = std.testing;
     var known_fn = std.StringHashMap(ast.TypeKind).init(testing.allocator);
     defer known_fn.deinit();
+    var known_fn_specs = std.StringHashMap(symbols.TypeSpec).init(testing.allocator);
+    defer known_fn_specs.deinit();
     var known_sig = std.StringHashMap(context.Context.ProcedureSig).init(testing.allocator);
     defer known_sig.deinit();
     var known_host = std.StringHashMap(symbols.Symbol).init(testing.allocator);
@@ -701,7 +573,7 @@ test "exprType promotes complex literal to COMPLEX*16 when component is DOUBLE P
         .decl_sources = &.{},
         .stmts = &.{},
     };
-    var ctx = context.Context.init(testing.allocator, unit, &known_fn, &known_sig, &known_host, null, .{});
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn, &known_fn_specs, &known_sig, &known_host, null, .{});
 
     var real_part = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0D0" } };
     var imag_part = ast.Expr{ .literal = .{ .kind = .real, .text = "2.0" } };

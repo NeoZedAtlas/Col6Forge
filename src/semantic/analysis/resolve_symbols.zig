@@ -7,12 +7,31 @@ const intrinsics = @import("intrinsics.zig");
 const SymbolKind = symbols.SymbolKind;
 const Symbol = symbols.Symbol;
 const CharacterLengthKind = symbols.CharacterLengthKind;
+const TypeSpec = symbols.TypeSpec;
 const MAX_IDENT_LEN: usize = 64;
 
 pub fn initImplicitDefaults(self: *context.Context) !void {
-    try self.implicit.append(.{ .start = 'I', .end = 'N', .type_kind = .integer, .char_len = null });
-    try self.implicit.append(.{ .start = 'A', .end = 'H', .type_kind = .real, .char_len = null });
-    try self.implicit.append(.{ .start = 'O', .end = 'Z', .type_kind = .real, .char_len = null });
+    try self.implicit.append(.{
+        .start = 'I',
+        .end = 'N',
+        .type_kind = .integer,
+        .type_spec = TypeSpec.fromResolvedKind(.integer, .integer, null),
+        .char_len = null,
+    });
+    try self.implicit.append(.{
+        .start = 'A',
+        .end = 'H',
+        .type_kind = .real,
+        .type_spec = TypeSpec.fromResolvedKind(.real, .real, null),
+        .char_len = null,
+    });
+    try self.implicit.append(.{
+        .start = 'O',
+        .end = 'Z',
+        .type_kind = .real,
+        .type_spec = TypeSpec.fromResolvedKind(.real, .real, null),
+        .char_len = null,
+    });
 }
 
 pub fn installBuiltinConstants(self: *context.Context) !void {
@@ -56,6 +75,10 @@ pub fn installUnitSymbol(self: *context.Context) !void {
     const info = if (self.unit.kind == .function)
         ImplicitInfo{
             .type_kind = lookupKnownFunctionType(self, self.unit.name) orelse implicitInfo(self, self.unit.name).type_kind,
+            .type_spec = if (lookupKnownFunctionTypeSpec(self, self.unit.name)) |known_spec|
+                known_spec
+            else
+                implicitInfo(self, self.unit.name).type_spec,
             .char_len_kind = .none,
             .char_len = null,
         }
@@ -64,6 +87,7 @@ pub fn installUnitSymbol(self: *context.Context) !void {
     const symbol = Symbol{
         .name = self.unit.name,
         .type_kind = info.type_kind,
+        .type_spec = info.type_spec,
         .dims = &.{},
         .char_len_kind = info.char_len_kind,
         .char_len = info.char_len,
@@ -84,6 +108,7 @@ pub fn installDummyArgs(self: *context.Context) !void {
         const symbol = Symbol{
             .name = arg,
             .type_kind = info.type_kind,
+            .type_spec = info.type_spec,
             .dims = &.{},
             .char_len_kind = info.char_len_kind,
             .char_len = info.char_len,
@@ -121,6 +146,10 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
         const symbol = Symbol{
             .name = name,
             .type_kind = proc_type,
+            .type_spec = if (proc_kind == .function)
+                lookupKnownFunctionTypeSpec(self, name) orelse TypeSpec.fromResolvedKind(TypeSpec.baseKind(proc_type), proc_type, null)
+            else
+                TypeSpec.fromResolvedKind(.real, .real, null),
             .dims = &.{},
             .char_len_kind = .none,
             .char_len = null,
@@ -135,12 +164,18 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
     }
     const known_fn_type = lookupKnownFunctionType(self, name);
     const info = if (known_fn_type) |known_ty|
-        ImplicitInfo{ .type_kind = known_ty, .char_len_kind = .none, .char_len = null }
+        ImplicitInfo{
+            .type_kind = known_ty,
+            .type_spec = lookupKnownFunctionTypeSpec(self, name) orelse TypeSpec.fromResolvedKind(TypeSpec.baseKind(known_ty), known_ty, null),
+            .char_len_kind = .none,
+            .char_len = null,
+        }
     else
         implicitInfo(self, name);
     const symbol = Symbol{
         .name = name,
         .type_kind = info.type_kind,
+        .type_spec = info.type_spec,
         .dims = &.{},
         .char_len_kind = info.char_len_kind,
         .char_len = info.char_len,
@@ -167,6 +202,7 @@ pub fn ensureDeclaredSymbol(self: *context.Context, name: []const u8) !usize {
     const symbol = Symbol{
         .name = name,
         .type_kind = info.type_kind,
+        .type_spec = info.type_spec,
         .dims = &.{},
         .char_len_kind = info.char_len_kind,
         .char_len = info.char_len,
@@ -245,12 +281,18 @@ fn findCurrentScopeSymbolIndex(self: *context.Context, name: []const u8) ?usize 
 
 const ImplicitInfo = struct {
     type_kind: ast.TypeKind,
+    type_spec: TypeSpec,
     char_len_kind: CharacterLengthKind,
     char_len: ?usize,
 };
 
 fn implicitInfo(self: *context.Context, name: []const u8) ImplicitInfo {
-    if (name.len == 0) return .{ .type_kind = .real, .char_len_kind = .none, .char_len = null };
+    if (name.len == 0) return .{
+        .type_kind = .real,
+        .type_spec = TypeSpec.fromResolvedKind(.real, .real, null),
+        .char_len_kind = .none,
+        .char_len = null,
+    };
     const first = std.ascii.toUpper(name[0]);
     var idx = self.implicit.items.len;
     while (idx > 0) {
@@ -259,14 +301,28 @@ fn implicitInfo(self: *context.Context, name: []const u8) ImplicitInfo {
         if (first >= rule.start and first <= rule.end) {
             const char_len = if (rule.type_kind == .character) rule.char_len orelse 1 else null;
             const char_len_kind: CharacterLengthKind = if (rule.type_kind == .character) .constant else .none;
-            return .{ .type_kind = rule.type_kind, .char_len_kind = char_len_kind, .char_len = char_len };
+            return .{
+                .type_kind = rule.type_kind,
+                .type_spec = rule.type_spec.withCharacterLength(char_len_kind, char_len),
+                .char_len_kind = char_len_kind,
+                .char_len = char_len,
+            };
         }
     }
-    return .{ .type_kind = .real, .char_len_kind = .none, .char_len = null };
+    return .{
+        .type_kind = .real,
+        .type_spec = TypeSpec.fromResolvedKind(.real, .real, null),
+        .char_len_kind = .none,
+        .char_len = null,
+    };
 }
 
 pub fn implicitType(self: *context.Context, name: []const u8) ast.TypeKind {
     return implicitInfo(self, name).type_kind;
+}
+
+pub fn implicitTypeSpec(self: *context.Context, name: []const u8) TypeSpec {
+    return implicitInfo(self, name).type_spec;
 }
 
 pub fn implicitCharLen(self: *context.Context, name: []const u8) ?usize {
@@ -311,6 +367,15 @@ pub fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.Ty
     return resolved;
 }
 
+pub fn lookupKnownFunctionTypeSpec(self: *context.Context, name: []const u8) ?TypeSpec {
+    if (getLowercaseMapValue(?TypeSpec, &self.known_function_type_spec_cache, name)) |cached| {
+        return cached;
+    }
+    const resolved = getLowercaseMapValue(TypeSpec, self.known_function_type_specs, name);
+    putKnownFunctionTypeSpecCache(self, name, resolved);
+    return resolved;
+}
+
 pub fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
     if (getLowercaseMapValue(?context.Context.ProcedureSig, &self.known_procedure_sig_cache, name)) |cached| {
         return cached;
@@ -327,6 +392,15 @@ fn putKnownFunctionTypeCache(self: *context.Context, name: []const u8, resolved:
     if (self.known_function_type_cache.contains(key)) return;
     const owned_key = self.arena.dupe(u8, key) catch return;
     self.known_function_type_cache.put(owned_key, resolved) catch {};
+}
+
+fn putKnownFunctionTypeSpecCache(self: *context.Context, name: []const u8, resolved: ?TypeSpec) void {
+    if (name.len > MAX_IDENT_LEN) return;
+    var key_buf: [MAX_IDENT_LEN]u8 = undefined;
+    const key = toLowerInBuffer(name, &key_buf);
+    if (self.known_function_type_spec_cache.contains(key)) return;
+    const owned_key = self.arena.dupe(u8, key) catch return;
+    self.known_function_type_spec_cache.put(owned_key, resolved) catch {};
 }
 
 fn putKnownProcedureSigCache(

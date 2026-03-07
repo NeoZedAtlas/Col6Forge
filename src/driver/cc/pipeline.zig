@@ -33,8 +33,8 @@ pub fn collectFortranKnownSymbols(
         const program = Col6Forge.parseProgram(arena.allocator(), logical_lines) catch continue;
         for (program.units) |unit| {
             if (unit.kind == .function) {
-                const fn_ty = Col6Forge.sema.inferFunctionType(unit);
-                try upsertKnownFunctionType(allocator, &function_types, unit.name, fn_ty);
+                const fn_spec = Col6Forge.sema.inferFunctionTypeSpec(unit);
+                try upsertKnownFunctionType(allocator, &function_types, unit.name, fn_spec);
             }
             if (unit.kind == .function or unit.kind == .subroutine) {
                 try upsertKnownProcedureSig(
@@ -112,15 +112,17 @@ fn upsertKnownFunctionType(
     allocator: std.mem.Allocator,
     list: *std.ArrayList(Col6Forge.sema.KnownFunctionType),
     name: []const u8,
-    type_kind: Col6Forge.ast.TypeKind,
+    type_spec: Col6Forge.sema.TypeSpec,
 ) !void {
     if (indexOfKnownFunctionType(list.items, name)) |idx| {
-        list.items[idx].type_kind = type_kind;
+        list.items[idx].type_kind = type_spec.lowered_kind;
+        list.items[idx].type_spec = type_spec;
         return;
     }
     try list.append(allocator, .{
         .name = try allocator.dupe(u8, name),
-        .type_kind = type_kind,
+        .type_kind = type_spec.lowered_kind,
+        .type_spec = type_spec,
     });
 }
 

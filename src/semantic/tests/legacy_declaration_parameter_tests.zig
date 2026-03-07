@@ -12,6 +12,7 @@ const analyzeProgramWithOptions = api.analyzeProgramWithOptions;
 const takeDiagnostic = api.takeDiagnostic;
 const clearDiagnostic = api.clearDiagnostic;
 const inferFunctionType = function_type.inferFunctionType;
+const inferFunctionTypeSpec = function_type.inferFunctionTypeSpec;
 
 test "inferFunctionType resolves REAL kind selector from declaration" {
     const testing = std.testing;
@@ -41,6 +42,10 @@ test "inferFunctionType resolves REAL kind selector from declaration" {
     };
 
     try testing.expectEqual(ast.TypeKind.double_precision, inferFunctionType(unit));
+    const inferred = inferFunctionTypeSpec(unit);
+    try testing.expectEqual(ast.TypeKind.real, inferred.declared_kind);
+    try testing.expectEqual(ast.TypeKind.double_precision, inferred.lowered_kind);
+    try testing.expectEqual(@as(?i64, null), inferred.kind_value);
 }
 
 test "inferFunctionType resolves COMPLEX kind selector from declaration" {
@@ -71,6 +76,10 @@ test "inferFunctionType resolves COMPLEX kind selector from declaration" {
     };
 
     try testing.expectEqual(ast.TypeKind.complex_double, inferFunctionType(unit));
+    const inferred = inferFunctionTypeSpec(unit);
+    try testing.expectEqual(ast.TypeKind.complex, inferred.declared_kind);
+    try testing.expectEqual(ast.TypeKind.complex_double, inferred.lowered_kind);
+    try testing.expectEqual(@as(?i64, 16), inferred.kind_value);
 }
 
 test "semantic declaration error reports declaration source line" {

@@ -3,7 +3,7 @@ const ast = @import("../../../../input.zig");
 const llvm_types = @import("../../../types.zig");
 const context = @import("../../../codegen/context.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
-const format_items = @import("../../../../../format/items.zig");
+const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -156,13 +156,13 @@ fn emitStreamBegin(
 }
 
 fn lowerStaticReadStreamFormatWithBuilder(ctx: *Context, builder: anytype, fmt_items: []const ast.FormatItem) EmitError!ValueRef {
-    const prepared = try format_items.ensureFlatWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    const prepared = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
     defer prepared.deinit(ctx.allocator);
 
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();
 
-    for (prepared.items) |item| {
+    for (prepared.ops) |item| {
         switch (item) {
             .literal => |text| try appendScanfLiteral(&fmt_buf, text),
             .spaces => |count| {
@@ -183,28 +183,28 @@ fn lowerStaticReadStreamFormatWithBuilder(ctx: *Context, builder: anytype, fmt_i
                 try fmt_buf.writer().print("%{c}", .{directive});
             },
             .scale => |scale| try fmt_buf.writer().print("%{d}P", .{scale}),
-            .int => |spec| if (spec.width > 0) {
-                try fmt_buf.writer().print("%{d}d", .{spec.width});
-            } else {
-                try fmt_buf.appendSlice("%d");
-            },
-            .real, .real_fixed => |spec| if (spec.width > 0) {
-                try fmt_buf.writer().print("%{d}f", .{spec.width});
-            } else {
-                try fmt_buf.appendSlice("%f");
-            },
-            .char => |spec| {
-                const width = if (spec.width > 0) spec.width else 1;
-                try fmt_buf.writer().print("%{d}c", .{width});
-            },
-            .logical => |spec| if (spec.width > 0) {
-                try fmt_buf.writer().print("%{d}L", .{spec.width});
-            } else {
-                try fmt_buf.appendSlice("%L");
+            .descriptor => |descriptor| switch (descriptor) {
+                .int => |spec| if (spec.width > 0) {
+                    try fmt_buf.writer().print("%{d}d", .{spec.width});
+                } else {
+                    try fmt_buf.appendSlice("%d");
+                },
+                .real, .real_fixed => |spec| if (spec.width > 0) {
+                    try fmt_buf.writer().print("%{d}f", .{spec.width});
+                } else {
+                    try fmt_buf.appendSlice("%f");
+                },
+                .char => |spec| {
+                    const width = if (spec.width > 0) spec.width else 1;
+                    try fmt_buf.writer().print("%{d}c", .{width});
+                },
+                .logical => |spec| if (spec.width > 0) {
+                    try fmt_buf.writer().print("%{d}L", .{spec.width});
+                } else {
+                    try fmt_buf.appendSlice("%L");
+                },
             },
             .sign_control => {},
-            .repeat_group => unreachable,
-            .reversion_offset => unreachable,
             .reversion_anchor => try fmt_buf.append(0x03),
         }
     }
