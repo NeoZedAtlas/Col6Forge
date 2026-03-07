@@ -769,27 +769,27 @@ L70:
 bb126:
   store i32 0, ptr %t0
   %t358 = sext i32 1 to i64
-  %t359 = sext i32 3 to i64
-  %t360 = sub i64 %t358, 1
-  %t361 = mul i64 %t360, 1
-  %t362 = add i64 0, %t361
-  %t363 = mul i64 1, %t359
-  %t364 = sext i32 1 to i64
-  %t365 = sub i64 %t364, 1
-  %t366 = mul i64 %t365, %t363
-  %t367 = add i64 %t362, %t366
+  %t359 = sub i64 %t358, 1
+  %t360 = mul i64 %t359, 1
+  %t361 = add i64 0, %t360
+  %t362 = sext i32 1 to i64
+  %t363 = sub i64 %t362, 1
+  %t364 = sext i32 3 to i64
+  %t365 = mul i64 1, %t364
+  %t366 = mul i64 %t363, %t365
+  %t367 = add i64 %t361, %t366
   %t368 = getelementptr i1, ptr %t13, i64 %t367
   store i1 1, ptr %t368
   %t369 = sext i32 1 to i64
-  %t370 = sext i32 3 to i64
-  %t371 = sub i64 %t369, 1
-  %t372 = mul i64 %t371, 1
-  %t373 = add i64 0, %t372
-  %t374 = mul i64 1, %t370
-  %t375 = sext i32 1 to i64
-  %t376 = sub i64 %t375, 1
-  %t377 = mul i64 %t376, %t374
-  %t378 = add i64 %t373, %t377
+  %t370 = sub i64 %t369, 1
+  %t371 = mul i64 %t370, 1
+  %t372 = add i64 0, %t371
+  %t373 = sext i32 1 to i64
+  %t374 = sub i64 %t373, 1
+  %t375 = sext i32 3 to i64
+  %t376 = mul i64 1, %t375
+  %t377 = mul i64 %t374, %t376
+  %t378 = add i64 %t372, %t377
   %t379 = getelementptr i1, ptr %t13, i64 %t378
   %t380 = load i1, ptr %t379
   br i1 %t380, label %if_then24, label %bb129

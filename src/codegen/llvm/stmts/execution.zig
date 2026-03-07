@@ -150,9 +150,12 @@ fn emitAllocateSpecFromText(ctx: *Context, builder: anytype, spec: []const u8) E
     const base_ptr = ValueRef{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true };
     try ctx.locals.put(name, base_ptr);
     try ctx.markManagedAllocation(name);
+    var running_multiplier = constI64(ctx, 1);
     for (dim_specs.items, 0..) |dim_spec, dim_idx| {
         try builder.store(dim_spec.lower, desc.lower_slots[dim_idx]);
         try builder.store(dim_spec.extent, desc.extent_slots[dim_idx]);
+        try builder.store(running_multiplier, desc.multiplier_slots[dim_idx]);
+        running_multiplier = try expr.emitMul(ctx, builder, running_multiplier, dim_spec.extent);
     }
 }
 
@@ -194,6 +197,7 @@ fn emitDeallocateSpecFromText(ctx: *Context, builder: anytype, spec: []const u8)
     for (0..desc.rank) |dim_idx| {
         try builder.store(constI64(ctx, 1), desc.lower_slots[dim_idx]);
         try builder.store(constI64(ctx, 0), desc.extent_slots[dim_idx]);
+        try builder.store(constI64(ctx, if (dim_idx == 0) 1 else 0), desc.multiplier_slots[dim_idx]);
     }
 }
 

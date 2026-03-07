@@ -23,6 +23,7 @@ pub const emitLinearSubscriptPtr = memory.emitLinearSubscriptPtr;
 pub const emitDimValue = memory.emitDimValue;
 pub const emitSymbolDimExtent = memory.emitSymbolDimExtent;
 pub const emitSymbolDimLower = memory.emitSymbolDimLower;
+pub const emitSymbolDimMultiplier = memory.emitSymbolDimMultiplier;
 pub const emitIndex = memory.emitIndex;
 pub const loadValue = memory.loadValue;
 pub const loadI32 = memory.loadI32;
@@ -411,6 +412,70 @@ test "emitSubscriptPtr, emitIndex, and emitDimValue enforce subscripts" {
 
     const bad_dim = try makeLiteral(harness.arena.allocator(), .assumed_size, "*");
     try testing.expectError(error.AssumedSizeDimUnsupported, emitDimValue(&harness.ctx, &builder, bad_dim));
+}
+
+test "emitSubscriptPtr uses runtime descriptor multipliers when present" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    const a = harness.arena.allocator();
+    const dim2 = try a.create(ast.Expr);
+    dim2.* = .{ .literal = .{ .kind = .integer, .text = "2" } };
+    const dim3 = try a.create(ast.Expr);
+    dim3.* = .{ .literal = .{ .kind = .integer, .text = "3" } };
+    const arr2_dims = try a.alloc(*ast.Expr, 2);
+    arr2_dims[0] = dim2;
+    arr2_dims[1] = dim3;
+    harness.sem_unit.symbols[1] = .{
+        .name = "ARR",
+        .type_kind = .integer,
+        .dims = arr2_dims,
+        .char_len = null,
+        .kind = .variable,
+        .storage = .local,
+        .is_external = false,
+        .is_intrinsic = false,
+        .const_value = null,
+        .type_explicit = true,
+    };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lower_slots = try a.alloc(ValueRef, 2);
+    const extent_slots = try a.alloc(ValueRef, 2);
+    const multiplier_slots = try a.alloc(ValueRef, 2);
+    inline for (0..2) |idx| {
+        const lower_name = try harness.ctx.nextTemp();
+        try builder.alloca(lower_name, .i64);
+        lower_slots[idx] = .{ .name = lower_name, .ty = .ptr, .is_ptr = true };
+        try builder.store(.{ .name = "1", .ty = .i64, .is_ptr = false }, lower_slots[idx]);
+
+        const extent_name = try harness.ctx.nextTemp();
+        try builder.alloca(extent_name, .i64);
+        extent_slots[idx] = .{ .name = extent_name, .ty = .ptr, .is_ptr = true };
+        try builder.store(.{ .name = if (idx == 0) "2" else "3", .ty = .i64, .is_ptr = false }, extent_slots[idx]);
+
+        const multiplier_name = try harness.ctx.nextTemp();
+        try builder.alloca(multiplier_name, .i64);
+        multiplier_slots[idx] = .{ .name = multiplier_name, .ty = .ptr, .is_ptr = true };
+        try builder.store(.{ .name = if (idx == 0) "1" else "10", .ty = .i64, .is_ptr = false }, multiplier_slots[idx]);
+    }
+    try harness.ctx.setRuntimeArrayDescriptor("ARR", lower_slots, extent_slots, multiplier_slots);
+
+    const idx1 = try makeLiteral(a, .integer, "2");
+    const idx2 = try makeLiteral(a, .integer, "3");
+    const idx_list = @constCast(&[_]*Expr{ idx1, idx2 });
+    _ = try emitSubscriptPtr(&harness.ctx, &builder, .{ .name = "ARR", .args = idx_list });
+
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "load i64, ptr") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "mul i64 %t") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, ", 10") != null);
 }
 
 test "emitCond, loadValue, loadI32, and exprType produce expected types" {

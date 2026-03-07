@@ -42,14 +42,13 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
 // Preconditions: sym.dims.len > 0 and args.len == sym.dims.len.
 fn emitColumnMajorOffset(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, args: []*Expr) !ValueRef {
     var offset = utils.zeroValue(index_ty);
-    var stride = oneIndexValue();
 
     var idx: usize = 0;
     while (idx < sym.dims.len) : (idx += 1) {
         const idx_val = try emitIndex(ctx, builder, args[idx]);
         const lb = try emitSymbolDimLower(ctx, builder, sym, idx);
         var dim_val: ?ValueRef = null;
-        if (ctx.options.bounds_check or idx + 1 < sym.dims.len) {
+        if (ctx.options.bounds_check) {
             dim_val = try emitSymbolDimExtent(ctx, builder, sym, idx);
         }
         if (ctx.options.bounds_check) {
@@ -58,12 +57,9 @@ fn emitColumnMajorOffset(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, 
             try emitBoundsCheck(ctx, builder, idx_val, lb, upper);
         }
         const idx_adj = try binary.emitSub(ctx, builder, idx_val, lb);
+        const stride = try emitSymbolDimMultiplier(ctx, builder, sym, idx);
         const term = try binary.emitMul(ctx, builder, idx_adj, stride);
         offset = try binary.emitAdd(ctx, builder, offset, term);
-
-        if (idx + 1 < sym.dims.len) {
-            stride = try binary.emitMul(ctx, builder, stride, dim_val.?);
-        }
     }
 
     return offset;
@@ -139,6 +135,22 @@ pub fn emitSymbolDimLower(ctx: *Context, builder: anytype, sym: ast.sema.Symbol,
         return .{ .name = tmp, .ty = .i64, .is_ptr = false };
     }
     return emitDimLower(ctx, builder, sym.dims[dim_index]);
+}
+
+pub fn emitSymbolDimMultiplier(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, dim_index: usize) !ValueRef {
+    if (ctx.runtimeArrayDimMultiplierSlot(sym.name, dim_index)) |slot| {
+        const tmp = try ctx.nextTemp();
+        try builder.load(tmp, .i64, slot);
+        return .{ .name = tmp, .ty = .i64, .is_ptr = false };
+    }
+
+    var stride = oneIndexValue();
+    var idx: usize = 0;
+    while (idx < dim_index) : (idx += 1) {
+        const extent = try emitSymbolDimExtent(ctx, builder, sym, idx);
+        stride = try binary.emitMul(ctx, builder, stride, extent);
+    }
+    return stride;
 }
 
 fn emitDimLower(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {

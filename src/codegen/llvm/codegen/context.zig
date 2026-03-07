@@ -70,6 +70,7 @@ pub const RuntimeArrayDescriptor = struct {
     rank: usize,
     lower_slots: []ValueRef,
     extent_slots: []ValueRef,
+    multiplier_slots: []ValueRef,
 };
 
 pub const IntrinsicWrapperKind = enum {
@@ -253,6 +254,7 @@ pub const Context = struct {
         while (desc_it.next()) |entry| {
             self.allocator.free(entry.value_ptr.lower_slots);
             self.allocator.free(entry.value_ptr.extent_slots);
+            self.allocator.free(entry.value_ptr.multiplier_slots);
         }
         self.runtime_array_descs.deinit();
         self.int_literal_cache.deinit();
@@ -442,17 +444,20 @@ pub const Context = struct {
         name: []const u8,
         lower_slots: []ValueRef,
         extent_slots: []ValueRef,
+        multiplier_slots: []ValueRef,
     ) !void {
-        if (lower_slots.len != extent_slots.len) return error.InvalidArrayDim;
+        if (lower_slots.len != extent_slots.len or lower_slots.len != multiplier_slots.len) return error.InvalidArrayDim;
         const sym_idx = self.symbolIndexForName(name) orelse return error.UnknownSymbol;
         if (self.runtime_array_descs.fetchRemove(sym_idx)) |kv| {
             self.allocator.free(kv.value.lower_slots);
             self.allocator.free(kv.value.extent_slots);
+            self.allocator.free(kv.value.multiplier_slots);
         }
         try self.runtime_array_descs.put(sym_idx, .{
             .rank = lower_slots.len,
             .lower_slots = lower_slots,
             .extent_slots = extent_slots,
+            .multiplier_slots = multiplier_slots,
         });
     }
 
@@ -471,6 +476,12 @@ pub const Context = struct {
         const desc = self.runtimeArrayDescriptor(name) orelse return null;
         if (dim_index >= desc.rank) return null;
         return desc.extent_slots[dim_index];
+    }
+
+    pub fn runtimeArrayDimMultiplierSlot(self: *const Context, name: []const u8, dim_index: usize) ?ValueRef {
+        const desc = self.runtimeArrayDescriptor(name) orelse return null;
+        if (dim_index >= desc.rank) return null;
+        return desc.multiplier_slots[dim_index];
     }
 
     pub fn markManagedAllocation(self: *Context, name: []const u8) !void {

@@ -484,6 +484,8 @@ fn installDeferredArrayDescriptor(ctx: *Context, builder: anytype, sym: ast.sema
     errdefer ctx.allocator.free(lower_slots);
     var extent_slots = try ctx.allocator.alloc(ValueRef, sym.dims.len);
     errdefer ctx.allocator.free(extent_slots);
+    var multiplier_slots = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    errdefer ctx.allocator.free(multiplier_slots);
 
     for (sym.dims, 0..) |_, idx| {
         const lower_name = try ctx.nextTemp();
@@ -498,9 +500,15 @@ fn installDeferredArrayDescriptor(ctx: *Context, builder: anytype, sym: ast.sema
         // Unallocated deferred-shape arrays expose extent 0 and fail bounds checks.
         try builder.store(constI64(ctx, 0), extent_ptr);
         extent_slots[idx] = extent_ptr;
+
+        const multiplier_name = try ctx.nextTemp();
+        try builder.alloca(multiplier_name, .i64);
+        const multiplier_ptr = ValueRef{ .name = multiplier_name, .ty = .ptr, .is_ptr = true };
+        try builder.store(constI64(ctx, if (idx == 0) 1 else 0), multiplier_ptr);
+        multiplier_slots[idx] = multiplier_ptr;
     }
 
-    try ctx.setRuntimeArrayDescriptor(sym.name, lower_slots, extent_slots);
+    try ctx.setRuntimeArrayDescriptor(sym.name, lower_slots, extent_slots, multiplier_slots);
 }
 
 fn constI64(ctx: *Context, value: i64) ValueRef {

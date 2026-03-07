@@ -509,15 +509,8 @@ fn emitUnformattedReadStream(ctx: *Context, builder: anytype, state: ValueRef, a
 }
 
 fn impliedStrideForSymbolDim(ctx: *Context, builder: anytype, sym: anytype, loop_dim: usize) EmitError!ValueRef {
-    var stride = ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
-    var idx: usize = 0;
-    while (idx < loop_dim) : (idx += 1) {
-        var extent = try expr.emitSymbolDimExtent(ctx, builder, sym, idx);
-        if (extent.ty != .i32) extent = try expr.coerce(ctx, builder, extent, .i32);
-        const mul_tmp = try ctx.nextTemp();
-        try builder.binary(mul_tmp, "mul", .i32, stride, extent);
-        stride = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
-    }
+    var stride = try expr.emitSymbolDimMultiplier(ctx, builder, sym, loop_dim);
+    if (stride.ty != .i32) stride = try expr.coerce(ctx, builder, stride, .i32);
     return stride;
 }
 
