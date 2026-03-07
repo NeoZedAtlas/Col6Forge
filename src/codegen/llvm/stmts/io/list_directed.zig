@@ -132,6 +132,244 @@ fn packReadTargets(ctx: *Context, builder: anytype, expanded: *const expansion.E
     };
 }
 
+fn emitArrayElemCountI32(ctx: *Context, builder: anytype, sym: anytype) EmitError!ValueRef {
+    if (ctx.arrayElemCountForSymbol(sym) catch null) |count| {
+        return ctx.constI32(@intCast(count));
+    }
+    var total = try ctx.constI32(1);
+    for (sym.dims, 0..) |dim, dim_idx| {
+        var extent = expr.emitSymbolDimExtent(ctx, builder, sym, dim_idx) catch |err| switch (err) {
+            error.UnknownSymbol => try expr.emitDimValue(ctx, builder, dim),
+            else => return err,
+        };
+        if (extent.ty != .i32) extent = try coerceRuntimeI32(ctx, builder, extent);
+        const mul_tmp = try ctx.nextTemp();
+        try builder.binary(mul_tmp, "mul", .i32, total, extent);
+        total = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
+    }
+    return total;
+}
+
+const ListBlockTransfer = struct {
+    kind: u8,
+    count: ValueRef,
+    stride: ValueRef,
+    base_ptr: ValueRef,
+};
+
+fn blockTransferKindForSymbol(ctx: *Context, sym: anytype) ?u8 {
+    return switch (sym.type_kind) {
+        .integer => defaultIntegerKind(ctx),
+        .real => 'f',
+        .double_precision => 'd',
+        .complex => 'c',
+        .complex_double => 'z',
+        .logical => 'l',
+        .character => null,
+    };
+}
+
+fn emitDynamicImpliedDoTransfer(ctx: *Context, builder: anytype, arg: *ast.Expr) EmitError!?ListBlockTransfer {
+    if (arg.* != .implied_do) return null;
+
+    const implied = arg.implied_do;
+    if (impliedBoundsStaticSmall(ctx, implied)) return null;
+    if (implied.items.len != 1 or implied.items[0].* != .call_or_subscript) return null;
+
+    const call = implied.items[0].call_or_subscript;
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
+
+    const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return null;
+    const kind = blockTransferKindForSymbol(ctx, sym) orelse return null;
+    return .{
+        .kind = kind,
+        .count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step),
+        .stride = try impliedStrideForDim(ctx, builder, sym, loop_dim, implied.step),
+        .base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start),
+    };
+}
+
+fn emitRangeSectionTransfer(ctx: *Context, builder: anytype, arg: *ast.Expr) EmitError!?ListBlockTransfer {
+    if (arg.* != .call_or_subscript) return null;
+
+    const call = arg.call_or_subscript;
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
+
+    var loop_dim: ?usize = null;
+    for (call.args, 0..) |sub_arg, idx| {
+        if (sub_arg.* != .dim_range) continue;
+        if (loop_dim != null) return null;
+        loop_dim = idx;
+    }
+    const dim = loop_dim orelse return null;
+    const range = call.args[dim].dim_range;
+    if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return null;
+
+    const start_expr = range.lower orelse blk: {
+        const one = try ctx.allocator.create(ast.Expr);
+        one.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+        break :blk one;
+    };
+    defer if (range.lower == null) ctx.allocator.destroy(start_expr);
+
+    var stride = try expr.emitSymbolDimMultiplier(ctx, builder, sym, dim);
+    stride = try coerceRuntimeI32(ctx, builder, stride);
+    if (range.stride) |stride_expr| {
+        const step = try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr));
+        const mul_tmp = try ctx.nextTemp();
+        try builder.binary(mul_tmp, "mul", .i32, stride, step);
+        stride = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
+    }
+
+    const kind = blockTransferKindForSymbol(ctx, sym) orelse return null;
+    return .{
+        .kind = kind,
+        .count = try emitImpliedFinalCount(ctx, builder, start_expr, range.upper, range.stride),
+        .stride = stride,
+        .base_ptr = try emitImpliedBasePtr(ctx, builder, call, dim, start_expr),
+    };
+}
+
+fn emitWholeArrayTransfer(ctx: *Context, builder: anytype, arg: *ast.Expr) EmitError!?ListBlockTransfer {
+    if (arg.* != .identifier) return null;
+    const sym = ctx.findSymbol(arg.identifier) orelse return null;
+    if (sym.dims.len == 0) return null;
+
+    const kind = blockTransferKindForSymbol(ctx, sym) orelse return null;
+    return .{
+        .kind = kind,
+        .count = try emitArrayElemCountI32(ctx, builder, sym),
+        .stride = try ctx.constI32(1),
+        .base_ptr = try ctx.getPointer(sym.name),
+    };
+}
+
+fn emitBlockTransferIfPossible(ctx: *Context, builder: anytype, arg: *ast.Expr) EmitError!?ListBlockTransfer {
+    if (try emitWholeArrayTransfer(ctx, builder, arg)) |transfer| return transfer;
+    if (try emitRangeSectionTransfer(ctx, builder, arg)) |transfer| return transfer;
+    return emitDynamicImpliedDoTransfer(ctx, builder, arg);
+}
+
+fn emitListWriteTypedSlice(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
+    if (args.len == 0) return;
+    var expanded_values = try expandWriteArgsList(ctx, builder, args);
+    defer expanded_values.deinit();
+    const packed_args = try packWriteArgs(ctx, builder, &expanded_values);
+    const decl = try ctx.ensureDeclRaw("col6forge_write_list_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
+    try builder.callTyped(null, .i32, decl, &.{ state, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_array, packed_args.arg_count });
+}
+
+fn emitListReadTypedSlice(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
+    if (args.len == 0) return;
+    var expanded = try expandReadTargets(ctx, builder, args);
+    defer expanded.deinit();
+    const packed_args = try packReadTargets(ctx, builder, &expanded);
+    const decl = try ctx.ensureDeclRaw("col6forge_read_list_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
+    try builder.callTyped(null, .i32, decl, &.{ state, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_array, packed_args.arg_count });
+    try applyComplexFixups(ctx, builder, &expanded);
+}
+
+fn emitListWriteBlockTransfer(ctx: *Context, builder: anytype, state: ValueRef, transfer: ListBlockTransfer) EmitError!void {
+    const decl = try ctx.ensureDeclRaw("col6forge_write_list_stream_n", .i32, &[_]utils.IRType{ .ptr, .i32, .i32, .i32, .ptr }, false);
+    try builder.callTyped(null, .i32, decl, &.{ state, try ctx.constI32(transfer.kind), transfer.count, transfer.stride, transfer.base_ptr });
+}
+
+fn emitListReadBlockTransfer(ctx: *Context, builder: anytype, state: ValueRef, transfer: ListBlockTransfer) EmitError!void {
+    const decl = try ctx.ensureDeclRaw("col6forge_read_list_stream_n", .i32, &[_]utils.IRType{ .ptr, .i32, .i32, .i32, .ptr }, false);
+    try builder.callTyped(null, .i32, decl, &.{ state, try ctx.constI32(transfer.kind), transfer.count, transfer.stride, transfer.base_ptr });
+}
+
+fn emitListWriteStream(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
+    var chunk_start: usize = 0;
+    var idx: usize = 0;
+    while (idx < args.len) : (idx += 1) {
+        if (try emitBlockTransferIfPossible(ctx, builder, args[idx])) |transfer| {
+            try emitListWriteTypedSlice(ctx, builder, state, args[chunk_start..idx]);
+            try emitListWriteBlockTransfer(ctx, builder, state, transfer);
+            chunk_start = idx + 1;
+        }
+    }
+    try emitListWriteTypedSlice(ctx, builder, state, args[chunk_start..]);
+}
+
+fn emitListReadStream(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
+    var chunk_start: usize = 0;
+    var idx: usize = 0;
+    while (idx < args.len) : (idx += 1) {
+        if (try emitBlockTransferIfPossible(ctx, builder, args[idx])) |transfer| {
+            try emitListReadTypedSlice(ctx, builder, state, args[chunk_start..idx]);
+            try emitListReadBlockTransfer(ctx, builder, state, transfer);
+            chunk_start = idx + 1;
+        }
+    }
+    try emitListReadTypedSlice(ctx, builder, state, args[chunk_start..]);
+}
+
+fn shouldStreamList(ctx: *Context, args: []*ast.Expr) bool {
+    if (args.len == 0) return false;
+    for (args) |arg| {
+        switch (arg.*) {
+            .implied_do => {
+                if (!impliedBoundsStaticSmall(ctx, arg.implied_do)) return true;
+            },
+            .identifier => {
+                const sym = ctx.findSymbol(arg.identifier) orelse continue;
+                if (sym.dims.len > 0 and sym.type_kind != .character and args.len > 1) return true;
+            },
+            .call_or_subscript => |call| {
+                const sym = ctx.findSymbol(call.name) orelse continue;
+                if (sym.dims.len == 0 or sym.type_kind == .character) continue;
+                for (call.args) |sub_arg| {
+                    if (sub_arg.* == .dim_range and args.len > 1) return true;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn emitStreamedListWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt, unit_i32: ValueRef) EmitError!bool {
+    if (!shouldStreamList(ctx, write.args)) return false;
+
+    const begin_decl = try ctx.ensureDeclRaw("col6forge_list_write_stream_begin", .ptr, &[_]utils.IRType{ .i32, .i32 }, false);
+    const finish_decl = try ctx.ensureDeclRaw("col6forge_list_write_stream_finish", .i32, &[_]utils.IRType{.ptr}, false);
+    const state_tmp = try ctx.nextTemp();
+    try builder.callTyped(state_tmp, .ptr, begin_decl, &.{ unit_i32, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } });
+    const state = ValueRef{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
+    try emitListWriteStream(ctx, builder, state, write.args);
+    try builder.callTyped(null, .i32, finish_decl, &.{state});
+    return true;
+}
+
+fn emitStreamedListRead(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    unit_i32: ValueRef,
+    status_mode: bool,
+) EmitError!?ValueRef {
+    if (!shouldStreamList(ctx, read.args)) return null;
+
+    const begin_decl = try ctx.ensureDeclRaw("col6forge_list_read_stream_begin", .ptr, &[_]utils.IRType{ .i32, .i32 }, false);
+    const finish_decl = try ctx.ensureDeclRaw("col6forge_list_read_stream_finish", .i32, &[_]utils.IRType{.ptr}, false);
+    const state_tmp = try ctx.nextTemp();
+    try builder.callTyped(state_tmp, .ptr, begin_decl, &.{ unit_i32, ValueRef{ .name = if (status_mode) "1" else "0", .ty = .i32, .is_ptr = false } });
+    const state = ValueRef{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
+    try emitListReadStream(ctx, builder, state, read.args);
+
+    if (status_mode) {
+        const status_tmp = try ctx.nextTemp();
+        try builder.callTyped(status_tmp, .i32, finish_decl, &.{state});
+        return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+    }
+
+    try builder.callTyped(null, .i32, finish_decl, &.{state});
+    return ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
+}
+
 fn emitListDirectedWriteExternal(ctx: *Context, builder: anytype, write: ast.WriteStmt, unit_i32: ValueRef) EmitError!void {
     var expanded_values = try expandWriteArgsList(ctx, builder, write.args);
     defer expanded_values.deinit();
@@ -226,6 +464,9 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
     const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, write.unit) else null;
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value);
 
+    if (!is_internal and try emitStreamedListWrite(ctx, builder, write, unit_i32)) {
+        return;
+    }
     if (!is_internal and try emitDynamicImpliedDoListWrite(ctx, builder, write, unit_i32)) {
         return;
     }
@@ -364,6 +605,9 @@ pub fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt)
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value);
 
     if (!is_internal) {
+        if (try emitStreamedListRead(ctx, builder, read, unit_i32, false)) |_| {
+            return;
+        }
         if (try emitDynamicImpliedDoListRead(ctx, builder, read, unit_i32)) |_| {
             return;
         }
@@ -382,6 +626,9 @@ pub fn emitListDirectedReadStatus(ctx: *Context, builder: anytype, read: ast.Rea
     const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value);
 
     if (!is_internal) {
+        if (try emitStreamedListRead(ctx, builder, read, unit_i32, true)) |status| {
+            return status;
+        }
         if (try emitDynamicImpliedDoListRead(ctx, builder, read, unit_i32)) |status| {
             return status;
         }

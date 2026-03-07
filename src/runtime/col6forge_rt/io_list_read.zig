@@ -13,6 +13,11 @@ extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
 extern fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long) c_int;
 extern fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) void;
+extern fn col6forge_list_write_stream_begin(unit: c_int, strict_status: c_int) ?*anyopaque;
+extern fn col6forge_write_list_stream_typed(state_any: ?*anyopaque, arg_ptrs: ?[*]?*anyopaque, arg_kinds: ?[*]const u8, arg_lens: ?[*]const c_int, arg_count: c_int) c_int;
+extern fn col6forge_write_list_stream_n(state_any: ?*anyopaque, kind: c_int, count: c_int, stride: c_int, base: ?*anyopaque) c_int;
+extern fn col6forge_list_write_stream_finish(state_any: ?*anyopaque) c_int;
+extern fn col6forge_rewind(unit: c_int) c_int;
 
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
@@ -260,6 +265,318 @@ fn col6forgeDiscardToRecordEnd(file: *FILE) void {
         ch = fgetc(file);
         if (ch == -1 or ch == '\n') break;
     }
+}
+
+const ListReadStreamState = struct {
+    unit: c_int,
+    input: ?ListInput,
+    input_opened: bool,
+    commit_pos: bool,
+    status_mode: c_int,
+    status: c_int,
+    token: [COL6FORGE_LIST_TOKEN_MAX]u8,
+};
+
+fn allocListReadStreamState(unit: c_int, input: ?ListInput, status_mode: c_int, status: c_int) ?*ListReadStreamState {
+    const state = std.heap.page_allocator.create(ListReadStreamState) catch return null;
+    state.* = .{
+        .unit = unit,
+        .input = input,
+        .input_opened = input != null,
+        .commit_pos = false,
+        .status_mode = status_mode,
+        .status = status,
+        .token = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX,
+    };
+    return state;
+}
+
+fn listReadStreamStateFromOpaque(state_any: ?*anyopaque) ?*ListReadStreamState {
+    const raw = state_any orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+fn closeListReadStreamState(stream: *ListReadStreamState) void {
+    if (!stream.input_opened) return;
+    col6forgeCloseListInput(stream.unit, stream.input.?, stream.commit_pos);
+    stream.input_opened = false;
+}
+
+fn destroyListReadStreamState(state: ?*ListReadStreamState) void {
+    if (state) |ptr| {
+        closeListReadStreamState(ptr);
+        std.heap.page_allocator.destroy(ptr);
+    }
+}
+
+fn beginListReadStream(unit: c_int, status_mode: c_int) ?*ListReadStreamState {
+    const input = col6forgeOpenListInput(unit) orelse {
+        if (status_mode == 0 and col6forge_io_should_abort() != 0) exit(2);
+        return allocListReadStreamState(unit, null, status_mode, 1);
+    };
+    return allocListReadStreamState(unit, input, status_mode, 0);
+}
+
+fn listReadStreamFail(stream: *ListReadStreamState, code: c_int) c_int {
+    if (stream.status == 0) stream.status = code;
+    if (stream.status_mode == 0 and col6forge_io_should_abort() != 0) {
+        closeListReadStreamState(stream);
+        exit(2);
+    }
+    return stream.status;
+}
+
+fn listReadStreamReadToken(stream: *ListReadStreamState) ?[]u8 {
+    if (stream.status != 0) return null;
+    const input = stream.input orelse {
+        _ = listReadStreamFail(stream, 1);
+        return null;
+    };
+    switch (col6forgeReadListTokenStream(input.file, stream.token[0..])) {
+        .ok => return stream.token[0..],
+        .eof => {
+            _ = listReadStreamFail(stream, -1);
+            return null;
+        },
+        .overflow => {
+            _ = listReadStreamFail(stream, 1);
+            return null;
+        },
+    }
+}
+
+fn listReadStreamReadTypedArg(stream: *ListReadStreamState, kind: u8, arg: ?*anyopaque, len_raw: c_int) c_int {
+    const ptr = arg orelse return listReadStreamFail(stream, 1);
+    switch (kind) {
+        'i' => {
+            const token = listReadStreamReadToken(stream) orelse return stream.status;
+            const out: *c_int = @ptrCast(@alignCast(ptr));
+            out.* = parseIntegerToken(token) orelse return listReadStreamFail(stream, 1);
+        },
+        'j' => {
+            const token = listReadStreamReadToken(stream) orelse return stream.status;
+            const out: *i64 = @ptrCast(@alignCast(ptr));
+            out.* = parseInteger64Token(token) orelse return listReadStreamFail(stream, 1);
+        },
+        'f' => {
+            const token = listReadStreamReadToken(stream) orelse return stream.status;
+            const out: *f32 = @ptrCast(@alignCast(ptr));
+            out.* = parseFloat32Token(token) orelse return listReadStreamFail(stream, 1);
+        },
+        'd' => {
+            const token = listReadStreamReadToken(stream) orelse return stream.status;
+            const out: *f64 = @ptrCast(@alignCast(ptr));
+            out.* = parseFloat64Token(token) orelse return listReadStreamFail(stream, 1);
+        },
+        'l' => {
+            const token = listReadStreamReadToken(stream) orelse return stream.status;
+            const out: *u8 = @ptrCast(@alignCast(ptr));
+            out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&stream.token), @intCast(cstrlenRaw(token))));
+        },
+        's' => {
+            const token = listReadStreamReadToken(stream) orelse return stream.status;
+            const out: [*]u8 = @ptrCast(ptr);
+            const len: usize = @intCast(@max(len_raw, 0));
+            var idx: usize = 0;
+            while (idx < len) : (idx += 1) out[idx] = ' ';
+            const token_len = cstrlenRaw(token);
+            const copy_len = @min(token_len, len);
+            idx = 0;
+            while (idx < copy_len) : (idx += 1) out[idx] = token[idx];
+        },
+        'c' => {
+            const real_token = listReadStreamReadToken(stream) orelse return stream.status;
+            const real = parseFloat32Token(real_token) orelse return listReadStreamFail(stream, 1);
+            const imag_token = listReadStreamReadToken(stream) orelse return stream.status;
+            const imag = parseFloat32Token(imag_token) orelse return listReadStreamFail(stream, 1);
+            const out: [*]f32 = @ptrCast(@alignCast(ptr));
+            out[0] = real;
+            out[1] = imag;
+        },
+        'z' => {
+            const real_token = listReadStreamReadToken(stream) orelse return stream.status;
+            const real = parseFloat64Token(real_token) orelse return listReadStreamFail(stream, 1);
+            const imag_token = listReadStreamReadToken(stream) orelse return stream.status;
+            const imag = parseFloat64Token(imag_token) orelse return listReadStreamFail(stream, 1);
+            const out: [*]f64 = @ptrCast(@alignCast(ptr));
+            out[0] = real;
+            out[1] = imag;
+        },
+        else => return listReadStreamFail(stream, 1),
+    }
+    return stream.status;
+}
+
+fn listReadStreamReadBlock(stream: *ListReadStreamState, kind_u8: u8, count: usize, stride: c_int, base_any: ?*anyopaque) c_int {
+    if (stream.status != 0 or count == 0) return stream.status;
+    if (stride == 0) return listReadStreamFail(stream, 1);
+    const base = base_any orelse return listReadStreamFail(stream, 1);
+
+    switch (kind_u8) {
+        'i' => {
+            const raw: [*]u8 = @ptrCast(base);
+            const byte_stride = checkedMulI64(stride, @sizeOf(c_int)) orelse return listReadStreamFail(stream, 1);
+            var idx: usize = 0;
+            while (idx < count) : (idx += 1) {
+                const token = listReadStreamReadToken(stream) orelse return stream.status;
+                const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
+                const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
+                const dst: *c_int = @ptrCast(@alignCast(ptr));
+                dst.* = parseIntegerToken(token) orelse return listReadStreamFail(stream, 1);
+            }
+        },
+        'j' => {
+            const raw: [*]u8 = @ptrCast(base);
+            const byte_stride = checkedMulI64(stride, @sizeOf(i64)) orelse return listReadStreamFail(stream, 1);
+            var idx: usize = 0;
+            while (idx < count) : (idx += 1) {
+                const token = listReadStreamReadToken(stream) orelse return stream.status;
+                const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
+                const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
+                const dst: *i64 = @ptrCast(@alignCast(ptr));
+                dst.* = parseInteger64Token(token) orelse return listReadStreamFail(stream, 1);
+            }
+        },
+        'f' => {
+            const raw: [*]u8 = @ptrCast(base);
+            const byte_stride = checkedMulI64(stride, @sizeOf(f32)) orelse return listReadStreamFail(stream, 1);
+            var idx: usize = 0;
+            while (idx < count) : (idx += 1) {
+                const token = listReadStreamReadToken(stream) orelse return stream.status;
+                const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
+                const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
+                const dst: *f32 = @ptrCast(@alignCast(ptr));
+                dst.* = parseFloat32Token(token) orelse return listReadStreamFail(stream, 1);
+            }
+        },
+        'd' => {
+            const raw: [*]u8 = @ptrCast(base);
+            const byte_stride = checkedMulI64(stride, @sizeOf(f64)) orelse return listReadStreamFail(stream, 1);
+            var idx: usize = 0;
+            while (idx < count) : (idx += 1) {
+                const token = listReadStreamReadToken(stream) orelse return stream.status;
+                const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
+                const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
+                const dst: *f64 = @ptrCast(@alignCast(ptr));
+                dst.* = parseFloat64Token(token) orelse return listReadStreamFail(stream, 1);
+            }
+        },
+        'l' => {
+            const raw: [*]u8 = @ptrCast(base);
+            var idx: usize = 0;
+            while (idx < count) : (idx += 1) {
+                const token = listReadStreamReadToken(stream) orelse return stream.status;
+                const off = checkedMulI64(@intCast(idx), stride) orelse return listReadStreamFail(stream, 1);
+                const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
+                ptr[0] = @intCast(col6forge_parse_logical_field(asConstCStr(&stream.token), @intCast(cstrlenRaw(token))));
+            }
+        },
+        'c' => {
+            const raw: [*]u8 = @ptrCast(base);
+            const byte_stride = checkedMulI64(stride, 2 * @sizeOf(f32)) orelse return listReadStreamFail(stream, 1);
+            var idx: usize = 0;
+            while (idx < count) : (idx += 1) {
+                const real_token = listReadStreamReadToken(stream) orelse return stream.status;
+                const real = parseFloat32Token(real_token) orelse return listReadStreamFail(stream, 1);
+                const imag_token = listReadStreamReadToken(stream) orelse return stream.status;
+                const imag = parseFloat32Token(imag_token) orelse return listReadStreamFail(stream, 1);
+                const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
+                const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
+                const dst: [*]f32 = @ptrCast(@alignCast(ptr));
+                dst[0] = real;
+                dst[1] = imag;
+            }
+        },
+        'z' => {
+            const raw: [*]u8 = @ptrCast(base);
+            const byte_stride = checkedMulI64(stride, 2 * @sizeOf(f64)) orelse return listReadStreamFail(stream, 1);
+            var idx: usize = 0;
+            while (idx < count) : (idx += 1) {
+                const real_token = listReadStreamReadToken(stream) orelse return stream.status;
+                const real = parseFloat64Token(real_token) orelse return listReadStreamFail(stream, 1);
+                const imag_token = listReadStreamReadToken(stream) orelse return stream.status;
+                const imag = parseFloat64Token(imag_token) orelse return listReadStreamFail(stream, 1);
+                const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
+                const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
+                const dst: [*]f64 = @ptrCast(@alignCast(ptr));
+                dst[0] = real;
+                dst[1] = imag;
+            }
+        },
+        else => return listReadStreamFail(stream, 1),
+    }
+    return stream.status;
+}
+
+fn listReadStreamTransferTyped(
+    state: ?*ListReadStreamState,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_lens: ?[*]const c_int,
+    arg_count: c_int,
+) c_int {
+    const stream = state orelse return 1;
+    if (stream.status != 0) return stream.status;
+
+    const total = runtimeArgCount(arg_count);
+    var idx: usize = 0;
+    while (idx < total) : (idx += 1) {
+        const status = listReadStreamReadTypedArg(
+            stream,
+            runtimeArgKindAt(arg_kinds, idx, total),
+            runtimeArgPtrAt(arg_ptrs, idx, total),
+            runtimeArgLenAt(arg_lens, idx, total),
+        );
+        if (status != 0) return status;
+    }
+    return stream.status;
+}
+
+fn listReadStreamTransferN(
+    state: ?*ListReadStreamState,
+    kind: c_int,
+    count: c_int,
+    stride: c_int,
+    base: ?*anyopaque,
+) c_int {
+    const stream = state orelse return 1;
+    return listReadStreamReadBlock(stream, @intCast(kind), @intCast(@max(count, 0)), stride, base);
+}
+
+pub export fn col6forge_list_read_stream_begin(unit: c_int, status_mode: c_int) callconv(.c) ?*anyopaque {
+    const state = beginListReadStream(unit, status_mode) orelse return null;
+    return @ptrCast(state);
+}
+
+pub export fn col6forge_read_list_stream_typed(
+    state_any: ?*anyopaque,
+    arg_ptrs: ?[*]?*anyopaque,
+    arg_kinds: ?[*]const u8,
+    arg_lens: ?[*]const c_int,
+    arg_count: c_int,
+) callconv(.c) c_int {
+    return listReadStreamTransferTyped(listReadStreamStateFromOpaque(state_any), arg_ptrs, arg_kinds, arg_lens, arg_count);
+}
+
+pub export fn col6forge_read_list_stream_n(
+    state_any: ?*anyopaque,
+    kind: c_int,
+    count: c_int,
+    stride: c_int,
+    base: ?*anyopaque,
+) callconv(.c) c_int {
+    return listReadStreamTransferN(listReadStreamStateFromOpaque(state_any), kind, count, stride, base);
+}
+
+pub export fn col6forge_list_read_stream_finish(state_any: ?*anyopaque) callconv(.c) c_int {
+    const state = listReadStreamStateFromOpaque(state_any);
+    defer destroyListReadStreamState(state);
+    const stream = state orelse return 1;
+    if (stream.status == 0 and stream.input_opened) {
+        col6forgeDiscardToRecordEnd(stream.input.?.file);
+        stream.commit_pos = true;
+    }
+    return stream.status;
 }
 
 pub export fn col6forge_read_list_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
@@ -974,4 +1291,45 @@ test "list index helpers detect arithmetic overflow" {
     try std.testing.expect(checkedMul(std.math.maxInt(usize), 2) == null);
     try std.testing.expect(checkedAdd(std.math.maxInt(usize), 1) == null);
     try std.testing.expect(checkedMulI64(std.math.maxInt(i64), 2) == null);
+}
+
+test "list stream io sequences typed and block transfers across one record" {
+    const unit: c_int = 64;
+
+    var pre_in: c_int = 7;
+    var mid1_in: [2]c_int = .{ 11, 22 };
+    var mid2_in: [2]c_int = .{ 33, 44 };
+    var post_in: c_int = 99;
+    var pre_write_ptrs: [1]?*anyopaque = .{@ptrCast(&pre_in)};
+    var post_write_ptrs: [1]?*anyopaque = .{@ptrCast(&post_in)};
+    const scalar_kinds: [1]u8 = .{'i'};
+    const scalar_lens: [1]c_int = .{0};
+
+    const write_state = col6forge_list_write_stream_begin(unit, 1) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_write_list_stream_typed(write_state, &pre_write_ptrs, &scalar_kinds, &scalar_lens, 1));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_write_list_stream_n(write_state, 'i', 2, 1, @ptrCast(&mid1_in[0])));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_write_list_stream_n(write_state, 'i', 2, 1, @ptrCast(&mid2_in[0])));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_write_list_stream_typed(write_state, &post_write_ptrs, &scalar_kinds, &scalar_lens, 1));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_list_write_stream_finish(write_state));
+
+    _ = col6forge_rewind(unit);
+
+    var pre_out: c_int = 0;
+    var mid1_out: [2]c_int = .{ 0, 0 };
+    var mid2_out: [2]c_int = .{ 0, 0 };
+    var post_out: c_int = 0;
+    var pre_read_ptrs: [1]?*anyopaque = .{@ptrCast(&pre_out)};
+    var post_read_ptrs: [1]?*anyopaque = .{@ptrCast(&post_out)};
+
+    const read_state = col6forge_list_read_stream_begin(unit, 1) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_read_list_stream_typed(read_state, &pre_read_ptrs, &scalar_kinds, null, 1));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_read_list_stream_n(read_state, 'i', 2, 1, @ptrCast(&mid1_out[0])));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_read_list_stream_n(read_state, 'i', 2, 1, @ptrCast(&mid2_out[0])));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_read_list_stream_typed(read_state, &post_read_ptrs, &scalar_kinds, null, 1));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_list_read_stream_finish(read_state));
+
+    try std.testing.expectEqual(pre_in, pre_out);
+    try std.testing.expectEqualSlices(c_int, mid1_in[0..], mid1_out[0..]);
+    try std.testing.expectEqualSlices(c_int, mid2_in[0..], mid2_out[0..]);
+    try std.testing.expectEqual(post_in, post_out);
 }
