@@ -28,6 +28,7 @@ const expandReadTargets = expansion.expandReadTargets;
 const applyComplexFixups = expansion.applyComplexFixups;
 const defaultIntegerKind = io_utils.defaultIntegerKind;
 const scalarRuntimeKind = io_utils.scalarRuntimeKind;
+const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 
 const PackedWriteArgs = struct {
     ptr_array: ValueRef,
@@ -224,7 +225,7 @@ pub fn emitListDirectedWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
     const unit_char_len = charLenForExpr(ctx, write.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
     const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, write.unit) else null;
-    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value);
 
     if (!is_internal and try emitDynamicImpliedDoListWrite(ctx, builder, write, unit_i32)) {
         return;
@@ -367,7 +368,7 @@ pub fn emitListDirectedRead(ctx: *Context, builder: anytype, read: ast.ReadStmt)
     const unit_char_len = charLenForExpr(ctx, read.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
     const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, read.unit) else null;
-    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value);
 
     if (!is_internal) {
         if (try emitDynamicImpliedDoListRead(ctx, builder, read, unit_i32)) |_| {
@@ -385,7 +386,7 @@ pub fn emitListDirectedReadStatus(ctx: *Context, builder: anytype, read: ast.Rea
     const unit_char_len = charLenForExpr(ctx, read.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
     const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, read.unit) else null;
-    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value);
 
     if (!is_internal) {
         if (try emitDynamicImpliedDoListRead(ctx, builder, read, unit_i32)) |status| {
@@ -577,13 +578,13 @@ fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) !ValueRef {
         .dim_range => |range| blk: {
             if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return error.UnsupportedImpliedDo;
             var upper = try expr.emitExpr(ctx, builder, range.upper);
-            upper = try expr.coerce(ctx, builder, upper, .i32);
+            upper = try coerceRuntimeI32(ctx, builder, upper);
             const lower = if (range.lower) |lower_expr|
-                try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr), .i32)
+                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr))
             else
                 ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
             const step = if (range.stride) |stride_expr|
-                try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr), .i32)
+                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr))
             else
                 ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
             break :blk try emitTripletCountValues(ctx, builder, lower, upper, step);
@@ -591,12 +592,12 @@ fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) !ValueRef {
         .literal => |lit| {
             if (lit.kind == .assumed_size) return error.UnsupportedImpliedDo;
             var value = try expr.emitExpr(ctx, builder, dim);
-            value = try expr.coerce(ctx, builder, value, .i32);
+            value = try coerceRuntimeI32(ctx, builder, value);
             return value;
         },
         else => {
             var value = try expr.emitExpr(ctx, builder, dim);
-            value = try expr.coerce(ctx, builder, value, .i32);
+            value = try coerceRuntimeI32(ctx, builder, value);
             return value;
         },
     };

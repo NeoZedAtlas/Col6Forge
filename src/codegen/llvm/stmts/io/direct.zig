@@ -26,6 +26,7 @@ const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
 const defaultIntegerKind = io_utils.defaultIntegerKind;
 const scalarRuntimeKind = io_utils.scalarRuntimeKind;
+const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const expandIoArgs = expansion.expandIoArgs;
 const ExpandedIoArgs = expansion.ExpandedIoArgs;
 const expandWriteArgs = expansion.expandWriteArgs;
@@ -123,9 +124,9 @@ pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitE
 fn prepareDirectArgs(ctx: *Context, builder: anytype, stmt: anytype) EmitError!PreparedDirectArgs {
     const rec_expr = stmt.rec orelse return error.MissingRecordNumber;
     const unit_value = try expr.emitExpr(ctx, builder, stmt.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const rec_value = try expr.emitExpr(ctx, builder, rec_expr);
-    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
     const expanded_args = try expandIoArgs(ctx, stmt.args);
     const fmt_items = try resolveFormatItemsForDirect(ctx, stmt.format);
     const recl = if (fmt_items != null) try lookupDirectRecl(ctx, stmt.unit) else null;
@@ -253,9 +254,9 @@ fn emitWholeArrayDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
 
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch return false;
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const rec_value = try expr.emitExpr(ctx, builder, write.rec.?);
-    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
     const count_i32 = try ctx.constI32(@intCast(elem_count));
     const one_i32 = try ctx.constI32(1);
     const base_ptr = try ctx.getPointer(sym.name);
@@ -273,9 +274,9 @@ fn emitWholeArrayDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt)
 
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch return false;
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const rec_value = try expr.emitExpr(ctx, builder, read.rec.?);
-    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
     const count_i32 = try ctx.constI32(@intCast(elem_count));
     const one_i32 = try ctx.constI32(1);
     const base_ptr = try ctx.getPointer(sym.name);
@@ -324,9 +325,9 @@ fn emitMixedArrayDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteSt
     const post_packed = try packTypedDirectArgs(ctx, builder, &post_typed);
 
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const rec_value = try expr.emitExpr(ctx, builder, write.rec.?);
-    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
     const mid_kind_val: i64 = switch (sym.type_kind) {
         .integer => defaultIntegerKind(ctx),
         .real => 'f',
@@ -378,9 +379,9 @@ fn emitMixedArrayDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt)
     const post_packed = try packTypedDirectArgs(ctx, builder, &post_typed);
 
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const rec_value = try expr.emitExpr(ctx, builder, read.rec.?);
-    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
     const mid_kind_val: i64 = switch (sym.type_kind) {
         .integer => defaultIntegerKind(ctx),
         .real => 'f',
@@ -472,7 +473,7 @@ fn emitArrayElemCountI32(ctx: *Context, builder: anytype, sym: anytype) EmitErro
             error.UnknownSymbol => try expr.emitDimValue(ctx, builder, dim),
             else => return err,
         };
-        if (extent.ty != .i32) extent = try expr.coerce(ctx, builder, extent, .i32);
+        if (extent.ty != .i32) extent = try coerceRuntimeI32(ctx, builder, extent);
         const mul_tmp = try ctx.nextTemp();
         try builder.binary(mul_tmp, "mul", .i32, total, extent);
         total = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
@@ -573,9 +574,9 @@ fn emitDynamicImpliedDoDirectWrite(
     };
 
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const rec_value = try expr.emitExpr(ctx, builder, write.rec.?);
-    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
     const stride = try impliedStrideForDim(ctx, builder, sym.dims, loop_dim);
     const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step);
     const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
@@ -660,9 +661,9 @@ fn emitDynamicImpliedDoDirectRead(
     };
 
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const rec_value = try expr.emitExpr(ctx, builder, read.rec.?);
-    const rec_i32 = try expr.coerce(ctx, builder, rec_value, .i32);
+    const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
     const stride = try impliedStrideForDim(ctx, builder, sym.dims, loop_dim);
     const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step);
     const base_ptr = try emitImpliedBasePtr(ctx, builder, call, loop_dim, implied.start);
@@ -794,13 +795,13 @@ fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) EmitError!V
         .dim_range => |range| blk: {
             if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return error.UnsupportedImpliedDo;
             var upper = try expr.emitExpr(ctx, builder, range.upper);
-            upper = try expr.coerce(ctx, builder, upper, .i32);
+            upper = try coerceRuntimeI32(ctx, builder, upper);
             const lower = if (range.lower) |lower_expr|
-                try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr), .i32)
+                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr))
             else
                 ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
             const step = if (range.stride) |stride_expr|
-                try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr), .i32)
+                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr))
             else
                 ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
             break :blk try emitTripletCountValues(ctx, builder, lower, upper, step);
@@ -808,12 +809,12 @@ fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) EmitError!V
         .literal => |lit| {
             if (lit.kind == .assumed_size) return error.UnsupportedImpliedDo;
             var value = try expr.emitExpr(ctx, builder, dim);
-            value = try expr.coerce(ctx, builder, value, .i32);
+            value = try coerceRuntimeI32(ctx, builder, value);
             return value;
         },
         else => {
             var value = try expr.emitExpr(ctx, builder, dim);
-            value = try expr.coerce(ctx, builder, value, .i32);
+            value = try coerceRuntimeI32(ctx, builder, value);
             return value;
         },
     };

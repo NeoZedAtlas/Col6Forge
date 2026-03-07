@@ -26,6 +26,7 @@ const intLiteralValue = io_utils.intLiteralValue;
 const defaultIntegerKind = io_utils.defaultIntegerKind;
 const scalarRuntimeKind = io_utils.scalarRuntimeKind;
 const scalarByteSize = io_utils.scalarByteSize;
+const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const expandIoArgs = expansion.expandIoArgs;
 const max_packed_array_elems: usize = 4096;
 
@@ -231,7 +232,7 @@ fn emitArrayElemCountI32(ctx: *Context, builder: anytype, sym: anytype) EmitErro
             error.UnknownSymbol => try expr.emitDimValue(ctx, builder, dim),
             else => return err,
         };
-        if (extent.ty != .i32) extent = try expr.coerce(ctx, builder, extent, .i32);
+        if (extent.ty != .i32) extent = try coerceRuntimeI32(ctx, builder, extent);
         const mul_tmp = try ctx.nextTemp();
         try builder.binary(mul_tmp, "mul", .i32, total, extent);
         total = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
@@ -387,7 +388,7 @@ fn emitRangeSectionTransfer(
     var stride = try impliedStrideForSymbolDim(ctx, builder, sym, dim);
     if (range.stride) |stride_expr| {
         var step = try expr.emitExpr(ctx, builder, stride_expr);
-        if (step.ty != .i32) step = try expr.coerce(ctx, builder, step, .i32);
+        if (step.ty != .i32) step = try coerceRuntimeI32(ctx, builder, step);
         const mul_tmp = try ctx.nextTemp();
         try builder.binary(mul_tmp, "mul", .i32, stride, step);
         stride = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
@@ -556,7 +557,7 @@ fn emitUnformattedReadStream(ctx: *Context, builder: anytype, state: ValueRef, a
 
 fn impliedStrideForSymbolDim(ctx: *Context, builder: anytype, sym: anytype, loop_dim: usize) EmitError!ValueRef {
     var stride = try expr.emitSymbolDimMultiplier(ctx, builder, sym, loop_dim);
-    if (stride.ty != .i32) stride = try expr.coerce(ctx, builder, stride, .i32);
+    if (stride.ty != .i32) stride = try coerceRuntimeI32(ctx, builder, stride);
     return stride;
 }
 
@@ -709,7 +710,7 @@ fn emitMixedArrayUnformattedRead(ctx: *Context, builder: anytype, read: ast.Read
 
 pub fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!void {
     const unit_value = try expr.emitExpr(ctx, builder, write.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const record_size = try emitUnformattedRecordSize(ctx, builder, write.args);
     const begin_decl = try ctx.ensureDeclRaw("col6forge_unformatted_write_stream_begin", .ptr, &[_]utils.IRType{ .i32, .i32 }, false);
     const state_tmp = try ctx.nextTemp();
@@ -722,7 +723,7 @@ pub fn emitUnformattedWrite(ctx: *Context, builder: anytype, write: ast.WriteStm
 
 fn emitUnformattedReadImpl(ctx: *Context, builder: anytype, read: ast.ReadStmt, needs_status: bool) EmitError!ValueRef {
     const unit_value = try expr.emitExpr(ctx, builder, read.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const record_size = try emitUnformattedRecordSize(ctx, builder, read.args);
     const begin_decl = try ctx.ensureDeclRaw("col6forge_unformatted_read_stream_begin", .ptr, &[_]utils.IRType{ .i32, .i32 }, false);
     const state_tmp = try ctx.nextTemp();
@@ -1017,13 +1018,13 @@ fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) EmitError!V
         .dim_range => |range| blk: {
             if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return error.UnsupportedImpliedDo;
             var upper = try expr.emitExpr(ctx, builder, range.upper);
-            upper = try expr.coerce(ctx, builder, upper, .i32);
+            upper = try coerceRuntimeI32(ctx, builder, upper);
             const lower = if (range.lower) |lower_expr|
-                try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr), .i32)
+                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr))
             else
                 ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
             const step = if (range.stride) |stride_expr|
-                try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr), .i32)
+                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr))
             else
                 ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
             break :blk try emitTripletCountValues(ctx, builder, lower, upper, step);
@@ -1031,12 +1032,12 @@ fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) EmitError!V
         .literal => |lit| {
             if (lit.kind == .assumed_size) return error.UnsupportedImpliedDo;
             var value = try expr.emitExpr(ctx, builder, dim);
-            value = try expr.coerce(ctx, builder, value, .i32);
+            value = try coerceRuntimeI32(ctx, builder, value);
             return value;
         },
         else => {
             var value = try expr.emitExpr(ctx, builder, dim);
-            value = try expr.coerce(ctx, builder, value, .i32);
+            value = try coerceRuntimeI32(ctx, builder, value);
             return value;
         },
     };

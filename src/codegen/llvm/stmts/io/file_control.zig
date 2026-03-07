@@ -13,6 +13,7 @@ const io_utils = @import("utils.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
 const evalConstIntSem = io_utils.evalConstIntSem;
+const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 
 fn constI32(ctx: *Context, value: i64) EmitError!ValueRef {
     return ctx.constI32(value);
@@ -44,13 +45,13 @@ fn emitSubstringLenValue(ctx: *Context, builder: anytype, sub: ast.SubstringExpr
     var end_val = try emitCharSymbolLenValue(ctx, sub.name, sym);
     if (sub.end) |end_expr| {
         end_val = try expr.emitExpr(ctx, builder, end_expr);
-        if (end_val.ty != .i32) end_val = try expr.coerce(ctx, builder, end_val, .i32);
+        if (end_val.ty != .i32) end_val = try coerceRuntimeI32(ctx, builder, end_val);
     }
 
     var start_val = try constI32(ctx, 1);
     if (sub.start) |start_expr| {
         start_val = try expr.emitExpr(ctx, builder, start_expr);
-        if (start_val.ty != .i32) start_val = try expr.coerce(ctx, builder, start_val, .i32);
+        if (start_val.ty != .i32) start_val = try coerceRuntimeI32(ctx, builder, start_val);
     }
 
     const diff_tmp = try ctx.nextTemp();
@@ -150,7 +151,7 @@ pub fn emitOpen(
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!bool {
     const unit_value = try expr.emitExpr(ctx, builder, open.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const file_arg = try emitCharArg(ctx, builder, open.file);
     const access_arg = try emitCharArg(ctx, builder, open.access);
     const form_arg = try emitCharArg(ctx, builder, open.form);
@@ -161,7 +162,7 @@ pub fn emitOpen(
     var has_recl_i32 = try constI32(ctx, 0);
     if (open.recl) |recl_expr| {
         const recl_value = try expr.emitExpr(ctx, builder, recl_expr);
-        recl_i32 = try expr.coerce(ctx, builder, recl_value, .i32);
+        recl_i32 = try coerceRuntimeI32(ctx, builder, recl_value);
         has_recl_i32 = try constI32(ctx, 1);
 
         // Track constant RECL by unit number (when constant) and by unit variable
@@ -207,7 +208,7 @@ pub fn emitRewind(
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!bool {
     const unit_value = try expr.emitExpr(ctx, builder, rewind.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const rewind_name = try ctx.ensureDeclRaw("col6forge_rewind", .i32, &.{.i32}, false);
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, rewind_name, &.{unit_i32});
@@ -330,7 +331,7 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
 
     const unit_node = spec.unit_expr orelse inquire.controls[0].value;
     const unit_value = try expr.emitExpr(ctx, builder, unit_node);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const args = [_]ValueRef{
         unit_i32,
         iostat_ptr,
@@ -385,7 +386,7 @@ pub fn emitClose(
     }
     const unit_node = unit_expr orelse return false;
     const unit_value = try expr.emitExpr(ctx, builder, unit_node);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const status_arg = try emitCharArg(ctx, builder, status_expr);
     const fn_name = try ctx.ensureDeclRaw("col6forge_close_ex", .i32, &.{ .i32, .ptr, .i32 }, false);
     const status_tmp = try ctx.nextTemp();
@@ -401,7 +402,7 @@ pub fn emitBackspace(
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!bool {
     const unit_value = try expr.emitExpr(ctx, builder, backspace.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const backspace_name = try ctx.ensureDeclRaw("col6forge_backspace", .i32, &.{.i32}, false);
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, backspace_name, &.{unit_i32});
@@ -416,7 +417,7 @@ pub fn emitEndfile(
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!bool {
     const unit_value = try expr.emitExpr(ctx, builder, endfile.unit);
-    const unit_i32 = try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const endfile_name = try ctx.ensureDeclRaw("col6forge_endfile", .i32, &.{.i32}, false);
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, endfile_name, &.{unit_i32});

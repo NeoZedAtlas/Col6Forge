@@ -30,6 +30,7 @@ const resolveCharFormatItemsFromExpr = char_format.resolveCharFormatItemsFromExp
 const emitKindArray = io_utils.emitKindArray;
 const defaultIntegerKind = io_utils.defaultIntegerKind;
 const defaultIntegerReadKind = io_utils.defaultIntegerReadKind;
+const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 
 const FormatExprResolution = union(enum) {
     dynamic_label_var: []const u8,
@@ -125,13 +126,13 @@ fn emitFormatExprLen(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitE
             var end_val: ValueRef = if (sym.char_len) |len| try constI32(ctx, @intCast(len)) else lookupCharArgLen(ctx, sub.name) orelse try constI32(ctx, 1);
             if (sub.end) |end_expr| {
                 end_val = try expr.emitExpr(ctx, builder, end_expr);
-                if (end_val.ty != .i32) end_val = try expr.coerce(ctx, builder, end_val, .i32);
+                if (end_val.ty != .i32) end_val = try coerceRuntimeI32(ctx, builder, end_val);
             }
 
             var start_val = try constI32(ctx, 1);
             if (sub.start) |start_expr| {
                 start_val = try expr.emitExpr(ctx, builder, start_expr);
-                if (start_val.ty != .i32) start_val = try expr.coerce(ctx, builder, start_val, .i32);
+                if (start_val.ty != .i32) start_val = try coerceRuntimeI32(ctx, builder, start_val);
             }
 
             const diff_tmp = try ctx.nextTemp();

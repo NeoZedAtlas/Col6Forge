@@ -294,6 +294,41 @@ pub fn emitStackValue(ctx: *Context, builder: anytype, value: ValueRef) EmitErro
     return ptr;
 }
 
+pub fn coerceRuntimeI32(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+    switch (value.ty) {
+        .i32 => return value,
+        .i64 => {
+            const min_i32 = ValueRef{ .name = try ctx.intLiteral(std.math.minInt(i32)), .ty = .i64, .is_ptr = false };
+            const max_i32 = ValueRef{ .name = try ctx.intLiteral(std.math.maxInt(i32)), .ty = .i64, .is_ptr = false };
+
+            const below_name = try ctx.nextTemp();
+            try builder.compare(below_name, "icmp", "slt", .i64, value, min_i32);
+            const below = ValueRef{ .name = below_name, .ty = .i1, .is_ptr = false };
+
+            const above_name = try ctx.nextTemp();
+            try builder.compare(above_name, "icmp", "sgt", .i64, value, max_i32);
+            const above = ValueRef{ .name = above_name, .ty = .i1, .is_ptr = false };
+
+            const overflow_name = try ctx.nextTemp();
+            try builder.binary(overflow_name, "or", .i1, below, above);
+            const overflow = ValueRef{ .name = overflow_name, .ty = .i1, .is_ptr = false };
+
+            const fail_label = try ctx.nextLabel("io_i32_fail");
+            const ok_label = try ctx.nextLabel("io_i32_ok");
+            try builder.brCond(overflow, fail_label, ok_label);
+
+            try builder.label(fail_label);
+            const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, &.{}, false);
+            try builder.callTyped(null, .void, trap_name, &.{});
+            try builder.emitUnreachable();
+
+            try builder.label(ok_label);
+            return expr.coerce(ctx, builder, value, .i32);
+        },
+        else => return expr.coerce(ctx, builder, value, .i32),
+    }
+}
+
 pub fn emitFreeAllocs(ctx: *Context, builder: anytype, allocs: []const ValueRef) EmitError!void {
     if (allocs.len == 0) return;
     const free_name = try ctx.ensureDeclRaw("free", .void, &[_]llvm_types.IRType{.ptr}, false);
@@ -464,16 +499,16 @@ pub fn emitTripletCount(
     step_expr: ?*ast.Expr,
 ) EmitError!ValueRef {
     var start_val = try expr.emitExpr(ctx, builder, start_expr);
-    start_val = try expr.coerce(ctx, builder, start_val, .i32);
+    start_val = try coerceRuntimeI32(ctx, builder, start_val);
     var end_val = try expr.emitExpr(ctx, builder, end_expr);
-    end_val = try expr.coerce(ctx, builder, end_val, .i32);
+    end_val = try coerceRuntimeI32(ctx, builder, end_val);
     if (step_expr == null) return emitUnitStepCountValues(ctx, builder, start_val, end_val);
     const step_node = step_expr.?;
     if ((try evalConstIntSem(ctx, step_node)) orelse intLiteralValue(step_node)) |step_const| {
         if (step_const == 1) return emitUnitStepCountValues(ctx, builder, start_val, end_val);
     }
     var step_val = try expr.emitExpr(ctx, builder, step_node);
-    step_val = try expr.coerce(ctx, builder, step_val, .i32);
+    step_val = try coerceRuntimeI32(ctx, builder, step_val);
     return emitTripletCountValues(ctx, builder, start_val, end_val, step_val);
 }
 

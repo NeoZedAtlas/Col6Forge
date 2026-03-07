@@ -47,6 +47,7 @@ const intLiteralValue = io_utils.intLiteralValue;
 const countFormatDescriptors = io_utils.countFormatDescriptors;
 const emitTripletCount = io_utils.emitTripletCount;
 const emitTripletCountValues = io_utils.emitTripletCountValues;
+const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 
 pub const emitOpen = file_control.emitOpen;
 pub const emitInquire = file_control.emitInquire;
@@ -87,7 +88,7 @@ pub fn emitWrite(
     const unit_char_len = charLenForExpr(ctx, write.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
     const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, write.unit) else null;
-    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value);
     var expanded_values = try expandWriteArgs(ctx, builder, write.args);
     defer expanded_values.deinit();
 
@@ -664,13 +665,13 @@ fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) EmitError!V
         .dim_range => |range| blk: {
             if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return error.UnsupportedImpliedDo;
             var upper = try expr.emitExpr(ctx, builder, range.upper);
-            upper = try expr.coerce(ctx, builder, upper, .i32);
+            upper = try coerceRuntimeI32(ctx, builder, upper);
             const lower = if (range.lower) |lower_expr|
-                try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr), .i32)
+                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, lower_expr))
             else
                 ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
             const step = if (range.stride) |stride_expr|
-                try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr), .i32)
+                try coerceRuntimeI32(ctx, builder, try expr.emitExpr(ctx, builder, stride_expr))
             else
                 ValueRef{ .name = "1", .ty = .i32, .is_ptr = false };
             break :blk try emitTripletCountValues(ctx, builder, lower, upper, step);
@@ -678,12 +679,12 @@ fn impliedDimExtent(ctx: *Context, builder: anytype, dim: *ast.Expr) EmitError!V
         .literal => |lit| {
             if (lit.kind == .assumed_size) return error.UnsupportedImpliedDo;
             var value = try expr.emitExpr(ctx, builder, dim);
-            value = try expr.coerce(ctx, builder, value, .i32);
+            value = try coerceRuntimeI32(ctx, builder, value);
             return value;
         },
         else => {
             var value = try expr.emitExpr(ctx, builder, dim);
-            value = try expr.coerce(ctx, builder, value, .i32);
+            value = try coerceRuntimeI32(ctx, builder, value);
             return value;
         },
     };
@@ -727,7 +728,7 @@ pub fn emitRead(
     const unit_char_len = charLenForExpr(ctx, read.unit);
     const is_internal = unit_char_len != null and unit_value.ty == .ptr;
     const unit_record_count = if (is_internal) internalUnitRecordCount(ctx, read.unit) else null;
-    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try expr.coerce(ctx, builder, unit_value, .i32);
+    const unit_i32 = if (is_internal) ValueRef{ .name = "0", .ty = .i32, .is_ptr = false } else try coerceRuntimeI32(ctx, builder, unit_value);
     var expanded = try expandReadTargets(ctx, builder, read.args);
     defer expanded.deinit();
 

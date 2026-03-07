@@ -20,6 +20,7 @@ const ExpandedReadTargets = expansion.ExpandedReadTargets;
 const emitWriteFormatted = write_mod.emitWriteFormatted;
 const emitReadFormatted = read_mod.emitReadFormatted;
 const emitReadFormattedStatus = read_mod.emitReadFormattedStatus;
+const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 
 const NumericFormat = struct {
     value: i32,
@@ -59,7 +60,7 @@ fn emitFormatSelector(ctx: *Context, builder: anytype, label_var: []const u8) Em
     const ty = ctx.typeFromKind(sym.type_kind);
     try builder.load(tmp, ty, ptr);
     const value = ValueRef{ .name = tmp, .ty = ty, .is_ptr = false };
-    return expr.coerce(ctx, builder, value, .i32);
+    return coerceRuntimeI32(ctx, builder, value);
 }
 
 fn emitMissingDynamicFormatTrap(ctx: *Context, builder: anytype) EmitError!void {
