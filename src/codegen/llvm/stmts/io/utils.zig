@@ -14,6 +14,111 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 
+pub const RuntimeI32OutArg = struct {
+    runtime_ptr: ValueRef,
+    target_ptr: ?ValueRef = null,
+    scratch_ptr: ?ValueRef = null,
+    target_ty: ?llvm_types.IRType = null,
+};
+
+pub fn storeRuntimeI32Value(
+    ctx: *Context,
+    builder: anytype,
+    target_expr: *ast.Expr,
+    value: ValueRef,
+) EmitError!void {
+    if (value.ty != .i32) return error.UnsupportedIntrinsicType;
+    const target_ptr = try expr.emitLValue(ctx, builder, target_expr);
+    const target_ty = try expr.exprType(ctx, target_expr);
+    switch (target_ty) {
+        .i32 => try builder.store(value, target_ptr),
+        .i64 => {
+            const widened = try expr.coerce(ctx, builder, value, .i64);
+            try builder.store(widened, target_ptr);
+        },
+        .i1 => {
+            const cmp_tmp = try ctx.nextTemp();
+            try builder.compare(
+                cmp_tmp,
+                "icmp",
+                "ne",
+                .i32,
+                value,
+                .{ .name = "0", .ty = .i32, .is_ptr = false },
+            );
+            try builder.store(.{ .name = cmp_tmp, .ty = .i1, .is_ptr = false }, target_ptr);
+        },
+        else => return error.UnsupportedIntrinsicType,
+    }
+}
+
+pub fn prepareRuntimeI32OutArg(
+    ctx: *Context,
+    builder: anytype,
+    target_expr: ?*ast.Expr,
+) EmitError!RuntimeI32OutArg {
+    const expr_node = target_expr orelse {
+        return .{ .runtime_ptr = .{ .name = "null", .ty = .ptr, .is_ptr = false } };
+    };
+
+    const target_ptr = try expr.emitLValue(ctx, builder, expr_node);
+    const target_ty = try expr.exprType(ctx, expr_node);
+    switch (target_ty) {
+        .i32 => return .{
+            .runtime_ptr = target_ptr,
+            .target_ptr = target_ptr,
+            .target_ty = .i32,
+        },
+        .i64, .i1 => {
+            const scratch_name = try ctx.nextTemp();
+            try builder.alloca(scratch_name, .i32);
+            const scratch_ptr = ValueRef{ .name = scratch_name, .ty = .ptr, .is_ptr = true };
+            try builder.store(.{ .name = "0", .ty = .i32, .is_ptr = false }, scratch_ptr);
+            return .{
+                .runtime_ptr = scratch_ptr,
+                .target_ptr = target_ptr,
+                .scratch_ptr = scratch_ptr,
+                .target_ty = target_ty,
+            };
+        },
+        else => return error.UnsupportedIntrinsicType,
+    }
+}
+
+pub fn commitRuntimeI32OutArg(
+    ctx: *Context,
+    builder: anytype,
+    arg: RuntimeI32OutArg,
+) EmitError!void {
+    const target_ptr = arg.target_ptr orelse return;
+    const target_ty = arg.target_ty orelse return;
+    const scratch_ptr = arg.scratch_ptr orelse return;
+
+    const loaded_name = try ctx.nextTemp();
+    try builder.load(loaded_name, .i32, scratch_ptr);
+    const loaded = ValueRef{ .name = loaded_name, .ty = .i32, .is_ptr = false };
+    switch (target_ty) {
+        .i64 => {
+            const widened = try expr.coerce(ctx, builder, loaded, .i64);
+            try builder.store(widened, target_ptr);
+        },
+        .i1 => {
+            const cmp_tmp = try ctx.nextTemp();
+            try builder.compare(
+                cmp_tmp,
+                "icmp",
+                "ne",
+                .i32,
+                loaded,
+                .{ .name = "0", .ty = .i32, .is_ptr = false },
+            );
+            try builder.store(.{ .name = cmp_tmp, .ty = .i1, .is_ptr = false }, target_ptr);
+        },
+        .i32 => {},
+        else => return error.UnsupportedIntrinsicType,
+    }
+}
+
 pub fn emitIoStatusBranches(
     ctx: *Context,
     builder: anytype,
@@ -23,8 +128,7 @@ pub fn emitIoStatusBranches(
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!bool {
     if (read.iostat) |iostat_expr| {
-        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
-        try builder.store(status, iostat_ptr);
+        try storeRuntimeI32Value(ctx, builder, iostat_expr, status);
     }
 
     const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };

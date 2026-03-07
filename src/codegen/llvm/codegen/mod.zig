@@ -1305,3 +1305,137 @@ test "unformatted whole-array integer io uses i64 helpers under widened default 
     try testing.expect(std.mem.indexOf(u8, output, "col6forge_write_unformatted_i64_n") != null);
     try testing.expect(std.mem.indexOf(u8, output, "col6forge_write_unformatted_i32_n") == null);
 }
+
+test "rewind iostat widens runtime status into default i64 integer" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const unit_expr = try makeLiteralExpr(a, .integer, "10");
+    const stat_expr = try makeIdentExpr(a, "stat");
+
+    const stmt_list = try a.alloc(input.Stmt, 1);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .rewind = .{
+            .unit = unit_expr,
+            .err_label = null,
+            .iostat = stat_expr,
+        } },
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 1);
+    sem_symbols[0] = makeLocalScalarSymbol("stat", .integer);
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(
+        &writer,
+        allocator,
+        program,
+        sem_prog,
+        "rewind_iostat_i64.f",
+        .{ .target_layout = .{ .default_integer_bits = 64 } },
+    );
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "call i32 @col6forge_rewind(i32 10)") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "store i32 %") == null);
+    try testing.expect(std.mem.indexOf(u8, output, "sext i32 %") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "store i64 %") != null);
+}
+
+test "inquire adapts integer and logical outputs under widened default integer layout" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const unit_expr = try makeLiteralExpr(a, .integer, "10");
+    const number_expr = try makeIdentExpr(a, "number");
+    const exist_expr = try makeIdentExpr(a, "exists");
+
+    const controls = try a.alloc(input.ControlItem, 3);
+    controls[0] = .{ .name = "UNIT", .value = unit_expr };
+    controls[1] = .{ .name = "NUMBER", .value = number_expr };
+    controls[2] = .{ .name = "EXIST", .value = exist_expr };
+
+    const stmt_list = try a.alloc(input.Stmt, 1);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .inquire = .{ .controls = controls } },
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 2);
+    sem_symbols[0] = makeLocalScalarSymbol("number", .integer);
+    sem_symbols[1] = makeLocalScalarSymbol("exists", .logical);
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(
+        &writer,
+        allocator,
+        program,
+        sem_prog,
+        "inquire_outputs_i64.f",
+        .{ .target_layout = .{ .default_integer_bits = 64 } },
+    );
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "call void @col6forge_inquire_unit(i32 10, ptr null, ptr null, ptr %") != null);
+    try testing.expect(std.mem.indexOf(u8, output, " = alloca i32\n") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "store i64 %") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "icmp ne i32 %") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "store i1 %") != null);
+}

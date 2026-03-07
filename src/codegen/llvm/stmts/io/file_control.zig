@@ -14,6 +14,10 @@ const io_utils = @import("utils.zig");
 const charLenForExpr = io_utils.charLenForExpr;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
+const RuntimeI32OutArg = io_utils.RuntimeI32OutArg;
+const storeRuntimeI32Value = io_utils.storeRuntimeI32Value;
+const prepareRuntimeI32OutArg = io_utils.prepareRuntimeI32OutArg;
+const commitRuntimeI32OutArg = io_utils.commitRuntimeI32OutArg;
 
 fn constI32(ctx: *Context, value: i64) EmitError!ValueRef {
     return ctx.constI32(value);
@@ -114,8 +118,7 @@ fn emitIoStatusOutcome(
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!bool {
     if (iostat_expr) |iostat_node| {
-        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_node);
-        try builder.store(status, iostat_ptr);
+        try storeRuntimeI32Value(ctx, builder, iostat_node, status);
     }
 
     if (err_label) |label| {
@@ -276,10 +279,10 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
     if (inquire.controls.len == 0) return;
     const spec = analyzeInquireStmt(inquire);
 
-    const iostat_ptr = if (spec.iostat_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const exist_ptr = if (spec.exist_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const opened_ptr = if (spec.opened_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const number_ptr = if (spec.number_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
+    const iostat_out = try prepareRuntimeI32OutArg(ctx, builder, spec.iostat_expr);
+    const exist_out = try prepareRuntimeI32OutArg(ctx, builder, spec.exist_expr);
+    const opened_out = try prepareRuntimeI32OutArg(ctx, builder, spec.opened_expr);
+    const number_out = try prepareRuntimeI32OutArg(ctx, builder, spec.number_expr);
     const access_ptr = if (spec.access_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
     const access_len_i32 = try emitCharExprLenOrZero(ctx, builder, spec.access_expr);
     const sequential_ptr = if (spec.sequential_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
@@ -294,8 +297,17 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
     const unformatted_len_i32 = try emitCharExprLenOrZero(ctx, builder, spec.unformatted_expr);
     const blank_ptr = if (spec.blank_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
     const blank_len_i32 = try emitCharExprLenOrZero(ctx, builder, spec.blank_expr);
-    const recl_ptr = if (spec.recl_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
-    const nextrec_ptr = if (spec.nextrec_expr) |expr_node| try expr.emitLValue(ctx, builder, expr_node) else nullPtr();
+    const recl_out = try prepareRuntimeI32OutArg(ctx, builder, spec.recl_expr);
+    const nextrec_out = try prepareRuntimeI32OutArg(ctx, builder, spec.nextrec_expr);
+
+    const numeric_outs = [_]RuntimeI32OutArg{
+        iostat_out,
+        exist_out,
+        opened_out,
+        number_out,
+        recl_out,
+        nextrec_out,
+    };
 
     if (spec.file_expr) |file_node| {
         const file_val = try expr.emitExpr(ctx, builder, file_node);
@@ -303,10 +315,10 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
         const args = [_]ValueRef{
             file_val,
             file_len_i32,
-            iostat_ptr,
-            exist_ptr,
-            opened_ptr,
-            number_ptr,
+            iostat_out.runtime_ptr,
+            exist_out.runtime_ptr,
+            opened_out.runtime_ptr,
+            number_out.runtime_ptr,
             access_ptr,
             access_len_i32,
             sequential_ptr,
@@ -321,11 +333,14 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
             unformatted_len_i32,
             blank_ptr,
             blank_len_i32,
-            recl_ptr,
-            nextrec_ptr,
+            recl_out.runtime_ptr,
+            nextrec_out.runtime_ptr,
         };
         const fn_name = try ctx.ensureDeclRaw("col6forge_inquire_file", .void, &.{ .ptr, .i32, .ptr, .ptr, .ptr, .ptr, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .ptr }, true);
         try builder.callTyped(null, .void, fn_name, args[0..]);
+        inline for (numeric_outs) |out_arg| {
+            try commitRuntimeI32OutArg(ctx, builder, out_arg);
+        }
         return;
     }
 
@@ -334,10 +349,10 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
     const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const args = [_]ValueRef{
         unit_i32,
-        iostat_ptr,
-        exist_ptr,
-        opened_ptr,
-        number_ptr,
+        iostat_out.runtime_ptr,
+        exist_out.runtime_ptr,
+        opened_out.runtime_ptr,
+        number_out.runtime_ptr,
         access_ptr,
         access_len_i32,
         sequential_ptr,
@@ -352,11 +367,14 @@ pub fn emitInquire(ctx: *Context, builder: anytype, inquire: ast.InquireStmt) Em
         unformatted_len_i32,
         blank_ptr,
         blank_len_i32,
-        recl_ptr,
-        nextrec_ptr,
+        recl_out.runtime_ptr,
+        nextrec_out.runtime_ptr,
     };
     const fn_name = try ctx.ensureDeclRaw("col6forge_inquire_unit", .void, &.{ .i32, .ptr, .ptr, .ptr, .ptr, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .i32, .ptr, .ptr }, true);
     try builder.callTyped(null, .void, fn_name, args[0..]);
+    inline for (numeric_outs) |out_arg| {
+        try commitRuntimeI32OutArg(ctx, builder, out_arg);
+    }
 }
 pub fn emitClose(
     ctx: *Context,

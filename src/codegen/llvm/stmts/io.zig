@@ -48,6 +48,7 @@ const countFormatDescriptors = io_utils.countFormatDescriptors;
 const emitTripletCount = io_utils.emitTripletCount;
 const emitTripletCountValues = io_utils.emitTripletCountValues;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
+const storeRuntimeI32Value = io_utils.storeRuntimeI32Value;
 
 pub const emitOpen = file_control.emitOpen;
 pub const emitInquire = file_control.emitInquire;
@@ -66,9 +67,7 @@ pub fn emitWrite(
     _ = next_block;
     _ = local_label_map;
     if (write.iostat) |iostat_expr| {
-        const iostat_ptr = try expr.emitLValue(ctx, builder, iostat_expr);
-        const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
-        try builder.store(zero, iostat_ptr);
+        try storeRuntimeI32Value(ctx, builder, iostat_expr, .{ .name = "0", .ty = .i32, .is_ptr = false });
     }
     // Direct access I/O requires a record number; list-directed I/O uses FMT=*
     // (represented as .none without REC).
