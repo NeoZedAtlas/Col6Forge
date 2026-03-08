@@ -25,7 +25,7 @@ const emitReadPreparedFormatPlan = format_expr.emitReadPreparedFormatPlan;
 const emitReadPreparedFormatPlanStatus = format_expr.emitReadPreparedFormatPlanStatus;
 const emitSpecialFormattedWrite = special_write.emitSpecialFormattedWrite;
 const emitReadFormattedStream = stream_read.emitReadFormattedStream;
-const emitWriteFormattedStreamStatic = stream_write.emitWriteFormattedStreamStatic;
+const emitWriteFormattedStream = stream_write.emitWriteFormattedStream;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
 
@@ -99,21 +99,18 @@ pub fn emitPreparedWriteExecutor(
                 expanded_values,
             );
         },
-        .stream => |source| switch (source) {
-            .static_items => |items| {
-                return emitWriteFormattedStreamStatic(
-                    ctx,
-                    builder,
-                    write,
-                    prepared.unit.unit_value,
-                    prepared.unit.unit_char_len,
-                    prepared.unit.unit_record_count,
-                    prepared.unit.is_internal,
-                    prepared.unit.unit_i32,
-                    items,
-                );
-            },
-            .runtime_expr => return error.UnsupportedImpliedDo,
+        .stream => |source| {
+            return emitWriteFormattedStream(
+                ctx,
+                builder,
+                write,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
+                source,
+            );
         },
     }
 }

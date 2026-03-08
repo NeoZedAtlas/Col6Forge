@@ -12,11 +12,14 @@ const EmitError = anyerror;
 
 const io_utils = @import("../utils.zig");
 const expansion = @import("../expansion.zig");
+const formatted_context = @import("context.zig");
 
 const expandWriteArgs = expansion.expandWriteArgs;
 const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
+const emitRuntimeFormatValue = formatted_context.emitRuntimeFormatValue;
+const StreamFormatSource = formatted_context.StreamFormatSource;
 
 fn oneForType(ctx: *Context, ty: llvm_types.IRType) EmitError!ValueRef {
     return switch (ty) {
@@ -304,35 +307,94 @@ fn emitStreamBegin(
     unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
-    fmt_items: []const ast.FormatItem,
+    format_source: StreamFormatSource,
 ) EmitError!ValueRef {
-    const fmt_ptr = try lowerStaticWriteStreamFormatWithBuilder(ctx, builder, fmt_items, is_internal);
     if (is_internal) {
-        const decl = try ctx.ensureDeclRaw("col6forge_write_internal_stream_begin", .ptr, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr }, false);
-        const state_tmp = try ctx.nextTemp();
-        try builder.callTyped(
-            state_tmp,
-            .ptr,
-            decl,
-            &.{
-                unit_value,
-                try ctx.constI32(@intCast(unit_char_len orelse return error.MissingFormatLabel)),
-                try ctx.constI32(@intCast(if (unit_record_count) |count| if (count > 1) count else 1 else 1)),
-                fmt_ptr,
+        switch (format_source) {
+            .static_items => |fmt_items| {
+                const fmt_ptr = try lowerStaticWriteStreamFormatWithBuilder(ctx, builder, fmt_items, is_internal);
+                const decl = try ctx.ensureDeclRaw("col6forge_write_internal_stream_begin", .ptr, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr }, false);
+                const state_tmp = try ctx.nextTemp();
+                try builder.callTyped(
+                    state_tmp,
+                    .ptr,
+                    decl,
+                    &.{
+                        unit_value,
+                        try ctx.constI32(@intCast(unit_char_len orelse return error.MissingFormatLabel)),
+                        try ctx.constI32(@intCast(if (unit_record_count) |count| if (count > 1) count else 1 else 1)),
+                        fmt_ptr,
+                    },
+                );
+                return .{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
             },
-        );
-        return .{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
+            .runtime_expr => |fmt_expr| {
+                const fmt_value = try emitRuntimeFormatValue(ctx, builder, fmt_expr);
+                const decl = try ctx.ensureDeclRaw("col6forge_write_internal_stream_begin_dynamic", .ptr, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32 }, false);
+                const state_tmp = try ctx.nextTemp();
+                try builder.callTyped(
+                    state_tmp,
+                    .ptr,
+                    decl,
+                    &.{
+                        unit_value,
+                        try ctx.constI32(@intCast(unit_char_len orelse return error.MissingFormatLabel)),
+                        try ctx.constI32(@intCast(if (unit_record_count) |count| if (count > 1) count else 1 else 1)),
+                        fmt_value.ptr,
+                        fmt_value.len,
+                    },
+                );
+                return .{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
+            },
+        }
     }
 
-    const decl = try ctx.ensureDeclRaw("col6forge_formatted_write_stream_begin", .ptr, &[_]llvm_types.IRType{ .i32, .ptr, .i32 }, false);
-    const state_tmp = try ctx.nextTemp();
-    try builder.callTyped(state_tmp, .ptr, decl, &.{ unit_i32, fmt_ptr, .{ .name = "0", .ty = .i32, .is_ptr = false } });
-    return .{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
+    switch (format_source) {
+        .static_items => |fmt_items| {
+            const fmt_ptr = try lowerStaticWriteStreamFormatWithBuilder(ctx, builder, fmt_items, is_internal);
+            const decl = try ctx.ensureDeclRaw("col6forge_formatted_write_stream_begin", .ptr, &[_]llvm_types.IRType{ .i32, .ptr, .i32 }, false);
+            const state_tmp = try ctx.nextTemp();
+            try builder.callTyped(state_tmp, .ptr, decl, &.{ unit_i32, fmt_ptr, .{ .name = "0", .ty = .i32, .is_ptr = false } });
+            return .{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
+        },
+        .runtime_expr => |fmt_expr| {
+            const fmt_value = try emitRuntimeFormatValue(ctx, builder, fmt_expr);
+            const decl = try ctx.ensureDeclRaw("col6forge_formatted_write_stream_begin_dynamic", .ptr, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .i32 }, false);
+            const state_tmp = try ctx.nextTemp();
+            try builder.callTyped(state_tmp, .ptr, decl, &.{ unit_i32, fmt_value.ptr, fmt_value.len, .{ .name = "0", .ty = .i32, .is_ptr = false } });
+            return .{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
+        },
+    }
 }
 
 fn emitStreamFinish(ctx: *Context, builder: anytype, state: ValueRef) EmitError!void {
     const decl = try ctx.ensureDeclRaw("col6forge_formatted_write_stream_finish", .i32, &[_]llvm_types.IRType{.ptr}, false);
     try builder.callTyped(null, .i32, decl, &.{state});
+}
+
+pub fn emitWriteFormattedStream(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    format_source: StreamFormatSource,
+) EmitError!void {
+    const state = try emitStreamBegin(
+        ctx,
+        builder,
+        unit_value,
+        unit_char_len,
+        unit_record_count,
+        is_internal,
+        unit_i32,
+        format_source,
+    );
+    try emitStreamArgs(ctx, builder, state, write.args);
+    try emitStreamFinish(ctx, builder, state);
 }
 
 pub fn emitWriteFormattedStreamStatic(
@@ -346,16 +408,15 @@ pub fn emitWriteFormattedStreamStatic(
     unit_i32: ValueRef,
     fmt_items: []const ast.FormatItem,
 ) EmitError!void {
-    const state = try emitStreamBegin(
+    return emitWriteFormattedStream(
         ctx,
         builder,
+        write,
         unit_value,
         unit_char_len,
         unit_record_count,
         is_internal,
         unit_i32,
-        fmt_items,
+        .{ .static_items = fmt_items },
     );
-    try emitStreamArgs(ctx, builder, state, write.args);
-    try emitStreamFinish(ctx, builder, state);
 }

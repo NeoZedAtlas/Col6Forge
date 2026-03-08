@@ -1,4 +1,5 @@
 const std = @import("std");
+const dynamic_format = @import("io_dynamic_format.zig");
 
 extern fn free(ptr: ?*anyopaque) void;
 extern fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque;
@@ -326,6 +327,26 @@ pub export fn col6forge_formatted_write_stream_begin(
     return @ptrCast(state);
 }
 
+pub export fn col6forge_formatted_write_stream_begin_dynamic(
+    unit: c_int,
+    fmt_ptr: ?[*]const u8,
+    fmt_len: c_int,
+    strict_status: c_int,
+) callconv(.c) ?*anyopaque {
+    const lowered = dynamic_format.lowerFormat(.write_external, fmt_ptr, fmt_len, null, 0) catch return null;
+    const state = std.heap.page_allocator.create(FormattedWriteStreamState) catch {
+        if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
+        return null;
+    };
+    state.* = .{
+        .dest = .{ .external = .{ .unit = unit, .strict_status = strict_status } },
+        .fmt = lowered.bytes[0 .. lowered.bytes.len - 1],
+        .fmt_heap_owned = lowered.heap_owned,
+        .reversion_pos = primeReversionPos(lowered.bytes[0 .. lowered.bytes.len - 1]),
+    };
+    return @ptrCast(state);
+}
+
 pub export fn col6forge_write_internal_stream_begin(
     buf: ?[*]u8,
     len: c_int,
@@ -338,6 +359,27 @@ pub export fn col6forge_write_internal_stream_begin(
         .dest = .{ .internal = .{ .buf = buf, .len = len, .count = count } },
         .fmt = std.mem.span(fmt_c),
         .reversion_pos = primeReversionPos(std.mem.span(fmt_c)),
+    };
+    return @ptrCast(state);
+}
+
+pub export fn col6forge_write_internal_stream_begin_dynamic(
+    buf: ?[*]u8,
+    len: c_int,
+    count: c_int,
+    fmt_ptr: ?[*]const u8,
+    fmt_len: c_int,
+) callconv(.c) ?*anyopaque {
+    const lowered = dynamic_format.lowerFormat(.write_internal, fmt_ptr, fmt_len, null, 0) catch return null;
+    const state = std.heap.page_allocator.create(FormattedWriteStreamState) catch {
+        if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
+        return null;
+    };
+    state.* = .{
+        .dest = .{ .internal = .{ .buf = buf, .len = len, .count = count } },
+        .fmt = lowered.bytes[0 .. lowered.bytes.len - 1],
+        .fmt_heap_owned = lowered.heap_owned,
+        .reversion_pos = primeReversionPos(lowered.bytes[0 .. lowered.bytes.len - 1]),
     };
     return @ptrCast(state);
 }
@@ -377,4 +419,19 @@ test "formatted write stream wraps integer vector across reversion" {
 
     try std.testing.expectEqualStrings("    M   :      11    22", buf[0..25]);
     try std.testing.expectEqualStrings("               33", buf[40..57]);
+}
+
+test "formatted write stream lowers runtime format expr for internal unit" {
+    var buf = [_]u8{0} ** 80;
+    const fmt = "(A4,':',I4)";
+    const state_any = col6forge_write_internal_stream_begin_dynamic(&buf, 40, 1, fmt.ptr, fmt.len) orelse return error.TestUnexpectedResult;
+
+    var title = [_]u8{ 'T', 'E', 'S', 'T' };
+    var value: c_int = 7;
+
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_write_stream_next(state_any, @ptrCast(&title), 's', title.len));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_write_stream_next(state_any, @ptrCast(&value), 'i', 0));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_write_stream_finish(state_any));
+
+    try std.testing.expectEqualStrings("TEST:   7", buf[0..8]);
 }

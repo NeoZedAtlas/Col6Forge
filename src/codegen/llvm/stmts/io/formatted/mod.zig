@@ -10,6 +10,7 @@ const special_write = @import("special_write.zig");
 
 pub const emitWriteFormatted = write.emitWriteFormatted;
 pub const emitWriteFormattedDirect = write.emitWriteFormattedDirect;
+pub const emitWriteFormattedStream = stream_write.emitWriteFormattedStream;
 pub const emitWriteFormattedStreamStatic = stream_write.emitWriteFormattedStreamStatic;
 pub const emitReadFormatted = read.emitReadFormatted;
 pub const emitReadFormattedStatus = read.emitReadFormattedStatus;
