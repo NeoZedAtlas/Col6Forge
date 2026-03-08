@@ -309,6 +309,10 @@ fn materializeDescriptorValues(
 
 fn analyzeSectionActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?SectionActualInfo {
     return switch (expr.*) {
+        .unary => |un| switch (un.op) {
+            .plus => analyzeSectionActual(ctx, builder, un.expr),
+            else => null,
+        },
         .identifier => |name| blk: {
             const sym = ctx.findSymbol(name) orelse break :blk null;
             if (sym.dims.len == 0) break :blk null;
@@ -393,6 +397,10 @@ fn analyzeArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?Ar
 
 fn arrayActualElementType(ctx: *Context, expr: *Expr) !?IRType {
     return switch (expr.*) {
+        .unary => |un| switch (un.op) {
+            .plus => arrayActualElementType(ctx, un.expr),
+            else => null,
+        },
         .identifier => |name| blk: {
             const sym = ctx.findSymbol(name) orelse break :blk null;
             if (sym.dims.len == 0) break :blk null;
