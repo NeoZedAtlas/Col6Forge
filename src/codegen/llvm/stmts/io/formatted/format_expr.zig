@@ -28,8 +28,7 @@ const emitReadFormattedStatus = read_mod.emitReadFormattedStatus;
 const emitKindArray = io_utils.emitKindArray;
 const defaultIntegerKind = io_utils.defaultIntegerKind;
 const defaultIntegerReadKind = io_utils.defaultIntegerReadKind;
-const RuntimeFormatValue = formatted_context.RuntimeFormatValue;
-const FormatExprResolution = formatted_context.FormatExprResolution;
+const FormatPlan = formatted_context.FormatPlan;
 const emitRuntimeFormatValue = formatted_context.emitRuntimeFormatValue;
 const resolveFormatExpr = formatted_context.resolveFormatExpr;
 
@@ -227,22 +226,7 @@ fn emitReadRuntimeFormatExpr(
     unit_i32: ValueRef,
     expanded: *ExpandedReadTargets,
 ) EmitError!void {
-    const fmt = try emitRuntimeFormatValue(ctx, builder, fmt_expr);
-    const runtime_args = try buildReadRuntimeArgs(ctx, builder, expanded);
-
-    if (is_internal) {
-        const len_val = try constI32(ctx, @intCast(unit_char_len orelse return error.MissingFormatLabel));
-        const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
-        const count_ref = try constI32(ctx, @intCast(count_val));
-        const read_name = try ctx.ensureDeclRaw("col6forge_read_internal_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32, .ptr, .ptr, .i32 }, false);
-        try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count });
-        try emitFreeAllocs(ctx, builder, runtime_args.heap_allocs);
-        return;
-    }
-
-    const read_name = try ctx.ensureDeclRaw("col6forge_read_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
-    try builder.callTyped(null, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 0) });
-    try emitFreeAllocs(ctx, builder, runtime_args.heap_allocs);
+    _ = try emitReadRuntimeFormatExprCore(ctx, builder, fmt_expr, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded, false);
 }
 
 fn emitReadRuntimeFormatExprStatus(
@@ -255,6 +239,21 @@ fn emitReadRuntimeFormatExprStatus(
     is_internal: bool,
     unit_i32: ValueRef,
     expanded: *ExpandedReadTargets,
+) EmitError!ValueRef {
+    return emitReadRuntimeFormatExprCore(ctx, builder, fmt_expr, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded, true);
+}
+
+fn emitReadRuntimeFormatExprCore(
+    ctx: *Context,
+    builder: anytype,
+    fmt_expr: *ast.Expr,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    expanded: *ExpandedReadTargets,
+    needs_status: bool,
 ) EmitError!ValueRef {
     const fmt = try emitRuntimeFormatValue(ctx, builder, fmt_expr);
     const runtime_args = try buildReadRuntimeArgs(ctx, builder, expanded);
@@ -270,17 +269,30 @@ fn emitReadRuntimeFormatExprStatus(
     }
 
     const read_name = try ctx.ensureDeclRaw("col6forge_read_fmt_expr_core", .i32, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .ptr, .ptr, .i32, .i32 }, false);
+    if (!needs_status) {
+        try builder.callTyped(null, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 0) });
+        try emitFreeAllocs(ctx, builder, runtime_args.heap_allocs);
+        return try constI32(ctx, 0);
+    }
     const status_tmp = try ctx.nextTemp();
     try builder.callTyped(status_tmp, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 1) });
     try emitFreeAllocs(ctx, builder, runtime_args.heap_allocs);
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
 }
 
-pub fn emitWriteFormatExpr(
+fn formatPlanFromExpr(ctx: *Context, fmt_expr: *ast.Expr) EmitError!FormatPlan {
+    return switch (try resolveFormatExpr(ctx, fmt_expr)) {
+        .dynamic_label_var => |label_var| .{ .dynamic_label_var = label_var },
+        .static_items => |items| .{ .static_items = items },
+        .runtime_char_expr => |runtime_fmt_expr| .{ .runtime_char_expr = runtime_fmt_expr },
+    };
+}
+
+pub fn emitWriteFormatPlan(
     ctx: *Context,
     builder: anytype,
     write: ast.WriteStmt,
-    fmt_expr: *ast.Expr,
+    plan: FormatPlan,
     unit_value: ValueRef,
     unit_char_len: ?usize,
     unit_record_count: ?usize,
@@ -288,7 +300,7 @@ pub fn emitWriteFormatExpr(
     unit_i32: ValueRef,
     expanded_values: *ExpandedWriteValues,
 ) EmitError!void {
-    switch (try resolveFormatExpr(ctx, fmt_expr)) {
+    switch (plan) {
         .dynamic_label_var => |label_var| {
             return emitWriteDynamicFormat(
                 ctx,
@@ -333,11 +345,11 @@ pub fn emitWriteFormatExpr(
     }
 }
 
-pub fn emitReadFormatExpr(
+pub fn emitReadFormatPlan(
     ctx: *Context,
     builder: anytype,
     read: ast.ReadStmt,
-    fmt_expr: *ast.Expr,
+    plan: FormatPlan,
     unit_value: ValueRef,
     unit_char_len: ?usize,
     unit_record_count: ?usize,
@@ -345,7 +357,7 @@ pub fn emitReadFormatExpr(
     unit_i32: ValueRef,
     expanded: *ExpandedReadTargets,
 ) EmitError!void {
-    switch (try resolveFormatExpr(ctx, fmt_expr)) {
+    switch (plan) {
         .dynamic_label_var => |label_var| {
             return emitReadDynamicFormat(
                 ctx,
@@ -390,11 +402,11 @@ pub fn emitReadFormatExpr(
     }
 }
 
-pub fn emitReadFormatExprStatus(
+pub fn emitReadFormatPlanStatus(
     ctx: *Context,
     builder: anytype,
     read: ast.ReadStmt,
-    fmt_expr: *ast.Expr,
+    plan: FormatPlan,
     unit_value: ValueRef,
     unit_char_len: ?usize,
     unit_record_count: ?usize,
@@ -402,7 +414,7 @@ pub fn emitReadFormatExprStatus(
     unit_i32: ValueRef,
     expanded: *ExpandedReadTargets,
 ) EmitError!ValueRef {
-    switch (try resolveFormatExpr(ctx, fmt_expr)) {
+    switch (plan) {
         .dynamic_label_var => |label_var| {
             return emitReadDynamicFormatStatus(
                 ctx,
@@ -445,5 +457,50 @@ pub fn emitReadFormatExprStatus(
             );
         },
     }
+}
+
+pub fn emitWriteFormatExpr(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    fmt_expr: *ast.Expr,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    expanded_values: *ExpandedWriteValues,
+) EmitError!void {
+    return emitWriteFormatPlan(ctx, builder, write, try formatPlanFromExpr(ctx, fmt_expr), unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded_values);
+}
+
+pub fn emitReadFormatExpr(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    fmt_expr: *ast.Expr,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    expanded: *ExpandedReadTargets,
+) EmitError!void {
+    return emitReadFormatPlan(ctx, builder, read, try formatPlanFromExpr(ctx, fmt_expr), unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded);
+}
+
+pub fn emitReadFormatExprStatus(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    fmt_expr: *ast.Expr,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    expanded: *ExpandedReadTargets,
+) EmitError!ValueRef {
+    return emitReadFormatPlanStatus(ctx, builder, read, try formatPlanFromExpr(ctx, fmt_expr), unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded);
 }
 

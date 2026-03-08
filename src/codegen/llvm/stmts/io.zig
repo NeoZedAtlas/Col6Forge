@@ -20,14 +20,11 @@ const format_items = @import("../../../format/items.zig");
 
 const emitWriteFormatted = formatted.emitWriteFormatted;
 const emitWriteFormattedStreamStatic = formatted.emitWriteFormattedStreamStatic;
-const emitWriteDynamicFormat = formatted.emitWriteDynamicFormat;
-const emitWriteFormatExpr = formatted.emitWriteFormatExpr;
+const emitWriteFormatPlan = formatted.emitWriteFormatPlan;
 const emitReadFormatted = formatted.emitReadFormatted;
 const emitReadFormattedStatus = formatted.emitReadFormattedStatus;
-const emitReadDynamicFormat = formatted.emitReadDynamicFormat;
-const emitReadDynamicFormatStatus = formatted.emitReadDynamicFormatStatus;
-const emitReadFormatExpr = formatted.emitReadFormatExpr;
-const emitReadFormatExprStatus = formatted.emitReadFormatExprStatus;
+const emitReadFormatPlan = formatted.emitReadFormatPlan;
+const emitReadFormatPlanStatus = formatted.emitReadFormatPlanStatus;
 const PreparedFormatContext = formatted.PreparedFormatContext;
 const prepareFormattedContext = formatted.prepareFormattedContext;
 const streamFormatSource = formatted.streamFormatSource;
@@ -149,37 +146,10 @@ fn emitPreparedFormattedWrite(
                 &expanded_values,
             );
         },
-        .dynamic_label_var => |label| {
+        .dynamic_label_var, .runtime_char_expr => {
             var expanded_values = try expandWriteArgs(ctx, builder, write.args);
             defer expanded_values.deinit();
-            return emitWriteDynamicFormat(
-                ctx,
-                builder,
-                write,
-                prepared.formatted.unit.unit_value,
-                prepared.formatted.unit.unit_char_len,
-                prepared.formatted.unit.unit_record_count,
-                prepared.formatted.unit.is_internal,
-                prepared.formatted.unit.unit_i32,
-                label,
-                &expanded_values,
-            );
-        },
-        .runtime_char_expr => |fmt_expr| {
-            var expanded_values = try expandWriteArgs(ctx, builder, write.args);
-            defer expanded_values.deinit();
-            return emitWriteFormatExpr(
-                ctx,
-                builder,
-                write,
-                fmt_expr,
-                prepared.formatted.unit.unit_value,
-                prepared.formatted.unit.unit_char_len,
-                prepared.formatted.unit.unit_record_count,
-                prepared.formatted.unit.is_internal,
-                prepared.formatted.unit.unit_i32,
-                &expanded_values,
-            );
+            return emitWriteFormatPlan(ctx, builder, write, prepared.formatted.plan, prepared.formatted.unit.unit_value, prepared.formatted.unit.unit_char_len, prepared.formatted.unit.unit_record_count, prepared.formatted.unit.is_internal, prepared.formatted.unit.unit_i32, &expanded_values);
         },
     }
 }
@@ -1074,90 +1044,31 @@ fn emitPreparedFormattedRead(
     var expanded = try expandReadTargets(ctx, builder, read.args);
     defer expanded.deinit();
 
-    return switch (prepared.formatted.plan) {
-        .static_items => |items| if (prepared.needs_status)
-            try emitReadFormattedStatus(
-                ctx,
-                builder,
-                read,
-                prepared.formatted.unit.unit_value,
-                prepared.formatted.unit.unit_char_len,
-                prepared.formatted.unit.unit_record_count,
-                prepared.formatted.unit.is_internal,
-                prepared.formatted.unit.unit_i32,
-                items,
-                &expanded,
-            )
-        else blk: {
-            try emitReadFormatted(
-                ctx,
-                builder,
-                read,
-                prepared.formatted.unit.unit_value,
-                prepared.formatted.unit.unit_char_len,
-                prepared.formatted.unit.unit_record_count,
-                prepared.formatted.unit.is_internal,
-                prepared.formatted.unit.unit_i32,
-                items,
-                &expanded,
-            );
-            break :blk ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
-        },
-        .dynamic_label_var => |label| if (prepared.needs_status)
-            try emitReadDynamicFormatStatus(
-                ctx,
-                builder,
-                read,
-                prepared.formatted.unit.unit_value,
-                prepared.formatted.unit.unit_char_len,
-                prepared.formatted.unit.unit_record_count,
-                prepared.formatted.unit.is_internal,
-                prepared.formatted.unit.unit_i32,
-                label,
-                &expanded,
-            )
-        else blk: {
-            try emitReadDynamicFormat(
-                ctx,
-                builder,
-                read,
-                prepared.formatted.unit.unit_value,
-                prepared.formatted.unit.unit_char_len,
-                prepared.formatted.unit.unit_record_count,
-                prepared.formatted.unit.is_internal,
-                prepared.formatted.unit.unit_i32,
-                label,
-                &expanded,
-            );
-            break :blk ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
-        },
-        .runtime_char_expr => |fmt_expr| if (prepared.needs_status)
-            try emitReadFormatExprStatus(
-                ctx,
-                builder,
-                read,
-                fmt_expr,
-                prepared.formatted.unit.unit_value,
-                prepared.formatted.unit.unit_char_len,
-                prepared.formatted.unit.unit_record_count,
-                prepared.formatted.unit.is_internal,
-                prepared.formatted.unit.unit_i32,
-                &expanded,
-            )
-        else blk: {
-            try emitReadFormatExpr(
-                ctx,
-                builder,
-                read,
-                fmt_expr,
-                prepared.formatted.unit.unit_value,
-                prepared.formatted.unit.unit_char_len,
-                prepared.formatted.unit.unit_record_count,
-                prepared.formatted.unit.is_internal,
-                prepared.formatted.unit.unit_i32,
-                &expanded,
-            );
-            break :blk ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
-        },
-    };
+    if (prepared.needs_status) {
+        return emitReadFormatPlanStatus(
+            ctx,
+            builder,
+            read,
+            prepared.formatted.plan,
+            prepared.formatted.unit.unit_value,
+            prepared.formatted.unit.unit_char_len,
+            prepared.formatted.unit.unit_record_count,
+            prepared.formatted.unit.is_internal,
+            prepared.formatted.unit.unit_i32,
+            &expanded,
+        );
+    }
+    try emitReadFormatPlan(
+        ctx,
+        builder,
+        read,
+        prepared.formatted.plan,
+        prepared.formatted.unit.unit_value,
+        prepared.formatted.unit.unit_char_len,
+        prepared.formatted.unit.unit_record_count,
+        prepared.formatted.unit.is_internal,
+        prepared.formatted.unit.unit_i32,
+        &expanded,
+    );
+    return ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
 }
