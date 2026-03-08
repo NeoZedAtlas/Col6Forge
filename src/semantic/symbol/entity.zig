@@ -54,6 +54,18 @@ pub const Symbol = struct {
     pub fn effectiveCharLenKind(self: Symbol) CharacterLengthKind {
         return if (self.type_spec.lowered_kind == .character) self.type_spec.char_len_kind else self.char_len_kind;
     }
+
+    pub fn applyTypeSpec(self: *Symbol, spec: TypeSpec) void {
+        self.type_spec = spec;
+        self.type_kind = spec.lowered_kind;
+        if (spec.lowered_kind == .character) {
+            self.char_len_kind = spec.char_len_kind;
+            self.char_len = spec.char_len;
+        } else {
+            self.char_len_kind = .none;
+            self.char_len = null;
+        }
+    }
 };
 
 pub const EntityKind = enum {

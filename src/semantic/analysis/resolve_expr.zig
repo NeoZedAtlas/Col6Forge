@@ -51,8 +51,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                 if (sym.is_intrinsic) {
                     resolved_spec = try intrinsicReturnType(self, call.name, sym.type_spec, call.args);
                     if (!intrinsic_signature.resultDependsOnArgs(call.name)) {
-                        sym.type_kind = resolved_spec.lowered_kind;
-                        sym.type_spec = resolved_spec;
+                        sym.applyTypeSpec(resolved_spec);
                         self.symbols.items[idx] = sym;
                     }
                 }
@@ -68,10 +67,8 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                             sym.is_external = true;
                         }
                         if (!sym.type_explicit) {
-                            if (symbols_mod.lookupKnownFunctionType(self, call.name)) |fn_ty| {
-                                sym.type_kind = fn_ty;
-                                sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, call.name) orelse
-                                    symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(fn_ty), fn_ty, null);
+                            if (symbols_mod.lookupKnownFunctionResolvedSpec(self, call.name)) |fn_spec| {
+                                sym.applyTypeSpec(fn_spec);
                                 sym.type_explicit = true;
                             }
                         }
@@ -80,7 +77,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                         // In expression context, known subroutine names cannot be indexed.
                         return error.InvalidSubscript;
                     }
-                } else if (symbols_mod.lookupKnownFunctionType(self, call.name)) |fn_ty| {
+                } else if (symbols_mod.lookupKnownFunctionResolvedSpec(self, call.name)) |fn_spec| {
                     kind = .call;
                     if (sym.kind == .variable) {
                         sym.kind = .function;
@@ -89,9 +86,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                         sym.is_external = true;
                     }
                     if (!sym.type_explicit) {
-                        sym.type_kind = fn_ty;
-                        sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, call.name) orelse
-                            symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(fn_ty), fn_ty, null);
+                        sym.applyTypeSpec(fn_spec);
                         sym.type_explicit = true;
                     }
                     self.symbols.items[idx] = sym;

@@ -30,6 +30,13 @@ const SectionActualInfo = struct {
     multipliers: []ValueRef,
 };
 
+const ArrayActualInfo = struct {
+    base_ptr: ValueRef,
+    elem_ty: IRType,
+    extents: []ValueRef,
+    multipliers: []ValueRef,
+};
+
 pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
     const abi_ret_ty = context.fortranAbiReturnType(ret_ty);
     var complex_result_ptr: ?ValueRef = null;
@@ -300,7 +307,7 @@ fn materializeDescriptorValues(
     return base_ptr;
 }
 
-fn analyzeSectionActual(ctx: *Context, builder: anytype, expr: *Expr) !?SectionActualInfo {
+fn analyzeSectionActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?SectionActualInfo {
     return switch (expr.*) {
         .identifier => |name| blk: {
             const sym = ctx.findSymbol(name) orelse break :blk null;
@@ -362,22 +369,41 @@ fn analyzeIntrinsicArrayConversionActual(
     ctx: *Context,
     builder: anytype,
     call: ast.CallOrSubscript,
-) !?SectionActualInfo {
+) anyerror!?SectionActualInfo {
     if (call.args.len != 1) return null;
-
-    const src_name = switch (call.args[0].*) {
-        .identifier => |name| name,
-        else => return null,
-    };
-    const src_sym = ctx.findSymbol(src_name) orelse return null;
-    if (src_sym.dims.len == 0) return null;
-
-    const extents = try emitSymbolDimExtents(ctx, builder, src_sym);
-    const multipliers = try emitContiguousMultipliers(ctx, builder, extents);
+    const src_actual = (try analyzeArrayActual(ctx, builder, call.args[0])) orelse return null;
+    const multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents);
     return .{
         .base_ptr = .{ .name = "", .ty = .ptr, .is_ptr = true },
-        .extents = extents,
+        .extents = src_actual.extents,
         .multipliers = multipliers,
+    };
+}
+
+fn analyzeArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualInfo {
+    const section = (try analyzeSectionActual(ctx, builder, expr)) orelse return null;
+    const elem_ty = try arrayActualElementType(ctx, expr) orelse return null;
+    return .{
+        .base_ptr = section.base_ptr,
+        .elem_ty = elem_ty,
+        .extents = section.extents,
+        .multipliers = section.multipliers,
+    };
+}
+
+fn arrayActualElementType(ctx: *Context, expr: *Expr) !?IRType {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse break :blk null;
+            if (sym.dims.len == 0) break :blk null;
+            break :blk if (sym.isCharacter()) .i8 else ctx.typeFromKind(sym.loweredKind());
+        },
+        .call_or_subscript => |call| blk: {
+            const sym = ctx.findSymbol(call.name) orelse break :blk null;
+            if (sym.dims.len == 0) break :blk null;
+            break :blk if (sym.isCharacter()) .i8 else ctx.typeFromKind(sym.loweredKind());
+        },
+        else => null,
     };
 }
 
@@ -554,24 +580,12 @@ fn i64Const(ctx: *Context, value: i64) ValueRef {
 fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call: ast.CallOrSubscript) !ArgPointerResult {
     if (call.args.len != 1) return error.InvalidIntrinsicCall;
     const dst_ty = intrinsicArrayConversionType(call.name) orelse return error.UnsupportedIntrinsicType;
-
-    const src_name = switch (call.args[0].*) {
-        .identifier => |name| name,
-        else => return error.UnsupportedIntrinsicType,
-    };
-    const src_sym = ctx.findSymbol(src_name) orelse return error.UnknownSymbol;
-    if (src_sym.dims.len == 0) return error.UnsupportedIntrinsicType;
-    const src_ty = ctx.typeFromKind(src_sym.loweredKind());
-
-    const src_ptr = try ctx.getPointer(src_name);
-    const elem_count_const = ctx.arrayElemCountForSymbol(src_sym) catch |err| switch (err) {
-        error.ArrayDimNotConstant => null,
-        else => return err,
-    };
-    const elem_count = if (elem_count_const) |count|
-        i64Const(ctx, @intCast(count))
-    else
-        try emitDynamicElemCountForSymbol(ctx, builder, src_sym);
+    const src_actual = (try analyzeArrayActual(ctx, builder, call.args[0])) orelse return error.UnsupportedIntrinsicType;
+    if (src_actual.extents.len != 1) return error.UnsupportedIntrinsicType;
+    const src_ptr = src_actual.base_ptr;
+    const src_ty = src_actual.elem_ty;
+    const elem_count = src_actual.extents[0];
+    const src_stride = src_actual.multipliers[0];
 
     const elem_size = i64Const(ctx, @intCast(byteSizeForIRType(dst_ty)));
     const total_bytes = try emitMulI64(ctx, builder, elem_count, elem_size);
@@ -580,7 +594,7 @@ fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call:
     try builder.callTyped(heap_ptr_name, .ptr, malloc_name, &.{total_bytes});
     const heap_ptr = ValueRef{ .name = heap_ptr_name, .ty = .ptr, .is_ptr = true };
 
-    try emitIntrinsicArrayConversionLoop(ctx, builder, src_ptr, src_ty, heap_ptr, dst_ty, elem_count);
+    try emitIntrinsicArrayConversionLoop(ctx, builder, src_ptr, src_ty, src_stride, heap_ptr, dst_ty, elem_count);
     return .{
         .ptr = heap_ptr,
         .owned_heap_ptr = heap_ptr,
@@ -772,6 +786,7 @@ fn emitIntrinsicArrayConversionLoop(
     builder: anytype,
     src_ptr: ValueRef,
     src_ty: IRType,
+    src_stride: ValueRef,
     dst_ptr: ValueRef,
     dst_ty: IRType,
     elem_count: ValueRef,
@@ -794,8 +809,9 @@ fn emitIntrinsicArrayConversionLoop(
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
+    const src_offset = try emitMulI64(ctx, builder, idx_val, src_stride);
     const src_elem_ptr_name = try ctx.nextTemp();
-    try builder.gep(src_elem_ptr_name, src_ty, src_ptr, idx_val);
+    try builder.gep(src_elem_ptr_name, src_ty, src_ptr, src_offset);
     const src_val_name = try ctx.nextTemp();
     try builder.load(src_val_name, src_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
     const src_val = ValueRef{ .name = src_val_name, .ty = src_ty, .is_ptr = false };

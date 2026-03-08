@@ -139,17 +139,14 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
             .function => .function,
             else => .subroutine,
         };
-        const proc_type = if (proc_kind == .function)
-            lookupKnownFunctionType(self, name) orelse implicitInfo(self, name).type_kind
+        const proc_spec = if (proc_kind == .function)
+            lookupKnownFunctionResolvedSpec(self, name) orelse implicitInfo(self, name).type_spec
         else
-            ast.TypeKind.real;
+            TypeSpec.fromResolvedKind(.real, .real, null);
         const symbol = Symbol{
             .name = name,
-            .type_kind = proc_type,
-            .type_spec = if (proc_kind == .function)
-                lookupKnownFunctionTypeSpec(self, name) orelse TypeSpec.fromResolvedKind(TypeSpec.baseKind(proc_type), proc_type, null)
-            else
-                TypeSpec.fromResolvedKind(.real, .real, null),
+            .type_kind = proc_spec.lowered_kind,
+            .type_spec = proc_spec,
             .dims = &.{},
             .char_len_kind = .none,
             .char_len = null,
@@ -162,11 +159,11 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
         };
         return internSymbol(self, symbol);
     }
-    const known_fn_type = lookupKnownFunctionType(self, name);
-    const info = if (known_fn_type) |known_ty|
+    const known_fn_spec = lookupKnownFunctionResolvedSpec(self, name);
+    const info = if (known_fn_spec) |known_spec|
         ImplicitInfo{
-            .type_kind = known_ty,
-            .type_spec = lookupKnownFunctionTypeSpec(self, name) orelse TypeSpec.fromResolvedKind(TypeSpec.baseKind(known_ty), known_ty, null),
+            .type_kind = known_spec.lowered_kind,
+            .type_spec = known_spec,
             .char_len_kind = .none,
             .char_len = null,
         }
@@ -179,7 +176,7 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
         .dims = &.{},
         .char_len_kind = info.char_len_kind,
         .char_len = info.char_len,
-        .kind = if (known_fn_type != null) .function else .variable,
+        .kind = if (known_fn_spec != null) .function else .variable,
         .storage = .local,
         .is_external = false,
         .is_intrinsic = false,
@@ -365,6 +362,14 @@ pub fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.Ty
     const resolved = getLowercaseMapValue(ast.TypeKind, self.known_function_types, name);
     putKnownFunctionTypeCache(self, name, resolved);
     return resolved;
+}
+
+pub fn lookupKnownFunctionResolvedSpec(self: *context.Context, name: []const u8) ?TypeSpec {
+    if (lookupKnownFunctionTypeSpec(self, name)) |spec| return spec;
+    if (lookupKnownFunctionType(self, name)) |kind| {
+        return TypeSpec.fromResolvedKind(TypeSpec.baseKind(kind), kind, null);
+    }
+    return null;
 }
 
 pub fn lookupKnownFunctionTypeSpec(self: *context.Context, name: []const u8) ?TypeSpec {

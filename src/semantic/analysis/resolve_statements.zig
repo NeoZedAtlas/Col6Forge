@@ -210,22 +210,18 @@ fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_nam
                 else => sym.kind,
             };
             if (sig.kind == .function) {
-                if (symbols_mod.lookupKnownFunctionType(self, remote_name)) |type_kind| {
-                    sym.type_kind = type_kind;
-                    sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, remote_name) orelse
-                        symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(type_kind), type_kind, null);
+                if (symbols_mod.lookupKnownFunctionResolvedSpec(self, remote_name)) |type_spec| {
+                    sym.applyTypeSpec(type_spec);
                     sym.type_explicit = true;
                 }
             }
             return;
         }
 
-    if (symbols_mod.lookupKnownFunctionType(self, remote_name)) |type_kind| {
+    if (symbols_mod.lookupKnownFunctionResolvedSpec(self, remote_name)) |type_spec| {
         sym.is_external = true;
         sym.kind = .function;
-        sym.type_kind = type_kind;
-        sym.type_spec = symbols_mod.lookupKnownFunctionTypeSpec(self, remote_name) orelse
-            symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(type_kind), type_kind, null);
+        sym.applyTypeSpec(type_spec);
         sym.type_explicit = true;
     }
 }
@@ -238,11 +234,8 @@ fn bindBuiltinUseImport(
     const idx = try symbols_mod.ensureSymbol(self, local_name);
     const sym = &self.symbols.items[idx];
     sym.name = local_name;
-    sym.type_kind = builtin.type_kind;
-    sym.type_spec = symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(builtin.type_kind), builtin.type_kind, null);
+    sym.applyTypeSpec(symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(builtin.type_kind), builtin.type_kind, null));
     sym.dims = &.{};
-    sym.char_len_kind = .none;
-    sym.char_len = null;
     sym.type_spec = sym.type_spec.withCharacterLength(.none, null);
     sym.kind = .parameter;
     sym.storage = .local;

@@ -996,6 +996,53 @@ test "semantic resolves ISO_FORTRAN_ENV use-only rename arrow for OUTPUT_UNIT" {
     try testing.expect(found);
 }
 
+test "semantic use import applies known function TypeSpec without rebuilding from TypeKind" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      USE MODX, ONLY: FOO\n" ++
+        "      DOUBLE PRECISION X\n" ++
+        "      X = FOO()\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgramWithKnown(
+        arena.allocator(),
+        program,
+        &.{
+            .{
+                .name = "FOO",
+                .type_kind = .double_precision,
+                .type_spec = symbols.TypeSpec.fromResolvedKind(.real, .double_precision, 8),
+            },
+        },
+        &.{
+            .{
+                .name = "FOO",
+                .kind = .function,
+                .arg_count = 0,
+            },
+        },
+    );
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "FOO")) continue;
+        found = true;
+        try testing.expectEqual(ast.TypeKind.double_precision, sym.type_kind);
+        try testing.expectEqual(ast.TypeKind.real, sym.type_spec.declared_kind);
+        try testing.expectEqual(ast.TypeKind.double_precision, sym.type_spec.lowered_kind);
+        try testing.expectEqual(@as(?u8, 8), sym.type_spec.kind_value);
+    }
+    try testing.expect(found);
+}
+
 test "semantic CF3112 diagnostic includes PARAMETER name and types" {
     const testing = std.testing;
     const allocator = testing.allocator;
