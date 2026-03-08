@@ -199,6 +199,20 @@ fn emitWriteRuntimeFormatExpr(
     unit_i32: ValueRef,
     expanded_values: *ExpandedWriteValues,
 ) EmitError!void {
+    return emitWriteRuntimeFormatExprCore(ctx, builder, fmt_expr, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded_values);
+}
+
+fn emitWriteRuntimeFormatExprCore(
+    ctx: *Context,
+    builder: anytype,
+    fmt_expr: *ast.Expr,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    expanded_values: *ExpandedWriteValues,
+) EmitError!void {
     const fmt = try emitRuntimeFormatValue(ctx, builder, fmt_expr);
     const runtime_args = try buildWriteRuntimeArgs(ctx, builder, expanded_values);
 

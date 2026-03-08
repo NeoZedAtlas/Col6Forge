@@ -154,7 +154,7 @@ pub fn emitWriteDynamicFormat(
 ) EmitError!void {
     var prepared = try prepareDynamicFormat(ctx, builder, label_var);
     defer prepared.deinit();
-    return emitWriteDynamicFormatPrepared(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, prepared, expanded_values);
+    return emitWriteDynamicFormatCore(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, prepared, expanded_values);
 }
 
 pub fn emitWriteDynamicFormatPrepared(
@@ -169,7 +169,21 @@ pub fn emitWriteDynamicFormatPrepared(
     prepared: PreparedDynamicFormat,
     expanded_values: *ExpandedWriteValues,
 ) EmitError!void {
+    return emitWriteDynamicFormatCore(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, prepared, expanded_values);
+}
 
+fn emitWriteDynamicFormatCore(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    prepared: PreparedDynamicFormat,
+    expanded_values: *ExpandedWriteValues,
+) EmitError!void {
     const Dispatch = struct {
         write: ast.WriteStmt,
         unit_value: ValueRef,
