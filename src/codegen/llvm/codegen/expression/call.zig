@@ -390,7 +390,7 @@ fn emitScalarArrayBinaryOperand(
 }
 
 fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?ArgPointerResult {
-    const src_actual = (try analyzeArrayActual(ctx, builder, expr)) orelse return null;
+    const src_actual = (try resolveArrayActual(ctx, builder, expr)) orelse return null;
     if (!isNegatableArrayElementType(src_actual.elem_ty)) return null;
 
     const elem_count = try emitExtentProductI64(ctx, builder, src_actual.extents);
