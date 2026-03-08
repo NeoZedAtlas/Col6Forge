@@ -21,11 +21,11 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     if (call.args.len == 0) return error.InvalidSubscript;
     if (call.args.len != sym.dims.len) return error.InvalidSubscript;
     const base_ptr = try ctx.getPointer(call.name);
-    const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else ctx.typeFromKind(sym.type_kind);
+    const elem_ty = if (sym.isCharacter()) ir.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
 
     var offset = try emitColumnMajorOffset(ctx, builder, sym, call.args);
 
-    if (sym.type_kind == .character) {
+    if (sym.isCharacter()) {
         const char_len = common.constantCharacterLen(sym) orelse return error.ArraysUnsupported;
         if (char_len != 1) {
             const scale = ValueRef{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = offset.ty, .is_ptr = false };
@@ -69,7 +69,7 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
     if (sym.dims.len == 0) return error.ArraysUnsupported;
     const base_ptr = try ctx.getPointer(call.name);
-    const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else ctx.typeFromKind(sym.type_kind);
+    const elem_ty = if (sym.isCharacter()) ir.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
 
     if (call.args.len != 1) return error.InvalidSubscript;
     const idx1 = try emitIndex(ctx, builder, call.args[0]);
@@ -82,7 +82,7 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
         try emitBoundsCheck(ctx, builder, idx1, oneIndexValue(), extent_total);
     }
     var idx1_adj = try binary.emitSub(ctx, builder, idx1, oneIndexValue());
-    if (sym.type_kind == .character) {
+    if (sym.isCharacter()) {
         const char_len = common.constantCharacterLen(sym) orelse return error.ArraysUnsupported;
         if (char_len != 1) {
             const scale = ValueRef{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = idx1_adj.ty, .is_ptr = false };

@@ -158,7 +158,7 @@ const ListBlockTransfer = struct {
 };
 
 fn blockTransferKindForSymbol(ctx: *Context, sym: anytype) ?u8 {
-    return switch (sym.type_kind) {
+    return switch (sym.loweredKind()) {
         .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',
@@ -316,11 +316,11 @@ fn shouldStreamList(ctx: *Context, args: []*ast.Expr) bool {
             },
             .identifier => {
                 const sym = ctx.findSymbol(arg.identifier) orelse continue;
-                if (sym.dims.len > 0 and sym.type_kind != .character and args.len > 1) return true;
+                if (sym.dims.len > 0 and !sym.isCharacter() and args.len > 1) return true;
             },
             .call_or_subscript => |call| {
                 const sym = ctx.findSymbol(call.name) orelse continue;
-                if (sym.dims.len == 0 or sym.type_kind == .character) continue;
+                if (sym.dims.len == 0 or sym.isCharacter()) continue;
                 for (call.args) |sub_arg| {
                     if (sub_arg.* == .dim_range and args.len > 1) return true;
                 }
@@ -493,7 +493,7 @@ fn emitDynamicImpliedDoListWrite(
     if (sym.dims.len == 0 or call.args.len != sym.dims.len) return false;
 
     const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return false;
-    const helper_name = switch (sym.type_kind) {
+    const helper_name = switch (sym.loweredKind()) {
         .integer => if (ctx.defaultIntegerIRType() == .i64) "col6forge_write_list_i64_n" else "col6forge_write_list_i32_n",
         .real => "col6forge_write_list_f32_n",
         .double_precision => "col6forge_write_list_f64_n",
@@ -521,7 +521,7 @@ fn emitDynamicImpliedDoListWrite(
     const pre_packed = try packWriteArgs(ctx, builder, &pre_expanded);
     const post_packed = try packWriteArgs(ctx, builder, &post_expanded);
 
-    const mid_kind_val: i64 = switch (sym.type_kind) {
+    const mid_kind_val: i64 = switch (sym.loweredKind()) {
         .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',
@@ -654,7 +654,7 @@ fn emitDynamicImpliedDoListRead(
 
     const loop_dim = impliedLoopDim(call.args, implied.var_name) orelse return null;
 
-    const helper_name = switch (sym.type_kind) {
+    const helper_name = switch (sym.loweredKind()) {
         .integer => if (ctx.defaultIntegerIRType() == .i64) "col6forge_read_list_i64_n" else "col6forge_read_list_i32_n",
         .real => "col6forge_read_list_f32_n",
         .double_precision => "col6forge_read_list_f64_n",
@@ -684,7 +684,7 @@ fn emitDynamicImpliedDoListRead(
     const pre_packed = packReadTargets(ctx, builder, &pre_expanded) catch return null;
     const post_packed = packReadTargets(ctx, builder, &post_expanded) catch return null;
 
-    const mid_kind_val: i64 = switch (sym.type_kind) {
+    const mid_kind_val: i64 = switch (sym.loweredKind()) {
         .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',

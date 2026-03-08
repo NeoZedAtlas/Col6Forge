@@ -37,14 +37,14 @@ fn lookupCharArgLen(ctx: *Context, name: []const u8) ?ValueRef {
 }
 
 fn emitCharSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) EmitError!ValueRef {
-    if (sym.char_len) |len| return try constI32(ctx, @intCast(len));
+    if (sym.effectiveCharLen()) |len| return try constI32(ctx, @intCast(len));
     if (lookupCharArgLen(ctx, name)) |len_val| return len_val;
     return try constI32(ctx, 1);
 }
 
 fn emitSubstringLenValue(ctx: *Context, builder: anytype, sub: ast.SubstringExpr) EmitError!ValueRef {
     const sym = ctx.findSymbol(sub.name) orelse return error.UnknownSymbol;
-    if (sym.type_kind != .character) return error.UnsupportedCast;
+    if (!sym.isCharacter()) return error.UnsupportedCast;
 
     var end_val = try emitCharSymbolLenValue(ctx, sub.name, sym);
     if (sub.end) |end_expr| {
@@ -69,12 +69,12 @@ fn emitCharExprLen(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitEr
     switch (expr_node.*) {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return null;
-            if (sym.type_kind != .character) return null;
+            if (!sym.isCharacter()) return null;
             return try emitCharSymbolLenValue(ctx, name, sym);
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return null;
-            if (sym.type_kind != .character) return null;
+            if (!sym.isCharacter()) return null;
             return try emitCharSymbolLenValue(ctx, call.name, sym);
         },
         .substring => |sub| {

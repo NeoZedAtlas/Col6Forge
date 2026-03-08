@@ -105,6 +105,8 @@ const Options = struct {
     keep_workdir: bool,
     translate_sources: bool,
     strict_translate: bool,
+    fail_on_fallback: bool,
+    max_fallbacks: ?usize,
     emit: Col6Forge.EmitKind,
     show_help: bool,
     incremental: bool,
@@ -122,6 +124,31 @@ const ParseArgError = union(enum) {
     unknown_flag: []const u8,
     invalid_runtime_backend: []const u8,
     invalid_timeout: []const u8,
+    invalid_max_fallbacks: []const u8,
+};
+
+const FallbackKind = enum {
+    pipeline,
+    translated_object,
+    translated_compile,
+};
+
+const FallbackStats = struct {
+    pipeline: usize = 0,
+    translated_object: usize = 0,
+    translated_compile: usize = 0,
+
+    fn record(self: *FallbackStats, kind: FallbackKind) void {
+        switch (kind) {
+            .pipeline => self.pipeline += 1,
+            .translated_object => self.translated_object += 1,
+            .translated_compile => self.translated_compile += 1,
+        }
+    }
+
+    fn total(self: FallbackStats) usize {
+        return self.pipeline + self.translated_object + self.translated_compile;
+    }
 };
 
 const ParseArgsOutcome = union(enum) {
@@ -217,6 +244,7 @@ pub fn main() !void {
     }
 
     var failures: usize = 0;
+    var fallback_stats = FallbackStats{};
     for (cases, 0..) |case, i| {
         std.log.info("[{d}/{d}] Running {s}\n", .{ i + 1, cases.len, case.name });
         const ok = processCase(
@@ -231,12 +259,29 @@ pub fn main() !void {
             case,
             libs,
             options,
+            &fallback_stats,
         ) catch |err| {
             std.log.err("internal error: {s} ({s})\n", .{ case.name, @errorName(err) });
             failures += 1;
             continue;
         };
         if (!ok) failures += 1;
+    }
+
+    if (fallback_stats.total() > 0) {
+        std.log.warn(
+            "fallback summary: total={d} pipeline={d} translated-object={d} translated-compile={d}\n",
+            .{ fallback_stats.total(), fallback_stats.pipeline, fallback_stats.translated_object, fallback_stats.translated_compile },
+        );
+    } else {
+        std.log.info("fallback summary: total=0\n", .{});
+    }
+
+    if (options.max_fallbacks) |max_fallbacks| {
+        if (fallback_stats.total() > max_fallbacks) {
+            std.log.err("fallback budget exceeded: total={d} max={d}\n", .{ fallback_stats.total(), max_fallbacks });
+            return error.FallbackBudgetExceeded;
+        }
     }
 
     if (failures > 0) {
@@ -256,6 +301,8 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var keep_workdir = false;
     var translate_sources = true;
     var strict_translate = false;
+    var fail_on_fallback = false;
+    var max_fallbacks: ?usize = null;
     var emit: Col6Forge.EmitKind = .llvm;
     var show_help = false;
     var incremental = true;
@@ -324,6 +371,18 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
             strict_translate = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--fail-on-fallback")) {
+            fail_on_fallback = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--max-fallbacks")) {
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
+            i += 1;
+            max_fallbacks = std.fmt.parseInt(usize, args[i], 10) catch {
+                return .{ .failure = .{ .invalid_max_fallbacks = args[i] } };
+            };
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--incremental")) {
             incremental = true;
             continue;
@@ -353,6 +412,8 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
         .keep_workdir = keep_workdir,
         .translate_sources = translate_sources,
         .strict_translate = strict_translate,
+        .fail_on_fallback = fail_on_fallback,
+        .max_fallbacks = max_fallbacks,
         .emit = emit,
         .show_help = show_help,
         .incremental = incremental,
@@ -368,6 +429,7 @@ fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
         .unknown_flag => |flag| try writer.interface.print("error: unknown flag: {s}\n", .{flag}),
         .invalid_runtime_backend => |value| try writer.interface.print("error: invalid runtime backend: {s} (expected c or zig)\n", .{value}),
         .invalid_timeout => |value| try writer.interface.print("error: invalid timeout value: {s}\n", .{value}),
+        .invalid_max_fallbacks => |value| try writer.interface.print("error: invalid max-fallbacks value: {s}\n", .{value}),
     }
     try writer.interface.flush();
 }
@@ -386,6 +448,8 @@ fn printUsage(file: std.fs.File) !void {
         \\  --translate-sources     Translate eligible case sources (default)
         \\  --no-translate-sources  Keep case sources on gfortran side
         \\  --strict-translate      Fail when any source translation fails (default: best-effort fallback)
+        \\  --fail-on-fallback      Fail when any fallback path is taken
+        \\  --max-fallbacks <n>     Fail if total fallback count exceeds n
         \\  --incremental           Enable translation/object/runtime cache (default)
         \\  --no-incremental        Disable incremental cache and rebuild everything
         \\  --clean-cache           Delete zig-cache/lapack-verify/cache before running
@@ -492,6 +556,7 @@ fn processCase(
     case: LapackCase,
     libs: SupportLibs,
     options: Options,
+    fallback_stats: *FallbackStats,
 ) !bool {
     _ = lin_dir;
     const work_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "lapack-verify", case.name });
@@ -543,7 +608,9 @@ fn processCase(
         candidate_sources,
         options.emit,
         options.strict_translate,
+        options.fail_on_fallback,
         options.incremental,
+        fallback_stats,
     );
     defer {
         allocator.free(translated.sources);
@@ -571,7 +638,9 @@ fn processCase(
         options.timeout_ms,
         test_dir,
         options.strict_translate,
+        options.fail_on_fallback,
         options.incremental,
+        fallback_stats,
     )) {
         return false;
     }
@@ -985,7 +1054,9 @@ fn translateSources(
     source_paths: []const []const u8,
     emit: Col6Forge.EmitKind,
     strict_translate: bool,
+    fail_on_fallback: bool,
     incremental: bool,
+    fallback_stats: *FallbackStats,
 ) !TranslateResult {
     var ll_buf: std.ArrayList([]const u8) = .empty;
     errdefer {
@@ -1016,7 +1087,7 @@ fn translateSources(
                         printPipelineError(src_path, err);
                         return err;
                     }
-                    std.log.warn("pipeline fallback: {s}\n", .{src_path});
+                    try recordFallback(fallback_stats, .pipeline, src_path, fail_on_fallback);
                     printPipelineError(src_path, err);
                     continue;
                 };
@@ -1029,7 +1100,7 @@ fn translateSources(
                     printPipelineError(src_path, err);
                     return err;
                 }
-                std.log.warn("pipeline fallback: {s}\n", .{src_path});
+                try recordFallback(fallback_stats, .pipeline, src_path, fail_on_fallback);
                 printPipelineError(src_path, err);
                 continue;
             };
@@ -1066,7 +1137,9 @@ fn compileTranslatedCase(
     timeout_ms: u64,
     cwd: []const u8,
     strict_translate: bool,
+    fail_on_fallback: bool,
     incremental: bool,
+    fallback_stats: *FallbackStats,
 ) !bool {
     const obj_dir = try std.fs.path.join(allocator, &.{ cwd, "obj-test-case" });
     defer allocator.free(obj_dir);
@@ -1109,7 +1182,7 @@ fn compileTranslatedCase(
                     return false;
                 }
                 const src_path = translated_sources[idx];
-                std.log.warn("translated object fallback: {s}\n", .{src_path});
+                recordFallback(fallback_stats, .translated_object, src_path, fail_on_fallback) catch return false;
                 const fb_name = try std.fmt.allocPrint(allocator, "tfb_{d}.o", .{idx});
                 defer allocator.free(fb_name);
                 const fb_obj = try std.fs.path.join(allocator, &.{ obj_dir, fb_name });
@@ -1149,7 +1222,10 @@ fn compileTranslatedCase(
                 return false;
             }
             const src_path = translated_sources[idx];
-            std.log.warn("translated compile fallback: {s}\n", .{src_path});
+            recordFallback(fallback_stats, .translated_compile, src_path, fail_on_fallback) catch {
+                allocator.free(obj_path);
+                return false;
+            };
             const fb_name = try std.fmt.allocPrint(allocator, "tfb_{d}.o", .{idx});
             defer allocator.free(fb_name);
             const fb_obj = try std.fs.path.join(allocator, &.{ obj_dir, fb_name });
@@ -1214,6 +1290,25 @@ fn compileTranslatedCase(
         return false;
     }
     return true;
+}
+
+fn recordFallback(
+    stats: *FallbackStats,
+    kind: FallbackKind,
+    src_path: []const u8,
+    fail_on_fallback: bool,
+) !void {
+    stats.record(kind);
+    std.log.warn("{s} fallback: {s}\n", .{ fallbackKindText(kind), src_path });
+    if (fail_on_fallback) return error.FallbackDisallowed;
+}
+
+fn fallbackKindText(kind: FallbackKind) []const u8 {
+    return switch (kind) {
+        .pipeline => "pipeline",
+        .translated_object => "translated object",
+        .translated_compile => "translated compile",
+    };
 }
 
 fn absolutizePath(allocator: std.mem.Allocator, root_path: []const u8, path: []const u8) ![]const u8 {
@@ -1603,4 +1698,39 @@ fn trimCr(line: []const u8) []const u8 {
 
 fn isTimingLine(line: []const u8) bool {
     return std.mem.indexOf(u8, line, "Total time used =") != null;
+}
+
+test "parseArgs recognizes fail-on-fallback gate" {
+    const testing = std.testing;
+
+    const args = [_][]const u8{
+        "lapack_runner",
+        "--fail-on-fallback",
+        "--strict-translate",
+    };
+
+    const options = switch (parseArgs(&args)) {
+        .success => |opts| opts,
+        .failure => |err| return err,
+    };
+
+    try testing.expect(options.fail_on_fallback);
+    try testing.expect(options.strict_translate);
+}
+
+test "parseArgs recognizes max-fallbacks gate" {
+    const testing = std.testing;
+
+    const args = [_][]const u8{
+        "lapack_runner",
+        "--max-fallbacks",
+        "7",
+    };
+
+    const options = switch (parseArgs(&args)) {
+        .success => |opts| opts,
+        .failure => |err| return err,
+    };
+
+    try testing.expectEqual(@as(?usize, 7), options.max_fallbacks);
 }

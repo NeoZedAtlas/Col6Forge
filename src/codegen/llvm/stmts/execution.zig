@@ -177,7 +177,7 @@ fn emitAllocateExtentExpr(ctx: *Context, builder: anytype, expr_node: *ast.Expr)
 }
 
 fn elementByteSize(sym: ast.sema.Symbol) EmitError!usize {
-    return switch (sym.type_kind) {
+    return switch (sym.loweredKind()) {
         .integer => 4,
         .real => 4,
         .double_precision => 8,
@@ -229,7 +229,7 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
 pub fn emitAssignLabel(ctx: *Context, builder: anytype, assign: ast.AssignLabelStmt) EmitError!void {
     const target_ptr = try ctx.getPointer(assign.target);
     const sym = ctx.findSymbol(assign.target) orelse return error.UnknownSymbol;
-    const target_ty = ctx.typeFromKind(sym.type_kind);
+    const target_ty = ctx.typeFromKind(sym.loweredKind());
     _ = std.fmt.parseInt(i64, assign.label, 10) catch return error.InvalidAssignedLabel;
     var value = ValueRef{ .name = assign.label, .ty = .i32, .is_ptr = false };
     if (target_ty != value.ty) {
@@ -271,7 +271,7 @@ fn emitContiguousSectionScalarAssignment(ctx: *Context, builder: anytype, assign
 
     const sym = ctx.findSymbol(call.name) orelse return false;
     if (sym.dims.len == 0 or call.args.len != sym.dims.len) return false;
-    if (sym.type_kind == .character) return false;
+    if (sym.isCharacter()) return false;
 
     var total_count = ValueRef{ .name = "1", .ty = .i64, .is_ptr = false };
     var has_range = false;
@@ -291,7 +291,7 @@ fn emitContiguousSectionScalarAssignment(ctx: *Context, builder: anytype, assign
     if (!has_range) return false;
 
     const base_ptr = ctx.locals.get(call.name) orelse return error.UnknownSymbol;
-    const elem_ty = ctx.typeFromKind(sym.type_kind);
+    const elem_ty = ctx.typeFromKind(sym.loweredKind());
     const value = try expr.emitExpr(ctx, builder, assign.value);
     const coerced = try expr.coerce(ctx, builder, value, elem_ty);
     try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, total_count, coerced);
@@ -303,10 +303,10 @@ fn emitWholeArrayScalarAssignment(ctx: *Context, builder: anytype, assign: ast.A
     const name = assign.target.identifier;
     const sym = ctx.findSymbol(name) orelse return false;
     if (sym.dims.len == 0) return false;
-    if (sym.type_kind == .character) return false;
+    if (sym.isCharacter()) return false;
 
     const base_ptr = ctx.locals.get(name) orelse return error.UnknownSymbol;
-    const elem_ty = ctx.typeFromKind(sym.type_kind);
+    const elem_ty = ctx.typeFromKind(sym.loweredKind());
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
         error.ArrayDimNotConstant => null,
         else => return err,
@@ -438,7 +438,7 @@ fn trackCharAssignment(ctx: *Context, target: *ast.Expr, value: ?[]const u8) voi
         .identifier => |name| {
             const sym = ctx.findSymbol(name);
             if (sym) |s| {
-                if (s.type_kind == .character and s.dims.len > 0) {
+                if (s.isCharacter() and s.dims.len > 0) {
                     invalidateCharArrayEntries(ctx, name);
                     return;
                 }
@@ -674,7 +674,7 @@ pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!v
         if (init.target.* == .call_or_subscript) {
             const call = init.target.call_or_subscript;
             const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-            if (sym.type_kind == .character) {
+            if (sym.isCharacter()) {
                 target_len = common.constantCharacterLen(sym) orelse return error.NonConstantCharacterLength;
             }
             if (sym.dims.len > 1 and call.args.len == 1) {
@@ -727,12 +727,12 @@ fn emitRepeatedDataInit(ctx: *Context, builder: anytype, init: ast.DataInit) Emi
     const name = init.target.identifier;
     const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
     if (sym.dims.len == 0) return false;
-    if (sym.type_kind == .character) return false;
+    if (sym.isCharacter()) return false;
 
     const repeat_i64 = std.math.cast(i64, init.repeat_count) orelse return error.DataExpansionTooLarge;
     const count = constI64(ctx, repeat_i64);
     const base_ptr = ctx.locals.get(name) orelse return error.UnknownSymbol;
-    const elem_ty = ctx.typeFromKind(sym.type_kind);
+    const elem_ty = ctx.typeFromKind(sym.loweredKind());
     const value = try expr.emitExpr(ctx, builder, init.value);
     const coerced = try expr.coerce(ctx, builder, value, elem_ty);
     try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, count, coerced);
@@ -756,12 +756,12 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
     if (ctx.unit.kind == .function) {
         const return_symbol_name = functionReturnSymbolName(ctx.unit);
         const sym = ctx.findSymbol(return_symbol_name) orelse return error.UnknownSymbol;
-        if (sym.type_kind == .character) {
+        if (sym.isCharacter()) {
             try ctx.emitHeapTempFrees(builder);
             try builder.retVoid();
             return;
         }
-        const ret_ty = ctx.typeFromKind(sym.type_kind);
+        const ret_ty = ctx.typeFromKind(sym.loweredKind());
         const ret_ptr = ctx.locals.get(return_symbol_name) orelse return error.UnknownSymbol;
         if (ret_ty == .complex_f64) {
             // COMPLEX*16 is returned via hidden sret pointer; function returns void.
@@ -974,12 +974,12 @@ fn emitCharLenValue(ctx: *Context, builder: anytype, value_expr: *ast.Expr) Emit
     switch (value_expr.*) {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
-            if (sym.type_kind != .character) return null;
+            if (!sym.isCharacter()) return null;
             return try emitCharSymbolLenValue(ctx, name, sym);
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-            if (sym.type_kind != .character) return null;
+            if (!sym.isCharacter()) return null;
             return try emitCharSymbolLenValue(ctx, call.name, sym);
         },
         .substring => |sub| {
@@ -1020,12 +1020,12 @@ fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
     switch (expr_node.*) {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return null;
-            if (sym.type_kind != .character) return null;
+            if (!sym.isCharacter()) return null;
             return common.constantCharacterLen(sym);
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return null;
-            if (sym.type_kind != .character) return null;
+            if (!sym.isCharacter()) return null;
             return common.constantCharacterLen(sym);
         },
         .substring => |sub| {
@@ -1051,7 +1051,7 @@ fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
 
 fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     const sym = ctx.findSymbol(sub.name) orelse return null;
-    if (sym.type_kind != .character) return null;
+    if (!sym.isCharacter()) return null;
     const base_len_usize = common.constantCharacterLen(sym) orelse return null;
     const base_len: i64 = @intCast(base_len_usize);
     const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;

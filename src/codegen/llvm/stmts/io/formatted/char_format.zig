@@ -15,10 +15,10 @@ const intLiteralValue = io_utils.intLiteralValue;
 
 pub fn formatFromCharArrayData(ctx: *Context, name: []const u8) EmitError!?[]const ast.FormatItem {
     const sym = ctx.findSymbol(name) orelse return null;
-    if (sym.type_kind != .character or sym.dims.len == 0) return null;
+    if (!sym.isCharacter() or sym.dims.len == 0) return null;
     const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return null;
     if (elem_count == 0) return null;
-    const char_len = sym.char_len orelse 1;
+    const char_len = sym.effectiveCharLen() orelse 1;
     const lower_bound = declaredLowerBound(sym.dims[0]) orelse return null;
 
     var elements = try ctx.allocator.alloc(?[]const u8, elem_count);

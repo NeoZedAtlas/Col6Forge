@@ -235,7 +235,7 @@ fn emitRuntimeImpliedDo(
     implied: ast.ImpliedDo,
 ) EmitError!void {
     const sym = ctx.findSymbol(implied.var_name) orelse return error.UnknownSymbol;
-    const var_ty = ctx.typeFromKind(sym.type_kind);
+    const var_ty = ctx.typeFromKind(sym.loweredKind());
     const var_ptr = try ctx.getPointer(implied.var_name);
 
     const start_val = try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, implied.start), var_ty);

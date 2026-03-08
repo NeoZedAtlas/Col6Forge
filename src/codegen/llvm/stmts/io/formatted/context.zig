@@ -101,7 +101,7 @@ pub fn resolveFormatPlan(
         .label => |label| {
             if (ctx.formats.get(label)) |fmt_info| return .{ .static_items = fmt_info.items };
             if (ctx.findSymbol(label)) |sym| {
-                if (sym.type_kind == .character) {
+                if (sym.isCharacter()) {
                     if (try formatFromCharArrayData(ctx, label)) |items| return .{ .static_items = items };
                     return error.MissingFormatLabel;
                 }
@@ -165,26 +165,26 @@ fn emitFormatExprLen(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitE
     switch (fmt_expr.*) {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return null;
-            if (sym.type_kind != .character) return null;
+            if (!sym.isCharacter()) return null;
             if (sym.dims.len > 0) {
-                if (sym.char_len) |len| {
+                if (sym.effectiveCharLen()) |len| {
                     const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch null;
                     if (elem_count) |count| return try ctx.constI32(@intCast(len * count));
                 }
             }
-            if (sym.char_len) |len| return try ctx.constI32(@intCast(len));
+            if (sym.effectiveCharLen()) |len| return try ctx.constI32(@intCast(len));
             return lookupCharArgLen(ctx, name) orelse try ctx.constI32(1);
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return null;
-            if (sym.type_kind != .character) return null;
+            if (!sym.isCharacter()) return null;
             if (call.args.len == 0 and sym.dims.len > 0) {
-                if (sym.char_len) |len| {
+                if (sym.effectiveCharLen()) |len| {
                     const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch null;
                     if (elem_count) |count| return try ctx.constI32(@intCast(len * count));
                 }
             }
-            if (sym.char_len) |len| return try ctx.constI32(@intCast(len));
+            if (sym.effectiveCharLen()) |len| return try ctx.constI32(@intCast(len));
             return lookupCharArgLen(ctx, call.name) orelse try ctx.constI32(1);
         },
         .literal => |lit| switch (lit.kind) {
@@ -197,9 +197,9 @@ fn emitFormatExprLen(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitE
         },
         .substring => |sub| {
             const sym = ctx.findSymbol(sub.name) orelse return null;
-            if (sym.type_kind != .character) return null;
+            if (!sym.isCharacter()) return null;
 
-            var end_val: ValueRef = if (sym.char_len) |len| try ctx.constI32(@intCast(len)) else lookupCharArgLen(ctx, sub.name) orelse try ctx.constI32(1);
+            var end_val: ValueRef = if (sym.effectiveCharLen()) |len| try ctx.constI32(@intCast(len)) else lookupCharArgLen(ctx, sub.name) orelse try ctx.constI32(1);
             if (sub.end) |end_expr| {
                 end_val = try expr.emitExpr(ctx, builder, end_expr);
                 if (end_val.ty != .i32) end_val = try coerceRuntimeI32(ctx, builder, end_val);

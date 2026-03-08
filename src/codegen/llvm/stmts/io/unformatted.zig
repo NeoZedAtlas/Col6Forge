@@ -64,13 +64,13 @@ fn appendArrayArgs(ctx: *Context, builder: anytype, args: *UnformattedArgs, sym:
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
     if (elem_count > max_packed_array_elems) return error.ArrayArgTooLargeForPackedIo;
     const base_ptr = try ctx.getPointer(sym.name);
-    const elem_ty = if (sym.type_kind == .character) utils.IRType.i8 else ctx.typeFromKind(sym.type_kind);
-    const char_len = sym.char_len orelse 1;
+    const elem_ty = if (sym.isCharacter()) utils.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
+    const char_len = sym.effectiveCharLen() orelse 1;
 
     var idx: usize = 0;
     while (idx < elem_count) : (idx += 1) {
         var offset_val = try ctx.constI32(@intCast(idx));
-        if (sym.type_kind == .character and char_len > 1) {
+        if (sym.isCharacter() and char_len > 1) {
             const scale = try ctx.constI32(@intCast(char_len));
             const mul_tmp = try ctx.nextTemp();
             try builder.binary(mul_tmp, "mul", .i32, offset_val, scale);
@@ -80,7 +80,7 @@ fn appendArrayArgs(ctx: *Context, builder: anytype, args: *UnformattedArgs, sym:
         try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
         const ptr = ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
 
-        if (sym.type_kind == .character) {
+        if (sym.isCharacter()) {
             if (char_len > std.math.maxInt(i32)) return error.IntegerOverflow;
             try appendArg(args, ptr, 's', @intCast(char_len));
         } else {
@@ -155,7 +155,7 @@ fn buildUnformattedReadArgs(ctx: *Context, builder: anytype, expanded_args: []*a
 }
 
 fn helperNameForUnformattedArray(ctx: *Context, sym: anytype, is_write: bool) ?[]const u8 {
-    return switch (sym.type_kind) {
+    return switch (sym.loweredKind()) {
         .integer => if (is_write)
             if (ctx.defaultIntegerIRType() == .i64) "col6forge_write_unformatted_i64_n" else "col6forge_write_unformatted_i32_n"
         else if (ctx.defaultIntegerIRType() == .i64) "col6forge_read_unformatted_i64_n" else "col6forge_read_unformatted_i32_n",
@@ -172,7 +172,7 @@ fn emitWholeArrayUnformattedWrite(ctx: *Context, builder: anytype, write: ast.Wr
     if (write.args.len != 1) return false;
     if (write.args[0].* != .identifier) return false;
     const sym = ctx.findSymbol(write.args[0].identifier) orelse return false;
-    if (sym.dims.len == 0 or sym.type_kind == .character) return false;
+    if (sym.dims.len == 0 or sym.isCharacter()) return false;
     const helper = helperNameForUnformattedArray(ctx, sym, true) orelse return false;
 
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch return false;
@@ -188,7 +188,7 @@ fn emitWholeArrayUnformattedRead(ctx: *Context, builder: anytype, read: ast.Read
     if (read.args.len != 1) return null;
     if (read.args[0].* != .identifier) return null;
     const sym = ctx.findSymbol(read.args[0].identifier) orelse return null;
-    if (sym.dims.len == 0 or sym.type_kind == .character) return null;
+    if (sym.dims.len == 0 or sym.isCharacter()) return null;
     const helper = helperNameForUnformattedArray(ctx, sym, false) orelse return null;
 
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch return null;
@@ -249,18 +249,18 @@ const BlockTransfer = struct {
 };
 
 fn byteSizeForSymbol(ctx: *Context, sym: anytype) ?i64 {
-    return switch (sym.type_kind) {
+    return switch (sym.loweredKind()) {
         .integer => scalarByteSize(ctx.defaultIntegerIRType()),
         .real => 4,
         .double_precision, .complex => 8,
         .complex_double => 16,
         .logical => 1,
-        .character => @as(i64, @intCast(sym.char_len orelse 1)),
+        .character => @as(i64, @intCast(sym.effectiveCharLen() orelse 1)),
     };
 }
 
 fn blockTransferKindForSymbol(ctx: *Context, sym: anytype) ?struct { kind: u8, elem_len: i32 } {
-    return switch (sym.type_kind) {
+    return switch (sym.loweredKind()) {
         .integer => .{ .kind = defaultIntegerKind(ctx), .elem_len = 0 },
         .real => .{ .kind = 'f', .elem_len = 0 },
         .double_precision => .{ .kind = 'd', .elem_len = 0 },
@@ -268,7 +268,7 @@ fn blockTransferKindForSymbol(ctx: *Context, sym: anytype) ?struct { kind: u8, e
         .complex_double => .{ .kind = 'z', .elem_len = 0 },
         .logical => .{ .kind = 'l', .elem_len = 0 },
         .character => blk: {
-            const char_len = sym.char_len orelse 1;
+            const char_len = sym.effectiveCharLen() orelse 1;
             if (char_len > std.math.maxInt(i32)) return null;
             break :blk .{ .kind = 's', .elem_len = @intCast(char_len) };
         },
@@ -587,7 +587,7 @@ fn emitMixedArrayUnformattedWrite(ctx: *Context, builder: anytype, write: ast.Wr
     const arr_idx = findSingleArrayArg(ctx, write.args) orelse return false;
     const arr_arg = write.args[arr_idx];
     const sym = ctx.findSymbol(arr_arg.identifier) orelse return false;
-    if (sym.dims.len == 0 or sym.type_kind == .character) return false;
+    if (sym.dims.len == 0 or sym.isCharacter()) return false;
 
     var pre_expanded = try expandIoArgs(ctx, write.args[0..arr_idx]);
     defer pre_expanded.deinit(ctx.allocator);
@@ -600,7 +600,7 @@ fn emitMixedArrayUnformattedWrite(ctx: *Context, builder: anytype, write: ast.Wr
     const pre_packed = try packUnformattedArgs(ctx, builder, &pre_args);
     const post_packed = try packUnformattedArgs(ctx, builder, &post_args);
 
-    const mid_kind_val: i64 = switch (sym.type_kind) {
+    const mid_kind_val: i64 = switch (sym.loweredKind()) {
         .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',
@@ -649,7 +649,7 @@ fn emitMixedArrayUnformattedRead(ctx: *Context, builder: anytype, read: ast.Read
     const arr_idx = findSingleArrayArg(ctx, read.args) orelse return null;
     const arr_arg = read.args[arr_idx];
     const sym = ctx.findSymbol(arr_arg.identifier) orelse return null;
-    if (sym.dims.len == 0 or sym.type_kind == .character) return null;
+    if (sym.dims.len == 0 or sym.isCharacter()) return null;
 
     var pre_expanded = try expandIoArgs(ctx, read.args[0..arr_idx]);
     defer pre_expanded.deinit(ctx.allocator);
@@ -662,7 +662,7 @@ fn emitMixedArrayUnformattedRead(ctx: *Context, builder: anytype, read: ast.Read
     const pre_packed = try packUnformattedArgs(ctx, builder, &pre_args);
     const post_packed = try packUnformattedArgs(ctx, builder, &post_args);
 
-    const mid_kind_val: i64 = switch (sym.type_kind) {
+    const mid_kind_val: i64 = switch (sym.loweredKind()) {
         .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',
@@ -768,7 +768,7 @@ fn emitDynamicImpliedDoUnformattedWrite(
         1;
     if (step_val != 1) return false;
 
-    const helper_name = switch (sym.type_kind) {
+    const helper_name = switch (sym.loweredKind()) {
         .integer => if (ctx.defaultIntegerIRType() == .i64) "col6forge_write_unformatted_i64_n" else "col6forge_write_unformatted_i32_n",
         .real => "col6forge_write_unformatted_f32_n",
         .double_precision => "col6forge_write_unformatted_f64_n",
@@ -799,7 +799,7 @@ fn emitDynamicImpliedDoUnformattedWrite(
     const pre_packed = try packUnformattedArgs(ctx, builder, &pre_args);
     const post_packed = try packUnformattedArgs(ctx, builder, &post_args);
 
-    const mid_kind_val: i64 = switch (sym.type_kind) {
+    const mid_kind_val: i64 = switch (sym.loweredKind()) {
         .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',
@@ -863,7 +863,7 @@ fn emitDynamicImpliedDoUnformattedRead(
         1;
     if (step_val != 1) return null;
 
-    const helper_name = switch (sym.type_kind) {
+    const helper_name = switch (sym.loweredKind()) {
         .integer => if (ctx.defaultIntegerIRType() == .i64) "col6forge_read_unformatted_i64_n" else "col6forge_read_unformatted_i32_n",
         .real => "col6forge_read_unformatted_f32_n",
         .double_precision => "col6forge_read_unformatted_f64_n",
@@ -895,7 +895,7 @@ fn emitDynamicImpliedDoUnformattedRead(
     const pre_packed = try packUnformattedArgs(ctx, builder, &pre_args);
     const post_packed = try packUnformattedArgs(ctx, builder, &post_args);
 
-    const mid_kind_val: i64 = switch (sym.type_kind) {
+    const mid_kind_val: i64 = switch (sym.loweredKind()) {
         .integer => defaultIntegerKind(ctx),
         .real => 'f',
         .double_precision => 'd',

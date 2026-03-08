@@ -185,20 +185,20 @@ pub fn emitWhere(
         else => return error.ControlFlowUnsupported,
     };
     const mask_sym = ctx.findSymbol(mask_name) orelse return error.UnknownSymbol;
-    if (mask_sym.type_kind != .logical or mask_sym.dims.len == 0) return error.ControlFlowUnsupported;
+    if (mask_sym.loweredKind() != .logical or mask_sym.dims.len == 0) return error.ControlFlowUnsupported;
 
     const target_name = switch (where.target.*) {
         .identifier => |name| name,
         else => return error.ControlFlowUnsupported,
     };
     const target_sym = ctx.findSymbol(target_name) orelse return error.UnknownSymbol;
-    if (target_sym.dims.len == 0 or target_sym.type_kind == .character) return error.ControlFlowUnsupported;
+    if (target_sym.dims.len == 0 or target_sym.isCharacter()) return error.ControlFlowUnsupported;
 
     const value_array_name: ?[]const u8 = switch (where.value.*) {
         .identifier => |name| blk: {
             const sym = ctx.findSymbol(name) orelse break :blk null;
             if (sym.dims.len == 0) break :blk null;
-            if (sym.type_kind == .character) return error.ControlFlowUnsupported;
+            if (sym.isCharacter()) return error.ControlFlowUnsupported;
             break :blk name;
         },
         else => null,
@@ -218,7 +218,7 @@ pub fn emitWhere(
 
     const mask_base = ctx.locals.get(mask_name) orelse return error.UnknownSymbol;
     const target_base = ctx.locals.get(target_name) orelse return error.UnknownSymbol;
-    const target_ty = ctx.typeFromKind(target_sym.type_kind);
+    const target_ty = ctx.typeFromKind(target_sym.loweredKind());
     const value_base: ?ValueRef = if (value_array_name) |arr_name| ctx.locals.get(arr_name) orelse return error.UnknownSymbol else null;
 
     const idx_ptr = try ctx.nextTemp();

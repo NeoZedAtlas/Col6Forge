@@ -39,10 +39,10 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     var is_complex_sret_function = false;
     if (ctx.unit.kind == .function) {
         const sym = ctx.findSymbol(return_symbol_name) orelse return error.UnknownSymbol;
-        is_character_function = sym.type_kind == .character;
-        is_complex_sret_function = sym.type_kind == .complex_double;
+        is_character_function = sym.isCharacter();
+        is_complex_sret_function = sym.loweredKind() == .complex_double;
         if (!is_character_function) {
-            const nominal_ret_ty = ctx.typeFromKind(sym.type_kind);
+            const nominal_ret_ty = ctx.typeFromKind(sym.loweredKind());
             return_ty = context.fortranAbiReturnType(nominal_ret_ty);
         }
     } else if (has_alt_return) {
@@ -87,7 +87,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         try ptr_arg_names.append(arg_name);
         const formal_name = ctx.unit.args[idx];
         if (ctx.findSymbol(formal_name)) |sym| {
-            if (sym.storage == .dummy and sym.type_kind == .character) {
+            if (sym.storage == .dummy and sym.isCharacter()) {
                 try char_dummy_names.append(formal_name);
             }
             if (sym.storage == .dummy and symbolHasDeferredDims(sym)) {
@@ -183,7 +183,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         if (isSaved(&save_info, sym.name) and !is_return_symbol) continue;
         if (symbolHasDeferredDims(sym)) {
             if (is_return_symbol and ctx.unit.kind == .function and !is_character_function and !is_complex_sret_function) {
-                const ty = ctx.typeFromKind(sym.type_kind);
+                const ty = ctx.typeFromKind(sym.loweredKind());
                 const alloca_name = try ctx.nextTemp();
                 try builder.alloca(alloca_name, ty);
                 try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
@@ -193,7 +193,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             try installDeferredArrayDescriptor(ctx, builder, sym);
             continue;
         }
-        if (sym.type_kind == .character) {
+        if (sym.isCharacter()) {
             const char_len = try common.requireConstantCharacterLen(sym);
             const alloca_name = try ctx.nextTemp();
             if (sym.dims.len > 0) {
@@ -223,7 +223,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
             continue;
         }
-        const ty = ctx.typeFromKind(sym.type_kind);
+        const ty = ctx.typeFromKind(sym.loweredKind());
         if (sym.dims.len > 0) {
             if (sym.is_generated_temp) {
                 const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
@@ -688,13 +688,13 @@ fn installHostAssocGlobals(
 
         var total_size: usize = 1;
         var alignment: usize = 1;
-        if (sym.type_kind == .character) {
+        if (sym.isCharacter()) {
             const char_len = try common.requireConstantCharacterLen(sym);
             const elem_count = ctx.arrayElemCountForSymbol(sym) catch continue;
             total_size = elem_count * char_len;
             alignment = 1;
         } else {
-            const ty = ctx.typeFromKind(sym.type_kind);
+            const ty = ctx.typeFromKind(sym.loweredKind());
             const sa = sizeAlignForType(ty);
             const elem_count = ctx.arrayElemCountForSymbol(sym) catch continue;
             total_size = sa.size * elem_count;
@@ -759,13 +759,13 @@ fn installSavedGlobals(ctx: *Context, builder: anytype, save_info: *const SaveIn
 
         var total_size: usize = 1;
         var alignment: usize = 1;
-        if (sym.type_kind == .character) {
+        if (sym.isCharacter()) {
             const char_len = try common.requireConstantCharacterLen(sym);
             const elem_count = try ctx.arrayElemCountForSymbol(sym);
             total_size = elem_count * char_len;
             alignment = 1;
         } else {
-            const ty = ctx.typeFromKind(sym.type_kind);
+            const ty = ctx.typeFromKind(sym.loweredKind());
             const sa = sizeAlignForType(ty);
             const elem_count = try ctx.arrayElemCountForSymbol(sym);
             total_size = sa.size * elem_count;
@@ -849,10 +849,10 @@ fn equivalenceItemSize(ctx: *Context, item: *ast.Expr) ?usize {
 }
 
 fn symbolElemSize(ctx: *Context, sym: sema.Symbol) ?usize {
-    if (sym.type_kind == .character) {
+    if (sym.isCharacter()) {
         return common.constantCharacterLen(sym);
     }
-    const ty = ctx.typeFromKind(sym.type_kind);
+    const ty = ctx.typeFromKind(sym.loweredKind());
     return sizeAlignForType(ty).size;
 }
 
@@ -864,7 +864,7 @@ fn symbolTotalSize(ctx: *Context, sym: sema.Symbol) ?usize {
 
 fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     const sym = ctx.findSymbol(sub.name) orelse return null;
-    if (sym.type_kind != .character) return null;
+    if (!sym.isCharacter()) return null;
     const base_len_usize = common.constantCharacterLen(sym) orelse return null;
     const base_len: i64 = @intCast(base_len_usize);
     const start_val = if (sub.start) |start_expr| constIndexValue(start_expr) orelse return null else 1;
@@ -880,7 +880,7 @@ fn applyEquivalencePair(ctx: *Context, builder: anytype, anchor: *ast.Expr, othe
         const b_call = other.call_or_subscript;
         const a_sym = ctx.findSymbol(a_call.name) orelse return;
         const b_sym = ctx.findSymbol(b_call.name) orelse return;
-        if (a_sym.type_kind != b_sym.type_kind) return;
+        if (a_sym.loweredKind() != b_sym.loweredKind()) return;
         if (a_sym.dims.len != b_sym.dims.len) return;
         if (argsEqual(a_call.args, b_call.args)) {
             const base = ctx.locals.get(a_call.name) orelse return;
@@ -894,7 +894,7 @@ fn applyEquivalencePair(ctx: *Context, builder: anytype, anchor: *ast.Expr, othe
             const neg_text = try ctx.intLiteral(-b_offset);
             const neg_val = ValueRef{ .name = neg_text, .ty = .i32, .is_ptr = false };
             const ptr_name = try ctx.nextTemp();
-            const elem_ty = ctx.typeFromKind(a_sym.type_kind);
+            const elem_ty = ctx.typeFromKind(a_sym.loweredKind());
             try builder.gep(ptr_name, elem_ty, anchor_ptr, neg_val);
             base_ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
         }

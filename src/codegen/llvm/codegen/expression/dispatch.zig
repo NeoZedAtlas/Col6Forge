@@ -67,14 +67,14 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             }
             const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
             if (sym.kind == .parameter) {
-                if (sym.const_value) |cv| return casting.emitConstTyped(ctx, builder, cv, sym.type_kind);
+                if (sym.const_value) |cv| return casting.emitConstTyped(ctx, builder, cv, sym.loweredKind());
             }
-            if (sym.type_kind == .character) {
+            if (sym.isCharacter()) {
                 const ptr = try ctx.getPointer(name);
                 return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
             }
             const ptr = try ctx.getPointer(name);
-            const ty = ctx.typeFromKind(sym.type_kind);
+            const ty = ctx.typeFromKind(sym.loweredKind());
             const tmp = try ctx.nextTemp();
             try builder.load(tmp, ty, ptr);
             return .{ .name = tmp, .ty = ty, .is_ptr = false };
@@ -135,7 +135,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                 if (sym.const_value) |cv| {
                     // Scalar PARAMETER values may appear with legacy subscript syntax
                     // after free-form lowering; treat them as compile-time constants.
-                    return casting.emitConstTyped(ctx, builder, cv, sym.type_kind);
+                    return casting.emitConstTyped(ctx, builder, cv, sym.loweredKind());
                 }
             }
             var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
@@ -148,10 +148,10 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             }
             if (kind == .subscript) {
                 const ptr = try memory.emitSubscriptPtr(ctx, builder, call_or_sub);
-                if (sym.type_kind == .character) {
+                if (sym.isCharacter()) {
                     return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
                 }
-                const ty = ctx.typeFromKind(sym.type_kind);
+                const ty = ctx.typeFromKind(sym.loweredKind());
                 const tmp = try ctx.nextTemp();
                 try builder.load(tmp, ty, ptr);
                 return .{ .name = tmp, .ty = ty, .is_ptr = false };
@@ -163,8 +163,8 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             if (sym.is_intrinsic) {
                 return intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args);
             }
-            const ret_ty = ctx.typeFromKind(sym.type_kind);
-            const is_character_function = sym.kind == .function and sym.type_kind == .character;
+            const ret_ty = ctx.typeFromKind(sym.loweredKind());
+            const is_character_function = sym.kind == .function and sym.isCharacter();
             if (is_character_function) {
                 const result_len = common.constantCharacterLen(sym) orelse return error.NonConstantCharacterLength;
                 if (sym.storage == .dummy) {
@@ -280,7 +280,7 @@ fn emitStatementFunctionCall(
     defer _ = ctx.stmt_func_stack.pop();
     var value = try emitExprImpl(ctx, builder, def.expr, ctx.stmt_func_stack.items.len);
     if (ctx.findSymbol(name)) |sym| {
-        const target_ty = ctx.typeFromKind(sym.type_kind);
+        const target_ty = ctx.typeFromKind(sym.loweredKind());
         value = try casting.coerce(ctx, builder, value, target_ty);
     }
     return value;
@@ -297,14 +297,14 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
     switch (expr.*) {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return null;
-            if (sym.type_kind != .character) return null;
+            if (!sym.isCharacter()) return null;
             const len = common.constantCharacterLen(sym) orelse return null;
             return len;
         },
         .call_or_subscript => |call_or_sub| {
             var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
-            if (sym.type_kind != .character) return null;
+            if (!sym.isCharacter()) return null;
             if (kind == .unknown) {
                 if (sym.dims.len > 0) {
                     kind = .subscript;
@@ -342,7 +342,7 @@ fn charLenForExpr(ctx: *Context, expr: *Expr) ?usize {
 
 fn emitSubstringPtr(ctx: *Context, builder: anytype, sub: ast.SubstringExpr) !ValueRef {
     const sym = ctx.findSymbol(sub.name) orelse return error.UnknownSymbol;
-    if (sym.type_kind != .character) return error.UnsupportedSubstring;
+    if (!sym.isCharacter()) return error.UnsupportedSubstring;
 
     var base_ptr: ValueRef = undefined;
     if (sub.args.len > 0) {
@@ -363,7 +363,7 @@ fn emitSubstringPtr(ctx: *Context, builder: anytype, sub: ast.SubstringExpr) !Va
 
 fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     const sym = ctx.findSymbol(sub.name) orelse return null;
-    if (sym.type_kind != .character) return null;
+    if (!sym.isCharacter()) return null;
     const base_len_usize = common.constantCharacterLen(sym) orelse return null;
     const base_len: i64 = @intCast(base_len_usize);
     const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;

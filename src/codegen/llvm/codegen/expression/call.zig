@@ -166,13 +166,13 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
                         return .{ .ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true } };
                     }
                 }
-                if (sym.kind == .parameter) {
+                    if (sym.kind == .parameter) {
                     if (sym.const_value) |cv| {
-                        const ty = ctx.typeFromKind(sym.type_kind);
+                        const ty = ctx.typeFromKind(sym.loweredKind());
                         const tmp = try ctx.nextTemp();
                         try builder.alloca(tmp, ty);
                         const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
-                        const value = casting.emitConstTyped(ctx, builder, cv, sym.type_kind);
+                        const value = casting.emitConstTyped(ctx, builder, cv, sym.loweredKind());
                         try builder.store(value, ptr);
                         return .{ .ptr = ptr };
                     }
@@ -181,7 +181,7 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
                     return .{ .ptr = try ctx.getPointer(name) };
                 }
                 if (sym.is_external) {
-                    const ret_ty = if (sym.kind == .function) ctx.typeFromKind(sym.type_kind) else .void;
+                    const ret_ty = if (sym.kind == .function) ctx.typeFromKind(sym.loweredKind()) else .void;
                     const mangled = try ctx.ensureDecl(name, ret_ty);
                     const ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{mangled});
                     return .{ .ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true } };
@@ -370,11 +370,11 @@ pub fn isCharacterActualArg(ctx: *Context, expr: *Expr) bool {
     return switch (expr.*) {
         .identifier => |name| blk: {
             const sym = ctx.findSymbol(name) orelse break :blk false;
-            break :blk sym.type_kind == .character;
+            break :blk sym.isCharacter();
         },
         .call_or_subscript => |call| blk: {
             const sym = ctx.findSymbol(call.name) orelse break :blk false;
-            break :blk sym.type_kind == .character;
+            break :blk sym.isCharacter();
         },
         .substring => true,
         .literal => |lit| lit.kind == .string or lit.kind == .hollerith,
@@ -457,11 +457,37 @@ fn emitSubstringLengthValue(ctx: *Context, builder: anytype, sub: ast.SubstringE
 }
 
 fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) !ValueRef {
-    if (common.constantCharacterLen(sym)) |char_len| {
+    if (sym.effectiveCharLenKind() == .constant or sym.effectiveCharLenKind() == .none) {
+        if (common.constantCharacterLen(sym)) |char_len| {
+            return try i32Const(ctx, @intCast(char_len));
+        }
+    }
+    if (sym.effectiveCharLen()) |char_len| {
         return try i32Const(ctx, @intCast(char_len));
     }
     if (ctx.char_arg_lens.get(name)) |len_val| return len_val;
     return try i32Const(ctx, 1);
+}
+
+fn charSymbolLengthValueI64(
+    ctx: *Context,
+    builder: anytype,
+    name: []const u8,
+    sym: ast.sema.Symbol,
+) !ValueRef {
+    if (sym.effectiveCharLenKind() == .constant or sym.effectiveCharLenKind() == .none) {
+        if (common.constantCharacterLen(sym)) |char_len| {
+            return i64Const(ctx, @intCast(char_len));
+        }
+    }
+    if (sym.effectiveCharLen()) |char_len| {
+        return i64Const(ctx, @intCast(char_len));
+    }
+    if (ctx.char_arg_lens.get(name)) |len_val| {
+        if (len_val.ty == .i64) return len_val;
+        return casting.coerce(ctx, builder, len_val, .i64);
+    }
+    return error.UnsupportedDescriptorActualArgument;
 }
 
 fn i32Const(ctx: *Context, value: i64) !ValueRef {
@@ -482,7 +508,7 @@ fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call:
     };
     const src_sym = ctx.findSymbol(src_name) orelse return error.UnknownSymbol;
     if (src_sym.dims.len == 0) return error.UnsupportedIntrinsicType;
-    const src_ty = ctx.typeFromKind(src_sym.type_kind);
+    const src_ty = ctx.typeFromKind(src_sym.loweredKind());
 
     const src_ptr = try ctx.getPointer(src_name);
     const elem_count_const = ctx.arrayElemCountForSymbol(src_sym) catch |err| switch (err) {
@@ -574,12 +600,21 @@ fn emitSectionBasePtr(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, cal
     }
 
     const base_ptr = try ctx.getPointer(call.name);
-    const elem_ty = if (sym.type_kind == .character) ir.IRType.i8 else ctx.typeFromKind(sym.type_kind);
-    if (sym.type_kind == .character) {
-        const char_len = common.constantCharacterLen(sym) orelse return error.UnsupportedDescriptorActualArgument;
-        if (char_len != 1) {
-            offset = try emitMulI64(ctx, builder, offset, i64Const(ctx, @intCast(char_len)));
-        }
+    const elem_ty = if (sym.isCharacter()) ir.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
+    if (sym.isCharacter()) {
+        const char_len = try charSymbolLengthValueI64(ctx, builder, call.name, sym);
+        const scaled_offset = try emitMulI64(ctx, builder, offset, char_len);
+        const needs_scale_tmp = try ctx.nextTemp();
+        try builder.compare(needs_scale_tmp, "icmp", "ne", .i64, char_len, i64Const(ctx, 1));
+        const offset_tmp = try ctx.nextTemp();
+        try builder.select(
+            offset_tmp,
+            .i64,
+            .{ .name = needs_scale_tmp, .ty = .i1, .is_ptr = false },
+            scaled_offset,
+            offset,
+        );
+        offset = .{ .name = offset_tmp, .ty = .i64, .is_ptr = false };
     }
     const gep = try ctx.nextTemp();
     try builder.gep(gep, elem_ty, base_ptr, offset);

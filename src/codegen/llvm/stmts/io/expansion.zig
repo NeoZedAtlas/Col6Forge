@@ -96,9 +96,9 @@ pub fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) Emi
                 const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
                 if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
                 const base_ptr = try ctx.getPointer(sym.name);
-                const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else ctx.typeFromKind(sym.type_kind);
-                const char_len = sym.char_len orelse 1;
-                const char_scale: ?ValueRef = if (sym.type_kind == .character and char_len > 1)
+                const elem_ty = if (sym.isCharacter()) llvm_types.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
+                const char_len = sym.effectiveCharLen() orelse 1;
+                const char_scale: ?ValueRef = if (sym.isCharacter() and char_len > 1)
                     .{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = .i32, .is_ptr = false }
                 else
                     null;
@@ -134,8 +134,8 @@ pub fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) Emi
                         });
                     } else {
                         try expanded.ptrs.append(elem_ptr);
-                        try expanded.types.append(if (sym.type_kind == .character) llvm_types.IRType.ptr else elem_ty);
-                        try expanded.char_lens.append(if (sym.type_kind == .character) char_len else 0);
+                        try expanded.types.append(if (sym.isCharacter()) llvm_types.IRType.ptr else elem_ty);
+                        try expanded.char_lens.append(if (sym.isCharacter()) char_len else 0);
                     }
                 }
                 continue;
@@ -594,9 +594,9 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
                 const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
                 if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
                 const base_ptr = try ctx.getPointer(sym.name);
-                const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else ctx.typeFromKind(sym.type_kind);
-                const char_len = sym.char_len orelse 1;
-                const char_scale: ?ValueRef = if (sym.type_kind == .character and char_len > 1)
+                const elem_ty = if (sym.isCharacter()) llvm_types.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
+                const char_len = sym.effectiveCharLen() orelse 1;
+                const char_scale: ?ValueRef = if (sym.isCharacter() and char_len > 1)
                     .{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = .i32, .is_ptr = false }
                 else
                     null;
@@ -608,8 +608,8 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
                     }
                     const ptr_name = try ctx.nextTemp();
                     try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
-                    if (sym.type_kind == .character) {
-                        try appendWriteValue(&expanded, .{ .name = ptr_name, .ty = .ptr, .is_ptr = false }, sym.char_len orelse 1, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
+                    if (sym.isCharacter()) {
+                        try appendWriteValue(&expanded, .{ .name = ptr_name, .ty = .ptr, .is_ptr = false }, char_len, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
                     } else {
                         const tmp = try ctx.nextTemp();
                         try builder.load(tmp, elem_ty, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
@@ -666,9 +666,9 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
                 const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
                 if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
                 const base_ptr = try ctx.getPointer(sym.name);
-                const elem_ty = if (sym.type_kind == .character) llvm_types.IRType.i8 else ctx.typeFromKind(sym.type_kind);
-                const char_len = sym.char_len orelse 1;
-                if (sym.type_kind == .character) {
+                const elem_ty = if (sym.isCharacter()) llvm_types.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
+                const char_len = sym.effectiveCharLen() orelse 1;
+                if (sym.isCharacter()) {
                     const total_len = elem_count * char_len;
                     try appendWriteValue(&expanded, .{ .name = base_ptr.name, .ty = .ptr, .is_ptr = true }, total_len, .{ .name = base_ptr.name, .ty = .ptr, .is_ptr = true });
                 } else {

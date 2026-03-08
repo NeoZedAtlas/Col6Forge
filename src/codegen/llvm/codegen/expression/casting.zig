@@ -212,7 +212,7 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
     switch (expr.*) {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
-            return ctx.typeFromKind(sym.type_kind);
+            return ctx.typeFromKind(sym.loweredKind());
         },
         .literal => |lit| return switch (lit.kind) {
             .integer => ctx.defaultIntegerIRType(),
@@ -249,11 +249,11 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
             }
             if (kind == .subscript) {
                 const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-                return ctx.typeFromKind(sym.type_kind);
+                return ctx.typeFromKind(sym.loweredKind());
             }
             if (kind != .call) return error.AmbiguousCallOrSubscript;
             const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-            return ctx.typeFromKind(sym.type_kind);
+            return ctx.typeFromKind(sym.loweredKind());
         },
         .implied_do => return error.UnsupportedImpliedDo,
     }

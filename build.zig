@@ -372,10 +372,27 @@ pub fn build(b: *std.Build) void {
     }
 
     const lapack_verify_step = b.step("lapack-verify", "Run LAPACK-lite 3.1.1 verification tests");
+    const lapack_fail_on_fallback = b.option(bool, "lapack_fail_on_fallback", "Fail LAPACK verification immediately when any fallback path is taken") orelse false;
+    const lapack_max_fallbacks = b.option(usize, "lapack_max_fallbacks", "Fail LAPACK verification if total fallback count exceeds this budget");
     const run_lapack_verify = b.addRunArtifact(lapack_runner);
     lapack_verify_step.dependOn(&run_lapack_verify.step);
+    if (lapack_fail_on_fallback) {
+        run_lapack_verify.addArg("--fail-on-fallback");
+    }
+    if (lapack_max_fallbacks) |max_fallbacks| {
+        run_lapack_verify.addArg("--max-fallbacks");
+        run_lapack_verify.addArg(b.fmt("{d}", .{max_fallbacks}));
+    }
     if (b.args) |args| {
         run_lapack_verify.addArgs(args);
+    }
+
+    const lapack_verify_strict_step = b.step("lapack-verify-strict", "Run LAPACK-lite verification and fail on any fallback path");
+    const run_lapack_verify_strict = b.addRunArtifact(lapack_runner);
+    lapack_verify_strict_step.dependOn(&run_lapack_verify_strict.step);
+    run_lapack_verify_strict.addArg("--fail-on-fallback");
+    if (b.args) |args| {
+        run_lapack_verify_strict.addArgs(args);
     }
 
     const test_all_step = b.step("test-all", "Run unified test harness");

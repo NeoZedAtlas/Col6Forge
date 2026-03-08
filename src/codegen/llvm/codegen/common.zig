@@ -121,8 +121,8 @@ pub fn buildUnitCommonLayoutsWithOptions(
         for (list.items) |name| {
             const sym = findSymbol(sem, name, &symbol_lookup) orelse return error.UnknownSymbol;
             if (sym.storage != .common) return error.InvalidCommonSymbol;
-            const ty = if (sym.type_kind == .character) ir.IRType.i8 else llvm_types.typeFromKindWithLayout(sym.type_kind, options.target_layout);
-            const sa = if (sym.type_kind == .character)
+            const ty = if (sym.isCharacter()) ir.IRType.i8 else llvm_types.typeFromKindWithLayout(sym.loweredKind(), options.target_layout);
+            const sa = if (sym.isCharacter())
                 SizeAlign{ .size = try requireConstantCharacterLen(sym), .alignment = 1 }
             else
                 try sizeAlign(ty);
@@ -167,12 +167,12 @@ const SizeAlign = struct {
 };
 
 pub fn constantCharacterLen(sym: input.sema.Symbol) ?usize {
-    if (sym.type_spec.lowered_kind != .character and sym.type_kind != .character) return null;
-    return switch (sym.type_spec.char_len_kind) {
-        .constant => sym.type_spec.char_len orelse sym.char_len,
+    if (!sym.isCharacter()) return null;
+    return switch (sym.effectiveCharLenKind()) {
+        .constant => sym.effectiveCharLen(),
         // Backward-compat/default CHARACTER semantics:
         // no explicit LEN means LEN=1 in fixed-form code paths.
-        .none => sym.type_spec.char_len orelse sym.char_len orelse 1,
+        .none => sym.effectiveCharLen() orelse 1,
         .assumed, .deferred => null,
     };
 }

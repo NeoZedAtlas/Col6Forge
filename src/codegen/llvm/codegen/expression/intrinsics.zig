@@ -32,7 +32,7 @@ fn lookupCharArgLen(ctx: *Context, name: []const u8) ?ValueRef {
 }
 
 fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) EmitError!?ValueRef {
-    if (sym.type_kind != .character) return null;
+    if (!sym.isCharacter()) return null;
     if (sym.kind == .parameter) {
         if (sym.const_value) |cv| switch (cv) {
             .string => |bytes| {
@@ -42,7 +42,7 @@ fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) 
             else => {},
         };
     }
-    if (sym.char_len) |char_len| {
+    if (sym.effectiveCharLen()) |char_len| {
         return try constI32(ctx, @intCast(char_len));
     }
     return lookupCharArgLen(ctx, name);
