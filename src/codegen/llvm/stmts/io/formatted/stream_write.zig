@@ -13,36 +13,15 @@ const EmitError = anyerror;
 const io_utils = @import("../utils.zig");
 const expansion = @import("../expansion.zig");
 const formatted_context = @import("context.zig");
+const stream_common = @import("stream_common.zig");
 
 const expandWriteArgs = expansion.expandWriteArgs;
-const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
-const evalConstIntSem = io_utils.evalConstIntSem;
-const intLiteralValue = io_utils.intLiteralValue;
 const emitRuntimeFormatValue = formatted_context.emitRuntimeFormatValue;
 const StreamFormatSource = formatted_context.StreamFormatSource;
-
-fn oneForType(ctx: *Context, ty: llvm_types.IRType) EmitError!ValueRef {
-    return switch (ty) {
-        .i64 => .{ .name = try ctx.intLiteral(1), .ty = .i64, .is_ptr = false },
-        else => try ctx.constI32(1),
-    };
-}
-
-fn isStaticImpliedDoBound(ctx: *Context, node: *ast.Expr) bool {
-    return (evalConstIntSem(ctx, node) catch null) != null or intLiteralValue(node) != null;
-}
-
-fn isRuntimeImpliedDo(ctx: *Context, implied: ast.ImpliedDo) bool {
-    if (!isStaticImpliedDoBound(ctx, implied.start)) return true;
-    if (!isStaticImpliedDoBound(ctx, implied.end)) return true;
-    if (implied.step) |step_expr| {
-        if (!isStaticImpliedDoBound(ctx, step_expr)) return true;
-    }
-    for (implied.items) |item| {
-        if (item.* == .implied_do and isRuntimeImpliedDo(ctx, item.implied_do)) return true;
-    }
-    return false;
-}
+const emitSharedRuntimeImpliedDo = stream_common.emitRuntimeImpliedDo;
+const emitSharedStreamArgs = stream_common.emitStreamArgs;
+const isRuntimeImpliedDo = stream_common.isRuntimeImpliedDo;
+const oneForType = stream_common.oneForType;
 
 fn appendEscapedLiteral(buf: *std.array_list.Managed(u8), text: []const u8) !void {
     for (text) |ch| {
@@ -237,66 +216,11 @@ fn emitRuntimeImpliedDo(
     state: ValueRef,
     implied: ast.ImpliedDo,
 ) EmitError!void {
-    const sym = ctx.findSymbol(implied.var_name) orelse return error.UnknownSymbol;
-    const var_ty = ctx.typeFromKind(sym.loweredKind());
-    const var_ptr = try ctx.getPointer(implied.var_name);
-
-    const start_val = try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, implied.start), var_ty);
-    const step_val = if (implied.step) |step_expr|
-        try expr.coerce(ctx, builder, try expr.emitExpr(ctx, builder, step_expr), var_ty)
-    else
-        try oneForType(ctx, var_ty);
-    const final_count = try emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step);
-
-    const iter_ptr_tmp = try ctx.nextTemp();
-    try builder.alloca(iter_ptr_tmp, .i32);
-    const iter_ptr = ValueRef{ .name = iter_ptr_tmp, .ty = .ptr, .is_ptr = true };
-    try builder.store(.{ .name = "0", .ty = .i32, .is_ptr = false }, iter_ptr);
-    try builder.store(start_val, var_ptr);
-
-    const test_label = try ctx.nextLabel("fmt_write_implied_test");
-    const body_label = try ctx.nextLabel("fmt_write_implied_body");
-    const inc_label = try ctx.nextLabel("fmt_write_implied_inc");
-    const done_label = try ctx.nextLabel("fmt_write_implied_done");
-
-    try builder.br(test_label);
-    try builder.label(test_label);
-    const iter_tmp = try ctx.nextTemp();
-    try builder.load(iter_tmp, .i32, iter_ptr);
-    const has_more_tmp = try ctx.nextTemp();
-    try builder.compare(has_more_tmp, "icmp", "slt", .i32, .{ .name = iter_tmp, .ty = .i32, .is_ptr = false }, final_count);
-    try builder.brCond(.{ .name = has_more_tmp, .ty = .i1, .is_ptr = false }, body_label, done_label);
-
-    try builder.label(body_label);
-    try emitStreamArgs(ctx, builder, state, implied.items);
-    try builder.br(inc_label);
-
-    try builder.label(inc_label);
-    const cur_var_tmp = try ctx.nextTemp();
-    try builder.load(cur_var_tmp, var_ty, var_ptr);
-    const next_var_tmp = try ctx.nextTemp();
-    try builder.binary(next_var_tmp, "add", var_ty, .{ .name = cur_var_tmp, .ty = var_ty, .is_ptr = false }, step_val);
-    try builder.store(.{ .name = next_var_tmp, .ty = var_ty, .is_ptr = false }, var_ptr);
-
-    const next_iter_tmp = try ctx.nextTemp();
-    try builder.binary(next_iter_tmp, "add", .i32, .{ .name = iter_tmp, .ty = .i32, .is_ptr = false }, .{ .name = "1", .ty = .i32, .is_ptr = false });
-    try builder.store(.{ .name = next_iter_tmp, .ty = .i32, .is_ptr = false }, iter_ptr);
-    try builder.br(test_label);
-
-    try builder.label(done_label);
+    return emitSharedRuntimeImpliedDo(ctx, builder, state, implied, "fmt_write_implied", emitStreamArgs);
 }
 
 fn emitStreamArgs(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast.Expr) EmitError!void {
-    var chunk_start: usize = 0;
-    var idx: usize = 0;
-    while (idx < args.len) : (idx += 1) {
-        if (args[idx].* == .implied_do and isRuntimeImpliedDo(ctx, args[idx].implied_do)) {
-            try emitStreamSlice(ctx, builder, state, args[chunk_start..idx]);
-            try emitRuntimeImpliedDo(ctx, builder, state, args[idx].implied_do);
-            chunk_start = idx + 1;
-        }
-    }
-    try emitStreamSlice(ctx, builder, state, args[chunk_start..]);
+    return emitSharedStreamArgs(ctx, builder, state, args, emitStreamSlice, emitRuntimeImpliedDo);
 }
 
 fn emitStreamBegin(
