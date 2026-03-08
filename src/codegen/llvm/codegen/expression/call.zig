@@ -581,11 +581,10 @@ fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call:
     if (call.args.len != 1) return error.InvalidIntrinsicCall;
     const dst_ty = intrinsicArrayConversionType(call.name) orelse return error.UnsupportedIntrinsicType;
     const src_actual = (try analyzeArrayActual(ctx, builder, call.args[0])) orelse return error.UnsupportedIntrinsicType;
-    if (src_actual.extents.len != 1) return error.UnsupportedIntrinsicType;
+    if (!try isContiguousArrayActual(ctx, builder, src_actual.extents, src_actual.multipliers)) return error.UnsupportedIntrinsicType;
     const src_ptr = src_actual.base_ptr;
     const src_ty = src_actual.elem_ty;
-    const elem_count = src_actual.extents[0];
-    const src_stride = src_actual.multipliers[0];
+    const elem_count = try emitExtentProductI64(ctx, builder, src_actual.extents);
 
     const elem_size = i64Const(ctx, @intCast(byteSizeForIRType(dst_ty)));
     const total_bytes = try emitMulI64(ctx, builder, elem_count, elem_size);
@@ -594,7 +593,7 @@ fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call:
     try builder.callTyped(heap_ptr_name, .ptr, malloc_name, &.{total_bytes});
     const heap_ptr = ValueRef{ .name = heap_ptr_name, .ty = .ptr, .is_ptr = true };
 
-    try emitIntrinsicArrayConversionLoop(ctx, builder, src_ptr, src_ty, src_stride, heap_ptr, dst_ty, elem_count);
+    try emitIntrinsicArrayConversionLoop(ctx, builder, src_ptr, src_ty, heap_ptr, dst_ty, elem_count);
     return .{
         .ptr = heap_ptr,
         .owned_heap_ptr = heap_ptr,
@@ -781,12 +780,42 @@ fn emitDynamicElemCountForSymbol(ctx: *Context, builder: anytype, sym: ast.sema.
     return total;
 }
 
+fn emitExtentProductI64(
+    ctx: *Context,
+    builder: anytype,
+    extents: []const ValueRef,
+) !ValueRef {
+    var total = i64Const(ctx, 1);
+    for (extents) |extent| {
+        total = try emitMulI64(ctx, builder, total, extent);
+    }
+    return total;
+}
+
+fn isContiguousArrayActual(
+    ctx: *Context,
+    builder: anytype,
+    extents: []const ValueRef,
+    multipliers: []const ValueRef,
+) !bool {
+    if (extents.len != multipliers.len) return false;
+    var expected = i64Const(ctx, 1);
+    for (multipliers, 0..) |multiplier, idx| {
+        if (!valueRefEquals(multiplier, expected)) return false;
+        expected = try emitMulI64(ctx, builder, expected, extents[idx]);
+    }
+    return true;
+}
+
+fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
+    return a.ty == b.ty and a.is_ptr == b.is_ptr and std.mem.eql(u8, a.name, b.name);
+}
+
 fn emitIntrinsicArrayConversionLoop(
     ctx: *Context,
     builder: anytype,
     src_ptr: ValueRef,
     src_ty: IRType,
-    src_stride: ValueRef,
     dst_ptr: ValueRef,
     dst_ty: IRType,
     elem_count: ValueRef,
@@ -809,9 +838,8 @@ fn emitIntrinsicArrayConversionLoop(
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
-    const src_offset = try emitMulI64(ctx, builder, idx_val, src_stride);
     const src_elem_ptr_name = try ctx.nextTemp();
-    try builder.gep(src_elem_ptr_name, src_ty, src_ptr, src_offset);
+    try builder.gep(src_elem_ptr_name, src_ty, src_ptr, idx_val);
     const src_val_name = try ctx.nextTemp();
     try builder.load(src_val_name, src_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
     const src_val = ValueRef{ .name = src_val_name, .ty = src_ty, .is_ptr = false };

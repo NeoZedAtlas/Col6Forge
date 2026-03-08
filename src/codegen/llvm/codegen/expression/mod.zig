@@ -707,6 +707,53 @@ test "emitCall supports intrinsic array conversion over rank-1 section actual" {
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
 }
 
+test "emitCall supports intrinsic array conversion over contiguous multidim actual" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    const a = harness.arena.allocator();
+    const dim2 = try a.create(ast.Expr);
+    dim2.* = .{ .literal = .{ .kind = .integer, .text = "2" } };
+    const dim3 = try a.create(ast.Expr);
+    dim3.* = .{ .literal = .{ .kind = .integer, .text = "3" } };
+    const arr2_dims = try a.alloc(*ast.Expr, 2);
+    arr2_dims[0] = dim2;
+    arr2_dims[1] = dim3;
+    harness.sem_unit.symbols[1].dims = arr2_dims;
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.real, .double_precision, null),
+                .requires_descriptor = true,
+                .rank = 2,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const src = try makeIdent(harness.arena.allocator(), "ARR");
+    const convert = try harness.arena.allocator().create(Expr);
+    convert.* = .{ .call_or_subscript = .{ .name = "DBLE", .args = @constCast(&[_]*Expr{src}) } };
+    _ = try emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{convert}), true);
+
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "@malloc") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "mul i64 1, 2") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "mul i64 %t, 3") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
+}
+
 test "emitCall falls back to unit character length for descriptor-scaled character section actual" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -29,32 +29,35 @@ const emitWriteFormattedStreamStatic = stream_write.emitWriteFormattedStreamStat
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
 
-pub const PreparedWriteExecutor = union(enum) {
+pub const PreparedExecutor = union(enum) {
     classic: PreparedExecutionFormatPlan,
     stream: StreamFormatSource,
 };
 
-pub const PreparedReadExecutor = union(enum) {
-    classic: PreparedExecutionFormatPlan,
-    stream: StreamFormatSource,
-};
+pub const PreparedWriteExecutor = PreparedExecutor;
+pub const PreparedReadExecutor = PreparedExecutor;
+
+pub fn prepareExecutor(
+    plan: PreparedExecutionFormatPlan,
+    has_runtime_implied_do: bool,
+) EmitError!PreparedExecutor {
+    if (!has_runtime_implied_do) return .{ .classic = plan };
+    const source = streamFormatSource(plan) orelse return error.UnsupportedImpliedDo;
+    return .{ .stream = source };
+}
 
 pub fn prepareWriteExecutor(
     plan: PreparedExecutionFormatPlan,
     has_runtime_implied_do: bool,
 ) EmitError!PreparedWriteExecutor {
-    if (!has_runtime_implied_do) return .{ .classic = plan };
-    const source = streamFormatSource(plan) orelse return error.UnsupportedImpliedDo;
-    return .{ .stream = source };
+    return prepareExecutor(plan, has_runtime_implied_do);
 }
 
 pub fn prepareReadExecutor(
     plan: PreparedExecutionFormatPlan,
     has_runtime_implied_do: bool,
 ) EmitError!PreparedReadExecutor {
-    if (!has_runtime_implied_do) return .{ .classic = plan };
-    const source = streamFormatSource(plan) orelse return error.UnsupportedImpliedDo;
-    return .{ .stream = source };
+    return prepareExecutor(plan, has_runtime_implied_do);
 }
 
 pub fn prepareWriteExecutorForArgs(
@@ -62,7 +65,7 @@ pub fn prepareWriteExecutorForArgs(
     plan: PreparedExecutionFormatPlan,
     args: []*ast.Expr,
 ) EmitError!PreparedWriteExecutor {
-    return prepareWriteExecutor(plan, hasRuntimeImpliedDoArgs(ctx, args));
+    return prepareExecutor(plan, hasRuntimeImpliedDoArgs(ctx, args));
 }
 
 pub fn prepareReadExecutorForArgs(
@@ -70,7 +73,7 @@ pub fn prepareReadExecutorForArgs(
     plan: PreparedExecutionFormatPlan,
     args: []*ast.Expr,
 ) EmitError!PreparedReadExecutor {
-    return prepareReadExecutor(plan, hasRuntimeImpliedDoArgs(ctx, args));
+    return prepareExecutor(plan, hasRuntimeImpliedDoArgs(ctx, args));
 }
 
 pub fn emitPreparedWriteExecutor(
