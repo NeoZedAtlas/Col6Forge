@@ -110,11 +110,7 @@ pub fn resolveFormatPlan(
             return error.MissingFormatLabel;
         },
         .inline_items => |items| .{ .static_items = items },
-        .expr => |fmt_expr| switch (try resolveFormatExpr(ctx, fmt_expr)) {
-            .static_items => |items| .{ .static_items = items },
-            .dynamic_label_var => |label| .{ .dynamic_label_var = label },
-            .runtime_char_expr => |runtime_fmt_expr| .{ .runtime_char_expr = runtime_fmt_expr },
-        },
+        .expr => |fmt_expr| try resolveFormatExprPlan(ctx, fmt_expr),
         .none => unreachable,
         .list_directed => unreachable,
     };
@@ -143,6 +139,14 @@ pub fn prepareExecutionFormatPlan(
         .dynamic_label_var => |label| .{ .dynamic_label = try dynamic_mod.prepareDynamicFormat(ctx, builder, label) },
         .runtime_char_expr => |fmt_expr| .{ .runtime_char_expr = fmt_expr },
     };
+}
+
+pub fn prepareExecutionFormatExprPlan(
+    ctx: *Context,
+    builder: anytype,
+    fmt_expr: *ast.Expr,
+) EmitError!PreparedExecutionFormatPlan {
+    return prepareExecutionFormatPlan(ctx, builder, try resolveFormatExprPlan(ctx, fmt_expr));
 }
 
 pub fn streamFormatSource(plan: PreparedExecutionFormatPlan) ?StreamFormatSource {
@@ -247,4 +251,12 @@ pub fn resolveFormatExpr(ctx: *Context, fmt_expr: *ast.Expr) EmitError!FormatExp
         return .{ .static_items = items };
     }
     return .{ .runtime_char_expr = fmt_expr };
+}
+
+pub fn resolveFormatExprPlan(ctx: *Context, fmt_expr: *ast.Expr) EmitError!FormatPlan {
+    return switch (try resolveFormatExpr(ctx, fmt_expr)) {
+        .dynamic_label_var => |label_var| .{ .dynamic_label_var = label_var },
+        .static_items => |items| .{ .static_items = items },
+        .runtime_char_expr => |runtime_fmt_expr| .{ .runtime_char_expr = runtime_fmt_expr },
+    };
 }

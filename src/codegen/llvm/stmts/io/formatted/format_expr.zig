@@ -31,8 +31,8 @@ const defaultIntegerReadKind = io_utils.defaultIntegerReadKind;
 const FormatPlan = formatted_context.FormatPlan;
 const PreparedExecutionFormatPlan = formatted_context.PreparedExecutionFormatPlan;
 const emitRuntimeFormatValue = formatted_context.emitRuntimeFormatValue;
-const resolveFormatExpr = formatted_context.resolveFormatExpr;
 const prepareExecutionFormatPlan = formatted_context.prepareExecutionFormatPlan;
+const prepareExecutionFormatExprPlan = formatted_context.prepareExecutionFormatExprPlan;
 
 const RuntimeCallArgs = struct {
     ptr_array: ValueRef,
@@ -294,14 +294,6 @@ fn emitReadRuntimeFormatExprCore(
     try builder.callTyped(status_tmp, .i32, read_name, &.{ unit_i32, fmt.ptr, fmt.len, runtime_args.ptr_array, runtime_args.kinds_ptr, runtime_args.arg_count, try constI32(ctx, 1) });
     try emitFreeAllocs(ctx, builder, runtime_args.heap_allocs);
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
-}
-
-fn formatPlanFromExpr(ctx: *Context, fmt_expr: *ast.Expr) EmitError!FormatPlan {
-    return switch (try resolveFormatExpr(ctx, fmt_expr)) {
-        .dynamic_label_var => |label_var| .{ .dynamic_label_var = label_var },
-        .static_items => |items| .{ .static_items = items },
-        .runtime_char_expr => |runtime_fmt_expr| .{ .runtime_char_expr = runtime_fmt_expr },
-    };
 }
 
 pub fn emitWriteFormatPlan(
@@ -601,7 +593,9 @@ pub fn emitWriteFormatExpr(
     unit_i32: ValueRef,
     expanded_values: *ExpandedWriteValues,
 ) EmitError!void {
-    return emitWriteFormatPlan(ctx, builder, write, try formatPlanFromExpr(ctx, fmt_expr), unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded_values);
+    var prepared = try prepareExecutionFormatExprPlan(ctx, builder, fmt_expr);
+    defer prepared.deinit();
+    return emitWritePreparedFormatPlan(ctx, builder, write, prepared, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded_values);
 }
 
 pub fn emitReadFormatExpr(
@@ -616,7 +610,9 @@ pub fn emitReadFormatExpr(
     unit_i32: ValueRef,
     expanded: *ExpandedReadTargets,
 ) EmitError!void {
-    return emitReadFormatPlan(ctx, builder, read, try formatPlanFromExpr(ctx, fmt_expr), unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded);
+    var prepared = try prepareExecutionFormatExprPlan(ctx, builder, fmt_expr);
+    defer prepared.deinit();
+    return emitReadPreparedFormatPlan(ctx, builder, read, prepared, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded);
 }
 
 pub fn emitReadFormatExprStatus(
@@ -631,6 +627,8 @@ pub fn emitReadFormatExprStatus(
     unit_i32: ValueRef,
     expanded: *ExpandedReadTargets,
 ) EmitError!ValueRef {
-    return emitReadFormatPlanStatus(ctx, builder, read, try formatPlanFromExpr(ctx, fmt_expr), unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded);
+    var prepared = try prepareExecutionFormatExprPlan(ctx, builder, fmt_expr);
+    defer prepared.deinit();
+    return emitReadPreparedFormatPlanStatus(ctx, builder, read, prepared, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded);
 }
 
