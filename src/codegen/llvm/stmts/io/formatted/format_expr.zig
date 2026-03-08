@@ -290,13 +290,6 @@ fn formatPlanFromExpr(ctx: *Context, fmt_expr: *ast.Expr) EmitError!FormatPlan {
     };
 }
 
-fn deinitPreparedPlan(plan: *PreparedExecutionFormatPlan) void {
-    switch (plan.*) {
-        .dynamic_label => |*dynamic| dynamic.deinit(),
-        else => {},
-    }
-}
-
 pub fn emitWriteFormatPlan(
     ctx: *Context,
     builder: anytype,
@@ -310,7 +303,7 @@ pub fn emitWriteFormatPlan(
     expanded_values: *ExpandedWriteValues,
 ) EmitError!void {
     var prepared = try prepareExecutionFormatPlan(ctx, builder, plan);
-    defer deinitPreparedPlan(&prepared);
+    defer prepared.deinit();
     return emitWritePreparedFormatPlan(
         ctx,
         builder,
@@ -395,7 +388,7 @@ pub fn emitReadFormatPlan(
     expanded: *ExpandedReadTargets,
 ) EmitError!void {
     var prepared = try prepareExecutionFormatPlan(ctx, builder, plan);
-    defer deinitPreparedPlan(&prepared);
+    defer prepared.deinit();
     return emitReadPreparedFormatPlan(
         ctx,
         builder,
@@ -422,49 +415,7 @@ pub fn emitReadPreparedFormatPlan(
     unit_i32: ValueRef,
     expanded: *ExpandedReadTargets,
 ) EmitError!void {
-    switch (plan) {
-        .dynamic_label => |prepared_dynamic| {
-            return dynamic_mod.emitReadDynamicFormatPrepared(
-                ctx,
-                builder,
-                read,
-                unit_value,
-                unit_char_len,
-                unit_record_count,
-                is_internal,
-                unit_i32,
-                prepared_dynamic,
-                expanded,
-            );
-        },
-        .static_items => |items| {
-            return emitReadFormatted(
-                ctx,
-                builder,
-                read,
-                unit_value,
-                unit_char_len,
-                unit_record_count,
-                is_internal,
-                unit_i32,
-                items,
-                expanded,
-            );
-        },
-        .runtime_char_expr => |runtime_fmt_expr| {
-            return emitReadRuntimeFormatExpr(
-                ctx,
-                builder,
-                runtime_fmt_expr,
-                unit_value,
-                unit_char_len,
-                unit_record_count,
-                is_internal,
-                unit_i32,
-                expanded,
-            );
-        },
-    }
+    _ = try emitReadPreparedFormatPlanCore(ctx, builder, read, plan, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, expanded, false);
 }
 
 pub fn emitReadFormatPlanStatus(
@@ -480,7 +431,7 @@ pub fn emitReadFormatPlanStatus(
     expanded: *ExpandedReadTargets,
 ) EmitError!ValueRef {
     var prepared = try prepareExecutionFormatPlan(ctx, builder, plan);
-    defer deinitPreparedPlan(&prepared);
+    defer prepared.deinit();
     return emitReadPreparedFormatPlanStatus(
         ctx,
         builder,
@@ -507,9 +458,51 @@ pub fn emitReadPreparedFormatPlanStatus(
     unit_i32: ValueRef,
     expanded: *ExpandedReadTargets,
 ) EmitError!ValueRef {
+    return emitReadPreparedFormatPlanCore(
+        ctx,
+        builder,
+        read,
+        plan,
+        unit_value,
+        unit_char_len,
+        unit_record_count,
+        is_internal,
+        unit_i32,
+        expanded,
+        true,
+    );
+}
+
+fn emitReadPreparedFormatPlanCore(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    plan: PreparedExecutionFormatPlan,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    expanded: *ExpandedReadTargets,
+    needs_status: bool,
+) EmitError!ValueRef {
     switch (plan) {
         .dynamic_label => |prepared_dynamic| {
-            return dynamic_mod.emitReadDynamicFormatPreparedStatus(
+            if (needs_status) {
+                return dynamic_mod.emitReadDynamicFormatPreparedStatus(
+                    ctx,
+                    builder,
+                    read,
+                    unit_value,
+                    unit_char_len,
+                    unit_record_count,
+                    is_internal,
+                    unit_i32,
+                    prepared_dynamic,
+                    expanded,
+                );
+            }
+            try dynamic_mod.emitReadDynamicFormatPrepared(
                 ctx,
                 builder,
                 read,
@@ -521,9 +514,24 @@ pub fn emitReadPreparedFormatPlanStatus(
                 prepared_dynamic,
                 expanded,
             );
+            return ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
         },
         .static_items => |items| {
-            return emitReadFormattedStatus(
+            if (needs_status) {
+                return emitReadFormattedStatus(
+                    ctx,
+                    builder,
+                    read,
+                    unit_value,
+                    unit_char_len,
+                    unit_record_count,
+                    is_internal,
+                    unit_i32,
+                    items,
+                    expanded,
+                );
+            }
+            try emitReadFormatted(
                 ctx,
                 builder,
                 read,
@@ -535,9 +543,23 @@ pub fn emitReadPreparedFormatPlanStatus(
                 items,
                 expanded,
             );
+            return ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
         },
         .runtime_char_expr => |runtime_fmt_expr| {
-            return emitReadRuntimeFormatExprStatus(
+            if (needs_status) {
+                return emitReadRuntimeFormatExprStatus(
+                    ctx,
+                    builder,
+                    runtime_fmt_expr,
+                    unit_value,
+                    unit_char_len,
+                    unit_record_count,
+                    is_internal,
+                    unit_i32,
+                    expanded,
+                );
+            }
+            try emitReadRuntimeFormatExpr(
                 ctx,
                 builder,
                 runtime_fmt_expr,
@@ -548,6 +570,7 @@ pub fn emitReadPreparedFormatPlanStatus(
                 unit_i32,
                 expanded,
             );
+            return ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
         },
     }
 }

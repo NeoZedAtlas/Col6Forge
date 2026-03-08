@@ -53,6 +53,13 @@ pub const PreparedExecutionFormatPlan = union(enum) {
     static_items: []const ast.FormatItem,
     dynamic_label: dynamic_mod.PreparedDynamicFormat,
     runtime_char_expr: *ast.Expr,
+
+    pub fn deinit(self: *PreparedExecutionFormatPlan) void {
+        switch (self.*) {
+            .dynamic_label => |*dynamic| dynamic.deinit(),
+            else => {},
+        }
+    }
 };
 
 pub const RuntimeFormatValue = struct {
