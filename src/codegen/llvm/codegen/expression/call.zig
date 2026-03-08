@@ -268,7 +268,7 @@ fn materializeActualDescriptor(
     expr: *Expr,
     arg_sig: ast.sema.KnownProcedureSig.ArgSig,
 ) !MaterializedDescriptor {
-    if (arg_sig.rank == 0) return error.UnsupportedDescriptorActualArgument;
+    if (arg_sig.rank == 0) return error.InvalidAbiState;
     const actual = (try analyzeSectionActual(ctx, builder, expr)) orelse return error.UnsupportedDescriptorActualArgument;
     if (actual.extents.len != arg_sig.rank) return error.UnsupportedDescriptorActualArgument;
 

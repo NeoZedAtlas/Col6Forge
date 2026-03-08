@@ -85,20 +85,7 @@ pub fn emitPreparedWriteExecutor(
     expanded_values: anytype,
 ) EmitError!void {
     switch (executor) {
-        .classic => |plan| {
-            return emitWritePreparedFormatPlan(
-                ctx,
-                builder,
-                write,
-                plan,
-                prepared.unit.unit_value,
-                prepared.unit.unit_char_len,
-                prepared.unit.unit_record_count,
-                prepared.unit.is_internal,
-                prepared.unit.unit_i32,
-                expanded_values,
-            );
-        },
+        .classic => |plan| return emitClassicPreparedWrite(ctx, builder, write, prepared, plan, expanded_values),
         .stream => |source| {
             return emitWriteFormattedStream(
                 ctx,
@@ -147,35 +134,7 @@ pub fn emitPreparedReadExecutor(
     expanded: anytype,
 ) EmitError!ValueRef {
     switch (executor) {
-        .classic => |plan| {
-            if (needs_status) {
-                return emitReadPreparedFormatPlanStatus(
-                    ctx,
-                    builder,
-                    read,
-                    plan,
-                    prepared.unit.unit_value,
-                    prepared.unit.unit_char_len,
-                    prepared.unit.unit_record_count,
-                    prepared.unit.is_internal,
-                    prepared.unit.unit_i32,
-                    expanded,
-                );
-            }
-            try emitReadPreparedFormatPlan(
-                ctx,
-                builder,
-                read,
-                plan,
-                prepared.unit.unit_value,
-                prepared.unit.unit_char_len,
-                prepared.unit.unit_record_count,
-                prepared.unit.is_internal,
-                prepared.unit.unit_i32,
-                expanded,
-            );
-            return .{ .name = "0", .ty = .i32, .is_ptr = false };
-        },
+        .classic => |plan| return emitClassicPreparedRead(ctx, builder, read, prepared, plan, needs_status, expanded),
         .stream => |source| {
             return emitReadFormattedStream(
                 ctx,
@@ -191,6 +150,66 @@ pub fn emitPreparedReadExecutor(
             );
         },
     }
+}
+
+fn emitClassicPreparedWrite(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    prepared: PreparedFormatContext,
+    plan: PreparedExecutionFormatPlan,
+    expanded_values: anytype,
+) EmitError!void {
+    return emitWritePreparedFormatPlan(
+        ctx,
+        builder,
+        write,
+        plan,
+        prepared.unit.unit_value,
+        prepared.unit.unit_char_len,
+        prepared.unit.unit_record_count,
+        prepared.unit.is_internal,
+        prepared.unit.unit_i32,
+        expanded_values,
+    );
+}
+
+fn emitClassicPreparedRead(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    prepared: PreparedFormatContext,
+    plan: PreparedExecutionFormatPlan,
+    needs_status: bool,
+    expanded: anytype,
+) EmitError!ValueRef {
+    if (needs_status) {
+        return emitReadPreparedFormatPlanStatus(
+            ctx,
+            builder,
+            read,
+            plan,
+            prepared.unit.unit_value,
+            prepared.unit.unit_char_len,
+            prepared.unit.unit_record_count,
+            prepared.unit.is_internal,
+            prepared.unit.unit_i32,
+            expanded,
+        );
+    }
+    try emitReadPreparedFormatPlan(
+        ctx,
+        builder,
+        read,
+        plan,
+        prepared.unit.unit_value,
+        prepared.unit.unit_char_len,
+        prepared.unit.unit_record_count,
+        prepared.unit.is_internal,
+        prepared.unit.unit_i32,
+        expanded,
+    );
+    return .{ .name = "0", .ty = .i32, .is_ptr = false };
 }
 
 pub fn emitPreparedRead(
