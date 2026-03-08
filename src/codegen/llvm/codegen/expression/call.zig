@@ -18,7 +18,7 @@ const ValueRef = context.ValueRef;
 const ArgPointerResult = struct {
     ptr: ValueRef,
     owned_heap_ptr: ?ValueRef = null,
-    descriptor_actual: ?SectionActualInfo = null,
+    descriptor_actual: ?ArrayActualPlan = null,
 };
 
 const MaterializedDescriptor = struct {
@@ -26,17 +26,17 @@ const MaterializedDescriptor = struct {
     multiplier_ptr: ValueRef,
 };
 
-const SectionActualInfo = struct {
-    base_ptr: ValueRef,
-    extents: []ValueRef,
-    multipliers: []ValueRef,
+const ArrayActualStorage = enum {
+    direct,
+    materialized_temp,
 };
 
-const ArrayActualInfo = struct {
+const ArrayActualPlan = struct {
     base_ptr: ValueRef,
     elem_ty: IRType,
     extents: []ValueRef,
     multipliers: []ValueRef,
+    storage: ArrayActualStorage,
 };
 
 pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
@@ -202,15 +202,15 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
             return .{ .ptr = try ctx.getPointer(name) };
         },
         .call_or_subscript => |call| {
-            if (try analyzeSectionActual(ctx, builder, expr)) |section| {
-                return .{ .ptr = section.base_ptr };
-            }
             const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
-            if (kind == .subscript) {
-                return .{ .ptr = try memory.emitSubscriptPtr(ctx, builder, call) };
-            }
             if (kind == .call and isIntrinsicArrayConversionArg(ctx, call)) {
                 return try emitIntrinsicArrayConversionArgPointer(ctx, builder, call);
+            }
+            if (try analyzeAddressableArrayActual(ctx, builder, expr)) |actual| {
+                return .{ .ptr = actual.base_ptr, .descriptor_actual = actual };
+            }
+            if (kind == .subscript) {
+                return .{ .ptr = try memory.emitSubscriptPtr(ctx, builder, call) };
             }
             // Non-subscript call expressions are not addressable.
         },
@@ -281,17 +281,13 @@ fn materializeActualDescriptor(
 ) !MaterializedDescriptor {
     if (arg_sig.rank == 0) return error.InvalidAbiState;
     const actual = (try resolveArrayActual(ctx, builder, expr)) orelse return error.UnsupportedDescriptorActualArgument;
-    return materializeKnownActualDescriptor(ctx, builder, .{
-        .base_ptr = actual.base_ptr,
-        .extents = actual.extents,
-        .multipliers = actual.multipliers,
-    }, arg_sig);
+    return materializeKnownActualDescriptor(ctx, builder, actual, arg_sig);
 }
 
 fn materializeKnownActualDescriptor(
     ctx: *Context,
     builder: anytype,
-    actual: SectionActualInfo,
+    actual: ArrayActualPlan,
     arg_sig: ast.sema.KnownProcedureSig.ArgSig,
 ) !MaterializedDescriptor {
     if (actual.extents.len != arg_sig.rank) return error.UnsupportedDescriptorActualArgument;
@@ -373,8 +369,10 @@ fn emitBinaryArrayExprActual(
         .ptr = dst_ptr,
         .descriptor_actual = .{
             .base_ptr = dst_ptr,
+            .elem_ty = result_ty,
             .extents = result_actual.extents,
             .multipliers = multipliers,
+            .storage = .materialized_temp,
         },
     };
 }
@@ -412,8 +410,10 @@ fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?Ar
         .ptr = dst_ptr,
         .descriptor_actual = .{
             .base_ptr = dst_ptr,
+            .elem_ty = src_actual.elem_ty,
             .extents = src_actual.extents,
             .multipliers = multipliers,
+            .storage = .materialized_temp,
         },
     };
 }
@@ -445,10 +445,10 @@ fn materializeDescriptorValues(
     return base_ptr;
 }
 
-fn analyzeSectionActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?SectionActualInfo {
+fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualPlan {
     return switch (expr.*) {
         .unary => |un| switch (un.op) {
-            .plus => analyzeSectionActual(ctx, builder, un.expr),
+            .plus => analyzeAddressableArrayActual(ctx, builder, un.expr),
             else => null,
         },
         .identifier => |name| blk: {
@@ -458,15 +458,13 @@ fn analyzeSectionActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?
             const multipliers = try emitSymbolDimMultipliers(ctx, builder, sym);
             break :blk .{
                 .base_ptr = try ctx.getPointer(name),
+                .elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout),
                 .extents = extents,
                 .multipliers = multipliers,
+                .storage = .direct,
             };
         },
         .call_or_subscript => |call| blk: {
-            if (isIntrinsicArrayConversionArg(ctx, call)) {
-                const src_actual = (try analyzeIntrinsicArrayConversionActual(ctx, builder, call)) orelse break :blk null;
-                break :blk src_actual;
-            }
             const sym = ctx.findSymbol(call.name) orelse break :blk null;
             if (sym.dims.len == 0 or call.args.len != sym.dims.len) break :blk null;
 
@@ -499,72 +497,41 @@ fn analyzeSectionActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?
             }
             break :blk .{
                 .base_ptr = try emitSectionBasePtr(ctx, builder, sym, call),
+                .elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout),
                 .extents = extents,
                 .multipliers = multipliers,
+                .storage = .direct,
             };
         },
         else => null,
     };
 }
 
-fn analyzeIntrinsicArrayConversionActual(
-    ctx: *Context,
-    builder: anytype,
-    call: ast.CallOrSubscript,
-) anyerror!?SectionActualInfo {
-    if (call.args.len != 1) return null;
-    const src_actual = (try resolveArrayActual(ctx, builder, call.args[0])) orelse return null;
-    const multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents);
-    return .{
-        .base_ptr = .{ .name = "", .ty = .ptr, .is_ptr = true },
-        .extents = src_actual.extents,
-        .multipliers = multipliers,
-    };
-}
-
-fn analyzeArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualInfo {
-    const section = (try analyzeSectionActual(ctx, builder, expr)) orelse return null;
-    const elem_ty = try arrayActualElementType(ctx, expr) orelse return null;
-    return .{
-        .base_ptr = section.base_ptr,
-        .elem_ty = elem_ty,
-        .extents = section.extents,
-        .multipliers = section.multipliers,
-    };
-}
-
-fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualInfo {
-    if (try analyzeArrayActual(ctx, builder, expr)) |actual| return actual;
+fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualPlan {
+    if (try analyzeAddressableArrayActual(ctx, builder, expr)) |actual| return actual;
+    if (expr.* == .call_or_subscript and isIntrinsicArrayConversionArg(ctx, expr.call_or_subscript)) {
+        return analyzeIntrinsicConversionActual(ctx, builder, expr.call_or_subscript);
+    }
     if (try emitMaterializedArrayExprActual(ctx, builder, expr)) |materialized| {
         const actual = materialized.descriptor_actual orelse return null;
-        const elem_ty = try casting.exprType(ctx, expr);
-        return .{
-            .base_ptr = materialized.ptr,
-            .elem_ty = elem_ty,
-            .extents = actual.extents,
-            .multipliers = actual.multipliers,
-        };
+        return actual;
     }
     return null;
 }
 
-fn arrayActualElementType(ctx: *Context, expr: *Expr) !?IRType {
-    return switch (expr.*) {
-        .unary => |un| switch (un.op) {
-            .plus => arrayActualElementType(ctx, un.expr),
-            else => null,
-        },
-        .identifier => |name| blk: {
-            const sym = ctx.findSymbol(name) orelse break :blk null;
-            if (sym.dims.len == 0) break :blk null;
-            break :blk if (sym.isCharacter()) .i8 else ctx.typeFromKind(sym.loweredKind());
-        },
-        .call_or_subscript => |call| blk: {
-            const sym = ctx.findSymbol(call.name) orelse break :blk null;
-            if (sym.dims.len == 0) break :blk null;
-            break :blk if (sym.isCharacter()) .i8 else ctx.typeFromKind(sym.loweredKind());
-        },
-        else => null,
+fn analyzeIntrinsicConversionActual(
+    ctx: *Context,
+    builder: anytype,
+    call: ast.CallOrSubscript,
+) anyerror!?ArrayActualPlan {
+    if (call.args.len != 1) return null;
+    const src_actual = (try resolveArrayActual(ctx, builder, call.args[0])) orelse return null;
+    return .{
+        .base_ptr = .{ .name = "", .ty = .ptr, .is_ptr = true },
+        .elem_ty = intrinsicArrayConversionType(call.name) orelse return null,
+        .extents = src_actual.extents,
+        .multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents),
+        .storage = .materialized_temp,
     };
 }
 
@@ -767,6 +734,13 @@ fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call:
     return .{
         .ptr = heap_ptr,
         .owned_heap_ptr = heap_ptr,
+        .descriptor_actual = .{
+            .base_ptr = heap_ptr,
+            .elem_ty = dst_ty,
+            .extents = src_actual.extents,
+            .multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents),
+            .storage = .materialized_temp,
+        },
     };
 }
 
@@ -836,7 +810,7 @@ fn emitSectionBasePtr(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, cal
     }
 
     const base_ptr = try ctx.getPointer(call.name);
-    const elem_ty = if (sym.isCharacter()) ir.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
+    const elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout);
     if (sym.isCharacter()) {
         const char_len = try charSymbolLengthValueI64(ctx, builder, call.name, sym);
         const scaled_offset = try emitMulI64(ctx, builder, offset, char_len);
@@ -1056,9 +1030,9 @@ fn emitBinaryArrayActualLoop(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
-    left_actual: ?ArrayActualInfo,
+    left_actual: ?ArrayActualPlan,
     left_scalar: ?ValueRef,
-    right_actual: ?ArrayActualInfo,
+    right_actual: ?ArrayActualPlan,
     right_scalar: ?ValueRef,
     dst_ptr: ValueRef,
     result_ty: IRType,
@@ -1112,7 +1086,7 @@ fn emitArrayActualElement(
     ctx: *Context,
     builder: anytype,
     idx_val: ValueRef,
-    actual: ArrayActualInfo,
+    actual: ArrayActualPlan,
 ) !ValueRef {
     const src_offset = try emitLinearizedActualOffset(ctx, builder, idx_val, actual.extents, actual.multipliers);
     const src_elem_ptr_name = try ctx.nextTemp();

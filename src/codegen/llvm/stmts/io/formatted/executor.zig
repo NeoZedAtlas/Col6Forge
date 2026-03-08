@@ -22,8 +22,8 @@ const emitWritePreparedFormatPlan = format_expr.emitWritePreparedFormatPlan;
 const emitReadPreparedFormatPlan = format_expr.emitReadPreparedFormatPlan;
 const emitReadPreparedFormatPlanStatus = format_expr.emitReadPreparedFormatPlanStatus;
 const emitSpecialFormattedWrite = special_write.emitSpecialFormattedWrite;
-const emitReadFormattedStream = stream_read.emitReadFormattedStream;
-const emitWriteFormattedStream = stream_write.emitWriteFormattedStream;
+const emitReadFormattedStreamPrepared = stream_read.emitReadFormattedStreamPrepared;
+const emitWriteFormattedStreamPrepared = stream_write.emitWriteFormattedStreamPrepared;
 const dynamic_mod = @import("dynamic.zig");
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
@@ -49,20 +49,6 @@ pub fn prepareExecutor(
         .mode = if (has_runtime_implied_do) .stream else .classic,
         .plan = plan,
     };
-}
-
-pub fn prepareWriteExecutor(
-    plan: PreparedExecutionFormatPlan,
-    has_runtime_implied_do: bool,
-) EmitError!PreparedWriteExecutor {
-    return prepareExecutor(plan, has_runtime_implied_do);
-}
-
-pub fn prepareReadExecutor(
-    plan: PreparedExecutionFormatPlan,
-    has_runtime_implied_do: bool,
-) EmitError!PreparedReadExecutor {
-    return prepareExecutor(plan, has_runtime_implied_do);
 }
 
 pub fn prepareWriteExecutorForArgs(
@@ -161,47 +147,7 @@ fn emitStreamPreparedWrite(
     prepared: PreparedFormatContext,
     plan: PreparedExecutionFormatPlan,
 ) EmitError!void {
-    switch (plan) {
-        .static_items => |items| {
-            return emitWriteFormattedStream(
-                ctx,
-                builder,
-                write,
-                prepared.unit.unit_value,
-                prepared.unit.unit_char_len,
-                prepared.unit.unit_record_count,
-                prepared.unit.is_internal,
-                prepared.unit.unit_i32,
-                .{ .static_items = items },
-            );
-        },
-        .runtime_char_expr => |fmt_expr| {
-            return emitWriteFormattedStream(
-                ctx,
-                builder,
-                write,
-                prepared.unit.unit_value,
-                prepared.unit.unit_char_len,
-                prepared.unit.unit_record_count,
-                prepared.unit.is_internal,
-                prepared.unit.unit_i32,
-                .{ .runtime_expr = fmt_expr },
-            );
-        },
-        .dynamic_label => |prepared_dynamic| {
-            return dynamic_mod.emitWriteDynamicFormatPreparedStream(
-                ctx,
-                builder,
-                write,
-                prepared.unit.unit_value,
-                prepared.unit.unit_char_len,
-                prepared.unit.unit_record_count,
-                prepared.unit.is_internal,
-                prepared.unit.unit_i32,
-                prepared_dynamic,
-            );
-        },
-    }
+    return emitWriteFormattedStreamPrepared(ctx, builder, write, prepared, plan);
 }
 
 fn emitClassicPreparedRead(
@@ -250,50 +196,7 @@ fn emitStreamPreparedRead(
     plan: PreparedExecutionFormatPlan,
     needs_status: bool,
 ) EmitError!ValueRef {
-    switch (plan) {
-        .static_items => |items| {
-            return emitReadFormattedStream(
-                ctx,
-                builder,
-                read,
-                prepared.unit.unit_value,
-                prepared.unit.unit_char_len,
-                prepared.unit.unit_record_count,
-                prepared.unit.is_internal,
-                prepared.unit.unit_i32,
-                .{ .static_items = items },
-                needs_status,
-            );
-        },
-        .runtime_char_expr => |fmt_expr| {
-            return emitReadFormattedStream(
-                ctx,
-                builder,
-                read,
-                prepared.unit.unit_value,
-                prepared.unit.unit_char_len,
-                prepared.unit.unit_record_count,
-                prepared.unit.is_internal,
-                prepared.unit.unit_i32,
-                .{ .runtime_expr = fmt_expr },
-                needs_status,
-            );
-        },
-        .dynamic_label => |prepared_dynamic| {
-            return dynamic_mod.emitReadDynamicFormatPreparedStream(
-                ctx,
-                builder,
-                read,
-                prepared.unit.unit_value,
-                prepared.unit.unit_char_len,
-                prepared.unit.unit_record_count,
-                prepared.unit.is_internal,
-                prepared.unit.unit_i32,
-                prepared_dynamic,
-                needs_status,
-            );
-        },
-    }
+    return emitReadFormattedStreamPrepared(ctx, builder, read, prepared, plan, needs_status);
 }
 
 pub fn emitPreparedRead(

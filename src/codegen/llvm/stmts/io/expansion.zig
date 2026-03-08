@@ -96,8 +96,8 @@ pub fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) Emi
                 const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
                 if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
                 const base_ptr = try ctx.getPointer(sym.name);
-                const elem_ty = if (sym.isCharacter()) llvm_types.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
-                const char_len = sym.effectiveCharLen() orelse 1;
+                const elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout);
+                const char_len = common.symbolCharacterLenOrOne(sym);
                 const char_scale: ?ValueRef = if (sym.isCharacter() and char_len > 1)
                     .{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = .i32, .is_ptr = false }
                 else
@@ -594,8 +594,8 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
                 const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
                 if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
                 const base_ptr = try ctx.getPointer(sym.name);
-                const elem_ty = if (sym.isCharacter()) llvm_types.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
-                const char_len = sym.effectiveCharLen() orelse 1;
+                const elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout);
+                const char_len = common.symbolCharacterLenOrOne(sym);
                 const char_scale: ?ValueRef = if (sym.isCharacter() and char_len > 1)
                     .{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = .i32, .is_ptr = false }
                 else
@@ -666,8 +666,8 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
                 const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
                 if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
                 const base_ptr = try ctx.getPointer(sym.name);
-                const elem_ty = if (sym.isCharacter()) llvm_types.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
-                const char_len = sym.effectiveCharLen() orelse 1;
+                const elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout);
+                const char_len = common.symbolCharacterLenOrOne(sym);
                 if (sym.isCharacter()) {
                     const total_len = elem_count * char_len;
                     try appendWriteValue(&expanded, .{ .name = base_ptr.name, .ty = .ptr, .is_ptr = true }, total_len, .{ .name = base_ptr.name, .ty = .ptr, .is_ptr = true });

@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
 const llvm_types = @import("../../types.zig");
+const common = @import("../../codegen/common.zig");
 const context = @import("../../codegen/context.zig");
 const expr = @import("../../codegen/expression/mod.zig");
 const utils = @import("../../codegen/utils.zig");
@@ -179,8 +180,8 @@ fn appendArrayArgs(ctx: *Context, builder: anytype, args: *TypedDirectArgs, sym:
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
     if (elem_count > max_packed_array_elems) return error.ArrayArgTooLargeForPackedIo;
     const base_ptr = try ctx.getPointer(sym.name);
-    const elem_ty = if (sym.isCharacter()) utils.IRType.i8 else ctx.typeFromKind(sym.loweredKind());
-    const char_len = sym.effectiveCharLen() orelse 1;
+    const elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout);
+    const char_len = common.symbolCharacterLenOrOne(sym);
 
     var idx: usize = 0;
     while (idx < elem_count) : (idx += 1) {
@@ -501,7 +502,7 @@ fn byteSizeForSymbol(ctx: *Context, sym: anytype) ?i64 {
         .double_precision, .complex => 8,
         .complex_double => 16,
         .logical => 1,
-        .character => @as(i64, @intCast(sym.effectiveCharLen() orelse 1)),
+        .character => @as(i64, @intCast(common.symbolCharacterLenOrOne(sym))),
     };
 }
 
@@ -514,7 +515,7 @@ fn blockTransferKindForSymbol(ctx: *Context, sym: anytype) ?struct { kind: u8, e
         .complex_double => .{ .kind = 'z', .elem_len = 0 },
         .logical => .{ .kind = 'l', .elem_len = 0 },
         .character => blk: {
-            const char_len = sym.effectiveCharLen() orelse 1;
+            const char_len = common.symbolCharacterLenOrOne(sym);
             if (char_len > std.math.maxInt(i32)) return null;
             break :blk .{ .kind = 's', .elem_len = @intCast(char_len) };
         },

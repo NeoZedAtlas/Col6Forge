@@ -18,7 +18,7 @@ pub fn formatFromCharArrayData(ctx: *Context, name: []const u8) EmitError!?[]con
     if (!sym.isCharacter() or sym.dims.len == 0) return null;
     const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return null;
     if (elem_count == 0) return null;
-    const char_len = sym.effectiveCharLen() orelse 1;
+    const char_len = common.symbolCharacterLenOrOne(sym);
     const lower_bound = declaredLowerBound(sym.dims[0]) orelse return null;
 
     var elements = try ctx.allocator.alloc(?[]const u8, elem_count);

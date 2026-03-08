@@ -149,14 +149,6 @@ pub fn prepareExecutionFormatExprPlan(
     return prepareExecutionFormatPlan(ctx, builder, try resolveFormatExprPlan(ctx, fmt_expr));
 }
 
-pub fn streamFormatSource(plan: PreparedExecutionFormatPlan) ?StreamFormatSource {
-    return switch (plan) {
-        .static_items => |items| .{ .static_items = items },
-        .runtime_char_expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
-        .dynamic_label => null,
-    };
-}
-
 fn lookupCharArgLen(ctx: *Context, name: []const u8) ?ValueRef {
     return ctx.char_arg_lens.get(name);
 }

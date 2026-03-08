@@ -181,6 +181,17 @@ pub fn requireConstantCharacterLen(sym: input.sema.Symbol) !usize {
     return constantCharacterLen(sym) orelse error.NonConstantCharacterLength;
 }
 
+pub fn symbolCharacterLenOrOne(sym: input.sema.Symbol) usize {
+    return sym.effectiveCharLen() orelse 1;
+}
+
+pub fn symbolElementIRType(sym: input.sema.Symbol, target_layout: input.sema.TargetLayout) ir.IRType {
+    return if (sym.isCharacter())
+        .i8
+    else
+        llvm_types.typeFromKindWithLayout(sym.loweredKind(), target_layout);
+}
+
 fn sizeAlign(ty: ir.IRType) !SizeAlign {
     return switch (ty) {
         .i1 => .{ .size = 1, .alignment = 1 },
