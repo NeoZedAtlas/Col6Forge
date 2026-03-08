@@ -13,6 +13,7 @@ const EmitError = anyerror;
 const io_utils = @import("../utils.zig");
 const expansion = @import("../expansion.zig");
 const utils = @import("../../../codegen/utils.zig");
+const formatted_context = @import("context.zig");
 
 const applyComplexFixups = expansion.applyComplexFixups;
 const expandReadTargets = expansion.expandReadTargets;
@@ -21,10 +22,7 @@ const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
 
-const StreamFormatSource = union(enum) {
-    static_items: []const ast.FormatItem,
-    runtime_expr: *ast.Expr,
-};
+const StreamFormatSource = formatted_context.StreamFormatSource;
 
 fn oneForType(ctx: *Context, ty: llvm_types.IRType) EmitError!ValueRef {
     return switch (ty) {
@@ -322,7 +320,7 @@ fn emitStreamFinish(ctx: *Context, builder: anytype, state: ValueRef) EmitError!
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
 }
 
-pub fn emitReadFormattedStreamStatic(
+pub fn emitReadFormattedStream(
     ctx: *Context,
     builder: anytype,
     read: ast.ReadStmt,
@@ -331,7 +329,7 @@ pub fn emitReadFormattedStreamStatic(
     unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
-    fmt_items: []const ast.FormatItem,
+    format_source: StreamFormatSource,
     return_status: bool,
 ) EmitError!ValueRef {
     const state = try emitStreamBegin(
@@ -342,34 +340,7 @@ pub fn emitReadFormattedStreamStatic(
         unit_record_count,
         is_internal,
         unit_i32,
-        .{ .static_items = fmt_items },
-        return_status,
-    );
-    try emitStreamArgs(ctx, builder, state, read.args);
-    return emitStreamFinish(ctx, builder, state);
-}
-
-pub fn emitReadFormattedStreamExpr(
-    ctx: *Context,
-    builder: anytype,
-    read: ast.ReadStmt,
-    fmt_expr: *ast.Expr,
-    unit_value: ValueRef,
-    unit_char_len: ?usize,
-    unit_record_count: ?usize,
-    is_internal: bool,
-    unit_i32: ValueRef,
-    return_status: bool,
-) EmitError!ValueRef {
-    const state = try emitStreamBegin(
-        ctx,
-        builder,
-        unit_value,
-        unit_char_len,
-        unit_record_count,
-        is_internal,
-        unit_i32,
-        .{ .runtime_expr = fmt_expr },
+        format_source,
         return_status,
     );
     try emitStreamArgs(ctx, builder, state, read.args);

@@ -29,6 +29,16 @@ pub const FormatDispatch = union(enum) {
     runtime_expr: *ast.Expr,
 };
 
+pub const StreamFormatSource = union(enum) {
+    static_items: []const ast.FormatItem,
+    runtime_expr: *ast.Expr,
+};
+
+pub const PreparedFormatContext = struct {
+    unit: PreparedUnitContext,
+    dispatch: FormatDispatch,
+};
+
 pub fn prepareUnitContext(
     ctx: *Context,
     builder: anytype,
@@ -69,5 +79,25 @@ pub fn resolveFormatDispatch(
         .expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
         .none => unreachable,
         .list_directed => unreachable,
+    };
+}
+
+pub fn prepareFormattedContext(
+    ctx: *Context,
+    builder: anytype,
+    unit: *ast.Expr,
+    format_spec: ast.FormatSpec,
+) EmitError!PreparedFormatContext {
+    return .{
+        .unit = try prepareUnitContext(ctx, builder, unit),
+        .dispatch = try resolveFormatDispatch(ctx, format_spec),
+    };
+}
+
+pub fn streamFormatSource(dispatch: FormatDispatch) ?StreamFormatSource {
+    return switch (dispatch) {
+        .static_items => |items| .{ .static_items = items },
+        .runtime_expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
+        .dynamic_label_var => null,
     };
 }
