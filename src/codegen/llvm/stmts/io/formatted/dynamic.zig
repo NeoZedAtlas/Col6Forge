@@ -14,6 +14,8 @@ const io_utils = @import("../utils.zig");
 const expansion = @import("../expansion.zig");
 const write_mod = @import("write.zig");
 const read_mod = @import("read.zig");
+const stream_write_mod = @import("stream_write.zig");
+const stream_read_mod = @import("stream_read.zig");
 
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
@@ -21,6 +23,8 @@ const emitWriteFormatted = write_mod.emitWriteFormatted;
 const emitReadFormatted = read_mod.emitReadFormatted;
 const emitReadFormattedStatus = read_mod.emitReadFormattedStatus;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
+const emitWriteFormattedStream = stream_write_mod.emitWriteFormattedStream;
+const emitReadFormattedStream = stream_read_mod.emitReadFormattedStream;
 
 const NumericFormat = struct {
     value: i32,
@@ -172,6 +176,55 @@ pub fn emitWriteDynamicFormatPrepared(
     return emitWriteDynamicFormatCore(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, prepared, expanded_values);
 }
 
+pub fn emitWriteDynamicFormatPreparedStream(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    prepared: PreparedDynamicFormat,
+) EmitError!void {
+    const Dispatch = struct {
+        write: ast.WriteStmt,
+        unit_value: ValueRef,
+        unit_char_len: ?usize,
+        unit_record_count: ?usize,
+        is_internal: bool,
+        unit_i32: ValueRef,
+
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+            try emitWriteFormattedStream(
+                ctx_inner,
+                builder_inner,
+                self.write,
+                self.unit_value,
+                self.unit_char_len,
+                self.unit_record_count,
+                self.is_internal,
+                self.unit_i32,
+                .{ .static_items = items },
+            );
+        }
+
+        fn emitDefault(_: @This(), ctx_inner: *Context, builder_inner: anytype, done_label: []const u8) EmitError!void {
+            _ = done_label;
+            try emitMissingDynamicFormatTrap(ctx_inner, builder_inner);
+        }
+    };
+
+    try emitDynamicFormatSwitch(ctx, builder, prepared.selector, prepared.numeric_formats.items, Dispatch{
+        .write = write,
+        .unit_value = unit_value,
+        .unit_char_len = unit_char_len,
+        .unit_record_count = unit_record_count,
+        .is_internal = is_internal,
+        .unit_i32 = unit_i32,
+    });
+}
+
 fn emitWriteDynamicFormatCore(
     ctx: *Context,
     builder: anytype,
@@ -283,6 +336,78 @@ pub fn emitReadDynamicFormatPreparedStatus(
     expanded: *ExpandedReadTargets,
 ) EmitError!ValueRef {
     return emitReadDynamicFormatPreparedCore(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, prepared, expanded, true);
+}
+
+pub fn emitReadDynamicFormatPreparedStream(
+    ctx: *Context,
+    builder: anytype,
+    read: ast.ReadStmt,
+    unit_value: ValueRef,
+    unit_char_len: ?usize,
+    unit_record_count: ?usize,
+    is_internal: bool,
+    unit_i32: ValueRef,
+    prepared: PreparedDynamicFormat,
+    needs_status: bool,
+) EmitError!ValueRef {
+    const status_ptr = if (needs_status) blk: {
+        const status_ptr_tmp = try ctx.nextTemp();
+        try builder.alloca(status_ptr_tmp, .i32);
+        break :blk ValueRef{ .name = status_ptr_tmp, .ty = .ptr, .is_ptr = true };
+    } else ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
+
+    const Dispatch = struct {
+        read: ast.ReadStmt,
+        unit_value: ValueRef,
+        unit_char_len: ?usize,
+        unit_record_count: ?usize,
+        is_internal: bool,
+        unit_i32: ValueRef,
+        status_ptr: ValueRef,
+        needs_status: bool,
+
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+            const status_val = try emitReadFormattedStream(
+                ctx_inner,
+                builder_inner,
+                self.read,
+                self.unit_value,
+                self.unit_char_len,
+                self.unit_record_count,
+                self.is_internal,
+                self.unit_i32,
+                .{ .static_items = items },
+                self.needs_status,
+            );
+            if (self.needs_status) {
+                try builder_inner.store(status_val, self.status_ptr);
+            }
+        }
+
+        fn emitDefault(self: @This(), ctx_inner: *Context, builder_inner: anytype, done_label: []const u8) EmitError!void {
+            if (!self.needs_status) {
+                return emitMissingDynamicFormatTrap(ctx_inner, builder_inner);
+            }
+            try builder_inner.store(.{ .name = "1", .ty = .i32, .is_ptr = false }, self.status_ptr);
+            try builder_inner.br(done_label);
+        }
+    };
+
+    try emitDynamicFormatSwitch(ctx, builder, prepared.selector, prepared.numeric_formats.items, Dispatch{
+        .read = read,
+        .unit_value = unit_value,
+        .unit_char_len = unit_char_len,
+        .unit_record_count = unit_record_count,
+        .is_internal = is_internal,
+        .unit_i32 = unit_i32,
+        .status_ptr = status_ptr,
+        .needs_status = needs_status,
+    });
+
+    if (!needs_status) return .{ .name = "0", .ty = .i32, .is_ptr = false };
+    const status_load = try ctx.nextTemp();
+    try builder.load(status_load, .i32, status_ptr);
+    return .{ .name = status_load, .ty = .i32, .is_ptr = false };
 }
 
 fn emitReadDynamicFormatCore(
