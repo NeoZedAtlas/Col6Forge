@@ -27,10 +27,34 @@ test "inferProcedureArgSigs captures descriptor-bearing dummy arrays" {
     try testing.expectEqual(@as(usize, 3), arg_sigs.len);
     try testing.expect(arg_sigs[0].requires_descriptor);
     try testing.expectEqual(@as(usize, 1), arg_sigs[0].rank);
-    try testing.expect(arg_sigs[1].requires_descriptor);
+    try testing.expect(!arg_sigs[1].requires_descriptor);
     try testing.expectEqual(@as(usize, 1), arg_sigs[1].rank);
     try testing.expectEqual(ast.TypeKind.character, arg_sigs[2].type_spec.lowered_kind);
     try testing.expectEqual(@as(?usize, null), arg_sigs[2].type_spec.char_len);
+}
+
+test "inferProcedureArgSigs keeps assumed-size lower-bound dummy arrays off descriptor ABI" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S(A)\n" ++
+        "      INTEGER A(1:*)\n" ++
+        "      END\n";
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[0]);
+    try testing.expectEqual(@as(usize, 1), arg_sigs.len);
+    try testing.expect(!arg_sigs[0].requires_descriptor);
+    try testing.expectEqual(@as(usize, 1), arg_sigs[0].rank);
 }
 
 test "inferProcedureArgSigs merges DIMENSION declarations for dummy arrays" {
@@ -54,7 +78,7 @@ test "inferProcedureArgSigs merges DIMENSION declarations for dummy arrays" {
 
     const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[0]);
     try testing.expectEqual(@as(usize, 1), arg_sigs.len);
-    try testing.expect(arg_sigs[0].requires_descriptor);
+    try testing.expect(!arg_sigs[0].requires_descriptor);
     try testing.expectEqual(@as(usize, 1), arg_sigs[0].rank);
     try testing.expectEqual(ast.TypeKind.integer, arg_sigs[0].type_spec.lowered_kind);
 }

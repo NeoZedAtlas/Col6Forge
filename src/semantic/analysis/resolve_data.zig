@@ -441,7 +441,7 @@ fn cloneExprWithSubst(
             const upper = try cloneExprWithSubst(ctx, range.upper, name, replacement);
             const stride = if (range.stride) |s| try cloneExprWithSubst(ctx, s, name, replacement) else null;
             const cloned = try ctx.arena.create(ast.Expr);
-            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
+            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride, .assumed_shape = range.assumed_shape } };
             return cloned;
         },
         .implied_do => |implied| {

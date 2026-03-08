@@ -62,6 +62,7 @@ fn parseDimExprDepth(lp: *LineParser, arena: std.mem.Allocator, depth: usize) Pa
     }
     if (lp.consume(.colon)) {
         var upper: *Expr = undefined;
+        var assumed_shape = false;
         if (lp.peekIs(.star)) {
             const tok = lp.next();
             const assumed = try arena.create(Expr);
@@ -71,6 +72,7 @@ fn parseDimExprDepth(lp: *LineParser, arena: std.mem.Allocator, depth: usize) Pa
             const assumed = try arena.create(Expr);
             assumed.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
             upper = assumed;
+            assumed_shape = true;
         } else {
             upper = try parseExprDepth(lp, arena, 0, depth + 1);
         }
@@ -81,7 +83,7 @@ fn parseDimExprDepth(lp: *LineParser, arena: std.mem.Allocator, depth: usize) Pa
         }
 
         const node = try arena.create(Expr);
-        node.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
+        node.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride, .assumed_shape = assumed_shape } };
         return node;
     }
     return lower orelse error.UnexpectedToken;
@@ -597,6 +599,7 @@ test "parseDimExpr handles deferred shape colon" {
             try testing.expect(range.lower == null);
             try testing.expect(range.upper.* == .literal);
             try testing.expectEqual(ast.LiteralKind.assumed_size, range.upper.literal.kind);
+            try testing.expect(range.assumed_shape);
         },
         else => return error.UnexpectedToken,
     }

@@ -226,13 +226,10 @@ fn dummyArgRequiresDescriptor(dims: []const *ast.Expr) bool {
     if (dims.len == 0) return false;
     for (dims) |dim| {
         switch (dim.*) {
-            .literal => |lit| {
-                if (lit.kind == .assumed_size) return true;
-            },
             .dim_range => |range| {
-                if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return true;
+                if (range.assumed_shape) return true;
             },
-            else => return true,
+            else => {},
         }
     }
     return false;

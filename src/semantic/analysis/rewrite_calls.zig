@@ -676,7 +676,7 @@ fn cloneExpr(ctx: *context.Context, node: *ast.Expr) !*ast.Expr {
             const lower = if (range.lower) |l| try cloneExpr(ctx, l) else null;
             const upper = try cloneExpr(ctx, range.upper);
             const stride = if (range.stride) |s| try cloneExpr(ctx, s) else null;
-            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
+            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride, .assumed_shape = range.assumed_shape } };
         },
         .implied_do => |implied| {
             const items = try ctx.arena.alloc(*ast.Expr, implied.items.len);

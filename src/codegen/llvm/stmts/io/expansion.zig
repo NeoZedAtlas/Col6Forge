@@ -464,7 +464,7 @@ fn cloneExprWithSubst(
             const lower = if (range.lower) |l| try cloneExprWithSubst(ctx, allocator, l, name, replacement) else null;
             const upper = try cloneExprWithSubst(ctx, allocator, range.upper, name, replacement);
             const stride = if (range.stride) |s| try cloneExprWithSubst(ctx, allocator, s, name, replacement) else null;
-            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
+            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride, .assumed_shape = range.assumed_shape } };
         },
         .implied_do => |implied| {
             if (std.ascii.eqlIgnoreCase(implied.var_name, name)) {
