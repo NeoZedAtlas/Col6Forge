@@ -280,8 +280,12 @@ fn materializeActualDescriptor(
     arg_sig: ast.sema.KnownProcedureSig.ArgSig,
 ) !MaterializedDescriptor {
     if (arg_sig.rank == 0) return error.InvalidAbiState;
-    const actual = (try analyzeSectionActual(ctx, builder, expr)) orelse return error.UnsupportedDescriptorActualArgument;
-    return materializeKnownActualDescriptor(ctx, builder, actual, arg_sig);
+    const actual = (try resolveArrayActual(ctx, builder, expr)) orelse return error.UnsupportedDescriptorActualArgument;
+    return materializeKnownActualDescriptor(ctx, builder, .{
+        .base_ptr = actual.base_ptr,
+        .extents = actual.extents,
+        .multipliers = actual.multipliers,
+    }, arg_sig);
 }
 
 fn materializeKnownActualDescriptor(
@@ -323,8 +327,8 @@ fn emitBinaryArrayExprActual(
         else => return null,
     }
 
-    const left_array = try analyzeArrayActual(ctx, builder, bin.left);
-    const right_array = try analyzeArrayActual(ctx, builder, bin.right);
+    const left_array = try resolveArrayActual(ctx, builder, bin.left);
+    const right_array = try resolveArrayActual(ctx, builder, bin.right);
     if (left_array == null and right_array == null) return null;
     if (left_array != null and right_array != null) return null;
 

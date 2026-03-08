@@ -28,9 +28,14 @@ const dynamic_mod = @import("dynamic.zig");
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
 
-pub const PreparedExecutor = union(enum) {
-    classic: PreparedExecutionFormatPlan,
-    stream: PreparedExecutionFormatPlan,
+pub const ExecutorMode = enum {
+    classic,
+    stream,
+};
+
+pub const PreparedExecutor = struct {
+    mode: ExecutorMode,
+    plan: PreparedExecutionFormatPlan,
 };
 
 pub const PreparedWriteExecutor = PreparedExecutor;
@@ -40,8 +45,10 @@ pub fn prepareExecutor(
     plan: PreparedExecutionFormatPlan,
     has_runtime_implied_do: bool,
 ) EmitError!PreparedExecutor {
-    if (!has_runtime_implied_do) return .{ .classic = plan };
-    return .{ .stream = plan };
+    return .{
+        .mode = if (has_runtime_implied_do) .stream else .classic,
+        .plan = plan,
+    };
 }
 
 pub fn prepareWriteExecutor(
@@ -82,9 +89,9 @@ pub fn emitPreparedWriteExecutor(
     executor: PreparedWriteExecutor,
     expanded_values: anytype,
 ) EmitError!void {
-    switch (executor) {
-        .classic => |plan| return emitClassicPreparedWrite(ctx, builder, write, prepared, plan, expanded_values),
-        .stream => |plan| return emitStreamPreparedWrite(ctx, builder, write, prepared, plan),
+    switch (executor.mode) {
+        .classic => return emitClassicPreparedWrite(ctx, builder, write, prepared, executor.plan, expanded_values),
+        .stream => return emitStreamPreparedWrite(ctx, builder, write, prepared, executor.plan),
     }
 }
 
@@ -95,10 +102,10 @@ pub fn emitPreparedWrite(
     prepared: PreparedFormatContext,
     executor: PreparedWriteExecutor,
 ) EmitError!void {
-    switch (executor) {
-        .classic => |plan| {
-            if (plan == .static_items) {
-                if (try emitSpecialFormattedWrite(ctx, builder, write, prepared, plan.static_items)) {
+    switch (executor.mode) {
+        .classic => {
+            if (executor.plan == .static_items) {
+                if (try emitSpecialFormattedWrite(ctx, builder, write, prepared, executor.plan.static_items)) {
                     return;
                 }
             }
@@ -119,9 +126,9 @@ pub fn emitPreparedReadExecutor(
     needs_status: bool,
     expanded: anytype,
 ) EmitError!ValueRef {
-    switch (executor) {
-        .classic => |plan| return emitClassicPreparedRead(ctx, builder, read, prepared, plan, needs_status, expanded),
-        .stream => |plan| return emitStreamPreparedRead(ctx, builder, read, prepared, plan, needs_status),
+    switch (executor.mode) {
+        .classic => return emitClassicPreparedRead(ctx, builder, read, prepared, executor.plan, needs_status, expanded),
+        .stream => return emitStreamPreparedRead(ctx, builder, read, prepared, executor.plan, needs_status),
     }
 }
 
