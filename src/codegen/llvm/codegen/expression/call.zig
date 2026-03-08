@@ -17,6 +17,7 @@ const ValueRef = context.ValueRef;
 const ArgPointerResult = struct {
     ptr: ValueRef,
     owned_heap_ptr: ?ValueRef = null,
+    descriptor_actual: ?SectionActualInfo = null,
 };
 
 const MaterializedDescriptor = struct {
@@ -164,6 +165,9 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
 }
 
 fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPointerResult {
+    if (try emitMaterializedArrayExprActual(ctx, builder, expr)) |materialized| {
+        return materialized;
+    }
     switch (expr.*) {
         .identifier => |name| {
             if (ctx.findSymbol(name)) |sym| {
@@ -236,8 +240,11 @@ fn appendAbiActualArgs(
     proc_sig: ?ast.sema.KnownProcedureSig,
     result_len: ?ValueRef,
 ) !void {
+    var resolved_args = std.array_list.Managed(ArgPointerResult).init(ctx.allocator);
+    defer resolved_args.deinit();
     for (args) |arg| {
         const resolved = try emitArgPointerDetailed(ctx, builder, arg);
+        try resolved_args.append(resolved);
         try abi_args.append(resolved.ptr);
         if (resolved.owned_heap_ptr) |heap_ptr| {
             try owned_heap_args.append(heap_ptr);
@@ -247,7 +254,10 @@ fn appendAbiActualArgs(
         for (args, 0..) |arg, idx| {
             if (idx >= sig.args.len) break;
             if (!sig.args[idx].requires_descriptor) continue;
-            const desc = try materializeActualDescriptor(ctx, builder, arg, sig.args[idx]);
+            const desc = if (resolved_args.items[idx].descriptor_actual) |actual|
+                try materializeKnownActualDescriptor(ctx, builder, actual, sig.args[idx])
+            else
+                try materializeActualDescriptor(ctx, builder, arg, sig.args[idx]);
             try abi_args.append(desc.extent_ptr);
             try abi_args.append(desc.multiplier_ptr);
         }
@@ -270,6 +280,15 @@ fn materializeActualDescriptor(
 ) !MaterializedDescriptor {
     if (arg_sig.rank == 0) return error.InvalidAbiState;
     const actual = (try analyzeSectionActual(ctx, builder, expr)) orelse return error.UnsupportedDescriptorActualArgument;
+    return materializeKnownActualDescriptor(ctx, builder, actual, arg_sig);
+}
+
+fn materializeKnownActualDescriptor(
+    ctx: *Context,
+    builder: anytype,
+    actual: SectionActualInfo,
+    arg_sig: ast.sema.KnownProcedureSig.ArgSig,
+) !MaterializedDescriptor {
     if (actual.extents.len != arg_sig.rank) return error.UnsupportedDescriptorActualArgument;
 
     const extent_ptr = try materializeDescriptorValues(ctx, builder, actual.extents);
@@ -277,6 +296,46 @@ fn materializeActualDescriptor(
     return .{
         .extent_ptr = extent_ptr,
         .multiplier_ptr = multiplier_ptr,
+    };
+}
+
+fn emitMaterializedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?ArgPointerResult {
+    return switch (expr.*) {
+        .unary => |un| switch (un.op) {
+            .plus => emitMaterializedArrayExprActual(ctx, builder, un.expr),
+            .minus => emitNegatedArrayExprActual(ctx, builder, un.expr),
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?ArgPointerResult {
+    const src_actual = (try analyzeArrayActual(ctx, builder, expr)) orelse return null;
+    if (!isNegatableArrayElementType(src_actual.elem_ty)) return null;
+
+    const elem_count = try emitExtentProductI64(ctx, builder, src_actual.extents);
+    const tmp_name = try ctx.nextTemp();
+    try builder.allocaArrayValue(tmp_name, src_actual.elem_ty, elem_count);
+    const dst_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
+    const multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents);
+    try emitNegatedArrayActualLoop(
+        ctx,
+        builder,
+        src_actual.base_ptr,
+        src_actual.elem_ty,
+        src_actual.extents,
+        src_actual.multipliers,
+        dst_ptr,
+        elem_count,
+    );
+    return .{
+        .ptr = dst_ptr,
+        .descriptor_actual = .{
+            .base_ptr = dst_ptr,
+            .extents = src_actual.extents,
+            .multipliers = multipliers,
+        },
     };
 }
 
@@ -883,6 +942,68 @@ fn emitLinearizedActualOffset(
         offset = try emitAddI64(ctx, builder, offset, term);
     }
     return offset;
+}
+
+fn isNegatableArrayElementType(ty: IRType) bool {
+    return switch (ty) {
+        .i32, .i64, .f32, .f64 => true,
+        else => false,
+    };
+}
+
+fn emitNegatedArrayActualLoop(
+    ctx: *Context,
+    builder: anytype,
+    src_ptr: ValueRef,
+    elem_ty: IRType,
+    src_extents: []const ValueRef,
+    src_multipliers: []const ValueRef,
+    dst_ptr: ValueRef,
+    elem_count: ValueRef,
+) !void {
+    const idx_ptr = try ctx.nextTemp();
+    try builder.alloca(idx_ptr, .i64);
+    try builder.store(i64Const(ctx, 0), .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+
+    const loop_head = try ctx.nextLabel("neg_arg_head");
+    const loop_body = try ctx.nextLabel("neg_arg_body");
+    const loop_exit = try ctx.nextLabel("neg_arg_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const idx_name = try ctx.nextTemp();
+    try builder.load(idx_name, .i64, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const src_offset = try emitLinearizedActualOffset(ctx, builder, idx_val, src_extents, src_multipliers);
+    const src_elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(src_elem_ptr_name, elem_ty, src_ptr, src_offset);
+    const src_val_name = try ctx.nextTemp();
+    try builder.load(src_val_name, elem_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
+    const src_val = ValueRef{ .name = src_val_name, .ty = elem_ty, .is_ptr = false };
+
+    const neg_name = try ctx.nextTemp();
+    const neg_op: []const u8 = switch (elem_ty) {
+        .f32, .f64 => "fsub",
+        .i32, .i64 => "sub",
+        else => return error.UnsupportedIntrinsicType,
+    };
+    try builder.binary(neg_name, neg_op, elem_ty, utils.zeroValue(elem_ty), src_val);
+
+    const dst_elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(dst_elem_ptr_name, elem_ty, dst_ptr, idx_val);
+    try builder.store(.{ .name = neg_name, .ty = elem_ty, .is_ptr = false }, .{ .name = dst_elem_ptr_name, .ty = .ptr, .is_ptr = true });
+
+    const next_name = try ctx.nextTemp();
+    try builder.binary(next_name, "add", .i64, idx_val, i64Const(ctx, 1));
+    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
 }
 
 fn isIntrinsicArrayConversionArg(ctx: *Context, call: ast.CallOrSubscript) bool {

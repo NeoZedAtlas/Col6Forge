@@ -751,6 +751,49 @@ test "emitCall supports intrinsic array conversion over unary-plus section actua
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
 }
 
+test "emitCall materializes unary-minus section actual for descriptor dummy" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+                .requires_descriptor = true,
+                .rank = 1,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lower = try makeLiteral(harness.arena.allocator(), .integer, "1");
+    const upper = try makeLiteral(harness.arena.allocator(), .integer, "4");
+    const stride = try makeLiteral(harness.arena.allocator(), .integer, "2");
+    const range = try harness.arena.allocator().create(Expr);
+    range.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
+    const section = try harness.arena.allocator().create(Expr);
+    section.* = .{ .call_or_subscript = .{ .name = "ARR", .args = @constCast(&[_]*Expr{range}) } };
+    const unary = try harness.arena.allocator().create(Expr);
+    unary.* = .{ .unary = .{ .op = .minus, .expr = section } };
+    _ = try emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{unary}), true);
+
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "alloca i32, i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "sub i32 0") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "store i64 1") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
+}
+
 test "emitCall supports intrinsic array conversion over contiguous multidim actual" {
     const testing = std.testing;
     const allocator = testing.allocator;
