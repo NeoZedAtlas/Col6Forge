@@ -13,10 +13,9 @@ const EmitError = anyerror;
 const io_utils = @import("../utils.zig");
 const expansion = @import("../expansion.zig");
 const dynamic_mod = @import("dynamic.zig");
-const char_format = @import("char_format.zig");
 const write_mod = @import("write.zig");
 const read_mod = @import("read.zig");
-const common = @import("../../../codegen/common.zig");
+const formatted_context = @import("context.zig");
 
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
@@ -26,28 +25,19 @@ const emitReadDynamicFormatStatus = dynamic_mod.emitReadDynamicFormatStatus;
 const emitWriteFormatted = write_mod.emitWriteFormatted;
 const emitReadFormatted = read_mod.emitReadFormatted;
 const emitReadFormattedStatus = read_mod.emitReadFormattedStatus;
-const resolveCharFormatItemsFromExpr = char_format.resolveCharFormatItemsFromExpr;
 const emitKindArray = io_utils.emitKindArray;
 const defaultIntegerKind = io_utils.defaultIntegerKind;
 const defaultIntegerReadKind = io_utils.defaultIntegerReadKind;
-const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
-
-const FormatExprResolution = union(enum) {
-    dynamic_label_var: []const u8,
-    static_items: []const ast.FormatItem,
-    runtime_char_expr: void,
-};
+const RuntimeFormatValue = formatted_context.RuntimeFormatValue;
+const FormatExprResolution = formatted_context.FormatExprResolution;
+const emitRuntimeFormatValue = formatted_context.emitRuntimeFormatValue;
+const resolveFormatExpr = formatted_context.resolveFormatExpr;
 
 const RuntimeCallArgs = struct {
     ptr_array: ValueRef,
     kinds_ptr: ValueRef,
     arg_count: ValueRef,
     heap_allocs: []const ValueRef,
-};
-
-const RuntimeFormatValue = struct {
-    ptr: ValueRef,
-    len: ValueRef,
 };
 
 fn constI32(ctx: *Context, value: i64) EmitError!ValueRef {
@@ -79,88 +69,6 @@ fn emitStackPointerArrayFromValues(ctx: *Context, builder: anytype, ptrs: []cons
         try builder.store(.{ .name = ptr.name, .ty = .ptr, .is_ptr = false }, slot_ptr);
     }
     return arr_ptr;
-}
-
-fn lookupCharArgLen(ctx: *Context, name: []const u8) ?ValueRef {
-    return ctx.char_arg_lens.get(name);
-}
-
-fn emitFormatExprLen(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitError!?ValueRef {
-    switch (fmt_expr.*) {
-        .identifier => |name| {
-            const sym = ctx.findSymbol(name) orelse return null;
-            if (sym.type_kind != .character) return null;
-            if (sym.dims.len > 0) {
-                if (sym.char_len) |len| {
-                    const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch null;
-                    if (elem_count) |count| return try constI32(ctx, @intCast(len * count));
-                }
-            }
-            if (sym.char_len) |len| return try constI32(ctx, @intCast(len));
-            return lookupCharArgLen(ctx, name) orelse try constI32(ctx, 1);
-        },
-        .call_or_subscript => |call| {
-            const sym = ctx.findSymbol(call.name) orelse return null;
-            if (sym.type_kind != .character) return null;
-            if (call.args.len == 0 and sym.dims.len > 0) {
-                if (sym.char_len) |len| {
-                    const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch null;
-                    if (elem_count) |count| return try constI32(ctx, @intCast(len * count));
-                }
-            }
-            if (sym.char_len) |len| return try constI32(ctx, @intCast(len));
-            return lookupCharArgLen(ctx, call.name) orelse try constI32(ctx, 1);
-        },
-        .literal => |lit| switch (lit.kind) {
-            .string => return try constI32(ctx, @intCast(utils.decodedStringLen(lit.text))),
-            .hollerith => {
-                const bytes = utils.hollerithBytes(lit.text) orelse return null;
-                return try constI32(ctx, @intCast(bytes.len));
-            },
-            else => return null,
-        },
-        .substring => |sub| {
-            const sym = ctx.findSymbol(sub.name) orelse return null;
-            if (sym.type_kind != .character) return null;
-
-            var end_val: ValueRef = if (sym.char_len) |len| try constI32(ctx, @intCast(len)) else lookupCharArgLen(ctx, sub.name) orelse try constI32(ctx, 1);
-            if (sub.end) |end_expr| {
-                end_val = try expr.emitExpr(ctx, builder, end_expr);
-                if (end_val.ty != .i32) end_val = try coerceRuntimeI32(ctx, builder, end_val);
-            }
-
-            var start_val = try constI32(ctx, 1);
-            if (sub.start) |start_expr| {
-                start_val = try expr.emitExpr(ctx, builder, start_expr);
-                if (start_val.ty != .i32) start_val = try coerceRuntimeI32(ctx, builder, start_val);
-            }
-
-            const diff_tmp = try ctx.nextTemp();
-            try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
-            const len_tmp = try ctx.nextTemp();
-            try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, try constI32(ctx, 1));
-            return .{ .name = len_tmp, .ty = .i32, .is_ptr = false };
-        },
-        .binary => |bin| {
-            if (bin.op != .concat) return null;
-            const left = try emitFormatExprLen(ctx, builder, bin.left) orelse return null;
-            const right = try emitFormatExprLen(ctx, builder, bin.right) orelse return null;
-            const sum_tmp = try ctx.nextTemp();
-            try builder.binary(sum_tmp, "add", .i32, left, right);
-            return .{ .name = sum_tmp, .ty = .i32, .is_ptr = false };
-        },
-        else => return null,
-    }
-}
-
-fn emitRuntimeFormatValue(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitError!RuntimeFormatValue {
-    const raw_ptr = try expr.emitExpr(ctx, builder, fmt_expr);
-    if (raw_ptr.ty != .ptr) return error.MissingFormatLabel;
-    const fmt_len = try emitFormatExprLen(ctx, builder, fmt_expr) orelse return error.MissingFormatLabel;
-    return .{
-        .ptr = .{ .name = raw_ptr.name, .ty = .ptr, .is_ptr = true },
-        .len = fmt_len,
-    };
 }
 
 fn buildWriteRuntimeArgs(ctx: *Context, builder: anytype, expanded_values: *ExpandedWriteValues) EmitError!RuntimeCallArgs {
@@ -368,20 +276,6 @@ fn emitReadRuntimeFormatExprStatus(
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
 }
 
-fn resolveFormatExpr(ctx: *Context, fmt_expr: *ast.Expr) EmitError!FormatExprResolution {
-    const fmt_ty = try expr.exprType(ctx, fmt_expr);
-    if (fmt_ty == .i32) {
-        if (fmt_expr.* != .identifier) return error.MissingFormatLabel;
-        return .{ .dynamic_label_var = fmt_expr.identifier };
-    }
-    if (fmt_ty != .ptr) return error.MissingFormatLabel;
-
-    if (try resolveCharFormatItemsFromExpr(ctx, fmt_expr)) |items| {
-        return .{ .static_items = items };
-    }
-    return .{ .runtime_char_expr = {} };
-}
-
 pub fn emitWriteFormatExpr(
     ctx: *Context,
     builder: anytype,
@@ -423,11 +317,11 @@ pub fn emitWriteFormatExpr(
                 expanded_values,
             );
         },
-        .runtime_char_expr => {
+        .runtime_char_expr => |runtime_fmt_expr| {
             return emitWriteRuntimeFormatExpr(
                 ctx,
                 builder,
-                fmt_expr,
+                runtime_fmt_expr,
                 unit_value,
                 unit_char_len,
                 unit_record_count,
@@ -480,11 +374,11 @@ pub fn emitReadFormatExpr(
                 expanded,
             );
         },
-        .runtime_char_expr => {
+        .runtime_char_expr => |runtime_fmt_expr| {
             return emitReadRuntimeFormatExpr(
                 ctx,
                 builder,
-                fmt_expr,
+                runtime_fmt_expr,
                 unit_value,
                 unit_char_len,
                 unit_record_count,
@@ -537,11 +431,11 @@ pub fn emitReadFormatExprStatus(
                 expanded,
             );
         },
-        .runtime_char_expr => {
+        .runtime_char_expr => |runtime_fmt_expr| {
             return emitReadRuntimeFormatExprStatus(
                 ctx,
                 builder,
-                fmt_expr,
+                runtime_fmt_expr,
                 unit_value,
                 unit_char_len,
                 unit_record_count,

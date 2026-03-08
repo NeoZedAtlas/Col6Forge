@@ -21,6 +21,7 @@ const appendScanfLiteral = io_utils.appendScanfLiteral;
 const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
+const emitRuntimeFormatValue = formatted_context.emitRuntimeFormatValue;
 
 const StreamFormatSource = formatted_context.StreamFormatSource;
 
@@ -57,31 +58,6 @@ fn isRuntimeImpliedDo(ctx: *Context, implied: ast.ImpliedDo) bool {
 
 fn isStaticImpliedDoBound(ctx: *Context, node: *ast.Expr) bool {
     return (evalConstIntSem(ctx, node) catch null) != null or intLiteralValue(node) != null;
-}
-
-fn emitRuntimeFormatValue(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitError!struct { ptr: ValueRef, len: ValueRef } {
-    const raw_ptr = try expr.emitExpr(ctx, builder, fmt_expr);
-    if (raw_ptr.ty != .ptr) return error.MissingFormatLabel;
-    const fmt_len = blk: {
-        switch (fmt_expr.*) {
-            .identifier => |name| {
-                const sym = ctx.findSymbol(name) orelse break :blk null;
-                if (sym.type_kind != .character) break :blk null;
-                if (sym.char_len) |len| break :blk try ctx.constI32(@intCast(len));
-                if (ctx.char_arg_lens.get(name)) |len_val| break :blk len_val;
-                break :blk try ctx.constI32(1);
-            },
-            .literal => |lit| switch (lit.kind) {
-                .string => break :blk try ctx.constI32(@intCast(utils.decodedStringLen(lit.text))),
-                else => break :blk null,
-            },
-            else => break :blk null,
-        }
-    } orelse return error.MissingFormatLabel;
-    return .{
-        .ptr = .{ .name = raw_ptr.name, .ty = .ptr, .is_ptr = true },
-        .len = fmt_len,
-    };
 }
 
 fn emitStreamBegin(
