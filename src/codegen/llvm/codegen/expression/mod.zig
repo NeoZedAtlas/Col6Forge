@@ -838,6 +838,53 @@ test "emitCall materializes binary section-plus-scalar actual for descriptor dum
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
 }
 
+test "emitCall supports intrinsic array conversion over binary section-plus-scalar actual" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.real, .double_precision, null),
+                .requires_descriptor = true,
+                .rank = 1,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lower = try makeLiteral(harness.arena.allocator(), .integer, "1");
+    const upper = try makeLiteral(harness.arena.allocator(), .integer, "4");
+    const stride = try makeLiteral(harness.arena.allocator(), .integer, "2");
+    const range = try harness.arena.allocator().create(Expr);
+    range.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride } };
+    const section = try harness.arena.allocator().create(Expr);
+    section.* = .{ .call_or_subscript = .{ .name = "ARR", .args = @constCast(&[_]*Expr{range}) } };
+    const scalar = try makeLiteral(harness.arena.allocator(), .integer, "1");
+    const sum = try harness.arena.allocator().create(Expr);
+    sum.* = .{ .binary = .{ .op = .add, .left = section, .right = scalar } };
+    const convert = try harness.arena.allocator().create(Expr);
+    convert.* = .{ .call_or_subscript = .{ .name = "DBLE", .args = @constCast(&[_]*Expr{sum}) } };
+    _ = try emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{convert}), true);
+
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "alloca i32, i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "add i32") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "@malloc") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "store double") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
+}
+
 test "emitCall supports intrinsic array conversion over contiguous multidim actual" {
     const testing = std.testing;
     const allocator = testing.allocator;

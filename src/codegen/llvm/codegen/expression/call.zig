@@ -488,7 +488,7 @@ fn analyzeIntrinsicArrayConversionActual(
     call: ast.CallOrSubscript,
 ) anyerror!?SectionActualInfo {
     if (call.args.len != 1) return null;
-    const src_actual = (try analyzeArrayActual(ctx, builder, call.args[0])) orelse return null;
+    const src_actual = (try resolveArrayActual(ctx, builder, call.args[0])) orelse return null;
     const multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents);
     return .{
         .base_ptr = .{ .name = "", .ty = .ptr, .is_ptr = true },
@@ -506,6 +506,21 @@ fn analyzeArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?Ar
         .extents = section.extents,
         .multipliers = section.multipliers,
     };
+}
+
+fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualInfo {
+    if (try analyzeArrayActual(ctx, builder, expr)) |actual| return actual;
+    if (try emitMaterializedArrayExprActual(ctx, builder, expr)) |materialized| {
+        const actual = materialized.descriptor_actual orelse return null;
+        const elem_ty = try casting.exprType(ctx, expr);
+        return .{
+            .base_ptr = materialized.ptr,
+            .elem_ty = elem_ty,
+            .extents = actual.extents,
+            .multipliers = actual.multipliers,
+        };
+    }
+    return null;
 }
 
 fn arrayActualElementType(ctx: *Context, expr: *Expr) !?IRType {
@@ -701,7 +716,7 @@ fn i64Const(ctx: *Context, value: i64) ValueRef {
 fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call: ast.CallOrSubscript) !ArgPointerResult {
     if (call.args.len != 1) return error.InvalidIntrinsicCall;
     const dst_ty = intrinsicArrayConversionType(call.name) orelse return error.UnsupportedIntrinsicType;
-    const src_actual = (try analyzeArrayActual(ctx, builder, call.args[0])) orelse return error.UnsupportedIntrinsicType;
+    const src_actual = (try resolveArrayActual(ctx, builder, call.args[0])) orelse return error.UnsupportedIntrinsicType;
     const src_ptr = src_actual.base_ptr;
     const src_ty = src_actual.elem_ty;
     const elem_count = try emitExtentProductI64(ctx, builder, src_actual.extents);
