@@ -418,7 +418,7 @@ fn intrinsicReturnType(
 }
 
 fn isArraySectionSubstring(sym: symbols.Symbol, sub: ast.SubstringExpr) bool {
-    return sym.type_kind != .character and sub.args.len == 0 and sub.start != null and sub.end != null;
+    return !sym.isCharacter() and sub.args.len == 0 and sub.start != null and sub.end != null;
 }
 
 fn invalidateExprTypeCache(self: *context.Context, expr: *ast.Expr) void {

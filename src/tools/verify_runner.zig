@@ -626,13 +626,10 @@ fn isFortranSource(path: []const u8) bool {
 }
 
 fn sanitizeWorkName(allocator: std.mem.Allocator, rel_path: []const u8) ![]const u8 {
-    const dot_index = std.mem.lastIndexOfScalar(u8, rel_path, '.') orelse rel_path.len;
-    const stem = rel_path[0..dot_index];
-
-    var buf = try allocator.alloc(u8, stem.len);
-    for (stem, 0..) |c, i| {
+    var buf = try allocator.alloc(u8, rel_path.len);
+    for (rel_path, 0..) |c, i| {
         buf[i] = switch (c) {
-            '/', '\\', ':' => '_',
+            '/', '\\', ':', '.' => '_',
             else => c,
         };
     }
@@ -1326,6 +1323,19 @@ test "linesEquivalentIgnoringWhitespace keeps token boundaries" {
     try testing.expect(linesEquivalentIgnoringWhitespace("  A   =   B  ", "A = B"));
     try testing.expect(!linesEquivalentIgnoringWhitespace("10 20", "1020"));
     try testing.expect(!linesEquivalentIgnoringWhitespace("A B C", "A BC"));
+}
+
+test "sanitizeWorkName keeps extension distinctions to avoid workdir collisions" {
+    const testing = std.testing;
+
+    const f_name = try sanitizeWorkName(testing.allocator, "fcvs21_f95/FM405.f");
+    defer testing.allocator.free(f_name);
+    const for_name = try sanitizeWorkName(testing.allocator, "FCSV78/FM405.FOR");
+    defer testing.allocator.free(for_name);
+
+    try testing.expect(!std.mem.eql(u8, f_name, for_name));
+    try testing.expect(std.mem.indexOfScalar(u8, f_name, '.') == null);
+    try testing.expect(std.mem.indexOfScalar(u8, for_name, '.') == null);
 }
 
 fn processCase(

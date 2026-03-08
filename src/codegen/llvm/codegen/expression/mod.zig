@@ -664,6 +664,45 @@ test "emitCall materializes contiguous descriptor arrays for intrinsic array con
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
 }
 
+test "emitCall falls back to unit character length for descriptor-scaled character section actual" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null),
+                .requires_descriptor = true,
+                .rank = 1,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lower = try makeLiteral(harness.arena.allocator(), .integer, "2");
+    const upper = try makeLiteral(harness.arena.allocator(), .integer, "4");
+    const range = try harness.arena.allocator().create(Expr);
+    range.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = null } };
+    const section = try harness.arena.allocator().create(Expr);
+    section.* = .{ .call_or_subscript = .{ .name = "CARR", .args = @constCast(&[_]*Expr{range}) } };
+    _ = try emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{section}), true);
+
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "icmp ne i64 1, 1") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "getelementptr i8, ptr %carr") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
+}
+
 test "emitSubscriptPtr, emitIndex, and emitDimValue enforce subscripts" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -540,7 +540,7 @@ fn charSymbolLengthValueI64(
         if (len_val.ty == .i64) return len_val;
         return casting.coerce(ctx, builder, len_val, .i64);
     }
-    return error.UnsupportedDescriptorActualArgument;
+    return i64Const(ctx, 1);
 }
 
 fn i32Const(ctx: *Context, value: i64) !ValueRef {

@@ -29,7 +29,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             _ = std.fmt.parseInt(i64, assign.label, 10) catch return error.InvalidLabelValue;
             const idx = resolve_symbols.findSymbolIndex(self, assign.target) orelse return error.AssignmentTypeMismatch;
             const sym = self.symbols.items[idx];
-            if (sym.type_kind != .integer or sym.dims.len != 0) return error.AssignmentTypeMismatch;
+            if (sym.loweredKind() != .integer or sym.dims.len != 0) return error.AssignmentTypeMismatch;
         },
         .use_stmt => {},
         .call => |call| {

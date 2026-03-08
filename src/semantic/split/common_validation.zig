@@ -57,7 +57,7 @@ pub fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_
                             const sym = symbol_lookup.lookupSemanticSymbol(sem_unit, &symbol_index, item.name) orelse return error.CommonBlockMismatch;
                             const size = try commonItemSize(sem_unit, sym);
                             try sig_ptr.items.append(.{
-                                .type_kind = sym.type_kind,
+                                .type_kind = sym.loweredKind(),
                                 .type_spec = sym.type_spec,
                                 .size = size,
                             });
@@ -162,14 +162,14 @@ pub fn setCommonMismatchDiagnostic(source: ast.DeclSource) void {
 }
 
 fn commonItemSize(sem_unit: *const SemanticUnit, sym: Symbol) !usize {
-    const elem_size: usize = switch (sym.type_kind) {
+    const elem_size: usize = switch (sym.loweredKind()) {
         .integer => 4,
         .real => 4,
         .double_precision => 8,
         .complex => 8,
         .complex_double => 16,
         .logical => 4,
-        .character => sym.type_spec.char_len orelse sym.char_len orelse 1,
+        .character => sym.effectiveCharLen() orelse 1,
     };
     const count = try const_eval_bridge.commonElementCount(sem_unit, sym.dims);
     const mul = @mulWithOverflow(elem_size, count);
