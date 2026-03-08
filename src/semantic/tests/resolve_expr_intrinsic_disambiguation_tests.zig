@@ -201,6 +201,22 @@ test "resolve_expr generic MAX does not poison later integer subscripts" {
     _ = try parseAndAnalyze(arena.allocator(), source);
 }
 
+test "resolve_expr accepts generic SIGN with DOUBLE PRECISION and DBLE complex operand" {
+    const testing = std.testing;
+    const source =
+        "      SUBROUTINE S(N,JC)\n" ++
+        "      INTEGER N, JC\n" ++
+        "      COMPLEX*16 U(10,10), WORK(100)\n" ++
+        "      DOUBLE PRECISION ONE\n" ++
+        "      PARAMETER ( ONE = 1.0D+0 )\n" ++
+        "      WORK( 2*N+JC ) = SIGN( ONE, DBLE( U( JC, JC ) ) )\n" ++
+        "      END\n";
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    _ = try parseAndAnalyze(arena.allocator(), source);
+}
+
 test "resolve_expr disambiguates A(1:3) as array section without mutating AST variant" {
     const testing = std.testing;
     const source =

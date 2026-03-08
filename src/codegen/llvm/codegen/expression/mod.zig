@@ -69,7 +69,7 @@ const TestHarness = struct {
         arr2_dims[0] = dim_expr;
         arr2_dims[1] = dim_expr;
 
-        const symbols = try a.alloc(sema.Symbol, 4);
+        const symbols = try a.alloc(sema.Symbol, 5);
         symbols[0] = .{
             .name = "A",
             .type_kind = .integer,
@@ -115,6 +115,18 @@ const TestHarness = struct {
             .storage = .dummy,
             .is_external = false,
             .is_intrinsic = false,
+            .const_value = null,
+            .type_explicit = true,
+        };
+        symbols[4] = .{
+            .name = "DBLE",
+            .type_kind = .double_precision,
+            .dims = empty_exprs,
+            .char_len = null,
+            .kind = .function,
+            .storage = .local,
+            .is_external = false,
+            .is_intrinsic = true,
             .const_value = null,
             .type_explicit = true,
         };
@@ -613,6 +625,42 @@ test "emitCall scales character section descriptor base pointer by runtime eleme
 
     try testing.expect(std.mem.indexOf(u8, buffer.items, "sext i32 %clen to i64") != null);
     try testing.expect(std.mem.indexOf(u8, buffer.items, "getelementptr i8, ptr %carr") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
+}
+
+test "emitCall materializes contiguous descriptor arrays for intrinsic array conversion actual" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.real, .double_precision, null),
+                .requires_descriptor = true,
+                .rank = 1,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const src = try makeIdent(harness.arena.allocator(), "ARR");
+    const convert = try harness.arena.allocator().create(Expr);
+    convert.* = .{ .call_or_subscript = .{ .name = "DBLE", .args = @constCast(&[_]*Expr{src}) } };
+    _ = try emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{convert}), true);
+
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "@malloc") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "store i64 1") != null);
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
 }
 

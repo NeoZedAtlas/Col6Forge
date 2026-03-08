@@ -305,12 +305,8 @@ fn analyzeSectionActual(ctx: *Context, builder: anytype, expr: *Expr) !?SectionA
         .identifier => |name| blk: {
             const sym = ctx.findSymbol(name) orelse break :blk null;
             if (sym.dims.len == 0) break :blk null;
-            const extents = try ctx.allocator.alloc(ValueRef, sym.dims.len);
-            const multipliers = try ctx.allocator.alloc(ValueRef, sym.dims.len);
-            for (sym.dims, 0..) |_, idx| {
-                extents[idx] = try memory.emitSymbolDimExtent(ctx, builder, sym, idx);
-                multipliers[idx] = try memory.emitSymbolDimMultiplier(ctx, builder, sym, idx);
-            }
+            const extents = try emitSymbolDimExtents(ctx, builder, sym);
+            const multipliers = try emitSymbolDimMultipliers(ctx, builder, sym);
             break :blk .{
                 .base_ptr = try ctx.getPointer(name),
                 .extents = extents,
@@ -318,6 +314,10 @@ fn analyzeSectionActual(ctx: *Context, builder: anytype, expr: *Expr) !?SectionA
             };
         },
         .call_or_subscript => |call| blk: {
+            if (isIntrinsicArrayConversionArg(ctx, call)) {
+                const src_actual = (try analyzeIntrinsicArrayConversionActual(ctx, builder, call)) orelse break :blk null;
+                break :blk src_actual;
+            }
             const sym = ctx.findSymbol(call.name) orelse break :blk null;
             if (sym.dims.len == 0 or call.args.len != sym.dims.len) break :blk null;
 
@@ -356,6 +356,59 @@ fn analyzeSectionActual(ctx: *Context, builder: anytype, expr: *Expr) !?SectionA
         },
         else => null,
     };
+}
+
+fn analyzeIntrinsicArrayConversionActual(
+    ctx: *Context,
+    builder: anytype,
+    call: ast.CallOrSubscript,
+) !?SectionActualInfo {
+    if (call.args.len != 1) return null;
+
+    const src_name = switch (call.args[0].*) {
+        .identifier => |name| name,
+        else => return null,
+    };
+    const src_sym = ctx.findSymbol(src_name) orelse return null;
+    if (src_sym.dims.len == 0) return null;
+
+    const extents = try emitSymbolDimExtents(ctx, builder, src_sym);
+    const multipliers = try emitContiguousMultipliers(ctx, builder, extents);
+    return .{
+        .base_ptr = .{ .name = "", .ty = .ptr, .is_ptr = true },
+        .extents = extents,
+        .multipliers = multipliers,
+    };
+}
+
+fn emitSymbolDimExtents(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) ![]ValueRef {
+    const extents = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    for (sym.dims, 0..) |_, idx| {
+        extents[idx] = try memory.emitSymbolDimExtent(ctx, builder, sym, idx);
+    }
+    return extents;
+}
+
+fn emitSymbolDimMultipliers(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) ![]ValueRef {
+    const multipliers = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    for (sym.dims, 0..) |_, idx| {
+        multipliers[idx] = try memory.emitSymbolDimMultiplier(ctx, builder, sym, idx);
+    }
+    return multipliers;
+}
+
+fn emitContiguousMultipliers(
+    ctx: *Context,
+    builder: anytype,
+    extents: []const ValueRef,
+) ![]ValueRef {
+    const multipliers = try ctx.allocator.alloc(ValueRef, extents.len);
+    var stride = i64Const(ctx, 1);
+    for (extents, 0..) |extent, idx| {
+        multipliers[idx] = stride;
+        stride = try emitMulI64(ctx, builder, stride, extent);
+    }
+    return multipliers;
 }
 
 fn emitOwnedHeapArgFrees(ctx: *Context, builder: anytype, owned_heap_args: []const ValueRef) !void {

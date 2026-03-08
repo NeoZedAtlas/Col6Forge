@@ -191,10 +191,16 @@ fn homogeneousArgsReturnType(args: []const symbols.TypeSpec) !symbols.TypeSpec {
 }
 
 fn sameCallSignatureType(a: symbols.TypeSpec, b: symbols.TypeSpec) bool {
-    return a.lowered_kind == b.lowered_kind and
-        a.kind_value == b.kind_value and
-        a.char_len_kind == b.char_len_kind and
+    if (a.lowered_kind != b.lowered_kind) return false;
+    if (!compatibleKindValue(a.kind_value, b.kind_value)) return false;
+    if (a.lowered_kind != .character) return true;
+    return a.char_len_kind == b.char_len_kind and
         a.char_len == b.char_len;
+}
+
+fn compatibleKindValue(a: ?i64, b: ?i64) bool {
+    if (a == null or b == null) return true;
+    return a == b;
 }
 
 fn isNumericType(kind: ast.TypeKind) bool {
@@ -222,5 +228,27 @@ test "inferResultType keeps generic MAX typed per call signature" {
     try testing.expectError(
         error.InvalidArithmeticOperands,
         inferResultType("max", fixedTypeSpec(.real), &.{ int_spec, real_spec }),
+    );
+}
+
+test "inferResultType accepts generic SIGN when default double mixes with DBLE result" {
+    const testing = std.testing;
+
+    const default_double = symbols.TypeSpec.fromResolvedKind(.double_precision, .double_precision, null);
+    const dble_result = symbols.TypeSpec.fromResolvedKind(.real, .double_precision, 8);
+
+    const inferred = try inferResultType("SIGN", fixedTypeSpec(.real), &.{ default_double, dble_result });
+    try testing.expectEqual(ast.TypeKind.double_precision, inferred.lowered_kind);
+}
+
+test "inferResultType still rejects conflicting explicit kind values for homogeneous intrinsic" {
+    const testing = std.testing;
+
+    const int4 = symbols.TypeSpec.fromResolvedKind(.integer, .integer, 4);
+    const int8 = symbols.TypeSpec.fromResolvedKind(.integer, .integer, 8);
+
+    try testing.expectError(
+        error.InvalidArithmeticOperands,
+        inferResultType("MAX", fixedTypeSpec(.integer), &.{ int4, int8 }),
     );
 }
