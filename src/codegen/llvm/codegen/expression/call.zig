@@ -5,6 +5,7 @@ const context = @import("../context.zig");
 const common = @import("../common.zig");
 const memory = @import("memory.zig");
 const dispatch = @import("dispatch.zig");
+const binary = @import("binary.zig");
 const utils = @import("../utils.zig");
 const llvm_types = @import("../../types.zig");
 const casting = @import("casting.zig");
@@ -301,12 +302,65 @@ fn materializeKnownActualDescriptor(
 
 fn emitMaterializedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?ArgPointerResult {
     return switch (expr.*) {
+        .binary => |bin| emitBinaryArrayExprActual(ctx, builder, expr, bin),
         .unary => |un| switch (un.op) {
             .plus => emitMaterializedArrayExprActual(ctx, builder, un.expr),
             .minus => emitNegatedArrayExprActual(ctx, builder, un.expr),
             else => null,
         },
         else => null,
+    };
+}
+
+fn emitBinaryArrayExprActual(
+    ctx: *Context,
+    builder: anytype,
+    expr: *Expr,
+    bin: ast.BinaryExpr,
+) !?ArgPointerResult {
+    switch (bin.op) {
+        .add, .sub, .mul, .div => {},
+        else => return null,
+    }
+
+    const left_array = try analyzeArrayActual(ctx, builder, bin.left);
+    const right_array = try analyzeArrayActual(ctx, builder, bin.right);
+    if (left_array == null and right_array == null) return null;
+    if (left_array != null and right_array != null) return null;
+
+    const array_actual = left_array orelse right_array.?;
+    const scalar_expr = if (left_array == null) bin.left else bin.right;
+    const scalar_raw = try dispatch.emitExpr(ctx, builder, scalar_expr);
+    if (scalar_raw.ty == .ptr) return null;
+
+    const result_ty = try casting.exprType(ctx, expr);
+    if (!isMaterializableArrayElementType(result_ty)) return null;
+
+    const elem_count = try emitExtentProductI64(ctx, builder, array_actual.extents);
+    const tmp_name = try ctx.nextTemp();
+    try builder.allocaArrayValue(tmp_name, result_ty, elem_count);
+    const dst_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
+    const multipliers = try emitContiguousMultipliers(ctx, builder, array_actual.extents);
+
+    try emitBinaryArrayActualLoop(
+        ctx,
+        builder,
+        bin.op,
+        array_actual,
+        scalar_raw,
+        left_array == null,
+        dst_ptr,
+        result_ty,
+        elem_count,
+    );
+
+    return .{
+        .ptr = dst_ptr,
+        .descriptor_actual = .{
+            .base_ptr = dst_ptr,
+            .extents = array_actual.extents,
+            .multipliers = multipliers,
+        },
     };
 }
 
@@ -949,6 +1003,69 @@ fn isNegatableArrayElementType(ty: IRType) bool {
         .i32, .i64, .f32, .f64 => true,
         else => false,
     };
+}
+
+fn isMaterializableArrayElementType(ty: IRType) bool {
+    return switch (ty) {
+        .i1, .i32, .i64, .f32, .f64, .complex_f32, .complex_f64 => true,
+        else => false,
+    };
+}
+
+fn emitBinaryArrayActualLoop(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    src_actual: ArrayActualInfo,
+    scalar_raw: ValueRef,
+    scalar_on_left: bool,
+    dst_ptr: ValueRef,
+    result_ty: IRType,
+    elem_count: ValueRef,
+) !void {
+    const idx_ptr = try ctx.nextTemp();
+    try builder.alloca(idx_ptr, .i64);
+    try builder.store(i64Const(ctx, 0), .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+
+    const loop_head = try ctx.nextLabel("binary_arg_head");
+    const loop_body = try ctx.nextLabel("binary_arg_body");
+    const loop_exit = try ctx.nextLabel("binary_arg_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const idx_name = try ctx.nextTemp();
+    try builder.load(idx_name, .i64, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const src_offset = try emitLinearizedActualOffset(ctx, builder, idx_val, src_actual.extents, src_actual.multipliers);
+    const src_elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(src_elem_ptr_name, src_actual.elem_ty, src_actual.base_ptr, src_offset);
+    const src_val_name = try ctx.nextTemp();
+    try builder.load(src_val_name, src_actual.elem_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
+    const src_val = ValueRef{ .name = src_val_name, .ty = src_actual.elem_ty, .is_ptr = false };
+
+    const lhs = if (scalar_on_left) scalar_raw else src_val;
+    const rhs = if (scalar_on_left) src_val else scalar_raw;
+    const result_raw = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+    const result_val = if (result_raw.ty == result_ty)
+        result_raw
+    else
+        try casting.coerce(ctx, builder, result_raw, result_ty);
+
+    const dst_elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(dst_elem_ptr_name, result_ty, dst_ptr, idx_val);
+    try builder.store(result_val, .{ .name = dst_elem_ptr_name, .ty = .ptr, .is_ptr = true });
+
+    const next_name = try ctx.nextTemp();
+    try builder.binary(next_name, "add", .i64, idx_val, i64Const(ctx, 1));
+    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
 }
 
 fn emitNegatedArrayActualLoop(
