@@ -25,10 +25,10 @@ pub const PreparedUnitContext = struct {
     unit_i32: ValueRef,
 };
 
-pub const FormatDispatch = union(enum) {
+pub const FormatPlan = union(enum) {
     static_items: []const ast.FormatItem,
     dynamic_label_var: []const u8,
-    runtime_expr: *ast.Expr,
+    runtime_char_expr: *ast.Expr,
 };
 
 pub const StreamFormatSource = union(enum) {
@@ -38,7 +38,7 @@ pub const StreamFormatSource = union(enum) {
 
 pub const PreparedFormatContext = struct {
     unit: PreparedUnitContext,
-    dispatch: FormatDispatch,
+    plan: FormatPlan,
 };
 
 pub const RuntimeFormatValue = struct {
@@ -72,10 +72,10 @@ pub fn prepareUnitContext(
     };
 }
 
-pub fn resolveFormatDispatch(
+pub fn resolveFormatPlan(
     ctx: *Context,
     format_spec: ast.FormatSpec,
-) EmitError!FormatDispatch {
+) EmitError!FormatPlan {
     return switch (format_spec) {
         .label => |label| {
             if (ctx.formats.get(label)) |fmt_info| return .{ .static_items = fmt_info.items };
@@ -89,7 +89,11 @@ pub fn resolveFormatDispatch(
             return error.MissingFormatLabel;
         },
         .inline_items => |items| .{ .static_items = items },
-        .expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
+        .expr => |fmt_expr| switch (try resolveFormatExpr(ctx, fmt_expr)) {
+            .static_items => |items| .{ .static_items = items },
+            .dynamic_label_var => |label| .{ .dynamic_label_var = label },
+            .runtime_char_expr => |runtime_fmt_expr| .{ .runtime_char_expr = runtime_fmt_expr },
+        },
         .none => unreachable,
         .list_directed => unreachable,
     };
@@ -103,14 +107,14 @@ pub fn prepareFormattedContext(
 ) EmitError!PreparedFormatContext {
     return .{
         .unit = try prepareUnitContext(ctx, builder, unit),
-        .dispatch = try resolveFormatDispatch(ctx, format_spec),
+        .plan = try resolveFormatPlan(ctx, format_spec),
     };
 }
 
-pub fn streamFormatSource(dispatch: FormatDispatch) ?StreamFormatSource {
-    return switch (dispatch) {
+pub fn streamFormatSource(plan: FormatPlan) ?StreamFormatSource {
+    return switch (plan) {
         .static_items => |items| .{ .static_items = items },
-        .runtime_expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
+        .runtime_char_expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
         .dynamic_label_var => null,
     };
 }

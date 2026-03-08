@@ -28,8 +28,6 @@ const emitReadDynamicFormat = formatted.emitReadDynamicFormat;
 const emitReadDynamicFormatStatus = formatted.emitReadDynamicFormatStatus;
 const emitReadFormatExpr = formatted.emitReadFormatExpr;
 const emitReadFormatExprStatus = formatted.emitReadFormatExprStatus;
-const FormatDispatch = formatted.FormatDispatch;
-const PreparedUnitContext = formatted.PreparedUnitContext;
 const PreparedFormatContext = formatted.PreparedFormatContext;
 const prepareFormattedContext = formatted.prepareFormattedContext;
 const streamFormatSource = formatted.streamFormatSource;
@@ -112,7 +110,7 @@ fn emitPreparedFormattedWrite(
     prepared: PreparedWriteContext,
 ) EmitError!void {
     if (prepared.has_runtime_implied_do) {
-        switch (prepared.formatted.dispatch) {
+        switch (prepared.formatted.plan) {
             .static_items => |items| return emitWriteFormattedStreamStatic(
                 ctx,
                 builder,
@@ -124,11 +122,11 @@ fn emitPreparedFormattedWrite(
                 prepared.formatted.unit.unit_i32,
                 items,
             ),
-            .runtime_expr, .dynamic_label_var => return error.UnsupportedImpliedDo,
+            .runtime_char_expr, .dynamic_label_var => return error.UnsupportedImpliedDo,
         }
     }
 
-    switch (prepared.formatted.dispatch) {
+    switch (prepared.formatted.plan) {
         .static_items => |items| {
             if (try emitTrailingDVectorFormattedWrite(ctx, builder, write, prepared.formatted.unit.unit_value, prepared.formatted.unit.unit_char_len, prepared.formatted.unit.unit_record_count, prepared.formatted.unit.is_internal, prepared.formatted.unit.unit_i32, items)) {
                 return;
@@ -167,7 +165,7 @@ fn emitPreparedFormattedWrite(
                 &expanded_values,
             );
         },
-        .runtime_expr => |fmt_expr| {
+        .runtime_char_expr => |fmt_expr| {
             var expanded_values = try expandWriteArgs(ctx, builder, write.args);
             defer expanded_values.deinit();
             return emitWriteFormatExpr(
@@ -1058,7 +1056,7 @@ fn emitPreparedFormattedRead(
     prepared: PreparedReadContext,
 ) EmitError!ValueRef {
     if (prepared.has_runtime_implied_do) {
-        const format_source = streamFormatSource(prepared.formatted.dispatch) orelse return error.UnsupportedImpliedDo;
+        const format_source = streamFormatSource(prepared.formatted.plan) orelse return error.UnsupportedImpliedDo;
         return emitReadFormattedStream(
             ctx,
             builder,
@@ -1076,7 +1074,7 @@ fn emitPreparedFormattedRead(
     var expanded = try expandReadTargets(ctx, builder, read.args);
     defer expanded.deinit();
 
-    return switch (prepared.formatted.dispatch) {
+    return switch (prepared.formatted.plan) {
         .static_items => |items| if (prepared.needs_status)
             try emitReadFormattedStatus(
                 ctx,
@@ -1133,7 +1131,7 @@ fn emitPreparedFormattedRead(
             );
             break :blk ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
         },
-        .runtime_expr => |fmt_expr| if (prepared.needs_status)
+        .runtime_char_expr => |fmt_expr| if (prepared.needs_status)
             try emitReadFormatExprStatus(
                 ctx,
                 builder,
