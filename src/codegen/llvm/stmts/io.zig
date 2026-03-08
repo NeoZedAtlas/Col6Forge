@@ -21,10 +21,13 @@ const format_items = @import("../../../format/items.zig");
 const emitWriteFormatted = formatted.emitWriteFormatted;
 const emitWriteFormattedStreamStatic = formatted.emitWriteFormattedStreamStatic;
 const emitWriteFormatPlan = formatted.emitWriteFormatPlan;
+const emitWritePreparedFormatPlan = formatted.emitWritePreparedFormatPlan;
 const emitReadFormatted = formatted.emitReadFormatted;
 const emitReadFormattedStatus = formatted.emitReadFormattedStatus;
 const emitReadFormatPlan = formatted.emitReadFormatPlan;
 const emitReadFormatPlanStatus = formatted.emitReadFormatPlanStatus;
+const emitReadPreparedFormatPlan = formatted.emitReadPreparedFormatPlan;
+const emitReadPreparedFormatPlanStatus = formatted.emitReadPreparedFormatPlanStatus;
 const PreparedFormatContext = formatted.PreparedFormatContext;
 const prepareFormattedContext = formatted.prepareFormattedContext;
 const streamFormatSource = formatted.streamFormatSource;
@@ -106,29 +109,31 @@ fn emitPreparedFormattedWrite(
     write: ast.WriteStmt,
     prepared: PreparedWriteContext,
 ) EmitError!void {
+    var prepared_format = prepared.formatted;
+    defer prepared_format.deinit();
     if (prepared.has_runtime_implied_do) {
-        switch (prepared.formatted.plan) {
+        switch (prepared_format.exec_plan) {
             .static_items => |items| return emitWriteFormattedStreamStatic(
                 ctx,
                 builder,
                 write,
-                prepared.formatted.unit.unit_value,
-                prepared.formatted.unit.unit_char_len,
-                prepared.formatted.unit.unit_record_count,
-                prepared.formatted.unit.is_internal,
-                prepared.formatted.unit.unit_i32,
+                prepared_format.unit.unit_value,
+                prepared_format.unit.unit_char_len,
+                prepared_format.unit.unit_record_count,
+                prepared_format.unit.is_internal,
+                prepared_format.unit.unit_i32,
                 items,
             ),
-            .runtime_char_expr, .dynamic_label_var => return error.UnsupportedImpliedDo,
+            .runtime_char_expr, .dynamic_label => return error.UnsupportedImpliedDo,
         }
     }
 
-    switch (prepared.formatted.plan) {
+    switch (prepared_format.exec_plan) {
         .static_items => |items| {
-            if (try emitTrailingDVectorFormattedWrite(ctx, builder, write, prepared.formatted.unit.unit_value, prepared.formatted.unit.unit_char_len, prepared.formatted.unit.unit_record_count, prepared.formatted.unit.is_internal, prepared.formatted.unit.unit_i32, items)) {
+            if (try emitTrailingDVectorFormattedWrite(ctx, builder, write, prepared_format.unit.unit_value, prepared_format.unit.unit_char_len, prepared_format.unit.unit_record_count, prepared_format.unit.is_internal, prepared_format.unit.unit_i32, items)) {
                 return;
             }
-            if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, prepared.formatted.unit.unit_i32, prepared.formatted.unit.is_internal, items)) {
+            if (try emitDynamicImpliedDoFormattedWrite(ctx, builder, write, prepared_format.unit.unit_i32, prepared_format.unit.is_internal, items)) {
                 return;
             }
             var expanded_values = try expandWriteArgs(ctx, builder, write.args);
@@ -137,19 +142,19 @@ fn emitPreparedFormattedWrite(
                 ctx,
                 builder,
                 write,
-                prepared.formatted.unit.unit_value,
-                prepared.formatted.unit.unit_char_len,
-                prepared.formatted.unit.unit_record_count,
-                prepared.formatted.unit.is_internal,
-                prepared.formatted.unit.unit_i32,
+                prepared_format.unit.unit_value,
+                prepared_format.unit.unit_char_len,
+                prepared_format.unit.unit_record_count,
+                prepared_format.unit.is_internal,
+                prepared_format.unit.unit_i32,
                 items,
                 &expanded_values,
             );
         },
-        .dynamic_label_var, .runtime_char_expr => {
+        .dynamic_label, .runtime_char_expr => {
             var expanded_values = try expandWriteArgs(ctx, builder, write.args);
             defer expanded_values.deinit();
-            return emitWriteFormatPlan(ctx, builder, write, prepared.formatted.plan, prepared.formatted.unit.unit_value, prepared.formatted.unit.unit_char_len, prepared.formatted.unit.unit_record_count, prepared.formatted.unit.is_internal, prepared.formatted.unit.unit_i32, &expanded_values);
+            return emitWritePreparedFormatPlan(ctx, builder, write, prepared_format.exec_plan, prepared_format.unit.unit_value, prepared_format.unit.unit_char_len, prepared_format.unit.unit_record_count, prepared_format.unit.is_internal, prepared_format.unit.unit_i32, &expanded_values);
         },
     }
 }
@@ -1025,17 +1030,19 @@ fn emitPreparedFormattedRead(
     read: ast.ReadStmt,
     prepared: PreparedReadContext,
 ) EmitError!ValueRef {
+    var prepared_format = prepared.formatted;
+    defer prepared_format.deinit();
     if (prepared.has_runtime_implied_do) {
-        const format_source = streamFormatSource(prepared.formatted.plan) orelse return error.UnsupportedImpliedDo;
+        const format_source = streamFormatSource(prepared_format.exec_plan) orelse return error.UnsupportedImpliedDo;
         return emitReadFormattedStream(
             ctx,
             builder,
             read,
-            prepared.formatted.unit.unit_value,
-            prepared.formatted.unit.unit_char_len,
-            prepared.formatted.unit.unit_record_count,
-            prepared.formatted.unit.is_internal,
-            prepared.formatted.unit.unit_i32,
+            prepared_format.unit.unit_value,
+            prepared_format.unit.unit_char_len,
+            prepared_format.unit.unit_record_count,
+            prepared_format.unit.is_internal,
+            prepared_format.unit.unit_i32,
             format_source,
             prepared.needs_status,
         );
@@ -1045,29 +1052,29 @@ fn emitPreparedFormattedRead(
     defer expanded.deinit();
 
     if (prepared.needs_status) {
-        return emitReadFormatPlanStatus(
+        return emitReadPreparedFormatPlanStatus(
             ctx,
             builder,
             read,
-            prepared.formatted.plan,
-            prepared.formatted.unit.unit_value,
-            prepared.formatted.unit.unit_char_len,
-            prepared.formatted.unit.unit_record_count,
-            prepared.formatted.unit.is_internal,
-            prepared.formatted.unit.unit_i32,
+            prepared_format.exec_plan,
+            prepared_format.unit.unit_value,
+            prepared_format.unit.unit_char_len,
+            prepared_format.unit.unit_record_count,
+            prepared_format.unit.is_internal,
+            prepared_format.unit.unit_i32,
             &expanded,
         );
     }
-    try emitReadFormatPlan(
+    try emitReadPreparedFormatPlan(
         ctx,
         builder,
         read,
-        prepared.formatted.plan,
-        prepared.formatted.unit.unit_value,
-        prepared.formatted.unit.unit_char_len,
-        prepared.formatted.unit.unit_record_count,
-        prepared.formatted.unit.is_internal,
-        prepared.formatted.unit.unit_i32,
+        prepared_format.exec_plan,
+        prepared_format.unit.unit_value,
+        prepared_format.unit.unit_char_len,
+        prepared_format.unit.unit_record_count,
+        prepared_format.unit.is_internal,
+        prepared_format.unit.unit_i32,
         &expanded,
     );
     return ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };

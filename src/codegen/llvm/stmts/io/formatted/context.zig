@@ -10,6 +10,7 @@ const ValueRef = context.ValueRef;
 const EmitError = anyerror;
 
 const char_format = @import("char_format.zig");
+const dynamic_mod = @import("dynamic.zig");
 const io_utils = @import("../utils.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
@@ -38,7 +39,20 @@ pub const StreamFormatSource = union(enum) {
 
 pub const PreparedFormatContext = struct {
     unit: PreparedUnitContext,
-    plan: FormatPlan,
+    exec_plan: PreparedExecutionFormatPlan,
+
+    pub fn deinit(self: *PreparedFormatContext) void {
+        switch (self.exec_plan) {
+            .dynamic_label => |*dynamic| dynamic.deinit(),
+            else => {},
+        }
+    }
+};
+
+pub const PreparedExecutionFormatPlan = union(enum) {
+    static_items: []const ast.FormatItem,
+    dynamic_label: dynamic_mod.PreparedDynamicFormat,
+    runtime_char_expr: *ast.Expr,
 };
 
 pub const RuntimeFormatValue = struct {
@@ -105,17 +119,30 @@ pub fn prepareFormattedContext(
     unit: *ast.Expr,
     format_spec: ast.FormatSpec,
 ) EmitError!PreparedFormatContext {
+    const raw_plan = try resolveFormatPlan(ctx, format_spec);
     return .{
         .unit = try prepareUnitContext(ctx, builder, unit),
-        .plan = try resolveFormatPlan(ctx, format_spec),
+        .exec_plan = try prepareExecutionFormatPlan(ctx, builder, raw_plan),
     };
 }
 
-pub fn streamFormatSource(plan: FormatPlan) ?StreamFormatSource {
+pub fn prepareExecutionFormatPlan(
+    ctx: *Context,
+    builder: anytype,
+    plan: FormatPlan,
+) EmitError!PreparedExecutionFormatPlan {
+    return switch (plan) {
+        .static_items => |items| .{ .static_items = items },
+        .dynamic_label_var => |label| .{ .dynamic_label = try dynamic_mod.prepareDynamicFormat(ctx, builder, label) },
+        .runtime_char_expr => |fmt_expr| .{ .runtime_char_expr = fmt_expr },
+    };
+}
+
+pub fn streamFormatSource(plan: PreparedExecutionFormatPlan) ?StreamFormatSource {
     return switch (plan) {
         .static_items => |items| .{ .static_items = items },
         .runtime_char_expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
-        .dynamic_label_var => null,
+        .dynamic_label => null,
     };
 }
 
