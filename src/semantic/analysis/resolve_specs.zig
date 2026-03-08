@@ -52,26 +52,13 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                         }
                     }
                 }
-                try self.implicit.append(.{
-                    .start = rule.start,
-                    .end = rule.end,
-                    .type_kind = resolved_rule_kind,
-                    .type_spec = resolved_rule_type.withCharacterLength(
-                        if (resolved_rule_kind == .character) .constant else .none,
-                        if (resolved_rule_kind == .character) char_len orelse 1 else null,
-                    ),
-                    .char_len = char_len,
-                });
-                applyImplicitRuleToExistingSymbols(self, .{
-                    .start = rule.start,
-                    .end = rule.end,
-                    .type_kind = resolved_rule_kind,
-                    .type_spec = resolved_rule_type.withCharacterLength(
-                        if (resolved_rule_kind == .character) .constant else .none,
-                        if (resolved_rule_kind == .character) char_len orelse 1 else null,
-                    ),
-                    .char_len = char_len,
-                });
+                const implicit_spec = resolved_rule_type.withCharacterLength(
+                    if (resolved_rule_kind == .character) .constant else .none,
+                    if (resolved_rule_kind == .character) char_len orelse 1 else null,
+                );
+                const implicit_rule = symbols.ImplicitRule.init(rule.start, rule.end, implicit_spec);
+                try self.implicit.append(implicit_rule);
+                applyImplicitRuleToExistingSymbols(self, implicit_rule);
             }
         },
         .dimension => |dim| {
@@ -269,17 +256,7 @@ fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.Impl
         if (sym.name.len == 0) continue;
         const first = std.ascii.toUpper(sym.name[0]);
         if (first < rule.start or first > rule.end) continue;
-        sym.type_kind = rule.type_kind;
-        sym.type_spec = rule.type_spec;
-        if (rule.type_kind == .character) {
-            sym.char_len_kind = .constant;
-            sym.char_len = rule.char_len orelse 1;
-            sym.type_spec = sym.type_spec.withCharacterLength(.constant, sym.char_len);
-        } else {
-            sym.char_len_kind = .none;
-            sym.char_len = null;
-            sym.type_spec = sym.type_spec.withCharacterLength(.none, null);
-        }
+        sym.applyTypeSpec(rule.type_spec);
     }
 }
 

@@ -66,6 +66,31 @@ pub const Symbol = struct {
             self.char_len = null;
         }
     }
+
+    pub fn init(
+        name: []const u8,
+        spec: TypeSpec,
+        dims: []*ast.Expr,
+        kind: SymbolKind,
+        storage: StorageClass,
+    ) Symbol {
+        var sym = Symbol{
+            .name = name,
+            .type_kind = spec.lowered_kind,
+            .type_spec = spec,
+            .dims = dims,
+            .char_len_kind = .none,
+            .char_len = null,
+            .kind = kind,
+            .storage = storage,
+            .is_external = false,
+            .is_intrinsic = false,
+            .const_value = null,
+            .type_explicit = false,
+        };
+        sym.applyTypeSpec(spec);
+        return sym;
+    }
 };
 
 pub const EntityKind = enum {
@@ -108,6 +133,16 @@ pub const ImplicitRule = struct {
     type_kind: ast.TypeKind,
     type_spec: TypeSpec = TypeSpec.fromKind(.real),
     char_len: ?usize,
+
+    pub fn init(start: u8, end: u8, spec: TypeSpec) ImplicitRule {
+        return .{
+            .start = start,
+            .end = end,
+            .type_kind = spec.lowered_kind,
+            .type_spec = spec,
+            .char_len = if (spec.lowered_kind == .character) spec.char_len else null,
+        };
+    }
 };
 
 pub const ResolvedRefKind = enum {
