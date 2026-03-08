@@ -330,29 +330,40 @@ fn emitBinaryArrayExprActual(
     const left_array = try resolveArrayActual(ctx, builder, bin.left);
     const right_array = try resolveArrayActual(ctx, builder, bin.right);
     if (left_array == null and right_array == null) return null;
-    if (left_array != null and right_array != null) return null;
 
-    const array_actual = left_array orelse right_array.?;
-    const scalar_expr = if (left_array == null) bin.left else bin.right;
-    const scalar_raw = try dispatch.emitExpr(ctx, builder, scalar_expr);
-    if (scalar_raw.ty == .ptr) return null;
+    const result_actual = left_array orelse right_array.?;
+    const left_value = if (left_array == null)
+        try emitScalarArrayBinaryOperand(ctx, builder, bin.left)
+    else
+        null;
+    const right_value = if (right_array == null)
+        try emitScalarArrayBinaryOperand(ctx, builder, bin.right)
+    else
+        null;
+
+    if (left_array != null and right_array != null) {
+        if (left_array.?.extents.len != right_array.?.extents.len) return null;
+    } else if ((left_value == null and left_array == null) or (right_value == null and right_array == null)) {
+        return null;
+    }
 
     const result_ty = try casting.exprType(ctx, expr);
     if (!isMaterializableArrayElementType(result_ty)) return null;
 
-    const elem_count = try emitExtentProductI64(ctx, builder, array_actual.extents);
+    const elem_count = try emitExtentProductI64(ctx, builder, result_actual.extents);
     const tmp_name = try ctx.nextTemp();
     try builder.allocaArrayValue(tmp_name, result_ty, elem_count);
     const dst_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
-    const multipliers = try emitContiguousMultipliers(ctx, builder, array_actual.extents);
+    const multipliers = try emitContiguousMultipliers(ctx, builder, result_actual.extents);
 
     try emitBinaryArrayActualLoop(
         ctx,
         builder,
         bin.op,
-        array_actual,
-        scalar_raw,
-        left_array == null,
+        left_array,
+        left_value,
+        right_array,
+        right_value,
         dst_ptr,
         result_ty,
         elem_count,
@@ -362,10 +373,20 @@ fn emitBinaryArrayExprActual(
         .ptr = dst_ptr,
         .descriptor_actual = .{
             .base_ptr = dst_ptr,
-            .extents = array_actual.extents,
+            .extents = result_actual.extents,
             .multipliers = multipliers,
         },
     };
+}
+
+fn emitScalarArrayBinaryOperand(
+    ctx: *Context,
+    builder: anytype,
+    expr: *Expr,
+) !?ValueRef {
+    const scalar_raw = try dispatch.emitExpr(ctx, builder, expr);
+    if (scalar_raw.ty == .ptr) return null;
+    return scalar_raw;
 }
 
 fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?ArgPointerResult {
@@ -1035,9 +1056,10 @@ fn emitBinaryArrayActualLoop(
     ctx: *Context,
     builder: anytype,
     op: ast.BinaryOp,
-    src_actual: ArrayActualInfo,
-    scalar_raw: ValueRef,
-    scalar_on_left: bool,
+    left_actual: ?ArrayActualInfo,
+    left_scalar: ?ValueRef,
+    right_actual: ?ArrayActualInfo,
+    right_scalar: ?ValueRef,
     dst_ptr: ValueRef,
     result_ty: IRType,
     elem_count: ValueRef,
@@ -1060,15 +1082,14 @@ fn emitBinaryArrayActualLoop(
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
-    const src_offset = try emitLinearizedActualOffset(ctx, builder, idx_val, src_actual.extents, src_actual.multipliers);
-    const src_elem_ptr_name = try ctx.nextTemp();
-    try builder.gep(src_elem_ptr_name, src_actual.elem_ty, src_actual.base_ptr, src_offset);
-    const src_val_name = try ctx.nextTemp();
-    try builder.load(src_val_name, src_actual.elem_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
-    const src_val = ValueRef{ .name = src_val_name, .ty = src_actual.elem_ty, .is_ptr = false };
-
-    const lhs = if (scalar_on_left) scalar_raw else src_val;
-    const rhs = if (scalar_on_left) src_val else scalar_raw;
+    const lhs = if (left_actual) |actual|
+        try emitArrayActualElement(ctx, builder, idx_val, actual)
+    else
+        left_scalar orelse return error.InvalidAbiState;
+    const rhs = if (right_actual) |actual|
+        try emitArrayActualElement(ctx, builder, idx_val, actual)
+    else
+        right_scalar orelse return error.InvalidAbiState;
     const result_raw = try binary.emitBinary(ctx, builder, op, lhs, rhs);
     const result_val = if (result_raw.ty == result_ty)
         result_raw
@@ -1085,6 +1106,20 @@ fn emitBinaryArrayActualLoop(
     try builder.br(loop_head);
 
     try builder.label(loop_exit);
+}
+
+fn emitArrayActualElement(
+    ctx: *Context,
+    builder: anytype,
+    idx_val: ValueRef,
+    actual: ArrayActualInfo,
+) !ValueRef {
+    const src_offset = try emitLinearizedActualOffset(ctx, builder, idx_val, actual.extents, actual.multipliers);
+    const src_elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(src_elem_ptr_name, actual.elem_ty, actual.base_ptr, src_offset);
+    const src_val_name = try ctx.nextTemp();
+    try builder.load(src_val_name, actual.elem_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
+    return .{ .name = src_val_name, .ty = actual.elem_ty, .is_ptr = false };
 }
 
 fn emitNegatedArrayActualLoop(
