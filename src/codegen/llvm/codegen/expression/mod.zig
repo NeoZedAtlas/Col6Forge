@@ -754,6 +754,64 @@ test "emitCall supports intrinsic array conversion over contiguous multidim actu
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
 }
 
+test "emitCall supports intrinsic array conversion over noncontiguous multidim section actual" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    const a = harness.arena.allocator();
+    const dim2 = try a.create(ast.Expr);
+    dim2.* = .{ .literal = .{ .kind = .integer, .text = "2" } };
+    const dim4 = try a.create(ast.Expr);
+    dim4.* = .{ .literal = .{ .kind = .integer, .text = "4" } };
+    const arr2_dims = try a.alloc(*ast.Expr, 2);
+    arr2_dims[0] = dim2;
+    arr2_dims[1] = dim4;
+    harness.sem_unit.symbols[2].dims = arr2_dims;
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.real, .double_precision, null),
+                .requires_descriptor = true,
+                .rank = 2,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lower_i = try makeLiteral(a, .integer, "1");
+    const upper_i = try makeLiteral(a, .integer, "2");
+    const range_i = try a.create(Expr);
+    range_i.* = .{ .dim_range = .{ .lower = lower_i, .upper = upper_i, .stride = null } };
+    const lower_j = try makeLiteral(a, .integer, "1");
+    const upper_j = try makeLiteral(a, .integer, "4");
+    const stride_j = try makeLiteral(a, .integer, "2");
+    const range_j = try a.create(Expr);
+    range_j.* = .{ .dim_range = .{ .lower = lower_j, .upper = upper_j, .stride = stride_j } };
+    const section = try a.create(Expr);
+    section.* = .{ .call_or_subscript = .{ .name = "ARR2", .args = @constCast(&[_]*Expr{ range_i, range_j }) } };
+    const convert = try a.create(Expr);
+    convert.* = .{ .call_or_subscript = .{ .name = "DBLE", .args = @constCast(&[_]*Expr{section}) } };
+    _ = try emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{convert}), true);
+
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "@malloc") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "srem i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "sdiv i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "getelementptr i32, ptr %arr2") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
+}
+
 test "emitCall falls back to unit character length for descriptor-scaled character section actual" {
     const testing = std.testing;
     const allocator = testing.allocator;

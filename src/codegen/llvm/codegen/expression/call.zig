@@ -581,7 +581,6 @@ fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call:
     if (call.args.len != 1) return error.InvalidIntrinsicCall;
     const dst_ty = intrinsicArrayConversionType(call.name) orelse return error.UnsupportedIntrinsicType;
     const src_actual = (try analyzeArrayActual(ctx, builder, call.args[0])) orelse return error.UnsupportedIntrinsicType;
-    if (!try isContiguousArrayActual(ctx, builder, src_actual.extents, src_actual.multipliers)) return error.UnsupportedIntrinsicType;
     const src_ptr = src_actual.base_ptr;
     const src_ty = src_actual.elem_ty;
     const elem_count = try emitExtentProductI64(ctx, builder, src_actual.extents);
@@ -593,7 +592,17 @@ fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call:
     try builder.callTyped(heap_ptr_name, .ptr, malloc_name, &.{total_bytes});
     const heap_ptr = ValueRef{ .name = heap_ptr_name, .ty = .ptr, .is_ptr = true };
 
-    try emitIntrinsicArrayConversionLoop(ctx, builder, src_ptr, src_ty, heap_ptr, dst_ty, elem_count);
+    try emitIntrinsicArrayConversionLoop(
+        ctx,
+        builder,
+        src_ptr,
+        src_ty,
+        src_actual.extents,
+        src_actual.multipliers,
+        heap_ptr,
+        dst_ty,
+        elem_count,
+    );
     return .{
         .ptr = heap_ptr,
         .owned_heap_ptr = heap_ptr,
@@ -792,30 +801,13 @@ fn emitExtentProductI64(
     return total;
 }
 
-fn isContiguousArrayActual(
-    ctx: *Context,
-    builder: anytype,
-    extents: []const ValueRef,
-    multipliers: []const ValueRef,
-) !bool {
-    if (extents.len != multipliers.len) return false;
-    var expected = i64Const(ctx, 1);
-    for (multipliers, 0..) |multiplier, idx| {
-        if (!valueRefEquals(multiplier, expected)) return false;
-        expected = try emitMulI64(ctx, builder, expected, extents[idx]);
-    }
-    return true;
-}
-
-fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
-    return a.ty == b.ty and a.is_ptr == b.is_ptr and std.mem.eql(u8, a.name, b.name);
-}
-
 fn emitIntrinsicArrayConversionLoop(
     ctx: *Context,
     builder: anytype,
     src_ptr: ValueRef,
     src_ty: IRType,
+    src_extents: []const ValueRef,
+    src_multipliers: []const ValueRef,
     dst_ptr: ValueRef,
     dst_ty: IRType,
     elem_count: ValueRef,
@@ -838,8 +830,9 @@ fn emitIntrinsicArrayConversionLoop(
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
+    const src_offset = try emitLinearizedActualOffset(ctx, builder, idx_val, src_extents, src_multipliers);
     const src_elem_ptr_name = try ctx.nextTemp();
-    try builder.gep(src_elem_ptr_name, src_ty, src_ptr, idx_val);
+    try builder.gep(src_elem_ptr_name, src_ty, src_ptr, src_offset);
     const src_val_name = try ctx.nextTemp();
     try builder.load(src_val_name, src_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
     const src_val = ValueRef{ .name = src_val_name, .ty = src_ty, .is_ptr = false };
@@ -855,6 +848,33 @@ fn emitIntrinsicArrayConversionLoop(
     try builder.br(loop_head);
 
     try builder.label(loop_exit);
+}
+
+fn emitLinearizedActualOffset(
+    ctx: *Context,
+    builder: anytype,
+    linear_idx: ValueRef,
+    extents: []const ValueRef,
+    multipliers: []const ValueRef,
+) !ValueRef {
+    if (extents.len != multipliers.len) return error.InvalidAbiState;
+    var remaining = linear_idx;
+    var offset = i64Const(ctx, 0);
+    for (extents, 0..) |extent, idx| {
+        const coord = if (idx + 1 == extents.len)
+            remaining
+        else blk: {
+            const coord_tmp = try ctx.nextTemp();
+            try builder.binary(coord_tmp, "srem", .i64, remaining, extent);
+            const next_remaining_tmp = try ctx.nextTemp();
+            try builder.binary(next_remaining_tmp, "sdiv", .i64, remaining, extent);
+            remaining = .{ .name = next_remaining_tmp, .ty = .i64, .is_ptr = false };
+            break :blk ValueRef{ .name = coord_tmp, .ty = .i64, .is_ptr = false };
+        };
+        const term = try emitMulI64(ctx, builder, coord, multipliers[idx]);
+        offset = try emitAddI64(ctx, builder, offset, term);
+    }
+    return offset;
 }
 
 fn isIntrinsicArrayConversionArg(ctx: *Context, call: ast.CallOrSubscript) bool {
