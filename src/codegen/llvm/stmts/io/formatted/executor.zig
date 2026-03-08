@@ -18,15 +18,20 @@ const expandWriteArgs = expansion.expandWriteArgs;
 const expandReadTargets = expansion.expandReadTargets;
 const PreparedExecutionFormatPlan = formatted_context.PreparedExecutionFormatPlan;
 const PreparedFormatContext = formatted_context.PreparedFormatContext;
-const emitWritePreparedFormatPlan = format_expr.emitWritePreparedFormatPlan;
-const emitReadPreparedFormatPlan = format_expr.emitReadPreparedFormatPlan;
-const emitReadPreparedFormatPlanStatus = format_expr.emitReadPreparedFormatPlanStatus;
+const emitWriteRuntimeFormatExprPrepared = format_expr.emitWriteRuntimeFormatExprPrepared;
+const emitReadRuntimeFormatExprPrepared = format_expr.emitReadRuntimeFormatExprPrepared;
+const emitReadRuntimeFormatExprPreparedStatus = format_expr.emitReadRuntimeFormatExprPreparedStatus;
 const emitSpecialFormattedWrite = special_write.emitSpecialFormattedWrite;
 const emitReadFormattedStreamPrepared = stream_read.emitReadFormattedStreamPrepared;
 const emitWriteFormattedStreamPrepared = stream_write.emitWriteFormattedStreamPrepared;
 const dynamic_mod = @import("dynamic.zig");
+const write_mod = @import("write.zig");
+const read_mod = @import("read.zig");
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
+const emitWriteFormatted = write_mod.emitWriteFormatted;
+const emitReadFormatted = read_mod.emitReadFormatted;
+const emitReadFormattedStatus = read_mod.emitReadFormattedStatus;
 
 pub const ExecutorMode = enum {
     classic,
@@ -126,18 +131,49 @@ fn emitClassicPreparedWrite(
     plan: PreparedExecutionFormatPlan,
     expanded_values: anytype,
 ) EmitError!void {
-    return emitWritePreparedFormatPlan(
-        ctx,
-        builder,
-        write,
-        plan,
-        prepared.unit.unit_value,
-        prepared.unit.unit_char_len,
-        prepared.unit.unit_record_count,
-        prepared.unit.is_internal,
-        prepared.unit.unit_i32,
-        expanded_values,
-    );
+    switch (plan) {
+        .dynamic_label => |prepared_dynamic| {
+            return dynamic_mod.emitWriteDynamicFormatPrepared(
+                ctx,
+                builder,
+                write,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
+                prepared_dynamic,
+                expanded_values,
+            );
+        },
+        .static_items => |items| {
+            return emitWriteFormatted(
+                ctx,
+                builder,
+                write,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
+                items,
+                expanded_values,
+            );
+        },
+        .runtime_char_expr => |runtime_fmt_expr| {
+            return emitWriteRuntimeFormatExprPrepared(
+                ctx,
+                builder,
+                runtime_fmt_expr,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
+                expanded_values,
+            );
+        },
+    }
 }
 
 fn emitStreamPreparedWrite(
@@ -159,32 +195,90 @@ fn emitClassicPreparedRead(
     needs_status: bool,
     expanded: anytype,
 ) EmitError!ValueRef {
-    if (needs_status) {
-        return emitReadPreparedFormatPlanStatus(
-            ctx,
-            builder,
-            read,
-            plan,
-            prepared.unit.unit_value,
-            prepared.unit.unit_char_len,
-            prepared.unit.unit_record_count,
-            prepared.unit.is_internal,
-            prepared.unit.unit_i32,
-            expanded,
-        );
+    switch (plan) {
+        .dynamic_label => |prepared_dynamic| {
+            if (needs_status) {
+                return dynamic_mod.emitReadDynamicFormatPreparedStatus(
+                    ctx,
+                    builder,
+                    read,
+                    prepared.unit.unit_value,
+                    prepared.unit.unit_char_len,
+                    prepared.unit.unit_record_count,
+                    prepared.unit.is_internal,
+                    prepared.unit.unit_i32,
+                    prepared_dynamic,
+                    expanded,
+                );
+            }
+            try dynamic_mod.emitReadDynamicFormatPrepared(
+                ctx,
+                builder,
+                read,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
+                prepared_dynamic,
+                expanded,
+            );
+        },
+        .static_items => |items| {
+            if (needs_status) {
+                return emitReadFormattedStatus(
+                    ctx,
+                    builder,
+                    read,
+                    prepared.unit.unit_value,
+                    prepared.unit.unit_char_len,
+                    prepared.unit.unit_record_count,
+                    prepared.unit.is_internal,
+                    prepared.unit.unit_i32,
+                    items,
+                    expanded,
+                );
+            }
+            try emitReadFormatted(
+                ctx,
+                builder,
+                read,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
+                items,
+                expanded,
+            );
+        },
+        .runtime_char_expr => |runtime_fmt_expr| {
+            if (needs_status) {
+                return emitReadRuntimeFormatExprPreparedStatus(
+                    ctx,
+                    builder,
+                    runtime_fmt_expr,
+                    prepared.unit.unit_value,
+                    prepared.unit.unit_char_len,
+                    prepared.unit.unit_record_count,
+                    prepared.unit.is_internal,
+                    prepared.unit.unit_i32,
+                    expanded,
+                );
+            }
+            try emitReadRuntimeFormatExprPrepared(
+                ctx,
+                builder,
+                runtime_fmt_expr,
+                prepared.unit.unit_value,
+                prepared.unit.unit_char_len,
+                prepared.unit.unit_record_count,
+                prepared.unit.is_internal,
+                prepared.unit.unit_i32,
+                expanded,
+            );
+        },
     }
-    try emitReadPreparedFormatPlan(
-        ctx,
-        builder,
-        read,
-        plan,
-        prepared.unit.unit_value,
-        prepared.unit.unit_char_len,
-        prepared.unit.unit_record_count,
-        prepared.unit.is_internal,
-        prepared.unit.unit_i32,
-        expanded,
-    );
     return .{ .name = "0", .ty = .i32, .is_ptr = false };
 }
 
