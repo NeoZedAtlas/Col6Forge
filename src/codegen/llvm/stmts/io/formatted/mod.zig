@@ -8,12 +8,7 @@ const context_mod = @import("context.zig");
 const executor_mod = @import("executor.zig");
 const special_write = @import("special_write.zig");
 
-pub const emitWriteFormatted = write.emitWriteFormatted;
-pub const emitWriteFormattedDirect = write.emitWriteFormattedDirect;
 pub const emitWriteFormattedStream = stream_write.emitWriteFormattedStream;
-pub const emitReadFormatted = read.emitReadFormatted;
-pub const emitReadFormattedStatus = read.emitReadFormattedStatus;
-pub const emitReadFormattedDirect = read.emitReadFormattedDirect;
 pub const formatFromCharArrayData = char_format.formatFromCharArrayData;
 pub const emitWriteDynamicFormat = dynamic_mod.emitWriteDynamicFormat;
 pub const emitReadDynamicFormat = dynamic_mod.emitReadDynamicFormat;
@@ -46,4 +41,3 @@ pub const emitPreparedWrite = executor_mod.emitPreparedWrite;
 pub const emitPreparedRead = executor_mod.emitPreparedRead;
 pub const emitPreparedWriteExecutor = executor_mod.emitPreparedWriteExecutor;
 pub const emitPreparedReadExecutor = executor_mod.emitPreparedReadExecutor;
-pub const emitSpecialFormattedWrite = special_write.emitSpecialFormattedWrite;

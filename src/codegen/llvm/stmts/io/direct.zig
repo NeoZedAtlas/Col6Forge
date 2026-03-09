@@ -14,6 +14,9 @@ const EmitError = anyerror;
 const io_utils = @import("utils.zig");
 const expansion = @import("expansion.zig");
 const formatted = @import("formatted/mod.zig");
+const formatted_write = @import("formatted/write.zig");
+const formatted_read = @import("formatted/read.zig");
+const format_ir = @import("../../../../format/stream_ir.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
 const emitStackValue = io_utils.emitStackValue;
@@ -31,19 +34,20 @@ const expandIoArgs = expansion.expandIoArgs;
 const ExpandedIoArgs = expansion.ExpandedIoArgs;
 const expandWriteArgs = expansion.expandWriteArgs;
 const expandReadTargets = expansion.expandReadTargets;
-const emitWriteFormattedDirect = formatted.emitWriteFormattedDirect;
-const emitReadFormattedDirect = formatted.emitReadFormattedDirect;
 const formatFromCharArrayData = formatted.formatFromCharArrayData;
+const emitWriteFormattedLowered = formatted_write.emitWriteFormattedLowered;
+const emitReadFormattedLowered = formatted_read.emitReadFormattedLowered;
 const max_packed_array_elems: usize = 4096;
 
 const PreparedDirectArgs = struct {
     unit_i32: ValueRef,
     rec_i32: ValueRef,
     expanded_args: ExpandedIoArgs,
-    fmt_items: ?[]const ast.FormatItem,
+    fmt_ops: ?[]const format_ir.StreamOp,
     recl: ?usize,
 
     pub fn deinit(self: *PreparedDirectArgs, allocator: std.mem.Allocator) void {
+        if (self.fmt_ops) |ops| allocator.free(ops);
         self.expanded_args.deinit(allocator);
     }
 };
@@ -65,21 +69,24 @@ pub fn emitDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) Em
     var prepared = try prepareDirectArgs(ctx, builder, write);
     defer prepared.deinit(ctx.allocator);
 
-    if (prepared.fmt_items) |fmt_items| {
+    if (prepared.fmt_ops) |fmt_ops| {
         const recl_len = prepared.recl orelse return error.InternalInvariantViolation;
         const recl_val = try ctx.constI32(@intCast(recl_len));
         var expanded_values = try expandWriteArgs(ctx, builder, prepared.expanded_args.items);
         defer expanded_values.deinit();
 
-        try emitWriteFormattedDirect(
+        try emitWriteFormattedLowered(
             ctx,
             builder,
             write,
+            .{ .name = "null", .ty = .ptr, .is_ptr = false },
+            null,
+            null,
+            true,
             prepared.unit_i32,
-            prepared.rec_i32,
-            recl_val,
-            fmt_items,
+            fmt_ops,
             &expanded_values,
+            .{ .unit_i32 = prepared.unit_i32, .rec_i32 = prepared.rec_i32, .recl_i32 = recl_val },
         );
         return;
     }
@@ -105,21 +112,25 @@ pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitE
     var prepared = try prepareDirectArgs(ctx, builder, read);
     defer prepared.deinit(ctx.allocator);
 
-    if (prepared.fmt_items) |fmt_items| {
+    if (prepared.fmt_ops) |fmt_ops| {
         const recl_len = prepared.recl orelse return error.InternalInvariantViolation;
         const recl_val = try ctx.constI32(@intCast(recl_len));
         var expanded = try expandReadTargets(ctx, builder, prepared.expanded_args.items);
         defer expanded.deinit();
 
-        try emitReadFormattedDirect(
+        _ = try emitReadFormattedLowered(
             ctx,
             builder,
             read,
+            .{ .name = "null", .ty = .ptr, .is_ptr = false },
+            null,
+            null,
+            true,
             prepared.unit_i32,
-            prepared.rec_i32,
-            recl_val,
-            fmt_items,
+            fmt_ops,
             &expanded,
+            false,
+            .{ .unit_i32 = prepared.unit_i32, .rec_i32 = prepared.rec_i32, .recl_i32 = recl_val },
         );
         return;
     }
@@ -135,13 +146,17 @@ fn prepareDirectArgs(ctx: *Context, builder: anytype, stmt: anytype) EmitError!P
     const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
     const expanded_args = try expandIoArgs(ctx, stmt.args);
     const fmt_items = try resolveFormatItemsForDirect(ctx, stmt.format);
-    const recl = if (fmt_items != null) try lookupDirectRecl(ctx, stmt.unit) else null;
+    const fmt_ops = if (fmt_items) |items| blk: {
+        const lowered = try format_ir.lower(ctx.allocator, items, format_ir.max_stream_ops);
+        break :blk lowered.ops;
+    } else null;
+    const recl = if (fmt_ops != null) try lookupDirectRecl(ctx, stmt.unit) else null;
 
     return .{
         .unit_i32 = unit_i32,
         .rec_i32 = rec_i32,
         .expanded_args = expanded_args,
-        .fmt_items = fmt_items,
+        .fmt_ops = fmt_ops,
         .recl = recl,
     };
 }
