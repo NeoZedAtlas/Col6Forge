@@ -14,10 +14,8 @@ const io_utils = @import("io/utils.zig");
 const file_control = @import("io/file_control.zig");
 const PreparedFormatContext = formatted.PreparedFormatContext;
 const prepareFormattedContext = formatted.prepareFormattedContext;
-const PreparedWriteExecutor = formatted.PreparedWriteExecutor;
-const PreparedReadExecutor = formatted.PreparedReadExecutor;
-const prepareWriteExecutorForArgs = formatted.prepareWriteExecutorForArgs;
-const prepareReadExecutorForArgs = formatted.prepareReadExecutorForArgs;
+const PreparedExecutor = formatted.PreparedExecutor;
+const prepareExecutorForArgs = formatted.prepareExecutorForArgs;
 const emitPreparedWrite = formatted.emitPreparedWrite;
 const emitPreparedRead = formatted.emitPreparedRead;
 const emitDirectWrite = direct.emitDirectWrite;
@@ -42,21 +40,27 @@ const WriteDispatch = union(enum) {
     direct,
     list_directed,
     unformatted,
-    formatted: PreparedWriteContext,
+    formatted: PreparedFormattedIoContext,
 };
 
 const ReadDispatch = union(enum) {
     direct: bool,
     list_directed: bool,
     unformatted: bool,
-    formatted: PreparedReadContext,
+    formatted: PreparedFormattedIoContext,
+};
+
+const PreparedFormattedIoContext = struct {
+    needs_status: bool,
+    formatted: PreparedFormatContext,
+    executor: PreparedExecutor,
 };
 
 fn classifyWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!WriteDispatch {
     if (write.rec != null) return .direct;
     if (write.format == .list_directed) return .list_directed;
     if (write.format == .none) return .unformatted;
-    return .{ .formatted = try prepareWriteContext(ctx, builder, write) };
+    return .{ .formatted = try prepareFormattedIoContext(ctx, builder, write.unit, write.format, write.args, false) };
 }
 
 fn classifyRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!ReadDispatch {
@@ -64,7 +68,7 @@ fn classifyRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!R
     if (read.rec != null) return .{ .direct = needs_status };
     if (read.format == .list_directed) return .{ .list_directed = needs_status };
     if (read.format == .none) return .{ .unformatted = needs_status };
-    return .{ .formatted = try prepareReadContext(ctx, builder, read) };
+    return .{ .formatted = try prepareFormattedIoContext(ctx, builder, read.unit, read.format, read.args, needs_status) };
 }
 
 pub fn emitWrite(
@@ -99,15 +103,18 @@ pub fn emitWrite(
     };
 }
 
-const PreparedWriteContext = struct {
-    formatted: PreparedFormatContext,
-    executor: PreparedWriteExecutor,
-};
-
-fn prepareWriteContext(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!PreparedWriteContext {
-    const formatted_ctx = try prepareFormattedContext(ctx, builder, write.unit, write.format);
+fn prepareFormattedIoContext(
+    ctx: *Context,
+    builder: anytype,
+    unit: *ast.Expr,
+    format: ast.FormatSpec,
+    args: []*ast.Expr,
+    needs_status: bool,
+) EmitError!PreparedFormattedIoContext {
+    const formatted_ctx = try prepareFormattedContext(ctx, builder, unit, format);
     return .{
-        .executor = try prepareWriteExecutorForArgs(ctx, formatted_ctx.exec_plan, write.args),
+        .needs_status = needs_status,
+        .executor = try prepareExecutorForArgs(ctx, formatted_ctx.exec_plan, args),
         .formatted = formatted_ctx,
     };
 }
@@ -116,7 +123,7 @@ fn emitPreparedFormattedWrite(
     ctx: *Context,
     builder: anytype,
     write: ast.WriteStmt,
-    prepared: PreparedWriteContext,
+    prepared: PreparedFormattedIoContext,
 ) EmitError!void {
     var prepared_format = prepared.formatted;
     defer prepared_format.deinit();
@@ -165,26 +172,11 @@ pub fn emitRead(
     };
 }
 
-const PreparedReadContext = struct {
-    needs_status: bool,
-    formatted: PreparedFormatContext,
-    executor: PreparedReadExecutor,
-};
-
-fn prepareReadContext(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!PreparedReadContext {
-    const formatted_ctx = try prepareFormattedContext(ctx, builder, read.unit, read.format);
-    return .{
-        .needs_status = read.iostat != null or read.err_label != null or read.end_label != null,
-        .executor = try prepareReadExecutorForArgs(ctx, formatted_ctx.exec_plan, read.args),
-        .formatted = formatted_ctx,
-    };
-}
-
 fn emitPreparedFormattedRead(
     ctx: *Context,
     builder: anytype,
     read: ast.ReadStmt,
-    prepared: PreparedReadContext,
+    prepared: PreparedFormattedIoContext,
 ) EmitError!ValueRef {
     var prepared_format = prepared.formatted;
     defer prepared_format.deinit();

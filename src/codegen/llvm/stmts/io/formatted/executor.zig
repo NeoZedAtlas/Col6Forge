@@ -42,9 +42,6 @@ pub const PreparedExecutor = struct {
     plan: PreparedExecutionFormatPlan,
 };
 
-pub const PreparedWriteExecutor = PreparedExecutor;
-pub const PreparedReadExecutor = PreparedExecutor;
-
 pub fn prepareExecutor(
     plan: PreparedExecutionFormatPlan,
     has_runtime_implied_do: bool,
@@ -55,34 +52,12 @@ pub fn prepareExecutor(
     };
 }
 
-pub fn prepareWriteExecutorForArgs(
+pub fn prepareExecutorForArgs(
     ctx: *Context,
     plan: PreparedExecutionFormatPlan,
     args: []*ast.Expr,
-) EmitError!PreparedWriteExecutor {
+) EmitError!PreparedExecutor {
     return prepareExecutor(plan, hasRuntimeImpliedDoArgs(ctx, args));
-}
-
-pub fn prepareReadExecutorForArgs(
-    ctx: *Context,
-    plan: PreparedExecutionFormatPlan,
-    args: []*ast.Expr,
-) EmitError!PreparedReadExecutor {
-    return prepareExecutor(plan, hasRuntimeImpliedDoArgs(ctx, args));
-}
-
-pub fn emitPreparedWriteExecutor(
-    ctx: *Context,
-    builder: anytype,
-    write: ast.WriteStmt,
-    prepared: PreparedFormatContext,
-    executor: PreparedWriteExecutor,
-    expanded_values: anytype,
-) EmitError!void {
-    switch (executor.mode) {
-        .classic => return emitClassicPreparedWrite(ctx, builder, write, prepared, executor.plan, expanded_values),
-        .stream => return emitStreamPreparedWrite(ctx, builder, write, prepared, executor.plan),
-    }
 }
 
 pub fn emitPreparedWrite(
@@ -90,7 +65,7 @@ pub fn emitPreparedWrite(
     builder: anytype,
     write: ast.WriteStmt,
     prepared: PreparedFormatContext,
-    executor: PreparedWriteExecutor,
+    executor: PreparedExecutor,
 ) EmitError!void {
     switch (executor.mode) {
         .classic => {
@@ -116,24 +91,9 @@ pub fn emitPreparedWrite(
             }
             var expanded_values = try expandWriteArgs(ctx, builder, write.args);
             defer expanded_values.deinit();
-            return emitPreparedWriteExecutor(ctx, builder, write, prepared, executor, &expanded_values);
+            return emitClassicPreparedWrite(ctx, builder, write, prepared, executor.plan, &expanded_values);
         },
-        .stream => return emitPreparedWriteExecutor(ctx, builder, write, prepared, executor, undefined),
-    }
-}
-
-pub fn emitPreparedReadExecutor(
-    ctx: *Context,
-    builder: anytype,
-    read: ast.ReadStmt,
-    prepared: PreparedFormatContext,
-    executor: PreparedReadExecutor,
-    needs_status: bool,
-    expanded: anytype,
-) EmitError!ValueRef {
-    switch (executor.mode) {
-        .classic => return emitClassicPreparedRead(ctx, builder, read, prepared, executor.plan, needs_status, expanded),
-        .stream => return emitStreamPreparedRead(ctx, builder, read, prepared, executor.plan, needs_status),
+        .stream => return emitStreamPreparedWrite(ctx, builder, write, prepared, executor.plan),
     }
 }
 
@@ -400,12 +360,15 @@ pub fn emitPreparedRead(
     builder: anytype,
     read: ast.ReadStmt,
     prepared: PreparedFormatContext,
-    executor: PreparedReadExecutor,
+    executor: PreparedExecutor,
     needs_status: bool,
 ) EmitError!ValueRef {
     var expanded = try expandReadTargets(ctx, builder, read.args);
     defer expanded.deinit();
-    return emitPreparedReadExecutor(ctx, builder, read, prepared, executor, needs_status, &expanded);
+    return switch (executor.mode) {
+        .classic => emitClassicPreparedRead(ctx, builder, read, prepared, executor.plan, needs_status, &expanded),
+        .stream => emitStreamPreparedRead(ctx, builder, read, prepared, executor.plan, needs_status),
+    };
 }
 
 fn hasRuntimeImpliedDoArgs(ctx: *Context, args: []*ast.Expr) bool {

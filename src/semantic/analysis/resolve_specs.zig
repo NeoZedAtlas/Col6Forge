@@ -84,27 +84,24 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 };
                 const const_val = check_const.coerceParameterValue(
                     self,
-                    sym.type_kind,
-                    sym.char_len,
+                    sym.loweredKind(),
+                    sym.effectiveCharLen(),
                     assigned_value,
                 ) catch |err| {
                     if (err == error.ParameterTypeMismatch) {
-                        setParameterTypeMismatchDiagnostic(self, assign.name, sym.type_kind, assigned_value);
+                        setParameterTypeMismatchDiagnostic(self, assign.name, sym.loweredKind(), assigned_value);
                     }
                     return err;
                 };
                 sym.const_value = const_val;
 
-                if (sym.type_kind == .character and sym.char_len_kind != .constant) {
+                if (sym.isCharacter() and sym.effectiveCharLenKind() != .constant) {
                     switch (const_val) {
                         .string => |bytes| {
-                            sym.char_len_kind = .constant;
-                            sym.char_len = bytes.len;
-                            sym.type_spec = sym.type_spec.withCharacterLength(.constant, bytes.len);
+                            sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, bytes.len));
                         },
                         else => {
-                            sym.char_len = null;
-                            sym.type_spec = sym.type_spec.withCharacterLength(sym.char_len_kind, null);
+                            sym.applyTypeSpec(sym.type_spec.withCharacterLength(sym.effectiveCharLenKind(), null));
                         },
                     }
                 }
@@ -269,7 +266,7 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
             return .{
                 .name = name,
                 .symbol_idx = idx,
-                .type_kind = sym.type_kind,
+                .type_kind = sym.loweredKind(),
                 .byte_offset = 0,
             };
         },
@@ -277,14 +274,14 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
             const idx = symbolIndexForResolvedExpr(self, expr_node) orelse
                 (symbols_mod.findSymbolIndex(self, sub.name) orelse return error.InvalidEquivalence);
             const sym = self.symbols.items[idx];
-            if (sym.type_kind != .character) return error.InvalidEquivalence;
+            if (!sym.isCharacter()) return error.InvalidEquivalence;
             const base_offset = (try designatorArrayByteOffset(self, sym, sub.args)) orelse return error.InvalidEquivalence;
             const substring_offset = (try substringStartByteOffset(self, sym, sub.start, sub.end)) orelse return error.InvalidEquivalence;
             const total_offset = addNoOverflow(base_offset, substring_offset) orelse return error.InvalidEquivalence;
             return .{
                 .name = sub.name,
                 .symbol_idx = idx,
-                .type_kind = sym.type_kind,
+                .type_kind = sym.loweredKind(),
                 .byte_offset = total_offset,
             };
         },
@@ -299,7 +296,7 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
             return .{
                 .name = call.name,
                 .symbol_idx = idx,
-                .type_kind = sym.type_kind,
+                .type_kind = sym.loweredKind(),
                 .byte_offset = byte_offset,
             };
         },
@@ -466,8 +463,8 @@ fn substringStartByteOffset(
     start_expr: ?*ast.Expr,
     end_expr: ?*ast.Expr,
 ) !?i64 {
-    if (sym.type_kind != .character) return null;
-    const char_len_i64: i64 = @intCast(sym.char_len orelse 1);
+    if (!sym.isCharacter()) return null;
+    const char_len_i64: i64 = @intCast(sym.effectiveCharLen() orelse 1);
     const start = if (start_expr) |expr| (try constIntegerValue(self, expr)) orelse return null else 1;
     const end = if (end_expr) |expr| (try constIntegerValue(self, expr)) orelse return null else char_len_i64;
     if (start < 1 or end < start or end > char_len_i64) return null;
@@ -529,14 +526,14 @@ fn constIntegerValue(self: *context.Context, expr: *ast.Expr) !?i64 {
 }
 
 fn symbolElemByteSize(sym: symbols.Symbol) ?i64 {
-    return switch (sym.type_kind) {
+    return switch (sym.loweredKind()) {
         .integer => 4,
         .real => 4,
         .double_precision => 8,
         .complex => 8,
         .complex_double => 16,
         .logical => 1,
-        .character => @intCast(sym.char_len orelse 1),
+        .character => @intCast(sym.effectiveCharLen() orelse 1),
     };
 }
 
