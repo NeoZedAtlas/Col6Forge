@@ -12,14 +12,10 @@ const EmitError = anyerror;
 
 const io_utils = @import("../utils.zig");
 const expansion = @import("../expansion.zig");
-const dynamic_mod = @import("dynamic.zig");
 const formatted_context = @import("context.zig");
 
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
-const emitWriteDynamicFormat = dynamic_mod.emitWriteDynamicFormat;
-const emitReadDynamicFormat = dynamic_mod.emitReadDynamicFormat;
-const emitReadDynamicFormatStatus = dynamic_mod.emitReadDynamicFormatStatus;
 const emitKindArray = io_utils.emitKindArray;
 const defaultIntegerKind = io_utils.defaultIntegerKind;
 const defaultIntegerReadKind = io_utils.defaultIntegerReadKind;

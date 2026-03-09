@@ -10,9 +10,6 @@ const special_write = @import("special_write.zig");
 
 pub const emitWriteFormattedStream = stream_write.emitWriteFormattedStream;
 pub const formatFromCharArrayData = char_format.formatFromCharArrayData;
-pub const emitWriteDynamicFormat = dynamic_mod.emitWriteDynamicFormat;
-pub const emitReadDynamicFormat = dynamic_mod.emitReadDynamicFormat;
-pub const emitReadDynamicFormatStatus = dynamic_mod.emitReadDynamicFormatStatus;
 pub const emitWriteRuntimeFormatExprPrepared = format_expr.emitWriteRuntimeFormatExprPrepared;
 pub const emitReadRuntimeFormatExprPrepared = format_expr.emitReadRuntimeFormatExprPrepared;
 pub const emitReadRuntimeFormatExprPreparedStatus = format_expr.emitReadRuntimeFormatExprPreparedStatus;

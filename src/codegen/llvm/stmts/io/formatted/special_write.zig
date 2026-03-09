@@ -55,18 +55,6 @@ const DVectorSource = struct {
     count: ValueRef,
 };
 
-pub fn emitSpecialFormattedWrite(
-    ctx: *Context,
-    builder: anytype,
-    write: ast.WriteStmt,
-    prepared: PreparedFormatContext,
-    fmt_items: []const ast.FormatItem,
-) EmitError!bool {
-    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
-    defer prepared_fmt.deinit(ctx.allocator);
-    return emitSpecialFormattedWriteLowered(ctx, builder, write, prepared, prepared_fmt.ops);
-}
-
 pub fn emitSpecialFormattedWriteLowered(
     ctx: *Context,
     builder: anytype,

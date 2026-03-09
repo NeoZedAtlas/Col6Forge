@@ -151,23 +151,6 @@ fn emitDynamicFormatSwitch(
     try builder.label(done_label);
 }
 
-pub fn emitWriteDynamicFormat(
-    ctx: *Context,
-    builder: anytype,
-    write: ast.WriteStmt,
-    unit_value: ValueRef,
-    unit_char_len: ?usize,
-    unit_record_count: ?usize,
-    is_internal: bool,
-    unit_i32: ValueRef,
-    label_var: []const u8,
-    expanded_values: *ExpandedWriteValues,
-) EmitError!void {
-    var prepared = try prepareDynamicFormat(ctx, builder, label_var);
-    defer prepared.deinit();
-    return emitWriteDynamicFormatCore(ctx, builder, write, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, prepared, expanded_values);
-}
-
 pub fn emitWriteDynamicFormatPrepared(
     ctx: *Context,
     builder: anytype,
@@ -286,21 +269,6 @@ fn emitWriteDynamicFormatCore(
     });
 }
 
-pub fn emitReadDynamicFormat(
-    ctx: *Context,
-    builder: anytype,
-    read: ast.ReadStmt,
-    unit_value: ValueRef,
-    unit_char_len: ?usize,
-    unit_record_count: ?usize,
-    is_internal: bool,
-    unit_i32: ValueRef,
-    label_var: []const u8,
-    expanded: *ExpandedReadTargets,
-) EmitError!void {
-    _ = try emitReadDynamicFormatCore(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, label_var, expanded, false);
-}
-
 pub fn emitReadDynamicFormatPrepared(
     ctx: *Context,
     builder: anytype,
@@ -314,21 +282,6 @@ pub fn emitReadDynamicFormatPrepared(
     expanded: *ExpandedReadTargets,
 ) EmitError!void {
     _ = try emitReadDynamicFormatPreparedCore(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, prepared, expanded, false);
-}
-
-pub fn emitReadDynamicFormatStatus(
-    ctx: *Context,
-    builder: anytype,
-    read: ast.ReadStmt,
-    unit_value: ValueRef,
-    unit_char_len: ?usize,
-    unit_record_count: ?usize,
-    is_internal: bool,
-    unit_i32: ValueRef,
-    label_var: []const u8,
-    expanded: *ExpandedReadTargets,
-) EmitError!ValueRef {
-    return emitReadDynamicFormatCore(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, label_var, expanded, true);
 }
 
 pub fn emitReadDynamicFormatPreparedStatus(
@@ -416,24 +369,6 @@ pub fn emitReadDynamicFormatPreparedStream(
     const status_load = try ctx.nextTemp();
     try builder.load(status_load, .i32, status_ptr);
     return .{ .name = status_load, .ty = .i32, .is_ptr = false };
-}
-
-fn emitReadDynamicFormatCore(
-    ctx: *Context,
-    builder: anytype,
-    read: ast.ReadStmt,
-    unit_value: ValueRef,
-    unit_char_len: ?usize,
-    unit_record_count: ?usize,
-    is_internal: bool,
-    unit_i32: ValueRef,
-    label_var: []const u8,
-    expanded: *ExpandedReadTargets,
-    needs_status: bool,
-) EmitError!ValueRef {
-    var prepared = try prepareDynamicFormat(ctx, builder, label_var);
-    defer prepared.deinit();
-    return emitReadDynamicFormatPreparedCore(ctx, builder, read, unit_value, unit_char_len, unit_record_count, is_internal, unit_i32, prepared, expanded, needs_status);
 }
 
 fn emitReadDynamicFormatPreparedCore(
