@@ -62,6 +62,18 @@ pub fn emitSpecialFormattedWrite(
     prepared: PreparedFormatContext,
     fmt_items: []const ast.FormatItem,
 ) EmitError!bool {
+    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
+    defer prepared_fmt.deinit(ctx.allocator);
+    return emitSpecialFormattedWriteLowered(ctx, builder, write, prepared, prepared_fmt.ops);
+}
+
+pub fn emitSpecialFormattedWriteLowered(
+    ctx: *Context,
+    builder: anytype,
+    write: ast.WriteStmt,
+    prepared: PreparedFormatContext,
+    fmt_ops: []const format_ir.StreamOp,
+) EmitError!bool {
     if (try emitTrailingDVectorFormattedWrite(
         ctx,
         builder,
@@ -71,7 +83,7 @@ pub fn emitSpecialFormattedWrite(
         prepared.unit.unit_record_count,
         prepared.unit.is_internal,
         prepared.unit.unit_i32,
-        fmt_items,
+        fmt_ops,
     )) {
         return true;
     }
@@ -81,7 +93,7 @@ pub fn emitSpecialFormattedWrite(
         write,
         prepared.unit.unit_i32,
         prepared.unit.is_internal,
-        fmt_items,
+        fmt_ops,
     );
 }
 
@@ -94,13 +106,10 @@ fn emitTrailingDVectorFormattedWrite(
     unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
-    fmt_items: []const ast.FormatItem,
+    fmt_ops: []const format_ir.StreamOp,
 ) EmitError!bool {
     if (is_internal) return false;
     if (write.args.len < 2) return false;
-    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
-    defer prepared_fmt.deinit(ctx.allocator);
-    const fmt_ops = prepared_fmt.ops;
 
     const vector_source = try resolveDVectorSource(ctx, builder, write.args[write.args.len - 1]) orelse return false;
     const reversion_start = format_ir.findReversionStart(fmt_ops);
@@ -251,13 +260,10 @@ fn emitDynamicImpliedDoFormattedWrite(
     write: ast.WriteStmt,
     unit_i32: ValueRef,
     is_internal: bool,
-    fmt_items: []const ast.FormatItem,
+    fmt_items: []const format_ir.StreamOp,
 ) EmitError!bool {
     if (is_internal) return false;
     if (write.args.len != 2) return false;
-    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
-    defer prepared_fmt.deinit(ctx.allocator);
-    const fmt_ops = prepared_fmt.ops;
 
     const title_arg = write.args[0];
     const title_ptr = try expr.emitExpr(ctx, builder, title_arg);
@@ -265,7 +271,7 @@ fn emitDynamicImpliedDoFormattedWrite(
     const title_len = charLenForExpr(ctx, title_arg) orelse return false;
 
     if (try resolveDVectorSource(ctx, builder, write.args[1])) |vector_source| {
-        const plan = parseDynamicDImpliedFormat(ctx, fmt_ops) orelse return false;
+        const plan = parseDynamicDImpliedFormat(ctx, fmt_items) orelse return false;
         defer {
             ctx.allocator.free(plan.pre);
             ctx.allocator.free(plan.post);
@@ -307,7 +313,7 @@ fn emitDynamicImpliedDoFormattedWrite(
     }
 
     if (try resolveIntegerVectorSource(ctx, builder, write.args[1])) |vector_source| {
-        const plan = parseDynamicIntegerImpliedFormat(ctx, fmt_ops) orelse return false;
+        const plan = parseDynamicIntegerImpliedFormat(ctx, fmt_items) orelse return false;
         defer {
             ctx.allocator.free(plan.pre);
             ctx.allocator.free(plan.post);

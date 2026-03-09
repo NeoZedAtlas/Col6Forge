@@ -1,5 +1,6 @@
 const ast = @import("../../../../input.zig");
 const context = @import("../../../codegen/context.zig");
+const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -21,7 +22,7 @@ const PreparedFormatContext = formatted_context.PreparedFormatContext;
 const emitWriteRuntimeFormatExprPrepared = format_expr.emitWriteRuntimeFormatExprPrepared;
 const emitReadRuntimeFormatExprPrepared = format_expr.emitReadRuntimeFormatExprPrepared;
 const emitReadRuntimeFormatExprPreparedStatus = format_expr.emitReadRuntimeFormatExprPreparedStatus;
-const emitSpecialFormattedWrite = special_write.emitSpecialFormattedWrite;
+const emitSpecialFormattedWriteLowered = special_write.emitSpecialFormattedWriteLowered;
 const emitReadFormattedStream = stream_read.emitReadFormattedStream;
 const emitWriteFormattedStream = stream_write.emitWriteFormattedStream;
 const dynamic_mod = @import("dynamic.zig");
@@ -29,9 +30,8 @@ const write_mod = @import("write.zig");
 const read_mod = @import("read.zig");
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
-const emitWriteFormatted = write_mod.emitWriteFormatted;
-const emitReadFormatted = read_mod.emitReadFormatted;
-const emitReadFormattedStatus = read_mod.emitReadFormattedStatus;
+const emitWriteFormattedLowered = write_mod.emitWriteFormattedLowered;
+const emitReadFormattedLowered = read_mod.emitReadFormattedLowered;
 
 pub const ExecutorMode = enum {
     classic,
@@ -96,9 +96,26 @@ pub fn emitPreparedWrite(
     switch (executor.mode) {
         .classic => {
             if (executor.plan == .static_items) {
-                if (try emitSpecialFormattedWrite(ctx, builder, write, prepared, executor.plan.static_items)) {
+                const lowered = try format_ir.lower(ctx.allocator, executor.plan.static_items, format_ir.max_stream_ops);
+                defer lowered.deinit(ctx.allocator);
+                if (try emitSpecialFormattedWriteLowered(ctx, builder, write, prepared, lowered.ops)) {
                     return;
                 }
+                var expanded_values = try expandWriteArgs(ctx, builder, write.args);
+                defer expanded_values.deinit();
+                return emitWriteFormattedLowered(
+                    ctx,
+                    builder,
+                    write,
+                    prepared.unit.unit_value,
+                    prepared.unit.unit_char_len,
+                    prepared.unit.unit_record_count,
+                    prepared.unit.is_internal,
+                    prepared.unit.unit_i32,
+                    lowered.ops,
+                    &expanded_values,
+                    null,
+                );
             }
             var expanded_values = try expandWriteArgs(ctx, builder, write.args);
             defer expanded_values.deinit();
@@ -147,7 +164,9 @@ fn emitClassicPreparedWrite(
             );
         },
         .static_items => |items| {
-            return emitWriteFormatted(
+            const lowered = try format_ir.lower(ctx.allocator, items, format_ir.max_stream_ops);
+            defer lowered.deinit(ctx.allocator);
+            return emitWriteFormattedLowered(
                 ctx,
                 builder,
                 write,
@@ -156,8 +175,9 @@ fn emitClassicPreparedWrite(
                 prepared.unit.unit_record_count,
                 prepared.unit.is_internal,
                 prepared.unit.unit_i32,
-                items,
+                lowered.ops,
                 expanded_values,
+                null,
             );
         },
         .runtime_char_expr => |runtime_fmt_expr| {
@@ -265,8 +285,10 @@ fn emitClassicPreparedRead(
             );
         },
         .static_items => |items| {
+            const lowered = try format_ir.lower(ctx.allocator, items, format_ir.max_stream_ops);
+            defer lowered.deinit(ctx.allocator);
             if (needs_status) {
-                return emitReadFormattedStatus(
+                return emitReadFormattedLowered(
                     ctx,
                     builder,
                     read,
@@ -275,11 +297,13 @@ fn emitClassicPreparedRead(
                     prepared.unit.unit_record_count,
                     prepared.unit.is_internal,
                     prepared.unit.unit_i32,
-                    items,
+                    lowered.ops,
                     expanded,
+                    true,
+                    null,
                 );
             }
-            try emitReadFormatted(
+            _ = try emitReadFormattedLowered(
                 ctx,
                 builder,
                 read,
@@ -288,8 +312,10 @@ fn emitClassicPreparedRead(
                 prepared.unit.unit_record_count,
                 prepared.unit.is_internal,
                 prepared.unit.unit_i32,
-                items,
+                lowered.ops,
                 expanded,
+                false,
+                null,
             );
         },
         .runtime_char_expr => |runtime_fmt_expr| {

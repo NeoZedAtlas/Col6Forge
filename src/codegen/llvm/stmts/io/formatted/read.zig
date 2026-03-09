@@ -47,7 +47,7 @@ fn constI32(ctx: *Context, value: usize) EmitError!ValueRef {
     return ctx.constI32(@intCast(value));
 }
 
-fn emitReadFormattedImpl(
+pub fn emitReadFormattedLowered(
     ctx: *Context,
     builder: anytype,
     read: ast.ReadStmt,
@@ -56,15 +56,12 @@ fn emitReadFormattedImpl(
     unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
-    fmt_items: []const ast.FormatItem,
+    fmt_ops: []const format_ir.StreamOp,
     expanded: *ExpandedReadTargets,
     return_status: bool,
     direct_spec: ?DirectIoSpec,
 ) EmitError!ValueRef {
     _ = read;
-    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
-    defer prepared_fmt.deinit(ctx.allocator);
-    const fmt_ops = prepared_fmt.ops;
 
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();
@@ -345,7 +342,9 @@ pub fn emitReadFormatted(
     fmt_items: []const ast.FormatItem,
     expanded: *ExpandedReadTargets,
 ) EmitError!void {
-    _ = try emitReadFormattedImpl(
+    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
+    defer prepared_fmt.deinit(ctx.allocator);
+    _ = try emitReadFormattedLowered(
         ctx,
         builder,
         read,
@@ -354,7 +353,7 @@ pub fn emitReadFormatted(
         unit_record_count,
         is_internal,
         unit_i32,
-        fmt_items,
+        prepared_fmt.ops,
         expanded,
         false,
         null,
@@ -373,7 +372,9 @@ pub fn emitReadFormattedStatus(
     fmt_items: []const ast.FormatItem,
     expanded: *ExpandedReadTargets,
 ) EmitError!ValueRef {
-    return emitReadFormattedImpl(
+    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
+    defer prepared_fmt.deinit(ctx.allocator);
+    return emitReadFormattedLowered(
         ctx,
         builder,
         read,
@@ -382,7 +383,7 @@ pub fn emitReadFormattedStatus(
         unit_record_count,
         is_internal,
         unit_i32,
-        fmt_items,
+        prepared_fmt.ops,
         expanded,
         true,
         null,
@@ -400,7 +401,9 @@ pub fn emitReadFormattedDirect(
     expanded: *ExpandedReadTargets,
 ) EmitError!void {
     const dummy_unit = ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    _ = try emitReadFormattedImpl(
+    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
+    defer prepared_fmt.deinit(ctx.allocator);
+    _ = try emitReadFormattedLowered(
         ctx,
         builder,
         read,
@@ -409,7 +412,7 @@ pub fn emitReadFormattedDirect(
         null,
         true,
         unit_i32,
-        fmt_items,
+        prepared_fmt.ops,
         expanded,
         false,
         .{ .unit_i32 = unit_i32, .rec_i32 = rec_i32, .recl_i32 = recl_i32 },
