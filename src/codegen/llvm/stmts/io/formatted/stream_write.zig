@@ -13,18 +13,13 @@ const EmitError = anyerror;
 const io_utils = @import("../utils.zig");
 const expansion = @import("../expansion.zig");
 const formatted_context = @import("context.zig");
-const dynamic_mod = @import("dynamic.zig");
 const stream_common = @import("stream_common.zig");
 
 const expandWriteArgs = expansion.expandWriteArgs;
 const emitRuntimeFormatValue = formatted_context.emitRuntimeFormatValue;
-const PreparedExecutionFormatPlan = formatted_context.PreparedExecutionFormatPlan;
-const PreparedFormatContext = formatted_context.PreparedFormatContext;
 const StreamFormatSource = formatted_context.StreamFormatSource;
 const emitSharedRuntimeImpliedDo = stream_common.emitRuntimeImpliedDo;
 const emitSharedStreamArgs = stream_common.emitStreamArgs;
-const isRuntimeImpliedDo = stream_common.isRuntimeImpliedDo;
-const oneForType = stream_common.oneForType;
 
 fn appendEscapedLiteral(buf: *std.array_list.Managed(u8), text: []const u8) !void {
     for (text) |ch| {
@@ -322,54 +317,4 @@ pub fn emitWriteFormattedStream(
     );
     try emitStreamArgs(ctx, builder, state, write.args);
     try emitStreamFinish(ctx, builder, state);
-}
-
-pub fn emitWriteFormattedStreamPrepared(
-    ctx: *Context,
-    builder: anytype,
-    write: ast.WriteStmt,
-    prepared: PreparedFormatContext,
-    plan: PreparedExecutionFormatPlan,
-) EmitError!void {
-    switch (plan) {
-        .static_items => |items| {
-            return emitWriteFormattedStream(
-                ctx,
-                builder,
-                write,
-                prepared.unit.unit_value,
-                prepared.unit.unit_char_len,
-                prepared.unit.unit_record_count,
-                prepared.unit.is_internal,
-                prepared.unit.unit_i32,
-                .{ .static_items = items },
-            );
-        },
-        .runtime_char_expr => |fmt_expr| {
-            return emitWriteFormattedStream(
-                ctx,
-                builder,
-                write,
-                prepared.unit.unit_value,
-                prepared.unit.unit_char_len,
-                prepared.unit.unit_record_count,
-                prepared.unit.is_internal,
-                prepared.unit.unit_i32,
-                .{ .runtime_expr = fmt_expr },
-            );
-        },
-        .dynamic_label => |prepared_dynamic| {
-            return dynamic_mod.emitWriteDynamicFormatPreparedStream(
-                ctx,
-                builder,
-                write,
-                prepared.unit.unit_value,
-                prepared.unit.unit_char_len,
-                prepared.unit.unit_record_count,
-                prepared.unit.is_internal,
-                prepared.unit.unit_i32,
-                prepared_dynamic,
-            );
-        },
-    }
 }
