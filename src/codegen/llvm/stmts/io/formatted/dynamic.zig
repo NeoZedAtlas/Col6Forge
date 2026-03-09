@@ -16,6 +16,7 @@ const write_mod = @import("write.zig");
 const read_mod = @import("read.zig");
 const stream_write_mod = @import("stream_write.zig");
 const stream_read_mod = @import("stream_read.zig");
+const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
@@ -196,6 +197,8 @@ pub fn emitWriteDynamicFormatPreparedStream(
         unit_i32: ValueRef,
 
         fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+            const lowered = try format_ir.lower(ctx_inner.allocator, items, format_ir.max_stream_ops);
+            defer lowered.deinit(ctx_inner.allocator);
             try emitWriteFormattedStream(
                 ctx_inner,
                 builder_inner,
@@ -205,7 +208,7 @@ pub fn emitWriteDynamicFormatPreparedStream(
                 self.unit_record_count,
                 self.is_internal,
                 self.unit_i32,
-                .{ .static_items = items },
+                .{ .static_ops = lowered.ops },
             );
         }
 
@@ -367,6 +370,8 @@ pub fn emitReadDynamicFormatPreparedStream(
         needs_status: bool,
 
         fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+            const lowered = try format_ir.lower(ctx_inner.allocator, items, format_ir.max_stream_ops);
+            defer lowered.deinit(ctx_inner.allocator);
             const status_val = try emitReadFormattedStream(
                 ctx_inner,
                 builder_inner,
@@ -376,7 +381,7 @@ pub fn emitReadDynamicFormatPreparedStream(
                 self.unit_record_count,
                 self.is_internal,
                 self.unit_i32,
-                .{ .static_items = items },
+                .{ .static_ops = lowered.ops },
                 self.needs_status,
             );
             if (self.needs_status) {

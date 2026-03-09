@@ -49,18 +49,15 @@ fn appendRealDescriptor(buf: *std.array_list.Managed(u8), kind: u8, width: usize
 fn lowerStaticWriteStreamFormatWithBuilder(
     ctx: *Context,
     builder: anytype,
-    fmt_items: []const ast.FormatItem,
+    fmt_ops: []const format_ir.StreamOp,
     is_internal: bool,
 ) EmitError!ValueRef {
-    const prepared = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
-    defer prepared.deinit(ctx.allocator);
-
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();
 
     var sign_plus = false;
     var scale_factor: i32 = 0;
-    for (prepared.ops) |item| {
+    for (fmt_ops) |item| {
         switch (item) {
             .literal => |text| try appendEscapedLiteral(&fmt_buf, text),
             .spaces => |count| {
@@ -233,8 +230,8 @@ fn emitStreamBegin(
 ) EmitError!ValueRef {
     if (is_internal) {
         switch (format_source) {
-            .static_items => |fmt_items| {
-                const fmt_ptr = try lowerStaticWriteStreamFormatWithBuilder(ctx, builder, fmt_items, is_internal);
+            .static_ops => |fmt_ops| {
+                const fmt_ptr = try lowerStaticWriteStreamFormatWithBuilder(ctx, builder, fmt_ops, is_internal);
                 const decl = try ctx.ensureDeclRaw("col6forge_write_internal_stream_begin", .ptr, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr }, false);
                 const state_tmp = try ctx.nextTemp();
                 try builder.callTyped(
@@ -272,8 +269,8 @@ fn emitStreamBegin(
     }
 
     switch (format_source) {
-        .static_items => |fmt_items| {
-            const fmt_ptr = try lowerStaticWriteStreamFormatWithBuilder(ctx, builder, fmt_items, is_internal);
+        .static_ops => |fmt_ops| {
+            const fmt_ptr = try lowerStaticWriteStreamFormatWithBuilder(ctx, builder, fmt_ops, is_internal);
             const decl = try ctx.ensureDeclRaw("col6forge_formatted_write_stream_begin", .ptr, &[_]llvm_types.IRType{ .i32, .ptr, .i32 }, false);
             const state_tmp = try ctx.nextTemp();
             try builder.callTyped(state_tmp, .ptr, decl, &.{ unit_i32, fmt_ptr, .{ .name = "0", .ty = .i32, .is_ptr = false } });

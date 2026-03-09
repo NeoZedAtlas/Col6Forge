@@ -205,6 +205,8 @@ fn emitStreamPreparedWrite(
 ) EmitError!void {
     switch (plan) {
         .static_items => |items| {
+            const lowered = try format_ir.lower(ctx.allocator, items, format_ir.max_stream_ops);
+            defer lowered.deinit(ctx.allocator);
             return emitWriteFormattedStream(
                 ctx,
                 builder,
@@ -214,7 +216,7 @@ fn emitStreamPreparedWrite(
                 prepared.unit.unit_record_count,
                 prepared.unit.is_internal,
                 prepared.unit.unit_i32,
-                .{ .static_items = items },
+                .{ .static_ops = lowered.ops },
             );
         },
         .runtime_char_expr => |runtime_fmt_expr| {
@@ -358,6 +360,8 @@ fn emitStreamPreparedRead(
 ) EmitError!ValueRef {
     switch (plan) {
         .static_items => |items| {
+            const lowered = try format_ir.lower(ctx.allocator, items, format_ir.max_stream_ops);
+            defer lowered.deinit(ctx.allocator);
             return emitReadFormattedStream(
                 ctx,
                 builder,
@@ -367,7 +371,7 @@ fn emitStreamPreparedRead(
                 prepared.unit.unit_record_count,
                 prepared.unit.is_internal,
                 prepared.unit.unit_i32,
-                .{ .static_items = items },
+                .{ .static_ops = lowered.ops },
                 needs_status,
             );
         },

@@ -3,6 +3,7 @@ const context = @import("../../../codegen/context.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
 const common = @import("../../../codegen/common.zig");
 const utils = @import("../../../codegen/utils.zig");
+const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -33,7 +34,7 @@ pub const FormatPlan = union(enum) {
 };
 
 pub const StreamFormatSource = union(enum) {
-    static_items: []const ast.FormatItem,
+    static_ops: []const format_ir.StreamOp,
     runtime_expr: *ast.Expr,
 };
 
