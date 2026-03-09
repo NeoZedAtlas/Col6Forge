@@ -3,6 +3,7 @@ const ast = @import("../../../../input.zig");
 const llvm_types = @import("../../../types.zig");
 const context = @import("../../../codegen/context.zig");
 const utils = @import("../../../codegen/utils.zig");
+const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -11,12 +12,9 @@ const EmitError = anyerror;
 
 const io_utils = @import("../utils.zig");
 const expansion = @import("../expansion.zig");
-const format_items = @import("../../../../../format/items.zig");
 
-const countFormatDescriptors = io_utils.countFormatDescriptors;
 const appendScanfLiteral = io_utils.appendScanfLiteral;
 const appendSpaces = io_utils.appendSpaces;
-const findReversionStart = io_utils.findReversionStart;
 const emitHeapBytes = io_utils.emitHeapBytes;
 const emitStackPointerArrayFromNames = io_utils.emitStackPointerArrayFromNames;
 const emitFreeAllocs = io_utils.emitFreeAllocs;
@@ -64,9 +62,9 @@ fn emitReadFormattedImpl(
     direct_spec: ?DirectIoSpec,
 ) EmitError!ValueRef {
     _ = read;
-    const prepared_fmt = try format_items.ensureFlatWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
     defer prepared_fmt.deinit(ctx.allocator);
-    const flat_fmt_items = prepared_fmt.items;
+    const fmt_ops = prepared_fmt.ops;
 
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();
@@ -84,9 +82,9 @@ fn emitReadFormattedImpl(
     var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer heap_allocs.deinit();
 
-    const descriptor_count = countFormatDescriptors(flat_fmt_items);
+    const descriptor_count = format_ir.countDescriptors(fmt_ops);
     if (descriptor_count == 0) {
-        for (flat_fmt_items) |item| {
+        for (fmt_ops) |item| {
             switch (item) {
                 .literal => |text| {
                     try appendScanfLiteral(&fmt_buf, text);
@@ -107,12 +105,13 @@ fn emitReadFormattedImpl(
                     const directive: u8 = if (ctrl == .nulls) 'N' else 'Z';
                     try fmt_buf.writer().print("%{c}", .{directive});
                 },
+                .sign_control, .scale, .reversion_anchor => {},
                 else => {},
             }
         }
     } else {
         var arg_index: usize = 0;
-        const reversion_start = findReversionStart(flat_fmt_items);
+        const reversion_start = format_ir.findReversionStart(fmt_ops);
         var format_start: usize = 0;
         var first_pass = true;
 
@@ -124,8 +123,8 @@ fn emitReadFormattedImpl(
 
             var scale_factor: i32 = 0;
             var fmt_index: usize = format_start;
-            while (fmt_index < flat_fmt_items.len) : (fmt_index += 1) {
-                const item = flat_fmt_items[fmt_index];
+            while (fmt_index < fmt_ops.len) : (fmt_index += 1) {
+                const item = fmt_ops[fmt_index];
                 switch (item) {
                     .literal => |text| {
                         try appendScanfLiteral(&fmt_buf, text);
@@ -142,94 +141,96 @@ fn emitReadFormattedImpl(
                         try fmt_buf.writer().print("%{d}{c}", .{ tab.count, directive });
                     },
                     .colon => {},
-                    .int => |spec| {
-                        if (arg_index >= expanded.ptrs.items.len) break;
-                        const width = if (spec.width > 0) spec.width else 0;
-                        if (width > 0) {
-                            try fmt_buf.writer().print("%{d}d", .{width});
-                        } else {
-                            try fmt_buf.appendSlice("%d");
-                        }
-                        try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
-                        try arg_kinds.append(defaultIntegerReadKind(ctx));
-                        arg_index += 1;
-                    },
-                    .real, .real_fixed => |spec| {
-                        if (arg_index >= expanded.ptrs.items.len) break;
-                        const ty = expanded.types.items[arg_index];
-                        const width = if (spec.width > 0) spec.width else 0;
-                        const fmt_spec = if (ty == .f64) "lf" else "f";
-                        if (width > 0) {
-                            try fmt_buf.writer().print("%{d}{s}", .{ width, fmt_spec });
-                        } else {
-                            try fmt_buf.writer().print("%{s}", .{fmt_spec});
-                        }
-                        if (scale_factor != 0) {
-                            const bytes: usize = switch (ty) {
-                                .f32 => 4,
-                                .f64 => 8,
-                                else => return error.UnsupportedIntrinsicType,
-                            };
-                            const tmp_ptr = try emitHeapBytes(ctx, builder, bytes);
-                            try heap_allocs.append(tmp_ptr);
-                            try arg_ptrs.append(tmp_ptr.name);
-                            try arg_kinds.append(if (ty == .f64) 'D' else 'f');
-                            try scale_fixups.append(.{
-                                .target_ptr = expanded.ptrs.items[arg_index],
-                                .temp_ptr = tmp_ptr,
-                                .ty = ty,
-                                .scale_factor = scale_factor,
-                            });
-                        } else {
+                    .descriptor => |descriptor| switch (descriptor) {
+                        .int => |spec| {
+                            if (arg_index >= expanded.ptrs.items.len) break;
+                            const width = if (spec.width > 0) spec.width else 0;
+                            if (width > 0) {
+                                try fmt_buf.writer().print("%{d}d", .{width});
+                            } else {
+                                try fmt_buf.appendSlice("%d");
+                            }
                             try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
-                            try arg_kinds.append(if (ty == .f64) 'D' else 'f');
-                        }
-                        arg_index += 1;
-                    },
-                    .char => |spec| {
-                        if (arg_index >= expanded.ptrs.items.len) break;
-                        const target_ptr = expanded.ptrs.items[arg_index];
-                        const target_len = expanded.char_lens.items[arg_index];
-                        const width = if (spec.width > 0) spec.width else if (target_len > 0) target_len else 1;
+                            try arg_kinds.append(defaultIntegerReadKind(ctx));
+                            arg_index += 1;
+                        },
+                        .real, .real_fixed => |spec| {
+                            if (arg_index >= expanded.ptrs.items.len) break;
+                            const ty = expanded.types.items[arg_index];
+                            const width = if (spec.width > 0) spec.width else 0;
+                            const fmt_spec = if (ty == .f64) "lf" else "f";
+                            if (width > 0) {
+                                try fmt_buf.writer().print("%{d}{s}", .{ width, fmt_spec });
+                            } else {
+                                try fmt_buf.writer().print("%{s}", .{fmt_spec});
+                            }
+                            if (scale_factor != 0) {
+                                const bytes: usize = switch (ty) {
+                                    .f32 => 4,
+                                    .f64 => 8,
+                                    else => return error.UnsupportedIntrinsicType,
+                                };
+                                const tmp_ptr = try emitHeapBytes(ctx, builder, bytes);
+                                try heap_allocs.append(tmp_ptr);
+                                try arg_ptrs.append(tmp_ptr.name);
+                                try arg_kinds.append(if (ty == .f64) 'D' else 'f');
+                                try scale_fixups.append(.{
+                                    .target_ptr = expanded.ptrs.items[arg_index],
+                                    .temp_ptr = tmp_ptr,
+                                    .ty = ty,
+                                    .scale_factor = scale_factor,
+                                });
+                            } else {
+                                try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                                try arg_kinds.append(if (ty == .f64) 'D' else 'f');
+                            }
+                            arg_index += 1;
+                        },
+                        .char => |spec| {
+                            if (arg_index >= expanded.ptrs.items.len) break;
+                            const target_ptr = expanded.ptrs.items[arg_index];
+                            const target_len = expanded.char_lens.items[arg_index];
+                            const width = if (spec.width > 0) spec.width else if (target_len > 0) target_len else 1;
 
-                        try fmt_buf.writer().print("%{d}c", .{width});
+                            try fmt_buf.writer().print("%{d}c", .{width});
 
-                        if (target_len > 0 and width > target_len) {
-                            const tmp_ptr = try emitHeapBytes(ctx, builder, width);
-                            try heap_allocs.append(tmp_ptr);
-                            try arg_ptrs.append(tmp_ptr.name);
-                            try arg_kinds.append('c');
-                            try char_fixups.append(.{
-                                .target_ptr = target_ptr,
-                                .target_len = target_len,
-                                .field_width = width,
-                                .temp_ptr = tmp_ptr,
-                            });
-                        } else {
-                            try arg_ptrs.append(target_ptr.name);
-                            try arg_kinds.append('c');
-                            if (target_len > 0 and width < target_len) {
+                            if (target_len > 0 and width > target_len) {
+                                const tmp_ptr = try emitHeapBytes(ctx, builder, width);
+                                try heap_allocs.append(tmp_ptr);
+                                try arg_ptrs.append(tmp_ptr.name);
+                                try arg_kinds.append('c');
                                 try char_fixups.append(.{
                                     .target_ptr = target_ptr,
                                     .target_len = target_len,
                                     .field_width = width,
-                                    .temp_ptr = null,
+                                    .temp_ptr = tmp_ptr,
                                 });
+                            } else {
+                                try arg_ptrs.append(target_ptr.name);
+                                try arg_kinds.append('c');
+                                if (target_len > 0 and width < target_len) {
+                                    try char_fixups.append(.{
+                                        .target_ptr = target_ptr,
+                                        .target_len = target_len,
+                                        .field_width = width,
+                                        .temp_ptr = null,
+                                    });
+                                }
                             }
-                        }
-                        arg_index += 1;
-                    },
-                    .logical => |spec| {
-                        if (arg_index >= expanded.ptrs.items.len) break;
-                        const width = if (spec.width > 0) spec.width else 0;
-                        if (width > 0) {
-                            try fmt_buf.writer().print("%{d}L", .{width});
-                        } else {
-                            try fmt_buf.appendSlice("%L");
-                        }
-                        try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
-                        try arg_kinds.append('L');
-                        arg_index += 1;
+                            arg_index += 1;
+                        },
+                        .logical => |spec| {
+                            if (arg_index >= expanded.ptrs.items.len) break;
+                            const width = if (spec.width > 0) spec.width else 0;
+                            if (width > 0) {
+                                try fmt_buf.writer().print("%{d}L", .{width});
+                            } else {
+                                try fmt_buf.appendSlice("%L");
+                            }
+                            try arg_ptrs.append(expanded.ptrs.items[arg_index].name);
+                            try arg_kinds.append('L');
+                            arg_index += 1;
+                        },
                     },
                     .scale => |value| {
                         scale_factor = value;
@@ -239,8 +240,6 @@ fn emitReadFormattedImpl(
                         try fmt_buf.writer().print("%{c}", .{directive});
                     },
                     .sign_control => {},
-                    .repeat_group => {},
-                    .reversion_offset => {},
                     .reversion_anchor => {},
                 }
             }

@@ -32,6 +32,21 @@ pub const PreparedStreamOps = struct {
     }
 };
 
+pub fn countDescriptors(ops: []const StreamOp) usize {
+    var count: usize = 0;
+    for (ops) |op| {
+        if (op == .descriptor) count += 1;
+    }
+    return count;
+}
+
+pub fn findReversionStart(ops: []const StreamOp) usize {
+    for (ops, 0..) |op, idx| {
+        if (op == .reversion_anchor) return idx;
+    }
+    return 0;
+}
+
 pub fn lower(
     allocator: std.mem.Allocator,
     items: []const ast.FormatItem,

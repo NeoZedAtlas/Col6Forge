@@ -3,7 +3,7 @@ const ast = @import("../../../../input.zig");
 const context = @import("../../../codegen/context.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
 const llvm_types = @import("../../../types.zig");
-const format_items = @import("../../../../../format/items.zig");
+const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -15,13 +15,11 @@ const io_utils = @import("../utils.zig");
 const write_mod = @import("write.zig");
 const context_mod = @import("context.zig");
 
-const emitWriteFormatted = write_mod.emitWriteFormatted;
+const emitWriteFormattedLowered = write_mod.emitWriteFormattedLowered;
 const expandWriteArgs = expansion.expandWriteArgs;
 const charLenForExpr = io_utils.charLenForExpr;
-const findReversionStart = io_utils.findReversionStart;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const intLiteralValue = io_utils.intLiteralValue;
-const countFormatDescriptors = io_utils.countFormatDescriptors;
 const emitTripletCount = io_utils.emitTripletCount;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const PreparedFormatContext = context_mod.PreparedFormatContext;
@@ -100,27 +98,27 @@ fn emitTrailingDVectorFormattedWrite(
 ) EmitError!bool {
     if (is_internal) return false;
     if (write.args.len < 2) return false;
-    const prepared_fmt = try format_items.ensureFlatWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
     defer prepared_fmt.deinit(ctx.allocator);
-    const flat_fmt_items = prepared_fmt.items;
+    const fmt_ops = prepared_fmt.ops;
 
     const vector_source = try resolveDVectorSource(ctx, builder, write.args[write.args.len - 1]) orelse return false;
-    const reversion_start = findReversionStart(flat_fmt_items);
-    if (reversion_start == 0 or reversion_start >= flat_fmt_items.len) return false;
+    const reversion_start = format_ir.findReversionStart(fmt_ops);
+    if (reversion_start == 0 or reversion_start >= fmt_ops.len) return false;
 
-    const prefix_desc_count = countFormatDescriptors(flat_fmt_items[0..reversion_start]);
+    const prefix_desc_count = format_ir.countDescriptors(fmt_ops[0..reversion_start]);
     if (prefix_desc_count != write.args.len - 1) return false;
 
-    const plan = parseDReversionPlan(flat_fmt_items[reversion_start..]) orelse return false;
-    const prefix_fmt_items = try cloneTrimmedPrefixFormatForSplitWrite(ctx, flat_fmt_items[0..reversion_start]);
+    const plan = parseDReversionPlan(fmt_ops[reversion_start..]) orelse return false;
+    const prefix_fmt_items = try cloneTrimmedPrefixFormatForSplitWrite(ctx, fmt_ops[0..reversion_start]);
     defer if (prefix_fmt_items) |items| ctx.allocator.free(items);
-    const prefix_fmt = if (prefix_fmt_items) |items| items else flat_fmt_items[0..reversion_start];
+    const prefix_fmt = if (prefix_fmt_items) |items| items else fmt_ops[0..reversion_start];
 
     var prefix_write = write;
     prefix_write.args = write.args[0 .. write.args.len - 1];
     var prefix_expanded = try expandWriteArgs(ctx, builder, prefix_write.args);
     defer prefix_expanded.deinit();
-    try emitWriteFormatted(
+    try emitWriteFormattedLowered(
         ctx,
         builder,
         prefix_write,
@@ -131,6 +129,7 @@ fn emitTrailingDVectorFormattedWrite(
         unit_i32,
         prefix_fmt,
         &prefix_expanded,
+        null,
     );
 
     const decl = try ctx.ensureDeclRaw(
@@ -167,8 +166,8 @@ fn emitTrailingDVectorFormattedWrite(
 
 fn cloneTrimmedPrefixFormatForSplitWrite(
     ctx: *Context,
-    prefix_items: []const ast.FormatItem,
-) EmitError!?[]ast.FormatItem {
+    prefix_items: []const format_ir.StreamOp,
+) EmitError!?[]format_ir.StreamOp {
     if (prefix_items.len == 0) return null;
     var idx = prefix_items.len;
     while (idx > 0) {
@@ -179,7 +178,7 @@ fn cloneTrimmedPrefixFormatForSplitWrite(
                 for (lit) |ch| {
                     if (ch != '\n') return null;
                 }
-                const cloned = try ctx.allocator.dupe(ast.FormatItem, prefix_items);
+                const cloned = try ctx.allocator.dupe(format_ir.StreamOp, prefix_items);
                 if (lit.len == 1) {
                     if (idx == 0) return cloned[0..0];
                     return cloned[0..idx];
@@ -194,7 +193,7 @@ fn cloneTrimmedPrefixFormatForSplitWrite(
     return null;
 }
 
-fn parseDReversionPlan(items: []const ast.FormatItem) ?DReversionPlan {
+fn parseDReversionPlan(items: []const format_ir.StreamOp) ?DReversionPlan {
     var indent: usize = 0;
     var seen_descriptor = false;
     var per_line: usize = 0;
@@ -220,16 +219,19 @@ fn parseDReversionPlan(items: []const ast.FormatItem) ?DReversionPlan {
                     indent += lit.len;
                 }
             },
-            .real => |spec| {
-                if (spec.kind != .d) return null;
-                if (!seen_descriptor) {
-                    width = spec.width;
-                    precision = spec.precision;
-                    seen_descriptor = true;
-                } else if (spec.width != width or spec.precision != precision) {
-                    return null;
-                }
-                per_line += 1;
+            .descriptor => |descriptor| switch (descriptor) {
+                .real => |spec| {
+                    if (spec.kind != .d) return null;
+                    if (!seen_descriptor) {
+                        width = spec.width;
+                        precision = spec.precision;
+                        seen_descriptor = true;
+                    } else if (spec.width != width or spec.precision != precision) {
+                        return null;
+                    }
+                    per_line += 1;
+                },
+                else => return null,
             },
             else => return null,
         }
@@ -253,9 +255,9 @@ fn emitDynamicImpliedDoFormattedWrite(
 ) EmitError!bool {
     if (is_internal) return false;
     if (write.args.len != 2) return false;
-    const prepared_fmt = try format_items.ensureFlatWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
+    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
     defer prepared_fmt.deinit(ctx.allocator);
-    const flat_fmt_items = prepared_fmt.items;
+    const fmt_ops = prepared_fmt.ops;
 
     const title_arg = write.args[0];
     const title_ptr = try expr.emitExpr(ctx, builder, title_arg);
@@ -263,7 +265,7 @@ fn emitDynamicImpliedDoFormattedWrite(
     const title_len = charLenForExpr(ctx, title_arg) orelse return false;
 
     if (try resolveDVectorSource(ctx, builder, write.args[1])) |vector_source| {
-        const plan = parseDynamicDImpliedFormat(ctx, flat_fmt_items) orelse return false;
+        const plan = parseDynamicDImpliedFormat(ctx, fmt_ops) orelse return false;
         defer {
             ctx.allocator.free(plan.pre);
             ctx.allocator.free(plan.post);
@@ -305,7 +307,7 @@ fn emitDynamicImpliedDoFormattedWrite(
     }
 
     if (try resolveIntegerVectorSource(ctx, builder, write.args[1])) |vector_source| {
-        const plan = parseDynamicIntegerImpliedFormat(ctx, flat_fmt_items) orelse return false;
+        const plan = parseDynamicIntegerImpliedFormat(ctx, fmt_ops) orelse return false;
         defer {
             ctx.allocator.free(plan.pre);
             ctx.allocator.free(plan.post);
@@ -526,8 +528,8 @@ fn emitRangeCount(
     return emitTripletCount(ctx, builder, start_expr, end_expr, step_expr);
 }
 
-fn parseDynamicDImpliedFormat(ctx: *Context, fmt_items: []const ast.FormatItem) ?DynamicDImpliedFormatPlan {
-    const reversion_start = findReversionStart(fmt_items);
+fn parseDynamicDImpliedFormat(ctx: *Context, fmt_items: []const format_ir.StreamOp) ?DynamicDImpliedFormatPlan {
+    const reversion_start = format_ir.findReversionStart(fmt_items);
     if (reversion_start == 0 or reversion_start > fmt_items.len) return null;
 
     var pre_buf = std.array_list.Managed(u8).init(ctx.allocator);
@@ -555,9 +557,12 @@ fn parseDynamicDImpliedFormat(ctx: *Context, fmt_items: []const ast.FormatItem) 
                     }
                 }
             },
-            .char => |spec| {
-                if (seen_char or spec.width != 0) return null;
-                seen_char = true;
+            .descriptor => |descriptor| switch (descriptor) {
+                .char => |spec| {
+                    if (seen_char or spec.width != 0) return null;
+                    seen_char = true;
+                },
+                else => return null,
             },
             else => return null,
         }
@@ -584,16 +589,19 @@ fn parseDynamicDImpliedFormat(ctx: *Context, fmt_items: []const ast.FormatItem) 
                 }
                 indent += lit.len;
             },
-            .real => |spec| {
-                if (spec.kind != .d) return null;
-                if (!seen_descriptor) {
-                    width = spec.width;
-                    precision = spec.precision;
-                    seen_descriptor = true;
-                } else if (spec.width != width or spec.precision != precision) {
-                    return null;
-                }
-                per_line += 1;
+            .descriptor => |descriptor| switch (descriptor) {
+                .real => |spec| {
+                    if (spec.kind != .d) return null;
+                    if (!seen_descriptor) {
+                        width = spec.width;
+                        precision = spec.precision;
+                        seen_descriptor = true;
+                    } else if (spec.width != width or spec.precision != precision) {
+                        return null;
+                    }
+                    per_line += 1;
+                },
+                else => return null,
             },
             else => return null,
         }
@@ -617,8 +625,8 @@ fn parseDynamicDImpliedFormat(ctx: *Context, fmt_items: []const ast.FormatItem) 
     };
 }
 
-fn parseDynamicIntegerImpliedFormat(ctx: *Context, fmt_items: []const ast.FormatItem) ?DynamicIntegerImpliedFormatPlan {
-    const reversion_start = findReversionStart(fmt_items);
+fn parseDynamicIntegerImpliedFormat(ctx: *Context, fmt_items: []const format_ir.StreamOp) ?DynamicIntegerImpliedFormatPlan {
+    const reversion_start = format_ir.findReversionStart(fmt_items);
     if (reversion_start == 0 or reversion_start > fmt_items.len) return null;
 
     var pre_buf = std.array_list.Managed(u8).init(ctx.allocator);
@@ -649,19 +657,22 @@ fn parseDynamicIntegerImpliedFormat(ctx: *Context, fmt_items: []const ast.Format
                     }
                 }
             },
-            .char => {
-                if (seen_char or seen_descriptor) return null;
-                seen_char = true;
-            },
-            .int => |spec| {
-                if (!seen_char or spec.min_digits != 0 or spec.width == 0) return null;
-                if (!seen_descriptor) {
-                    width = spec.width;
-                    seen_descriptor = true;
-                } else if (spec.width != width) {
-                    return null;
-                }
-                first_per_line += 1;
+            .descriptor => |descriptor| switch (descriptor) {
+                .char => {
+                    if (seen_char or seen_descriptor) return null;
+                    seen_char = true;
+                },
+                .int => |spec| {
+                    if (!seen_char or spec.min_digits != 0 or spec.width == 0) return null;
+                    if (!seen_descriptor) {
+                        width = spec.width;
+                        seen_descriptor = true;
+                    } else if (spec.width != width) {
+                        return null;
+                    }
+                    first_per_line += 1;
+                },
+                else => return null,
             },
             else => return null,
         }
@@ -685,15 +696,18 @@ fn parseDynamicIntegerImpliedFormat(ctx: *Context, fmt_items: []const ast.Format
                 }
                 indent += lit.len;
             },
-            .int => |spec| {
-                if (spec.min_digits != 0 or spec.width == 0) return null;
-                if (!seen_descriptor) {
-                    width = spec.width;
-                    seen_descriptor = true;
-                } else if (spec.width != width) {
-                    return null;
-                }
-                per_line += 1;
+            .descriptor => |descriptor| switch (descriptor) {
+                .int => |spec| {
+                    if (spec.min_digits != 0 or spec.width == 0) return null;
+                    if (!seen_descriptor) {
+                        width = spec.width;
+                        seen_descriptor = true;
+                    } else if (spec.width != width) {
+                        return null;
+                    }
+                    per_line += 1;
+                },
+                else => return null,
             },
             else => return null,
         }

@@ -4,6 +4,7 @@ const llvm_types = @import("../../../types.zig");
 const context = @import("../../../codegen/context.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
 const utils = @import("../../../codegen/utils.zig");
+const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -12,12 +13,9 @@ const EmitError = anyerror;
 
 const io_utils = @import("../utils.zig");
 const expansion = @import("../expansion.zig");
-const format_items = @import("../../../../../format/items.zig");
 
-const countFormatDescriptors = io_utils.countFormatDescriptors;
 const isAllNewlines = io_utils.isAllNewlines;
 const flushPendingSpaces = io_utils.flushPendingSpaces;
-const findReversionStart = io_utils.findReversionStart;
 const appendIntFormat = io_utils.appendIntFormat;
 const emitStackPointerArrayFromValues = io_utils.emitStackPointerArrayFromValues;
 const emitKindArray = io_utils.emitKindArray;
@@ -45,7 +43,7 @@ fn appendTabMarker(fmt_buf: *std.array_list.Managed(u8), tab: ast.TabFormat) !vo
     try fmt_buf.append(0x02);
 }
 
-fn emitWriteFormattedImpl(
+pub fn emitWriteFormattedLowered(
     ctx: *Context,
     builder: anytype,
     write: ast.WriteStmt,
@@ -54,14 +52,11 @@ fn emitWriteFormattedImpl(
     unit_record_count: ?usize,
     is_internal: bool,
     unit_i32: ValueRef,
-    fmt_items: []const ast.FormatItem,
+    fmt_ops: []const format_ir.StreamOp,
     expanded_values: *ExpandedWriteValues,
     direct_spec: ?DirectIoSpec,
 ) EmitError!void {
     _ = write;
-    const prepared_fmt = try format_items.ensureFlatWithReversionAnchor(ctx.allocator, fmt_items, format_items.max_flat_items);
-    defer prepared_fmt.deinit(ctx.allocator);
-    const flat_fmt_items = prepared_fmt.items;
 
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();
@@ -70,11 +65,11 @@ fn emitWriteFormattedImpl(
     var args = std.array_list.Managed(Arg).init(ctx.allocator);
     defer args.deinit();
 
-    const descriptor_count = countFormatDescriptors(flat_fmt_items);
+    const descriptor_count = format_ir.countDescriptors(fmt_ops);
     if (descriptor_count == 0) {
         var pending_spaces: usize = 0;
         var column: usize = 1;
-        format_loop: for (flat_fmt_items) |item| {
+        format_loop: for (fmt_ops) |item| {
             switch (item) {
                 .literal => |text| {
                     if (isAllNewlines(text)) {
@@ -135,9 +130,7 @@ fn emitWriteFormattedImpl(
                         },
                     }
                 },
-                .colon => {
-                    break :format_loop;
-                },
+                .colon => break :format_loop,
                 else => {},
             }
         }
@@ -145,7 +138,7 @@ fn emitWriteFormattedImpl(
     } else if (expanded_values.values.items.len == 0) {
         var pending_spaces: usize = 0;
         var column: usize = 1;
-        format_loop: for (flat_fmt_items) |item| {
+        format_loop: for (fmt_ops) |item| {
             switch (item) {
                 .literal => |text| {
                     if (isAllNewlines(text)) {
@@ -206,20 +199,18 @@ fn emitWriteFormattedImpl(
                         },
                     }
                 },
-                .colon => {
-                    break :format_loop;
-                },
-                .int, .real, .real_fixed, .char, .logical => {
+                .colon => break :format_loop,
+                .descriptor => {
                     pending_spaces = 0;
                     break;
                 },
-                .repeat_group, .scale, .blank_control, .sign_control, .reversion_offset, .reversion_anchor => {},
+                .scale, .blank_control, .sign_control, .reversion_anchor => {},
             }
         }
     } else {
         var arg_index: usize = 0;
         var pending_spaces: usize = 0;
-        const reversion_start = findReversionStart(flat_fmt_items);
+        const reversion_start = format_ir.findReversionStart(fmt_ops);
         var format_start: usize = 0;
         var first_pass = true;
         while (arg_index < expanded_values.values.items.len) {
@@ -233,8 +224,8 @@ fn emitWriteFormattedImpl(
             var column: usize = 1;
             var idx: usize = format_start;
             var stop_format = false;
-            while (idx < flat_fmt_items.len) : (idx += 1) {
-                const item = flat_fmt_items[idx];
+            while (idx < fmt_ops.len) : (idx += 1) {
+                const item = fmt_ops[idx];
                 switch (item) {
                     .literal => |text| {
                         if (isAllNewlines(text)) {
@@ -295,188 +286,180 @@ fn emitWriteFormattedImpl(
                             },
                         }
                     },
-                    .int => |spec| {
-                        if (arg_index >= expanded_values.values.items.len) break;
-                        try flushPendingSpaces(&fmt_buf, &pending_spaces);
-                        const value = expanded_values.values.items[arg_index];
-                        const int_ty = ctx.defaultIntegerIRType();
-                        const coerced = try expr.coerce(ctx, builder, value, int_ty);
-                        if (spec.min_digits == 0) {
-                            try appendIntFormat(&fmt_buf, spec.width, sign_plus);
-                            try args.append(.{ .ty = int_ty, .name = coerced.name });
-                        } else {
-                            const fmt_i_name = try ctx.ensureDeclRaw(
-                                if (int_ty == .i64) "col6forge_fmt_i64" else "col6forge_fmt_i",
-                                .ptr,
-                                &[_]llvm_types.IRType{ .i32, .i32, .i32, int_ty },
-                                false,
-                            );
-                            const tmp = try ctx.nextTemp();
-                            const width_val = try ctx.constI32(@intCast(spec.width));
-                            const min_val = try ctx.constI32(@intCast(spec.min_digits));
-                            const sign_val = ValueRef{ .name = if (sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
-                            try builder.callTyped(tmp, .ptr, fmt_i_name, &.{ width_val, min_val, sign_val, coerced });
-                            try fmt_buf.appendSlice("%s");
-                            try args.append(.{ .ty = .ptr, .name = tmp });
-                        }
-                        arg_index += 1;
-                        if (spec.width > 0) {
-                            column += spec.width;
-                        }
-                    },
-                    .real, .real_fixed => |spec| {
-                        if (arg_index >= expanded_values.values.items.len) break;
-                        try flushPendingSpaces(&fmt_buf, &pending_spaces);
-                        const value = expanded_values.values.items[arg_index];
-                        var coerced = try expr.coerce(ctx, builder, value, .f64);
-                        if (item == .real_fixed and scale_factor != 0) {
-                            const scale = std.math.pow(f64, 10.0, @as(f64, @floatFromInt(scale_factor)));
-                            const scale_text = utils.formatFloatValue(ctx.allocator, scale, .f64);
-                            const scale_val = ValueRef{ .name = scale_text, .ty = .f64, .is_ptr = false };
-                            const scaled_tmp = try ctx.nextTemp();
-                            try builder.binary(scaled_tmp, "fmul", .f64, coerced, scale_val);
-                            coerced = .{ .name = scaled_tmp, .ty = .f64, .is_ptr = false };
-                        }
-                        if (item == .real_fixed and spec.width > 0) {
-                            const fmt_tmp = try ctx.nextTemp();
-                            const width_val = try ctx.constI32(@intCast(spec.width));
-                            const prec_val = try ctx.constI32(@intCast(spec.precision));
-                            const sign_val = ValueRef{ .name = if (sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
-                            const fmt_name = try ctx.ensureDeclRaw("col6forge_fmt_f", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .f64 }, false);
-                            try builder.callTyped(fmt_tmp, .ptr, fmt_name, &.{ width_val, prec_val, sign_val, coerced });
-                            try fmt_buf.appendSlice("%s");
-                            try args.append(.{ .ty = .ptr, .name = fmt_tmp });
-                        } else if (item == .real_fixed and spec.precision == 0) {
-                            const sign_flag = if (sign_plus) "+" else "";
-                            try fmt_buf.writer().print("%{s}#{d}.0f", .{ sign_flag, spec.width });
-                            try args.append(.{ .ty = .f64, .name = coerced.name });
-                        } else if (item == .real_fixed) {
-                            const sign_flag = if (sign_plus) "+" else "";
-                            try fmt_buf.writer().print("%{s}{d}.{d}f", .{ sign_flag, spec.width, spec.precision });
-                            try args.append(.{ .ty = .f64, .name = coerced.name });
-                        } else {
-                            const fmt_tmp = try ctx.nextTemp();
-                            const width_val = try ctx.constI32(@intCast(spec.width));
-                            const prec_val = try ctx.constI32(@intCast(spec.precision));
-                            const exp_val = try ctx.constI32(@intCast(spec.exp_width));
-                            const scale_val = try ctx.constI32(@intCast(scale_factor));
-                            const sign_val = ValueRef{ .name = if (sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
-                            const fmt_name = switch (spec.kind) {
-                                .d => try ctx.ensureDeclRaw("col6forge_fmt_d", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
-                                .g => try ctx.ensureDeclRaw("col6forge_fmt_g", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
-                                .e => try ctx.ensureDeclRaw("col6forge_fmt_e", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
-                            };
-                            try builder.callTyped(fmt_tmp, .ptr, fmt_name, &.{ width_val, prec_val, exp_val, scale_val, sign_val, coerced });
-                            try fmt_buf.appendSlice("%s");
-                            try args.append(.{ .ty = .ptr, .name = fmt_tmp });
-                        }
-                        arg_index += 1;
-                        if (spec.width > 0) {
-                            column += spec.width;
-                        }
-                    },
-                    .char => |spec| {
-                        if (arg_index >= expanded_values.values.items.len) break;
-                        try flushPendingSpaces(&fmt_buf, &pending_spaces);
-                        const value = expanded_values.values.items[arg_index];
-                        const arg_len = expanded_values.char_lens.items[arg_index];
-                        const field_width = if (spec.width > 0) spec.width else arg_len;
-                        const precision = if (arg_len > 0 and field_width > arg_len) arg_len else field_width;
-                        if (value.ty != .ptr) {
-                            // Keep historical behavior for legacy test suites that route
-                            // numeric values through A editing at runtime.
-                            const width_val = try ctx.constI32(@intCast(field_width));
-                            switch (value.ty) {
-                                .i32, .i64 => {
-                                    const int_ty = ctx.defaultIntegerIRType();
-                                    const int_value = try expr.coerce(ctx, builder, value, int_ty);
-                                    const fmt_i_name = try ctx.ensureDeclRaw(
-                                        if (int_ty == .i64) "col6forge_fmt_i64" else "col6forge_fmt_i",
-                                        .ptr,
-                                        &[_]llvm_types.IRType{ .i32, .i32, .i32, int_ty },
-                                        false,
-                                    );
-                                    const tmp = try ctx.nextTemp();
-                                    try builder.callTyped(tmp, .ptr, fmt_i_name, &.{
-                                        width_val,
-                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
-                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
-                                        int_value,
-                                    });
-                                    try fmt_buf.appendSlice("%s");
-                                    try args.append(.{ .ty = .ptr, .name = tmp });
-                                },
-                                .i1 => {
-                                    const select_tmp = try ctx.nextTemp();
-                                    const int_ty = ctx.defaultIntegerIRType();
-                                    const one_val = try expr.coerce(ctx, builder, ValueRef{ .name = "1", .ty = .i32, .is_ptr = false }, int_ty);
-                                    const zero_val = try expr.coerce(ctx, builder, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false }, int_ty);
-                                    try builder.select(select_tmp, int_ty, value, one_val, zero_val);
-                                    const fmt_i_name = try ctx.ensureDeclRaw(
-                                        if (int_ty == .i64) "col6forge_fmt_i64" else "col6forge_fmt_i",
-                                        .ptr,
-                                        &[_]llvm_types.IRType{ .i32, .i32, .i32, int_ty },
-                                        false,
-                                    );
-                                    const tmp = try ctx.nextTemp();
-                                    const select_val = ValueRef{ .name = select_tmp, .ty = int_ty, .is_ptr = false };
-                                    try builder.callTyped(tmp, .ptr, fmt_i_name, &.{
-                                        width_val,
-                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
-                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
-                                        select_val,
-                                    });
-                                    try fmt_buf.appendSlice("%s");
-                                    try args.append(.{ .ty = .ptr, .name = tmp });
-                                },
-                                .f32, .f64 => {
-                                    const coerced = try expr.coerce(ctx, builder, value, .f64);
-                                    const fmt_f_name = try ctx.ensureDeclRaw("col6forge_fmt_f", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .f64 }, false);
-                                    const tmp = try ctx.nextTemp();
-                                    try builder.callTyped(tmp, .ptr, fmt_f_name, &.{
-                                        width_val,
-                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
-                                        ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
-                                        coerced,
-                                    });
-                                    try fmt_buf.appendSlice("%s");
-                                    try args.append(.{ .ty = .ptr, .name = tmp });
-                                },
-                                else => return error.UnsupportedIntrinsicType,
+                    .descriptor => |descriptor| switch (descriptor) {
+                        .int => |spec| {
+                            if (arg_index >= expanded_values.values.items.len) break;
+                            try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                            const value = expanded_values.values.items[arg_index];
+                            const int_ty = ctx.defaultIntegerIRType();
+                            const coerced = try expr.coerce(ctx, builder, value, int_ty);
+                            if (spec.min_digits == 0) {
+                                try appendIntFormat(&fmt_buf, spec.width, sign_plus);
+                                try args.append(.{ .ty = int_ty, .name = coerced.name });
+                            } else {
+                                const fmt_i_name = try ctx.ensureDeclRaw(
+                                    if (int_ty == .i64) "col6forge_fmt_i64" else "col6forge_fmt_i",
+                                    .ptr,
+                                    &[_]llvm_types.IRType{ .i32, .i32, .i32, int_ty },
+                                    false,
+                                );
+                                const tmp = try ctx.nextTemp();
+                                const width_val = try ctx.constI32(@intCast(spec.width));
+                                const min_val = try ctx.constI32(@intCast(spec.min_digits));
+                                const sign_val = ValueRef{ .name = if (sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
+                                try builder.callTyped(tmp, .ptr, fmt_i_name, &.{ width_val, min_val, sign_val, coerced });
+                                try fmt_buf.appendSlice("%s");
+                                try args.append(.{ .ty = .ptr, .name = tmp });
                             }
-                        } else {
-                            try fmt_buf.appendSlice("%*.*s");
-                            const width_text = try ctx.intLiteral(@intCast(field_width));
-                            const prec_text = try ctx.intLiteral(@intCast(precision));
-                            try args.append(.{ .ty = .i32, .name = width_text });
-                            try args.append(.{ .ty = .i32, .name = prec_text });
-                            try args.append(.{ .ty = .ptr, .name = value.name });
-                        }
-                        arg_index += 1;
-                        if (field_width > 0) {
-                            column += field_width;
-                        }
-                    },
-                    .logical => |spec| {
-                        if (arg_index >= expanded_values.values.items.len) break;
-                        try flushPendingSpaces(&fmt_buf, &pending_spaces);
-                        const value = expanded_values.values.items[arg_index];
-                        var cond = value;
-                        if (cond.ty != .i1) {
-                            cond = try expr.coerce(ctx, builder, value, .i1);
-                        }
-                        const true_val = ValueRef{ .name = "84", .ty = .i32, .is_ptr = false };
-                        const false_val = ValueRef{ .name = "70", .ty = .i32, .is_ptr = false };
-                        const select_tmp = try ctx.nextTemp();
-                        try builder.select(select_tmp, .i32, cond, true_val, false_val);
-                        if (spec.width > 0) {
-                            try fmt_buf.writer().print("%{d}c", .{spec.width});
-                        } else {
-                            try fmt_buf.appendSlice("%c");
-                        }
-                        try args.append(.{ .ty = .i32, .name = select_tmp });
-                        arg_index += 1;
-                        column += if (spec.width > 0) spec.width else 1;
+                            arg_index += 1;
+                            if (spec.width > 0) column += spec.width;
+                        },
+                        .real, .real_fixed => |spec| {
+                            if (arg_index >= expanded_values.values.items.len) break;
+                            try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                            const value = expanded_values.values.items[arg_index];
+                            var coerced = try expr.coerce(ctx, builder, value, .f64);
+                            if (descriptor == .real_fixed and scale_factor != 0) {
+                                const scale = std.math.pow(f64, 10.0, @as(f64, @floatFromInt(scale_factor)));
+                                const scale_text = utils.formatFloatValue(ctx.allocator, scale, .f64);
+                                const scale_val = ValueRef{ .name = scale_text, .ty = .f64, .is_ptr = false };
+                                const scaled_tmp = try ctx.nextTemp();
+                                try builder.binary(scaled_tmp, "fmul", .f64, coerced, scale_val);
+                                coerced = .{ .name = scaled_tmp, .ty = .f64, .is_ptr = false };
+                            }
+                            if (descriptor == .real_fixed and spec.width > 0) {
+                                const fmt_tmp = try ctx.nextTemp();
+                                const width_val = try ctx.constI32(@intCast(spec.width));
+                                const prec_val = try ctx.constI32(@intCast(spec.precision));
+                                const sign_val = ValueRef{ .name = if (sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
+                                const fmt_name = try ctx.ensureDeclRaw("col6forge_fmt_f", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .f64 }, false);
+                                try builder.callTyped(fmt_tmp, .ptr, fmt_name, &.{ width_val, prec_val, sign_val, coerced });
+                                try fmt_buf.appendSlice("%s");
+                                try args.append(.{ .ty = .ptr, .name = fmt_tmp });
+                            } else if (descriptor == .real_fixed and spec.precision == 0) {
+                                const sign_flag = if (sign_plus) "+" else "";
+                                try fmt_buf.writer().print("%{s}#{d}.0f", .{ sign_flag, spec.width });
+                                try args.append(.{ .ty = .f64, .name = coerced.name });
+                            } else if (descriptor == .real_fixed) {
+                                const sign_flag = if (sign_plus) "+" else "";
+                                try fmt_buf.writer().print("%{s}{d}.{d}f", .{ sign_flag, spec.width, spec.precision });
+                                try args.append(.{ .ty = .f64, .name = coerced.name });
+                            } else {
+                                const fmt_tmp = try ctx.nextTemp();
+                                const width_val = try ctx.constI32(@intCast(spec.width));
+                                const prec_val = try ctx.constI32(@intCast(spec.precision));
+                                const exp_val = try ctx.constI32(@intCast(spec.exp_width));
+                                const scale_val = try ctx.constI32(@intCast(scale_factor));
+                                const sign_val = ValueRef{ .name = if (sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
+                                const fmt_name = switch (spec.kind) {
+                                    .d => try ctx.ensureDeclRaw("col6forge_fmt_d", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
+                                    .g => try ctx.ensureDeclRaw("col6forge_fmt_g", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
+                                    .e => try ctx.ensureDeclRaw("col6forge_fmt_e", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .i32, .i32, .f64 }, false),
+                                };
+                                try builder.callTyped(fmt_tmp, .ptr, fmt_name, &.{ width_val, prec_val, exp_val, scale_val, sign_val, coerced });
+                                try fmt_buf.appendSlice("%s");
+                                try args.append(.{ .ty = .ptr, .name = fmt_tmp });
+                            }
+                            arg_index += 1;
+                            if (spec.width > 0) column += spec.width;
+                        },
+                        .char => |spec| {
+                            if (arg_index >= expanded_values.values.items.len) break;
+                            try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                            const value = expanded_values.values.items[arg_index];
+                            const arg_len = expanded_values.char_lens.items[arg_index];
+                            const field_width = if (spec.width > 0) spec.width else arg_len;
+                            const precision = if (arg_len > 0 and field_width > arg_len) arg_len else field_width;
+                            if (value.ty != .ptr) {
+                                const width_val = try ctx.constI32(@intCast(field_width));
+                                switch (value.ty) {
+                                    .i32, .i64 => {
+                                        const int_ty = ctx.defaultIntegerIRType();
+                                        const int_value = try expr.coerce(ctx, builder, value, int_ty);
+                                        const fmt_i_name = try ctx.ensureDeclRaw(
+                                            if (int_ty == .i64) "col6forge_fmt_i64" else "col6forge_fmt_i",
+                                            .ptr,
+                                            &[_]llvm_types.IRType{ .i32, .i32, .i32, int_ty },
+                                            false,
+                                        );
+                                        const tmp = try ctx.nextTemp();
+                                        try builder.callTyped(tmp, .ptr, fmt_i_name, &.{
+                                            width_val,
+                                            ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                            ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                            int_value,
+                                        });
+                                        try fmt_buf.appendSlice("%s");
+                                        try args.append(.{ .ty = .ptr, .name = tmp });
+                                    },
+                                    .i1 => {
+                                        const select_tmp = try ctx.nextTemp();
+                                        const int_ty = ctx.defaultIntegerIRType();
+                                        const one_val = try expr.coerce(ctx, builder, ValueRef{ .name = "1", .ty = .i32, .is_ptr = false }, int_ty);
+                                        const zero_val = try expr.coerce(ctx, builder, ValueRef{ .name = "0", .ty = .i32, .is_ptr = false }, int_ty);
+                                        try builder.select(select_tmp, int_ty, value, one_val, zero_val);
+                                        const fmt_i_name = try ctx.ensureDeclRaw(
+                                            if (int_ty == .i64) "col6forge_fmt_i64" else "col6forge_fmt_i",
+                                            .ptr,
+                                            &[_]llvm_types.IRType{ .i32, .i32, .i32, int_ty },
+                                            false,
+                                        );
+                                        const tmp = try ctx.nextTemp();
+                                        const select_val = ValueRef{ .name = select_tmp, .ty = int_ty, .is_ptr = false };
+                                        try builder.callTyped(tmp, .ptr, fmt_i_name, &.{
+                                            width_val,
+                                            ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                            ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                            select_val,
+                                        });
+                                        try fmt_buf.appendSlice("%s");
+                                        try args.append(.{ .ty = .ptr, .name = tmp });
+                                    },
+                                    .f32, .f64 => {
+                                        const coerced = try expr.coerce(ctx, builder, value, .f64);
+                                        const fmt_f_name = try ctx.ensureDeclRaw("col6forge_fmt_f", .ptr, &[_]llvm_types.IRType{ .i32, .i32, .i32, .f64 }, false);
+                                        const tmp = try ctx.nextTemp();
+                                        try builder.callTyped(tmp, .ptr, fmt_f_name, &.{
+                                            width_val,
+                                            ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                            ValueRef{ .name = "0", .ty = .i32, .is_ptr = false },
+                                            coerced,
+                                        });
+                                        try fmt_buf.appendSlice("%s");
+                                        try args.append(.{ .ty = .ptr, .name = tmp });
+                                    },
+                                    else => return error.UnsupportedIntrinsicType,
+                                }
+                            } else {
+                                try fmt_buf.appendSlice("%*.*s");
+                                const width_text = try ctx.intLiteral(@intCast(field_width));
+                                const prec_text = try ctx.intLiteral(@intCast(precision));
+                                try args.append(.{ .ty = .i32, .name = width_text });
+                                try args.append(.{ .ty = .i32, .name = prec_text });
+                                try args.append(.{ .ty = .ptr, .name = value.name });
+                            }
+                            arg_index += 1;
+                            if (field_width > 0) column += field_width;
+                        },
+                        .logical => |spec| {
+                            if (arg_index >= expanded_values.values.items.len) break;
+                            try flushPendingSpaces(&fmt_buf, &pending_spaces);
+                            const value = expanded_values.values.items[arg_index];
+                            var cond = value;
+                            if (cond.ty != .i1) cond = try expr.coerce(ctx, builder, value, .i1);
+                            const true_val = ValueRef{ .name = "84", .ty = .i32, .is_ptr = false };
+                            const false_val = ValueRef{ .name = "70", .ty = .i32, .is_ptr = false };
+                            const select_tmp = try ctx.nextTemp();
+                            try builder.select(select_tmp, .i32, cond, true_val, false_val);
+                            if (spec.width > 0) {
+                                try fmt_buf.writer().print("%{d}c", .{spec.width});
+                            } else {
+                                try fmt_buf.appendSlice("%c");
+                            }
+                            try args.append(.{ .ty = .i32, .name = select_tmp });
+                            arg_index += 1;
+                            column += if (spec.width > 0) spec.width else 1;
+                        },
                     },
                     .colon => {
                         if (arg_index >= expanded_values.values.items.len) {
@@ -491,8 +474,6 @@ fn emitWriteFormattedImpl(
                     .sign_control => |ctrl| {
                         sign_plus = (ctrl == .plus);
                     },
-                    .repeat_group => {},
-                    .reversion_offset => {},
                     .reversion_anchor => {},
                 }
                 if (stop_format) break;
@@ -602,7 +583,9 @@ pub fn emitWriteFormatted(
     fmt_items: []const ast.FormatItem,
     expanded_values: *ExpandedWriteValues,
 ) EmitError!void {
-    return emitWriteFormattedImpl(
+    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
+    defer prepared_fmt.deinit(ctx.allocator);
+    return emitWriteFormattedLowered(
         ctx,
         builder,
         write,
@@ -611,7 +594,7 @@ pub fn emitWriteFormatted(
         unit_record_count,
         is_internal,
         unit_i32,
-        fmt_items,
+        prepared_fmt.ops,
         expanded_values,
         null,
     );
@@ -628,7 +611,9 @@ pub fn emitWriteFormattedDirect(
     expanded_values: *ExpandedWriteValues,
 ) EmitError!void {
     const dummy_unit = ValueRef{ .name = "null", .ty = .ptr, .is_ptr = false };
-    return emitWriteFormattedImpl(
+    const prepared_fmt = try format_ir.lower(ctx.allocator, fmt_items, format_ir.max_stream_ops);
+    defer prepared_fmt.deinit(ctx.allocator);
+    return emitWriteFormattedLowered(
         ctx,
         builder,
         write,
@@ -637,7 +622,7 @@ pub fn emitWriteFormattedDirect(
         null,
         true,
         unit_i32,
-        fmt_items,
+        prepared_fmt.ops,
         expanded_values,
         .{ .unit_i32 = unit_i32, .rec_i32 = rec_i32, .recl_i32 = recl_i32 },
     );
