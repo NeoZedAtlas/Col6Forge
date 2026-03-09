@@ -1,6 +1,5 @@
 const ast = @import("../../../../input.zig");
 const context = @import("../../../codegen/context.zig");
-const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -95,10 +94,8 @@ pub fn emitPreparedWrite(
 ) EmitError!void {
     switch (executor.mode) {
         .classic => {
-            if (executor.plan == .static_items) {
-                const lowered = try format_ir.lower(ctx.allocator, executor.plan.static_items, format_ir.max_stream_ops);
-                defer lowered.deinit(ctx.allocator);
-                if (try emitSpecialFormattedWriteLowered(ctx, builder, write, prepared, lowered.ops)) {
+            if (executor.plan == .static_ops) {
+                if (try emitSpecialFormattedWriteLowered(ctx, builder, write, prepared, executor.plan.static_ops)) {
                     return;
                 }
                 var expanded_values = try expandWriteArgs(ctx, builder, write.args);
@@ -112,7 +109,7 @@ pub fn emitPreparedWrite(
                     prepared.unit.unit_record_count,
                     prepared.unit.is_internal,
                     prepared.unit.unit_i32,
-                    lowered.ops,
+                    executor.plan.static_ops,
                     &expanded_values,
                     null,
                 );
@@ -163,9 +160,7 @@ fn emitClassicPreparedWrite(
                 expanded_values,
             );
         },
-        .static_items => |items| {
-            const lowered = try format_ir.lower(ctx.allocator, items, format_ir.max_stream_ops);
-            defer lowered.deinit(ctx.allocator);
+        .static_ops => |ops| {
             return emitWriteFormattedLowered(
                 ctx,
                 builder,
@@ -175,7 +170,7 @@ fn emitClassicPreparedWrite(
                 prepared.unit.unit_record_count,
                 prepared.unit.is_internal,
                 prepared.unit.unit_i32,
-                lowered.ops,
+                ops,
                 expanded_values,
                 null,
             );
@@ -204,9 +199,7 @@ fn emitStreamPreparedWrite(
     plan: PreparedExecutionFormatPlan,
 ) EmitError!void {
     switch (plan) {
-        .static_items => |items| {
-            const lowered = try format_ir.lower(ctx.allocator, items, format_ir.max_stream_ops);
-            defer lowered.deinit(ctx.allocator);
+        .static_ops => |ops| {
             return emitWriteFormattedStream(
                 ctx,
                 builder,
@@ -216,7 +209,7 @@ fn emitStreamPreparedWrite(
                 prepared.unit.unit_record_count,
                 prepared.unit.is_internal,
                 prepared.unit.unit_i32,
-                .{ .static_ops = lowered.ops },
+                .{ .static_ops = ops },
             );
         },
         .runtime_char_expr => |runtime_fmt_expr| {
@@ -286,9 +279,7 @@ fn emitClassicPreparedRead(
                 expanded,
             );
         },
-        .static_items => |items| {
-            const lowered = try format_ir.lower(ctx.allocator, items, format_ir.max_stream_ops);
-            defer lowered.deinit(ctx.allocator);
+        .static_ops => |ops| {
             if (needs_status) {
                 return emitReadFormattedLowered(
                     ctx,
@@ -299,7 +290,7 @@ fn emitClassicPreparedRead(
                     prepared.unit.unit_record_count,
                     prepared.unit.is_internal,
                     prepared.unit.unit_i32,
-                    lowered.ops,
+                    ops,
                     expanded,
                     true,
                     null,
@@ -314,7 +305,7 @@ fn emitClassicPreparedRead(
                 prepared.unit.unit_record_count,
                 prepared.unit.is_internal,
                 prepared.unit.unit_i32,
-                lowered.ops,
+                ops,
                 expanded,
                 false,
                 null,
@@ -359,9 +350,7 @@ fn emitStreamPreparedRead(
     needs_status: bool,
 ) EmitError!ValueRef {
     switch (plan) {
-        .static_items => |items| {
-            const lowered = try format_ir.lower(ctx.allocator, items, format_ir.max_stream_ops);
-            defer lowered.deinit(ctx.allocator);
+        .static_ops => |ops| {
             return emitReadFormattedStream(
                 ctx,
                 builder,
@@ -371,7 +360,7 @@ fn emitStreamPreparedRead(
                 prepared.unit.unit_record_count,
                 prepared.unit.is_internal,
                 prepared.unit.unit_i32,
-                .{ .static_ops = lowered.ops },
+                .{ .static_ops = ops },
                 needs_status,
             );
         },

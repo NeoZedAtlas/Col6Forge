@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("../../../../input.zig");
 const context = @import("../../../codegen/context.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
@@ -39,24 +40,23 @@ pub const StreamFormatSource = union(enum) {
 };
 
 pub const PreparedFormatContext = struct {
+    allocator: std.mem.Allocator,
     unit: PreparedUnitContext,
     exec_plan: PreparedExecutionFormatPlan,
 
     pub fn deinit(self: *PreparedFormatContext) void {
-        switch (self.exec_plan) {
-            .dynamic_label => |*dynamic| dynamic.deinit(),
-            else => {},
-        }
+        self.exec_plan.deinit(self.allocator);
     }
 };
 
 pub const PreparedExecutionFormatPlan = union(enum) {
-    static_items: []const ast.FormatItem,
+    static_ops: []const format_ir.StreamOp,
     dynamic_label: dynamic_mod.PreparedDynamicFormat,
     runtime_char_expr: *ast.Expr,
 
-    pub fn deinit(self: *PreparedExecutionFormatPlan) void {
+    pub fn deinit(self: *PreparedExecutionFormatPlan, allocator: std.mem.Allocator) void {
         switch (self.*) {
+            .static_ops => |ops| allocator.free(ops),
             .dynamic_label => |*dynamic| dynamic.deinit(),
             else => {},
         }
@@ -125,6 +125,7 @@ pub fn prepareFormattedContext(
 ) EmitError!PreparedFormatContext {
     const raw_plan = try resolveFormatPlan(ctx, format_spec);
     return .{
+        .allocator = ctx.allocator,
         .unit = try prepareUnitContext(ctx, builder, unit),
         .exec_plan = try prepareExecutionFormatPlan(ctx, builder, raw_plan),
     };
@@ -136,7 +137,10 @@ pub fn prepareExecutionFormatPlan(
     plan: FormatPlan,
 ) EmitError!PreparedExecutionFormatPlan {
     return switch (plan) {
-        .static_items => |items| .{ .static_items = items },
+        .static_items => |items| blk: {
+            const lowered = try format_ir.lower(ctx.allocator, items, format_ir.max_stream_ops);
+            break :blk .{ .static_ops = lowered.ops };
+        },
         .dynamic_label_var => |label| .{ .dynamic_label = try dynamic_mod.prepareDynamicFormat(ctx, builder, label) },
         .runtime_char_expr => |fmt_expr| .{ .runtime_char_expr = fmt_expr },
     };
