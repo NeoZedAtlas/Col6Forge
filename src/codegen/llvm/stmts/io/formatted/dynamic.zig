@@ -28,7 +28,7 @@ const emitReadFormattedStream = stream_read_mod.emitReadFormattedStream;
 
 const NumericFormat = struct {
     value: i32,
-    items: []const ast.FormatItem,
+    ops: []const format_ir.StreamOp,
 };
 
 pub const PreparedDynamicFormat = struct {
@@ -36,6 +36,9 @@ pub const PreparedDynamicFormat = struct {
     selector: ValueRef,
 
     pub fn deinit(self: *PreparedDynamicFormat) void {
+        for (self.numeric_formats.items) |fmt| {
+            self.numeric_formats.allocator.free(fmt.ops);
+        }
         self.numeric_formats.deinit();
     }
 };
@@ -49,7 +52,9 @@ fn collectNumericFormats(ctx: *Context, list: *std.array_list.Managed(NumericFor
     while (it.next()) |entry| {
         const label_text = entry.key_ptr.*;
         const parsed = std.fmt.parseInt(i32, label_text, 10) catch continue;
-        try list.append(.{ .value = parsed, .items = entry.value_ptr.items });
+        const lowered = try format_ir.lower(ctx.allocator, entry.value_ptr.items, format_ir.max_stream_ops);
+        errdefer lowered.deinit(ctx.allocator);
+        try list.append(.{ .value = parsed, .ops = lowered.ops });
     }
     if (list.items.len == 0) return error.MissingFormatLabel;
 
@@ -61,6 +66,8 @@ fn collectNumericFormats(ctx: *Context, list: *std.array_list.Managed(NumericFor
         if (write_idx == 0 or list.items[write_idx - 1].value != fmt.value) {
             list.items[write_idx] = fmt;
             write_idx += 1;
+        } else {
+            ctx.allocator.free(fmt.ops);
         }
     }
     list.items.len = write_idx;
@@ -111,7 +118,7 @@ fn emitDynamicFormatSwitch(
     const SwitchCase = BuilderType.SwitchCase;
     const CasePlan = struct {
         case_item: SwitchCase,
-        items: []const ast.FormatItem,
+        fmt: NumericFormat,
     };
 
     var plans = std.array_list.Managed(CasePlan).init(ctx.allocator);
@@ -125,7 +132,7 @@ fn emitDynamicFormatSwitch(
             .value = @as(i64, fmt.value),
             .label = case_label,
         };
-        try plans.append(.{ .case_item = case_item, .items = fmt.items });
+        try plans.append(.{ .case_item = case_item, .fmt = fmt });
         try cases.append(case_item);
     }
 
@@ -135,7 +142,7 @@ fn emitDynamicFormatSwitch(
 
     for (plans.items) |plan| {
         try builder.label(plan.case_item.label);
-        try dispatch.emitMatched(ctx, builder, plan.items);
+        try dispatch.emitMatched(ctx, builder, plan.fmt);
         try builder.br(done_label);
     }
 
@@ -195,9 +202,7 @@ pub fn emitWriteDynamicFormatPreparedStream(
         is_internal: bool,
         unit_i32: ValueRef,
 
-        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
-            const lowered = try format_ir.lower(ctx_inner.allocator, items, format_ir.max_stream_ops);
-            defer lowered.deinit(ctx_inner.allocator);
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, fmt: NumericFormat) EmitError!void {
             try emitWriteFormattedStream(
                 ctx_inner,
                 builder_inner,
@@ -207,7 +212,7 @@ pub fn emitWriteDynamicFormatPreparedStream(
                 self.unit_record_count,
                 self.is_internal,
                 self.unit_i32,
-                .{ .static_ops = lowered.ops },
+                .{ .static_ops = fmt.ops },
             );
         }
 
@@ -248,9 +253,7 @@ fn emitWriteDynamicFormatCore(
         unit_i32: ValueRef,
         expanded_values: *ExpandedWriteValues,
 
-        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
-            const lowered = try format_ir.lower(ctx_inner.allocator, items, format_ir.max_stream_ops);
-            defer lowered.deinit(ctx_inner.allocator);
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, fmt: NumericFormat) EmitError!void {
             try emitWriteFormattedLowered(
                 ctx_inner,
                 builder_inner,
@@ -260,7 +263,7 @@ fn emitWriteDynamicFormatCore(
                 self.unit_record_count,
                 self.is_internal,
                 self.unit_i32,
-                lowered.ops,
+                fmt.ops,
                 self.expanded_values,
                 null,
             );
@@ -371,9 +374,7 @@ pub fn emitReadDynamicFormatPreparedStream(
         status_ptr: ValueRef,
         needs_status: bool,
 
-        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
-            const lowered = try format_ir.lower(ctx_inner.allocator, items, format_ir.max_stream_ops);
-            defer lowered.deinit(ctx_inner.allocator);
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, fmt: NumericFormat) EmitError!void {
             const status_val = try emitReadFormattedStream(
                 ctx_inner,
                 builder_inner,
@@ -383,7 +384,7 @@ pub fn emitReadDynamicFormatPreparedStream(
                 self.unit_record_count,
                 self.is_internal,
                 self.unit_i32,
-                .{ .static_ops = lowered.ops },
+                .{ .static_ops = fmt.ops },
                 self.needs_status,
             );
             if (self.needs_status) {
@@ -465,9 +466,7 @@ fn emitReadDynamicFormatPreparedCore(
         status_ptr: ValueRef,
         needs_status: bool,
 
-        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
-            const lowered = try format_ir.lower(ctx_inner.allocator, items, format_ir.max_stream_ops);
-            defer lowered.deinit(ctx_inner.allocator);
+        fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, fmt: NumericFormat) EmitError!void {
             if (self.needs_status) {
                 const status_val = try emitReadFormattedLowered(
                     ctx_inner,
@@ -478,7 +477,7 @@ fn emitReadDynamicFormatPreparedCore(
                     self.unit_record_count,
                     self.is_internal,
                     self.unit_i32,
-                    lowered.ops,
+                    fmt.ops,
                     self.expanded,
                     true,
                     null,
@@ -495,7 +494,7 @@ fn emitReadDynamicFormatPreparedCore(
                 self.unit_record_count,
                 self.is_internal,
                 self.unit_i32,
-                lowered.ops,
+                fmt.ops,
                 self.expanded,
                 false,
                 null,
