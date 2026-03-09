@@ -15,6 +15,7 @@ const expansion = @import("../expansion.zig");
 const utils = @import("../../../codegen/utils.zig");
 const formatted_context = @import("context.zig");
 const stream_common = @import("stream_common.zig");
+const stream_runtime = @import("stream_runtime.zig");
 
 const applyComplexFixups = expansion.applyComplexFixups;
 const expandReadTargets = expansion.expandReadTargets;
@@ -23,6 +24,8 @@ const emitRuntimeFormatValue = formatted_context.emitRuntimeFormatValue;
 const StreamFormatSource = formatted_context.StreamFormatSource;
 const emitSharedRuntimeImpliedDo = stream_common.emitRuntimeImpliedDo;
 const emitSharedStreamArgs = stream_common.emitStreamArgs;
+const emitSharedStreamBegin = stream_runtime.emitStreamBegin;
+const emitSharedStreamFinishStatus = stream_runtime.emitStreamFinishStatus;
 
 fn formattedReadKindForType(ctx: *Context, ty: llvm_types.IRType) EmitError!u8 {
     return switch (ty) {
@@ -47,65 +50,31 @@ fn emitStreamBegin(
     format_source: StreamFormatSource,
     return_status: bool,
 ) EmitError!ValueRef {
-    if (is_internal) {
-        switch (format_source) {
-            .static_ops => |fmt_ops| {
-                const fmt_ptr = try lowerStaticReadStreamFormatWithBuilder(ctx, builder, fmt_ops);
-                const decl = try ctx.ensureDeclRaw("col6forge_read_internal_stream_begin", .ptr, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr }, false);
-                const state_tmp = try ctx.nextTemp();
-                try builder.callTyped(
-                    state_tmp,
-                    .ptr,
-                    decl,
-                    &.{
-                        unit_value,
-                        try ctx.constI32(@intCast(unit_char_len orelse return error.MissingFormatLabel)),
-                        try ctx.constI32(@intCast(if (unit_record_count) |count| if (count > 1) count else 1 else 1)),
-                        fmt_ptr,
-                    },
-                );
-                return .{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
-            },
-            .runtime_expr => |fmt_expr| {
-                const fmt_value = try emitRuntimeFormatValue(ctx, builder, fmt_expr);
-                const decl = try ctx.ensureDeclRaw("col6forge_read_internal_stream_begin_dynamic", .ptr, &[_]llvm_types.IRType{ .ptr, .i32, .i32, .ptr, .i32 }, false);
-                const state_tmp = try ctx.nextTemp();
-                try builder.callTyped(
-                    state_tmp,
-                    .ptr,
-                    decl,
-                    &.{
-                        unit_value,
-                        try ctx.constI32(@intCast(unit_char_len orelse return error.MissingFormatLabel)),
-                        try ctx.constI32(@intCast(if (unit_record_count) |count| if (count > 1) count else 1 else 1)),
-                        fmt_value.ptr,
-                        fmt_value.len,
-                    },
-                );
-                return .{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
-            },
-        }
-    }
-
-    switch (format_source) {
-        .static_ops => |fmt_ops| {
-            const fmt_ptr = try lowerStaticReadStreamFormatWithBuilder(ctx, builder, fmt_ops);
-            const decl = try ctx.ensureDeclRaw("col6forge_formatted_read_stream_begin", .ptr, &[_]llvm_types.IRType{ .i32, .ptr, .i32 }, false);
-            const state_tmp = try ctx.nextTemp();
-            try builder.callTyped(state_tmp, .ptr, decl, &.{ unit_i32, fmt_ptr, .{ .name = if (return_status) "1" else "0", .ty = .i32, .is_ptr = false } });
-            return .{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
+    return emitSharedStreamBegin(
+        ctx,
+        builder,
+        .{
+            .external_static = "col6forge_formatted_read_stream_begin",
+            .external_dynamic = "col6forge_formatted_read_stream_begin_dynamic",
+            .internal_static = "col6forge_read_internal_stream_begin",
+            .internal_dynamic = "col6forge_read_internal_stream_begin_dynamic",
         },
-        .runtime_expr => |fmt_expr| {
-            const fmt_value = try emitRuntimeFormatValue(ctx, builder, fmt_expr);
-            const decl = try ctx.ensureDeclRaw("col6forge_formatted_read_stream_begin_dynamic", .ptr, &[_]llvm_types.IRType{ .i32, .ptr, .i32, .i32 }, false);
-            const state_tmp = try ctx.nextTemp();
-            try builder.callTyped(state_tmp, .ptr, decl, &.{ unit_i32, fmt_value.ptr, fmt_value.len, .{ .name = if (return_status) "1" else "0", .ty = .i32, .is_ptr = false } });
-            return .{ .name = state_tmp, .ty = .ptr, .is_ptr = true };
+        .{
+            .unit_value = unit_value,
+            .unit_char_len = unit_char_len,
+            .unit_record_count = unit_record_count,
+            .is_internal = is_internal,
+            .unit_i32 = unit_i32,
+            .format_source = format_source,
+            .mode_i32 = .{ .name = if (return_status) "1" else "0", .ty = .i32, .is_ptr = false },
         },
-    }
+        lowerStaticReadStreamFormatWithBuilder,
+        emitRuntimeFormatValue,
+    );
 }
 
-fn lowerStaticReadStreamFormatWithBuilder(ctx: *Context, builder: anytype, fmt_ops: []const format_ir.StreamOp) EmitError!ValueRef {
+fn lowerStaticReadStreamFormatWithBuilder(ctx: *Context, builder: anytype, fmt_ops: []const format_ir.StreamOp, is_internal: bool) EmitError!ValueRef {
+    _ = is_internal;
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();
 
@@ -208,10 +177,7 @@ fn emitStreamArgs(ctx: *Context, builder: anytype, state: ValueRef, args: []*ast
 }
 
 fn emitStreamFinish(ctx: *Context, builder: anytype, state: ValueRef) EmitError!ValueRef {
-    const decl = try ctx.ensureDeclRaw("col6forge_formatted_read_stream_finish", .i32, &[_]llvm_types.IRType{.ptr}, false);
-    const status_tmp = try ctx.nextTemp();
-    try builder.callTyped(status_tmp, .i32, decl, &.{state});
-    return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };
+    return emitSharedStreamFinishStatus(ctx, builder, "col6forge_formatted_read_stream_finish", state);
 }
 
 pub fn emitReadFormattedStream(
