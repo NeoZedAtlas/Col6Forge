@@ -20,9 +20,8 @@ const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const ExpandedWriteValues = expansion.ExpandedWriteValues;
 const ExpandedReadTargets = expansion.ExpandedReadTargets;
-const emitWriteFormatted = write_mod.emitWriteFormatted;
-const emitReadFormatted = read_mod.emitReadFormatted;
-const emitReadFormattedStatus = read_mod.emitReadFormattedStatus;
+const emitWriteFormattedLowered = write_mod.emitWriteFormattedLowered;
+const emitReadFormattedLowered = read_mod.emitReadFormattedLowered;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const emitWriteFormattedStream = stream_write_mod.emitWriteFormattedStream;
 const emitReadFormattedStream = stream_read_mod.emitReadFormattedStream;
@@ -250,7 +249,9 @@ fn emitWriteDynamicFormatCore(
         expanded_values: *ExpandedWriteValues,
 
         fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
-            try emitWriteFormatted(
+            const lowered = try format_ir.lower(ctx_inner.allocator, items, format_ir.max_stream_ops);
+            defer lowered.deinit(ctx_inner.allocator);
+            try emitWriteFormattedLowered(
                 ctx_inner,
                 builder_inner,
                 self.write,
@@ -259,8 +260,9 @@ fn emitWriteDynamicFormatCore(
                 self.unit_record_count,
                 self.is_internal,
                 self.unit_i32,
-                items,
+                lowered.ops,
                 self.expanded_values,
+                null,
             );
         }
 
@@ -464,8 +466,10 @@ fn emitReadDynamicFormatPreparedCore(
         needs_status: bool,
 
         fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, items: []const ast.FormatItem) EmitError!void {
+            const lowered = try format_ir.lower(ctx_inner.allocator, items, format_ir.max_stream_ops);
+            defer lowered.deinit(ctx_inner.allocator);
             if (self.needs_status) {
-                const status_val = try emitReadFormattedStatus(
+                const status_val = try emitReadFormattedLowered(
                     ctx_inner,
                     builder_inner,
                     self.read,
@@ -474,13 +478,15 @@ fn emitReadDynamicFormatPreparedCore(
                     self.unit_record_count,
                     self.is_internal,
                     self.unit_i32,
-                    items,
+                    lowered.ops,
                     self.expanded,
+                    true,
+                    null,
                 );
                 try builder_inner.store(status_val, self.status_ptr);
                 return;
             }
-            try emitReadFormatted(
+            _ = try emitReadFormattedLowered(
                 ctx_inner,
                 builder_inner,
                 self.read,
@@ -489,8 +495,10 @@ fn emitReadDynamicFormatPreparedCore(
                 self.unit_record_count,
                 self.is_internal,
                 self.unit_i32,
-                items,
+                lowered.ops,
                 self.expanded,
+                false,
+                null,
             );
         }
 
