@@ -27,49 +27,43 @@ pub fn applyDeclarator(
     explicit_type: bool,
 ) !void {
     const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
-    if (explicit_type and self.symbols.items[idx].type_explicit) {
+    var sym = &self.symbols.items[idx];
+    if (explicit_type and sym.type_explicit) {
         return error.DuplicateDeclaration;
     }
     if (explicit_type) {
-        self.symbols.items[idx].type_kind = type_spec.lowered_kind;
-        self.symbols.items[idx].type_spec = type_spec;
-        self.symbols.items[idx].type_explicit = true;
-    } else if (!self.symbols.items[idx].type_explicit) {
-        self.symbols.items[idx].type_kind = type_spec.lowered_kind;
-        self.symbols.items[idx].type_spec = type_spec;
+        sym.applyTypeSpec(type_spec);
+        sym.type_explicit = true;
+    } else if (!sym.type_explicit) {
+        sym.applyTypeSpec(type_spec);
     }
     if (item.dims.len > 0) {
-        if (self.symbols.items[idx].dims.len > 0) {
+        if (sym.dims.len > 0) {
             // Do not silently overwrite previously declared shape.
             return error.DuplicateDeclaration;
         }
-        self.symbols.items[idx].dims = item.dims;
+        sym.dims = item.dims;
     }
     if (storage == .common) {
-        self.symbols.items[idx].storage = .common;
-    } else if (self.symbols.items[idx].storage != .dummy and self.symbols.items[idx].storage != .common) {
-        self.symbols.items[idx].storage = storage;
+        sym.storage = .common;
+    } else if (sym.storage != .dummy and sym.storage != .common) {
+        sym.storage = storage;
     }
 
     // Use the resolved symbol type after declaration merge. Non-type declarations
     // (e.g. COMMON/DIMENSION) must not accidentally erase CHARACTER length.
-    const effective_type = self.symbols.items[idx].type_kind;
-    if (effective_type != .character) {
-        self.symbols.items[idx].char_len_kind = .none;
-        self.symbols.items[idx].char_len = null;
-        self.symbols.items[idx].type_spec = self.symbols.items[idx].type_spec.withCharacterLength(.none, null);
+    if (!sym.isCharacter()) {
+        sym.applyTypeSpec(sym.type_spec.withCharacterLength(.none, null));
         return;
     }
 
-    var length: usize = if (self.symbols.items[idx].char_len_kind == .constant)
-        self.symbols.items[idx].char_len orelse 1
+    var length: usize = if (sym.effectiveCharLenKind() == .constant)
+        sym.effectiveCharLen() orelse 1
     else
         1;
     if (item.char_len) |len_expr| {
         if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) {
-            self.symbols.items[idx].char_len_kind = .assumed;
-            self.symbols.items[idx].char_len = null;
-            self.symbols.items[idx].type_spec = self.symbols.items[idx].type_spec.withCharacterLength(.assumed, null);
+            sym.applyTypeSpec(sym.type_spec.withCharacterLength(.assumed, null));
             return;
         }
         if (try constants.evalConst(self, len_expr)) |value| {
@@ -86,22 +80,18 @@ pub fn applyDeclarator(
         } else {
             // Keep deferred/assumed length only where the rest of the semantic
             // pipeline already supports unknown CHARACTER size.
-            if (allowsDeferredCharacterLength(self.symbols.items[idx])) {
-                self.symbols.items[idx].char_len_kind = .deferred;
-                self.symbols.items[idx].char_len = null;
-                self.symbols.items[idx].type_spec = self.symbols.items[idx].type_spec.withCharacterLength(.deferred, null);
+            if (allowsDeferredCharacterLength(sym.*)) {
+                sym.applyTypeSpec(sym.type_spec.withCharacterLength(.deferred, null));
                 return;
             }
             return error.InvalidCharLen;
         }
-    } else if (!explicit_type and self.symbols.items[idx].char_len_kind != .constant) {
+    } else if (!explicit_type and sym.effectiveCharLenKind() != .constant) {
         if (symbols_mod.implicitCharLen(self, item.name)) |implicit_len| {
             length = implicit_len;
         }
     }
-    self.symbols.items[idx].char_len_kind = CharacterLengthKind.constant;
-    self.symbols.items[idx].char_len = length;
-    self.symbols.items[idx].type_spec = self.symbols.items[idx].type_spec.withCharacterLength(.constant, length);
+    sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, length));
 }
 
 fn allowsDeferredCharacterLength(sym: symbols.Symbol) bool {

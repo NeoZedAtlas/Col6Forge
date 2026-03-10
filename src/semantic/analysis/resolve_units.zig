@@ -77,8 +77,8 @@ fn unitScopeKind(kind: ast.ProgramUnitKind) scope.ScopeKind {
 
 fn validateAssumedCharacterLengths(ctx: *context.Context) !void {
     for (ctx.symbols.items) |sym| {
-        if (sym.type_kind != .character) continue;
-        if (sym.char_len_kind != .assumed) continue;
+        if (!sym.isCharacter()) continue;
+        if (sym.effectiveCharLenKind() != .assumed) continue;
         if (sym.storage == .dummy) continue;
         if (sym.kind == .parameter) continue;
         if (sym.kind == .function) continue;
