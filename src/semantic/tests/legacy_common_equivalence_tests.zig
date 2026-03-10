@@ -229,10 +229,10 @@ test "semantic accepts deferred CHARACTER length for dummy argument" {
     for (sem.units[0].symbols) |sym| {
         if (!std.ascii.eqlIgnoreCase(sym.name, "STR")) continue;
         found = true;
-        try testing.expectEqual(ast.TypeKind.character, sym.type_kind);
+        try testing.expect(sym.isCharacter());
         try testing.expectEqual(symbols.StorageClass.dummy, sym.storage);
-        try testing.expectEqual(symbols.CharacterLengthKind.deferred, sym.char_len_kind);
-        try testing.expect(sym.char_len == null);
+        try testing.expectEqual(symbols.CharacterLengthKind.deferred, sym.effectiveCharLenKind());
+        try testing.expect(sym.effectiveCharLen() == null);
     }
     try testing.expect(found);
 }
@@ -257,10 +257,10 @@ test "semantic accepts assumed CHARACTER*(*) for dummy argument" {
     for (sem.units[0].symbols) |sym| {
         if (!std.ascii.eqlIgnoreCase(sym.name, "STR")) continue;
         found = true;
-        try testing.expectEqual(ast.TypeKind.character, sym.type_kind);
+        try testing.expect(sym.isCharacter());
         try testing.expectEqual(symbols.StorageClass.dummy, sym.storage);
-        try testing.expectEqual(symbols.CharacterLengthKind.assumed, sym.char_len_kind);
-        try testing.expect(sym.char_len == null);
+        try testing.expectEqual(symbols.CharacterLengthKind.assumed, sym.effectiveCharLenKind());
+        try testing.expect(sym.effectiveCharLen() == null);
     }
     try testing.expect(found);
 }
@@ -286,10 +286,10 @@ test "semantic COMMON declaration does not erase explicit CHARACTER length" {
     for (sem.units[0].symbols) |sym| {
         if (!std.ascii.eqlIgnoreCase(sym.name, "D2Z1K")) continue;
         found = true;
-        try testing.expectEqual(ast.TypeKind.character, sym.type_kind);
+        try testing.expect(sym.isCharacter());
         try testing.expectEqual(symbols.StorageClass.common, sym.storage);
-        try testing.expectEqual(symbols.CharacterLengthKind.constant, sym.char_len_kind);
-        try testing.expectEqual(@as(?usize, 2), sym.char_len);
+        try testing.expectEqual(symbols.CharacterLengthKind.constant, sym.effectiveCharLenKind());
+        try testing.expectEqual(@as(?usize, 2), sym.effectiveCharLen());
     }
     try testing.expect(found);
 }

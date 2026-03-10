@@ -200,7 +200,7 @@ pub fn expectSymbolTypeInvariant(
         for (unit.symbols) |sym| {
             if (!std.ascii.eqlIgnoreCase(sym.name, symbol_name)) continue;
             found_symbol = true;
-            try testing.expectEqual(expected_type, sym.type_kind);
+            try testing.expectEqual(expected_type, sym.loweredKind());
             break;
         }
         break;
@@ -233,9 +233,9 @@ pub fn expectSymbolCharLenInvariant(
         for (unit.symbols) |sym| {
             if (!std.ascii.eqlIgnoreCase(sym.name, symbol_name)) continue;
             found = true;
-            try std.testing.expectEqual(ast.TypeKind.character, sym.type_kind);
-            try std.testing.expectEqual(expected_len_kind, sym.char_len_kind);
-            try std.testing.expectEqual(expected_len, sym.char_len);
+            try std.testing.expect(sym.isCharacter());
+            try std.testing.expectEqual(expected_len_kind, sym.effectiveCharLenKind());
+            try std.testing.expectEqual(expected_len, sym.effectiveCharLen());
             break;
         }
     }

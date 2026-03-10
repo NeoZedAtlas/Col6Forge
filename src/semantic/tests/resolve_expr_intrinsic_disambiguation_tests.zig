@@ -36,7 +36,7 @@ test "resolve_expr intrinsic ABS returns INTEGER for integer argument" {
         if (!std.ascii.eqlIgnoreCase(sym.name, "ABS")) continue;
         found = true;
         try testing.expect(sym.is_intrinsic);
-        try testing.expectEqual(ast.TypeKind.integer, sym.type_kind);
+        try testing.expectEqual(ast.TypeKind.integer, sym.loweredKind());
     }
     try testing.expect(found);
 }
@@ -58,7 +58,7 @@ test "resolve_expr intrinsic ABS returns DOUBLE PRECISION for double argument" {
         if (!std.ascii.eqlIgnoreCase(sym.name, "ABS")) continue;
         found = true;
         try testing.expect(sym.is_intrinsic);
-        try testing.expectEqual(ast.TypeKind.double_precision, sym.type_kind);
+        try testing.expectEqual(ast.TypeKind.double_precision, sym.loweredKind());
     }
     try testing.expect(found);
 }
@@ -80,7 +80,7 @@ test "resolve_expr intrinsic SQRT preserves double precision argument kind" {
         if (!std.ascii.eqlIgnoreCase(sym.name, "SQRT")) continue;
         found = true;
         try testing.expect(sym.is_intrinsic);
-        try testing.expectEqual(ast.TypeKind.double_precision, sym.type_kind);
+        try testing.expectEqual(ast.TypeKind.double_precision, sym.loweredKind());
     }
     try testing.expect(found);
 }
@@ -138,7 +138,7 @@ test "resolve_expr intrinsic MAX keeps INTEGER type for homogeneous INTEGER args
         if (!std.ascii.eqlIgnoreCase(sym.name, "MAX")) continue;
         found = true;
         try testing.expect(sym.is_intrinsic);
-        try testing.expectEqual(ast.TypeKind.integer, sym.type_kind);
+        try testing.expectEqual(ast.TypeKind.integer, sym.loweredKind());
         try testing.expectEqual(ast.TypeKind.integer, sym.type_spec.declared_kind);
         try testing.expectEqual(ast.TypeKind.integer, sym.type_spec.lowered_kind);
     }
@@ -162,7 +162,7 @@ test "resolve_expr intrinsic LOG preserves double precision argument kind" {
         if (!std.ascii.eqlIgnoreCase(sym.name, "LOG")) continue;
         found = true;
         try testing.expect(sym.is_intrinsic);
-        try testing.expectEqual(ast.TypeKind.double_precision, sym.type_kind);
+        try testing.expectEqual(ast.TypeKind.double_precision, sym.loweredKind());
     }
     try testing.expect(found);
 }

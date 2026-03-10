@@ -273,7 +273,7 @@ test "semantic IMPLICIT rules are unit-local" {
     var found = false;
     for (fn_unit.symbols) |sym| {
         if (std.ascii.eqlIgnoreCase(sym.name, "R")) {
-            try testing.expectEqual(ast.TypeKind.real, sym.type_kind);
+            try testing.expectEqual(ast.TypeKind.real, sym.loweredKind());
             found = true;
             break;
         }
@@ -730,14 +730,14 @@ test "semantic applies CHARACTER PARAMETER LEN padding and truncation" {
         const cv = sym.const_value orelse continue;
         if (std.ascii.eqlIgnoreCase(sym.name, "A")) {
             found_a = true;
-            try testing.expectEqual(@as(?usize, 5), sym.char_len);
+            try testing.expectEqual(@as(?usize, 5), sym.effectiveCharLen());
             switch (cv) {
                 .string => |bytes| try testing.expectEqualStrings("XY   ", bytes),
                 else => return error.TestExpectedEqual,
             }
         } else if (std.ascii.eqlIgnoreCase(sym.name, "B")) {
             found_b = true;
-            try testing.expectEqual(@as(?usize, 2), sym.char_len);
+            try testing.expectEqual(@as(?usize, 2), sym.effectiveCharLen());
             switch (cv) {
                 .string => |bytes| try testing.expectEqualStrings("WX", bytes),
                 else => return error.TestExpectedEqual,
@@ -1035,7 +1035,7 @@ test "semantic use import applies known function TypeSpec without rebuilding fro
     for (sem.units[0].symbols) |sym| {
         if (!std.ascii.eqlIgnoreCase(sym.name, "FOO")) continue;
         found = true;
-        try testing.expectEqual(ast.TypeKind.double_precision, sym.type_kind);
+        try testing.expectEqual(ast.TypeKind.double_precision, sym.loweredKind());
         try testing.expectEqual(ast.TypeKind.real, sym.type_spec.declared_kind);
         try testing.expectEqual(ast.TypeKind.double_precision, sym.type_spec.lowered_kind);
         try testing.expectEqual(@as(?u8, 8), sym.type_spec.kind_value);

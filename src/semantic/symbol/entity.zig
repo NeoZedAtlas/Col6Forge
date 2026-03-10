@@ -37,22 +37,19 @@ pub const Symbol = struct {
     host_owner_name: ?[]const u8 = null,
 
     pub fn loweredKind(self: Symbol) ast.TypeKind {
-        return if (self.type_spec.lowered_kind != .real or self.type_kind == .real)
-            self.type_spec.lowered_kind
-        else
-            self.type_kind;
+        return self.type_spec.lowered_kind;
     }
 
     pub fn isCharacter(self: Symbol) bool {
-        return self.type_spec.lowered_kind == .character or self.type_kind == .character;
+        return self.type_spec.lowered_kind == .character;
     }
 
     pub fn effectiveCharLen(self: Symbol) ?usize {
-        return self.type_spec.char_len orelse self.char_len;
+        return self.type_spec.char_len;
     }
 
     pub fn effectiveCharLenKind(self: Symbol) CharacterLengthKind {
-        return if (self.type_spec.lowered_kind == .character) self.type_spec.char_len_kind else self.char_len_kind;
+        return if (self.type_spec.lowered_kind == .character) self.type_spec.char_len_kind else .none;
     }
 
     pub fn applyTypeSpec(self: *Symbol, spec: TypeSpec) void {
