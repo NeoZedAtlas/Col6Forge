@@ -436,10 +436,10 @@ fn ensureImplicitRuleNoOverlap(self: *context.Context, start: u8, end: u8) !void
 }
 
 fn isDefaultImplicitRule(rule: symbols.ImplicitRule) bool {
-    if (rule.char_len != null) return false;
-    if (rule.start == 'I' and rule.end == 'N' and rule.type_kind == .integer) return true;
-    if (rule.start == 'A' and rule.end == 'H' and rule.type_kind == .real) return true;
-    if (rule.start == 'O' and rule.end == 'Z' and rule.type_kind == .real) return true;
+    if (rule.type_spec.char_len != null) return false;
+    if (rule.start == 'I' and rule.end == 'N' and rule.type_spec.lowered_kind == .integer) return true;
+    if (rule.start == 'A' and rule.end == 'H' and rule.type_spec.lowered_kind == .real) return true;
+    if (rule.start == 'O' and rule.end == 'Z' and rule.type_spec.lowered_kind == .real) return true;
     return false;
 }
 

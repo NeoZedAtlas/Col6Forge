@@ -130,17 +130,13 @@ pub const ConstValue = union(enum) {
 pub const ImplicitRule = struct {
     start: u8,
     end: u8,
-    type_kind: ast.TypeKind,
     type_spec: TypeSpec = TypeSpec.fromKind(.real),
-    char_len: ?usize,
 
     pub fn init(start: u8, end: u8, spec: TypeSpec) ImplicitRule {
         return .{
             .start = start,
             .end = end,
-            .type_kind = spec.lowered_kind,
             .type_spec = spec,
-            .char_len = if (spec.lowered_kind == .character) spec.char_len else null,
         };
     }
 };
