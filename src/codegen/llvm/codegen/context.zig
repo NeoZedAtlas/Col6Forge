@@ -342,10 +342,10 @@ pub const Context = struct {
 
     pub fn findSymbol(self: *Context, name: []const u8) ?input.sema.Symbol {
         if (self.symbol_index_exact.get(name)) |idx_exact| {
-            return self.sem.symbols[idx_exact];
+            return self.sem.symbols[idx_exact].normalized();
         }
         const idx = self.symbol_index.get(name) orelse return null;
-        return self.sem.symbols[idx];
+        return self.sem.symbols[idx].normalized();
     }
 
     pub fn arrayElemCountForSymbol(self: *Context, sym: input.sema.Symbol) !usize {

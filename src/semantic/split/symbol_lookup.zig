@@ -10,23 +10,24 @@ pub fn collectHostSymbols(
     sem_symbols: []const symbols.Symbol,
 ) !void {
     for (sem_symbols) |sym| {
+        const normalized = sym.normalized();
         if (sym.kind == .function or sym.kind == .subroutine) continue;
         var key_buf: [128]u8 = undefined;
-        if (sym.name.len <= key_buf.len) {
-            for (sym.name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
-            if (map.getPtr(key_buf[0..sym.name.len])) |ptr| {
-                ptr.* = sym;
+        if (normalized.name.len <= key_buf.len) {
+            for (normalized.name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+            if (map.getPtr(key_buf[0..normalized.name.len])) |ptr| {
+                ptr.* = normalized;
                 continue;
             }
         } else {
-            const lookup_key = try lowerDup(arena, sym.name);
+            const lookup_key = try lowerDup(arena, normalized.name);
             if (map.getPtr(lookup_key)) |ptr| {
-                ptr.* = sym;
+                ptr.* = normalized;
                 continue;
             }
         }
-        const key = try lowerDup(arena, sym.name);
-        try map.put(key, sym);
+        const key = try lowerDup(arena, normalized.name);
+        try map.put(key, normalized);
     }
 }
 
@@ -48,11 +49,11 @@ pub fn lookupSemanticSymbol(
     if (name.len <= key_buf.len) {
         var i: usize = 0;
         while (i < name.len) : (i += 1) key_buf[i] = std.ascii.toLower(name[i]);
-        if (symbol_index.get(key_buf[0..name.len])) |idx| return sem_unit.symbols[idx];
+        if (symbol_index.get(key_buf[0..name.len])) |idx| return sem_unit.symbols[idx].normalized();
         return null;
     }
     const key = lowerDup(symbol_index.allocator, name) catch return null;
-    if (symbol_index.get(key)) |idx| return sem_unit.symbols[idx];
+    if (symbol_index.get(key)) |idx| return sem_unit.symbols[idx].normalized();
     return null;
 }
 

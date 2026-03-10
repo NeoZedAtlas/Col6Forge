@@ -210,10 +210,10 @@ const SymbolLookup = struct {
 fn findSymbol(sem: *const input.sema.SemanticUnit, name: []const u8, lookup: ?*const SymbolLookup) ?input.sema.Symbol {
     if (lookup) |idx_lookup| {
         const idx = idx_lookup.map.get(name) orelse return null;
-        return sem.symbols[idx];
+        return sem.symbols[idx].normalized();
     }
     for (sem.symbols) |sym| {
-        if (std.ascii.eqlIgnoreCase(sym.name, name)) return sym;
+        if (std.ascii.eqlIgnoreCase(sym.name, name)) return sym.normalized();
     }
     return null;
 }

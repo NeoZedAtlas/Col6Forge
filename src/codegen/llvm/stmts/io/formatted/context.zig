@@ -55,6 +55,14 @@ pub const PreparedExecutionFormatPlan = union(enum) {
     dynamic_label: dynamic_mod.PreparedDynamicFormat,
     runtime_char_expr: *ast.Expr,
 
+    pub fn asStreamSource(self: PreparedExecutionFormatPlan) ?StreamFormatSource {
+        return switch (self) {
+            .static_ops => |ops| .{ .static_ops = ops },
+            .runtime_char_expr => |fmt_expr| .{ .runtime_expr = fmt_expr },
+            .dynamic_label => null,
+        };
+    }
+
     pub fn deinit(self: *PreparedExecutionFormatPlan, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .static_ops => |ops| allocator.free(ops),

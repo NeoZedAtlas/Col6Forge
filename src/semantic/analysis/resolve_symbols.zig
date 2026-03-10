@@ -130,23 +130,24 @@ pub fn ensureDeclaredSymbol(self: *context.Context, name: []const u8) !usize {
 pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
     if (self.current_scope == null) return error.MissingScope;
     const scope_id = self.current_scope.?;
+    const normalized = symbol.normalized();
     var key_owned: ?[]const u8 = null;
     var key_buf: [MAX_IDENT_LEN]u8 = undefined;
-    if (symbol.name.len <= key_buf.len) {
-        const key = toLowerInBuffer(symbol.name, &key_buf);
+    if (normalized.name.len <= key_buf.len) {
+        const key = toLowerInBuffer(normalized.name, &key_buf);
         if (self.scopes.items[scope_id.index].symbols.contains(key)) {
             return error.DuplicateDeclaration;
         }
     } else {
-        const lookup_key = try lowerDup(self.arena, symbol.name);
+        const lookup_key = try lowerDup(self.arena, normalized.name);
         key_owned = lookup_key;
         if (self.scopes.items[scope_id.index].symbols.contains(lookup_key)) {
             return error.DuplicateDeclaration;
         }
     }
-    const key = key_owned orelse try lowerDup(self.arena, symbol.name);
+    const key = key_owned orelse try lowerDup(self.arena, normalized.name);
     const idx = self.symbols.items.len;
-    try self.symbols.append(symbol);
+    try self.symbols.append(normalized);
     try self.scopes.items[scope_id.index].symbols.put(key, idx);
     self.invalidateSymbolLookupCache();
     return idx;

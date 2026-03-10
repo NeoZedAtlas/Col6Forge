@@ -40,38 +40,44 @@ pub const Symbol = struct {
     is_host_associated: bool = false,
     host_owner_name: ?[]const u8 = null,
 
-    fn compatLoweredKind(self: Symbol) ast.TypeKind {
-        return if (self.type_kind != self.type_spec.lowered_kind) self.type_kind else self.type_spec.lowered_kind;
-    }
-
-    pub fn loweredKind(self: Symbol) ast.TypeKind {
-        return self.compatLoweredKind();
-    }
-
-    pub fn isCharacter(self: Symbol) bool {
-        return self.compatLoweredKind() == .character;
-    }
-
-    pub fn effectiveCharLen(self: Symbol) ?usize {
-        if (!self.isCharacter()) return null;
-        return self.char_len orelse self.type_spec.char_len;
-    }
-
-    pub fn effectiveCharLenKind(self: Symbol) CharacterLengthKind {
-        if (!self.isCharacter()) return .none;
-        return if (self.char_len_kind != .none) self.char_len_kind else self.type_spec.char_len_kind;
-    }
-
-    pub fn applyTypeSpec(self: *Symbol, spec: TypeSpec) void {
-        self.type_spec = spec;
-        self.type_kind = spec.lowered_kind;
-        if (spec.lowered_kind == .character) {
-            self.char_len_kind = spec.char_len_kind;
-            self.char_len = spec.char_len;
+    pub fn normalizeCompatMirrors(self: *Symbol) void {
+        self.type_kind = self.type_spec.lowered_kind;
+        if (self.type_spec.lowered_kind == .character) {
+            self.char_len_kind = self.type_spec.char_len_kind;
+            self.char_len = self.type_spec.char_len;
         } else {
             self.char_len_kind = .none;
             self.char_len = null;
         }
+    }
+
+    pub fn normalized(self: Symbol) Symbol {
+        var out = self;
+        out.normalizeCompatMirrors();
+        return out;
+    }
+
+    pub fn loweredKind(self: Symbol) ast.TypeKind {
+        return self.type_spec.lowered_kind;
+    }
+
+    pub fn isCharacter(self: Symbol) bool {
+        return self.type_spec.lowered_kind == .character;
+    }
+
+    pub fn effectiveCharLen(self: Symbol) ?usize {
+        if (!self.isCharacter()) return null;
+        return self.type_spec.char_len;
+    }
+
+    pub fn effectiveCharLenKind(self: Symbol) CharacterLengthKind {
+        if (!self.isCharacter()) return .none;
+        return self.type_spec.char_len_kind;
+    }
+
+    pub fn applyTypeSpec(self: *Symbol, spec: TypeSpec) void {
+        self.type_spec = spec;
+        self.normalizeCompatMirrors();
     }
 
     pub fn init(
