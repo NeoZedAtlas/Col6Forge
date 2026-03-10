@@ -299,7 +299,7 @@ fn buildArrayConversion(
     const src_idx = resolve_symbols.findSymbolIndex(ctx, src_name) orelse return null;
     const src_sym = ctx.symbols.items[src_idx];
     if (src_sym.dims.len == 0) return null;
-    if (!isNumericArrayType(src_sym.type_kind)) return null;
+    if (!isNumericArrayType(src_sym.loweredKind())) return null;
 
     const temp_name = try nextTempArrayName(ctx, state);
 
@@ -448,35 +448,27 @@ fn internGeneratedArray(
     target_kind: ast.TypeKind,
     dims: []*ast.Expr,
 ) !void {
-    const symbol = Symbol{
-        .name = name,
-        .type_kind = target_kind,
-        .dims = dims,
-        .char_len = null,
-        .kind = .variable,
-        .storage = .local,
-        .is_external = false,
-        .is_intrinsic = false,
-        .is_generated_temp = true,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    var symbol = Symbol.init(
+        name,
+        symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(target_kind), target_kind, null),
+        dims,
+        .variable,
+        .local,
+    );
+    symbol.is_generated_temp = true;
+    symbol.type_explicit = true;
     _ = try resolve_symbols.internSymbol(ctx, symbol);
 }
 
 fn internGeneratedLoopVar(ctx: *context.Context, name: []const u8) !void {
-    const symbol = Symbol{
-        .name = name,
-        .type_kind = .integer,
-        .dims = &.{},
-        .char_len = null,
-        .kind = .variable,
-        .storage = .local,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    var symbol = Symbol.init(
+        name,
+        symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
+        &.{},
+        .variable,
+        .local,
+    );
+    symbol.type_explicit = true;
     _ = try resolve_symbols.internSymbol(ctx, symbol);
 }
 

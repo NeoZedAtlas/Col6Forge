@@ -128,7 +128,7 @@ fn lowerDataStmt(ctx: *context.Context, data: ast.DataStmt) !ast.DataStmt {
 
             if (target.* == .identifier) {
                 const symbol_idx = resolve_symbols.findSymbolIndex(ctx, target.identifier);
-                const symbol_type = if (symbol_idx) |idx| ctx.symbols.items[idx].type_kind else null;
+                const symbol_is_character = if (symbol_idx) |idx| ctx.symbols.items[idx].isCharacter() else false;
                 if (try arrayShapeForName(ctx, target.identifier)) |shape| {
                     const reserved_for_rest = remaining_targets - 1;
                     if (remaining_values <= reserved_for_rest) return error.DataValueCountMismatch;
@@ -137,7 +137,7 @@ fn lowerDataStmt(ctx: *context.Context, data: ast.DataStmt) !ast.DataStmt {
                     if (take == 0 or take > remaining_values) return error.DataValueCountMismatch;
 
                     // Keep whole-array DATA initializers compact when values are uniform.
-                    if (shape.size != null and take >= min_compact_array_fill and symbol_type != null and symbol_type.? != .character) {
+                    if (shape.size != null and take >= min_compact_array_fill and !symbol_is_character) {
                         if (cursor.consumeUniform(take)) |uniform_value| {
                             try ensureAppendBudget(inits.items.len, 1);
                             try inits.append(.{

@@ -419,7 +419,7 @@ pub const Context = struct {
         if (name.len == 0) return .real;
         const first = std.ascii.toUpper(name[0]);
         for (self.sem.implicit_rules) |rule| {
-            if (first >= rule.start and first <= rule.end) return rule.type_kind;
+            if (first >= rule.start and first <= rule.end) return rule.type_spec.lowered_kind;
         }
         return .real;
     }
