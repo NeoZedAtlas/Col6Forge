@@ -939,6 +939,58 @@ test "emitCall materializes binary section-plus-section actual for descriptor du
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
 }
 
+test "emitCall guards binary array actual shape compatibility" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+                .requires_descriptor = true,
+                .rank = 1,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lower_a = try makeLiteral(harness.arena.allocator(), .integer, "1");
+    const upper_a = try makeLiteral(harness.arena.allocator(), .integer, "4");
+    const stride_a = try makeLiteral(harness.arena.allocator(), .integer, "2");
+    const range_a = try harness.arena.allocator().create(Expr);
+    range_a.* = .{ .dim_range = .{ .lower = lower_a, .upper = upper_a, .stride = stride_a } };
+
+    const lower_b = try makeLiteral(harness.arena.allocator(), .integer, "1");
+    const upper_b = try makeLiteral(harness.arena.allocator(), .integer, "5");
+    const stride_b = try makeLiteral(harness.arena.allocator(), .integer, "2");
+    const range_b = try harness.arena.allocator().create(Expr);
+    range_b.* = .{ .dim_range = .{ .lower = lower_b, .upper = upper_b, .stride = stride_b } };
+
+    const lhs = try harness.arena.allocator().create(Expr);
+    lhs.* = .{ .call_or_subscript = .{ .name = "ARR", .args = @constCast(&[_]*Expr{range_a}) } };
+    const rhs = try harness.arena.allocator().create(Expr);
+    rhs.* = .{ .call_or_subscript = .{ .name = "ARR", .args = @constCast(&[_]*Expr{range_b}) } };
+    const binary_expr = try harness.arena.allocator().create(Expr);
+    binary_expr.* = .{ .binary = .{ .op = .add, .left = lhs, .right = rhs } };
+
+    _ = try emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{binary_expr}), true);
+
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "icmp eq i64") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "@llvm.trap") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
+}
+
 test "emitCall materializes unary-minus over binary array actual for descriptor dummy" {
     const testing = std.testing;
     const allocator = testing.allocator;
