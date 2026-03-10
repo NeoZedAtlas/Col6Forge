@@ -596,33 +596,31 @@ fn makeLiteralExpr(arena: std.mem.Allocator, kind: input.LiteralKind, text: []co
 }
 
 fn makeLocalArraySymbol(name: []const u8, ty: input.TypeKind, dims: []*input.Expr) input.sema.Symbol {
-    return .{
-        .name = name,
-        .type_kind = ty,
-        .dims = dims,
-        .char_len = null,
-        .kind = .variable,
-        .storage = .local,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    var sym = input.sema.Symbol.init(
+        name,
+        input.sema.TypeSpec.fromResolvedKind(ty, ty, null),
+        dims,
+        .variable,
+        .local,
+    );
+    sym.type_explicit = true;
+    return sym;
 }
 
 fn makeLocalScalarSymbol(name: []const u8, ty: input.TypeKind) input.sema.Symbol {
-    return .{
-        .name = name,
-        .type_kind = ty,
-        .dims = &[_]*input.Expr{},
-        .char_len = null,
-        .kind = .variable,
-        .storage = .local,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    return makeLocalArraySymbol(name, ty, &[_]*input.Expr{});
+}
+
+fn makeLocalCharacterSymbol(name: []const u8, len: usize, dims: []*input.Expr) input.sema.Symbol {
+    var sym = input.sema.Symbol.init(
+        name,
+        input.sema.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, len),
+        dims,
+        .variable,
+        .local,
+    );
+    sym.type_explicit = true;
+    return sym;
 }
 
 test "emitModuleToWriter emits module header and empty function" {
@@ -694,19 +692,16 @@ test "emitModuleToWriter adds hidden descriptor args for deferred-shape dummy ar
     const program = input.Program{ .units = units };
 
     const symbols = try a.alloc(input.sema.Symbol, 1);
-    symbols[0] = .{
-        .name = "A",
-        .type_kind = .integer,
-        .type_spec = input.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
-        .dims = dims,
-        .char_len_kind = .none,
-        .char_len = null,
-        .kind = .variable,
-        .storage = .dummy,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
+    symbols[0] = blk: {
+        var sym = input.sema.Symbol.init(
+            "A",
+            input.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+            dims,
+            .variable,
+            .dummy,
+        );
+        sym.type_explicit = true;
+        break :blk sym;
     };
     const sem_unit = input.sema.SemanticUnit{
         .name = "S",
@@ -757,19 +752,16 @@ test "emitModuleToWriter keeps assumed-size lower-bound dummy arrays on legacy A
     const program = input.Program{ .units = units };
 
     const symbols = try a.alloc(input.sema.Symbol, 1);
-    symbols[0] = .{
-        .name = "A",
-        .type_kind = .integer,
-        .type_spec = input.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
-        .dims = dims,
-        .char_len_kind = .none,
-        .char_len = null,
-        .kind = .variable,
-        .storage = .dummy,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
+    symbols[0] = blk: {
+        var sym = input.sema.Symbol.init(
+            "A",
+            input.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+            dims,
+            .variable,
+            .dummy,
+        );
+        sym.type_explicit = true;
+        break :blk sym;
     };
     const sem_unit = input.sema.SemanticUnit{
         .name = "S",
@@ -832,19 +824,17 @@ test "emitModuleToWriter declares external subroutine with descriptor-aware ABI"
 
     const symbols = try a.alloc(input.sema.Symbol, 2);
     symbols[0] = makeLocalArraySymbol("A", .integer, dims);
-    symbols[1] = .{
-        .name = "FOO",
-        .type_kind = .real,
-        .type_spec = input.sema.TypeSpec.fromResolvedKind(.real, .real, null),
-        .dims = &[_]*input.Expr{},
-        .char_len_kind = .none,
-        .char_len = null,
-        .kind = .subroutine,
-        .storage = .local,
-        .is_external = true,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
+    symbols[1] = blk: {
+        var sym = input.sema.Symbol.init(
+            "FOO",
+            input.sema.TypeSpec.fromResolvedKind(.real, .real, null),
+            &[_]*input.Expr{},
+            .subroutine,
+            .local,
+        );
+        sym.is_external = true;
+        sym.type_explicit = true;
+        break :blk sym;
     };
     const sem_unit = input.sema.SemanticUnit{
         .name = "S",
@@ -1017,18 +1007,7 @@ test "ASSIGN plus no-list assigned GOTO lowers to blockaddress indirectbr path" 
     const program = input.Program{ .units = units };
 
     const symbols = try a.alloc(input.sema.Symbol, 1);
-    symbols[0] = .{
-        .name = "I",
-        .type_kind = .integer,
-        .dims = &[_]*input.Expr{},
-        .char_len = null,
-        .kind = .variable,
-        .storage = .local,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    symbols[0] = makeLocalScalarSymbol("I", .integer);
     const sem_unit = input.sema.SemanticUnit{
         .name = "UNIT",
         .kind = .subroutine,
@@ -1383,18 +1362,7 @@ test "unformatted io lowering streams mixed scalars, multiple implied-do blocks 
     sem_symbols[1] = makeLocalScalarSymbol("M", .integer);
     sem_symbols[2] = makeLocalArraySymbol("A", .integer, arr_dims);
     sem_symbols[3] = makeLocalArraySymbol("B", .integer, arr_dims);
-    sem_symbols[4] = .{
-        .name = "STRS",
-        .type_kind = .character,
-        .dims = char_dims,
-        .char_len = 4,
-        .kind = .variable,
-        .storage = .local,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    sem_symbols[4] = makeLocalCharacterSymbol("STRS", 4, char_dims);
 
     const sem_unit = input.sema.SemanticUnit{
         .name = "S",
@@ -2564,13 +2532,7 @@ test "formatted read uses stream lowering for runtime implied-do with runtime fo
     sem_symbols[0] = makeLocalScalarSymbol("N", .integer);
     sem_symbols[1] = makeLocalScalarSymbol("I", .integer);
     sem_symbols[2] = makeLocalArraySymbol("A", .integer, arr_dims);
-    sem_symbols[3] = .{
-        .name = "FMT",
-        .type_kind = .character,
-        .dims = &[_]input.ArrayDim{},
-        .storage = .local,
-        .char_len = 32,
-    };
+    sem_symbols[3] = makeLocalCharacterSymbol("FMT", 32, &[_]*input.Expr{});
 
     const sem_unit = input.sema.SemanticUnit{
         .name = "S",
@@ -2658,20 +2620,7 @@ test "formatted write uses stream lowering for runtime implied-do with runtime f
     const sem_symbols = try a.alloc(input.sema.Symbol, 3);
     sem_symbols[0] = makeLocalScalarSymbol("N", .integer);
     sem_symbols[1] = makeLocalArraySymbol("A", .integer, arr_dims);
-    sem_symbols[2] = .{
-        .name = "FMT",
-        .type_kind = .character,
-        .type_spec = input.sema.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, 32),
-        .dims = &[_]input.ArrayDim{},
-        .char_len_kind = .constant,
-        .char_len = 32,
-        .kind = .variable,
-        .storage = .local,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    sem_symbols[2] = makeLocalCharacterSymbol("FMT", 32, &[_]*input.Expr{});
 
     const sem_unit = input.sema.SemanticUnit{
         .name = "S",

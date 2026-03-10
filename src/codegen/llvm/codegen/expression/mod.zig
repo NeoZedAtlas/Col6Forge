@@ -6,6 +6,10 @@ const call_mod = @import("call.zig");
 
 pub const emitExpr = dispatch.emitExpr;
 pub const emitLValue = dispatch.emitLValue;
+pub const emitCharacterLenValue = dispatch.emitCharacterLenValue;
+pub const emitCharacterLenValueOrOne = dispatch.emitCharacterLenValueOrOne;
+pub const emitCharacterSymbolLenValue = dispatch.emitCharacterSymbolLenValue;
+pub const emitCharacterSymbolLenValueI64 = dispatch.emitCharacterSymbolLenValueI64;
 
 pub const emitBinary = binary.emitBinary;
 pub const emitAdd = binary.emitAdd;
@@ -46,6 +50,18 @@ const IRType = ir.IRType;
 const Context = context.Context;
 const ValueRef = context.ValueRef;
 
+fn makeTestSymbol(
+    name: []const u8,
+    spec: sema.TypeSpec,
+    dims: []*ast.Expr,
+    kind: sema.SymbolKind,
+    storage: sema.StorageClass,
+) sema.Symbol {
+    var sym = sema.Symbol.init(name, spec, dims, kind, storage);
+    sym.type_explicit = true;
+    return sym;
+}
+
 const TestHarness = struct {
     arena: std.heap.ArenaAllocator,
     unit: ast.ProgramUnit,
@@ -70,92 +86,33 @@ const TestHarness = struct {
         arr2_dims[1] = dim_expr;
 
         const symbols = try a.alloc(sema.Symbol, 7);
-        symbols[0] = .{
-            .name = "A",
-            .type_kind = .integer,
-            .dims = empty_exprs,
-            .char_len = null,
-            .kind = .variable,
-            .storage = .local,
-            .is_external = false,
-            .is_intrinsic = false,
-            .const_value = null,
-            .type_explicit = true,
-        };
-        symbols[1] = .{
-            .name = "ARR",
-            .type_kind = .integer,
-            .dims = arr_dims,
-            .char_len = null,
-            .kind = .variable,
-            .storage = .local,
-            .is_external = false,
-            .is_intrinsic = false,
-            .const_value = null,
-            .type_explicit = true,
-        };
-        symbols[2] = .{
-            .name = "ARR2",
-            .type_kind = .integer,
-            .dims = arr2_dims,
-            .char_len = null,
-            .kind = .variable,
-            .storage = .local,
-            .is_external = false,
-            .is_intrinsic = false,
-            .const_value = null,
-            .type_explicit = true,
-        };
-        symbols[3] = .{
-            .name = "CARR",
-            .type_kind = .character,
-            .dims = arr_dims,
-            .char_len = null,
-            .kind = .variable,
-            .storage = .dummy,
-            .is_external = false,
-            .is_intrinsic = false,
-            .const_value = null,
-            .type_explicit = true,
-        };
-        symbols[4] = .{
-            .name = "DBLE",
-            .type_kind = .double_precision,
-            .dims = empty_exprs,
-            .char_len = null,
-            .kind = .function,
-            .storage = .local,
-            .is_external = false,
-            .is_intrinsic = true,
-            .const_value = null,
-            .type_explicit = true,
-        };
-        symbols[5] = .{
-            .name = "CPN001",
-            .type_kind = .character,
-            .dims = empty_exprs,
-            .char_len_kind = .constant,
-            .char_len = 5,
-            .kind = .parameter,
-            .storage = .local,
-            .is_external = false,
-            .is_intrinsic = false,
-            .const_value = .{ .string = "PQRST" },
-            .type_explicit = true,
-        };
-        symbols[6] = .{
-            .name = "CFUN",
-            .type_kind = .character,
-            .dims = empty_exprs,
-            .char_len_kind = .constant,
-            .char_len = 4,
-            .kind = .function,
-            .storage = .local,
-            .is_external = false,
-            .is_intrinsic = false,
-            .const_value = null,
-            .type_explicit = true,
-        };
+        symbols[0] = makeTestSymbol("A", sema.TypeSpec.fromResolvedKind(.integer, .integer, null), empty_exprs, .variable, .local);
+        symbols[1] = makeTestSymbol("ARR", sema.TypeSpec.fromResolvedKind(.integer, .integer, null), arr_dims, .variable, .local);
+        symbols[2] = makeTestSymbol("ARR2", sema.TypeSpec.fromResolvedKind(.integer, .integer, null), arr2_dims, .variable, .local);
+        symbols[3] = makeTestSymbol(
+            "CARR",
+            sema.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, 1),
+            arr_dims,
+            .variable,
+            .dummy,
+        );
+        symbols[4] = makeTestSymbol("DBLE", sema.TypeSpec.fromResolvedKind(.double_precision, .double_precision, null), empty_exprs, .function, .local);
+        symbols[4].is_intrinsic = true;
+        symbols[5] = makeTestSymbol(
+            "CPN001",
+            sema.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, 5),
+            empty_exprs,
+            .parameter,
+            .local,
+        );
+        symbols[5].const_value = .{ .string = "PQRST" };
+        symbols[6] = makeTestSymbol(
+            "CFUN",
+            sema.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, 4),
+            empty_exprs,
+            .function,
+            .local,
+        );
 
         const sem_unit = sema.SemanticUnit{
             .name = "UNIT",
@@ -1370,18 +1327,13 @@ test "emitSubscriptPtr uses runtime descriptor multipliers when present" {
     const arr2_dims = try a.alloc(*ast.Expr, 2);
     arr2_dims[0] = dim2;
     arr2_dims[1] = dim3;
-    harness.sem_unit.symbols[1] = .{
-        .name = "ARR",
-        .type_kind = .integer,
-        .dims = arr2_dims,
-        .char_len = null,
-        .kind = .variable,
-        .storage = .local,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    harness.sem_unit.symbols[1] = makeTestSymbol(
+        "ARR",
+        sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+        arr2_dims,
+        .variable,
+        .local,
+    );
 
     var buffer = std.array_list.Managed(u8).init(allocator);
     defer buffer.deinit();

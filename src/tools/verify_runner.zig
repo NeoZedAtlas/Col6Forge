@@ -707,14 +707,31 @@ fn isFortranSource(path: []const u8) bool {
 }
 
 fn sanitizeWorkName(allocator: std.mem.Allocator, rel_path: []const u8) ![]const u8 {
-    var buf = try allocator.alloc(u8, rel_path.len);
-    for (rel_path, 0..) |c, i| {
-        buf[i] = switch (c) {
-            '/', '\\', ':', '.' => '_',
-            else => c,
+    const base_name = std.fs.path.basename(rel_path);
+    var stem_buf: [32]u8 = undefined;
+    var stem_len: usize = 0;
+    for (base_name) |c| {
+        const mapped: u8 = switch (c) {
+            '/', '\\', ':', '.', ' ' => '_',
+            else => std.ascii.toLower(c),
         };
+        if (!std.ascii.isAlphanumeric(mapped) and mapped != '_') continue;
+        if (stem_len == stem_buf.len) break;
+        stem_buf[stem_len] = mapped;
+        stem_len += 1;
     }
-    return buf;
+    if (stem_len == 0) {
+        stem_buf[0] = 'c';
+        stem_buf[1] = 'a';
+        stem_buf[2] = 's';
+        stem_buf[3] = 'e';
+        stem_len = 4;
+    }
+
+    var hasher = std.hash.XxHash64.init(0);
+    hasher.update(rel_path);
+    const digest = hasher.final();
+    return std.fmt.allocPrint(allocator, "{s}_{x:0>16}", .{ stem_buf[0..stem_len], digest });
 }
 
 fn exeName(comptime base: []const u8) []const u8 {
@@ -1060,20 +1077,6 @@ fn prepareExePath(allocator: std.mem.Allocator, work_dir: []const u8, base: []co
     var attempt: usize = 0;
     while (attempt < 1000) : (attempt += 1) {
         const candidate = try buildExePath(allocator, work_dir, base, attempt);
-        if (attempt == 0) {
-            std.fs.deleteFileAbsolute(candidate) catch |err| switch (err) {
-                error.FileNotFound => return candidate,
-                error.AccessDenied, error.PermissionDenied => {
-                    allocator.free(candidate);
-                    continue;
-                },
-                else => {
-                    allocator.free(candidate);
-                    return err;
-                },
-            };
-            return candidate;
-        }
         std.fs.accessAbsolute(candidate, .{ .mode = .read_only }) catch |err| switch (err) {
             error.FileNotFound => return candidate,
             error.AccessDenied, error.PermissionDenied => {

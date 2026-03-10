@@ -173,25 +173,33 @@ fn emitFormatExprLen(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitE
             const sym = ctx.findSymbol(name) orelse return null;
             if (!sym.isCharacter()) return null;
             if (sym.dims.len > 0) {
-                if (sym.effectiveCharLen()) |len| {
-                    const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch null;
-                    if (elem_count) |count| return try ctx.constI32(@intCast(len * count));
+                const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch null;
+                if (elem_count) |count| {
+                    const elem_len = try expr_dispatch.emitCharacterSymbolLenValue(ctx, name, sym);
+                    if (count == 1) return elem_len;
+                    const count_val = try ctx.constI32(@intCast(count));
+                    const total_tmp = try ctx.nextTemp();
+                    try builder.binary(total_tmp, "mul", .i32, elem_len, count_val);
+                    return .{ .name = total_tmp, .ty = .i32, .is_ptr = false };
                 }
             }
-            if (sym.effectiveCharLen()) |len| return try ctx.constI32(@intCast(len));
-            return lookupCharArgLen(ctx, name) orelse try ctx.constI32(1);
+            return try expr_dispatch.emitCharacterSymbolLenValue(ctx, name, sym);
         },
         .call_or_subscript => |call| {
             const sym = ctx.findSymbol(call.name) orelse return null;
             if (!sym.isCharacter()) return null;
             if (call.args.len == 0 and sym.dims.len > 0) {
-                if (sym.effectiveCharLen()) |len| {
-                    const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch null;
-                    if (elem_count) |count| return try ctx.constI32(@intCast(len * count));
+                const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch null;
+                if (elem_count) |count| {
+                    const elem_len = try expr_dispatch.emitCharacterSymbolLenValue(ctx, call.name, sym);
+                    if (count == 1) return elem_len;
+                    const count_val = try ctx.constI32(@intCast(count));
+                    const total_tmp = try ctx.nextTemp();
+                    try builder.binary(total_tmp, "mul", .i32, elem_len, count_val);
+                    return .{ .name = total_tmp, .ty = .i32, .is_ptr = false };
                 }
             }
-            if (sym.effectiveCharLen()) |len| return try ctx.constI32(@intCast(len));
-            return lookupCharArgLen(ctx, call.name) orelse try ctx.constI32(1);
+            return try expr_dispatch.emitCharacterSymbolLenValue(ctx, call.name, sym);
         },
         else => return expr_dispatch.emitCharacterLenValue(ctx, builder, fmt_expr),
     }

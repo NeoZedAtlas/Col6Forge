@@ -643,17 +643,8 @@ fn charSymbolLengthValueI64(
     name: []const u8,
     sym: ast.sema.Symbol,
 ) !ValueRef {
-    var name_expr = Expr{ .identifier = name };
-    const len_val = (try dispatch.emitCharacterLenValue(ctx, builder, &name_expr)) orelse blk: {
-        if (sym.effectiveCharLenKind() == .constant or sym.effectiveCharLenKind() == .none) {
-            if (common.constantCharacterLen(sym)) |char_len| break :blk try i32Const(ctx, @intCast(char_len));
-        }
-        if (sym.effectiveCharLen()) |char_len| break :blk try i32Const(ctx, @intCast(char_len));
-        if (ctx.char_arg_lens.get(name)) |arg_len| break :blk arg_len;
-        break :blk try i32Const(ctx, 1);
-    };
-    if (len_val.ty == .i64) return len_val;
-    return casting.coerce(ctx, builder, len_val, .i64);
+    _ = sym;
+    return dispatch.emitCharacterSymbolLenValueI64(ctx, builder, name, ctx.findSymbol(name) orelse return error.UnknownSymbol);
 }
 
 fn i32Const(ctx: *Context, value: i64) !ValueRef {

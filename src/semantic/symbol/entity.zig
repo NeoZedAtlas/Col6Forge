@@ -18,16 +18,18 @@ pub const CharacterLengthKind = type_spec.CharacterLengthKind;
 pub const TypeSpec = type_spec.TypeSpec;
 
 pub const Symbol = struct {
+    pub const CompatMirrors = struct {
+        type_kind: ast.TypeKind,
+        char_len_kind: CharacterLengthKind = .none,
+        char_len: ?usize = null,
+    };
+
     name: []const u8,
-    // Compatibility mirrors for older callers and serialized fixtures.
-    // Semantic/codegen behavior must read from `type_spec` through helpers.
-    type_kind: ast.TypeKind,
     type_spec: TypeSpec = TypeSpec.fromKind(.real),
     dims: []*ast.Expr,
-    // Compatibility mirrors for character metadata. Keep them synchronized
-    // via `applyTypeSpec`, but do not treat them as the source of truth.
-    char_len_kind: CharacterLengthKind = .none,
-    char_len: ?usize,
+    // Compatibility mirrors for older callers and serialized fixtures.
+    // Semantic/codegen behavior must read from `type_spec` through helpers.
+    compat: CompatMirrors,
     kind: SymbolKind,
     storage: StorageClass,
     is_external: bool,
@@ -41,13 +43,13 @@ pub const Symbol = struct {
     host_owner_name: ?[]const u8 = null,
 
     pub fn normalizeCompatMirrors(self: *Symbol) void {
-        self.type_kind = self.type_spec.lowered_kind;
+        self.compat.type_kind = self.type_spec.lowered_kind;
         if (self.type_spec.lowered_kind == .character) {
-            self.char_len_kind = self.type_spec.char_len_kind;
-            self.char_len = self.type_spec.char_len;
+            self.compat.char_len_kind = self.type_spec.char_len_kind;
+            self.compat.char_len = self.type_spec.char_len;
         } else {
-            self.char_len_kind = .none;
-            self.char_len = null;
+            self.compat.char_len_kind = .none;
+            self.compat.char_len = null;
         }
     }
 
@@ -89,11 +91,9 @@ pub const Symbol = struct {
     ) Symbol {
         var sym = Symbol{
             .name = name,
-            .type_kind = spec.lowered_kind,
             .type_spec = spec,
             .dims = dims,
-            .char_len_kind = .none,
-            .char_len = null,
+            .compat = .{ .type_kind = spec.lowered_kind },
             .kind = kind,
             .storage = storage,
             .is_external = false,

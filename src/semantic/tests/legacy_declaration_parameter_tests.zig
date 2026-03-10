@@ -1018,7 +1018,6 @@ test "semantic use import applies known function TypeSpec without rebuilding fro
         &.{
             .{
                 .name = "FOO",
-                .type_kind = .double_precision,
                 .type_spec = symbols.TypeSpec.fromResolvedKind(.real, .double_precision, 8),
             },
         },

@@ -366,6 +366,10 @@ pub fn emitCharacterLenValue(ctx: *Context, builder: anytype, expr: *Expr) EmitE
     return emitCharacterLenValueImpl(ctx, builder, expr, ctx.stmt_func_stack.items.len);
 }
 
+pub fn emitCharacterLenValueOrOne(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef {
+    return (try emitCharacterLenValue(ctx, builder, expr)) orelse try ctx.constI32(1);
+}
+
 pub fn emitCharacterValuePlan(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?CharacterValuePlan {
     return emitCharacterValuePlanImpl(ctx, builder, expr, ctx.stmt_func_stack.items.len);
 }
@@ -420,8 +424,68 @@ fn powInt(base: i64, exp: i64) i64 {
 }
 
 fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize) EmitError!?ValueRef {
-    const plan = (try emitCharacterValuePlanImpl(ctx, builder, expr, subst_depth)) orelse return null;
-    return plan.logical_len;
+    switch (expr.*) {
+        .identifier => |name| {
+            if (subst_depth > 0) {
+                var depth = subst_depth;
+                while (depth > 0) {
+                    depth -= 1;
+                    const subst = ctx.stmt_func_stack.items[depth];
+                    if (findParamIndex(subst.params, name)) |idx| {
+                        return emitCharacterLenValueImpl(ctx, builder, subst.actuals[idx], depth);
+                    }
+                }
+            }
+            const sym = ctx.findSymbol(name) orelse return null;
+            if (!sym.isCharacter()) return null;
+            return try emitCharacterSymbolLenValue(ctx, name, sym);
+        },
+        .call_or_subscript => |call_or_sub| {
+            const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
+            if (!sym.isCharacter()) return null;
+            var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            if (kind == .unknown) {
+                if (sym.dims.len > 0) {
+                    kind = .subscript;
+                } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
+                    kind = .call;
+                }
+            }
+            return switch (kind) {
+                .subscript, .call => try emitCharacterSymbolLenValue(ctx, call_or_sub.name, sym),
+                else => null,
+            };
+        },
+        .substring => |sub| {
+            const sym = ctx.findSymbol(sub.name) orelse return null;
+            if (!sym.isCharacter()) return null;
+            var end_val = try emitCharacterSymbolLenValue(ctx, sub.name, sym);
+            if (sub.end) |end_expr| {
+                end_val = try memory.emitIndex(ctx, builder, end_expr);
+            }
+            var start_val = utils.oneValue();
+            if (sub.start) |start_expr| {
+                start_val = try memory.emitIndex(ctx, builder, start_expr);
+            }
+            const diff = try binary.emitSub(ctx, builder, end_val, start_val);
+            return try binary.emitAdd(ctx, builder, diff, utils.oneValue());
+        },
+        .literal => |lit| switch (lit.kind) {
+            .string => return try ctx.constI32(@intCast(utils.decodedStringLen(lit.text))),
+            .hollerith => {
+                const bytes = utils.hollerithBytes(lit.text) orelse return null;
+                return try ctx.constI32(@intCast(bytes.len));
+            },
+            else => return null,
+        },
+        .binary => |bin| {
+            if (bin.op != .concat) return null;
+            const left_len = try emitCharacterLenValueImpl(ctx, builder, bin.left, subst_depth) orelse return null;
+            const right_len = try emitCharacterLenValueImpl(ctx, builder, bin.right, subst_depth) orelse return null;
+            return try binary.emitAdd(ctx, builder, left_len, right_len);
+        },
+        else => return null,
+    }
 }
 
 fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize) EmitError!?CharacterValuePlan {
@@ -601,7 +665,7 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
     }
 }
 
-fn emitCharacterSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) !ValueRef {
+pub fn emitCharacterSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) !ValueRef {
     if (sym.effectiveCharLenKind() == .constant or sym.effectiveCharLenKind() == .none) {
         if (common.constantCharacterLen(sym)) |char_len| {
             return try ctx.constI32(@intCast(char_len));
@@ -612,6 +676,12 @@ fn emitCharacterSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sema.Sy
     }
     if (ctx.char_arg_lens.get(name)) |len_val| return len_val;
     return try ctx.constI32(1);
+}
+
+pub fn emitCharacterSymbolLenValueI64(ctx: *Context, builder: anytype, name: []const u8, sym: ast.sema.Symbol) !ValueRef {
+    const len_val = try emitCharacterSymbolLenValue(ctx, name, sym);
+    if (len_val.ty == .i64) return len_val;
+    return casting.coerce(ctx, builder, len_val, .i64);
 }
 
 fn copyCharacterBytesFromPlan(

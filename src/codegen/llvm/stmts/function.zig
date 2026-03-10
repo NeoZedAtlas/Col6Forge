@@ -16,6 +16,18 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 
+fn makeTestSymbol(name: []const u8, dims: []*ast.Expr) sema.Symbol {
+    var sym = sema.Symbol.init(
+        name,
+        sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+        dims,
+        .variable,
+        .local,
+    );
+    sym.type_explicit = true;
+    return sym;
+}
+
 pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try ctx.buildRefMap();
     try ctx.buildLocals();
@@ -909,18 +921,7 @@ test "emitFunction emits a simple assignment" {
     };
 
     const symbols = try a.alloc(sema.Symbol, 1);
-    symbols[0] = .{
-        .name = "A",
-        .type_kind = .integer,
-        .dims = try a.alloc(*ast.Expr, 0),
-        .char_len = null,
-        .kind = .variable,
-        .storage = .local,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    symbols[0] = makeTestSymbol("A", try a.alloc(*ast.Expr, 0));
     const sem_unit = sema.SemanticUnit{
         .name = "UNIT",
         .kind = .subroutine,
@@ -981,18 +982,7 @@ test "emitFunction lowers default INTEGER to i64 when target layout widens it" {
     };
 
     const symbols = try a.alloc(sema.Symbol, 1);
-    symbols[0] = .{
-        .name = "A",
-        .type_kind = .integer,
-        .dims = try a.alloc(*ast.Expr, 0),
-        .char_len = null,
-        .kind = .variable,
-        .storage = .local,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    symbols[0] = makeTestSymbol("A", try a.alloc(*ast.Expr, 0));
     const sem_unit = sema.SemanticUnit{
         .name = "UNIT",
         .kind = .subroutine,

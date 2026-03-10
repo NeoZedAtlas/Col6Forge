@@ -240,6 +240,17 @@ fn arrayElementCountWithLookup(
     return total;
 }
 
+fn makeTestSymbol(
+    name: []const u8,
+    spec: input.sema.TypeSpec,
+    dims: []*input.Expr,
+    storage: input.sema.StorageClass,
+) input.sema.Symbol {
+    var sym = input.sema.Symbol.init(name, spec, dims, .variable, storage);
+    sym.type_explicit = true;
+    return sym;
+}
+
 fn dimSizeValue(sem: *const input.sema.SemanticUnit, dim: *input.Expr, lookup: ?*const SymbolLookup) !?i64 {
     switch (dim.*) {
         .literal => |lit| {
@@ -315,30 +326,8 @@ test "buildUnitCommonLayouts computes offsets and alignment" {
     };
 
     const symbols = try a.alloc(input.sema.Symbol, 2);
-    symbols[0] = .{
-        .name = "A",
-        .type_kind = .integer,
-        .dims = empty_exprs,
-        .char_len = null,
-        .kind = .variable,
-        .storage = .common,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
-    symbols[1] = .{
-        .name = "B",
-        .type_kind = .real,
-        .dims = empty_exprs,
-        .char_len = null,
-        .kind = .variable,
-        .storage = .common,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    symbols[0] = makeTestSymbol("A", input.sema.TypeSpec.fromResolvedKind(.integer, .integer, null), empty_exprs, .common);
+    symbols[1] = makeTestSymbol("B", input.sema.TypeSpec.fromResolvedKind(.real, .real, null), empty_exprs, .common);
     const sem_unit = input.sema.SemanticUnit{
         .name = "UNIT",
         .kind = .subroutine,
@@ -387,30 +376,8 @@ test "buildUnitCommonLayouts widens INTEGER storage with target layout" {
     };
 
     const symbols = try a.alloc(input.sema.Symbol, 2);
-    symbols[0] = .{
-        .name = "A",
-        .type_kind = .integer,
-        .dims = empty_exprs,
-        .char_len = null,
-        .kind = .variable,
-        .storage = .common,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
-    symbols[1] = .{
-        .name = "B",
-        .type_kind = .real,
-        .dims = empty_exprs,
-        .char_len = null,
-        .kind = .variable,
-        .storage = .common,
-        .is_external = false,
-        .is_intrinsic = false,
-        .const_value = null,
-        .type_explicit = true,
-    };
+    symbols[0] = makeTestSymbol("A", input.sema.TypeSpec.fromResolvedKind(.integer, .integer, null), empty_exprs, .common);
+    symbols[1] = makeTestSymbol("B", input.sema.TypeSpec.fromResolvedKind(.real, .real, null), empty_exprs, .common);
     const sem_unit = input.sema.SemanticUnit{
         .name = "UNIT",
         .kind = .subroutine,

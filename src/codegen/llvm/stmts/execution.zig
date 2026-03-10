@@ -951,9 +951,9 @@ fn constI64(ctx: *Context, value: i64) ValueRef {
 }
 
 fn emitCharSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) EmitError!ValueRef {
-    if (common.constantCharacterLen(sym)) |len| return constI32(ctx, @intCast(len));
-    if (ctx.char_arg_lens.get(name)) |len_val| return len_val;
-    return error.NonConstantCharacterLength;
+    const len_val = try expr_dispatch.emitCharacterSymbolLenValue(ctx, name, sym);
+    if (len_val.ty != .i32) return error.NonConstantCharacterLength;
+    return len_val;
 }
 
 fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {

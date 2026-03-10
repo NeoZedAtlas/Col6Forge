@@ -37,9 +37,8 @@ fn lookupCharArgLen(ctx: *Context, name: []const u8) ?ValueRef {
 }
 
 fn emitCharSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) EmitError!ValueRef {
-    if (sym.effectiveCharLen()) |len| return try constI32(ctx, @intCast(len));
-    if (lookupCharArgLen(ctx, name)) |len_val| return len_val;
-    return try constI32(ctx, 1);
+    _ = lookupCharArgLen;
+    return expr.emitCharacterSymbolLenValue(ctx, name, sym);
 }
 
 fn emitSubstringLenValue(ctx: *Context, builder: anytype, sub: ast.SubstringExpr) EmitError!ValueRef {
@@ -89,8 +88,7 @@ fn emitCharExprLen(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitEr
             return .{ .name = sum_tmp, .ty = .i32, .is_ptr = false };
         },
         else => {
-            if (charLenForExpr(ctx, expr_node)) |len| return try constI32(ctx, @intCast(len));
-            return null;
+            return try expr.emitCharacterLenValue(ctx, builder, expr_node);
         },
     }
 }
