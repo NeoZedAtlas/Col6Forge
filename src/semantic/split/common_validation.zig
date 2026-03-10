@@ -2,11 +2,10 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const diagnostic = @import("../diagnostic.zig");
 const symbols = @import("../symbol/mod.zig");
+const storage_model = @import("storage_model.zig");
 const symbol_lookup = @import("symbol_lookup.zig");
-const const_eval_bridge = @import("const_eval_bridge.zig");
 
 pub const SemanticUnit = symbols.SemanticUnit;
-pub const Symbol = symbols.Symbol;
 
 pub const CommonItemSig = struct {
     type_spec: symbols.TypeSpec,
@@ -28,41 +27,39 @@ pub fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_
     for (program.units, 0..) |unit, unit_idx| {
         if (unit_idx >= sem_units.len) break;
         const sem_unit = &sem_units[unit_idx];
+        const common_blocks = try storage_model.buildUnitCommonBlocks(arena, unit, sem_unit);
         if (unit.decl_sources.len != 0) {
             std.debug.assert(unit.decl_sources.len == unit.decls.len);
         }
-        var symbol_index = try symbol_lookup.buildSemanticSymbolIndex(arena, sem_unit);
-        defer symbol_index.deinit();
+        var decl_sources = std.StringHashMap(ast.DeclSource).init(arena);
+        defer decl_sources.deinit();
+        for (unit.decls, 0..) |decl, decl_idx| {
+            if (decl != .common) continue;
+            const decl_source = if (decl_idx < unit.decl_sources.len)
+                unit.decl_sources[decl_idx]
+            else
+                ast.DeclSource{};
+            for (decl.common.blocks) |block| {
+                const key = try normalizedCommonKey(arena, block.name);
+                if (!decl_sources.contains(key)) try decl_sources.put(key, decl_source);
+            }
+        }
 
         var local = std.StringHashMap(CommonLocalBlock).init(arena);
         defer local.deinit();
-        for (unit.decls, 0..) |decl, decl_idx| {
-            switch (decl) {
-                .common => |com| {
-                    const decl_source = if (decl_idx < unit.decl_sources.len)
-                        unit.decl_sources[decl_idx]
-                    else
-                        ast.DeclSource{};
-                    for (com.blocks) |block| {
-                        const key = try normalizedCommonKey(arena, block.name);
-                        if (!local.contains(key)) {
-                            try local.put(key, .{
-                                .items = std.array_list.Managed(CommonItemSig).init(arena),
-                                .source = decl_source,
-                            });
-                        }
-                        const sig_ptr = local.getPtr(key) orelse return error.CommonBlockMismatch;
-                        for (block.items) |item| {
-                            const sym = symbol_lookup.lookupSemanticSymbol(sem_unit, &symbol_index, item.name) orelse return error.CommonBlockMismatch;
-                            const size = try commonItemSize(sem_unit, sym);
-                            try sig_ptr.items.append(.{
-                                .type_spec = sym.type_spec,
-                                .size = size,
-                            });
-                        }
-                    }
-                },
-                else => {},
+        for (common_blocks) |block| {
+            if (!local.contains(block.key)) {
+                try local.put(block.key, .{
+                    .items = std.array_list.Managed(CommonItemSig).init(arena),
+                    .source = decl_sources.get(block.key) orelse ast.DeclSource{},
+                });
+            }
+            const sig_ptr = local.getPtr(block.key) orelse return error.CommonBlockMismatch;
+            for (block.items) |item| {
+                try sig_ptr.items.append(.{
+                    .type_spec = item.type_spec,
+                    .size = item.byte_size,
+                });
             }
         }
 
@@ -82,7 +79,7 @@ pub fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_
                         prev.total_size = total_size;
                     }
                 } else {
-                    try global.put(key, .{
+                    try global.put("", .{
                         .items = try block.items.toOwnedSlice(),
                         .total_size = total_size,
                     });
@@ -99,7 +96,8 @@ pub fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_
                     prev.total_size = total_size;
                 }
             } else {
-                try global.put(key, .{
+                const owned_key = try arena.dupe(u8, key);
+                try global.put(owned_key, .{
                     .items = try block.items.toOwnedSlice(),
                     .total_size = total_size,
                 });
@@ -156,20 +154,4 @@ pub fn setCommonMismatchDiagnostic(source: ast.DeclSource) void {
     const line = if (source.line == 0) 1 else source.line;
     const col = if (source.column == 0) 1 else source.column;
     diagnostic.set(line, col, "CF3115", "COMMON block layout mismatch across program units", source.text);
-}
-
-fn commonItemSize(sem_unit: *const SemanticUnit, sym: Symbol) !usize {
-    const elem_size: usize = switch (sym.loweredKind()) {
-        .integer => 4,
-        .real => 4,
-        .double_precision => 8,
-        .complex => 8,
-        .complex_double => 16,
-        .logical => 4,
-        .character => sym.effectiveCharLen() orelse 1,
-    };
-    const count = try const_eval_bridge.commonElementCount(sem_unit, sym.dims);
-    const mul = @mulWithOverflow(elem_size, count);
-    if (mul[1] != 0) return error.CommonBlockMismatch;
-    return mul[0];
 }

@@ -3,6 +3,7 @@ const input = @import("../../input.zig");
 const evaluator = @import("../../../semantic/evaluator.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
+const storage_model = input.sema.storage_model;
 
 pub const CaseInsensitiveStringContext = struct {
     pub fn hash(_: @This(), key: []const u8) u64 {
@@ -71,77 +72,43 @@ pub fn buildUnitCommonLayoutsWithOptions(
     sem: *const input.sema.SemanticUnit,
     options: CommonLayoutOptions,
 ) ![]CommonBlockLayout {
+    const common_blocks = try storage_model.buildUnitCommonBlocks(allocator, unit, sem);
+    defer storage_model.deinitCommonBlocks(allocator, common_blocks);
+
     var symbol_lookup = try SymbolLookup.init(allocator, sem);
     defer symbol_lookup.deinit();
-
-    var blocks = CaseInsensitiveStringHashMap(std.array_list.Managed([]const u8)).initContext(allocator, .{});
-    defer {
-        var it_deinit = blocks.iterator();
-        while (it_deinit.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit();
-        }
-        blocks.deinit();
-    }
-    var order = std.array_list.Managed([]const u8).init(allocator);
-    defer order.deinit();
-
-    for (unit.decls) |decl| {
-        switch (decl) {
-            .common => |com| {
-                for (com.blocks) |block| {
-                    const lookup_key = block.name orelse "";
-                    if (!blocks.contains(lookup_key)) {
-                        const key = try blockKey(allocator, block.name);
-                        try blocks.put(key, std.array_list.Managed([]const u8).init(allocator));
-                        try order.append(key);
-                    }
-                    const list = blocks.getPtr(lookup_key) orelse return error.MissingCommonBlock;
-                    for (block.items) |item| {
-                        try list.append(item.name);
-                    }
-                }
-            },
-            else => {},
-        }
-    }
 
     var layouts = std.array_list.Managed(CommonBlockLayout).init(allocator);
     errdefer {
         for (layouts.items) |*layout| layout.deinit(allocator);
         layouts.deinit();
     }
-    for (order.items) |key| {
-        const list = blocks.get(key) orelse return error.MissingCommonBlock;
+    for (common_blocks) |block| {
         var items = std.array_list.Managed(CommonItem).init(allocator);
         errdefer items.deinit();
         var offset: usize = 0;
         var max_align: usize = 1;
 
-        for (list.items) |name| {
-            const sym = findSymbol(sem, name, &symbol_lookup) orelse return error.UnknownSymbol;
+        for (block.items) |storage_item| {
+            const sym = findSymbol(sem, storage_item.name, &symbol_lookup) orelse return error.UnknownSymbol;
             if (sym.storage != .common) return error.InvalidCommonSymbol;
             const ty = if (sym.isCharacter()) ir.IRType.i8 else llvm_types.typeFromKindWithLayout(sym.loweredKind(), options.target_layout);
             const sa = if (sym.isCharacter())
                 SizeAlign{ .size = try requireConstantCharacterLen(sym), .alignment = 1 }
             else
                 try sizeAlign(ty);
-            const elem_count = if (sym.dims.len > 0) try arrayElementCountWithLookup(sem, sym.dims, &symbol_lookup) else 1;
-            const elem_size = sa.size;
-            const size_mul = @mulWithOverflow(elem_size, elem_count);
-            if (size_mul[1] != 0) return error.ArraySizeOverflow;
-            const item_size = size_mul[0];
+            const item_size = storage_item.byte_size;
             if (options.align_items) {
                 offset = alignForward(offset, sa.alignment);
             }
-            try items.append(.{ .name = name, .offset = offset, .ty = ty, .size = item_size });
+            try items.append(.{ .name = storage_item.name, .offset = offset, .ty = ty, .size = item_size });
             offset += item_size;
             if (sa.alignment > max_align) max_align = sa.alignment;
         }
 
         const total = if (options.align_items) alignForward(offset, max_align) else offset;
-        const layout_key = try allocator.dupe(u8, key);
-        const global_name = try commonGlobalName(allocator, key);
+        const layout_key = try allocator.dupe(u8, block.key);
+        const global_name = try commonGlobalName(allocator, block.key);
         try layouts.append(.{
             .key = layout_key,
             .global_name = global_name,

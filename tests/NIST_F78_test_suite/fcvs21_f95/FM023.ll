@@ -1011,7 +1011,7 @@ bb131:
   %t604 = mul i64 1, %t603
   %t605 = mul i64 %t602, %t604
   %t606 = add i64 %t600, %t605
-  %t607 = getelementptr i32, ptr %t2, i64 %t606
+  %t607 = getelementptr i32, ptr %t24, i64 %t606
   %t608 = sub i32 0, 9999
   store i32 %t608, ptr %t607
   %t609 = sext i32 2 to i64
@@ -1024,7 +1024,7 @@ bb131:
   %t616 = mul i64 1, %t615
   %t617 = mul i64 %t614, %t616
   %t618 = add i64 %t612, %t617
-  %t619 = getelementptr i32, ptr %t2, i64 %t618
+  %t619 = getelementptr i32, ptr %t24, i64 %t618
   %t620 = load i32, ptr %t619
   store i32 %t620, ptr %t21
   br label %L46380
@@ -1134,7 +1134,7 @@ bb148:
   %t675 = mul i64 1, %t674
   %t676 = mul i64 %t673, %t675
   %t677 = add i64 %t671, %t676
-  %t678 = getelementptr i32, ptr %t2, i64 %t677
+  %t678 = getelementptr i32, ptr %t24, i64 %t677
   %t679 = sub i32 0, 9999
   store i32 %t679, ptr %t678
   %t680 = sext i32 2 to i64
@@ -1147,7 +1147,7 @@ bb148:
   %t687 = mul i64 1, %t686
   %t688 = mul i64 %t685, %t687
   %t689 = add i64 %t683, %t688
-  %t690 = getelementptr i32, ptr %t2, i64 %t689
+  %t690 = getelementptr i32, ptr %t24, i64 %t689
   %t691 = load i32, ptr %t690
   store i32 %t691, ptr %t21
   br label %L46390
@@ -1257,7 +1257,7 @@ bb165:
   %t746 = mul i64 1, %t745
   %t747 = mul i64 %t744, %t746
   %t748 = add i64 %t742, %t747
-  %t749 = getelementptr float, ptr %t4, i64 %t748
+  %t749 = getelementptr float, ptr %t25, i64 %t748
   %t750 = sitofp i32 512 to float
   store float %t750, ptr %t749
   %t751 = sext i32 2 to i64
@@ -1270,7 +1270,7 @@ bb165:
   %t758 = mul i64 1, %t757
   %t759 = mul i64 %t756, %t758
   %t760 = add i64 %t754, %t759
-  %t761 = getelementptr float, ptr %t4, i64 %t760
+  %t761 = getelementptr float, ptr %t25, i64 %t760
   %t762 = load float, ptr %t761
   %t763 = fptosi float %t762 to i32
   store i32 %t763, ptr %t21
@@ -1380,7 +1380,7 @@ bb182:
   %t817 = mul i64 1, %t816
   %t818 = mul i64 %t815, %t817
   %t819 = add i64 %t813, %t818
-  %t820 = getelementptr float, ptr %t4, i64 %t819
+  %t820 = getelementptr float, ptr %t25, i64 %t819
   %t821 = sitofp i32 512 to float
   store float %t821, ptr %t820
   %t822 = sext i32 2 to i64
@@ -1393,7 +1393,7 @@ bb182:
   %t829 = mul i64 1, %t828
   %t830 = mul i64 %t827, %t829
   %t831 = add i64 %t825, %t830
-  %t832 = getelementptr float, ptr %t4, i64 %t831
+  %t832 = getelementptr float, ptr %t25, i64 %t831
   %t833 = load float, ptr %t832
   %t834 = fptosi float %t833 to i32
   store i32 %t834, ptr %t21

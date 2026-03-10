@@ -14,6 +14,7 @@ pub const diagnostic = @import("diagnostic.zig");
 pub const api = @import("split/api.zig");
 pub const function_type = @import("split/function_type.zig");
 pub const common_validation = @import("split/common_validation.zig");
+pub const storage_model = @import("split/storage_model.zig");
 pub const symbol_lookup = @import("split/symbol_lookup.zig");
 pub const const_eval_bridge = @import("split/const_eval_bridge.zig");
 

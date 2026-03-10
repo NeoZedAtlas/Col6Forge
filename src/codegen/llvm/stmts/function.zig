@@ -9,6 +9,7 @@ const execution = @import("execution.zig");
 const sema = @import("../../../semantic/mod.zig");
 const utils = @import("../codegen/utils.zig");
 const builder_mod = @import("../codegen/builder.zig");
+const storage_model = sema.storage_model;
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -267,17 +268,21 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         try ctx.locals.put(ctx.unit.name, result_ptr);
     }
 
-    if (unitHasCommonDecls(ctx.unit.decls)) {
-        try installCommonLocals(ctx, builder);
-    }
-    if (unitHasEquivalenceDecls(ctx.unit.decls)) {
-        var orig_locals = std.StringHashMap(ValueRef).init(ctx.allocator);
-        defer orig_locals.deinit();
-        var it = ctx.locals.iterator();
-        while (it.next()) |entry| {
-            try orig_locals.put(entry.key_ptr.*, entry.value_ptr.*);
+    if (unitHasCommonDecls(ctx.unit.decls) or unitHasEquivalenceDecls(ctx.unit.decls)) {
+        if (unitHasCommonDecls(ctx.unit.decls)) {
+            try installCommonLocals(ctx, builder);
         }
-        try applyEquivalences(ctx, builder, &orig_locals);
+        if (unitHasEquivalenceDecls(ctx.unit.decls)) {
+            const equivalence_groups = try storage_model.buildUnitEquivalenceGroups(ctx.allocator, ctx.unit, ctx.sem);
+            defer storage_model.deinitEquivalenceGroups(ctx.allocator, equivalence_groups);
+            var orig_locals = std.StringHashMap(ValueRef).init(ctx.allocator);
+            defer orig_locals.deinit();
+            var it = ctx.locals.iterator();
+            while (it.next()) |entry| {
+                try orig_locals.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+            try applyEquivalences(ctx, builder, equivalence_groups, &orig_locals);
+        }
     }
     try emitDeclaratorInitializers(ctx, builder, &save_info);
 
@@ -793,231 +798,58 @@ fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {
     }
 }
 
-fn applyEquivalences(ctx: *Context, builder: anytype, orig_locals: *const std.StringHashMap(ValueRef)) EmitError!void {
-    for (ctx.unit.decls) |decl| {
-        if (decl != .equivalence) continue;
-        for (decl.equivalence.groups) |group| {
-            if (group.items.len < 2) continue;
-            var anchor = group.items[0];
-            var anchor_size: usize = 0;
-            for (group.items) |item| {
-                const size = equivalenceItemSize(ctx, item) orelse 0;
-                if (size > anchor_size) {
-                    anchor = item;
-                    anchor_size = size;
-                    continue;
-                }
-                if (size == anchor_size) {
-                    const name = switch (item.*) {
-                        .identifier => |id| id,
-                        .call_or_subscript => |call| call.name,
-                        else => null,
-                    } orelse continue;
-                    const current = ctx.locals.get(name) orelse continue;
-                    if (orig_locals.get(name)) |orig| {
-                        if (!std.mem.eql(u8, current.name, orig.name)) {
-                            anchor = item;
-                        }
-                    }
-                }
-            }
-            for (group.items) |other| {
-                if (other == anchor) continue;
-                try applyEquivalencePair(ctx, builder, anchor, other);
-            }
+fn applyEquivalences(
+    ctx: *Context,
+    builder: anytype,
+    equivalence_groups: []const storage_model.EquivalenceGroup,
+    orig_locals: *const std.StringHashMap(ValueRef),
+) EmitError!void {
+    for (equivalence_groups) |group| {
+        if (group.members.len < 2) continue;
+        const anchor = chooseEquivalenceAnchor(group, orig_locals) orelse continue;
+        const anchor_ptr = orig_locals.get(anchor.symbol_name) orelse continue;
+        for (group.members) |member| {
+            const relative = member.symbol_base_byte_offset - anchor.symbol_base_byte_offset;
+            const ptr = if (relative == 0)
+                anchor_ptr
+            else
+                try byteOffsetPtr(ctx, builder, anchor_ptr, relative);
+            try ctx.locals.put(member.symbol_name, ptr);
         }
     }
 }
 
-fn equivalenceItemSize(ctx: *Context, item: *ast.Expr) ?usize {
-    switch (item.*) {
-        .identifier => |name| {
-            const sym = ctx.findSymbol(name) orelse return null;
-            return symbolTotalSize(ctx, sym);
-        },
-        .call_or_subscript => |call| {
-            const sym = ctx.findSymbol(call.name) orelse return null;
-            if (sym.dims.len == 0) return symbolTotalSize(ctx, sym);
-            return symbolElemSize(ctx, sym);
-        },
-        .substring => |sub| {
-            const len = substringLen(ctx, sub) orelse return null;
-            return len;
-        },
-        else => return null,
-    }
-}
-
-fn symbolElemSize(ctx: *Context, sym: sema.Symbol) ?usize {
-    if (sym.isCharacter()) {
-        return common.constantCharacterLen(sym);
-    }
-    const ty = ctx.typeFromKind(sym.loweredKind());
-    return sizeAlignForType(ty).size;
-}
-
-fn symbolTotalSize(ctx: *Context, sym: sema.Symbol) ?usize {
-    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return null;
-    const elem_size = symbolElemSize(ctx, sym) orelse return null;
-    return elem_count * elem_size;
-}
-
-fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
-    const sym = ctx.findSymbol(sub.name) orelse return null;
-    if (!sym.isCharacter()) return null;
-    const base_len_usize = common.constantCharacterLen(sym) orelse return null;
-    const base_len: i64 = @intCast(base_len_usize);
-    const start_val = if (sub.start) |start_expr| constIndexValue(start_expr) orelse return null else 1;
-    const end_val = if (sub.end) |end_expr| constIndexValue(end_expr) orelse return null else base_len;
-    const length = end_val - start_val + 1;
-    if (length <= 0) return null;
-    return @intCast(length);
-}
-
-fn applyEquivalencePair(ctx: *Context, builder: anytype, anchor: *ast.Expr, other: *ast.Expr) EmitError!void {
-    if (anchor.* == .call_or_subscript and other.* == .call_or_subscript) {
-        const a_call = anchor.call_or_subscript;
-        const b_call = other.call_or_subscript;
-        const a_sym = ctx.findSymbol(a_call.name) orelse return;
-        const b_sym = ctx.findSymbol(b_call.name) orelse return;
-        if (a_sym.loweredKind() != b_sym.loweredKind()) return;
-        if (a_sym.dims.len != b_sym.dims.len) return;
-        if (argsEqual(a_call.args, b_call.args)) {
-            const base = ctx.locals.get(a_call.name) orelse return;
-            try ctx.locals.put(b_call.name, base);
-            return;
+fn chooseEquivalenceAnchor(
+    group: storage_model.EquivalenceGroup,
+    orig_locals: *const std.StringHashMap(ValueRef),
+) ?storage_model.EquivalenceMember {
+    var best: ?storage_model.EquivalenceMember = null;
+    for (group.members) |member| {
+        if (!orig_locals.contains(member.symbol_name)) continue;
+        if (best == null) {
+            best = member;
+            continue;
         }
-        const b_offset = constLinearOffset(b_sym, b_call) orelse return;
-        const anchor_ptr = try expression.emitSubscriptPtr(ctx, builder, a_call);
-        var base_ptr = anchor_ptr;
-        if (b_offset != 0) {
-            const neg_text = try ctx.intLiteral(-b_offset);
-            const neg_val = ValueRef{ .name = neg_text, .ty = .i32, .is_ptr = false };
-            const ptr_name = try ctx.nextTemp();
-            const elem_ty = ctx.typeFromKind(a_sym.loweredKind());
-            try builder.gep(ptr_name, elem_ty, anchor_ptr, neg_val);
-            base_ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+        const current = best.?;
+        const member_is_common = member.storage == .common;
+        const current_is_common = current.storage == .common;
+        if (member_is_common != current_is_common) {
+            if (member_is_common) best = member;
+            continue;
         }
-        try ctx.locals.put(b_call.name, base_ptr);
-        return;
-    }
-    if (anchor.* == .call_or_subscript and other.* == .identifier) {
-        const other_sym = ctx.findSymbol(other.identifier) orelse return;
-        if (other_sym.dims.len > 0) {
-            try applyEquivalenceSubscriptArray(ctx, builder, anchor, other.identifier);
-        } else {
-            try applyEquivalenceSubscriptScalar(ctx, builder, anchor, other.identifier);
-        }
-        return;
-    }
-    if (anchor.* == .identifier and other.* == .call_or_subscript) {
-        const anchor_sym = ctx.findSymbol(anchor.identifier) orelse return;
-        if (anchor_sym.dims.len > 0) {
-            try applyEquivalenceSubscriptArray(ctx, builder, other, anchor.identifier);
-        } else {
-            try applyEquivalenceSubscriptScalar(ctx, builder, other, anchor.identifier);
-        }
-        return;
-    }
-    if (anchor.* == .identifier and other.* == .identifier) {
-        const a_name = anchor.identifier;
-        const b_name = other.identifier;
-        const a_sym = ctx.findSymbol(a_name) orelse return;
-        const b_sym = ctx.findSymbol(b_name) orelse return;
-        var base_name = a_name;
-        var alias_name = b_name;
-        if (a_sym.storage == .common and b_sym.storage != .common) {
-            base_name = a_name;
-            alias_name = b_name;
-        } else if (b_sym.storage == .common and a_sym.storage != .common) {
-            base_name = b_name;
-            alias_name = a_name;
-        }
-        const base = ctx.locals.get(base_name) orelse return;
-        try ctx.locals.put(alias_name, base);
-    }
-}
-
-fn applyEquivalenceSubscriptScalar(ctx: *Context, builder: anytype, sub_expr: *ast.Expr, scalar_name: []const u8) EmitError!void {
-    const call = sub_expr.call_or_subscript;
-    if (!isEquivalenceSubscriptDesignator(ctx, sub_expr, call)) return;
-    const scalar_sym = ctx.findSymbol(scalar_name) orelse return;
-    if (scalar_sym.dims.len != 0) return;
-    const ptr = try expression.emitSubscriptPtr(ctx, builder, call);
-    try ctx.locals.put(scalar_name, ptr);
-}
-
-fn applyEquivalenceSubscriptArray(ctx: *Context, builder: anytype, sub_expr: *ast.Expr, array_name: []const u8) EmitError!void {
-    const call = sub_expr.call_or_subscript;
-    if (!isEquivalenceSubscriptDesignator(ctx, sub_expr, call)) return;
-    const array_sym = ctx.findSymbol(array_name) orelse return;
-    if (array_sym.dims.len == 0) return;
-    const ptr = try expression.emitSubscriptPtr(ctx, builder, call);
-    try ctx.locals.put(array_name, ptr);
-}
-
-fn isEquivalenceSubscriptDesignator(ctx: *Context, sub_expr: *ast.Expr, call: ast.CallOrSubscript) bool {
-    const expr_key = @as(usize, @intFromPtr(sub_expr));
-    if (ctx.ref_kinds.get(expr_key)) |kind| {
-        if (kind == .subscript) return true;
-        if (kind != .unknown) return false;
-    }
-    const sym = ctx.findSymbol(call.name) orelse return false;
-    return sym.dims.len > 0 and call.args.len == sym.dims.len;
-}
-
-fn argsEqual(a: []*ast.Expr, b: []*ast.Expr) bool {
-    if (a.len != b.len) return false;
-    for (a, 0..) |arg, idx| {
-        const av = constIndexValue(arg) orelse return false;
-        const bv = constIndexValue(b[idx]) orelse return false;
-        if (av != bv) return false;
-    }
-    return true;
-}
-
-fn constLinearOffset(sym: sema.Symbol, call: ast.CallOrSubscript) ?i64 {
-    if (call.args.len == 0) return null;
-    if (call.args.len != sym.dims.len) return null;
-    var offset: i64 = 0;
-    var stride: i64 = 1;
-    var idx: usize = 0;
-    while (idx < call.args.len) : (idx += 1) {
-        const idx_val = constIndexValue(call.args[idx]) orelse return null;
-        const dim_val = dimSizeConst(sym.dims[idx]) orelse return null;
-        const lower_val = dimLowerConst(sym.dims[idx]) orelse return null;
-        if (dim_val <= 0) return null;
-        const rel = idx_val - lower_val;
-        if (rel < 0) return null;
-        offset += rel * stride;
-        if (idx + 1 < call.args.len) {
-            const mul = @mulWithOverflow(stride, dim_val);
-            if (mul[1] != 0) return null;
-            stride = mul[0];
+        if (member.symbol_byte_size > current.symbol_byte_size) {
+            best = member;
         }
     }
-    return offset;
+    return best;
 }
 
-fn dimSizeConst(expr: *ast.Expr) ?i64 {
-    if (expr.* == .dim_range) {
-        const range = expr.dim_range;
-        if (range.stride != null) return null;
-        if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return null;
-        const upper = constIndexValue(range.upper) orelse return null;
-        const lower = if (range.lower) |lower_expr| constIndexValue(lower_expr) orelse return null else 1;
-        return upper - lower + 1;
-    }
-    return constIndexValue(expr);
-}
-
-fn dimLowerConst(expr: *ast.Expr) ?i64 {
-    if (expr.* == .dim_range) {
-        const range = expr.dim_range;
-        if (range.lower) |lower_expr| return constIndexValue(lower_expr);
-        return 1;
-    }
-    return 1;
+fn byteOffsetPtr(ctx: *Context, builder: anytype, base_ptr: ValueRef, byte_offset: i64) EmitError!ValueRef {
+    const offset_text = try ctx.intLiteral(byte_offset);
+    const offset_val = ValueRef{ .name = offset_text, .ty = .i32, .is_ptr = false };
+    const ptr_name = try ctx.nextTemp();
+    try builder.gep(ptr_name, .i8, base_ptr, offset_val);
+    return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
 }
 
 fn constIndexValue(expr: *ast.Expr) ?i64 {
