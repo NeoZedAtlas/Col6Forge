@@ -1,5 +1,5 @@
 ; ModuleID = 'col6forge'
-source_filename = "tests/NIST_F78_test_suite\fcvs21_f95\FM923.f"
+source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM923.f"
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-gnu"
 @fmt_fm923_37000 = private unnamed_addr constant [90 x i8] c"\0A   LSTDI1 - (370)  LIST DIRECTED INPUT FOR SUBSET DATA TYPES\0A\0A    ANS REF. - 13.6  12.4\0A\00", align 1

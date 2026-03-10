@@ -1,5 +1,5 @@
 ; ModuleID = 'col6forge'
-source_filename = "tests/NIST_F78_test_suite\fcvs21_f95\FM903.f"
+source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM903.f"
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-gnu"
 @fmt_fm903_35400 = private unnamed_addr constant [91 x i8] c" \0A IOFMTF - (354) ADDITIONAL FORMATTED\0A\0A DATA TRANSFERS\0A\0A ANS REF. - 12.9.5.2  13.1  13.5\0A\00", align 1

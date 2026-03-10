@@ -2038,7 +2038,7 @@ fn prepareRuntimeArtifacts(
             defer allocator.free(emit_arg);
             const build = try runProcessCapture(
                 allocator,
-                &.{ "zig", "build-obj", "-ODebug", emit_arg, runtime_src },
+                &.{ "zig", "build-obj", "-ODebug", "-fPIC", emit_arg, runtime_src },
                 output_dir,
                 timeout_ms,
             );

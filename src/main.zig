@@ -119,9 +119,17 @@ fn runMain() !void {
 }
 
 fn isCcToolInvocation(argv0: []const u8) bool {
-    const base = std.fs.path.basename(argv0);
+    const base = crossPlatformBasename(argv0);
     const name = if (std.ascii.endsWithIgnoreCase(base, ".exe")) base[0 .. base.len - 4] else base;
     return std.ascii.eqlIgnoreCase(name, "col6forge-cc") or std.ascii.eqlIgnoreCase(name, "col6cc");
+}
+
+fn crossPlatformBasename(path: []const u8) []const u8 {
+    var start: usize = 0;
+    for (path, 0..) |ch, idx| {
+        if (ch == '/' or ch == '\\') start = idx + 1;
+    }
+    return path[start..];
 }
 
 fn countWrite(counter: *u128, bytes: []const u8) error{}!usize {

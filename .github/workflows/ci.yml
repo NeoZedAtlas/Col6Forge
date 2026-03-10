@@ -132,7 +132,9 @@ jobs:
           fi
 
       - name: Benchmark baseline
+        id: perf_base
         if: steps.base.outputs.sha != ''
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -145,11 +147,11 @@ jobs:
         run: zig build perf-bench -- --output perf_head.json --iterations 3 --warmup 1
 
       - name: Compare performance reports
-        if: steps.base.outputs.sha != ''
+        if: steps.base.outputs.sha != '' && steps.perf_base.outcome == 'success'
         run: zig build perf-regress -- --base ../baseline_ref/perf_base.json --candidate perf_head.json --max-regression-pct 12
 
       - name: Upload performance artifacts
-        if: always() && steps.base.outputs.sha != ''
+        if: always() && steps.base.outputs.sha != '' && steps.perf_base.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: perf-reports
@@ -160,6 +162,10 @@ jobs:
       - name: Skip notice (no baseline revision)
         if: steps.base.outputs.sha == ''
         run: echo "No baseline revision available; skipping performance regression comparison."
+
+      - name: Skip notice (baseline benchmark unavailable)
+        if: steps.base.outputs.sha != '' && steps.perf_base.outcome != 'success'
+        run: echo "Baseline benchmark failed on the historical revision; skipping regression comparison for this run."
 
   gcc-dg-experimental:
     name: GCC DG Experimental

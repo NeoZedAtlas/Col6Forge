@@ -1,5 +1,5 @@
 ; ModuleID = 'col6forge'
-source_filename = "tests/NIST_F78_test_suite\fcvs21_f95\FM901.f"
+source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM901.f"
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-gnu"
 @fmt_fm901_2300 = private unnamed_addr constant [115 x i8] c" \0A  AFMTF - (023) FORMATTED DATA TRANSFER\0A\0A  USING A-CONVERSION WITH SUBSTRINGS\0A\0A  REFS - 12.9.5.2  13.3  13.5.11\0A\00", align 1

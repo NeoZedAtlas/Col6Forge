@@ -1,5 +1,5 @@
 ; ModuleID = 'col6forge'
-source_filename = "tests/NIST_F78_test_suite\fcvs21_f95\FM831.f"
+source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM831.f"
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-gnu"
 @fmt_fm831_20800 = private unnamed_addr constant [109 x i8] c" \0A YGEN3 - (208) GENERIC FUNCTIONS --\0A\0A  ABS, MOD, SIGN, SIN, COS, TAN, SINH, COSH, TANH\0A\0A  ANS REF. - 15.3\0A\00", align 1

@@ -570,7 +570,7 @@ fn prepareRuntimeArtifacts(
             }
             const emit_arg = try std.fmt.allocPrint(allocator, "-femit-bin={s}", .{runtime_obj});
             defer allocator.free(emit_arg);
-            const cmd = [_][]const u8{ "zig", "build-obj", "-ODebug", emit_arg, runtime_src };
+            const cmd = [_][]const u8{ "zig", "build-obj", "-ODebug", "-fPIC", emit_arg, runtime_src };
             const build = try runProcessCaptureWithInput(allocator, &cmd, output_dir, null, timeout_ms);
             defer build.deinit(allocator);
             if (build.timed_out) return error.RuntimeBackendBuildTimeout;

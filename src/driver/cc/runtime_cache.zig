@@ -134,7 +134,7 @@ fn buildRuntimeObject(allocator: std.mem.Allocator, runtime_obj_path: []const u8
 
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
-    try argv.appendSlice(allocator, &.{ "zig", "build-obj", "-ODebug", emit_arg });
+    try argv.appendSlice(allocator, &.{ "zig", "build-obj", "-ODebug", "-fPIC", emit_arg });
     if (cfg.target) |target| {
         try argv.appendSlice(allocator, &.{ "-target", target });
     }

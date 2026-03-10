@@ -55,7 +55,9 @@ pub fn Builder(comptime WriterType: type) type {
         pub fn moduleHeader(self: *@This(), source_name: []const u8) !void {
             try self.bump();
             try self.writer.print("; ModuleID = 'col6forge'\n", .{});
-            try self.writer.print("source_filename = \"{s}\"\n", .{source_name});
+            try self.writer.writeAll("source_filename = \"");
+            try emitNormalizedSourcePath(self.writer, source_name);
+            try self.writer.writeAll("\"\n");
             if (builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) {
                 try self.writer.writeAll("target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"\n");
                 try self.writer.writeAll("target triple = \"x86_64-pc-windows-gnu\"\n");
@@ -540,6 +542,13 @@ test "switchBr serializes switch terminator" {
     );
 }
 
+fn emitNormalizedSourcePath(writer: anytype, path: []const u8) !void {
+    for (path) |ch| {
+        const out = if (ch == '\\') '/' else ch;
+        try writer.writeAll(&[_]u8{out});
+    }
+}
+
 test "indirectBr serializes indirect branch terminator" {
     const testing = std.testing;
     var buf = std.array_list.Managed(u8).init(testing.allocator);
@@ -571,4 +580,16 @@ test "storeBlockAddress serializes blockaddress store" {
         "  store ptr blockaddress(@f_unit, %L10), ptr %slot\n",
         buf.items,
     );
+}
+
+test "moduleHeader normalizes source filename separators" {
+    const testing = std.testing;
+    var buf = std.array_list.Managed(u8).init(testing.allocator);
+    defer buf.deinit();
+
+    const writer = buf.writer();
+    var builder = Builder(@TypeOf(writer)).init(writer);
+    try builder.moduleHeader("tests\\NIST_F78_test_suite\\fcvs21_f95\\FM903.f");
+
+    try testing.expect(std.mem.indexOf(u8, buf.items, "source_filename = \"tests/NIST_F78_test_suite/fcvs21_f95/FM903.f\"") != null);
 }

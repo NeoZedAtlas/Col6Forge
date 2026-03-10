@@ -1,5 +1,5 @@
 ; ModuleID = 'col6forge'
-source_filename = "tests/NIST_F78_test_suite\fcvs21_f95\FM261.f"
+source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM261.f"
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-gnu"
 @fmt_fm261_30300 = private unnamed_addr constant [94 x i8] c" \0A BLKIF4 - (303) BLOCK IF\0A\0A  BLOCK IF WITH SUBPROGRAM CALL\0A\0A  SUBSET REF. 11.6 - 11.9, 15.6\0A\00", align 1

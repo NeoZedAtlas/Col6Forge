@@ -1,5 +1,5 @@
 ; ModuleID = 'col6forge'
-source_filename = "tests/NIST_F78_test_suite\fcvs21_f95\FM361.f"
+source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM361.f"
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-gnu"
 @fmt_fm361_16501 = private unnamed_addr constant [144 x i8] c" \0A\0A  XMAX - (165) INTRINSIC FUNCTIONS--  \0A\0A             AMAX0, AMAX1, MAX0, MAX1  \0A             (CHOOSING LARGEST VALUE)\0A\0A  SUBSET REF. - 15.3\0A\00", align 1
