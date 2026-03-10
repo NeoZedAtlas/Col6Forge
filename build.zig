@@ -227,6 +227,15 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const architecture_audit = b.addExecutable(.{
+        .name = "architecture_audit",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/architecture_audit.zig"),
+            .target = target,
+            .optimize = tools_optimize,
+        }),
+    });
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
@@ -249,6 +258,7 @@ pub fn build(b: *std.Build) void {
     const install_test_harness = b.addInstallArtifact(test_harness, .{});
     const install_perf_bench = b.addInstallArtifact(perf_bench, .{});
     const install_perf_compare = b.addInstallArtifact(perf_compare, .{});
+    const install_architecture_audit = b.addInstallArtifact(architecture_audit, .{});
 
     const tools_step = b.step("tools", "Install all developer runner tools");
     tools_step.dependOn(&install_golden_runner.step);
@@ -259,6 +269,7 @@ pub fn build(b: *std.Build) void {
     tools_step.dependOn(&install_test_harness.step);
     tools_step.dependOn(&install_perf_bench.step);
     tools_step.dependOn(&install_perf_compare.step);
+    tools_step.dependOn(&install_architecture_audit.step);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
@@ -349,6 +360,11 @@ pub fn build(b: *std.Build) void {
     tools_check_step.dependOn(&test_harness.step);
     tools_check_step.dependOn(&perf_bench.step);
     tools_check_step.dependOn(&perf_compare.step);
+    tools_check_step.dependOn(&architecture_audit.step);
+
+    const architecture_audit_step = b.step("architecture-audit", "Run architecture guardrail audit");
+    const run_architecture_audit = b.addRunArtifact(architecture_audit);
+    architecture_audit_step.dependOn(&run_architecture_audit.step);
 
     const golden_step = b.step("golden", "Run golden file tests");
     const run_golden = b.addRunArtifact(golden_runner);

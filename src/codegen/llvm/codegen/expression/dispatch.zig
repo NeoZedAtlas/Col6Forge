@@ -34,7 +34,27 @@ pub const CharacterValuePlan = struct {
     logical_len_const: ?usize,
     storage_len_const: ?usize,
     kind: CharacterValueKind,
+
+    fn validate(self: CharacterValuePlan) !void {
+        if (self.ptr.ty != .ptr) return error.InvalidCharacterValuePlan;
+        if (self.logical_len.is_ptr or (self.logical_len.ty != .i32 and self.logical_len.ty != .i64)) {
+            return error.InvalidCharacterValuePlan;
+        }
+        if (self.storage_len.is_ptr or (self.storage_len.ty != .i32 and self.storage_len.ty != .i64)) {
+            return error.InvalidCharacterValuePlan;
+        }
+        if (self.logical_len_const) |logical_len_const| {
+            if (self.storage_len_const) |storage_len_const| {
+                if (storage_len_const < logical_len_const) return error.InvalidCharacterValuePlan;
+            }
+        }
+    }
 };
+
+fn validatedCharacterValuePlan(plan: CharacterValuePlan) !CharacterValuePlan {
+    try plan.validate();
+    return plan;
+}
 
 pub fn emitLValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     switch (expr.*) {
@@ -371,7 +391,10 @@ pub fn emitCharacterLenValueOrOne(ctx: *Context, builder: anytype, expr: *Expr) 
 }
 
 pub fn emitCharacterValuePlan(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?CharacterValuePlan {
-    return emitCharacterValuePlanImpl(ctx, builder, expr, ctx.stmt_func_stack.items.len);
+    if (try emitCharacterValuePlanImpl(ctx, builder, expr, ctx.stmt_func_stack.items.len)) |plan| {
+        return try validatedCharacterValuePlan(plan);
+    }
+    return null;
 }
 
 fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
@@ -516,26 +539,26 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
                         const buf_ptr = ValueRef{ .name = buf_name, .ty = .ptr, .is_ptr = true };
                         try copyCharacterBytesConst(ctx, builder, buf_ptr, bytes, 0);
                         const len_val = try ctx.constI32(@intCast(bytes.len));
-                        return .{
+                        return try validatedCharacterValuePlan(.{
                             .ptr = buf_ptr,
                             .logical_len = len_val,
                             .storage_len = len_val,
                             .logical_len_const = bytes.len,
                             .storage_len_const = bytes.len,
                             .kind = .literal_temp,
-                        };
+                        });
                     }
                 }
             }
             const len_val = try emitCharacterSymbolLenValue(ctx, name, sym);
-            return .{
+            return try validatedCharacterValuePlan(.{
                 .ptr = try ctx.getPointer(name),
                 .logical_len = len_val,
                 .storage_len = len_val,
                 .logical_len_const = common.constantCharacterLen(sym),
                 .storage_len_const = common.constantCharacterLen(sym),
                 .kind = .direct_symbol,
-            };
+            });
         },
         .call_or_subscript => |call_or_sub| {
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
@@ -551,14 +574,14 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
             switch (kind) {
                 .subscript => {
                     const len_val = try emitCharacterSymbolLenValue(ctx, call_or_sub.name, sym);
-                    return .{
+                    return try validatedCharacterValuePlan(.{
                         .ptr = try memory.emitSubscriptPtr(ctx, builder, call_or_sub),
                         .logical_len = len_val,
                         .storage_len = len_val,
                         .logical_len_const = common.constantCharacterLen(sym),
                         .storage_len_const = common.constantCharacterLen(sym),
                         .kind = .direct_symbol,
-                    };
+                    });
                 },
                 .call => {
                     if (!(sym.kind == .function and sym.isCharacter())) return null;
@@ -570,14 +593,14 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
                         break :blk try call.emitCharacterCall(ctx, builder, fn_name, result_len, call_or_sub.args);
                     };
                     const len_val = try ctx.constI32(@intCast(result_len));
-                    return .{
+                    return try validatedCharacterValuePlan(.{
                         .ptr = .{ .name = ptr.name, .ty = .ptr, .is_ptr = true },
                         .logical_len = len_val,
                         .storage_len = len_val,
                         .logical_len_const = result_len,
                         .storage_len_const = result_len,
                         .kind = .function_result,
-                    };
+                    });
                 },
                 else => return null,
             }
@@ -603,14 +626,14 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
             const diff = try binary.emitSub(ctx, builder, end_val, start_val);
             const len_val = try binary.emitAdd(ctx, builder, diff, utils.oneValue());
             const const_len = substringLen(ctx, sub);
-            return .{
+            return try validatedCharacterValuePlan(.{
                 .ptr = .{ .name = gep, .ty = .ptr, .is_ptr = true },
                 .logical_len = len_val,
                 .storage_len = len_val,
                 .logical_len_const = const_len,
                 .storage_len_const = const_len,
                 .kind = .substring_view,
-            };
+            });
         },
         .literal => |lit| {
             const bytes = switch (lit.kind) {
@@ -626,14 +649,14 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
             const buf_ptr = ValueRef{ .name = buf_name, .ty = .ptr, .is_ptr = true };
             try copyCharacterBytesConst(ctx, builder, buf_ptr, bytes, 0);
             const len_val = try ctx.constI32(@intCast(bytes.len));
-            return .{
+            return try validatedCharacterValuePlan(.{
                 .ptr = buf_ptr,
                 .logical_len = len_val,
                 .storage_len = len_val,
                 .logical_len_const = bytes.len,
                 .storage_len_const = bytes.len,
                 .kind = .literal_temp,
-            };
+            });
         },
         .binary => |bin| {
             if (bin.op != .concat) return null;
@@ -652,14 +675,14 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
             try copyCharacterBytesFromPlan(ctx, builder, buf_ptr, left, 0);
             try copyCharacterBytesFromPlan(ctx, builder, buf_ptr, right, left_len);
             const len_val = try ctx.constI32(@intCast(total_len));
-            return .{
+            return try validatedCharacterValuePlan(.{
                 .ptr = buf_ptr,
                 .logical_len = len_val,
                 .storage_len = len_val,
                 .logical_len_const = total_len,
                 .storage_len_const = total_len,
                 .kind = .concat_temp,
-            };
+            });
         },
         else => return null,
     }
@@ -691,6 +714,7 @@ fn copyCharacterBytesFromPlan(
     src: CharacterValuePlan,
     dst_offset: usize,
 ) EmitError!void {
+    try src.validate();
     const len = src.logical_len_const orelse return error.UnsupportedConcat;
     var idx: usize = 0;
     while (idx < len) : (idx += 1) {
@@ -732,6 +756,8 @@ fn emitCharCompare(
     lhs: CharacterValuePlan,
     rhs: CharacterValuePlan,
 ) EmitError!ValueRef {
+    try lhs.validate();
+    try rhs.validate();
     const compare_name = try ctx.ensureDeclRaw("col6forge_char_compare", .i32, &[_]ir.IRType{ .ptr, .i32, .ptr, .i32 }, false);
     const cmp_tmp = try ctx.nextTemp();
     try builder.callTyped(cmp_tmp, .i32, compare_name, &.{ lhs.ptr, lhs.logical_len, rhs.ptr, rhs.logical_len });

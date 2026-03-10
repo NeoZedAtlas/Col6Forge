@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const type_spec = @import("../type_spec.zig");
 
@@ -42,6 +43,17 @@ pub const Symbol = struct {
     is_host_associated: bool = false,
     host_owner_name: ?[]const u8 = null,
 
+    pub fn assertCompatInvariant(self: Symbol) void {
+        std.debug.assert(self.compat.type_kind == self.type_spec.lowered_kind);
+        if (self.type_spec.lowered_kind == .character) {
+            std.debug.assert(self.compat.char_len_kind == self.type_spec.char_len_kind);
+            std.debug.assert(self.compat.char_len == self.type_spec.char_len);
+        } else {
+            std.debug.assert(self.compat.char_len_kind == .none);
+            std.debug.assert(self.compat.char_len == null);
+        }
+    }
+
     pub fn normalizeCompatMirrors(self: *Symbol) void {
         self.compat.type_kind = self.type_spec.lowered_kind;
         if (self.type_spec.lowered_kind == .character) {
@@ -51,6 +63,7 @@ pub const Symbol = struct {
             self.compat.char_len_kind = .none;
             self.compat.char_len = null;
         }
+        self.assertCompatInvariant();
     }
 
     pub fn normalized(self: Symbol) Symbol {
@@ -102,6 +115,7 @@ pub const Symbol = struct {
             .type_explicit = false,
         };
         sym.applyTypeSpec(spec);
+        sym.assertCompatInvariant();
         return sym;
     }
 };

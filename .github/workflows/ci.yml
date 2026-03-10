@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guardrails-and-unit:
+    name: Guardrails and Unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install gfortran
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran
+
+      - name: Compile checks
+        run: zig build check
+
+      - name: Compile toolchain runners
+        run: zig build tools-check
+
+      - name: Architecture audit
+        run: zig build architecture-audit
+
+      - name: Unit tests
+        run: zig build test
+
+      - name: Lexer fuzz
+        env:
+          COL6FORGE_LEX_FUZZ_ITERS: "20000"
+        run: zig build fuzz
+
+  golden-and-verification:
+    name: Golden and Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install gfortran
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran
+
+      - name: Golden tests
+        run: zig build golden -- --jobs 1
+
+      - name: NIST strict verification
+        run: zig build verify-strict -- --jobs 1
+
+  ecosystem-verification:
+    name: BLAS and LAPACK
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install gfortran
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran
+
+      - name: BLAS verification
+        run: zig build blas-verify
+
+      - name: LAPACK strict verification
+        run: zig build lapack-verify-strict
+
+  perf-regression:
+    name: Perf Regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install gfortran
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran
+
+      - name: Resolve baseline revision
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "sha=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+              echo "sha=$(git rev-parse HEAD^)" >> "$GITHUB_OUTPUT"
+            else
+              echo "sha=" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Benchmark baseline
+        if: steps.base.outputs.sha != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add ../baseline_ref "${{ steps.base.outputs.sha }}"
+          cd ../baseline_ref
+          zig build perf-bench -- --output perf_base.json --iterations 3 --warmup 1
+
+      - name: Benchmark candidate
+        if: steps.base.outputs.sha != ''
+        run: zig build perf-bench -- --output perf_head.json --iterations 3 --warmup 1
+
+      - name: Compare performance reports
+        if: steps.base.outputs.sha != ''
+        run: zig build perf-regress -- --base ../baseline_ref/perf_base.json --candidate perf_head.json --max-regression-pct 12
+
+      - name: Upload performance artifacts
+        if: always() && steps.base.outputs.sha != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-reports
+          path: |
+            perf_head.json
+            ../baseline_ref/perf_base.json
+
+      - name: Skip notice (no baseline revision)
+        if: steps.base.outputs.sha == ''
+        run: echo "No baseline revision available; skipping performance regression comparison."
+
+  gcc-dg-experimental:
+    name: GCC DG Experimental
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install gfortran
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran
+
+      - name: GCC gfortran.dg verification
+        run: zig build gcc-dg-verify

@@ -38,7 +38,24 @@ const ArrayActualPlan = struct {
     multipliers: []ValueRef,
     address_scale: ValueRef,
     storage: ArrayActualStorage,
+
+    fn validate(self: ArrayActualPlan) !void {
+        if (self.base_ptr.ty != .ptr or !self.base_ptr.is_ptr) return error.InvalidArrayActualPlan;
+        if (self.extents.len != self.multipliers.len) return error.InvalidArrayActualPlan;
+        if (self.address_scale.ty != .i64 or self.address_scale.is_ptr) return error.InvalidArrayActualPlan;
+        for (self.extents) |extent| {
+            if (extent.ty != .i64 or extent.is_ptr) return error.InvalidArrayActualPlan;
+        }
+        for (self.multipliers) |multiplier| {
+            if (multiplier.ty != .i64 or multiplier.is_ptr) return error.InvalidArrayActualPlan;
+        }
+    }
 };
+
+fn validatedArrayActual(plan: ArrayActualPlan) !ArrayActualPlan {
+    try plan.validate();
+    return plan;
+}
 
 pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
     const abi_ret_ty = context.fortranAbiReturnType(ret_ty);
@@ -294,6 +311,7 @@ fn materializeKnownActualDescriptor(
     actual: ArrayActualPlan,
     arg_sig: ast.sema.KnownProcedureSig.ArgSig,
 ) !MaterializedDescriptor {
+    try actual.validate();
     if (actual.extents.len != arg_sig.rank) return error.DescriptorActualRankMismatch;
 
     const extent_ptr = try materializeDescriptorValues(ctx, builder, actual.extents);
@@ -372,14 +390,14 @@ fn emitBinaryArrayExprActual(
 
     return .{
         .ptr = dst_ptr,
-        .descriptor_actual = .{
+        .descriptor_actual = try validatedArrayActual(.{
             .base_ptr = dst_ptr,
             .elem_ty = result_ty,
             .extents = result_actual.extents,
             .multipliers = multipliers,
             .address_scale = i64Const(ctx, 1),
             .storage = .materialized_temp,
-        },
+        }),
     };
 }
 
@@ -450,14 +468,14 @@ fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?Ar
     );
     return .{
         .ptr = dst_ptr,
-        .descriptor_actual = .{
+        .descriptor_actual = try validatedArrayActual(.{
             .base_ptr = dst_ptr,
             .elem_ty = src_actual.elem_ty,
             .extents = src_actual.extents,
             .multipliers = multipliers,
             .address_scale = i64Const(ctx, 1),
             .storage = .materialized_temp,
-        },
+        }),
     };
 }
 
@@ -499,14 +517,14 @@ fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Expr) a
             if (sym.dims.len == 0) break :blk null;
             const extents = try emitSymbolDimExtents(ctx, builder, sym);
             const multipliers = try emitSymbolDimMultipliers(ctx, builder, sym);
-            break :blk .{
+            break :blk try validatedArrayActual(.{
                 .base_ptr = try ctx.getPointer(name),
                 .elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout),
                 .extents = extents,
                 .multipliers = multipliers,
                 .address_scale = try actualAddressScaleForSymbol(ctx, builder, name, sym),
                 .storage = .direct,
-            };
+            });
         },
         .call_or_subscript => |call| blk: {
             const sym = ctx.findSymbol(call.name) orelse break :blk null;
@@ -539,27 +557,30 @@ fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Expr) a
                 multipliers[out_idx] = try emitMulI64(ctx, builder, sym_multiplier, step);
                 out_idx += 1;
             }
-            break :blk .{
+            break :blk try validatedArrayActual(.{
                 .base_ptr = try emitSectionBasePtr(ctx, builder, sym, call),
                 .elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout),
                 .extents = extents,
                 .multipliers = multipliers,
                 .address_scale = try actualAddressScaleForSymbol(ctx, builder, call.name, sym),
                 .storage = .direct,
-            };
+            });
         },
         else => null,
     };
 }
 
 fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualPlan {
-    if (try analyzeAddressableArrayActual(ctx, builder, expr)) |actual| return actual;
+    if (try analyzeAddressableArrayActual(ctx, builder, expr)) |actual| return try validatedArrayActual(actual);
     if (expr.* == .call_or_subscript and isIntrinsicArrayConversionArg(ctx, expr.call_or_subscript)) {
-        return analyzeIntrinsicConversionActual(ctx, builder, expr.call_or_subscript);
+        if (try analyzeIntrinsicConversionActual(ctx, builder, expr.call_or_subscript)) |actual| {
+            return try validatedArrayActual(actual);
+        }
+        return null;
     }
     if (try emitMaterializedArrayExprActual(ctx, builder, expr)) |materialized| {
         const actual = materialized.descriptor_actual orelse return null;
-        return actual;
+        return try validatedArrayActual(actual);
     }
     return null;
 }
@@ -571,14 +592,14 @@ fn analyzeIntrinsicConversionActual(
 ) anyerror!?ArrayActualPlan {
     if (call.args.len != 1) return null;
     const src_actual = (try resolveArrayActual(ctx, builder, call.args[0])) orelse return null;
-    return .{
+    return try validatedArrayActual(.{
         .base_ptr = .{ .name = "", .ty = .ptr, .is_ptr = true },
         .elem_ty = intrinsicArrayConversionType(call.name) orelse return null,
         .extents = src_actual.extents,
         .multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents),
         .address_scale = i64Const(ctx, 1),
         .storage = .materialized_temp,
-    };
+    });
 }
 
 fn emitSymbolDimExtents(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) ![]ValueRef {
@@ -685,14 +706,14 @@ fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call:
     return .{
         .ptr = heap_ptr,
         .owned_heap_ptr = heap_ptr,
-        .descriptor_actual = .{
+        .descriptor_actual = try validatedArrayActual(.{
             .base_ptr = heap_ptr,
             .elem_ty = dst_ty,
             .extents = src_actual.extents,
             .multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents),
             .address_scale = i64Const(ctx, 1),
             .storage = .materialized_temp,
-        },
+        }),
     };
 }
 
@@ -1050,6 +1071,7 @@ fn emitArrayActualElement(
     idx_val: ValueRef,
     actual: ArrayActualPlan,
 ) !ValueRef {
+    try actual.validate();
     const src_elem_ptr_name = try ctx.nextTemp();
     try emitArrayActualElementPtr(
         ctx,
@@ -1143,6 +1165,7 @@ fn emitArrayActualElementPtr(
     address_scale: ValueRef,
     idx_val: ValueRef,
 ) !void {
+    if (extents.len != multipliers.len) return error.InvalidArrayActualPlan;
     var offset = try emitLinearizedActualOffset(ctx, builder, idx_val, extents, multipliers);
     if (!valueRefEquals(address_scale, i64Const(ctx, 1))) {
         offset = try emitMulI64(ctx, builder, offset, address_scale);
