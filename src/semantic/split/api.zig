@@ -18,8 +18,7 @@ pub const KnownFunctionType = struct {
     type_spec: symbols.TypeSpec = symbols.TypeSpec.fromResolvedKind(.real, .real, null),
 
     pub fn resolvedSpec(self: KnownFunctionType) symbols.TypeSpec {
-        if (self.type_spec.lowered_kind == self.type_kind) return self.type_spec;
-        return symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(self.type_kind), self.type_kind, null);
+        return self.type_spec;
     }
 };
 
