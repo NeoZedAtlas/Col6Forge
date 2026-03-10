@@ -7,6 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Col6Forge = @import("Col6Forge");
+const fallback_policy = @import("fallback_policy.zig");
 
 const RuntimeBackend = enum {
     c,
@@ -44,6 +45,7 @@ pub fn main() !void {
     var log_state: LogState = .{};
     var profile_collector = PipelineProfileCollector.init(options.profile_summary);
     defer profile_collector.deinit(allocator);
+    var fallback_tracker = fallback_policy.Tracker.init(options.fallback_policy);
 
     const root_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(root_path);
@@ -130,10 +132,12 @@ pub fn main() !void {
         }
         if (failures > 0) {
             profile_collector.print(&log_state);
+            try emitFallbackSummary(&log_state, &fallback_tracker);
             log_state.stderr("verification failed: {d}\n", .{failures});
             return error.VerificationFailed;
         }
         profile_collector.print(&log_state);
+        try emitFallbackSummary(&log_state, &fallback_tracker);
         log_state.stdout("verification passed\n", .{});
         return;
     }
@@ -171,10 +175,12 @@ pub fn main() !void {
     const failure_count = failures.load(.seq_cst);
     if (failure_count > 0) {
         profile_collector.print(&log_state);
+        try emitFallbackSummary(&log_state, &fallback_tracker);
         log_state.stderr("verification failed: {d}\n", .{failure_count});
         return error.VerificationFailed;
     }
     profile_collector.print(&log_state);
+    try emitFallbackSummary(&log_state, &fallback_tracker);
     log_state.stdout("verification passed\n", .{});
 }
 
@@ -190,6 +196,7 @@ const Options = struct {
     incremental: bool,
     clean_cache: bool,
     profile_summary: bool,
+    fallback_policy: fallback_policy.Policy,
 };
 
 const StageSamples = struct {
@@ -354,6 +361,8 @@ const ParseArgError = union(enum) {
     invalid_runtime_backend: []const u8,
     invalid_timeout: []const u8,
     invalid_jobs: []const u8,
+    invalid_max_fallbacks: []const u8,
+    invalid_fallback_policy: []const u8,
     duplicate_suite_flag: struct {
         first: []const u8,
         second: []const u8,
@@ -362,6 +371,9 @@ const ParseArgError = union(enum) {
         tests_dir: []const u8,
         suite_flag: []const u8,
     },
+    conflicting_fallback_policy: void,
+    missing_fallback_budget: void,
+    redundant_fallback_budget: void,
 };
 
 const ParseArgsOutcome = union(enum) {
@@ -382,6 +394,9 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var incremental = true;
     var clean_cache = false;
     var profile_summary = false;
+    var fail_on_fallback = false;
+    var fallback_mode: ?fallback_policy.Mode = null;
+    var max_fallbacks: ?usize = null;
     var suite: ?TestSuite = null;
     var suite_flag: ?[]const u8 = null;
 
@@ -466,6 +481,26 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
             if (jobs == 0) return .{ .failure = .{ .invalid_jobs = args[i] } };
             continue;
         }
+        if (std.mem.eql(u8, arg, "--fallback-policy")) {
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
+            i += 1;
+            fallback_mode = fallback_policy.parseMode(args[i]) catch {
+                return .{ .failure = .{ .invalid_fallback_policy = args[i] } };
+            };
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--fail-on-fallback")) {
+            fail_on_fallback = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--max-fallbacks")) {
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
+            i += 1;
+            max_fallbacks = std.fmt.parseInt(usize, args[i], 10) catch {
+                return .{ .failure = .{ .invalid_max_fallbacks = args[i] } };
+            };
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--incremental")) {
             incremental = true;
             continue;
@@ -504,6 +539,16 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
         tests_dir = suiteTestsDir(suite.?);
     }
 
+    const resolved_fallback_policy = fallback_policy.Policy.resolve(
+        fallback_mode,
+        fail_on_fallback,
+        max_fallbacks,
+    ) catch |err| switch (err) {
+        error.ConflictingFallbackPolicy => return .{ .failure = .conflicting_fallback_policy },
+        error.MissingFallbackBudget => return .{ .failure = .missing_fallback_budget },
+        error.RedundantFallbackBudget => return .{ .failure = .redundant_fallback_budget },
+    };
+
     return .{ .success = .{
         .tests_dir = tests_dir,
         .filter = filter,
@@ -516,6 +561,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
         .incremental = incremental,
         .clean_cache = clean_cache,
         .profile_summary = profile_summary,
+        .fallback_policy = resolved_fallback_policy,
     } };
 }
 
@@ -528,8 +574,13 @@ fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
         .invalid_runtime_backend => |value| try writer.interface.print("error: invalid runtime backend: {s} (expected c or zig)\n", .{value}),
         .invalid_timeout => |value| try writer.interface.print("error: invalid timeout value: {s}\n", .{value}),
         .invalid_jobs => |value| try writer.interface.print("error: invalid jobs value: {s} (must be positive integer)\n", .{value}),
+        .invalid_max_fallbacks => |value| try writer.interface.print("error: invalid max-fallbacks value: {s}\n", .{value}),
+        .invalid_fallback_policy => |value| try writer.interface.print("error: invalid fallback policy: {s} (expected disabled, report, budget, or strict)\n", .{value}),
         .duplicate_suite_flag => |flags| try writer.interface.print("error: conflicting suite flags: {s} and {s}\n", .{ flags.first, flags.second }),
         .conflicting_suite_selection => |conflict| try writer.interface.print("error: cannot combine --tests-dir {s} with suite flag {s}\n", .{ conflict.tests_dir, conflict.suite_flag }),
+        .conflicting_fallback_policy => try writer.interface.print("error: conflicting fallback policy flags\n", .{}),
+        .missing_fallback_budget => try writer.interface.print("error: budget fallback policy requires --max-fallbacks <n>\n", .{}),
+        .redundant_fallback_budget => try writer.interface.print("error: --max-fallbacks may only be used with implicit or explicit budget fallback policy\n", .{}),
     }
     try writer.interface.flush();
 }
@@ -546,6 +597,9 @@ fn printUsage(file: std.fs.File) !void {
         \\  --runtime-backend  Runtime backend: c (default) or zig (experimental)
         \\  --timeout <ms>     Per-test timeout in milliseconds (default: 120000)
         \\  --jobs <n>, -j <n> Parallel job count (default: min(CPU cores, 4))
+        \\  --fallback-policy <mode> Fallback gate: disabled, report (default), budget, or strict
+        \\  --fail-on-fallback      Compatibility alias for --fallback-policy strict
+        \\  --max-fallbacks <n>     Budget threshold for fallback-policy budget (or implicit budget mode)
         \\  --incremental      Enable translation/object/runtime cache (default)
         \\  --no-incremental   Disable incremental cache and rebuild everything
         \\  --clean-cache      Delete zig-cache/verify/cache before running
@@ -559,6 +613,33 @@ fn printUsage(file: std.fs.File) !void {
         \\  zig build verify -- --fcsv78 --filter FM715
         \\
     );
+}
+
+fn emitFallbackSummary(log_state: *LogState, tracker: *fallback_policy.Tracker) !void {
+    if (!tracker.policy.shouldPrintSummary()) return;
+
+    var summary_buf: [256]u8 = undefined;
+    var summary_stream = std.io.fixedBufferStream(&summary_buf);
+    try fallback_policy.writeSummary(summary_stream.writer(), tracker.stats);
+    if (tracker.stats.total() > 0) {
+        log_state.stderr("{s}\n", .{summary_stream.getWritten()});
+    } else {
+        log_state.stdout("{s}\n", .{summary_stream.getWritten()});
+    }
+
+    tracker.enforce() catch |err| {
+        if (err == error.FallbackBudgetExceeded) {
+            var budget_buf: [128]u8 = undefined;
+            var budget_stream = std.io.fixedBufferStream(&budget_buf);
+            try fallback_policy.writeBudgetExceeded(
+                budget_stream.writer(),
+                tracker.stats,
+                tracker.policy.max_fallbacks.?,
+            );
+            log_state.stderr("{s}\n", .{budget_stream.getWritten()});
+        }
+        return err;
+    };
 }
 
 const TestSuite = enum {
@@ -1974,4 +2055,34 @@ fn prepareRuntimeArtifacts(
 fn defaultJobs() usize {
     const cpu = std.Thread.getCpuCount() catch 1;
     return if (cpu > 4) 4 else cpu;
+}
+
+test "parseArgs recognizes verify fallback budget gate" {
+    const args = [_][]const u8{
+        "verify_runner",
+        "--max-fallbacks",
+        "2",
+    };
+
+    const options = switch (parseArgs(&args)) {
+        .success => |opts| opts,
+        .failure => |err| return err,
+    };
+
+    try std.testing.expectEqual(fallback_policy.Mode.budget, options.fallback_policy.mode);
+    try std.testing.expectEqual(@as(?usize, 2), options.fallback_policy.max_fallbacks);
+}
+
+test "parseArgs recognizes verify strict fallback gate" {
+    const args = [_][]const u8{
+        "verify_runner",
+        "--fail-on-fallback",
+    };
+
+    const options = switch (parseArgs(&args)) {
+        .success => |opts| opts,
+        .failure => |err| return err,
+    };
+
+    try std.testing.expectEqual(fallback_policy.Mode.strict, options.fallback_policy.mode);
 }

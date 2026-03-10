@@ -1,5 +1,22 @@
 const std = @import("std");
 
+const FallbackGate = struct {
+    fail_on_fallback: bool = false,
+    max_fallbacks: ?usize = null,
+};
+
+fn addFallbackGateArgs(run: *std.Build.Step.Run, gate: FallbackGate) void {
+    if (gate.fail_on_fallback) {
+        run.addArgs(&.{ "--fallback-policy", "strict" });
+        return;
+    }
+    if (gate.max_fallbacks) |max_fallbacks| {
+        run.addArgs(&.{ "--fallback-policy", "budget" });
+        run.addArg("--max-fallbacks");
+        run.addArg(run.step.owner.fmt("{d}", .{max_fallbacks}));
+    }
+}
+
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
 // executed by an external runner. The functions in `std.Build` implement a DSL
@@ -343,6 +360,8 @@ pub fn build(b: *std.Build) void {
     const verify_step = b.step("verify", "Run NIST F78 verification tests");
     const verify_fcvs21_f95 = b.option(bool, "fcvs21_f95", "Verify with the Fortran 95 adapted NIST F78 suite (example: zig build verify -Dfcvs21_f95 -- --filter FM715)") orelse false;
     const verify_fcsv78 = b.option(bool, "fcsv78", "Verify with the original NIST F78 suite (example: zig build verify -Dfcsv78 -- --filter FM715)") orelse false;
+    const verify_fail_on_fallback = b.option(bool, "verify_fail_on_fallback", "Fail verification immediately when any fallback path is taken") orelse false;
+    const verify_max_fallbacks = b.option(usize, "verify_max_fallbacks", "Fail verification if total fallback count exceeds this budget");
     if (verify_fcvs21_f95 and verify_fcsv78) {
         @panic("choose at most one of -Dfcvs21_f95 or -Dfcsv78");
     }
@@ -353,8 +372,25 @@ pub fn build(b: *std.Build) void {
     } else if (verify_fcsv78) {
         run_verify.addArgs(&.{ "--tests-dir", "tests/NIST_F78_test_suite/FCSV78" });
     }
+    addFallbackGateArgs(run_verify, .{
+        .fail_on_fallback = verify_fail_on_fallback,
+        .max_fallbacks = verify_max_fallbacks,
+    });
     if (b.args) |args| {
         run_verify.addArgs(args);
+    }
+
+    const verify_strict_step = b.step("verify-strict", "Run NIST F78 verification tests and fail on any fallback path");
+    const run_verify_strict = b.addRunArtifact(verify_runner);
+    verify_strict_step.dependOn(&run_verify_strict.step);
+    if (verify_fcvs21_f95) {
+        run_verify_strict.addArgs(&.{ "--tests-dir", "tests/NIST_F78_test_suite/fcvs21_f95" });
+    } else if (verify_fcsv78) {
+        run_verify_strict.addArgs(&.{ "--tests-dir", "tests/NIST_F78_test_suite/FCSV78" });
+    }
+    addFallbackGateArgs(run_verify_strict, .{ .fail_on_fallback = true });
+    if (b.args) |args| {
+        run_verify_strict.addArgs(args);
     }
 
     const gcc_dg_verify_step = b.step("gcc-dg-verify", "Run GCC gfortran.dg compile verification tests");
@@ -376,13 +412,10 @@ pub fn build(b: *std.Build) void {
     const lapack_max_fallbacks = b.option(usize, "lapack_max_fallbacks", "Fail LAPACK verification if total fallback count exceeds this budget");
     const run_lapack_verify = b.addRunArtifact(lapack_runner);
     lapack_verify_step.dependOn(&run_lapack_verify.step);
-    if (lapack_fail_on_fallback) {
-        run_lapack_verify.addArg("--fail-on-fallback");
-    }
-    if (lapack_max_fallbacks) |max_fallbacks| {
-        run_lapack_verify.addArg("--max-fallbacks");
-        run_lapack_verify.addArg(b.fmt("{d}", .{max_fallbacks}));
-    }
+    addFallbackGateArgs(run_lapack_verify, .{
+        .fail_on_fallback = lapack_fail_on_fallback,
+        .max_fallbacks = lapack_max_fallbacks,
+    });
     if (b.args) |args| {
         run_lapack_verify.addArgs(args);
     }
@@ -390,7 +423,7 @@ pub fn build(b: *std.Build) void {
     const lapack_verify_strict_step = b.step("lapack-verify-strict", "Run LAPACK-lite verification and fail on any fallback path");
     const run_lapack_verify_strict = b.addRunArtifact(lapack_runner);
     lapack_verify_strict_step.dependOn(&run_lapack_verify_strict.step);
-    run_lapack_verify_strict.addArg("--fail-on-fallback");
+    addFallbackGateArgs(run_lapack_verify_strict, .{ .fail_on_fallback = true });
     if (b.args) |args| {
         run_lapack_verify_strict.addArgs(args);
     }
