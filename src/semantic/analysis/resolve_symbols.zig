@@ -18,9 +18,10 @@ pub fn initImplicitDefaults(self: *context.Context) !void {
 
 pub fn installBuiltinConstants(self: *context.Context) !void {
     if (self.builtin_constants.count() != 0) return;
-    try putBuiltinConstant(self, "iso_fortran_env", "output_unit", .integer, .{ .integer = 6 });
-    try putBuiltinConstant(self, "iso_fortran_env", "input_unit", .integer, .{ .integer = 5 });
-    try putBuiltinConstant(self, "iso_fortran_env", "error_unit", .integer, .{ .integer = 0 });
+    const integer_spec = TypeSpec.fromResolvedKind(.integer, .integer, null);
+    try putBuiltinConstant(self, "iso_fortran_env", "output_unit", integer_spec, .{ .integer = 6 });
+    try putBuiltinConstant(self, "iso_fortran_env", "input_unit", integer_spec, .{ .integer = 5 });
+    try putBuiltinConstant(self, "iso_fortran_env", "error_unit", integer_spec, .{ .integer = 0 });
 }
 
 pub fn findBuiltinConstant(self: *context.Context, name: []const u8) ?context.Context.BuiltinConstant {
@@ -233,13 +234,13 @@ fn putBuiltinConstant(
     self: *context.Context,
     module_name: []const u8,
     name: []const u8,
-    type_kind: ast.TypeKind,
+    type_spec: TypeSpec,
     value: symbols.ConstValue,
 ) !void {
     const key = try lowerDup(self.arena, name);
     try self.builtin_constants.put(key, .{
         .module_name = module_name,
-        .type_kind = type_kind,
+        .type_spec = type_spec,
         .value = value,
     });
 }
@@ -250,21 +251,8 @@ fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
     return out;
 }
 
-pub fn lookupKnownFunctionType(self: *context.Context, name: []const u8) ?ast.TypeKind {
-    if (getLowercaseMapValue(?ast.TypeKind, &self.known_function_type_cache, name)) |cached| {
-        return cached;
-    }
-    const resolved = getLowercaseMapValue(ast.TypeKind, self.known_function_types, name);
-    putKnownFunctionTypeCache(self, name, resolved);
-    return resolved;
-}
-
 pub fn lookupKnownFunctionResolvedSpec(self: *context.Context, name: []const u8) ?TypeSpec {
-    if (lookupKnownFunctionTypeSpec(self, name)) |spec| return spec;
-    if (lookupKnownFunctionType(self, name)) |kind| {
-        return TypeSpec.fromResolvedKind(TypeSpec.baseKind(kind), kind, null);
-    }
-    return null;
+    return lookupKnownFunctionTypeSpec(self, name);
 }
 
 pub fn lookupKnownFunctionTypeSpec(self: *context.Context, name: []const u8) ?TypeSpec {
@@ -283,15 +271,6 @@ pub fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?contex
     const resolved = getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, name);
     putKnownProcedureSigCache(self, name, resolved);
     return resolved;
-}
-
-fn putKnownFunctionTypeCache(self: *context.Context, name: []const u8, resolved: ?ast.TypeKind) void {
-    if (name.len > MAX_IDENT_LEN) return;
-    var key_buf: [MAX_IDENT_LEN]u8 = undefined;
-    const key = toLowerInBuffer(name, &key_buf);
-    if (self.known_function_type_cache.contains(key)) return;
-    const owned_key = self.arena.dupe(u8, key) catch return;
-    self.known_function_type_cache.put(owned_key, resolved) catch {};
 }
 
 fn putKnownFunctionTypeSpecCache(self: *context.Context, name: []const u8, resolved: ?TypeSpec) void {

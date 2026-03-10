@@ -16,6 +16,11 @@ pub const KnownFunctionType = struct {
     name: []const u8,
     type_kind: ast.TypeKind,
     type_spec: symbols.TypeSpec = symbols.TypeSpec.fromResolvedKind(.real, .real, null),
+
+    pub fn resolvedSpec(self: KnownFunctionType) symbols.TypeSpec {
+        if (self.type_spec.lowered_kind == self.type_kind) return self.type_spec;
+        return symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(self.type_kind), self.type_kind, null);
+    }
 };
 
 pub const KnownProcedureSig = struct {
@@ -62,7 +67,6 @@ pub fn analyzeProgramWithKnownAndOptions(
 ) !SemanticProgram {
     diagnostic.clear();
     const mutable_program = program;
-    var known_function_types = std.StringHashMap(ast.TypeKind).init(arena);
     var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena);
     var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena);
     var known_host_symbols = std.StringHashMap(symbols.Symbol).init(arena);
@@ -70,8 +74,7 @@ pub fn analyzeProgramWithKnownAndOptions(
     var active_host_owner: ?[]const u8 = null;
     for (known_fn_types) |known| {
         const key = try symbol_lookup.lowerDup(arena, known.name);
-        try known_function_types.put(key, known.type_kind);
-        try known_function_type_specs.put(key, known.type_spec);
+        try known_function_type_specs.put(key, known.resolvedSpec());
     }
     for (known_proc_sigs) |known| {
         const key = try symbol_lookup.lowerDup(arena, known.name);
@@ -87,7 +90,6 @@ pub fn analyzeProgramWithKnownAndOptions(
         if (unit.kind == .function) {
             const key = try symbol_lookup.lowerDup(arena, unit.name);
             const inferred = function_type.inferFunctionTypeSpec(unit);
-            try known_function_types.put(key, inferred.lowered_kind);
             try known_function_type_specs.put(key, inferred);
         }
         if (unit.kind == .function or unit.kind == .subroutine) {
@@ -107,7 +109,6 @@ pub fn analyzeProgramWithKnownAndOptions(
             arena,
             unit,
             &.{},
-            &known_function_types,
             &known_function_type_specs,
             &known_procedure_sigs,
             &known_host_symbols,

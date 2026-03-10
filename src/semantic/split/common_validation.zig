@@ -9,7 +9,6 @@ pub const SemanticUnit = symbols.SemanticUnit;
 pub const Symbol = symbols.Symbol;
 
 pub const CommonItemSig = struct {
-    type_kind: ast.TypeKind,
     type_spec: symbols.TypeSpec,
     size: usize,
 };
@@ -57,7 +56,6 @@ pub fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_
                             const sym = symbol_lookup.lookupSemanticSymbol(sem_unit, &symbol_index, item.name) orelse return error.CommonBlockMismatch;
                             const size = try commonItemSize(sem_unit, sym);
                             try sig_ptr.items.append(.{
-                                .type_kind = sym.loweredKind(),
                                 .type_spec = sym.type_spec,
                                 .size = size,
                             });
@@ -126,7 +124,6 @@ pub fn commonSigsCompatible(a: []const CommonItemSig, b: []const CommonItemSig) 
     while (idx_a < a.len and idx_b < b.len) {
         const seg_a = a[idx_a];
         const seg_b = b[idx_b];
-        if (seg_a.type_kind != seg_b.type_kind) return false;
         if (!std.meta.eql(seg_a.type_spec, seg_b.type_spec)) return false;
 
         const consume = @min(rem_a, rem_b);

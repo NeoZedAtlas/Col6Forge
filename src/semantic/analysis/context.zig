@@ -55,7 +55,7 @@ pub const Context = struct {
 
     pub const BuiltinConstant = struct {
         module_name: []const u8,
-        type_kind: ast.TypeKind,
+        type_spec: symbols.TypeSpec,
         value: symbols.ConstValue,
     };
 
@@ -70,7 +70,6 @@ pub const Context = struct {
     ref_symbol_index: std.AutoHashMap(usize, usize),
     symbol_lookup_cache: std.StringHashMap(?usize),
     symbol_lookup_cache_scope: ?scope.ScopeId,
-    known_function_type_cache: std.StringHashMap(?ast.TypeKind),
     known_function_type_spec_cache: std.StringHashMap(?symbols.TypeSpec),
     known_procedure_sig_cache: std.StringHashMap(?ProcedureSig),
     intrinsic_arity_cache: std.StringHashMap(?intrinsics.Arity),
@@ -90,7 +89,6 @@ pub const Context = struct {
     current_owner: ?Owner,
     current_decl_source: ?ast.DeclSource,
     current_stmt: ?ast.Stmt,
-    known_function_types: *const std.StringHashMap(ast.TypeKind),
     known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
     known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
     known_host_parameters: *const std.StringHashMap(symbols.Symbol),
@@ -106,7 +104,6 @@ pub const Context = struct {
     pub fn init(
         arena: std.mem.Allocator,
         unit: ast.ProgramUnit,
-        known_function_types: *const std.StringHashMap(ast.TypeKind),
         known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
         known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
@@ -125,7 +122,6 @@ pub const Context = struct {
             .ref_symbol_index = std.AutoHashMap(usize, usize).init(arena),
             .symbol_lookup_cache = std.StringHashMap(?usize).init(arena),
             .symbol_lookup_cache_scope = null,
-            .known_function_type_cache = std.StringHashMap(?ast.TypeKind).init(arena),
             .known_function_type_spec_cache = std.StringHashMap(?symbols.TypeSpec).init(arena),
             .known_procedure_sig_cache = std.StringHashMap(?ProcedureSig).init(arena),
             .intrinsic_arity_cache = std.StringHashMap(?intrinsics.Arity).init(arena),
@@ -145,7 +141,6 @@ pub const Context = struct {
             .current_owner = null,
             .current_decl_source = null,
             .current_stmt = null,
-            .known_function_types = known_function_types,
             .known_function_type_specs = known_function_type_specs,
             .known_procedure_sigs = known_procedure_sigs,
             .known_host_parameters = known_host_parameters,

@@ -14,7 +14,6 @@ pub const UnitAnalyzer = struct {
         arena: std.mem.Allocator,
         unit: *ast.ProgramUnit,
         initial_implicit: []const symbols.ImplicitRule,
-        known_function_types: *const std.StringHashMap(ast.TypeKind),
         known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
         known_procedure_sigs: *const std.StringHashMap(context.Context.ProcedureSig),
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
@@ -24,7 +23,6 @@ pub const UnitAnalyzer = struct {
         var ctx = context.Context.init(
             arena,
             unit.*,
-            known_function_types,
             known_function_type_specs,
             known_procedure_sigs,
             known_host_parameters,
@@ -117,8 +115,6 @@ fn semanticErrorInfo(err: anyerror) struct { code: []const u8, message: []const 
 test "semantic UnexpectedTypeDecl maps to CF3107 with declaration source" {
     const testing = std.testing;
 
-    var known_function_types = std.StringHashMap(ast.TypeKind).init(testing.allocator);
-    defer known_function_types.deinit();
     var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(testing.allocator);
     defer known_function_type_specs.deinit();
     var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(testing.allocator);
@@ -137,7 +133,6 @@ test "semantic UnexpectedTypeDecl maps to CF3107 with declaration source" {
     var ctx = context.Context.init(
         testing.allocator,
         unit,
-        &known_function_types,
         &known_function_type_specs,
         &known_procedure_sigs,
         &known_host_parameters,

@@ -234,9 +234,8 @@ fn bindBuiltinUseImport(
     const idx = try symbols_mod.ensureSymbol(self, local_name);
     const sym = &self.symbols.items[idx];
     sym.name = local_name;
-    sym.applyTypeSpec(symbols.TypeSpec.fromResolvedKind(symbols.TypeSpec.baseKind(builtin.type_kind), builtin.type_kind, null));
+    sym.applyTypeSpec(builtin.type_spec);
     sym.dims = &.{};
-    sym.type_spec = sym.type_spec.withCharacterLength(.none, null);
     sym.kind = .parameter;
     sym.storage = .local;
     sym.const_value = builtin.value;

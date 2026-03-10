@@ -60,7 +60,7 @@ pub fn expectSemanticErrorNoGeneratedTempLeakInvariant(
     const program = try parser.parseProgram(arena.allocator(), lines);
     try testing.expect(program.units.len > 0);
 
-    var known_function_types = std.StringHashMap(ast.TypeKind).init(arena.allocator());
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
     var known_procedure_sigs = std.StringHashMap(analysis_context.Context.ProcedureSig).init(arena.allocator());
     var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
 
@@ -74,7 +74,7 @@ pub fn expectSemanticErrorNoGeneratedTempLeakInvariant(
             arena.allocator(),
             unit,
             &.{},
-            &known_function_types,
+            &known_function_type_specs,
             &known_procedure_sigs,
             &known_host_parameters,
             null,
@@ -113,7 +113,7 @@ pub fn expectSemanticErrorNoTempLeakAndFirstCallArgCallExprInvariant(
     const program = try parser.parseProgram(arena.allocator(), lines);
     try testing.expect(program.units.len > 0);
 
-    var known_function_types = std.StringHashMap(ast.TypeKind).init(arena.allocator());
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
     var known_procedure_sigs = std.StringHashMap(analysis_context.Context.ProcedureSig).init(arena.allocator());
     var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
 
@@ -127,7 +127,7 @@ pub fn expectSemanticErrorNoTempLeakAndFirstCallArgCallExprInvariant(
             arena.allocator(),
             unit,
             &.{},
-            &known_function_types,
+            &known_function_type_specs,
             &known_procedure_sigs,
             &known_host_parameters,
             null,

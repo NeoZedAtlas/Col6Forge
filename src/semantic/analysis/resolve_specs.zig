@@ -14,7 +14,7 @@ const ResolvedRefKind = symbols.ResolvedRefKind;
 const EquivalenceDesignator = struct {
     name: []const u8,
     symbol_idx: usize,
-    type_kind: ast.TypeKind,
+    type_spec: symbols.TypeSpec,
     byte_offset: i64,
 };
 
@@ -134,7 +134,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                     try seen.put(designator_key, {});
 
                     if (root) |base| {
-                        if (!equivalenceTypeCompatible(base.type_kind, designator.type_kind)) {
+                        if (!equivalenceTypeCompatible(base.type_spec, designator.type_spec)) {
                             return error.InvalidEquivalence;
                         }
                         const relation = subNoOverflow(base.byte_offset, designator.byte_offset) orelse
@@ -266,7 +266,7 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
             return .{
                 .name = name,
                 .symbol_idx = idx,
-                .type_kind = sym.loweredKind(),
+                .type_spec = sym.type_spec,
                 .byte_offset = 0,
             };
         },
@@ -281,7 +281,7 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
             return .{
                 .name = sub.name,
                 .symbol_idx = idx,
-                .type_kind = sym.loweredKind(),
+                .type_spec = sym.type_spec,
                 .byte_offset = total_offset,
             };
         },
@@ -296,7 +296,7 @@ fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !Equivale
             return .{
                 .name = call.name,
                 .symbol_idx = idx,
-                .type_kind = sym.loweredKind(),
+                .type_spec = sym.type_spec,
                 .byte_offset = byte_offset,
             };
         },
@@ -312,9 +312,9 @@ fn symbolIndexForResolvedExpr(self: *const context.Context, expr_node: *ast.Expr
     return self.ref_symbol_index.get(@intFromPtr(expr_node));
 }
 
-fn equivalenceTypeCompatible(a: ast.TypeKind, b: ast.TypeKind) bool {
-    if (a == b) return true;
-    if (isNumeric(a) and isNumeric(b)) return true;
+fn equivalenceTypeCompatible(a: symbols.TypeSpec, b: symbols.TypeSpec) bool {
+    if (a.lowered_kind == b.lowered_kind) return true;
+    if (isNumeric(a.lowered_kind) and isNumeric(b.lowered_kind)) return true;
     return false;
 }
 

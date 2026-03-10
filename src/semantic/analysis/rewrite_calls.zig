@@ -343,7 +343,7 @@ fn buildArrayConversion(
 fn isIntrinsicConversionCallee(ctx: *context.Context, name: []const u8) bool {
     // User-defined procedures shadow intrinsic names and must never be rewritten.
     if (resolve_symbols.lookupKnownProcedureSig(ctx, name) != null) return false;
-    if (resolve_symbols.lookupKnownFunctionType(ctx, name) != null) return false;
+    if (resolve_symbols.lookupKnownFunctionResolvedSpec(ctx, name) != null) return false;
 
     if (resolve_symbols.findSymbolIndex(ctx, name)) |idx| {
         return ctx.symbols.items[idx].is_intrinsic;
