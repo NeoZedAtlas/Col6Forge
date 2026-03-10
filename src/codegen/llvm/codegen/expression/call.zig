@@ -36,6 +36,7 @@ const ArrayActualPlan = struct {
     elem_ty: IRType,
     extents: []ValueRef,
     multipliers: []ValueRef,
+    address_scale: ValueRef,
     storage: ArrayActualStorage,
 };
 
@@ -280,7 +281,7 @@ fn materializeActualDescriptor(
     arg_sig: ast.sema.KnownProcedureSig.ArgSig,
 ) !MaterializedDescriptor {
     if (arg_sig.rank == 0) return error.InvalidAbiState;
-    const actual = (try resolveArrayActual(ctx, builder, expr)) orelse return error.UnsupportedDescriptorActualArgument;
+    const actual = (try resolveArrayActual(ctx, builder, expr)) orelse return error.NonArrayDescriptorActualArgument;
     return materializeKnownActualDescriptor(ctx, builder, actual, arg_sig);
 }
 
@@ -290,7 +291,7 @@ fn materializeKnownActualDescriptor(
     actual: ArrayActualPlan,
     arg_sig: ast.sema.KnownProcedureSig.ArgSig,
 ) !MaterializedDescriptor {
-    if (actual.extents.len != arg_sig.rank) return error.UnsupportedDescriptorActualArgument;
+    if (actual.extents.len != arg_sig.rank) return error.DescriptorActualRankMismatch;
 
     const extent_ptr = try materializeDescriptorValues(ctx, builder, actual.extents);
     const multiplier_ptr = try materializeDescriptorValues(ctx, builder, actual.multipliers);
@@ -373,6 +374,7 @@ fn emitBinaryArrayExprActual(
             .elem_ty = result_ty,
             .extents = result_actual.extents,
             .multipliers = multipliers,
+            .address_scale = i64Const(ctx, 1),
             .storage = .materialized_temp,
         },
     };
@@ -439,6 +441,7 @@ fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?Ar
         src_actual.elem_ty,
         src_actual.extents,
         src_actual.multipliers,
+        src_actual.address_scale,
         dst_ptr,
         elem_count,
     );
@@ -449,6 +452,7 @@ fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?Ar
             .elem_ty = src_actual.elem_ty,
             .extents = src_actual.extents,
             .multipliers = multipliers,
+            .address_scale = i64Const(ctx, 1),
             .storage = .materialized_temp,
         },
     };
@@ -497,6 +501,7 @@ fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Expr) a
                 .elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout),
                 .extents = extents,
                 .multipliers = multipliers,
+                .address_scale = try actualAddressScaleForSymbol(ctx, builder, name, sym),
                 .storage = .direct,
             };
         },
@@ -536,6 +541,7 @@ fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Expr) a
                 .elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout),
                 .extents = extents,
                 .multipliers = multipliers,
+                .address_scale = try actualAddressScaleForSymbol(ctx, builder, call.name, sym),
                 .storage = .direct,
             };
         },
@@ -567,6 +573,7 @@ fn analyzeIntrinsicConversionActual(
         .elem_ty = intrinsicArrayConversionType(call.name) orelse return null,
         .extents = src_actual.extents,
         .multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents),
+        .address_scale = i64Const(ctx, 1),
         .storage = .materialized_temp,
     };
 }
@@ -763,6 +770,7 @@ fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call:
         src_ty,
         src_actual.extents,
         src_actual.multipliers,
+        src_actual.address_scale,
         heap_ptr,
         dst_ty,
         elem_count,
@@ -775,6 +783,7 @@ fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call:
             .elem_ty = dst_ty,
             .extents = src_actual.extents,
             .multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents),
+            .address_scale = i64Const(ctx, 1),
             .storage = .materialized_temp,
         },
     };
@@ -979,6 +988,7 @@ fn emitIntrinsicArrayConversionLoop(
     src_ty: IRType,
     src_extents: []const ValueRef,
     src_multipliers: []const ValueRef,
+    src_address_scale: ValueRef,
     dst_ptr: ValueRef,
     dst_ty: IRType,
     elem_count: ValueRef,
@@ -1001,9 +1011,18 @@ fn emitIntrinsicArrayConversionLoop(
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
-    const src_offset = try emitLinearizedActualOffset(ctx, builder, idx_val, src_extents, src_multipliers);
     const src_elem_ptr_name = try ctx.nextTemp();
-    try builder.gep(src_elem_ptr_name, src_ty, src_ptr, src_offset);
+    try emitArrayActualElementPtr(
+        ctx,
+        builder,
+        src_elem_ptr_name,
+        src_ptr,
+        src_ty,
+        src_extents,
+        src_multipliers,
+        src_address_scale,
+        idx_val,
+    );
     const src_val_name = try ctx.nextTemp();
     try builder.load(src_val_name, src_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
     const src_val = ValueRef{ .name = src_val_name, .ty = src_ty, .is_ptr = false };
@@ -1124,9 +1143,18 @@ fn emitArrayActualElement(
     idx_val: ValueRef,
     actual: ArrayActualPlan,
 ) !ValueRef {
-    const src_offset = try emitLinearizedActualOffset(ctx, builder, idx_val, actual.extents, actual.multipliers);
     const src_elem_ptr_name = try ctx.nextTemp();
-    try builder.gep(src_elem_ptr_name, actual.elem_ty, actual.base_ptr, src_offset);
+    try emitArrayActualElementPtr(
+        ctx,
+        builder,
+        src_elem_ptr_name,
+        actual.base_ptr,
+        actual.elem_ty,
+        actual.extents,
+        actual.multipliers,
+        actual.address_scale,
+        idx_val,
+    );
     const src_val_name = try ctx.nextTemp();
     try builder.load(src_val_name, actual.elem_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
     return .{ .name = src_val_name, .ty = actual.elem_ty, .is_ptr = false };
@@ -1139,6 +1167,7 @@ fn emitNegatedArrayActualLoop(
     elem_ty: IRType,
     src_extents: []const ValueRef,
     src_multipliers: []const ValueRef,
+    src_address_scale: ValueRef,
     dst_ptr: ValueRef,
     elem_count: ValueRef,
 ) !void {
@@ -1160,9 +1189,18 @@ fn emitNegatedArrayActualLoop(
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
-    const src_offset = try emitLinearizedActualOffset(ctx, builder, idx_val, src_extents, src_multipliers);
     const src_elem_ptr_name = try ctx.nextTemp();
-    try builder.gep(src_elem_ptr_name, elem_ty, src_ptr, src_offset);
+    try emitArrayActualElementPtr(
+        ctx,
+        builder,
+        src_elem_ptr_name,
+        src_ptr,
+        elem_ty,
+        src_extents,
+        src_multipliers,
+        src_address_scale,
+        idx_val,
+    );
     const src_val_name = try ctx.nextTemp();
     try builder.load(src_val_name, elem_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
     const src_val = ValueRef{ .name = src_val_name, .ty = elem_ty, .is_ptr = false };
@@ -1185,6 +1223,38 @@ fn emitNegatedArrayActualLoop(
     try builder.br(loop_head);
 
     try builder.label(loop_exit);
+}
+
+fn emitArrayActualElementPtr(
+    ctx: *Context,
+    builder: anytype,
+    ptr_name: []const u8,
+    base_ptr: ValueRef,
+    elem_ty: IRType,
+    extents: []const ValueRef,
+    multipliers: []const ValueRef,
+    address_scale: ValueRef,
+    idx_val: ValueRef,
+) !void {
+    var offset = try emitLinearizedActualOffset(ctx, builder, idx_val, extents, multipliers);
+    if (!valueRefEquals(address_scale, i64Const(ctx, 1))) {
+        offset = try emitMulI64(ctx, builder, offset, address_scale);
+    }
+    try builder.gep(ptr_name, elem_ty, base_ptr, offset);
+}
+
+fn actualAddressScaleForSymbol(
+    ctx: *Context,
+    builder: anytype,
+    name: []const u8,
+    sym: ast.sema.Symbol,
+) !ValueRef {
+    if (!sym.isCharacter()) return i64Const(ctx, 1);
+    return charSymbolLengthValueI64(ctx, builder, name, sym);
+}
+
+fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
+    return a.ty == b.ty and a.is_ptr == b.is_ptr and std.mem.eql(u8, a.name, b.name);
 }
 
 fn isIntrinsicArrayConversionArg(ctx: *Context, call: ast.CallOrSubscript) bool {

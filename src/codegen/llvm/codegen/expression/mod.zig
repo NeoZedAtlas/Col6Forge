@@ -1228,6 +1228,78 @@ test "emitCall falls back to unit character length for descriptor-scaled charact
     try testing.expect(std.mem.indexOf(u8, buffer.items, "call void (...) @foo_(ptr %t") != null);
 }
 
+test "emitCall rejects scalar actual for descriptor dummy with explicit non-array error" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+                .requires_descriptor = true,
+                .rank = 1,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const scalar = try makeLiteral(harness.arena.allocator(), .integer, "42");
+    try testing.expectError(
+        error.NonArrayDescriptorActualArgument,
+        emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{scalar}), true),
+    );
+}
+
+test "emitCall rejects descriptor actual rank mismatch with explicit ABI error" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    try harness.known_procedure_sigs.put("foo_", .{
+        .name = "foo_",
+        .kind = .subroutine,
+        .arg_count = 1,
+        .alt_return_count = 0,
+        .args = &.{
+            .{
+                .type_spec = ast.sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+                .requires_descriptor = true,
+                .rank = 2,
+            },
+        },
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lower = try makeLiteral(harness.arena.allocator(), .integer, "1");
+    const upper = try makeLiteral(harness.arena.allocator(), .integer, "4");
+    const range = try harness.arena.allocator().create(Expr);
+    range.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = null } };
+    const section = try harness.arena.allocator().create(Expr);
+    section.* = .{ .call_or_subscript = .{ .name = "ARR", .args = @constCast(&[_]*Expr{range}) } };
+
+    try testing.expectError(
+        error.DescriptorActualRankMismatch,
+        emitCall(&harness.ctx, &builder, "foo_", .void, @constCast(&[_]*Expr{section}), true),
+    );
+}
+
 test "emitSubscriptPtr, emitIndex, and emitDimValue enforce subscripts" {
     const testing = std.testing;
     const allocator = testing.allocator;

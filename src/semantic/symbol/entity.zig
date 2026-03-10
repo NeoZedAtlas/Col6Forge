@@ -19,9 +19,13 @@ pub const TypeSpec = type_spec.TypeSpec;
 
 pub const Symbol = struct {
     name: []const u8,
+    // Compatibility mirrors for older callers and serialized fixtures.
+    // Semantic/codegen behavior must read from `type_spec` through helpers.
     type_kind: ast.TypeKind,
     type_spec: TypeSpec = TypeSpec.fromKind(.real),
     dims: []*ast.Expr,
+    // Compatibility mirrors for character metadata. Keep them synchronized
+    // via `applyTypeSpec`, but do not treat them as the source of truth.
     char_len_kind: CharacterLengthKind = .none,
     char_len: ?usize,
     kind: SymbolKind,
@@ -36,20 +40,26 @@ pub const Symbol = struct {
     is_host_associated: bool = false,
     host_owner_name: ?[]const u8 = null,
 
+    fn compatLoweredKind(self: Symbol) ast.TypeKind {
+        return if (self.type_kind != self.type_spec.lowered_kind) self.type_kind else self.type_spec.lowered_kind;
+    }
+
     pub fn loweredKind(self: Symbol) ast.TypeKind {
-        return self.type_spec.lowered_kind;
+        return self.compatLoweredKind();
     }
 
     pub fn isCharacter(self: Symbol) bool {
-        return self.type_spec.lowered_kind == .character;
+        return self.compatLoweredKind() == .character;
     }
 
     pub fn effectiveCharLen(self: Symbol) ?usize {
-        return self.type_spec.char_len;
+        if (!self.isCharacter()) return null;
+        return self.char_len orelse self.type_spec.char_len;
     }
 
     pub fn effectiveCharLenKind(self: Symbol) CharacterLengthKind {
-        return if (self.type_spec.lowered_kind == .character) self.type_spec.char_len_kind else .none;
+        if (!self.isCharacter()) return .none;
+        return if (self.char_len_kind != .none) self.char_len_kind else self.type_spec.char_len_kind;
     }
 
     pub fn applyTypeSpec(self: *Symbol, spec: TypeSpec) void {
