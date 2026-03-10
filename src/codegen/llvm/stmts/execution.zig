@@ -4,6 +4,7 @@ const common = @import("../codegen/common.zig");
 const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
 const expr_call = @import("../codegen/expression/call.zig");
+const expr_dispatch = @import("../codegen/expression/dispatch.zig");
 const utils = @import("../codegen/utils.zig");
 const cfg = @import("cfg.zig");
 const ir = @import("../../ir.zig");
@@ -834,38 +835,8 @@ fn stmtNodeHasAltReturn(node: ast.StmtNode) bool {
 }
 
 fn storeCharacterValue(ctx: *Context, builder: anytype, target_ptr: ValueRef, char_len: usize, value_expr: *ast.Expr) EmitError!void {
-    if (value_expr.* == .literal) {
-        const lit = value_expr.literal;
-        if (lit.kind == .string or lit.kind == .hollerith) {
-            const bytes = try literalBytes(ctx.allocator, lit);
-            try emitCharacterBytesStore(ctx, builder, target_ptr, char_len, bytes);
-            return;
-        }
-    }
-
-    const src_ptr = try expr.emitExpr(ctx, builder, value_expr);
-    const src_len_opt = charLenForExpr(ctx, value_expr);
-    if (src_len_opt == null and expr_call.isCharacterActualArg(ctx, value_expr)) {
-        const target_len = constI32(ctx, @intCast(char_len));
-        try storeCharacterValueDynamic(ctx, builder, target_ptr, target_len, value_expr);
-        return;
-    }
-    const src_len = src_len_opt orelse 1;
-    var i: usize = 0;
-    while (i < char_len) : (i += 1) {
-        const offset = ValueRef{ .name = try ctx.intLiteral(@intCast(i)), .ty = .i32, .is_ptr = false };
-        const dst_gep = try ctx.nextTemp();
-        try builder.gep(dst_gep, .i8, target_ptr, offset);
-        var val = ValueRef{ .name = try ctx.intLiteral(32), .ty = .i8, .is_ptr = false };
-        if (i < src_len) {
-            const src_gep = try ctx.nextTemp();
-            try builder.gep(src_gep, .i8, src_ptr, offset);
-            const tmp = try ctx.nextTemp();
-            try builder.load(tmp, .i8, .{ .name = src_gep, .ty = .ptr, .is_ptr = true });
-            val = .{ .name = tmp, .ty = .i8, .is_ptr = false };
-        }
-        try builder.store(val, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
-    }
+    const target_len = constI32(ctx, @intCast(char_len));
+    try storeCharacterValueDynamic(ctx, builder, target_ptr, target_len, value_expr);
 }
 
 fn emitCharacterBytesStore(
@@ -893,13 +864,14 @@ fn storeCharacterValueDynamic(
     target_len: ValueRef,
     value_expr: *ast.Expr,
 ) EmitError!void {
-    const src_ptr = try expr.emitExpr(ctx, builder, value_expr);
+    const plan = (try expr_dispatch.emitCharacterValuePlan(ctx, builder, value_expr)) orelse return error.UnsupportedCharacterArgumentLength;
     var target_len_i32 = target_len;
     if (target_len_i32.ty != .i32) {
         target_len_i32 = try expr.coerceCheckedI32(ctx, builder, target_len_i32);
     }
 
-    var src_len = (try emitCharLenValue(ctx, builder, value_expr)) orelse constI32(ctx, 1);
+    const src_ptr = plan.ptr;
+    var src_len = plan.logical_len;
     if (src_len.ty != .i32) {
         src_len = try expr.coerceCheckedI32(ctx, builder, src_len);
     }
@@ -970,38 +942,6 @@ fn emitSubstringLenValue(ctx: *Context, builder: anytype, sub: ast.SubstringExpr
     return expr.emitAdd(ctx, builder, diff, utils.oneValue());
 }
 
-fn emitCharLenValue(ctx: *Context, builder: anytype, value_expr: *ast.Expr) EmitError!?ValueRef {
-    switch (value_expr.*) {
-        .identifier => |name| {
-            const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
-            if (!sym.isCharacter()) return null;
-            return try emitCharSymbolLenValue(ctx, name, sym);
-        },
-        .call_or_subscript => |call| {
-            const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-            if (!sym.isCharacter()) return null;
-            return try emitCharSymbolLenValue(ctx, call.name, sym);
-        },
-        .substring => |sub| {
-            return try emitSubstringLenValue(ctx, builder, sub);
-        },
-        .binary => |bin| {
-            if (bin.op != .concat) return null;
-            const left_len = (try emitCharLenValue(ctx, builder, bin.left)) orelse return null;
-            const right_len = (try emitCharLenValue(ctx, builder, bin.right)) orelse return null;
-            const sum_tmp = try ctx.nextTemp();
-            try builder.binary(sum_tmp, "add", .i32, left_len, right_len);
-            return .{ .name = sum_tmp, .ty = .i32, .is_ptr = false };
-        },
-        else => {
-            if (charLenForExpr(ctx, value_expr)) |len| {
-                return constI32(ctx, @intCast(len));
-            }
-            return null;
-        },
-    }
-}
-
 fn constI32(ctx: *Context, value: i64) ValueRef {
     return ctx.constI32(value) catch unreachable;
 }
@@ -1017,48 +957,7 @@ fn emitCharSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol)
 }
 
 fn charLenForExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
-    switch (expr_node.*) {
-        .identifier => |name| {
-            const sym = ctx.findSymbol(name) orelse return null;
-            if (!sym.isCharacter()) return null;
-            return common.constantCharacterLen(sym);
-        },
-        .call_or_subscript => |call| {
-            const sym = ctx.findSymbol(call.name) orelse return null;
-            if (!sym.isCharacter()) return null;
-            return common.constantCharacterLen(sym);
-        },
-        .substring => |sub| {
-            return substringLen(ctx, sub);
-        },
-        .literal => |lit| switch (lit.kind) {
-            .string => return utils.decodedStringLen(lit.text),
-            .hollerith => {
-                const bytes = utils.hollerithBytes(lit.text) orelse return null;
-                return bytes.len;
-            },
-            else => return null,
-        },
-        .binary => |bin| {
-            if (bin.op != .concat) return null;
-            const left_len = charLenForExpr(ctx, bin.left) orelse return null;
-            const right_len = charLenForExpr(ctx, bin.right) orelse return null;
-            return left_len + right_len;
-        },
-        else => return null,
-    }
-}
-
-fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
-    const sym = ctx.findSymbol(sub.name) orelse return null;
-    if (!sym.isCharacter()) return null;
-    const base_len_usize = common.constantCharacterLen(sym) orelse return null;
-    const base_len: i64 = @intCast(base_len_usize);
-    const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;
-    const end_val = if (sub.end) |end_expr| intLiteralValue(end_expr) orelse return null else base_len;
-    const length = end_val - start_val + 1;
-    if (length <= 0) return null;
-    return @intCast(length);
+    return expr_dispatch.constantCharacterLenForExpr(ctx, expr_node);
 }
 
 fn intLiteralValue(expr_node: *ast.Expr) ?i64 {

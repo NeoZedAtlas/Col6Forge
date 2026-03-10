@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../../input.zig");
 const context = @import("../../../codegen/context.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
+const expr_dispatch = @import("../../../codegen/expression/dispatch.zig");
 const common = @import("../../../codegen/common.zig");
 const utils = @import("../../../codegen/utils.zig");
 const format_ir = @import("../../../../../format/stream_ir.zig");
@@ -184,45 +185,7 @@ fn emitFormatExprLen(ctx: *Context, builder: anytype, fmt_expr: *ast.Expr) EmitE
             if (sym.effectiveCharLen()) |len| return try ctx.constI32(@intCast(len));
             return lookupCharArgLen(ctx, call.name) orelse try ctx.constI32(1);
         },
-        .literal => |lit| switch (lit.kind) {
-            .string => return try ctx.constI32(@intCast(utils.decodedStringLen(lit.text))),
-            .hollerith => {
-                const bytes = utils.hollerithBytes(lit.text) orelse return null;
-                return try ctx.constI32(@intCast(bytes.len));
-            },
-            else => return null,
-        },
-        .substring => |sub| {
-            const sym = ctx.findSymbol(sub.name) orelse return null;
-            if (!sym.isCharacter()) return null;
-
-            var end_val: ValueRef = if (sym.effectiveCharLen()) |len| try ctx.constI32(@intCast(len)) else lookupCharArgLen(ctx, sub.name) orelse try ctx.constI32(1);
-            if (sub.end) |end_expr| {
-                end_val = try expr.emitExpr(ctx, builder, end_expr);
-                if (end_val.ty != .i32) end_val = try coerceRuntimeI32(ctx, builder, end_val);
-            }
-
-            var start_val = try ctx.constI32(1);
-            if (sub.start) |start_expr| {
-                start_val = try expr.emitExpr(ctx, builder, start_expr);
-                if (start_val.ty != .i32) start_val = try coerceRuntimeI32(ctx, builder, start_val);
-            }
-
-            const diff_tmp = try ctx.nextTemp();
-            try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
-            const len_tmp = try ctx.nextTemp();
-            try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, try ctx.constI32(1));
-            return .{ .name = len_tmp, .ty = .i32, .is_ptr = false };
-        },
-        .binary => |bin| {
-            if (bin.op != .concat) return null;
-            const left = try emitFormatExprLen(ctx, builder, bin.left) orelse return null;
-            const right = try emitFormatExprLen(ctx, builder, bin.right) orelse return null;
-            const sum_tmp = try ctx.nextTemp();
-            try builder.binary(sum_tmp, "add", .i32, left, right);
-            return .{ .name = sum_tmp, .ty = .i32, .is_ptr = false };
-        },
-        else => return null,
+        else => return expr_dispatch.emitCharacterLenValue(ctx, builder, fmt_expr),
     }
 }
 

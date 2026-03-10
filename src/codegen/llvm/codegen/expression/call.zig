@@ -170,6 +170,9 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
     if (try emitMaterializedArrayExprActual(ctx, builder, expr)) |materialized| {
         return materialized;
     }
+    if (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) |char_value| {
+        return .{ .ptr = char_value.ptr };
+    }
     switch (expr.*) {
         .identifier => |name| {
             if (ctx.findSymbol(name)) |sym| {
@@ -617,58 +620,11 @@ fn emitOwnedHeapArgFrees(ctx: *Context, builder: anytype, owned_heap_args: []con
 }
 
 pub fn isCharacterActualArg(ctx: *Context, expr: *Expr) bool {
-    return switch (expr.*) {
-        .identifier => |name| blk: {
-            const sym = ctx.findSymbol(name) orelse break :blk false;
-            break :blk sym.isCharacter();
-        },
-        .call_or_subscript => |call| blk: {
-            const sym = ctx.findSymbol(call.name) orelse break :blk false;
-            break :blk sym.isCharacter();
-        },
-        .substring => true,
-        .literal => |lit| lit.kind == .string or lit.kind == .hollerith,
-        .binary => |bin| bin.op == .concat,
-        else => false,
-    };
+    return dispatch.isCharacterExpr(ctx, expr);
 }
 
 fn emitCharacterLengthArg(ctx: *Context, builder: anytype, expr: *Expr) !?ValueRef {
-    if (!isCharacterActualArg(ctx, expr)) return null;
-
-    switch (expr.*) {
-        .identifier => |name| {
-            const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
-            return try charSymbolLengthValue(ctx, name, sym);
-        },
-        .call_or_subscript => |call| {
-            const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-            return try charSymbolLengthValue(ctx, call.name, sym);
-        },
-        .substring => |sub| {
-            return try emitSubstringLengthValue(ctx, builder, sub);
-        },
-        .literal => |lit| {
-            const len: i64 = switch (lit.kind) {
-                .string => @intCast(utils.decodedStringLen(lit.text)),
-                .hollerith => blk: {
-                    const bytes = utils.hollerithBytes(lit.text) orelse return error.UnsupportedLiteral;
-                    break :blk @intCast(bytes.len);
-                },
-                else => return error.UnsupportedLiteral,
-            };
-            return try i32Const(ctx, len);
-        },
-        .binary => |bin| {
-            if (bin.op != .concat) return error.UnsupportedCharacterArgumentLength;
-            const left_len = (try emitCharacterLengthArg(ctx, builder, bin.left)) orelse return error.UnsupportedCharacterArgumentLength;
-            const right_len = (try emitCharacterLengthArg(ctx, builder, bin.right)) orelse return error.UnsupportedCharacterArgumentLength;
-            const tmp = try ctx.nextTemp();
-            try builder.binary(tmp, "add", .i32, left_len, right_len);
-            return .{ .name = tmp, .ty = .i32, .is_ptr = false };
-        },
-        else => return error.UnsupportedCharacterArgumentLength,
-    }
+    return (try dispatch.emitCharacterLenValue(ctx, builder, expr)) orelse null;
 }
 
 fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
@@ -681,63 +637,23 @@ fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
     return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
 }
 
-fn emitSubstringLengthValue(ctx: *Context, builder: anytype, sub: ast.SubstringExpr) !ValueRef {
-    const sym = ctx.findSymbol(sub.name) orelse return error.UnknownSymbol;
-    var end_val = try charSymbolLengthValue(ctx, sub.name, sym);
-    if (sub.end) |end_expr| {
-        end_val = try dispatch.emitExpr(ctx, builder, end_expr);
-        if (end_val.ty != .i32) {
-            end_val = try casting.coerceCheckedI32(ctx, builder, end_val);
-        }
-    }
-
-    var start_val = try i32Const(ctx, 1);
-    if (sub.start) |start_expr| {
-        start_val = try dispatch.emitExpr(ctx, builder, start_expr);
-        if (start_val.ty != .i32) {
-            start_val = try casting.coerceCheckedI32(ctx, builder, start_val);
-        }
-    }
-
-    const diff_tmp = try ctx.nextTemp();
-    try builder.binary(diff_tmp, "sub", .i32, end_val, start_val);
-    const len_tmp = try ctx.nextTemp();
-    try builder.binary(len_tmp, "add", .i32, .{ .name = diff_tmp, .ty = .i32, .is_ptr = false }, try i32Const(ctx, 1));
-    return .{ .name = len_tmp, .ty = .i32, .is_ptr = false };
-}
-
-fn charSymbolLengthValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) !ValueRef {
-    if (sym.effectiveCharLenKind() == .constant or sym.effectiveCharLenKind() == .none) {
-        if (common.constantCharacterLen(sym)) |char_len| {
-            return try i32Const(ctx, @intCast(char_len));
-        }
-    }
-    if (sym.effectiveCharLen()) |char_len| {
-        return try i32Const(ctx, @intCast(char_len));
-    }
-    if (ctx.char_arg_lens.get(name)) |len_val| return len_val;
-    return try i32Const(ctx, 1);
-}
-
 fn charSymbolLengthValueI64(
     ctx: *Context,
     builder: anytype,
     name: []const u8,
     sym: ast.sema.Symbol,
 ) !ValueRef {
-    if (sym.effectiveCharLenKind() == .constant or sym.effectiveCharLenKind() == .none) {
-        if (common.constantCharacterLen(sym)) |char_len| {
-            return i64Const(ctx, @intCast(char_len));
+    var name_expr = Expr{ .identifier = name };
+    const len_val = (try dispatch.emitCharacterLenValue(ctx, builder, &name_expr)) orelse blk: {
+        if (sym.effectiveCharLenKind() == .constant or sym.effectiveCharLenKind() == .none) {
+            if (common.constantCharacterLen(sym)) |char_len| break :blk try i32Const(ctx, @intCast(char_len));
         }
-    }
-    if (sym.effectiveCharLen()) |char_len| {
-        return i64Const(ctx, @intCast(char_len));
-    }
-    if (ctx.char_arg_lens.get(name)) |len_val| {
-        if (len_val.ty == .i64) return len_val;
-        return casting.coerce(ctx, builder, len_val, .i64);
-    }
-    return i64Const(ctx, 1);
+        if (sym.effectiveCharLen()) |char_len| break :blk try i32Const(ctx, @intCast(char_len));
+        if (ctx.char_arg_lens.get(name)) |arg_len| break :blk arg_len;
+        break :blk try i32Const(ctx, 1);
+    };
+    if (len_val.ty == .i64) return len_val;
+    return casting.coerce(ctx, builder, len_val, .i64);
 }
 
 fn i32Const(ctx: *Context, value: i64) !ValueRef {

@@ -69,7 +69,7 @@ const TestHarness = struct {
         arr2_dims[0] = dim_expr;
         arr2_dims[1] = dim_expr;
 
-        const symbols = try a.alloc(sema.Symbol, 5);
+        const symbols = try a.alloc(sema.Symbol, 7);
         symbols[0] = .{
             .name = "A",
             .type_kind = .integer,
@@ -127,6 +127,32 @@ const TestHarness = struct {
             .storage = .local,
             .is_external = false,
             .is_intrinsic = true,
+            .const_value = null,
+            .type_explicit = true,
+        };
+        symbols[5] = .{
+            .name = "CPN001",
+            .type_kind = .character,
+            .dims = empty_exprs,
+            .char_len_kind = .constant,
+            .char_len = 5,
+            .kind = .parameter,
+            .storage = .local,
+            .is_external = false,
+            .is_intrinsic = false,
+            .const_value = .{ .string = "PQRST" },
+            .type_explicit = true,
+        };
+        symbols[6] = .{
+            .name = "CFUN",
+            .type_kind = .character,
+            .dims = empty_exprs,
+            .char_len_kind = .constant,
+            .char_len = 4,
+            .kind = .function,
+            .storage = .local,
+            .is_external = false,
+            .is_intrinsic = false,
             .const_value = null,
             .type_explicit = true,
         };
@@ -1444,4 +1470,48 @@ test "coerce casts scalars to target types" {
     const casted = try coerce(&harness.ctx, &builder, value, .f32);
     try testing.expectEqual(IRType.f32, casted.ty);
     try testing.expectEqualStrings("%t0", casted.name);
+}
+
+test "emitArgPointer materializes CHARACTER parameter as temporary bytes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const ident = try makeIdent(harness.arena.allocator(), "CPN001");
+    const ptr = try emitArgPointer(&harness.ctx, &builder, ident);
+
+    try testing.expectEqual(IRType.ptr, ptr.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "alloca [5 x i8]") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "store i8 80") != null);
+}
+
+test "emitExpr lowers concat with character function result through shared character plan" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const lit = try makeLiteral(harness.arena.allocator(), .string, "'AB'");
+    const call_expr = try harness.arena.allocator().create(Expr);
+    call_expr.* = .{ .call_or_subscript = .{ .name = "CFUN", .args = @constCast(&[_]*Expr{}) } };
+    const concat = try harness.arena.allocator().create(Expr);
+    concat.* = .{ .binary = .{ .op = .concat, .left = lit, .right = call_expr } };
+
+    const value = try emitExpr(&harness.ctx, &builder, concat);
+    try testing.expectEqual(IRType.ptr, value.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void @cfun_") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "alloca [6 x i8]") != null);
 }
