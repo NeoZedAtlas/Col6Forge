@@ -14,7 +14,6 @@ pub const SemanticUnit = symbols.SemanticUnit;
 
 pub const KnownFunctionType = struct {
     name: []const u8,
-    type_kind: ast.TypeKind,
     type_spec: symbols.TypeSpec = symbols.TypeSpec.fromResolvedKind(.real, .real, null),
 
     pub fn resolvedSpec(self: KnownFunctionType) symbols.TypeSpec {

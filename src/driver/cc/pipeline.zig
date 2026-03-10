@@ -118,13 +118,11 @@ fn upsertKnownFunctionType(
     type_spec: Col6Forge.sema.TypeSpec,
 ) !void {
     if (indexOfKnownFunctionType(list.items, name)) |idx| {
-        list.items[idx].type_kind = type_spec.lowered_kind;
         list.items[idx].type_spec = type_spec;
         return;
     }
     try list.append(allocator, .{
         .name = try allocator.dupe(u8, name),
-        .type_kind = type_spec.lowered_kind,
         .type_spec = type_spec,
     });
 }
