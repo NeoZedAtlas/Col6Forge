@@ -9,6 +9,7 @@ const RuntimeBackend = enum {
 };
 
 const CACHE_SCHEMA_VERSION: u32 = 2;
+const MAX_RUN_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RUN_OUTPUT_BYTES: usize = 128 * 1024 * 1024;
 
 const INSTALL_EXTRAS = [_][]const u8{
@@ -696,7 +697,7 @@ fn processCase(
             const test_stderr_path = try buildRunArtifactPath(allocator, test_dir, input_name, "stderr");
             defer allocator.free(test_stderr_path);
 
-            const ref_run = try runProcessRedirectedWithInputPath(
+            const ref_run = try runProcessStreamToFilesWithInputPath(
                 allocator,
                 ref_exe,
                 ref_dir,
@@ -709,7 +710,7 @@ fn processCase(
                 std.log.warn("timeout: reference run {s} ({s})\n", .{ case.name, input_name });
                 return false;
             }
-            const test_run = try runProcessRedirectedWithInputPath(
+            const test_run = try runProcessStreamToFilesWithInputPath(
                 allocator,
                 test_exe,
                 test_dir,
@@ -1650,7 +1651,7 @@ fn runProcessCaptureWithInputPath(
     return runProcessCaptureWithInput(allocator, &.{ "sh", "-c", cmd }, cwd, null, timeout_ms);
 }
 
-fn runProcessRedirectedWithInputPath(
+fn runProcessStreamToFilesWithInputPath(
     allocator: std.mem.Allocator,
     exe_path: []const u8,
     cwd: ?[]const u8,
@@ -1659,29 +1660,39 @@ fn runProcessRedirectedWithInputPath(
     stderr_path: []const u8,
     timeout_ms: u64,
 ) !ProcessRedirectResult {
-    const cmd = try std.fmt.allocPrint(
+    const input = try readFileLimitedAbsolute(allocator, input_path, MAX_RUN_INPUT_BYTES);
+    defer allocator.free(input);
+
+    var stdout_file = try std.fs.createFileAbsolute(stdout_path, .{ .truncate = true });
+    defer stdout_file.close();
+    var stderr_file = try std.fs.createFileAbsolute(stderr_path, .{ .truncate = true });
+    defer stderr_file.close();
+
+    return runProcessPipeToFiles(
         allocator,
-        "\"{s}\" < \"{s}\" > \"{s}\" 2> \"{s}\"",
-        .{ exe_path, input_path, stdout_path, stderr_path },
+        &.{ exe_path },
+        cwd,
+        input,
+        &stdout_file,
+        &stderr_file,
+        timeout_ms,
     );
-    defer allocator.free(cmd);
-    if (builtin.os.tag == .windows) {
-        return runProcessNoCapture(allocator, &.{ "cmd.exe", "/D", "/C", cmd }, cwd, timeout_ms);
-    }
-    return runProcessNoCapture(allocator, &.{ "sh", "-c", cmd }, cwd, timeout_ms);
 }
 
-fn runProcessNoCapture(
+fn runProcessPipeToFiles(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     cwd: ?[]const u8,
+    input: []const u8,
+    stdout_file: *std.fs.File,
+    stderr_file: *std.fs.File,
     timeout_ms: u64,
 ) !ProcessRedirectResult {
     var child = std.process.Child.init(argv, allocator);
     child.cwd = cwd;
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
     try child.spawn();
 
     var done = std.atomic.Value(bool).init(false);
@@ -1691,18 +1702,55 @@ fn runProcessNoCapture(
         monitor = try std.Thread.spawn(.{}, timeoutMonitor, .{ &child, &done, &timed_out, timeout_ms });
     }
 
+    const stdout_pipe = child.stdout.?;
+    const stderr_pipe = child.stderr.?;
+    var stdout_pump = try std.Thread.spawn(.{}, pumpPipeToFile, .{ stdout_pipe, stdout_file.* });
+    var stderr_pump = try std.Thread.spawn(.{}, pumpPipeToFile, .{ stderr_pipe, stderr_file.* });
+
+    if (child.stdin) |*stdin_file| {
+        stdin_file.writeAll(input) catch |err| switch (err) {
+            error.BrokenPipe, error.Unexpected => {},
+            else => {
+                terminateChildNoWait(&child);
+                _ = child.wait() catch {};
+                done.store(true, .seq_cst);
+                if (monitor) |t| t.join();
+                stdout_pump.join();
+                stderr_pump.join();
+                return err;
+            },
+        };
+        stdin_file.close();
+        child.stdin = null;
+    }
+
     const term = child.wait() catch |err| {
         done.store(true, .seq_cst);
         if (monitor) |t| t.join();
+        stdout_pump.join();
+        stderr_pump.join();
         return err;
     };
     done.store(true, .seq_cst);
     if (monitor) |t| t.join();
+    stdout_pump.join();
+    stderr_pump.join();
 
     return .{
         .term = term,
         .timed_out = timed_out.load(.seq_cst),
     };
+}
+
+fn pumpPipeToFile(src: std.fs.File, dst: std.fs.File) void {
+    var reader_file = src;
+    var writer_file = dst;
+    var buf: [64 * 1024]u8 = undefined;
+    while (true) {
+        const n = reader_file.read(&buf) catch break;
+        if (n == 0) break;
+        writer_file.writeAll(buf[0..n]) catch break;
+    }
 }
 
 fn runProcessCaptureWithInput(
@@ -1750,7 +1798,7 @@ fn runProcessCaptureWithInput(
     child.collectOutput(allocator, &stdout_buf, &stderr_buf, 1024 * 1024 * 1024) catch |err| {
         done.store(true, .seq_cst);
         if (monitor) |t| t.join();
-        _ = child.kill() catch {};
+        terminateChildNoWait(&child);
         _ = child.wait() catch {};
         return err;
     };
@@ -1783,7 +1831,22 @@ fn timeoutMonitor(
     }
     if (done.load(.seq_cst)) return;
     timed_out.store(true, .seq_cst);
-    _ = child.kill() catch {};
+    terminateChildNoWait(child);
+}
+
+fn terminateChildNoWait(child: *std.process.Child) void {
+    if (builtin.os.tag == .windows) {
+        std.os.windows.TerminateProcess(child.id, 1) catch |err| switch (err) {
+            error.AccessDenied => {},
+            else => {},
+        };
+        return;
+    }
+
+    std.posix.kill(child.id, std.posix.SIG.KILL) catch |err| switch (err) {
+        error.ProcessNotFound => {},
+        else => {},
+    };
 }
 
 fn isZeroExit(term: std.process.Child.Term) bool {
