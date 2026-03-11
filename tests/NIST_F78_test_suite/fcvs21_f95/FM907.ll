@@ -1,7 +1,5 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM907.f"
-target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-pc-windows-gnu"
 @fmt_fm907_37300 = private unnamed_addr constant [97 x i8] c" \0A LSTDO2 - (373)  LIST DIRECTED OUTPUT FOR D.P. AND COMPLEX DATA TYPES\0A\0A ANS REF. - 13.6  12.4\0A\00", align 1
 @fmt_fm907_70000 = private unnamed_addr constant [812 x i8] c"                                                 THE CORRECT LINE OF EACH TEST  \0A                                                 IS HOLLERITH INFORMATION.      \0A                                                 COLUMN SPACING,  LINE BREAKS,  \0A                                                 AND THE NUMBER OF DECIMAL      \0A                                                 PLACES FOR DOUBLE PRECISION    \0A                                                 OR COMPLEX NUMBERS ARE         \0A                                                 PROCESSOR DEPENDENT.           \0A                                                 EITHER E OR F FORMAT MAY BE    \0A                                                 USED FOR DOUBLE PRECISION OR   \0A                                                 COMPLEX NUMBERS.               \0A\0A\00", align 1
 @fmt_fm907_70011 = private unnamed_addr constant [12 x i8] c"       2.5\0A\00", align 1

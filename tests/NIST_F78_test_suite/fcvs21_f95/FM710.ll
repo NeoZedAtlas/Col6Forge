@@ -1,7 +1,5 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM710.f"
-target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-pc-windows-gnu"
 @fmt_fm710_70030 = private unnamed_addr constant [41 x i8] c"                           %4d%4d%4d%4d\0A\00", align 1
 @fmt_fm710_70031 = private unnamed_addr constant [45 x i8] c"                              7   8   9  10\0A\00", align 1
 @fmt_fm710_90001 = private unnamed_addr constant [64 x i8] c"                                                         FM710\0A\00", align 1

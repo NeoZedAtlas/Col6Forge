@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
 const utils = @import("utils.zig");
@@ -58,10 +57,6 @@ pub fn Builder(comptime WriterType: type) type {
             try self.writer.writeAll("source_filename = \"");
             try emitNormalizedSourcePath(self.writer, source_name);
             try self.writer.writeAll("\"\n");
-            if (builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) {
-                try self.writer.writeAll("target datalayout = \"e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"\n");
-                try self.writer.writeAll("target triple = \"x86_64-pc-windows-gnu\"\n");
-            }
         }
 
         pub fn commonGlobal(self: *@This(), name: []const u8, size: usize, alignment: usize) !void {

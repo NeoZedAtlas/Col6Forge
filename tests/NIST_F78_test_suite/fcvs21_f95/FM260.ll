@@ -1,7 +1,5 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM260.f"
-target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-pc-windows-gnu"
 @fmt_fm260_30200 = private unnamed_addr constant [107 x i8] c"  BLKIF3 - (302) BLOCK IF\0A\0A  WITH OTHER CONTROL CONSTRUCTS (II)\0A\0A  SUBSET REF.  11.1 - 11.3, 11.6 - 11.10\0A\00", align 1
 @fmt_fm260_30215 = private unnamed_addr constant [33 x i8] c"                           %10d\0A\00", align 1
 @fmt_fm260_30225 = private unnamed_addr constant [233 x i8] c"\0A                                                 TEST 1 (11 COMPUTED RESULTS)\0A                                                 TEST 2 (8 COMPUTED RESULTS)\0A                                                 ALL ANSWERS SHOULD BE ZERO\0A\00", align 1

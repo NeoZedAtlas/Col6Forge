@@ -19,6 +19,13 @@ const FORTRAN_FALLBACK = [_][]const u8{
     // Empty by default: translate all .f BLAS sources when possible.
 };
 
+const PLATFORM_FORTRAN_FALLBACK = [_][]const u8{
+    "cdotc.f",
+    "cdotu.f",
+    "zdotc.f",
+    "zdotu.f",
+};
+
 const SBLAS3 = [_][]const u8{
     "sgemm.f",
     "ssymm.f",
@@ -847,6 +854,11 @@ fn isFortranFallbackSource(path: []const u8) bool {
     const base = std.fs.path.basename(path);
     for (FORTRAN_FALLBACK) |name| {
         if (std.ascii.eqlIgnoreCase(base, name)) return true;
+    }
+    if (builtin.os.tag != .windows) {
+        for (PLATFORM_FORTRAN_FALLBACK) |name| {
+            if (std.ascii.eqlIgnoreCase(base, name)) return true;
+        }
     }
     return false;
 }

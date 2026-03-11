@@ -1,7 +1,5 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM252.f"
-target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-pc-windows-gnu"
 @fmt_fm252_12 = private unnamed_addr constant [53 x i8] c" **** ASSIGN FORMAT NUMBER TO INTEGER VARIABLE ****\0A\00", align 1
 @fmt_fm252_90001 = private unnamed_addr constant [32 x i8] c"                         FM252\0A\00", align 1
 @fmt_fm252_90000 = private unnamed_addr constant [43 x i8] c"                     END OF PROGRAM FM252\0A\00", align 1

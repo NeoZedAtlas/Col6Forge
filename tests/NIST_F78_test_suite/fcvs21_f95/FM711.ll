@@ -1,7 +1,5 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM711.f"
-target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-pc-windows-gnu"
 @common_blank_ = common global [8 x i8] zeroinitializer, align 4
 @fmt_fm711_70010 = private unnamed_addr constant [5 x i8] c"%5d\0A\00", align 1
 @fmt_fm711_90001 = private unnamed_addr constant [64 x i8] c"                                                         FM711\0A\00", align 1

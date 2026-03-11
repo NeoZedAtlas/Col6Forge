@@ -1,7 +1,5 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM909.f"
-target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-pc-windows-gnu"
 @fmt_fm909_39300 = private unnamed_addr constant [71 x i8] c" \0A INTER4 - (393) INTERNAL FILES --  USING WRITE\0A\0A ANS. REF. - 12.2.5\0A\00", align 1
 @fmt_fm909_39199 = private unnamed_addr constant [812 x i8] c"                                                 NOTE 1: FOR NUMERIC VALUES,    \0A                                                    OPTIONAL LEADING ZERO MAY BE\0A                                                    BLANK FOR ABSOLUTE VALUE < 1\0A                                                 NOTE 2: LEADING PLUS SIGN IS   \0A                                                    OPTIONAL FOR NUMERIC VALUES \0A                                                 NOTE 3: E FORMAT EXPONENT MAY  \0A                                                    BE E+NN OR +0NN FOR REALS   \0A                                                 NOTE 4: D FORMAT EXPONENT MAY  \0A                                                    BE D+NN, E+NN, OR +0NN FOR  \0A                                                    DOUBLE PRECISION VALUES     \0A\0A\00", align 1
 @fmt_fm909_39301 = private unnamed_addr constant [21 x i8] c"             %10.5E\0A\00", align 1

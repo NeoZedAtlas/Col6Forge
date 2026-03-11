@@ -1,7 +1,5 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM832.f"
-target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-pc-windows-gnu"
 @fmt_fm832_21000 = private unnamed_addr constant [110 x i8] c" \0A YGEN5 - (210) GENERIC FUNCTIONS --\0A\0A  SQRT,EXP,LOG,LOG10,COS,SINH,TANH,ASIN,ATAN,ATAN2\0A\0A  ANS REF. - 15.3\0A\00", align 1
 @fmt_fm832_21001 = private unnamed_addr constant [35 x i8] c"\0A        TEST WITH REAL ARGUMENTS\0A\00", align 1
 @fmt_fm832_21002 = private unnamed_addr constant [47 x i8] c"\0A        TEST WITH DOUBLE PRECISION ARGUMENTS\0A\00", align 1
