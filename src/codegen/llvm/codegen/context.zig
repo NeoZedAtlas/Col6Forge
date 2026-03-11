@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const input = @import("../../input.zig");
 const ast = @import("../../../ast/nodes.zig");
 const ir = @import("../../ir.zig");
@@ -585,15 +586,32 @@ fn writeUnsignedDecimal(buffer: []u8, value: usize) []const u8 {
 }
 
 pub fn fortranAbiReturnType(ret_ty: IRType) IRType {
+    if (fortranAbiUsesHiddenResultPtr(ret_ty)) return .void;
     return switch (ret_ty) {
-        .complex_f32 => .i64,
-        .complex_f64 => .void,
+        .complex_f32 => if (builtin.os.tag == .windows) .i64 else .complex_f32,
         else => ret_ty,
+    };
+}
+
+pub fn fortranAbiUsesHiddenResultPtr(ret_ty: IRType) bool {
+    return switch (ret_ty) {
+        .complex_f64 => builtin.os.tag == .windows,
+        .complex_f32 => false,
+        else => false,
     };
 }
 
 test "fortranAbiReturnType uses sret ABI for complex*16" {
     const testing = std.testing;
-    try testing.expectEqual(IRType.void, fortranAbiReturnType(.complex_f64));
-    try testing.expectEqual(IRType.i64, fortranAbiReturnType(.complex_f32));
+    if (builtin.os.tag == .windows) {
+        try testing.expectEqual(IRType.void, fortranAbiReturnType(.complex_f64));
+        try testing.expect(fortranAbiUsesHiddenResultPtr(.complex_f64));
+        try testing.expectEqual(IRType.i64, fortranAbiReturnType(.complex_f32));
+        try testing.expect(!fortranAbiUsesHiddenResultPtr(.complex_f32));
+    } else {
+        try testing.expectEqual(IRType.complex_f64, fortranAbiReturnType(.complex_f64));
+        try testing.expect(!fortranAbiUsesHiddenResultPtr(.complex_f64));
+        try testing.expectEqual(IRType.complex_f32, fortranAbiReturnType(.complex_f32));
+        try testing.expect(!fortranAbiUsesHiddenResultPtr(.complex_f32));
+    }
 }

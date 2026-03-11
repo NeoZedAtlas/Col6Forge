@@ -53,7 +53,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     if (ctx.unit.kind == .function) {
         const sym = ctx.findSymbol(return_symbol_name) orelse return error.UnknownSymbol;
         is_character_function = sym.isCharacter();
-        is_complex_sret_function = sym.loweredKind() == .complex_double;
+        is_complex_sret_function = context.fortranAbiUsesHiddenResultPtr(ctx.typeFromKind(sym.loweredKind()));
         if (!is_character_function) {
             const nominal_ret_ty = ctx.typeFromKind(sym.loweredKind());
             return_ty = context.fortranAbiReturnType(nominal_ret_ty);

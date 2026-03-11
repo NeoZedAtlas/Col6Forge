@@ -450,8 +450,34 @@ test "emitCall complex_f64 uses hidden sret pointer and void call ABI" {
     const no_args = @constCast(&[_]*Expr{});
     const call_val = try emitCall(&harness.ctx, &builder, "zfun_", .complex_f64, no_args, false);
     try testing.expectEqual(IRType.complex_f64, call_val.ty);
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "call void @zfun_(ptr") != null);
-    try testing.expect(std.mem.indexOf(u8, buffer.items, "call ptr @zfun_") == null);
+    if (@import("builtin").os.tag == .windows) {
+        try testing.expect(std.mem.indexOf(u8, buffer.items, "call void @zfun_(ptr") != null);
+        try testing.expect(std.mem.indexOf(u8, buffer.items, "call ptr @zfun_") == null);
+    } else {
+        try testing.expect(std.mem.indexOf(u8, buffer.items, "call {double, double} @zfun_(") != null);
+    }
+}
+
+test "emitCall complex_f32 ABI matches target convention" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const no_args = @constCast(&[_]*Expr{});
+    const call_val = try emitCall(&harness.ctx, &builder, "cfun_", .complex_f32, no_args, false);
+    try testing.expectEqual(IRType.complex_f32, call_val.ty);
+    if (@import("builtin").os.tag == .windows) {
+        try testing.expect(std.mem.indexOf(u8, buffer.items, "call i64 @cfun_(") != null);
+    } else {
+        try testing.expect(std.mem.indexOf(u8, buffer.items, "call {float, float} @cfun_(") != null);
+    }
 }
 
 test "emitCall appends descriptor arrays for known deferred-shape dummy" {

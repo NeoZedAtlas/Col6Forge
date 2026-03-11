@@ -261,7 +261,7 @@ fn buildAbiParamTypes(
     var tys = std.array_list.Managed(llvm_types.IRType).init(ctx.allocator);
     defer tys.deinit();
 
-    const has_hidden_result_ptr = has_character_result or ret_ty == .complex_f64;
+    const has_hidden_result_ptr = has_character_result or context.fortranAbiUsesHiddenResultPtr(ret_ty);
     if (has_hidden_result_ptr) {
         try tys.append(.ptr);
     }
