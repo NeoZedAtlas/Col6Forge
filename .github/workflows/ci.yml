@@ -143,6 +143,7 @@ jobs:
           zig build perf-bench -- --output perf_base.json --iterations 3 --warmup 1
 
       - name: Benchmark candidate
+        id: perf_head
         if: steps.base.outputs.sha != ''
         run: zig build perf-bench -- --output perf_head.json --iterations 3 --warmup 1
 
@@ -151,21 +152,43 @@ jobs:
         run: zig build perf-regress -- --base ../baseline_ref/perf_base.json --candidate perf_head.json --max-regression-pct 12
 
       - name: Upload performance artifacts
-        if: always() && steps.base.outputs.sha != '' && steps.perf_base.outcome == 'success'
+        if: always() && steps.base.outputs.sha != '' && steps.perf_head.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: perf-reports
           path: |
             perf_head.json
             ../baseline_ref/perf_base.json
+          if-no-files-found: ignore
 
       - name: Skip notice (no baseline revision)
         if: steps.base.outputs.sha == ''
-        run: echo "No baseline revision available; skipping performance regression comparison."
+        shell: bash
+        run: |
+          echo "::warning::No baseline revision available; skipping performance regression comparison."
+          {
+            echo "## Performance Compare Skipped"
+            echo
+            echo "- Reason: no baseline revision was available for this run."
+            echo "- Candidate benchmark: not attempted."
+            echo "- Action: no regression comparison was performed."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Skip notice (baseline benchmark unavailable)
         if: steps.base.outputs.sha != '' && steps.perf_base.outcome != 'success'
-        run: echo "Baseline benchmark failed on the historical revision; skipping regression comparison for this run."
+        shell: bash
+        run: |
+          echo "::warning::Baseline benchmark failed on the historical revision; performance regression comparison was skipped."
+          {
+            echo "## Performance Compare Skipped"
+            echo
+            echo "- Reason: baseline benchmark failed on the historical revision."
+            echo "- Baseline revision: \`${{ steps.base.outputs.sha }}\`"
+            echo "- Baseline benchmark outcome: \`${{ steps.perf_base.outcome }}\`"
+            echo "- Candidate benchmark outcome: \`${{ steps.perf_head.outcome }}\`"
+            echo "- Action: candidate benchmark still ran, but no regression comparison was performed."
+            echo "- Follow-up: investigate baseline benchmark compatibility instead of ignoring this warning."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   gcc-dg-experimental:
     name: GCC DG Experimental
