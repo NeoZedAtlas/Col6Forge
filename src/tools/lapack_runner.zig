@@ -9,6 +9,7 @@ const RuntimeBackend = enum {
 };
 
 const CACHE_SCHEMA_VERSION: u32 = 2;
+const MAX_RUN_OUTPUT_BYTES: usize = 128 * 1024 * 1024;
 
 const INSTALL_EXTRAS = [_][]const u8{
     "lsame.f",
@@ -661,28 +662,87 @@ fn processCase(
         const input_path = try absolutizePath(allocator, root_path, input_rel);
         defer allocator.free(input_path);
 
-        const ref_run = try runProcessCaptureWithInputPath(allocator, ref_exe, ref_dir, input_path, options.timeout_ms);
-        defer ref_run.deinit(allocator);
-        if (ref_run.timed_out) {
-            std.log.warn("timeout: reference run {s} ({s})\n", .{ case.name, input_name });
-            return false;
-        }
-        const test_run = try runProcessCaptureWithInputPath(allocator, test_exe, test_dir, input_path, options.timeout_ms);
-        defer test_run.deinit(allocator);
-        if (test_run.timed_out) {
-            std.log.warn("timeout: translated run {s} ({s})\n", .{ case.name, input_name });
-            return false;
-        }
+        if (builtin.os.tag == .windows) {
+            const ref_run = try runProcessCaptureWithInputPath(allocator, ref_exe, ref_dir, input_path, options.timeout_ms);
+            defer ref_run.deinit(allocator);
+            if (ref_run.timed_out) {
+                std.log.warn("timeout: reference run {s} ({s})\n", .{ case.name, input_name });
+                return false;
+            }
+            const test_run = try runProcessCaptureWithInputPath(allocator, test_exe, test_dir, input_path, options.timeout_ms);
+            defer test_run.deinit(allocator);
+            if (test_run.timed_out) {
+                std.log.warn("timeout: translated run {s} ({s})\n", .{ case.name, input_name });
+                return false;
+            }
 
-        const ref_code = exitCode(ref_run.term);
-        const test_code = exitCode(test_run.term);
-        if (ref_code != test_code) {
-            std.log.warn("exit code mismatch: {s} ({s}) ref={d} test={d}\n", .{ case.name, input_name, ref_code, test_code });
-            return false;
-        }
-        if (!outputsEquivalent(ref_run.stdout, test_run.stdout)) {
-            std.log.warn("stdout mismatch: {s} ({s})\n", .{ case.name, input_name });
-            return false;
+            const ref_code = exitCode(ref_run.term);
+            const test_code = exitCode(test_run.term);
+            if (ref_code != test_code) {
+                std.log.warn("exit code mismatch: {s} ({s}) ref={d} test={d}\n", .{ case.name, input_name, ref_code, test_code });
+                return false;
+            }
+            if (!outputsEquivalent(ref_run.stdout, test_run.stdout)) {
+                std.log.warn("stdout mismatch: {s} ({s})\n", .{ case.name, input_name });
+                return false;
+            }
+        } else {
+            const ref_stdout_path = try buildRunArtifactPath(allocator, ref_dir, input_name, "stdout");
+            defer allocator.free(ref_stdout_path);
+            const ref_stderr_path = try buildRunArtifactPath(allocator, ref_dir, input_name, "stderr");
+            defer allocator.free(ref_stderr_path);
+            const test_stdout_path = try buildRunArtifactPath(allocator, test_dir, input_name, "stdout");
+            defer allocator.free(test_stdout_path);
+            const test_stderr_path = try buildRunArtifactPath(allocator, test_dir, input_name, "stderr");
+            defer allocator.free(test_stderr_path);
+
+            const ref_run = try runProcessRedirectedWithInputPath(
+                allocator,
+                ref_exe,
+                ref_dir,
+                input_path,
+                ref_stdout_path,
+                ref_stderr_path,
+                options.timeout_ms,
+            );
+            if (ref_run.timed_out) {
+                std.log.warn("timeout: reference run {s} ({s})\n", .{ case.name, input_name });
+                return false;
+            }
+            const test_run = try runProcessRedirectedWithInputPath(
+                allocator,
+                test_exe,
+                test_dir,
+                input_path,
+                test_stdout_path,
+                test_stderr_path,
+                options.timeout_ms,
+            );
+            if (test_run.timed_out) {
+                std.log.warn("timeout: translated run {s} ({s})\n", .{ case.name, input_name });
+                return false;
+            }
+
+            const ref_code = exitCode(ref_run.term);
+            const test_code = exitCode(test_run.term);
+            if (ref_code != test_code) {
+                std.log.warn("exit code mismatch: {s} ({s}) ref={d} test={d}\n", .{ case.name, input_name, ref_code, test_code });
+                return false;
+            }
+            const ref_stdout = readFileLimitedAbsolute(allocator, ref_stdout_path, MAX_RUN_OUTPUT_BYTES) catch |err| {
+                std.log.warn("failed to read reference stdout: {s} ({s}, {s})\n", .{ case.name, input_name, @errorName(err) });
+                return false;
+            };
+            defer allocator.free(ref_stdout);
+            const test_stdout = readFileLimitedAbsolute(allocator, test_stdout_path, MAX_RUN_OUTPUT_BYTES) catch |err| {
+                std.log.warn("failed to read translated stdout: {s} ({s}, {s})\n", .{ case.name, input_name, @errorName(err) });
+                return false;
+            };
+            defer allocator.free(test_stdout);
+            if (!outputsEquivalent(ref_stdout, test_stdout)) {
+                std.log.warn("stdout mismatch: {s} ({s})\n", .{ case.name, input_name });
+                return false;
+            }
         }
     }
 
@@ -1570,6 +1630,11 @@ const ProcessResult = struct {
     }
 };
 
+const ProcessRedirectResult = struct {
+    term: std.process.Child.Term,
+    timed_out: bool,
+};
+
 fn runProcessCaptureWithInputPath(
     allocator: std.mem.Allocator,
     exe_path: []const u8,
@@ -1583,6 +1648,61 @@ fn runProcessCaptureWithInputPath(
         return runProcessCaptureWithInput(allocator, &.{ "cmd.exe", "/D", "/C", cmd }, cwd, null, timeout_ms);
     }
     return runProcessCaptureWithInput(allocator, &.{ "sh", "-c", cmd }, cwd, null, timeout_ms);
+}
+
+fn runProcessRedirectedWithInputPath(
+    allocator: std.mem.Allocator,
+    exe_path: []const u8,
+    cwd: ?[]const u8,
+    input_path: []const u8,
+    stdout_path: []const u8,
+    stderr_path: []const u8,
+    timeout_ms: u64,
+) !ProcessRedirectResult {
+    const cmd = try std.fmt.allocPrint(
+        allocator,
+        "\"{s}\" < \"{s}\" > \"{s}\" 2> \"{s}\"",
+        .{ exe_path, input_path, stdout_path, stderr_path },
+    );
+    defer allocator.free(cmd);
+    if (builtin.os.tag == .windows) {
+        return runProcessNoCapture(allocator, &.{ "cmd.exe", "/D", "/C", cmd }, cwd, timeout_ms);
+    }
+    return runProcessNoCapture(allocator, &.{ "sh", "-c", cmd }, cwd, timeout_ms);
+}
+
+fn runProcessNoCapture(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    cwd: ?[]const u8,
+    timeout_ms: u64,
+) !ProcessRedirectResult {
+    var child = std.process.Child.init(argv, allocator);
+    child.cwd = cwd;
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    try child.spawn();
+
+    var done = std.atomic.Value(bool).init(false);
+    var timed_out = std.atomic.Value(bool).init(false);
+    var monitor: ?std.Thread = null;
+    if (timeout_ms > 0) {
+        monitor = try std.Thread.spawn(.{}, timeoutMonitor, .{ &child, &done, &timed_out, timeout_ms });
+    }
+
+    const term = child.wait() catch |err| {
+        done.store(true, .seq_cst);
+        if (monitor) |t| t.join();
+        return err;
+    };
+    done.store(true, .seq_cst);
+    if (monitor) |t| t.join();
+
+    return .{
+        .term = term,
+        .timed_out = timed_out.load(.seq_cst),
+    };
 }
 
 fn runProcessCaptureWithInput(
@@ -1627,7 +1747,13 @@ fn runProcessCaptureWithInput(
     errdefer stdout_buf.deinit(allocator);
     errdefer stderr_buf.deinit(allocator);
 
-    try child.collectOutput(allocator, &stdout_buf, &stderr_buf, 1024 * 1024 * 1024);
+    child.collectOutput(allocator, &stdout_buf, &stderr_buf, 1024 * 1024 * 1024) catch |err| {
+        done.store(true, .seq_cst);
+        if (monitor) |t| t.join();
+        _ = child.kill() catch {};
+        _ = child.wait() catch {};
+        return err;
+    };
 
     done.store(true, .seq_cst);
     if (monitor) |t| t.join();
@@ -1678,6 +1804,27 @@ fn exitCode(term: std.process.Child.Term) u32 {
 fn fileExists(path: []const u8) bool {
     std.fs.cwd().access(path, .{}) catch return false;
     return true;
+}
+
+fn buildRunArtifactPath(
+    allocator: std.mem.Allocator,
+    dir: []const u8,
+    input_name: []const u8,
+    suffix: []const u8,
+) ![]const u8 {
+    const file_name = try std.fmt.allocPrint(allocator, "{s}.{s}.txt", .{ input_name, suffix });
+    defer allocator.free(file_name);
+    return std.fs.path.join(allocator, &.{ dir, file_name });
+}
+
+fn readFileLimitedAbsolute(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    max_bytes: usize,
+) ![]u8 {
+    var file = try std.fs.openFileAbsolute(path, .{});
+    defer file.close();
+    return file.readToEndAlloc(allocator, max_bytes);
 }
 
 fn outputsEquivalent(expected: []const u8, actual: []const u8) bool {
