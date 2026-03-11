@@ -29,9 +29,9 @@ jobs:
           ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
           if [[ ! -x "$ZIG_DIR/zig" ]]; then
             mkdir -p "$ZIG_DIR"
-            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
             tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
-            mv "$RUNNER_TEMP/zig-linux-x86_64-${ZIG_VERSION}"/* "$ZIG_DIR"/
+            mv "$RUNNER_TEMP/zig-x86_64-linux-${ZIG_VERSION}"/* "$ZIG_DIR"/
           fi
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
@@ -73,9 +73,9 @@ jobs:
           ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
           if [[ ! -x "$ZIG_DIR/zig" ]]; then
             mkdir -p "$ZIG_DIR"
-            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
             tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
-            mv "$RUNNER_TEMP/zig-linux-x86_64-${ZIG_VERSION}"/* "$ZIG_DIR"/
+            mv "$RUNNER_TEMP/zig-x86_64-linux-${ZIG_VERSION}"/* "$ZIG_DIR"/
           fi
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
@@ -106,9 +106,9 @@ jobs:
           ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
           if [[ ! -x "$ZIG_DIR/zig" ]]; then
             mkdir -p "$ZIG_DIR"
-            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
             tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
-            mv "$RUNNER_TEMP/zig-linux-x86_64-${ZIG_VERSION}"/* "$ZIG_DIR"/
+            mv "$RUNNER_TEMP/zig-x86_64-linux-${ZIG_VERSION}"/* "$ZIG_DIR"/
           fi
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
@@ -141,9 +141,9 @@ jobs:
           ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
           if [[ ! -x "$ZIG_DIR/zig" ]]; then
             mkdir -p "$ZIG_DIR"
-            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
             tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
-            mv "$RUNNER_TEMP/zig-linux-x86_64-${ZIG_VERSION}"/* "$ZIG_DIR"/
+            mv "$RUNNER_TEMP/zig-x86_64-linux-${ZIG_VERSION}"/* "$ZIG_DIR"/
           fi
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
@@ -253,9 +253,9 @@ jobs:
           ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
           if [[ ! -x "$ZIG_DIR/zig" ]]; then
             mkdir -p "$ZIG_DIR"
-            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
             tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
-            mv "$RUNNER_TEMP/zig-linux-x86_64-${ZIG_VERSION}"/* "$ZIG_DIR"/
+            mv "$RUNNER_TEMP/zig-x86_64-linux-${ZIG_VERSION}"/* "$ZIG_DIR"/
           fi
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
