@@ -580,7 +580,7 @@ fn buildSubroutineAbiParamTypes(
     }
     for (args) |arg| {
         if (expr_call.isCharacterActualArg(ctx, arg)) {
-            try tys.append(.i32);
+            try tys.append(ctx.abiCharacterLenType());
         }
     }
     return tys.toOwnedSlice();
