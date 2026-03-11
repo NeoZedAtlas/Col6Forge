@@ -2359,13 +2359,13 @@ bb0:
   %t17 = insertvalue {float, float} %t16, float %t15, 1
   store {float, float} %t17, ptr %t0
   %t18 = load {float, float}, ptr %t0
-  %t19 = alloca {float, float}
+  %t19 = alloca <2 x float>
   store {float, float} %t18, ptr %t19
   %t20 = load <2 x float>, ptr %t19
   ret <2 x float> %t20
 exit:
   %t21 = load {float, float}, ptr %t0
-  %t22 = alloca {float, float}
+  %t22 = alloca <2 x float>
   store {float, float} %t21, ptr %t22
   %t23 = load <2 x float>, ptr %t22
   ret <2 x float> %t23
