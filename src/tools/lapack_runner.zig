@@ -1627,7 +1627,7 @@ fn runProcessCaptureWithInput(
     errdefer stdout_buf.deinit(allocator);
     errdefer stderr_buf.deinit(allocator);
 
-    try child.collectOutput(allocator, &stdout_buf, &stderr_buf, 64 * 1024 * 1024);
+    try child.collectOutput(allocator, &stdout_buf, &stderr_buf, 256 * 1024 * 1024);
 
     done.store(true, .seq_cst);
     if (monitor) |t| t.join();

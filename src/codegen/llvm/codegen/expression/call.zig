@@ -156,7 +156,7 @@ pub fn emitCharacterCall(ctx: *Context, builder: anytype, fn_name: []const u8, r
     var owned_heap_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer owned_heap_args.deinit();
     try abi_args.append(result_ptr);
-    const result_len_val = try i32Const(ctx, @intCast(result_len));
+    const result_len_val = try ctx.abiCharacterLenConst(@intCast(result_len));
     try appendAbiActualArgs(ctx, builder, &abi_args, &owned_heap_args, args, ctx.lookupKnownProcedureSig(fn_name), result_len_val);
 
     try builder.callTyped(null, .void, fn_name, abi_args.items);
@@ -171,7 +171,7 @@ pub fn emitIndirectCharacterCall(ctx: *Context, builder: anytype, fn_ptr: ValueR
     var owned_heap_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer owned_heap_args.deinit();
     try abi_args.append(result_ptr);
-    const result_len_val = try i32Const(ctx, @intCast(result_len));
+    const result_len_val = try ctx.abiCharacterLenConst(@intCast(result_len));
     try appendAbiActualArgs(ctx, builder, &abi_args, &owned_heap_args, args, null, result_len_val);
 
     try builder.callIndirectTyped(null, .void, fn_ptr.name, abi_args.items);
@@ -645,7 +645,7 @@ pub fn isCharacterActualArg(ctx: *Context, expr: *Expr) bool {
 }
 
 fn emitCharacterLengthArg(ctx: *Context, builder: anytype, expr: *Expr) !?ValueRef {
-    return (try dispatch.emitCharacterLenValue(ctx, builder, expr)) orelse null;
+    return (try dispatch.emitAbiCharacterLenValue(ctx, builder, expr)) orelse null;
 }
 
 fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
@@ -666,10 +666,6 @@ fn charSymbolLengthValueI64(
 ) !ValueRef {
     _ = sym;
     return dispatch.emitCharacterSymbolLenValueI64(ctx, builder, name, ctx.findSymbol(name) orelse return error.UnknownSymbol);
-}
-
-fn i32Const(ctx: *Context, value: i64) !ValueRef {
-    return try ctx.constI32(value);
 }
 
 fn i64Const(ctx: *Context, value: i64) ValueRef {

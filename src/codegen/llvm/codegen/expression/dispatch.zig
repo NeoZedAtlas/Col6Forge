@@ -276,11 +276,11 @@ fn buildAbiParamTypes(
         }
     }
     if (has_character_result) {
-        try tys.append(.i32);
+        try tys.append(ctx.abiCharacterLenType());
     }
     for (args) |arg| {
         if (call.isCharacterActualArg(ctx, arg)) {
-            try tys.append(.i32);
+            try tys.append(ctx.abiCharacterLenType());
         }
     }
     return tys.toOwnedSlice();
@@ -388,6 +388,14 @@ pub fn emitCharacterLenValue(ctx: *Context, builder: anytype, expr: *Expr) EmitE
 
 pub fn emitCharacterLenValueOrOne(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef {
     return (try emitCharacterLenValue(ctx, builder, expr)) orelse try ctx.constI32(1);
+}
+
+pub fn emitAbiCharacterLenValue(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?ValueRef {
+    const len_val = (try emitCharacterLenValue(ctx, builder, expr)) orelse return null;
+    const abi_len_ty = ctx.abiCharacterLenType();
+    if (len_val.ty == abi_len_ty) return len_val;
+    const coerced = try casting.coerce(ctx, builder, len_val, abi_len_ty);
+    return coerced;
 }
 
 pub fn emitCharacterValuePlan(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?CharacterValuePlan {

@@ -457,6 +457,22 @@ pub const Context = struct {
         return .{ .name = try self.intLiteral(value), .ty = .i32, .is_ptr = false };
     }
 
+    pub fn constI64(self: *Context, value: i64) !ValueRef {
+        return .{ .name = try self.intLiteral(value), .ty = .i64, .is_ptr = false };
+    }
+
+    pub fn abiCharacterLenType(self: *const Context) IRType {
+        return if (targetIsWindows(self.options.target)) .i32 else .i64;
+    }
+
+    pub fn abiCharacterLenConst(self: *Context, value: i64) !ValueRef {
+        return switch (self.abiCharacterLenType()) {
+            .i32 => try self.constI32(value),
+            .i64 => try self.constI64(value),
+            else => unreachable,
+        };
+    }
+
     pub fn defaultIntegerIRType(self: *const Context) IRType {
         return llvm_types.defaultIntegerType(self.options.target_layout);
     }

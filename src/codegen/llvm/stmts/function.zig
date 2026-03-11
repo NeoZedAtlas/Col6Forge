@@ -122,16 +122,17 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         next_arg_index += 1;
     }
 
+    const abi_char_len_ty = ctx.abiCharacterLenType();
     if (is_character_function) {
         const arg_name = try utils.formatTempName(ctx.allocator, "arg", next_arg_index);
-        try builder.defineArg(.i32, arg_name, next_arg_index == 0);
+        try builder.defineArg(abi_char_len_ty, arg_name, next_arg_index == 0);
         result_len_arg_name = arg_name;
         next_arg_index += 1;
     }
 
     for (char_dummy_names.items) |_| {
         const arg_name = try utils.formatTempName(ctx.allocator, "arg", next_arg_index);
-        try builder.defineArg(.i32, arg_name, next_arg_index == 0);
+        try builder.defineArg(abi_char_len_ty, arg_name, next_arg_index == 0);
         try char_dummy_len_args.append(arg_name);
         next_arg_index += 1;
     }
@@ -148,7 +149,10 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     }
 
     if (result_len_arg_name) |len_name| {
-        const len_ref = ValueRef{ .name = len_name, .ty = .i32, .is_ptr = false };
+        var len_ref = ValueRef{ .name = len_name, .ty = abi_char_len_ty, .is_ptr = false };
+        if (abi_char_len_ty != .i32) {
+            len_ref = try expression.coerce(ctx, builder, len_ref, .i32);
+        }
         try ctx.char_arg_lens.put(return_symbol_name, len_ref);
         if (!std.ascii.eqlIgnoreCase(return_symbol_name, ctx.unit.name)) {
             try ctx.char_arg_lens.put(ctx.unit.name, len_ref);
@@ -156,7 +160,11 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     }
     for (char_dummy_names.items, 0..) |formal_name, idx| {
         const len_name = char_dummy_len_args.items[idx];
-        try ctx.char_arg_lens.put(formal_name, .{ .name = len_name, .ty = .i32, .is_ptr = false });
+        var len_ref = ValueRef{ .name = len_name, .ty = abi_char_len_ty, .is_ptr = false };
+        if (abi_char_len_ty != .i32) {
+            len_ref = try expression.coerce(ctx, builder, len_ref, .i32);
+        }
+        try ctx.char_arg_lens.put(formal_name, len_ref);
     }
 
     const ptr_arg_offset: usize = if (has_hidden_result_arg) 1 else 0;
