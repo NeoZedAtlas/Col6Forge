@@ -82,7 +82,7 @@ pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IR
         return .{ .name = "", .ty = ret_ty, .is_ptr = false };
     }
 
-    if (ret_ty == .complex_f32) {
+    if (abi_ret_ty == .i64 and ret_ty == .complex_f32) {
         const packed_tmp = try ctx.nextTemp();
         try builder.callTyped(packed_tmp, .i64, fn_name, abi_args.items);
         try emitOwnedHeapArgFrees(ctx, builder, owned_heap_args.items);
@@ -128,7 +128,7 @@ pub fn emitIndirectCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, ret_t
         return .{ .name = "", .ty = ret_ty, .is_ptr = false };
     }
 
-    if (ret_ty == .complex_f32) {
+    if (abi_ret_ty == .i64 and ret_ty == .complex_f32) {
         const packed_tmp = try ctx.nextTemp();
         try builder.callIndirectTyped(packed_tmp, .i64, fn_ptr.name, abi_args.items);
         try emitOwnedHeapArgFrees(ctx, builder, owned_heap_args.items);

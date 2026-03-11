@@ -774,8 +774,8 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
             utils.zeroValue(ret_ty)
         else
             try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
-        if (ret_ty == .complex_f32) {
-            // Windows GNU Fortran returns COMPLEX*8 packed in i64; other targets use a hidden result pointer.
+        if (context.fortranAbiReturnType(ret_ty) == .i64 and ret_ty == .complex_f32) {
+            // Windows GNU Fortran returns COMPLEX*8 packed in i64.
             const pack_slot = try ctx.nextTemp();
             try builder.alloca(pack_slot, .complex_f32);
             const pack_ptr = ValueRef{ .name = pack_slot, .ty = .ptr, .is_ptr = true };

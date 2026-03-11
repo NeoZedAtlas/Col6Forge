@@ -153,12 +153,21 @@ jobs:
 
       - name: Upload performance artifacts
         if: always() && steps.base.outputs.sha != '' && steps.perf_head.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p perf-artifacts
+          cp perf_head.json perf-artifacts/perf_head.json
+          if [[ -f ../baseline_ref/perf_base.json ]]; then
+            cp ../baseline_ref/perf_base.json perf-artifacts/perf_base.json
+          fi
+
+      - name: Publish performance artifacts
+        if: always() && steps.base.outputs.sha != '' && steps.perf_head.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: perf-reports
-          path: |
-            perf_head.json
-            ../baseline_ref/perf_base.json
+          path: perf-artifacts
           if-no-files-found: ignore
 
       - name: Skip notice (no baseline revision)
