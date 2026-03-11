@@ -135,6 +135,7 @@ pub fn coerce(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) 
             else => return unsupportedCast(from, to),
         },
         .i8 => return unsupportedCast(from, to),
+        .v2f32 => return unsupportedCast(from, to),
         .i64 => switch (to) {
             .i32 => "trunc",
             .f32 => "sitofp",

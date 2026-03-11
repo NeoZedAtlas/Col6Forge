@@ -12,9 +12,6 @@ on:
 permissions:
   contents: read
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   guardrails-and-unit:
     name: Guardrails and Unit
@@ -22,12 +19,21 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.15.2
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.15.2
+          ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+          if [[ ! -x "$ZIG_DIR/zig" ]]; then
+            mkdir -p "$ZIG_DIR"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            mv "$RUNNER_TEMP/zig-linux-x86_64-${ZIG_VERSION}"/* "$ZIG_DIR"/
+          fi
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
       - name: Install gfortran
         run: |
@@ -57,12 +63,21 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.15.2
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.15.2
+          ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+          if [[ ! -x "$ZIG_DIR/zig" ]]; then
+            mkdir -p "$ZIG_DIR"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            mv "$RUNNER_TEMP/zig-linux-x86_64-${ZIG_VERSION}"/* "$ZIG_DIR"/
+          fi
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
       - name: Install gfortran
         run: |
@@ -81,12 +96,21 @@ jobs:
     timeout-minutes: 240
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.15.2
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.15.2
+          ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+          if [[ ! -x "$ZIG_DIR/zig" ]]; then
+            mkdir -p "$ZIG_DIR"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            mv "$RUNNER_TEMP/zig-linux-x86_64-${ZIG_VERSION}"/* "$ZIG_DIR"/
+          fi
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
       - name: Install gfortran
         run: |
@@ -105,14 +129,23 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.15.2
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.15.2
+          ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+          if [[ ! -x "$ZIG_DIR/zig" ]]; then
+            mkdir -p "$ZIG_DIR"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            mv "$RUNNER_TEMP/zig-linux-x86_64-${ZIG_VERSION}"/* "$ZIG_DIR"/
+          fi
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
       - name: Install gfortran
         run: |
@@ -210,12 +243,21 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.15.2
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.15.2
+          ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+          if [[ ! -x "$ZIG_DIR/zig" ]]; then
+            mkdir -p "$ZIG_DIR"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            mv "$RUNNER_TEMP/zig-linux-x86_64-${ZIG_VERSION}"/* "$ZIG_DIR"/
+          fi
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
       - name: Install gfortran
         run: |

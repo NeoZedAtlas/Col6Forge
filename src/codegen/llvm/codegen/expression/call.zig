@@ -82,11 +82,11 @@ pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IR
         return .{ .name = "", .ty = ret_ty, .is_ptr = false };
     }
 
-    if (abi_ret_ty == .i64 and ret_ty == .complex_f32) {
+    if (ret_ty == .complex_f32 and (abi_ret_ty == .i64 or abi_ret_ty == .v2f32)) {
         const packed_tmp = try ctx.nextTemp();
-        try builder.callTyped(packed_tmp, .i64, fn_name, abi_args.items);
+        try builder.callTyped(packed_tmp, abi_ret_ty, fn_name, abi_args.items);
         try emitOwnedHeapArgFrees(ctx, builder, owned_heap_args.items);
-        return unpackComplexF32Return(ctx, builder, packed_tmp);
+        return unpackComplexF32Return(ctx, builder, packed_tmp, abi_ret_ty);
     }
     if (ctx.abiUsesHiddenResultPtr(ret_ty)) {
         const sret_ptr = complex_result_ptr orelse return error.InvalidAbiState;
@@ -128,11 +128,11 @@ pub fn emitIndirectCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, ret_t
         return .{ .name = "", .ty = ret_ty, .is_ptr = false };
     }
 
-    if (abi_ret_ty == .i64 and ret_ty == .complex_f32) {
+    if (ret_ty == .complex_f32 and (abi_ret_ty == .i64 or abi_ret_ty == .v2f32)) {
         const packed_tmp = try ctx.nextTemp();
-        try builder.callIndirectTyped(packed_tmp, .i64, fn_ptr.name, abi_args.items);
+        try builder.callIndirectTyped(packed_tmp, abi_ret_ty, fn_ptr.name, abi_args.items);
         try emitOwnedHeapArgFrees(ctx, builder, owned_heap_args.items);
-        return unpackComplexF32Return(ctx, builder, packed_tmp);
+        return unpackComplexF32Return(ctx, builder, packed_tmp, abi_ret_ty);
     }
     if (ctx.abiUsesHiddenResultPtr(ret_ty)) {
         const sret_ptr = complex_result_ptr orelse return error.InvalidAbiState;
@@ -740,6 +740,7 @@ fn byteSizeForIRType(ty: IRType) usize {
         .i64 => 8,
         .f32 => 4,
         .f64 => 8,
+        .v2f32 => 8,
         .complex_f32 => 8,
         .complex_f64 => 16,
         .ptr => @sizeOf(usize),
@@ -1259,11 +1260,11 @@ fn isArrayValuedExpr(ctx: *Context, expr: *Expr) bool {
     }
 }
 
-fn unpackComplexF32Return(ctx: *Context, builder: anytype, packed_name: []const u8) !ValueRef {
+fn unpackComplexF32Return(ctx: *Context, builder: anytype, packed_name: []const u8, abi_ret_ty: IRType) !ValueRef {
     const slot_tmp = try ctx.nextTemp();
-    try builder.alloca(slot_tmp, .i64);
+    try builder.alloca(slot_tmp, abi_ret_ty);
     const slot_ptr = ValueRef{ .name = slot_tmp, .ty = .ptr, .is_ptr = true };
-    const packed_val = ValueRef{ .name = packed_name, .ty = .i64, .is_ptr = false };
+    const packed_val = ValueRef{ .name = packed_name, .ty = abi_ret_ty, .is_ptr = false };
     try builder.store(packed_val, slot_ptr);
     const value_tmp = try ctx.nextTemp();
     try builder.load(value_tmp, .complex_f32, slot_ptr);

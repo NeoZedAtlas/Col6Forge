@@ -476,7 +476,7 @@ test "emitCall complex_f32 ABI matches target convention" {
     if (@import("builtin").os.tag == .windows) {
         try testing.expect(std.mem.indexOf(u8, buffer.items, "call i64 @cfun_(") != null);
     } else {
-        try testing.expect(std.mem.indexOf(u8, buffer.items, "call {float, float} @cfun_(") != null);
+        try testing.expect(std.mem.indexOf(u8, buffer.items, "call <2 x float> @cfun_(") != null);
     }
 }
 

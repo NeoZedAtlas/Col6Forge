@@ -613,7 +613,7 @@ fn targetIsWindows(target: ?[]const u8) bool {
 pub fn fortranAbiReturnTypeForTarget(target: ?[]const u8, ret_ty: IRType) IRType {
     if (fortranAbiUsesHiddenResultPtrForTarget(target, ret_ty)) return .void;
     return switch (ret_ty) {
-        .complex_f32 => if (targetIsWindows(target)) .i64 else .complex_f32,
+        .complex_f32 => if (targetIsWindows(target)) .i64 else .v2f32,
         else => ret_ty,
     };
 }
@@ -644,7 +644,7 @@ test "fortranAbiReturnType uses sret ABI for complex*16" {
     } else {
         try testing.expectEqual(IRType.complex_f64, fortranAbiReturnType(.complex_f64));
         try testing.expect(!fortranAbiUsesHiddenResultPtr(.complex_f64));
-        try testing.expectEqual(IRType.complex_f32, fortranAbiReturnType(.complex_f32));
+        try testing.expectEqual(IRType.v2f32, fortranAbiReturnType(.complex_f32));
         try testing.expect(!fortranAbiUsesHiddenResultPtr(.complex_f32));
     }
 }

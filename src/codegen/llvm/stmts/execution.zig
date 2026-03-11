@@ -774,16 +774,17 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
             utils.zeroValue(ret_ty)
         else
             try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
-        if (ctx.abiReturnType(ret_ty) == .i64 and ret_ty == .complex_f32) {
-            // Windows GNU Fortran returns COMPLEX*8 packed in i64.
+        if (ret_ty == .complex_f32 and (ctx.abiReturnType(ret_ty) == .i64 or ctx.abiReturnType(ret_ty) == .v2f32)) {
+            // ABI boundary returns COMPLEX*8 using a target-specific packed form.
+            const abi_ret_ty = ctx.abiReturnType(ret_ty);
             const pack_slot = try ctx.nextTemp();
             try builder.alloca(pack_slot, .complex_f32);
             const pack_ptr = ValueRef{ .name = pack_slot, .ty = .ptr, .is_ptr = true };
             try builder.store(ret_val, pack_ptr);
             const packed_tmp = try ctx.nextTemp();
-            try builder.load(packed_tmp, .i64, pack_ptr);
+            try builder.load(packed_tmp, abi_ret_ty, pack_ptr);
             try ctx.emitHeapTempFrees(builder);
-            try builder.retValue(.i64, packed_tmp);
+            try builder.retValue(abi_ret_ty, packed_tmp);
             return;
         }
         try ctx.emitHeapTempFrees(builder);

@@ -8,6 +8,7 @@ pub const IRType = enum {
     i64,
     f32,
     f64,
+    v2f32,
     complex_f32,
     complex_f64,
     ptr,
