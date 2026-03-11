@@ -126,6 +126,24 @@ look up `CF2001` in this file.
 - Meaning: `MODULE ... END MODULE` program units are not supported yet.
 - Typical fix: use supported F77-style top-level units (`PROGRAM`/`SUBROUTINE`/`FUNCTION`/`BLOCK DATA`) or wait for module support.
 
+## CF2013
+
+- Stage: parser
+- Meaning: `DATA` statement expansion exceeds parser safety limit.
+- Typical fix: reduce `DATA` repetition/expansion size or split initialization across multiple statements.
+
+## CF2014
+
+- Stage: parser
+- Meaning: `FORMAT` statement expansion exceeds parser safety limit.
+- Typical fix: simplify the `FORMAT` expression or split large repeated groups.
+
+## CF2015
+
+- Stage: parser
+- Meaning: `EQUIVALENCE` group must contain at least two designators.
+- Typical fix: ensure each `EQUIVALENCE` group lists two or more storage designators.
+
 ## CF2099
 
 - Stage: parser (catch-all)
@@ -281,6 +299,36 @@ look up `CF2001` in this file.
 - Stage: semantic analysis
 - Meaning: literal value for an I/O control specifier is not recognized.
 - Typical fix: use a standard keyword such as `DIRECT`/`SEQUENTIAL`, `FORMATTED`/`UNFORMATTED`, `NULL`/`ZERO`, `KEEP`/`DELETE`.
+
+## CF3126
+
+- Stage: semantic analysis
+- Meaning: overlapping `IMPLICIT` letter ranges were declared in the same scope.
+- Typical fix: make each `IMPLICIT` letter range disjoint or consolidate the declarations.
+
+## CF3127
+
+- Stage: semantic analysis
+- Meaning: unsupported intrinsic argument type or array conversion shape reached semantic lowering.
+- Typical fix: rewrite the intrinsic call using supported scalar argument types or simpler array shapes.
+
+## CF3128
+
+- Stage: semantic analysis
+- Meaning: `DATA` statement target/value counts do not match.
+- Typical fix: ensure the expanded `DATA` value list matches the number of initialized targets.
+
+## CF3129
+
+- Stage: semantic analysis
+- Meaning: `DATA` statement expansion exceeds semantic safety limit.
+- Typical fix: reduce `DATA` repetition/expansion size or split initialization into smaller statements.
+
+## CF3130
+
+- Stage: semantic analysis
+- Meaning: `IF`/`DO WHILE` condition is not a `LOGICAL` expression.
+- Typical fix: supply a `LOGICAL` condition instead of `INTEGER`, `REAL`, or other non-logical expressions.
 
 ## CF3199
 
