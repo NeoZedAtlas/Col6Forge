@@ -372,9 +372,17 @@ pub const Context = struct {
         const mangled = try self.mangleName(name);
         if (self.defined.contains(mangled)) return mangled;
         if (self.decls.contains(mangled)) return mangled;
-        const decl = IRDecl{ .ret_type = fortranAbiReturnType(ret_ty), .sig = "", .varargs = true };
+        const decl = IRDecl{ .ret_type = self.abiReturnType(ret_ty), .sig = "", .varargs = true };
         try self.decls.put(mangled, decl);
         return mangled;
+    }
+
+    pub fn abiReturnType(self: *const Context, ret_ty: IRType) IRType {
+        return fortranAbiReturnTypeForTarget(self.options.target, ret_ty);
+    }
+
+    pub fn abiUsesHiddenResultPtr(self: *const Context, ret_ty: IRType) bool {
+        return fortranAbiUsesHiddenResultPtrForTarget(self.options.target, ret_ty);
     }
 
     pub fn mangleName(self: *Context, name: []const u8) ![]const u8 {
@@ -585,20 +593,45 @@ fn writeUnsignedDecimal(buffer: []u8, value: usize) []const u8 {
     return buffer[cursor..];
 }
 
-pub fn fortranAbiReturnType(ret_ty: IRType) IRType {
-    if (fortranAbiUsesHiddenResultPtr(ret_ty)) return .void;
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (haystack.len < needle.len) return false;
+    var idx: usize = 0;
+    while (idx + needle.len <= haystack.len) : (idx += 1) {
+        if (std.ascii.eqlIgnoreCase(haystack[idx .. idx + needle.len], needle)) return true;
+    }
+    return false;
+}
+
+fn targetIsWindows(target: ?[]const u8) bool {
+    const triple = target orelse return builtin.os.tag == .windows;
+    return containsIgnoreCase(triple, "windows") or
+        containsIgnoreCase(triple, "mingw") or
+        containsIgnoreCase(triple, "msvc");
+}
+
+pub fn fortranAbiReturnTypeForTarget(target: ?[]const u8, ret_ty: IRType) IRType {
+    if (fortranAbiUsesHiddenResultPtrForTarget(target, ret_ty)) return .void;
     return switch (ret_ty) {
-        .complex_f32 => if (builtin.os.tag == .windows) .i64 else .complex_f32,
+        .complex_f32 => if (targetIsWindows(target)) .i64 else .complex_f32,
         else => ret_ty,
     };
 }
 
-pub fn fortranAbiUsesHiddenResultPtr(ret_ty: IRType) bool {
+pub fn fortranAbiUsesHiddenResultPtrForTarget(target: ?[]const u8, ret_ty: IRType) bool {
     return switch (ret_ty) {
-        .complex_f64 => builtin.os.tag == .windows,
+        .complex_f64 => targetIsWindows(target),
         .complex_f32 => false,
         else => false,
     };
+}
+
+pub fn fortranAbiReturnType(ret_ty: IRType) IRType {
+    return fortranAbiReturnTypeForTarget(null, ret_ty);
+}
+
+pub fn fortranAbiUsesHiddenResultPtr(ret_ty: IRType) bool {
+    return fortranAbiUsesHiddenResultPtrForTarget(null, ret_ty);
 }
 
 test "fortranAbiReturnType uses sret ABI for complex*16" {

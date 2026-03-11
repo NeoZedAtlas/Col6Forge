@@ -357,7 +357,9 @@ fn processCase(
     log_state: *LogState,
 ) !CaseResult {
     var timer = try std.time.Timer.start();
-    const result = Col6Forge.runPipeline(allocator, case.input_path, options.emit) catch |err| {
+    const result = Col6Forge.runPipelineWithOptions(allocator, case.input_path, options.emit, .{
+        .target = "x86_64-linux-gnu",
+    }) catch |err| {
         try reportPipelineError(log_state, case.input_path, err);
         return .{ .ok = false, .updated = false };
     };

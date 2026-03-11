@@ -544,7 +544,7 @@ fn ensureTypedExternalDeclForCall(
         if (!existing.varargs) return mangled;
         const param_types = try buildSubroutineAbiParamTypes(ctx, name, args);
         try ctx.decls.put(mangled, .{
-            .ret_type = context.fortranAbiReturnType(ret_ty),
+            .ret_type = ctx.abiReturnType(ret_ty),
             .sig = try formatParamSig(ctx, param_types),
             .varargs = false,
         });
@@ -554,7 +554,7 @@ fn ensureTypedExternalDeclForCall(
     const param_types = try buildSubroutineAbiParamTypes(ctx, name, args);
     return ctx.ensureDeclRaw(
         mangled,
-        context.fortranAbiReturnType(ret_ty),
+        ctx.abiReturnType(ret_ty),
         param_types,
         false,
     );
@@ -764,7 +764,7 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
         }
         const ret_ty = ctx.typeFromKind(sym.loweredKind());
         const ret_ptr = ctx.locals.get(return_symbol_name) orelse return error.UnknownSymbol;
-        if (context.fortranAbiUsesHiddenResultPtr(ret_ty)) {
+        if (ctx.abiUsesHiddenResultPtr(ret_ty)) {
             // Hidden-result ABI returns through the caller-provided pointer; function returns void.
             try ctx.emitHeapTempFrees(builder);
             try builder.retVoid();
@@ -774,7 +774,7 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
             utils.zeroValue(ret_ty)
         else
             try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
-        if (context.fortranAbiReturnType(ret_ty) == .i64 and ret_ty == .complex_f32) {
+        if (ctx.abiReturnType(ret_ty) == .i64 and ret_ty == .complex_f32) {
             // Windows GNU Fortran returns COMPLEX*8 packed in i64.
             const pack_slot = try ctx.nextTemp();
             try builder.alloca(pack_slot, .complex_f32);

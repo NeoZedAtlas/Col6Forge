@@ -235,7 +235,7 @@ fn ensureExternalDeclForCall(
         const param_types = try buildAbiParamTypes(ctx, name, ret_ty, args, has_character_result);
 
         try ctx.decls.put(mangled, .{
-            .ret_type = context.fortranAbiReturnType(ret_ty),
+            .ret_type = ctx.abiReturnType(ret_ty),
             .sig = try formatParamSig(ctx, param_types),
             .varargs = false,
         });
@@ -245,7 +245,7 @@ fn ensureExternalDeclForCall(
     const param_types = try buildAbiParamTypes(ctx, name, ret_ty, args, has_character_result);
     return ctx.ensureDeclRaw(
         mangled,
-        context.fortranAbiReturnType(ret_ty),
+        ctx.abiReturnType(ret_ty),
         param_types,
         false,
     );
@@ -261,7 +261,7 @@ fn buildAbiParamTypes(
     var tys = std.array_list.Managed(llvm_types.IRType).init(ctx.allocator);
     defer tys.deinit();
 
-    const has_hidden_result_ptr = has_character_result or context.fortranAbiUsesHiddenResultPtr(ret_ty);
+    const has_hidden_result_ptr = has_character_result or ctx.abiUsesHiddenResultPtr(ret_ty);
     if (has_hidden_result_ptr) {
         try tys.append(.ptr);
     }
