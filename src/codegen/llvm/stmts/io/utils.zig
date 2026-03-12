@@ -29,7 +29,10 @@ pub fn storeRuntimeI32Value(
 ) EmitError!void {
     if (value.ty != .i32) return error.UnsupportedIntrinsicType;
     const target_ptr = try expr.emitLValue(ctx, builder, target_expr);
-    const target_ty = try expr.exprType(ctx, target_expr);
+    const target_ty = if (targetExprSymbol(ctx, target_expr)) |sym|
+        common.symbolStorageIRType(sym, ctx.options.target_layout)
+    else
+        try expr.exprType(ctx, target_expr);
     switch (target_ty) {
         .i32 => try builder.store(value, target_ptr),
         .i64 => {
@@ -62,7 +65,10 @@ pub fn prepareRuntimeI32OutArg(
     };
 
     const target_ptr = try expr.emitLValue(ctx, builder, expr_node);
-    const target_ty = try expr.exprType(ctx, expr_node);
+    const target_ty = if (targetExprSymbol(ctx, expr_node)) |sym|
+        common.symbolStorageIRType(sym, ctx.options.target_layout)
+    else
+        try expr.exprType(ctx, expr_node);
     switch (target_ty) {
         .i32 => return .{
             .runtime_ptr = target_ptr,
@@ -83,6 +89,14 @@ pub fn prepareRuntimeI32OutArg(
         },
         else => return error.UnsupportedIntrinsicType,
     }
+}
+
+fn targetExprSymbol(ctx: *Context, expr_node: *ast.Expr) ?ast.sema.Symbol {
+    return switch (expr_node.*) {
+        .identifier => |name| ctx.findSymbol(name),
+        .call_or_subscript => |call| ctx.findSymbol(call.name),
+        else => null,
+    };
 }
 
 pub fn commitRuntimeI32OutArg(

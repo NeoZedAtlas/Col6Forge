@@ -222,8 +222,11 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
     }
     const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
     const value = try expr.emitExpr(ctx, builder, assign.value);
-    const sym_ty = try expr.exprType(ctx, assign.target);
-    const coerced = try expr.coerce(ctx, builder, value, sym_ty);
+    const target_ty = if (targetExprSymbol(ctx, assign.target)) |sym|
+        common.symbolStorageIRType(sym, ctx.options.target_layout)
+    else
+        try expr.exprType(ctx, assign.target);
+    const coerced = try expr.coerce(ctx, builder, value, target_ty);
     try builder.store(coerced, target_ptr);
 }
 
@@ -292,7 +295,7 @@ fn emitContiguousSectionScalarAssignment(ctx: *Context, builder: anytype, assign
     if (!has_range) return false;
 
     const base_ptr = ctx.locals.get(call.name) orelse return error.UnknownSymbol;
-    const elem_ty = ctx.typeFromKind(sym.loweredKind());
+    const elem_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
     const value = try expr.emitExpr(ctx, builder, assign.value);
     const coerced = try expr.coerce(ctx, builder, value, elem_ty);
     try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, total_count, coerced);
@@ -307,7 +310,7 @@ fn emitWholeArrayScalarAssignment(ctx: *Context, builder: anytype, assign: ast.A
     if (sym.isCharacter()) return false;
 
     const base_ptr = ctx.locals.get(name) orelse return error.UnknownSymbol;
-    const elem_ty = ctx.typeFromKind(sym.loweredKind());
+    const elem_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
     const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
         error.ArrayDimNotConstant => null,
         else => return err,
@@ -717,8 +720,11 @@ pub fn emitData(ctx: *Context, builder: anytype, data: ast.DataStmt) EmitError!v
             continue;
         }
         const value = try expr.emitExpr(ctx, builder, init.value);
-        const sym_ty = try expr.exprType(ctx, init.target);
-        const coerced = try expr.coerce(ctx, builder, value, sym_ty);
+        const target_ty = if (targetExprSymbol(ctx, init.target)) |sym|
+            common.symbolStorageIRType(sym, ctx.options.target_layout)
+        else
+            try expr.exprType(ctx, init.target);
+        const coerced = try expr.coerce(ctx, builder, value, target_ty);
         try builder.store(coerced, target_ptr);
     }
 }
@@ -733,7 +739,7 @@ fn emitRepeatedDataInit(ctx: *Context, builder: anytype, init: ast.DataInit) Emi
     const repeat_i64 = std.math.cast(i64, init.repeat_count) orelse return error.DataExpansionTooLarge;
     const count = constI64(ctx, repeat_i64);
     const base_ptr = ctx.locals.get(name) orelse return error.UnknownSymbol;
-    const elem_ty = ctx.typeFromKind(sym.loweredKind());
+    const elem_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
     const value = try expr.emitExpr(ctx, builder, init.value);
     const coerced = try expr.coerce(ctx, builder, value, elem_ty);
     try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, count, coerced);
@@ -772,7 +778,11 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
         }
         const ret_val = if (std.mem.eql(u8, ret_ptr.name, "null"))
             utils.zeroValue(ret_ty)
-        else
+        else if (sym.loweredKind() == .logical) blk: {
+            const storage_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
+            const loaded = try expr.loadValue(ctx, builder, ret_ptr, storage_ty);
+            break :blk try expr.coerce(ctx, builder, loaded, ret_ty);
+        } else
             try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
         if (ret_ty == .complex_f32 and (ctx.abiReturnType(ret_ty) == .i64 or ctx.abiReturnType(ret_ty) == .v2f32)) {
             // ABI boundary returns COMPLEX*8 using a target-specific packed form.
@@ -806,6 +816,14 @@ fn functionReturnSymbolName(unit: ast.ProgramUnit) []const u8 {
     if (unit.kind != .function) return unit.name;
     if (unit.result_name) |name| return name;
     return unit.name;
+}
+
+fn targetExprSymbol(ctx: *Context, expr_node: *ast.Expr) ?ast.sema.Symbol {
+    return switch (expr_node.*) {
+        .identifier => |name| ctx.findSymbol(name),
+        .call_or_subscript => |call| ctx.findSymbol(call.name),
+        else => null,
+    };
 }
 
 pub fn unitHasAltReturn(unit: ast.ProgramUnit) bool {

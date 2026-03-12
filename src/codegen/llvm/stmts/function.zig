@@ -204,7 +204,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         if (isSaved(&save_info, sym.name) and !is_return_symbol) continue;
         if (symbolHasDeferredDims(sym)) {
             if (is_return_symbol and ctx.unit.kind == .function and !is_character_function and !is_complex_sret_function) {
-                const ty = ctx.typeFromKind(sym.loweredKind());
+                const ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
                 const alloca_name = try ctx.nextTemp();
                 try builder.alloca(alloca_name, ty);
                 try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
@@ -244,7 +244,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             try ctx.locals.put(sym.name, .{ .name = alloca_name, .ty = .ptr, .is_ptr = true });
             continue;
         }
-        const ty = ctx.typeFromKind(sym.loweredKind());
+        const ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
         if (sym.dims.len > 0) {
             if (sym.is_generated_temp) {
                 const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
@@ -720,7 +720,7 @@ fn installHostAssocGlobals(
             total_size = elem_count * char_len;
             alignment = 1;
         } else {
-            const ty = ctx.typeFromKind(sym.loweredKind());
+            const ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
             const sa = sizeAlignForType(ty);
             const elem_count = ctx.arrayElemCountForSymbol(sym) catch continue;
             total_size = sa.size * elem_count;
@@ -791,7 +791,7 @@ fn installSavedGlobals(ctx: *Context, builder: anytype, save_info: *const SaveIn
             total_size = elem_count * char_len;
             alignment = 1;
         } else {
-            const ty = ctx.typeFromKind(sym.loweredKind());
+            const ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
             const sa = sizeAlignForType(ty);
             const elem_count = try ctx.arrayElemCountForSymbol(sym);
             total_size = sa.size * elem_count;

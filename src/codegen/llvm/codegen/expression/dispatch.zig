@@ -113,9 +113,14 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             }
             const ptr = try ctx.getPointer(name);
             const ty = ctx.typeFromKind(sym.loweredKind());
+            const load_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
             const tmp = try ctx.nextTemp();
-            try builder.load(tmp, ty, ptr);
-            return .{ .name = tmp, .ty = ty, .is_ptr = false };
+            try builder.load(tmp, load_ty, ptr);
+            var value = ValueRef{ .name = tmp, .ty = load_ty, .is_ptr = false };
+            if (sym.loweredKind() == .logical) {
+                value = try casting.coerce(ctx, builder, value, ty);
+            }
+            return value;
         },
         .literal => |lit| {
             return casting.emitLiteral(ctx, builder, lit);
@@ -187,9 +192,14 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                     return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
                 }
                 const ty = ctx.typeFromKind(sym.loweredKind());
+                const load_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
                 const tmp = try ctx.nextTemp();
-                try builder.load(tmp, ty, ptr);
-                return .{ .name = tmp, .ty = ty, .is_ptr = false };
+                try builder.load(tmp, load_ty, ptr);
+                var value = ValueRef{ .name = tmp, .ty = load_ty, .is_ptr = false };
+                if (sym.loweredKind() == .logical) {
+                    value = try casting.coerce(ctx, builder, value, ty);
+                }
+                return value;
             }
             if (kind != .call) return error.AmbiguousCallOrSubscript;
             if (ctx.getStatementFunction(call_or_sub.name)) |def| {

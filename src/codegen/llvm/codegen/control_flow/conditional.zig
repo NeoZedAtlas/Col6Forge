@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
 const sema = @import("../../../../semantic/mod.zig");
+const common = @import("../common.zig");
 const context = @import("../context.zig");
 const llvm_types = @import("../../types.zig");
 const expr = @import("../expression/mod.zig");
@@ -230,8 +231,9 @@ pub fn emitWhere(
 
     const mask_base = ctx.locals.get(mask_name) orelse return error.UnknownSymbol;
     const target_base = ctx.locals.get(target_name) orelse return error.UnknownSymbol;
-    const target_ty = ctx.typeFromKind(target_sym.loweredKind());
+    const target_ty = common.symbolStorageIRType(target_sym, ctx.options.target_layout);
     const value_base: ?ValueRef = if (value_array_name) |arr_name| ctx.locals.get(arr_name) orelse return error.UnknownSymbol else null;
+    const mask_elem_ty = common.symbolStorageIRType(mask_sym, ctx.options.target_layout);
 
     const idx_ptr = try ctx.nextTemp();
     try builder.alloca(idx_ptr, .i64);
@@ -256,10 +258,16 @@ pub fn emitWhere(
 
     try builder.label(loop_body);
     const mask_gep = try ctx.nextTemp();
-    try builder.gep(mask_gep, .i1, mask_base, idx_val);
+    try builder.gep(mask_gep, mask_elem_ty, mask_base, idx_val);
     const mask_val_tmp = try ctx.nextTemp();
-    try builder.load(mask_val_tmp, .i1, .{ .name = mask_gep, .ty = .ptr, .is_ptr = true });
-    try builder.brCond(.{ .name = mask_val_tmp, .ty = .i1, .is_ptr = false }, loop_then, loop_else);
+    try builder.load(mask_val_tmp, mask_elem_ty, .{ .name = mask_gep, .ty = .ptr, .is_ptr = true });
+    const mask_cond = try expr.coerce(
+        ctx,
+        builder,
+        .{ .name = mask_val_tmp, .ty = mask_elem_ty, .is_ptr = false },
+        .i1,
+    );
+    try builder.brCond(mask_cond, loop_then, loop_else);
 
     try builder.label(loop_then);
     const target_gep = try ctx.nextTemp();

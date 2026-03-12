@@ -199,13 +199,16 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
                         return .{ .ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true } };
                     }
                 }
-                    if (sym.kind == .parameter) {
+                if (sym.kind == .parameter) {
                     if (sym.const_value) |cv| {
-                        const ty = ctx.typeFromKind(sym.loweredKind());
+                        const ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
                         const tmp = try ctx.nextTemp();
                         try builder.alloca(tmp, ty);
                         const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
-                        const value = casting.emitConstTyped(ctx, builder, cv, sym.loweredKind());
+                        var value = casting.emitConstTyped(ctx, builder, cv, sym.loweredKind());
+                        if (sym.loweredKind() == .logical) {
+                            value = try casting.coerce(ctx, builder, value, ty);
+                        }
                         try builder.store(value, ptr);
                         return .{ .ptr = ptr };
                     }
@@ -246,10 +249,12 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
         // Character/substring expressions already evaluate to data pointers.
         return .{ .ptr = .{ .name = value.name, .ty = .ptr, .is_ptr = true } };
     }
+    const alloc_ty = if (value.ty == .i1) ctx.defaultIntegerIRType() else value.ty;
     const tmp = try ctx.nextTemp();
-    try builder.alloca(tmp, value.ty);
+    try builder.alloca(tmp, alloc_ty);
     const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
-    try builder.store(value, ptr);
+    const stored = if (alloc_ty == value.ty) value else try casting.coerce(ctx, builder, value, alloc_ty);
+    try builder.store(stored, ptr);
     return .{ .ptr = ptr };
 }
 
