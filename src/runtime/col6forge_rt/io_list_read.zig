@@ -757,8 +757,6 @@ pub export fn col6forge_read_list_v(
     status_mode: c_int,
 ) callconv(.c) c_int {
     const total = runtimeArgCount(arg_count);
-    if (total == 0) return 0;
-
     const input = col6forgeOpenListInput(unit) orelse {
         if (status_mode != 0) return 1;
         if (col6forge_io_should_abort() != 0) exit(2);
@@ -773,6 +771,12 @@ pub export fn col6forge_read_list_v(
         }
     }
     const file = input.file;
+
+    if (total == 0) {
+        col6forgeDiscardToRecordEnd(file);
+        commit_pos = true;
+        return 0;
+    }
 
     var token: [COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX;
     var i: usize = 0;
@@ -1332,4 +1336,33 @@ test "list stream io sequences typed and block transfers across one record" {
     try std.testing.expectEqualSlices(c_int, mid1_in[0..], mid1_out[0..]);
     try std.testing.expectEqualSlices(c_int, mid2_in[0..], mid2_out[0..]);
     try std.testing.expectEqual(post_in, post_out);
+}
+
+test "empty list read consumes one record" {
+    const unit: c_int = 65;
+
+    var first_in: c_int = 111;
+    var second_in: c_int = 222;
+    var write_ptrs: [1]?*anyopaque = .{undefined};
+    const scalar_kinds: [1]u8 = .{'i'};
+    const scalar_lens: [1]c_int = .{0};
+
+    write_ptrs[0] = @ptrCast(&first_in);
+    const write_state1 = col6forge_list_write_stream_begin(unit, 1) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_write_list_stream_typed(write_state1, &write_ptrs, &scalar_kinds, &scalar_lens, 1));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_list_write_stream_finish(write_state1));
+
+    write_ptrs[0] = @ptrCast(&second_in);
+    const write_state2 = col6forge_list_write_stream_begin(unit, 1) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_write_list_stream_typed(write_state2, &write_ptrs, &scalar_kinds, &scalar_lens, 1));
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_list_write_stream_finish(write_state2));
+
+    _ = col6forge_rewind(unit);
+
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_read_list_v(unit, null, null, null, 0, 1));
+
+    var out: c_int = 0;
+    var read_ptrs: [1]?*anyopaque = .{@ptrCast(&out)};
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_read_list_v(unit, &read_ptrs, &scalar_kinds, &scalar_lens, 1, 1));
+    try std.testing.expectEqual(second_in, out);
 }

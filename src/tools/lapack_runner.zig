@@ -20,24 +20,7 @@ const INSTALL_EXTRAS = [_][]const u8{
     "dsecnd_INT_CPU_TIME.f",
 };
 
-const FORTRAN_FALLBACK = [_][]const u8{
-    "xerbla.f",
-    "dchkab.f",
-    "ddrvab.f",
-    "derrab.f",
-    "zchkab.f",
-    "zdrvab.f",
-    "zerrab.f",
-    "chkxer.f",
-    "alaerh.f",
-    "alahd.f",
-    "aladhd.f",
-    "alareq.f",
-    "dlatb4.f",
-    "dlarhs.f",
-    "zlatb4.f",
-    "zlarhs.f",
-};
+const FORTRAN_FALLBACK = [_][]const u8{};
 
 const XLINTSTS_VARS = [_][]const u8{ "ALINTST", "SCLNTST", "SLINTST" };
 const XLINTSTC_VARS = [_][]const u8{ "ALINTST", "SCLNTST", "CLINTST" };
@@ -1904,9 +1887,45 @@ fn outputsEquivalent(expected: []const u8, actual: []const u8) bool {
         const exp_line = std.mem.trimRight(u8, trimCr(exp_opt.?), " \t");
         const act_line = std.mem.trimRight(u8, trimCr(act_opt.?), " \t");
         if (std.mem.eql(u8, exp_line, act_line)) continue;
+        if (equivalentIgnoringFortranExponentMarker(exp_line, act_line)) continue;
         if (isTimingLine(exp_line) and isTimingLine(act_line)) continue;
         return false;
     }
+}
+
+fn equivalentIgnoringFortranExponentMarker(expected: []const u8, actual: []const u8) bool {
+    var exp_idx: usize = 0;
+    var act_idx: usize = 0;
+    while (true) {
+        while (exp_idx < expected.len and isHorizontalSpace(expected[exp_idx])) : (exp_idx += 1) {}
+        while (act_idx < actual.len and isHorizontalSpace(actual[act_idx])) : (act_idx += 1) {}
+        while (exp_idx < expected.len and isOptionalFortranExponentMarker(expected, exp_idx)) : (exp_idx += 1) {}
+        while (act_idx < actual.len and isOptionalFortranExponentMarker(actual, act_idx)) : (act_idx += 1) {}
+
+        if (exp_idx == expected.len and act_idx == actual.len) return true;
+        if (exp_idx == expected.len or act_idx == actual.len) return false;
+        if (expected[exp_idx] != actual[act_idx]) return false;
+        exp_idx += 1;
+        act_idx += 1;
+    }
+}
+
+fn isHorizontalSpace(ch: u8) bool {
+    return ch == ' ' or ch == '\t';
+}
+
+fn isOptionalFortranExponentMarker(text: []const u8, idx: usize) bool {
+    if (idx >= text.len) return false;
+    const ch = text[idx];
+    if (ch != 'd' and ch != 'D' and ch != 'e' and ch != 'E') return false;
+    if (idx == 0 or idx + 2 >= text.len) return false;
+
+    const prev = text[idx - 1];
+    const next = text[idx + 1];
+    const next_next = text[idx + 2];
+    if (!(std.ascii.isDigit(prev) or prev == '.')) return false;
+    if (next != '+' and next != '-') return false;
+    return std.ascii.isDigit(next_next);
 }
 
 fn trimCr(line: []const u8) []const u8 {
@@ -1966,4 +1985,15 @@ test "parseArgs recognizes explicit fallback policy" {
     };
 
     try std.testing.expectEqual(fallback_policy.Mode.disabled, options.fallback_policy.mode);
+}
+
+test "outputsEquivalent accepts optional Fortran exponent markers" {
+    try std.testing.expect(outputsEquivalent(
+        " Relative machine underflow is taken to be    0.222507-307\n",
+        " Relative machine underflow is taken to be   0.222507D-307\n",
+    ));
+    try std.testing.expect(outputsEquivalent(
+        " Relative machine overflow  is taken to be    0.179769+309\n",
+        " Relative machine overflow  is taken to be   0.179769E+309\n",
+    ));
 }

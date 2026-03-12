@@ -457,7 +457,9 @@ fn symbolElementByteSize(sym: Symbol) ?i64 {
         .double_precision => 8,
         .complex => 8,
         .complex_double => 16,
-        .logical => 1,
+        // Default Fortran LOGICAL storage follows default INTEGER width in the
+        // legacy F77/LAPACK code this storage model is used for.
+        .logical => 4,
         .character => @intCast(sym.effectiveCharLen() orelse 1),
     };
 }

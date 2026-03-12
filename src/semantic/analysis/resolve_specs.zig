@@ -532,7 +532,7 @@ fn symbolElemByteSize(sym: symbols.Symbol) ?i64 {
         .double_precision => 8,
         .complex => 8,
         .complex_double => 16,
-        .logical => 1,
+        .logical => 4,
         .character => @intCast(sym.effectiveCharLen() orelse 1),
     };
 }
