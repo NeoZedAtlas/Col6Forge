@@ -9652,7 +9652,31 @@ entry:
   %t1 = trunc i64 %arg3 to i32
   br label %bb0
 bb0:
-  store ptr %arg1, ptr %arg0
+  %t2 = alloca i32
+  store i32 0, ptr %t2
+  br label %str_loop_cond0
+str_loop_cond0:
+  %t3 = load i32, ptr %t2
+  %t4 = icmp slt i32 %t3, %t0
+  br i1 %t4, label %str_loop_body1, label %str_loop_end5
+str_loop_body1:
+  %t5 = icmp slt i32 %t3, %t1
+  br i1 %t5, label %str_copy2, label %str_pad3
+str_copy2:
+  %t6 = getelementptr i8, ptr %arg1, i32 %t3
+  %t7 = load i8, ptr %t6
+  %t8 = getelementptr i8, ptr %arg0, i32 %t3
+  store i8 %t7, ptr %t8
+  br label %str_loop_inc4
+str_pad3:
+  %t9 = getelementptr i8, ptr %arg0, i32 %t3
+  store i8 32, ptr %t9
+  br label %str_loop_inc4
+str_loop_inc4:
+  %t10 = add i32 %t3, 1
+  store i32 %t10, ptr %t2
+  br label %str_loop_cond0
+str_loop_end5:
   ret void
 exit:
   ret void

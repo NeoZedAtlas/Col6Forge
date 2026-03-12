@@ -1888,9 +1888,100 @@ fn outputsEquivalent(expected: []const u8, actual: []const u8) bool {
         const act_line = std.mem.trimRight(u8, trimCr(act_opt.?), " \t");
         if (std.mem.eql(u8, exp_line, act_line)) continue;
         if (equivalentIgnoringFortranExponentMarker(exp_line, act_line)) continue;
+        if (equivalentNumericTokens(exp_line, act_line)) continue;
         if (isTimingLine(exp_line) and isTimingLine(act_line)) continue;
         return false;
     }
+}
+
+fn equivalentNumericTokens(expected: []const u8, actual: []const u8) bool {
+    var exp_it = std.mem.tokenizeAny(u8, expected, " \t");
+    var act_it = std.mem.tokenizeAny(u8, actual, " \t");
+
+    while (true) {
+        const exp_tok = exp_it.next();
+        const act_tok = act_it.next();
+        if (exp_tok == null and act_tok == null) return true;
+        if (exp_tok == null or act_tok == null) return false;
+
+        const exp = exp_tok.?;
+        const act = act_tok.?;
+        if (std.mem.eql(u8, exp, act)) continue;
+        if (equivalentIgnoringFortranExponentMarker(exp, act)) continue;
+
+        if (std.fmt.parseInt(i64, exp, 10) catch null) |exp_int| {
+            const act_int = std.fmt.parseInt(i64, act, 10) catch return false;
+            if (exp_int == act_int) continue;
+            return false;
+        }
+
+        const exp_float = parseFloatToken(exp) orelse return false;
+        const act_float = parseFloatToken(act) orelse return false;
+        if (!floatTokensEquivalent(exp, exp_float, act, act_float)) return false;
+    }
+}
+
+fn parseFloatToken(tok: []const u8) ?f64 {
+    if (tok.len == 0) return null;
+    var buf: [128]u8 = undefined;
+    if (tok.len > buf.len) return null;
+    for (tok, 0..) |ch, i| {
+        buf[i] = switch (ch) {
+            'D' => 'E',
+            'd' => 'e',
+            else => ch,
+        };
+    }
+    return std.fmt.parseFloat(f64, buf[0..tok.len]) catch null;
+}
+
+fn floatTokensEquivalent(expected_tok: []const u8, expected: f64, actual_tok: []const u8, actual: f64) bool {
+    if (expected == actual) return true;
+    if (std.math.isNan(expected) or std.math.isNan(actual)) return false;
+    if (!std.math.isFinite(expected) or !std.math.isFinite(actual)) return false;
+    if (expected == 0.0 and actual == 0.0) return true;
+
+    const exp_tol = floatTokenTolerance(expected_tok) orelse return false;
+    const act_tol = floatTokenTolerance(actual_tok) orelse return false;
+    const tol = @max(exp_tol, act_tol);
+    return @abs(expected - actual) <= tol;
+}
+
+fn floatTokenTolerance(tok: []const u8) ?f64 {
+    if (tok.len == 0) return null;
+
+    var start: usize = 0;
+    if (tok[start] == '+' or tok[start] == '-') start += 1;
+    if (start >= tok.len) return null;
+
+    var mantissa_end = tok.len;
+    var exp10: i32 = 0;
+    var i = start;
+    while (i < tok.len) : (i += 1) {
+        const ch = tok[i];
+        if (ch != 'e' and ch != 'E' and ch != 'd' and ch != 'D') continue;
+        mantissa_end = i;
+        exp10 = std.fmt.parseInt(i32, tok[i + 1 ..], 10) catch return null;
+        break;
+    }
+    if (mantissa_end <= start) return null;
+
+    const mantissa = tok[start..mantissa_end];
+    const dot_idx = std.mem.indexOfScalar(u8, mantissa, '.') orelse mantissa.len;
+    const int_digits = if (dot_idx == 0) 0 else dot_idx;
+    const frac_digits = if (dot_idx < mantissa.len) mantissa.len - dot_idx - 1 else 0;
+
+    var has_digit = false;
+    for (mantissa) |ch| {
+        if (std.ascii.isDigit(ch)) {
+            has_digit = true;
+            break;
+        }
+    }
+    if (!has_digit) return null;
+
+    const lsd_exp: i32 = exp10 + @as(i32, @intCast(int_digits)) - @as(i32, @intCast(frac_digits)) - 1;
+    return 0.5 * std.math.pow(f64, 10.0, @as(f64, @floatFromInt(lsd_exp)));
 }
 
 fn equivalentIgnoringFortranExponentMarker(expected: []const u8, actual: []const u8) bool {
@@ -1995,5 +2086,23 @@ test "outputsEquivalent accepts optional Fortran exponent markers" {
     try std.testing.expect(outputsEquivalent(
         " Relative machine overflow  is taken to be    0.179769+309\n",
         " Relative machine overflow  is taken to be   0.179769E+309\n",
+    ));
+}
+
+test "outputsEquivalent accepts numeric differences within printed precision" {
+    try std.testing.expect(outputsEquivalent(
+        " ratio  1.234567E+03\n",
+        " ratio  1.2345669E+03\n",
+    ));
+    try std.testing.expect(outputsEquivalent(
+        " value -0.000000E+00\n",
+        " value  0.000000E+00\n",
+    ));
+}
+
+test "outputsEquivalent rejects numeric differences beyond printed precision" {
+    try std.testing.expect(!outputsEquivalent(
+        " ratio  1.234567E+03\n",
+        " ratio  1.234500E+03\n",
     ));
 }

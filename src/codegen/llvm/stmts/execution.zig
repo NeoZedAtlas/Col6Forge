@@ -220,6 +220,12 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
         trackCharAssignment(ctx, assign.target, const_value);
         return;
     }
+    if (try expr_dispatch.emitCharacterLenValue(ctx, builder, assign.target)) |target_len| {
+        const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
+        try storeCharacterValueDynamic(ctx, builder, target_ptr, target_len, assign.value);
+        trackCharAssignment(ctx, assign.target, null);
+        return;
+    }
     const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
     const value = try expr.emitExpr(ctx, builder, assign.value);
     const target_ty = if (targetExprSymbol(ctx, assign.target)) |sym|
