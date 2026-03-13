@@ -1,0 +1,207 @@
+name: Perf Regression
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: perf-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  perf-regression:
+    name: Perf Regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.15.2
+          ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+          if [[ ! -x "$ZIG_DIR/zig" ]]; then
+            mkdir -p "$ZIG_DIR"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            mv "$RUNNER_TEMP/zig-x86_64-linux-${ZIG_VERSION}"/* "$ZIG_DIR"/
+          fi
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
+
+      - name: Ensure gfortran
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v gfortran >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gfortran
+          fi
+          gfortran --version | head -n 1
+
+      - name: Resolve baseline revision
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            echo "sha=$(git rev-parse HEAD^)" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Benchmark baseline
+        id: perf_base
+        if: steps.base.outputs.sha != ''
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add ../baseline_ref "${{ steps.base.outputs.sha }}"
+          cd ../baseline_ref
+          zig build perf-bench -- --output perf_base.json --iterations 3 --warmup 1
+
+      - name: Benchmark candidate
+        id: perf_head
+        if: steps.base.outputs.sha != ''
+        run: zig build perf-bench -- --output perf_head.json --iterations 3 --warmup 1
+
+      - name: Compare performance reports
+        id: perf_compare
+        if: steps.base.outputs.sha != '' && steps.perf_base.outcome == 'success'
+        run: zig build perf-regress -- --base ../baseline_ref/perf_base.json --candidate perf_head.json --max-regression-pct 12
+
+      - name: Upload performance artifacts
+        if: always() && steps.base.outputs.sha != '' && steps.perf_head.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p perf-artifacts
+          cp perf_head.json perf-artifacts/perf_head.json
+          if [[ -f ../baseline_ref/perf_base.json ]]; then
+            cp ../baseline_ref/perf_base.json perf-artifacts/perf_base.json
+          fi
+
+      - name: Publish performance artifacts
+        if: always() && steps.base.outputs.sha != '' && steps.perf_head.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-reports
+          path: perf-artifacts
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Prepare perf-history worktree
+        if: always() && steps.perf_head.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf ../perf-history-tree
+          git fetch origin perf-history:refs/remotes/origin/perf-history || true
+          if git show-ref --verify --quiet refs/remotes/origin/perf-history; then
+            git worktree add ../perf-history-tree refs/remotes/origin/perf-history
+          else
+            git worktree add --detach ../perf-history-tree
+            cd ../perf-history-tree
+            git switch --orphan perf-history
+            git rm -rf . >/dev/null 2>&1 || true
+            find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+
+      - name: Update performance dashboard
+        id: dashboard
+        if: always() && steps.perf_head.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_LABEL="$(date -u +%F)"
+          zig build perf-dashboard -- \
+            --history ../perf-history-tree/perf-history/history.json \
+            --candidate perf_head.json \
+            --markdown ../perf-history-tree/PERFORMANCE.md \
+            --commit-sha "${GITHUB_SHA}" \
+            --label "${RUN_LABEL}" \
+            --max-runs 52
+          mkdir -p ../perf-history-tree/perf-history
+          cp perf_head.json ../perf-history-tree/perf-history/latest.json
+          echo "run_label=${RUN_LABEL}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish performance dashboard
+        id: dashboard_publish
+        if: always() && steps.perf_head.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ../perf-history-tree
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PERFORMANCE.md perf-history/history.json perf-history/latest.json
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "Update performance dashboard for ${{ steps.dashboard.outputs.run_label }} (${GITHUB_SHA})"
+          git push origin HEAD:perf-history
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Skip notice (no baseline revision)
+        if: steps.base.outputs.sha == ''
+        shell: bash
+        run: |
+          echo "::warning::No baseline revision available; skipping performance regression comparison."
+          {
+            echo "## Performance Compare Skipped"
+            echo
+            echo "- Reason: no baseline revision was available for this run."
+            echo "- Candidate benchmark: not attempted."
+            echo "- Action: no regression comparison was performed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Skip notice (baseline benchmark unavailable)
+        if: steps.base.outputs.sha != '' && steps.perf_base.outcome != 'success'
+        shell: bash
+        run: |
+          echo "::warning::Baseline benchmark failed on the historical revision; performance regression comparison was skipped."
+          {
+            echo "## Performance Compare Skipped"
+            echo
+            echo "- Reason: baseline benchmark failed on the historical revision."
+            echo "- Baseline revision: \`${{ steps.base.outputs.sha }}\`"
+            echo "- Baseline benchmark outcome: \`${{ steps.perf_base.outcome }}\`"
+            echo "- Candidate benchmark outcome: \`${{ steps.perf_head.outcome }}\`"
+            echo "- Action: candidate benchmark still ran, but no regression comparison was performed."
+            echo "- Follow-up: investigate baseline benchmark compatibility instead of ignoring this warning."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Performance Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Performance Summary"
+            echo
+            echo "- Baseline revision: \`${{ steps.base.outputs.sha || 'none' }}\`"
+            echo "- Baseline benchmark outcome: \`${{ steps.perf_base.outcome || 'skipped' }}\`"
+            echo "- Candidate benchmark outcome: \`${{ steps.perf_head.outcome || 'skipped' }}\`"
+            echo "- Regression compare outcome: \`${{ steps.perf_compare.outcome || 'skipped' }}\`"
+            echo "- Dashboard update outcome: \`${{ steps.dashboard_publish.outcome || 'skipped' }}\`"
+            echo "- Artifact retention: \`30 days\`"
+            if [[ "${{ steps.perf_compare.outcome }}" == "failure" ]]; then
+              echo "- Status: regression check failed; inspect the \`perf-reports\` artifact."
+            elif [[ "${{ steps.perf_compare.outcome }}" == "success" ]]; then
+              echo "- Status: regression check passed."
+            else
+              echo "- Status: comparison skipped."
+            fi
+            if [[ "${{ steps.dashboard_publish.outcome }}" == "success" ]]; then
+              echo "- Dashboard: https://github.com/${{ github.repository }}/blob/perf-history/PERFORMANCE.md"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

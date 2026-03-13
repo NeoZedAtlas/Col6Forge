@@ -227,6 +227,15 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const perf_dashboard = b.addExecutable(.{
+        .name = "perf_dashboard",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/perf_dashboard.zig"),
+            .target = target,
+            .optimize = tools_optimize,
+        }),
+    });
+
     const architecture_audit = b.addExecutable(.{
         .name = "architecture_audit",
         .root_module = b.createModule(.{
@@ -258,6 +267,7 @@ pub fn build(b: *std.Build) void {
     const install_test_harness = b.addInstallArtifact(test_harness, .{});
     const install_perf_bench = b.addInstallArtifact(perf_bench, .{});
     const install_perf_compare = b.addInstallArtifact(perf_compare, .{});
+    const install_perf_dashboard = b.addInstallArtifact(perf_dashboard, .{});
     const install_architecture_audit = b.addInstallArtifact(architecture_audit, .{});
 
     const tools_step = b.step("tools", "Install all developer runner tools");
@@ -269,6 +279,7 @@ pub fn build(b: *std.Build) void {
     tools_step.dependOn(&install_test_harness.step);
     tools_step.dependOn(&install_perf_bench.step);
     tools_step.dependOn(&install_perf_compare.step);
+    tools_step.dependOn(&install_perf_dashboard.step);
     tools_step.dependOn(&install_architecture_audit.step);
 
     // This creates a top level step. Top level steps have a name and can be
@@ -360,6 +371,7 @@ pub fn build(b: *std.Build) void {
     tools_check_step.dependOn(&test_harness.step);
     tools_check_step.dependOn(&perf_bench.step);
     tools_check_step.dependOn(&perf_compare.step);
+    tools_check_step.dependOn(&perf_dashboard.step);
     tools_check_step.dependOn(&architecture_audit.step);
 
     const architecture_audit_step = b.step("architecture-audit", "Run architecture guardrail audit");
@@ -467,6 +479,13 @@ pub fn build(b: *std.Build) void {
 
     const perf_regress_step = b.step("perf-regress", "Alias of perf-compare for CI regression checks");
     perf_regress_step.dependOn(&run_perf_compare.step);
+
+    const perf_dashboard_step = b.step("perf-dashboard", "Update performance history JSON and generate PERFORMANCE.md");
+    const run_perf_dashboard = b.addRunArtifact(perf_dashboard);
+    perf_dashboard_step.dependOn(&run_perf_dashboard.step);
+    if (b.args) |args| {
+        run_perf_dashboard.addArgs(args);
+    }
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
