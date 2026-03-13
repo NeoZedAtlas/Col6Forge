@@ -36,7 +36,7 @@ fn typedFieldSize(kind: u8, len_in: c_int) ?usize {
         'i', 'f' => 4,
         'j', 'd', 'c' => 8,
         'z' => 16,
-        'l' => 1,
+        'l' => 4,
         's' => blk: {
             if (len_in < 0) break :blk null;
             break :blk @intCast(len_in);
@@ -1533,12 +1533,12 @@ pub export fn col6forge_read_direct_c64_n(unit: c_int, rec: c_int, count: c_int,
     return directReadComplexN(f64, unit, rec, count, stride, base);
 }
 
-pub export fn col6forge_write_direct_l_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const u8) callconv(.c) c_int {
-    return directWriteScalarN(u8, unit, rec, count, stride, base);
+pub export fn col6forge_write_direct_l_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
+    return directWriteScalarN(c_int, unit, rec, count, stride, base);
 }
 
-pub export fn col6forge_read_direct_l_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]u8) callconv(.c) c_int {
-    return directReadScalarN(u8, unit, rec, count, stride, base);
+pub export fn col6forge_read_direct_l_n(unit: c_int, rec: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
+    return directReadScalarN(c_int, unit, rec, count, stride, base);
 }
 
 pub export fn col6forge_write_unformatted_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
@@ -1589,12 +1589,12 @@ pub export fn col6forge_read_unformatted_c64_n(unit: c_int, count: c_int, stride
     return unformattedReadComplexN(f64, unit, count, stride, base);
 }
 
-pub export fn col6forge_write_unformatted_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const u8) callconv(.c) c_int {
-    return unformattedWriteScalarN(u8, unit, count, stride, base);
+pub export fn col6forge_write_unformatted_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]const c_int) callconv(.c) c_int {
+    return unformattedWriteScalarN(c_int, unit, count, stride, base);
 }
 
-pub export fn col6forge_read_unformatted_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]u8) callconv(.c) c_int {
-    return unformattedReadScalarN(u8, unit, count, stride, base);
+pub export fn col6forge_read_unformatted_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
+    return unformattedReadScalarN(c_int, unit, count, stride, base);
 }
 
 test "typed direct io roundtrip handles integer, complex and character" {
@@ -1662,7 +1662,7 @@ test "typed unformatted io roundtrip handles character, complex*16 and logical" 
 
     var char_in: [5]u8 = .{ 'H', 'E', 'L', 'L', 'O' };
     var complex_in: [2]f64 = .{ 3.5, -4.25 };
-    var logical_in: u8 = 1;
+    var logical_in: c_int = 1;
     var write_args: [3]?*anyopaque = .{
         @ptrCast(&char_in),
         @ptrCast(&complex_in),
@@ -1676,7 +1676,7 @@ test "typed unformatted io roundtrip handles character, complex*16 and logical" 
 
     var char_out: [5]u8 = .{ 0, 0, 0, 0, 0 };
     var complex_out: [2]f64 = .{ 0.0, 0.0 };
-    var logical_out: u8 = 0;
+    var logical_out: c_int = 0;
     var read_args: [3]?*anyopaque = .{
         @ptrCast(&char_out),
         @ptrCast(&complex_out),
@@ -1689,6 +1689,50 @@ test "typed unformatted io roundtrip handles character, complex*16 and logical" 
     try std.testing.expectEqual(complex_in[0], complex_out[0]);
     try std.testing.expectEqual(complex_in[1], complex_out[1]);
     try std.testing.expectEqual(logical_in, logical_out);
+}
+
+test "typed direct io roundtrip preserves logical arrays with element stride" {
+    const unit: c_int = 59;
+    const rec: c_int = 9;
+    col6forge_open_direct(unit, 56);
+
+    var header_in: [6]c_int = .{ 411, 4, 142, 80, rec, 0 };
+    var logicals_in: [2][2][2]c_int = .{
+        .{ .{ 1, 1 }, .{ 1, 1 } },
+        .{ .{ 1, 1 }, .{ 1, 0 } },
+    };
+    var write_args: [7]?*anyopaque = .{
+        @ptrCast(&header_in[0]),
+        @ptrCast(&header_in[1]),
+        @ptrCast(&header_in[2]),
+        @ptrCast(&header_in[3]),
+        @ptrCast(&header_in[4]),
+        @ptrCast(&header_in[5]),
+        @ptrCast(&logicals_in),
+    };
+    const write_kinds: [7]u8 = .{ 'i', 'i', 'i', 'i', 'i', 'i', 'l' };
+    const write_lens: [7]c_int = .{ 0, 0, 0, 0, 0, 0, 0 };
+    col6forge_write_direct_typed(unit, rec, &write_args, &write_kinds, &write_lens, 7);
+
+    var header_out: [6]c_int = .{ 0, 0, 0, 0, 0, 0 };
+    var logicals_out: [2][2][2]c_int = .{
+        .{ .{ 0, 0 }, .{ 0, 0 } },
+        .{ .{ 0, 0 }, .{ 0, 0 } },
+    };
+    var read_args: [7]?*anyopaque = .{
+        @ptrCast(&header_out[0]),
+        @ptrCast(&header_out[1]),
+        @ptrCast(&header_out[2]),
+        @ptrCast(&header_out[3]),
+        @ptrCast(&header_out[4]),
+        @ptrCast(&header_out[5]),
+        @ptrCast(&logicals_out),
+    };
+    const status = col6forge_read_direct_typed(unit, rec, &read_args, &write_kinds, &write_lens, 7);
+
+    try std.testing.expectEqual(@as(c_int, 0), status);
+    try std.testing.expectEqualSlices(c_int, header_in[0..], header_out[0..]);
+    try std.testing.expectEqualDeep(logicals_in, logicals_out);
 }
 
 test "streamed unformatted io preserves mixed typed, character array and repeated block transfers" {

@@ -99,6 +99,32 @@ fn targetExprSymbol(ctx: *Context, expr_node: *ast.Expr) ?ast.sema.Symbol {
     };
 }
 
+pub fn ioScalarStorageIRType(ctx: *Context, expr_node: *ast.Expr) EmitError!?llvm_types.IRType {
+    if (targetExprSymbol(ctx, expr_node)) |sym| {
+        if (sym.isCharacter()) return .ptr;
+        if (sym.loweredKind() == .logical) {
+            return common.symbolStorageIRType(sym, ctx.options.target_layout);
+        }
+    }
+
+    const ty = try expr.exprType(ctx, expr_node);
+    return switch (ty) {
+        .ptr => null,
+        .i1 => ctx.defaultIntegerIRType(),
+        else => ty,
+    };
+}
+
+pub fn emitStackIoScalarValue(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+    if (value.ty == .ptr) return error.UnsupportedIntrinsicType;
+    if (value.ty == .i1) {
+        const storage_ty = ctx.defaultIntegerIRType();
+        const widened = try expr.coerce(ctx, builder, value, storage_ty);
+        return emitStackValue(ctx, builder, widened);
+    }
+    return emitStackValue(ctx, builder, value);
+}
+
 pub fn commitRuntimeI32OutArg(
     ctx: *Context,
     builder: anytype,

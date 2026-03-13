@@ -1887,136 +1887,158 @@ fn outputsEquivalent(expected: []const u8, actual: []const u8) bool {
         const exp_line = std.mem.trimRight(u8, trimCr(exp_opt.?), " \t");
         const act_line = std.mem.trimRight(u8, trimCr(act_opt.?), " \t");
         if (std.mem.eql(u8, exp_line, act_line)) continue;
-        if (equivalentIgnoringFortranExponentMarker(exp_line, act_line)) continue;
-        if (equivalentNumericTokens(exp_line, act_line)) continue;
+        if (equivalentTextWithNumericTolerance(exp_line, act_line)) continue;
         if (isTimingLine(exp_line) and isTimingLine(act_line)) continue;
         return false;
     }
 }
 
-fn equivalentNumericTokens(expected: []const u8, actual: []const u8) bool {
-    var exp_it = std.mem.tokenizeAny(u8, expected, " \t");
-    var act_it = std.mem.tokenizeAny(u8, actual, " \t");
-
-    while (true) {
-        const exp_tok = exp_it.next();
-        const act_tok = act_it.next();
-        if (exp_tok == null and act_tok == null) return true;
-        if (exp_tok == null or act_tok == null) return false;
-
-        const exp = exp_tok.?;
-        const act = act_tok.?;
-        if (std.mem.eql(u8, exp, act)) continue;
-        if (equivalentIgnoringFortranExponentMarker(exp, act)) continue;
-
-        if (std.fmt.parseInt(i64, exp, 10) catch null) |exp_int| {
-            const act_int = std.fmt.parseInt(i64, act, 10) catch return false;
-            if (exp_int == act_int) continue;
-            return false;
-        }
-
-        const exp_float = parseFloatToken(exp) orelse return false;
-        const act_float = parseFloatToken(act) orelse return false;
-        if (!floatTokensEquivalent(exp, exp_float, act, act_float)) return false;
-    }
-}
-
-fn parseFloatToken(tok: []const u8) ?f64 {
-    if (tok.len == 0) return null;
-    var buf: [128]u8 = undefined;
-    if (tok.len > buf.len) return null;
-    for (tok, 0..) |ch, i| {
-        buf[i] = switch (ch) {
-            'D' => 'E',
-            'd' => 'e',
-            else => ch,
-        };
-    }
-    return std.fmt.parseFloat(f64, buf[0..tok.len]) catch null;
-}
-
-fn floatTokensEquivalent(expected_tok: []const u8, expected: f64, actual_tok: []const u8, actual: f64) bool {
-    if (expected == actual) return true;
-    if (std.math.isNan(expected) or std.math.isNan(actual)) return false;
-    if (!std.math.isFinite(expected) or !std.math.isFinite(actual)) return false;
-    if (expected == 0.0 and actual == 0.0) return true;
-
-    const exp_tol = floatTokenTolerance(expected_tok) orelse return false;
-    const act_tol = floatTokenTolerance(actual_tok) orelse return false;
-    const tol = @max(exp_tol, act_tol);
-    return @abs(expected - actual) <= tol;
-}
-
-fn floatTokenTolerance(tok: []const u8) ?f64 {
-    if (tok.len == 0) return null;
-
-    var start: usize = 0;
-    if (tok[start] == '+' or tok[start] == '-') start += 1;
-    if (start >= tok.len) return null;
-
-    var mantissa_end = tok.len;
-    var exp10: i32 = 0;
-    var i = start;
-    while (i < tok.len) : (i += 1) {
-        const ch = tok[i];
-        if (ch != 'e' and ch != 'E' and ch != 'd' and ch != 'D') continue;
-        mantissa_end = i;
-        exp10 = std.fmt.parseInt(i32, tok[i + 1 ..], 10) catch return null;
-        break;
-    }
-    if (mantissa_end <= start) return null;
-
-    const mantissa = tok[start..mantissa_end];
-    const dot_idx = std.mem.indexOfScalar(u8, mantissa, '.') orelse mantissa.len;
-    const int_digits = if (dot_idx == 0) 0 else dot_idx;
-    const frac_digits = if (dot_idx < mantissa.len) mantissa.len - dot_idx - 1 else 0;
-
-    var has_digit = false;
-    for (mantissa) |ch| {
-        if (std.ascii.isDigit(ch)) {
-            has_digit = true;
-            break;
-        }
-    }
-    if (!has_digit) return null;
-
-    const lsd_exp: i32 = exp10 + @as(i32, @intCast(int_digits)) - @as(i32, @intCast(frac_digits)) - 1;
-    return 0.5 * std.math.pow(f64, 10.0, @as(f64, @floatFromInt(lsd_exp)));
-}
-
-fn equivalentIgnoringFortranExponentMarker(expected: []const u8, actual: []const u8) bool {
+fn equivalentTextWithNumericTolerance(expected: []const u8, actual: []const u8) bool {
     var exp_idx: usize = 0;
     var act_idx: usize = 0;
     while (true) {
         while (exp_idx < expected.len and isHorizontalSpace(expected[exp_idx])) : (exp_idx += 1) {}
         while (act_idx < actual.len and isHorizontalSpace(actual[act_idx])) : (act_idx += 1) {}
-        while (exp_idx < expected.len and isOptionalFortranExponentMarker(expected, exp_idx)) : (exp_idx += 1) {}
-        while (act_idx < actual.len and isOptionalFortranExponentMarker(actual, act_idx)) : (act_idx += 1) {}
 
         if (exp_idx == expected.len and act_idx == actual.len) return true;
         if (exp_idx == expected.len or act_idx == actual.len) return false;
+
+        if (parseNumericToken(expected, exp_idx)) |exp_tok| {
+            if (parseNumericToken(actual, act_idx)) |act_tok| {
+                if (!numericTokensEquivalent(exp_tok, act_tok)) return false;
+                exp_idx = exp_tok.end;
+                act_idx = act_tok.end;
+                continue;
+            }
+        }
         if (expected[exp_idx] != actual[act_idx]) return false;
         exp_idx += 1;
         act_idx += 1;
     }
 }
 
-fn isHorizontalSpace(ch: u8) bool {
-    return ch == ' ' or ch == '\t';
+const NumericToken = struct {
+    raw: []const u8,
+    end: usize,
+    kind: enum { integer, float },
+    int_value: i64 = 0,
+    float_value: f64 = 0.0,
+    tolerance: f64 = 0.0,
+};
+
+fn numericTokensEquivalent(expected: NumericToken, actual: NumericToken) bool {
+    if (expected.kind == .integer and actual.kind == .integer) {
+        return expected.int_value == actual.int_value;
+    }
+
+    const exp_float = if (expected.kind == .integer) @as(f64, @floatFromInt(expected.int_value)) else expected.float_value;
+    const act_float = if (actual.kind == .integer) @as(f64, @floatFromInt(actual.int_value)) else actual.float_value;
+    if (exp_float == act_float) return true;
+    if (std.math.isNan(exp_float) or std.math.isNan(act_float)) return false;
+    if (!std.math.isFinite(exp_float) or !std.math.isFinite(act_float)) return false;
+    if (exp_float == 0.0 and act_float == 0.0) return true;
+
+    const tol = @max(expected.tolerance, actual.tolerance);
+    return @abs(exp_float - act_float) <= tol;
 }
 
-fn isOptionalFortranExponentMarker(text: []const u8, idx: usize) bool {
-    if (idx >= text.len) return false;
-    const ch = text[idx];
-    if (ch != 'd' and ch != 'D' and ch != 'e' and ch != 'E') return false;
-    if (idx == 0 or idx + 2 >= text.len) return false;
+fn parseNumericToken(text: []const u8, start_idx: usize) ?NumericToken {
+    if (start_idx >= text.len) return null;
+    var i = start_idx;
+    if (text[i] == '+' or text[i] == '-') {
+        i += 1;
+        if (i >= text.len) return null;
+    }
 
-    const prev = text[idx - 1];
-    const next = text[idx + 1];
-    const next_next = text[idx + 2];
-    if (!(std.ascii.isDigit(prev) or prev == '.')) return false;
-    if (next != '+' and next != '-') return false;
-    return std.ascii.isDigit(next_next);
+    var saw_digit = false;
+    var saw_dot = false;
+    var digits_before_dot: usize = 0;
+    var frac_digits: usize = 0;
+
+    while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {
+        saw_digit = true;
+        digits_before_dot += 1;
+    }
+    if (i < text.len and text[i] == '.') {
+        saw_dot = true;
+        i += 1;
+        while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {
+            saw_digit = true;
+            frac_digits += 1;
+        }
+    }
+    if (!saw_digit) return null;
+
+    var exponent: i32 = 0;
+    var has_exponent = false;
+    var explicit_exponent = false;
+    const mantissa_end = i;
+
+    if (i < text.len) {
+        const ch = text[i];
+        if ((ch == 'e' or ch == 'E' or ch == 'd' or ch == 'D') and i + 2 < text.len) {
+            const sign = text[i + 1];
+            if ((sign == '+' or sign == '-') and std.ascii.isDigit(text[i + 2])) {
+                explicit_exponent = true;
+                has_exponent = true;
+                i += 2;
+                const exp_start = i;
+                while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
+                exponent = std.fmt.parseInt(i32, text[exp_start - 1 .. i], 10) catch return null;
+            }
+        } else if ((ch == '+' or ch == '-') and i + 1 < text.len and std.ascii.isDigit(text[i + 1])) {
+            has_exponent = true;
+            i += 1;
+            const exp_start = i;
+            while (i < text.len and std.ascii.isDigit(text[i])) : (i += 1) {}
+            exponent = std.fmt.parseInt(i32, text[exp_start - 1 .. i], 10) catch return null;
+        }
+    }
+
+    const raw = text[start_idx..i];
+    if (!saw_dot and !has_exponent) {
+        const int_value = std.fmt.parseInt(i64, raw, 10) catch return null;
+        return .{
+            .raw = raw,
+            .end = i,
+            .kind = .integer,
+            .int_value = int_value,
+            .tolerance = 0.0,
+        };
+    }
+
+    var buf: [128]u8 = undefined;
+    if (raw.len + 1 > buf.len) return null;
+    var out: usize = 0;
+    var src: usize = 0;
+    while (src < raw.len) : (src += 1) {
+        const ch = raw[src];
+        if (!explicit_exponent and src == mantissa_end - start_idx and has_exponent) {
+            buf[out] = 'e';
+            out += 1;
+        }
+        buf[out] = switch (ch) {
+            'D' => 'E',
+            'd' => 'e',
+            else => ch,
+        };
+        out += 1;
+    }
+
+    const float_value = std.fmt.parseFloat(f64, buf[0..out]) catch return null;
+    const lsd_exp: i32 = exponent + @as(i32, @intCast(digits_before_dot)) - @as(i32, @intCast(frac_digits)) - 1;
+    const tolerance = 0.5 * std.math.pow(f64, 10.0, @as(f64, @floatFromInt(lsd_exp)));
+    return .{
+        .raw = raw,
+        .end = i,
+        .kind = .float,
+        .float_value = float_value,
+        .tolerance = tolerance,
+    };
+}
+
+fn isHorizontalSpace(ch: u8) bool {
+    return ch == ' ' or ch == '\t';
 }
 
 fn trimCr(line: []const u8) []const u8 {
@@ -2104,5 +2126,12 @@ test "outputsEquivalent rejects numeric differences beyond printed precision" {
     try std.testing.expect(!outputsEquivalent(
         " ratio  1.234567E+03\n",
         " ratio  1.234500E+03\n",
+    ));
+}
+
+test "outputsEquivalent accepts numeric differences inside punctuation" {
+    try std.testing.expect(outputsEquivalent(
+        " value=(1.234567E+03,-0.000000E+00)\n",
+        " value=(1.2345669D+03,0.000000E+00)\n",
     ));
 }

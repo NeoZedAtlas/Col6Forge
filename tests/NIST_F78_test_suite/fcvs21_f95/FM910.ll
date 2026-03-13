@@ -1142,7 +1142,7 @@ bb56:
   %t539 = load i32, ptr %t44
   %t540 = add i32 4, 4
   %t541 = add i32 %t540, 4
-  %t542 = add i32 %t541, 1
+  %t542 = add i32 %t541, 4
   %t543 = add i32 %t542, 8
   %t544 = add i32 %t543, 8
   %t545 = call ptr @col6forge_unformatted_read_stream_begin(i32 %t539, i32 %t544)

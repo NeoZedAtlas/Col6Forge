@@ -16,6 +16,7 @@ const expansion = @import("expansion.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
 const emitStackValue = io_utils.emitStackValue;
+const emitStackIoScalarValue = io_utils.emitStackIoScalarValue;
 const emitStackPointerArrayFromValues = io_utils.emitStackPointerArrayFromValues;
 const emitStackI32Array = io_utils.emitStackI32Array;
 const emitKindArray = io_utils.emitKindArray;
@@ -28,6 +29,7 @@ const defaultIntegerKind = io_utils.defaultIntegerKind;
 const scalarRuntimeKind = io_utils.scalarRuntimeKind;
 const scalarByteSize = io_utils.scalarByteSize;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
+const ioScalarStorageIRType = io_utils.ioScalarStorageIRType;
 const expandIoArgs = expansion.expandIoArgs;
 const max_packed_array_elems: usize = 4096;
 
@@ -119,7 +121,7 @@ fn buildUnformattedWriteArgs(ctx: *Context, builder: anytype, expanded_args: []*
         }
 
         const kind = try kindForScalarType(ctx, value.ty);
-        const ptr = try emitStackValue(ctx, builder, value);
+        const ptr = try emitStackIoScalarValue(ctx, builder, value);
         try appendArg(&out, ptr, kind, 0);
     }
 
@@ -255,7 +257,7 @@ fn byteSizeForSymbol(ctx: *Context, sym: anytype) ?i64 {
         .real => 4,
         .double_precision, .complex => 8,
         .complex_double => 16,
-        .logical => 1,
+        .logical => scalarByteSize(ctx.defaultIntegerIRType()),
         .character => @as(i64, @intCast(common.symbolCharacterLenOrOne(sym))),
     };
 }
@@ -300,6 +302,10 @@ fn emitExpandedArgByteSize(ctx: *Context, builder: anytype, arg: *ast.Expr) Emit
             const elem_size = byteSizeForSymbol(ctx, sym) orelse return error.UnsupportedIntrinsicType;
             return mulI32ByConst(ctx, builder, elem_count, elem_size);
         }
+        if (sym.loweredKind() == .logical) {
+            const byte_size = scalarByteSize(common.symbolStorageIRType(sym, ctx.options.target_layout)) orelse return error.UnsupportedIntrinsicType;
+            return ctx.constI32(byte_size);
+        }
     }
 
     const ty = try expr.exprType(ctx, arg);
@@ -307,7 +313,8 @@ fn emitExpandedArgByteSize(ctx: *Context, builder: anytype, arg: *ast.Expr) Emit
         const char_len = charLenForExpr(ctx, arg) orelse 1;
         return ctx.constI32(@intCast(char_len));
     }
-    const byte_size = scalarByteSize(ty) orelse return error.UnsupportedIntrinsicType;
+    const storage_ty = (try ioScalarStorageIRType(ctx, arg)) orelse return error.UnsupportedIntrinsicType;
+    const byte_size = scalarByteSize(storage_ty) orelse return error.UnsupportedIntrinsicType;
     return ctx.constI32(byte_size);
 }
 
@@ -440,7 +447,7 @@ fn emitUnformattedArgByteSize(ctx: *Context, builder: anytype, arg: *ast.Expr) E
             'i', 'f' => 4,
             'd', 'c' => 8,
             'z' => 16,
-            'l' => 1,
+            'l' => scalarByteSize(ctx.defaultIntegerIRType()) orelse return error.UnsupportedIntrinsicType,
             else => return error.UnsupportedIntrinsicType,
         });
     }
@@ -449,7 +456,7 @@ fn emitUnformattedArgByteSize(ctx: *Context, builder: anytype, arg: *ast.Expr) E
             'i', 'f' => 4,
             'd', 'c' => 8,
             'z' => 16,
-            'l' => 1,
+            'l' => scalarByteSize(ctx.defaultIntegerIRType()) orelse return error.UnsupportedIntrinsicType,
             else => return error.UnsupportedIntrinsicType,
         });
     }
@@ -458,7 +465,7 @@ fn emitUnformattedArgByteSize(ctx: *Context, builder: anytype, arg: *ast.Expr) E
             'i', 'f' => 4,
             'd', 'c' => 8,
             'z' => 16,
-            'l' => 1,
+            'l' => scalarByteSize(ctx.defaultIntegerIRType()) orelse return error.UnsupportedIntrinsicType,
             else => return error.UnsupportedIntrinsicType,
         });
     }
