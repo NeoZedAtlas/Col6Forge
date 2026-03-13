@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "updated_unix_ms": 1773424213550,
+  "entries": [
+    {
+      "label": "2026-03-13",
+      "commit_sha": "e09f5c7cee5bce7c2e1d3a32eefe07f08273216f",
+      "generated_unix_ms": 1773424209482,
+      "iterations": 3,
+      "warmup": 1,
+      "cases": [
+        {
+          "name": "blas:xblat3d",
+          "median_ms": 1252,
+          "mean_ms": 1252
+        },
+        {
+          "name": "lapack:xlintstds",
+          "median_ms": 3425,
+          "mean_ms": 3440.6666666666665
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "generated_unix_ms": 1773424209482,
+  "iterations": 3,
+  "warmup": 1,
+  "cases": [
+    {
+      "name": "blas:xblat3d",
+      "step": "blas-verify",
+      "filter": "xblat3d",
+      "samples_ms": [
+        1252,
+        1252,
+        1252
+      ],
+      "median_ms": 1252,
+      "mean_ms": 1252
+    },
+    {
+      "name": "lapack:xlintstds",
+      "step": "lapack-verify",
+      "filter": "xlintstds",
+      "samples_ms": [
+        3474,
+        3423,
+        3425
+      ],
+      "median_ms": 3425,
+      "mean_ms": 3440.6666666666665
+    }
+  ]
+}
