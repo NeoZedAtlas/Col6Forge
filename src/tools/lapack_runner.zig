@@ -97,6 +97,7 @@ const Options = struct {
     show_help: bool,
     incremental: bool,
     clean_cache: bool,
+    prepare_only: bool,
 };
 
 const SupportLibs = struct {
@@ -209,6 +210,26 @@ pub fn main() !void {
         allocator.free(libs.tmg_lib);
     }
 
+    const runtime_output_dir = if (options.incremental) cache_dir else common_abs;
+    var runtime_artifacts = prepareRuntimeArtifacts(
+        allocator,
+        root_path,
+        runtime_output_dir,
+        options.runtime_backend,
+        options.timeout_ms,
+        runtime_cache_key,
+        options.incremental,
+    ) catch |err| {
+        std.log.err("runtime backend prepare failed: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    defer runtime_artifacts.deinit(allocator);
+
+    if (options.prepare_only) {
+        std.log.info("LAPACK-lite preparation completed\n", .{});
+        return;
+    }
+
     var failures: usize = 0;
     var fallback_tracker = fallback_policy.Tracker.init(options.fallback_policy);
     for (cases, 0..) |case, i| {
@@ -281,6 +302,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var show_help = false;
     var incremental = true;
     var clean_cache = false;
+    var prepare_only = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -383,6 +405,10 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
             clean_cache = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--prepare-only")) {
+            prepare_only = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "-emit-llvm")) {
             emit = .llvm;
             continue;
@@ -416,6 +442,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
         .show_help = show_help,
         .incremental = incremental,
         .clean_cache = clean_cache,
+        .prepare_only = prepare_only,
     } };
 }
 
@@ -438,7 +465,7 @@ fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: lapack_runner [--lapack-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--case <name>] [--gfortran <path>] [--runtime-backend <c|zig>] [--timeout <ms>] [--keep-workdir] [--incremental|--no-incremental] [--clean-cache]
+        \\Usage: lapack_runner [--lapack-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--case <name>] [--gfortran <path>] [--runtime-backend <c|zig>] [--timeout <ms>] [--keep-workdir] [--incremental|--no-incremental] [--clean-cache] [--prepare-only]
         \\Options:
         \\  --lapack-dir <dir>      LAPACK-lite root directory (default: tests/LAPACK-lite-3.1.1)
         \\  --testing-dir <dir>     Testing directory (default: <lapack-dir>/TESTING)
@@ -457,6 +484,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  --incremental           Enable translation/object/runtime cache (default)
         \\  --no-incremental        Disable incremental cache and rebuild everything
         \\  --clean-cache           Delete zig-cache/lapack-verify/cache before running
+        \\  --prepare-only          Build shared support libs/runtime cache and exit
         \\  -emit-llvm              Emit LLVM IR (default)
         \\  -h, --help              Show this help
         \\Examples:
