@@ -418,7 +418,8 @@ fn isDuplicateProgramUnitTokens(
     tokens: []lexer.Token,
     header: ProgramUnitHeader,
 ) bool {
-    var lp = LineParser.init(line, tokens);
+    const probe_tokens = arena.dupe(lexer.Token, tokens) catch return false;
+    var lp = LineParser.init(line, probe_tokens);
     var block_data_counter: usize = 0;
     const parsed = parseProgramUnitHeader(arena, &lp, &block_data_counter) catch return false;
     if (lp.peek() != null) return false;
@@ -562,7 +563,7 @@ fn isStandaloneEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) 
 
 fn parseComplexTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeInfo {
     if (lp.consume(.star)) {
-        const selector = try expr.parseExpr(lp, arena, expr.min_prec_power);
+        const selector = try decl.parseLegacyStarSelectorExpr(lp, arena);
         return .{
             .type_kind = .complex,
             .kind_selector = selector,
@@ -581,7 +582,7 @@ fn parseComplexTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeIn
 
 fn parseRealTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeInfo {
     if (lp.consume(.star)) {
-        const selector = try expr.parseExpr(lp, arena, expr.min_prec_power);
+        const selector = try decl.parseLegacyStarSelectorExpr(lp, arena);
         return .{
             .type_kind = .real,
             .kind_selector = selector,
@@ -1160,7 +1161,7 @@ test "parseProgram supports implicit main program header" {
 
 fn parseTypePrefixOptionalKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
     if (lp.consume(.star)) {
-        return expr.parseExpr(lp, arena, expr.min_prec_power);
+        return try decl.parseLegacyStarSelectorExpr(lp, arena);
     }
     if (!lp.peekIs(.l_paren)) return null;
     return parseTypePrefixKindSelectorExpr(lp, arena);

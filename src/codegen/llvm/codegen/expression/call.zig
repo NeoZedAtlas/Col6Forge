@@ -58,7 +58,7 @@ fn validatedArrayActual(plan: ArrayActualPlan) !ArrayActualPlan {
 }
 
 pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
-    const abi_ret_ty = ctx.abiReturnType(ret_ty);
+    const abi_ret_ty = ctx.abiFunctionReturnType(ret_ty);
     var complex_result_ptr: ?ValueRef = null;
 
     if (ctx.abiUsesHiddenResultPtr(ret_ty)) {
@@ -100,11 +100,14 @@ pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IR
     const tmp = try ctx.nextTemp();
     try builder.callTyped(tmp, abi_ret_ty, fn_name, abi_args.items);
     try emitOwnedHeapArgFrees(ctx, builder, owned_heap_args.items);
+    if (abi_ret_ty != ret_ty) {
+        return try casting.coerce(ctx, builder, .{ .name = tmp, .ty = abi_ret_ty, .is_ptr = false }, ret_ty);
+    }
     return .{ .name = tmp, .ty = ret_ty, .is_ptr = false };
 }
 
 pub fn emitIndirectCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
-    const abi_ret_ty = ctx.abiReturnType(ret_ty);
+    const abi_ret_ty = ctx.abiFunctionReturnType(ret_ty);
     var complex_result_ptr: ?ValueRef = null;
 
     if (ctx.abiUsesHiddenResultPtr(ret_ty)) {
@@ -146,6 +149,9 @@ pub fn emitIndirectCall(ctx: *Context, builder: anytype, fn_ptr: ValueRef, ret_t
     const tmp = try ctx.nextTemp();
     try builder.callIndirectTyped(tmp, abi_ret_ty, fn_ptr.name, abi_args.items);
     try emitOwnedHeapArgFrees(ctx, builder, owned_heap_args.items);
+    if (abi_ret_ty != ret_ty) {
+        return try casting.coerce(ctx, builder, .{ .name = tmp, .ty = abi_ret_ty, .is_ptr = false }, ret_ty);
+    }
     return .{ .name = tmp, .ty = ret_ty, .is_ptr = false };
 }
 

@@ -775,6 +775,7 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
             return;
         }
         const ret_ty = ctx.typeFromKind(sym.loweredKind());
+        const abi_ret_ty = ctx.abiFunctionReturnType(ret_ty);
         const ret_ptr = ctx.locals.get(return_symbol_name) orelse return error.UnknownSymbol;
         if (ctx.abiUsesHiddenResultPtr(ret_ty)) {
             // Hidden-result ABI returns through the caller-provided pointer; function returns void.
@@ -783,30 +784,29 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
             return;
         }
         const ret_val = if (std.mem.eql(u8, ret_ptr.name, "null"))
-            utils.zeroValue(ret_ty)
+            utils.zeroValue(abi_ret_ty)
         else if (sym.loweredKind() == .logical) blk: {
             const storage_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
-            const loaded = try expr.loadValue(ctx, builder, ret_ptr, storage_ty);
-            break :blk try expr.coerce(ctx, builder, loaded, ret_ty);
+            break :blk try expr.loadValue(ctx, builder, ret_ptr, storage_ty);
         } else
             try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
         if (ret_ty == .complex_f32 and (ctx.abiReturnType(ret_ty) == .i64 or ctx.abiReturnType(ret_ty) == .v2f32)) {
             // ABI boundary returns COMPLEX*8 using a target-specific packed form.
-            const abi_ret_ty = ctx.abiReturnType(ret_ty);
+            const complex_abi_ret_ty = ctx.abiReturnType(ret_ty);
             const pack_slot = try ctx.nextTemp();
             // Use the ABI return type for the spill slot so vector-return targets
             // keep the stronger alignment they require.
-            try builder.alloca(pack_slot, abi_ret_ty);
+            try builder.alloca(pack_slot, complex_abi_ret_ty);
             const pack_ptr = ValueRef{ .name = pack_slot, .ty = .ptr, .is_ptr = true };
             try builder.store(ret_val, pack_ptr);
             const packed_tmp = try ctx.nextTemp();
-            try builder.load(packed_tmp, abi_ret_ty, pack_ptr);
+            try builder.load(packed_tmp, complex_abi_ret_ty, pack_ptr);
             try ctx.emitHeapTempFrees(builder);
-            try builder.retValue(abi_ret_ty, packed_tmp);
+            try builder.retValue(complex_abi_ret_ty, packed_tmp);
             return;
         }
         try ctx.emitHeapTempFrees(builder);
-        try builder.retValue(ret_ty, ret_val.name);
+        try builder.retValue(abi_ret_ty, ret_val.name);
         return;
     }
     if (ctx.unit.kind == .subroutine and unitHasAltReturn(ctx.unit)) {

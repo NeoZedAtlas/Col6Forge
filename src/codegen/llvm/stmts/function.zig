@@ -56,7 +56,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         is_complex_sret_function = ctx.abiUsesHiddenResultPtr(ctx.typeFromKind(sym.loweredKind()));
         if (!is_character_function) {
             const nominal_ret_ty = ctx.typeFromKind(sym.loweredKind());
-            return_ty = ctx.abiReturnType(nominal_ret_ty);
+            return_ty = ctx.abiFunctionReturnType(nominal_ret_ty);
         }
     } else if (has_alt_return) {
         return_ty = .i32;

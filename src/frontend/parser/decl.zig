@@ -4,6 +4,7 @@ const context = @import("token_stream.zig");
 const expr = @import("expr.zig");
 const fixed_form = @import("../fixed_form.zig");
 const lexer = @import("../lexer.zig");
+const logical_line = @import("../logical_line.zig");
 
 const LineParser = context.LineParser;
 const TypeKind = ast.TypeKind;
@@ -361,7 +362,7 @@ fn validateDeclarationDimExpr(dim: *ast.Expr) !void {
 
 fn parseOptionalKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
     if (lp.consume(.star)) {
-        return expr.parseExpr(lp, arena, expr.min_prec_power);
+        return try parseLegacyStarSelectorExpr(lp, arena);
     }
     if (!lp.peekIs(.l_paren)) return null;
     return parseKindSelectorExprInParens(lp, arena);
@@ -369,7 +370,7 @@ fn parseOptionalKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.E
 
 fn parseStarOnlyKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
     if (!lp.consume(.star)) return null;
-    return expr.parseExpr(lp, arena, expr.min_prec_power);
+    return try parseLegacyStarSelectorExpr(lp, arena);
 }
 
 fn parseRealKindSuffix(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
@@ -382,7 +383,7 @@ fn parseRealKindSuffix(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpe
 
 fn parseComplexKindSuffix(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
     if (lp.consume(.star)) {
-        const selector = try expr.parseExpr(lp, arena, expr.min_prec_power);
+        const selector = try parseLegacyStarSelectorExpr(lp, arena);
         return .{
             .type_kind = .complex,
             .kind_selector = selector,
@@ -545,7 +546,99 @@ pub fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
         default_len.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
         return default_len;
     }
+    return try parseLegacyStarSelectorExpr(lp, arena);
+}
+
+pub fn parseLegacyStarSelectorExpr(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
+    if (try splitAmbiguousLegacyStarToken(lp, arena)) |split_expr| return split_expr;
     return expr.parseExpr(lp, arena, expr.min_prec_power);
+}
+
+fn splitAmbiguousLegacyStarToken(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
+    const tok = lp.peek() orelse return null;
+    if (tok.kind != .real) return null;
+
+    const text = lp.tokenText(tok);
+    const split = findLegacyStarSelectorSplit(text) orelse return null;
+
+    const selector_text = std.mem.trimRight(u8, text[0..split.selector_end], " \t");
+    if (selector_text.len == 0) return null;
+
+    const suffix_start = tok.start + split.suffix_start;
+    const suffix_end = tok.end;
+    lp.tokens[lp.index] = makeToken(lp.line, .identifier, suffix_start, suffix_end);
+
+    const literal_text = try arena.dupe(u8, selector_text);
+    const node = try arena.create(ast.Expr);
+    node.* = .{
+        .literal = .{
+            .kind = if (std.mem.indexOfScalar(u8, literal_text, '.')) |_| ast.LiteralKind.real else ast.LiteralKind.integer,
+            .text = literal_text,
+        },
+    };
+    return node;
+}
+
+const LegacyStarSplit = struct {
+    selector_end: usize,
+    suffix_start: usize,
+};
+
+fn findLegacyStarSelectorSplit(text: []const u8) ?LegacyStarSplit {
+    var split_at: usize = 0;
+    while (split_at < text.len and text[split_at] != ' ' and text[split_at] != '\t') : (split_at += 1) {}
+    if (split_at == text.len) return null;
+
+    const selector = text[0..split_at];
+    if (!isLegacyStarSelectorPrefix(selector)) return null;
+
+    var suffix_start = split_at;
+    while (suffix_start < text.len and (text[suffix_start] == ' ' or text[suffix_start] == '\t')) : (suffix_start += 1) {}
+    if (suffix_start == text.len) return null;
+
+    const suffix = text[suffix_start..];
+    if (!isIdentifierText(suffix)) return null;
+
+    return .{
+        .selector_end = split_at,
+        .suffix_start = suffix_start,
+    };
+}
+
+fn isLegacyStarSelectorPrefix(text: []const u8) bool {
+    if (text.len == 0) return false;
+    var saw_digit = false;
+    for (text, 0..) |ch, idx| {
+        switch (ch) {
+            '0'...'9' => saw_digit = true,
+            '.' => {},
+            '+', '-' => if (idx != 0) return false,
+            else => return false,
+        }
+    }
+    return saw_digit;
+}
+
+fn isIdentifierText(text: []const u8) bool {
+    if (text.len == 0) return false;
+    if (!std.ascii.isAlphabetic(text[0])) return false;
+    for (text[1..]) |ch| {
+        if (!(std.ascii.isAlphanumeric(ch) or ch == '_')) return false;
+    }
+    return true;
+}
+
+fn makeToken(line: logical_line.LogicalLine, kind: lexer.TokenKind, start: usize, end: usize) lexer.Token {
+    const start_pos = logical_line.mapIndexToPos(line, start);
+    const end_pos = logical_line.mapIndexToPosExclusive(line, end);
+    return .{
+        .kind = kind,
+        .start = start,
+        .end = end,
+        .line = start_pos.line,
+        .column = start_pos.column,
+        .range = .{ .start = start_pos, .end = end_pos },
+    };
 }
 
 fn parseNameList(lp: *LineParser, arena: std.mem.Allocator) ![]const []const u8 {
@@ -1011,6 +1104,69 @@ test "parseDecl handles COMPLEX*16 declaration" {
             try testing.expectEqual(@as(usize, 2), td.items.len);
             try testing.expectEqualStrings("ALPHA", td.items[0].name);
             try testing.expectEqualStrings("BETA", td.items[1].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles COMPLEX*16 declaration with D-number declarators" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      COMPLEX*16 D11, D12, T1, T2\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.complex, td.type_kind);
+            try testing.expect(td.kind_selector != null);
+            switch (td.kind_selector.?.*) {
+                .literal => |lit| try testing.expectEqualStrings("16", lit.text),
+                else => return error.UnexpectedToken,
+            }
+            try testing.expectEqual(@as(usize, 4), td.items.len);
+            try testing.expectEqualStrings("D11", td.items[0].name);
+            try testing.expectEqualStrings("D12", td.items[1].name);
+            try testing.expectEqualStrings("T1", td.items[2].name);
+            try testing.expectEqualStrings("T2", td.items[3].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles CHARACTER*2 declaration with D-number declarator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CHARACTER*2 D2\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.character, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("D2", td.items[0].name);
+            try testing.expect(td.items[0].char_len != null);
+            switch (td.items[0].char_len.?.*) {
+                .literal => |lit| try testing.expectEqualStrings("2", lit.text),
+                else => return error.UnexpectedToken,
+            }
         },
         else => return error.UnexpectedToken,
     }

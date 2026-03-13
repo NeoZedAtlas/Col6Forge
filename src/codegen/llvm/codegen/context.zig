@@ -372,13 +372,17 @@ pub const Context = struct {
         const mangled = try self.mangleName(name);
         if (self.defined.contains(mangled)) return mangled;
         if (self.decls.contains(mangled)) return mangled;
-        const decl = IRDecl{ .ret_type = self.abiReturnType(ret_ty), .sig = "", .varargs = true };
+        const decl = IRDecl{ .ret_type = self.abiFunctionReturnType(ret_ty), .sig = "", .varargs = true };
         try self.decls.put(mangled, decl);
         return mangled;
     }
 
     pub fn abiReturnType(self: *const Context, ret_ty: IRType) IRType {
         return fortranAbiReturnTypeForTarget(self.options.target, ret_ty);
+    }
+
+    pub fn abiFunctionReturnType(self: *const Context, ret_ty: IRType) IRType {
+        return fortranFunctionAbiReturnTypeForTarget(self.options.target, self.options.target_layout, ret_ty);
     }
 
     pub fn abiUsesHiddenResultPtr(self: *const Context, ret_ty: IRType) bool {
@@ -634,6 +638,11 @@ pub fn fortranAbiReturnTypeForTarget(target: ?[]const u8, ret_ty: IRType) IRType
     };
 }
 
+pub fn fortranFunctionAbiReturnTypeForTarget(target: ?[]const u8, target_layout: input.sema.TargetLayout, ret_ty: IRType) IRType {
+    if (ret_ty == .i1) return llvm_types.defaultIntegerType(target_layout);
+    return fortranAbiReturnTypeForTarget(target, ret_ty);
+}
+
 pub fn fortranAbiUsesHiddenResultPtrForTarget(target: ?[]const u8, ret_ty: IRType) bool {
     return switch (ret_ty) {
         .complex_f64 => targetIsWindows(target),
@@ -663,4 +672,14 @@ test "fortranAbiReturnType uses sret ABI for complex*16" {
         try testing.expectEqual(IRType.v2f32, fortranAbiReturnType(.complex_f32));
         try testing.expect(!fortranAbiUsesHiddenResultPtr(.complex_f32));
     }
+}
+
+test "fortranFunctionAbiReturnType widens logical results to default integer" {
+    const testing = std.testing;
+
+    try testing.expectEqual(IRType.i32, fortranFunctionAbiReturnTypeForTarget(null, .{}, .i1));
+    try testing.expectEqual(
+        IRType.i64,
+        fortranFunctionAbiReturnTypeForTarget(null, .{ .default_integer_bits = 64 }, .i1),
+    );
 }
