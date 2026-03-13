@@ -185,16 +185,26 @@ jobs:
     strategy:
       matrix:
         include:
-          - shard_name: LIN
-            filter: xlintst
+          - shard_name: LIN S
+            case_name: xlintsts
+          - shard_name: LIN C
+            case_name: xlintstc
+          - shard_name: LIN D
+            case_name: xlintstd
+          - shard_name: LIN Z
+            case_name: xlintstz
+          - shard_name: LIN DS
+            case_name: xlintstds
+          - shard_name: LIN ZC
+            case_name: xlintstzc
           - shard_name: EIG S
-            filter: xeigtsts
+            case_name: xeigtsts
           - shard_name: EIG C
-            filter: xeigtstc
+            case_name: xeigtstc
           - shard_name: EIG D
-            filter: xeigtstd
+            case_name: xeigtstd
           - shard_name: EIG Z
-            filter: xeigtstz
+            case_name: xeigtstz
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -224,10 +234,11 @@ jobs:
           gfortran --version | head -n 1
 
       - name: LAPACK strict verification
-        run: zig build lapack-verify-strict -- --filter ${{ matrix.filter }}
+        run: zig build lapack-verify-strict -- --case ${{ matrix.case_name }}
 
   perf-regression:
     name: Perf Regression
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:

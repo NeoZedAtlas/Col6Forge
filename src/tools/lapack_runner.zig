@@ -85,6 +85,7 @@ const Options = struct {
     lapack_dir: []const u8,
     testing_dir: ?[]const u8,
     filter: ?[]const u8,
+    exact_case: ?[]const u8,
     gfortran_path: []const u8,
     runtime_backend: RuntimeBackend,
     timeout_ms: u64,
@@ -179,7 +180,7 @@ pub fn main() !void {
         }
     }
 
-    const cases = try collectCases(arena_allocator, options.filter);
+    const cases = try collectCases(arena_allocator, options.filter, options.exact_case);
     if (cases.len == 0) {
         std.log.warn("no LAPACK-lite cases selected\n", .{});
         return;
@@ -266,6 +267,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var lapack_dir: []const u8 = "tests/LAPACK-lite-3.1.1";
     var testing_dir: ?[]const u8 = null;
     var filter: ?[]const u8 = null;
+    var exact_case: ?[]const u8 = null;
     var gfortran_path: []const u8 = defaultGfortran();
     var runtime_backend: RuntimeBackend = .c;
     var timeout_ms: u64 = 300_000;
@@ -303,6 +305,12 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
             if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             filter = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--case")) {
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
+            i += 1;
+            exact_case = args[i];
             continue;
         }
         if (std.mem.eql(u8, arg, "--gfortran")) {
@@ -396,6 +404,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
         .lapack_dir = lapack_dir,
         .testing_dir = testing_dir,
         .filter = filter,
+        .exact_case = exact_case,
         .gfortran_path = gfortran_path,
         .runtime_backend = runtime_backend,
         .timeout_ms = timeout_ms,
@@ -429,11 +438,12 @@ fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: lapack_runner [--lapack-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--gfortran <path>] [--runtime-backend <c|zig>] [--timeout <ms>] [--keep-workdir] [--incremental|--no-incremental] [--clean-cache]
+        \\Usage: lapack_runner [--lapack-dir <dir>] [--testing-dir <dir>] [--filter <text>] [--case <name>] [--gfortran <path>] [--runtime-backend <c|zig>] [--timeout <ms>] [--keep-workdir] [--incremental|--no-incremental] [--clean-cache]
         \\Options:
         \\  --lapack-dir <dir>      LAPACK-lite root directory (default: tests/LAPACK-lite-3.1.1)
         \\  --testing-dir <dir>     Testing directory (default: <lapack-dir>/TESTING)
         \\  --filter <text>         Run only case names containing text (e.g. xlintstds)
+        \\  --case <name>           Run only the exact case name (e.g. xlintstzc)
         \\  --gfortran <path>       Path to gfortran executable
         \\  --runtime-backend       Runtime backend: c (default) or zig (experimental)
         \\  --timeout <ms>          Per-command timeout milliseconds (default: 300000)
@@ -451,6 +461,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  -h, --help              Show this help
         \\Examples:
         \\  zig build lapack-verify -- --filter xlintstds
+        \\  zig build lapack-verify -- --case xeigtstz
         \\  zig build lapack-verify -- --no-translate-sources
         \\
     );
@@ -527,9 +538,12 @@ fn prepareRuntimeArtifacts(
     };
 }
 
-fn collectCases(allocator: std.mem.Allocator, filter: ?[]const u8) ![]LapackCase {
+fn collectCases(allocator: std.mem.Allocator, filter: ?[]const u8, exact_case: ?[]const u8) ![]LapackCase {
     var list: std.ArrayList(LapackCase) = .empty;
     for (ALL_CASES) |case| {
+        if (exact_case) |needle| {
+            if (!std.mem.eql(u8, case.name, needle)) continue;
+        }
         if (filter) |needle| {
             if (!std.mem.containsAtLeast(u8, case.name, 1, needle)) continue;
         }
