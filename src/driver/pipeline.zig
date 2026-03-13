@@ -768,3 +768,26 @@ test "runPipeline reports semantic expression diagnostics against the original s
     try testing.expectEqualStrings("CF3119", diag_info.code);
     try testing.expectEqualStrings("      I='A'+1", diag_info.line_text);
 }
+
+test "runPipeline reports free-form continued parse diagnostics against the original source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "program p\n" ++
+        "integer :: a, &\n" ++
+        "  )\n" ++
+        "end\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "continued_parse_error.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag_info.line);
+    try testing.expectEqual(@as(usize, 3), diag_info.column);
+    try testing.expectEqualStrings("CF2001", diag_info.code);
+    try testing.expectEqualStrings("  )", diag_info.line_text);
+}

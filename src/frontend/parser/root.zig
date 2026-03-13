@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const fixed_form = @import("../fixed_form.zig");
+const free_form = @import("../free_form.zig");
 const logical_line = @import("../logical_line.zig");
 const lexer = @import("../lexer.zig");
 const context = @import("token_stream.zig");
@@ -1392,5 +1393,27 @@ test "parseProgram reports continued IF parse errors on the real source line" {
     const diag = parse_diag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 8), diag.column);
+    try testing.expectEqualStrings("CF2001", diag.code);
+}
+
+test "parseProgram reports free-form continued declaration parse errors on the real source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "integer :: a, &\n" ++
+        "  )\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    try testing.expectError(error.UnexpectedToken, parseProgram(arena.allocator(), lines));
+    const diag = parse_diag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 3), diag.column);
     try testing.expectEqualStrings("CF2001", diag.code);
 }

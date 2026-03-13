@@ -10,6 +10,16 @@ const KindState = enum {
     double,
 };
 
+const MappedText = struct {
+    text: []u8,
+    segments: []Segment,
+
+    fn deinit(self: MappedText, allocator: std.mem.Allocator) void {
+        allocator.free(self.text);
+        allocator.free(self.segments);
+    }
+};
+
 pub fn normalizeFreeForm(allocator: std.mem.Allocator, contents: []const u8) ![]LogicalLine {
     return normalizeFreeFormWithMapMode(allocator, contents, false);
 }
@@ -19,10 +29,12 @@ pub fn normalizeFreeFormWithMapMode(
     contents: []const u8,
     coarse_source_map: bool,
 ) ![]LogicalLine {
-    _ = coarse_source_map;
     var list = std.array_list.Managed(LogicalLine).init(allocator);
     var buffer = std.array_list.Managed(u8).init(allocator);
+    var segments = std.array_list.Managed(Segment).init(allocator);
     var kind_state: KindState = .unknown;
+    defer buffer.deinit();
+    defer segments.deinit();
 
     var in_stmt = false;
     var continued = false;
@@ -38,7 +50,7 @@ pub fn normalizeFreeFormWithMapMode(
 
         if (trimmed.len == 0) {
             if (in_stmt and !continued) {
-                try flushLogicalLine(allocator, &list, &buffer, stmt_start, stmt_end, &kind_state);
+                try flushLogicalLine(allocator, &list, &buffer, &segments, stmt_start, stmt_end, coarse_source_map, &kind_state);
                 in_stmt = false;
             }
             continue;
@@ -70,19 +82,24 @@ pub fn normalizeFreeFormWithMapMode(
 
         if (part.len > 0) {
             try buffer.appendSlice(part);
+            if (!coarse_source_map) {
+                try segments.append(.{
+                    .line = line_no,
+                    .column = sliceStartColumn(line, part),
+                    .length = part.len,
+                });
+            }
         }
 
         continued = cont;
         if (!continued) {
-            try flushLogicalLine(allocator, &list, &buffer, stmt_start, stmt_end, &kind_state);
+            try flushLogicalLine(allocator, &list, &buffer, &segments, stmt_start, stmt_end, coarse_source_map, &kind_state);
             in_stmt = false;
         }
     }
 
     if (in_stmt) {
-        try flushLogicalLine(allocator, &list, &buffer, stmt_start, stmt_end, &kind_state);
-    } else {
-        buffer.deinit();
+        try flushLogicalLine(allocator, &list, &buffer, &segments, stmt_start, stmt_end, coarse_source_map, &kind_state);
     }
 
     return list.toOwnedSlice();
@@ -96,12 +113,46 @@ fn flushLogicalLine(
     allocator: std.mem.Allocator,
     list: *std.array_list.Managed(LogicalLine),
     buffer: *std.array_list.Managed(u8),
+    segments: *std.array_list.Managed(Segment),
     start_line: usize,
     end_line: usize,
+    coarse_source_map: bool,
     kind_state: *KindState,
 ) !void {
-    try rewriteAndAppend(allocator, list, buffer.items, start_line, end_line, kind_state);
+    const raw = try takeBufferedMappedText(allocator, buffer, segments, start_line, coarse_source_map);
+    defer raw.deinit(allocator);
+    try rewriteAndAppend(allocator, list, raw, start_line, end_line, kind_state);
     buffer.clearRetainingCapacity();
+    segments.clearRetainingCapacity();
+}
+
+fn takeBufferedMappedText(
+    allocator: std.mem.Allocator,
+    buffer: *std.array_list.Managed(u8),
+    segments: *std.array_list.Managed(Segment),
+    start_line: usize,
+    coarse_source_map: bool,
+) !MappedText {
+    const text = try allocator.dupe(u8, buffer.items);
+    if (!coarse_source_map) {
+        const owned_segments = try allocator.alloc(Segment, segments.items.len);
+        @memcpy(owned_segments, segments.items);
+        return .{
+            .text = text,
+            .segments = owned_segments,
+        };
+    }
+
+    const owned_segments = try allocator.alloc(Segment, 1);
+    owned_segments[0] = .{
+        .line = start_line,
+        .column = 1,
+        .length = text.len,
+    };
+    return .{
+        .text = text,
+        .segments = owned_segments,
+    };
 }
 
 fn trimCr(line: []const u8) []const u8 {
@@ -109,6 +160,13 @@ fn trimCr(line: []const u8) []const u8 {
         return line[0 .. line.len - 1];
     }
     return line;
+}
+
+fn sliceStartColumn(line: []const u8, slice: []const u8) usize {
+    if (slice.len == 0) return 1;
+    const base = @intFromPtr(line.ptr);
+    const sub = @intFromPtr(slice.ptr);
+    return (sub - base) + 1;
 }
 
 fn hasTrailingContinuation(text: []const u8) bool {
@@ -156,17 +214,18 @@ fn stripInlineComment(line: []const u8) []const u8 {
 fn rewriteAndAppend(
     allocator: std.mem.Allocator,
     list: *std.array_list.Managed(LogicalLine),
-    raw_text: []const u8,
+    raw: MappedText,
     start_line: usize,
     end_line: usize,
     kind_state: *KindState,
 ) !void {
-    const stmt_owned = try normalizeStmtText(allocator, raw_text);
-    defer allocator.free(stmt_owned);
-    const stmt = std.mem.trim(u8, stmt_owned, " \t");
-    if (stmt.len == 0) return;
+    const normalized = try normalizeStmtTextWithMap(allocator, raw);
+    defer normalized.deinit(allocator);
+    const stmt = try trimMappedText(allocator, normalized);
+    defer stmt.deinit(allocator);
+    if (stmt.text.len == 0) return;
 
-    const compact_stmt = try compactUpper(allocator, stmt);
+    const compact_stmt = try compactUpper(allocator, stmt.text);
     defer allocator.free(compact_stmt);
 
     if (std.mem.startsWith(u8, compact_stmt, "INTEGER,PARAMETER::WP=KIND(1.D0)")) {
@@ -177,21 +236,28 @@ fn rewriteAndAppend(
         kind_state.* = .single;
         return;
     }
-    if (semicolonOutsideStrings(stmt)) |semi_idx| {
-        const head = std.mem.trim(u8, stmt[0..semi_idx], " \t");
-        const tail_raw = std.mem.trim(u8, stmt[semi_idx + 1 ..], " \t");
-        if (head.len > 0) {
-            try appendLogicalLine(list, try allocator.dupe(u8, head), start_line, end_line);
+    if (semicolonOutsideStrings(stmt.text)) |semi_idx| {
+        const head = try trimMappedTextRange(allocator, stmt, 0, semi_idx);
+        errdefer head.deinit(allocator);
+        const tail = try trimMappedTextRange(allocator, stmt, semi_idx + 1, stmt.text.len);
+        errdefer tail.deinit(allocator);
+        if (head.text.len > 0) {
+            try appendMappedLogicalLine(list, head, start_line, end_line);
+        } else {
+            head.deinit(allocator);
         }
-        if (tail_raw.len > 0) {
-            try rewriteAndAppend(allocator, list, tail_raw, start_line, end_line, kind_state);
+        if (tail.text.len > 0) {
+            defer tail.deinit(allocator);
+            try rewriteAndAppend(allocator, list, tail, start_line, end_line, kind_state);
+        } else {
+            tail.deinit(allocator);
         }
         return;
     }
 
-    if (indexOfDoubleColon(stmt)) |dcolon| {
-        const left = std.mem.trim(u8, stmt[0..dcolon], " \t");
-        const right = std.mem.trim(u8, stmt[dcolon + 2 ..], " \t");
+    if (indexOfDoubleColon(stmt.text)) |dcolon| {
+        const left = std.mem.trim(u8, stmt.text[0..dcolon], " \t");
+        const right = std.mem.trim(u8, stmt.text[dcolon + 2 ..], " \t");
         const left_compact = try compactUpper(allocator, left);
         defer allocator.free(left_compact);
         if (std.mem.indexOf(u8, left_compact, ",PARAMETER")) |param_idx_compact| {
@@ -235,9 +301,9 @@ fn rewriteAndAppend(
                                     try std.fmt.allocPrint(allocator, "{s} {s}", .{ mapped, name })
                                 else
                                     try std.fmt.allocPrint(allocator, "{s} {s}({d})", .{ mapped, base_name, count });
-                                try appendLogicalLine(list, decl_text, start_line, end_line);
+                                try appendGeneratedLogicalLine(list, decl_text, stmt.segments, start_line, end_line);
                                 const data_text = try std.fmt.allocPrint(allocator, "DATA {s} /{s}/", .{ base_name, elems });
-                                try appendLogicalLine(list, data_text, start_line, end_line);
+                                try appendGeneratedLogicalLine(list, data_text, stmt.segments, start_line, end_line);
                             } else {
                                 if (scalar_names.items.len > 0) try scalar_names.appendSlice(", ");
                                 try scalar_names.appendSlice(name);
@@ -254,11 +320,11 @@ fn rewriteAndAppend(
 
                 if (scalar_names.items.len > 0) {
                     const decl_text = try std.fmt.allocPrint(allocator, "{s} {s}", .{ mapped, scalar_names.items });
-                    try appendLogicalLine(list, decl_text, start_line, end_line);
+                    try appendGeneratedLogicalLine(list, decl_text, stmt.segments, start_line, end_line);
                 }
                 if (scalar_assigns.items.len > 0) {
                     const param_text = try std.fmt.allocPrint(allocator, "PARAMETER ({s})", .{scalar_assigns.items});
-                    try appendLogicalLine(list, param_text, start_line, end_line);
+                    try appendGeneratedLogicalLine(list, param_text, stmt.segments, start_line, end_line);
                 }
                 return;
             }
@@ -266,20 +332,20 @@ fn rewriteAndAppend(
             defer allocator.free(names);
             if (names.len > 0) {
                 const decl_text = try std.fmt.allocPrint(allocator, "{s} {s}", .{ mapped, names });
-                try appendLogicalLine(list, decl_text, start_line, end_line);
+                try appendGeneratedLogicalLine(list, decl_text, stmt.segments, start_line, end_line);
             }
             const param_text = try std.fmt.allocPrint(allocator, "PARAMETER ({s})", .{simplified});
-            try appendLogicalLine(list, param_text, start_line, end_line);
+            try appendGeneratedLogicalLine(list, param_text, stmt.segments, start_line, end_line);
             return;
         } else {
             // Preserve modern declaration attributes (`DIMENSION`, `ALLOCATABLE`,
             // `INTENT`, etc.) so downstream parser/semantic can keep rank and shape.
-            try appendLogicalLine(list, try allocator.dupe(u8, stmt), start_line, end_line);
+            try appendMappedLogicalLine(list, try dupMappedText(allocator, stmt), start_line, end_line);
             return;
         }
     }
 
-    try appendLogicalLine(list, try allocator.dupe(u8, stmt), start_line, end_line);
+    try appendMappedLogicalLine(list, try dupMappedText(allocator, stmt), start_line, end_line);
 }
 
 fn simplifyParameterAssigns(allocator: std.mem.Allocator, assigns: []const u8, kind_state: KindState) ![]const u8 {
@@ -347,11 +413,39 @@ fn replacementForParam(name: []const u8, kind_state: KindState) ?[]const u8 {
     return null;
 }
 
-fn appendLogicalLine(list: *std.array_list.Managed(LogicalLine), text_owned: []const u8, start_line: usize, end_line: usize) !void {
+fn dupMappedText(allocator: std.mem.Allocator, text: MappedText) !MappedText {
+    return .{
+        .text = try allocator.dupe(u8, text.text),
+        .segments = try dupSegments(allocator, text.segments),
+    };
+}
+
+fn dupSegments(allocator: std.mem.Allocator, segments: []const Segment) ![]Segment {
+    const out = try allocator.alloc(Segment, segments.len);
+    @memcpy(out, segments);
+    return out;
+}
+
+fn appendMappedLogicalLine(list: *std.array_list.Managed(LogicalLine), mapped: MappedText, start_line: usize, end_line: usize) !void {
+    try list.append(.{
+        .label = null,
+        .text = mapped.text,
+        .span = .{ .start_line = start_line, .end_line = end_line },
+        .segments = mapped.segments,
+    });
+}
+
+fn appendGeneratedLogicalLine(
+    list: *std.array_list.Managed(LogicalLine),
+    text_owned: []u8,
+    origin_segments: []const Segment,
+    start_line: usize,
+    end_line: usize,
+) !void {
     const segs = try list.allocator.alloc(Segment, 1);
     segs[0] = .{
-        .line = start_line,
-        .column = 1,
+        .line = if (origin_segments.len > 0) origin_segments[0].line else start_line,
+        .column = if (origin_segments.len > 0) origin_segments[0].column else 1,
         .length = text_owned.len,
     };
     try list.append(.{
@@ -362,50 +456,175 @@ fn appendLogicalLine(list: *std.array_list.Managed(LogicalLine), text_owned: []c
     });
 }
 
-fn normalizeStmtText(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+fn normalizeStmtTextWithMap(allocator: std.mem.Allocator, raw: MappedText) !MappedText {
     var out = std.array_list.Managed(u8).init(allocator);
+    var segments = std.array_list.Managed(Segment).init(allocator);
     var i: usize = 0;
-    while (i < text.len) {
-        if (i + 1 < text.len and text[i] == '=' and text[i + 1] == '>') {
+    var run_start: usize = 0;
+    while (i < raw.text.len) {
+        if (i + 1 < raw.text.len and raw.text[i] == '=' and raw.text[i + 1] == '>') {
+            try appendMappedRange(&out, &segments, raw, run_start, i);
             // Preserve USE rename arrows and let parser consume `=>` directly.
-            try out.appendSlice("=>");
+            try appendMappedRange(&out, &segments, raw, i, i + 2);
             i += 2;
+            run_start = i;
             continue;
         }
-        if (i + 1 < text.len and text[i] == '<' and text[i + 1] == '=') {
-            try out.appendSlice(".LE.");
+        if (i + 1 < raw.text.len and raw.text[i] == '<' and raw.text[i + 1] == '=') {
+            try appendMappedRange(&out, &segments, raw, run_start, i);
+            try appendGeneratedSegment(&out, &segments, raw, i, ".LE.");
             i += 2;
+            run_start = i;
             continue;
         }
-        if (i + 1 < text.len and text[i] == '>' and text[i + 1] == '=') {
-            try out.appendSlice(".GE.");
+        if (i + 1 < raw.text.len and raw.text[i] == '>' and raw.text[i + 1] == '=') {
+            try appendMappedRange(&out, &segments, raw, run_start, i);
+            try appendGeneratedSegment(&out, &segments, raw, i, ".GE.");
             i += 2;
+            run_start = i;
             continue;
         }
-        if (i + 1 < text.len and text[i] == '=' and text[i + 1] == '=') {
-            try out.appendSlice(".EQ.");
+        if (i + 1 < raw.text.len and raw.text[i] == '=' and raw.text[i + 1] == '=') {
+            try appendMappedRange(&out, &segments, raw, run_start, i);
+            try appendGeneratedSegment(&out, &segments, raw, i, ".EQ.");
             i += 2;
+            run_start = i;
             continue;
         }
-        if (i + 1 < text.len and text[i] == '/' and text[i + 1] == '=') {
-            try out.appendSlice(".NE.");
+        if (i + 1 < raw.text.len and raw.text[i] == '/' and raw.text[i + 1] == '=') {
+            try appendMappedRange(&out, &segments, raw, run_start, i);
+            try appendGeneratedSegment(&out, &segments, raw, i, ".NE.");
             i += 2;
+            run_start = i;
             continue;
         }
-        if (text[i] == '<') {
-            try out.appendSlice(".LT.");
+        if (raw.text[i] == '<') {
+            try appendMappedRange(&out, &segments, raw, run_start, i);
+            try appendGeneratedSegment(&out, &segments, raw, i, ".LT.");
             i += 1;
+            run_start = i;
             continue;
         }
-        if (text[i] == '>') {
-            try out.appendSlice(".GT.");
+        if (raw.text[i] == '>') {
+            try appendMappedRange(&out, &segments, raw, run_start, i);
+            try appendGeneratedSegment(&out, &segments, raw, i, ".GT.");
             i += 1;
+            run_start = i;
             continue;
         }
-        try out.append(text[i]);
         i += 1;
     }
+    try appendMappedRange(&out, &segments, raw, run_start, raw.text.len);
+    return .{
+        .text = try out.toOwnedSlice(),
+        .segments = try segments.toOwnedSlice(),
+    };
+}
+
+fn trimMappedText(allocator: std.mem.Allocator, mapped: MappedText) !MappedText {
+    var start: usize = 0;
+    var end: usize = mapped.text.len;
+    while (start < end and (mapped.text[start] == ' ' or mapped.text[start] == '\t')) : (start += 1) {}
+    while (end > start and (mapped.text[end - 1] == ' ' or mapped.text[end - 1] == '\t')) : (end -= 1) {}
+    return sliceMappedText(allocator, mapped, start, end);
+}
+
+fn trimMappedTextRange(allocator: std.mem.Allocator, mapped: MappedText, start_idx: usize, end_idx: usize) !MappedText {
+    var start = start_idx;
+    var end = end_idx;
+    while (start < end and (mapped.text[start] == ' ' or mapped.text[start] == '\t')) : (start += 1) {}
+    while (end > start and (mapped.text[end - 1] == ' ' or mapped.text[end - 1] == '\t')) : (end -= 1) {}
+    return sliceMappedText(allocator, mapped, start, end);
+}
+
+fn sliceMappedText(allocator: std.mem.Allocator, mapped: MappedText, start_idx: usize, end_idx: usize) !MappedText {
+    return .{
+        .text = try allocator.dupe(u8, mapped.text[start_idx..end_idx]),
+        .segments = try sliceSegments(allocator, mapped.segments, start_idx, end_idx),
+    };
+}
+
+fn sliceSegments(allocator: std.mem.Allocator, source_segments: []const Segment, start_idx: usize, end_idx: usize) ![]Segment {
+    var out = std.array_list.Managed(Segment).init(allocator);
+    var offset: usize = 0;
+    for (source_segments) |segment| {
+        const seg_start = offset;
+        const seg_end = offset + segment.length;
+        const overlap_start = @max(start_idx, seg_start);
+        const overlap_end = @min(end_idx, seg_end);
+        if (overlap_start < overlap_end) {
+            try out.append(.{
+                .line = segment.line,
+                .column = segment.column + (overlap_start - seg_start),
+                .length = overlap_end - overlap_start,
+            });
+        }
+        offset = seg_end;
+    }
     return out.toOwnedSlice();
+}
+
+fn appendMappedRange(
+    out_text: *std.array_list.Managed(u8),
+    out_segments: *std.array_list.Managed(Segment),
+    raw: MappedText,
+    start_idx: usize,
+    end_idx: usize,
+) !void {
+    if (end_idx <= start_idx) return;
+    try out_text.appendSlice(raw.text[start_idx..end_idx]);
+
+    var offset: usize = 0;
+    for (raw.segments) |segment| {
+        const seg_start = offset;
+        const seg_end = offset + segment.length;
+        const overlap_start = @max(start_idx, seg_start);
+        const overlap_end = @min(end_idx, seg_end);
+        if (overlap_start < overlap_end) {
+            try out_segments.append(.{
+                .line = segment.line,
+                .column = segment.column + (overlap_start - seg_start),
+                .length = overlap_end - overlap_start,
+            });
+        }
+        offset = seg_end;
+    }
+}
+
+fn appendGeneratedSegment(
+    out_text: *std.array_list.Managed(u8),
+    out_segments: *std.array_list.Managed(Segment),
+    raw: MappedText,
+    source_idx: usize,
+    replacement: []const u8,
+) !void {
+    try out_text.appendSlice(replacement);
+    const pos = mappedPosAt(raw.segments, source_idx);
+    try out_segments.append(.{
+        .line = pos.line,
+        .column = pos.column,
+        .length = replacement.len,
+    });
+}
+
+fn mappedPosAt(segments: []const Segment, index: usize) struct { line: usize, column: usize } {
+    var offset: usize = 0;
+    for (segments) |segment| {
+        if (index < offset + segment.length) {
+            return .{
+                .line = segment.line,
+                .column = segment.column + (index - offset),
+            };
+        }
+        offset += segment.length;
+    }
+    if (segments.len > 0) {
+        return .{
+            .line = segments[segments.len - 1].line,
+            .column = segments[segments.len - 1].column,
+        };
+    }
+    return .{ .line = 1, .column = 1 };
 }
 
 fn mapTypeSpec(allocator: std.mem.Allocator, spec_raw: []const u8, kind_state: KindState) ![]const u8 {
@@ -554,6 +773,31 @@ test "normalizeFreeForm keeps USE rename arrow" {
 
     try testing.expectEqual(@as(usize, 1), lines.len);
     try testing.expectEqualStrings("use iso_fortran_env, only: nwrite => output_unit", lines[0].text);
+}
+
+test "normalizeFreeForm preserves fine-grained continuation segments" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text =
+        "x = a &\n" ++
+        "  &+ b\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 1), lines.len);
+    try testing.expectEqualStrings("x = a + b", lines[0].text);
+    try testing.expectEqual(@as(usize, 2), lines[0].segments.len);
+    try testing.expectEqual(@as(usize, 1), lines[0].segments[0].line);
+    try testing.expectEqual(@as(usize, 1), lines[0].segments[0].column);
+    try testing.expectEqual(@as(usize, 6), lines[0].segments[0].length);
+    try testing.expectEqual(@as(usize, 2), lines[0].segments[1].line);
+    try testing.expectEqual(@as(usize, 4), lines[0].segments[1].column);
+    try testing.expectEqual(@as(usize, 3), lines[0].segments[1].length);
+
+    const plus_pos = logical_line.mapIndexToPos(lines[0], 6);
+    try testing.expectEqual(@as(usize, 2), plus_pos.line);
+    try testing.expectEqual(@as(usize, 4), plus_pos.column);
 }
 
 fn isArrayConstructor(value: []const u8) bool {
