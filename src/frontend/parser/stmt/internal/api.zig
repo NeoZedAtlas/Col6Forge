@@ -3,6 +3,7 @@ const ast = @import("../../../../ast/nodes.zig");
 const logical_line = @import("../../../logical_line.zig");
 const lexer = @import("../../../lexer.zig");
 const context = @import("../../token_stream.zig");
+const parse_diag = @import("../../diagnostic.zig");
 const array_info = @import("../../array_info.zig");
 const action_stmt = @import("action_stmt.zig");
 const control_flow = @import("../control_flow.zig");
@@ -35,6 +36,20 @@ fn makeStmtWithSource(line: logical_line.LogicalLine, label: ?[]const u8, node: 
         .source_column = defaultSourceColumn(line),
         .source_text = line.text,
     };
+}
+
+fn setParseDiagnosticFromStream(line: logical_line.LogicalLine, lp: LineParser, err: anyerror) void {
+    const info = parse_diag.errorInfo(err);
+    var line_no = line.span.start_line;
+    var column: usize = 1;
+    if (lp.index < lp.tokens.len) {
+        line_no = lp.tokens[lp.index].line;
+        column = lp.tokens[lp.index].column;
+    } else if (lp.tokens.len > 0) {
+        line_no = lp.tokens[lp.tokens.len - 1].range.end.line;
+        column = lp.tokens[lp.tokens.len - 1].range.end.column;
+    }
+    parse_diag.set(line_no, column, info.code, info.message, line.text);
 }
 
 fn actionCallbacks() action_stmt.ActionCallbacks {
@@ -103,7 +118,10 @@ pub fn parseStatement(
         const construct_name = do_lp.readName(arena) orelse return error.MissingName;
         _ = do_lp.expect(.colon) orelse return error.UnexpectedToken;
         if (!do_lp.consumeKeyword("DO")) return error.UnexpectedToken;
-        const stmt_node = try control_flow.parseDoStatement(arena, &do_lp, do_ctx);
+        const stmt_node = control_flow.parseDoStatement(arena, &do_lp, do_ctx) catch |err| {
+            setParseDiagnosticFromStream(line, do_lp, err);
+            return err;
+        };
         if (control_flow_bridge.loopEndLabel(stmt_node)) |cycle_label| {
             const exit_label = try control_flow_bridge.maybeAttachLoopExitLabel(arena, do_ctx, stmt_node);
             try do_ctx.updateTopDoName(construct_name, cycle_label, exit_label);
@@ -116,16 +134,25 @@ pub fn parseStatement(
             index.* += 1;
             return makeStmtWithSource(line, label, stmt_node);
         }
-        var stmt = try if_stmt.parseIfStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, parseStatement, actionCallbacks());
+        var stmt = if_stmt.parseIfStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, parseStatement, actionCallbacks()) catch |err| {
+            if (!parse_diag.has()) setParseDiagnosticFromStream(line, lp, err);
+            return err;
+        };
         setStmtSourceIfMissing(&stmt, line);
         return stmt;
     }
     if (select_case.isSelectCaseStart(lp)) {
-        var stmt = try select_case.parseSelectCaseStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, parseStatement);
+        var stmt = select_case.parseSelectCaseStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, parseStatement) catch |err| {
+            if (!parse_diag.has()) setParseDiagnosticFromStream(line, lp, err);
+            return err;
+        };
         setStmtSourceIfMissing(&stmt, line);
         return stmt;
     }
-    const action_node = try action_stmt.parseActionStmtNode(arena, line, &lp, do_ctx, .top_level, actionCallbacks());
+    const action_node = action_stmt.parseActionStmtNode(arena, line, &lp, do_ctx, .top_level, actionCallbacks()) catch |err| {
+        if (!parse_diag.has()) setParseDiagnosticFromStream(line, lp, err);
+        return err;
+    };
     index.* += 1;
     return makeStmtWithSource(line, label, action_node);
 }

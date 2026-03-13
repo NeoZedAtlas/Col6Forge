@@ -690,3 +690,81 @@ fn sourceLineAt(contents: []const u8, line_no: usize) []const u8 {
     }
     return "";
 }
+
+fn writeTempSourceFile(tmp: *std.testing.TmpDir, allocator: std.mem.Allocator, file_name: []const u8, source: []const u8) ![]u8 {
+    var file = try tmp.dir.createFile(file_name, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(source);
+
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    return std.fs.path.join(allocator, &.{ dir_path, file_name });
+}
+
+test "runPipeline reports parse diagnostics against the original continued source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER A,\n" ++
+        "     1 )\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "continued_parse_error.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag_info.line);
+    try testing.expectEqual(@as(usize, 8), diag_info.column);
+    try testing.expectEqualStrings("CF2001", diag_info.code);
+    try testing.expectEqualStrings("     1 )", diag_info.line_text);
+}
+
+test "runPipeline reports semantic declaration diagnostics against the original source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*(*) A\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_decl_error.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.InvalidCharLen, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag_info.line);
+    try testing.expectEqual(@as(usize, 7), diag_info.column);
+    try testing.expectEqualStrings("CF3103", diag_info.code);
+    try testing.expectEqualStrings("      CHARACTER*(*) A", diag_info.line_text);
+}
+
+test "runPipeline reports semantic expression diagnostics against the original source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER I\n" ++
+        "      I='A'+1\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_expr_error.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.InvalidArithmeticOperands, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag_info.line);
+    try testing.expectEqual(@as(usize, 7), diag_info.column);
+    try testing.expectEqualStrings("CF3119", diag_info.code);
+    try testing.expectEqualStrings("      I='A'+1", diag_info.line_text);
+}

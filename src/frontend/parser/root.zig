@@ -275,9 +275,11 @@ const Parser = struct {
                 continue;
             }
             var stmt_node = stmt.parseStatement(self.arena, self.lines, &self.index, &do_ctx, &param_ints, &param_strings, &array_names) catch |err| {
-                const err_line = lineAtIndexOrLast(self.lines, self.index, line);
-                const err_col = if (err_line.segments.len > 0) err_line.segments[0].column else 1;
-                setParseDiagnosticForLine(err_line, err_col, err);
+                if (!parse_diag.has()) {
+                    const err_line = lineAtIndexOrLast(self.lines, self.index, line);
+                    const err_col = if (err_line.segments.len > 0) err_line.segments[0].column else 1;
+                    setParseDiagnosticForLine(err_line, err_line.span.start_line, err_col, err);
+                }
                 return err;
             };
             stampStmtSource(&stmt_node, line);
@@ -498,22 +500,25 @@ fn setLexerOrLineDiagnostic(line: logical_line.LogicalLine, err: anyerror) void 
         parse_diag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
         return;
     }
-    setParseDiagnosticForLine(line, 1, err);
+    setParseDiagnosticForLine(line, line.span.start_line, 1, err);
 }
 
 fn setParseDiagnosticFromStream(line: logical_line.LogicalLine, lp: LineParser, err: anyerror) void {
+    var line_no = line.span.start_line;
     var column: usize = 1;
     if (lp.index < lp.tokens.len) {
+        line_no = lp.tokens[lp.index].line;
         column = lp.tokens[lp.index].column;
     } else if (lp.tokens.len > 0) {
+        line_no = lp.tokens[lp.tokens.len - 1].range.end.line;
         column = lp.tokens[lp.tokens.len - 1].range.end.column;
     }
-    setParseDiagnosticForLine(line, column, err);
+    setParseDiagnosticForLine(line, line_no, column, err);
 }
 
-fn setParseDiagnosticForLine(line: logical_line.LogicalLine, column: usize, err: anyerror) void {
+fn setParseDiagnosticForLine(line: logical_line.LogicalLine, line_no: usize, column: usize, err: anyerror) void {
     const info = parseErrorInfo(err);
-    parse_diag.set(line.span.start_line, column, info.code, info.message, line.text);
+    parse_diag.set(line_no, column, info.code, info.message, line.text);
 }
 
 fn stampStmtSource(stmt_node: *ast.Stmt, line: logical_line.LogicalLine) void {
@@ -1343,4 +1348,49 @@ test "parseProgram keeps split PROGRAMX assignment in implicit main" {
     try testing.expectEqual(@as(usize, 1), program.units[0].stmts.len);
     try testing.expect(program.units[0].stmts[0].node == .assignment);
     try testing.expectEqualStrings("PROGRAMX", program.units[0].stmts[0].node.assignment.target.identifier);
+}
+
+test "parseProgram reports continued declaration parse errors on the real source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER A,\n" ++
+        "     1 )\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    try testing.expectError(error.UnexpectedToken, parseProgram(arena.allocator(), lines));
+    const diag = parse_diag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 8), diag.column);
+    try testing.expectEqualStrings("CF2001", diag.code);
+}
+
+test "parseProgram reports continued IF parse errors on the real source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      IF (A .EQ.\n" ++
+        "     1 ) THEN\n" ++
+        "      END IF\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    try testing.expectError(error.UnexpectedToken, parseProgram(arena.allocator(), lines));
+    const diag = parse_diag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 8), diag.column);
+    try testing.expectEqualStrings("CF2001", diag.code);
 }

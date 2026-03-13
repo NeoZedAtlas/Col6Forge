@@ -164,7 +164,10 @@ test "semantic reports CF3116 for duplicate declaration" {
 
     try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 7), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "REAL A"));
 }
 
 test "semantic reports CF3116 for conflicting DIMENSION redeclaration" {
@@ -352,7 +355,10 @@ test "semantic reports CF3119 for CHARACTER arithmetic operand" {
 
     try testing.expectError(error.InvalidArithmeticOperands, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 7), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3119"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "I='A'+1"));
 }
 
 test "semantic reports CF3119 for LOGICAL and REAL logical operator" {

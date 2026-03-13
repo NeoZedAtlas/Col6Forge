@@ -26,6 +26,10 @@ pub fn clear() void {
     has_diag = false;
 }
 
+pub fn has() bool {
+    return has_diag;
+}
+
 pub fn set(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
     var next: Storage = .{
         .line = if (line == 0) 1 else line,
@@ -47,6 +51,27 @@ pub fn take() ?ParseDiagnostic {
         .code = storage.code_buf[0..storage.code_len],
         .message = storage.message_buf[0..storage.message_len],
         .line_text = storage.line_buf[0..storage.line_len],
+    };
+}
+
+pub fn errorInfo(err: anyerror) struct { code: []const u8, message: []const u8 } {
+    return switch (err) {
+        error.UnexpectedToken => .{ .code = "CF2001", .message = "unexpected token in statement" },
+        error.UnexpectedEOF => .{ .code = "CF2002", .message = "unexpected end of file" },
+        error.ExpectedProgramUnit => .{ .code = "CF2003", .message = "expected PROGRAM/SUBROUTINE/FUNCTION/BLOCK DATA" },
+        error.MissingName => .{ .code = "CF2004", .message = "missing required identifier" },
+        error.ExpectedPrecision => .{ .code = "CF2005", .message = "expected PRECISION after DOUBLE" },
+        error.UnsupportedComplexKind => .{ .code = "CF2006", .message = "unsupported COMPLEX kind; use COMPLEX*8 or COMPLEX*16" },
+        error.UnknownType => .{ .code = "CF2007", .message = "unknown type in declaration" },
+        error.ExpectedEndIf => .{ .code = "CF2008", .message = "IF block is missing END IF/ENDIF" },
+        error.DeclarationInIfBlock => .{ .code = "CF2009", .message = "declaration is not allowed inside IF executable block" },
+        error.EndDoWithoutDo => .{ .code = "CF2010", .message = "END DO/ENDDO found without matching DO" },
+        error.ExpressionDepthExceeded => .{ .code = "CF2011", .message = "expression nesting exceeds parser limit" },
+        error.UnsupportedModuleUnit => .{ .code = "CF2012", .message = "MODULE program units are not supported yet" },
+        error.DataExpansionTooLarge => .{ .code = "CF2013", .message = "DATA statement expansion exceeds parser safety limit" },
+        error.FormatExpansionTooLarge => .{ .code = "CF2014", .message = "FORMAT statement expansion exceeds parser safety limit" },
+        error.InvalidEquivalenceGroup => .{ .code = "CF2015", .message = "EQUIVALENCE group must contain at least two designators" },
+        else => .{ .code = "CF2099", .message = "parser failed to understand source" },
     };
 }
 

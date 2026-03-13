@@ -24,7 +24,7 @@ pub fn collectFortranKnownSymbols(
         const contents = std.fs.cwd().readFileAlloc(allocator, input_path, max_size) catch continue;
         defer allocator.free(contents);
 
-        const logical_lines = Col6Forge.frontend.normalizeSourcePath(.auto, allocator, input_path, contents, true) catch continue;
+        const logical_lines = Col6Forge.frontend.normalizeSourcePath(.auto, allocator, input_path, contents, false) catch continue;
         defer Col6Forge.frontend.freeSourceFormLines(allocator, logical_lines);
 
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -192,10 +192,49 @@ fn emitPipelineToFile(
             .pause_mode = pause_mode,
             .target = target,
             .time_report = time_report,
-            .coarse_source_map = true,
+            .coarse_source_map = false,
             .known_function_types = known_function_types,
             .known_procedure_sigs = known_procedure_sigs,
         },
     );
     try out_writer.interface.flush();
+}
+
+fn writeTempSourceFile(tmp: *std.testing.TmpDir, allocator: std.mem.Allocator, file_name: []const u8, source: []const u8) ![]u8 {
+    var file = try tmp.dir.createFile(file_name, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(source);
+
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    return std.fs.path.join(allocator, &.{ dir_path, file_name });
+}
+
+test "emitPipelineToFile preserves fine-grained fixed-form diagnostics for cc translation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER A,\n" ++
+        "     1 )\n" ++
+        "      END\n";
+    const input_path = try writeTempSourceFile(&tmp, allocator, "cc_parse_error.f", source);
+    defer allocator.free(input_path);
+    const output_path = try writeTempSourceFile(&tmp, allocator, "translated.ll", "");
+    defer allocator.free(output_path);
+
+    try testing.expectError(
+        error.UnexpectedToken,
+        emitPipelineToFile(allocator, input_path, output_path, false, .auto, null, false, &.{}, &.{}),
+    );
+
+    const diag_info = Col6Forge.takeLastPipelineDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag_info.line);
+    try testing.expectEqual(@as(usize, 8), diag_info.column);
+    try testing.expectEqualStrings("CF2001", diag_info.code);
+    try testing.expectEqualStrings("     1 )", diag_info.line_text);
 }
