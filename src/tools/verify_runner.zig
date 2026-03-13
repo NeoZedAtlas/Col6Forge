@@ -14,7 +14,7 @@ const RuntimeBackend = enum {
     zig,
 };
 
-const CACHE_SCHEMA_VERSION: u32 = 2;
+const CACHE_SCHEMA_VERSION: u32 = 3;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -804,13 +804,20 @@ fn fileExistsAbsolute(path: []const u8) bool {
 fn copyFileAbsolute(src_path: []const u8, dst_path: []const u8) !void {
     var src = try std.fs.openFileAbsolute(src_path, .{});
     defer src.close();
-    var dst = try std.fs.createFileAbsolute(dst_path, .{ .truncate = true });
+    const stat = try src.stat();
+    var dst = try std.fs.createFileAbsolute(dst_path, .{
+        .truncate = true,
+        .mode = stat.mode,
+    });
     defer dst.close();
     var buf: [64 * 1024]u8 = undefined;
     while (true) {
         const n = try src.read(&buf);
         if (n == 0) break;
         try dst.writeAll(buf[0..n]);
+    }
+    if (builtin.os.tag != .windows) {
+        try dst.chmod(stat.mode);
     }
 }
 

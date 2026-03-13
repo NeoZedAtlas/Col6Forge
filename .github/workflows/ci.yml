@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   guardrails-and-unit:
     name: Guardrails and Unit
@@ -35,10 +39,15 @@ jobs:
           fi
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
-      - name: Install gfortran
+      - name: Ensure gfortran
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gfortran
+          set -euo pipefail
+          if ! command -v gfortran >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gfortran
+          fi
+          gfortran --version | head -n 1
 
       - name: Compile checks
         run: zig build check
@@ -57,10 +66,10 @@ jobs:
           COL6FORGE_LEX_FUZZ_ITERS: "20000"
         run: zig build fuzz
 
-  golden-and-verification:
-    name: Golden and Verification
+  golden:
+    name: Golden
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -79,21 +88,30 @@ jobs:
           fi
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
-      - name: Install gfortran
+      - name: Ensure gfortran
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gfortran
+          set -euo pipefail
+          if ! command -v gfortran >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gfortran
+          fi
+          gfortran --version | head -n 1
 
       - name: Golden tests
-        run: zig build golden -- --jobs 1
+        run: zig build golden -- --jobs 4
 
-      - name: NIST strict verification
-        run: zig build verify-strict -- --jobs 1
-
-  ecosystem-verification:
-    name: BLAS and LAPACK
+  nist-strict-verification:
+    name: NIST Strict (${{ matrix.suite_name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 120
+    strategy:
+      matrix:
+        include:
+          - suite_name: fcvs21_f95
+            build_arg: -Dfcvs21_f95
+          - suite_name: FCSV78
+            build_arg: -Dfcsv78
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -112,16 +130,101 @@ jobs:
           fi
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
-      - name: Install gfortran
+      - name: Ensure gfortran
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gfortran
+          set -euo pipefail
+          if ! command -v gfortran >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gfortran
+          fi
+          gfortran --version | head -n 1
+
+      - name: NIST strict verification
+        run: zig build verify-strict ${{ matrix.build_arg }} -- --jobs 1
+
+  blas-verification:
+    name: BLAS
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.15.2
+          ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+          if [[ ! -x "$ZIG_DIR/zig" ]]; then
+            mkdir -p "$ZIG_DIR"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            mv "$RUNNER_TEMP/zig-x86_64-linux-${ZIG_VERSION}"/* "$ZIG_DIR"/
+          fi
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
+
+      - name: Ensure gfortran
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v gfortran >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gfortran
+          fi
+          gfortran --version | head -n 1
 
       - name: BLAS verification
         run: zig build blas-verify
 
+  lapack-strict-verification:
+    name: LAPACK Strict (${{ matrix.shard_name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      matrix:
+        include:
+          - shard_name: LIN
+            filter: xlintst
+          - shard_name: EIG S
+            filter: xeigtsts
+          - shard_name: EIG C
+            filter: xeigtstc
+          - shard_name: EIG D
+            filter: xeigtstd
+          - shard_name: EIG Z
+            filter: xeigtstz
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION=0.15.2
+          ZIG_DIR="$RUNNER_TEMP/zig-$ZIG_VERSION"
+          if [[ ! -x "$ZIG_DIR/zig" ]]; then
+            mkdir -p "$ZIG_DIR"
+            curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+            tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+            mv "$RUNNER_TEMP/zig-x86_64-linux-${ZIG_VERSION}"/* "$ZIG_DIR"/
+          fi
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
+
+      - name: Ensure gfortran
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v gfortran >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gfortran
+          fi
+          gfortran --version | head -n 1
+
       - name: LAPACK strict verification
-        run: zig build lapack-verify-strict
+        run: zig build lapack-verify-strict -- --filter ${{ matrix.filter }}
 
   perf-regression:
     name: Perf Regression
@@ -147,10 +250,15 @@ jobs:
           fi
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
-      - name: Install gfortran
+      - name: Ensure gfortran
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gfortran
+          set -euo pipefail
+          if ! command -v gfortran >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gfortran
+          fi
+          gfortran --version | head -n 1
 
       - name: Resolve baseline revision
         id: base
@@ -259,10 +367,15 @@ jobs:
           fi
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
-      - name: Install gfortran
+      - name: Ensure gfortran
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gfortran
+          set -euo pipefail
+          if ! command -v gfortran >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gfortran
+          fi
+          gfortran --version | head -n 1
 
       - name: GCC gfortran.dg verification
         run: zig build gcc-dg-verify
