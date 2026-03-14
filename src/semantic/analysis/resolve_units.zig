@@ -38,15 +38,15 @@ pub const Resolver = struct {
         }
         for (ctx.unit.decls, 0..) |decl, decl_idx| {
             if (decl_idx < ctx.unit.decl_sources.len) {
-                ctx.current_decl_source = ctx.unit.decl_sources[decl_idx];
+                ctx.setCurrentDeclSource(ctx.unit.decl_sources[decl_idx]);
             } else {
-                ctx.current_decl_source = null;
+                ctx.setCurrentDeclSource(null);
             }
             switch (decl) {
                 .type_decl => |type_decl| try decls.applyTypeDecl(ctx, type_decl),
                 else => try specs.applySpec(ctx, decl),
             }
-            ctx.current_decl_source = null;
+            ctx.setCurrentDeclSource(null);
         }
         try validateAssumedCharacterLengths(ctx);
         try resolve_data.lowerDataStatements(ctx);
@@ -82,7 +82,7 @@ fn validateAssumedCharacterLengths(ctx: *context.Context) !void {
         if (sym.storage == .dummy) continue;
         if (sym.kind == .parameter) continue;
         if (sym.kind == .function) continue;
-        ctx.current_decl_source = findTypeDeclSource(ctx, sym.name);
+        ctx.setCurrentDeclSource(findTypeDeclSource(ctx, sym.name));
         return error.InvalidCharLen;
     }
 }

@@ -45,6 +45,7 @@ pub const inferFunctionTypeSpec = function_type.inferFunctionTypeSpec;
 pub const inferProcedureArgSigs = api.inferProcedureArgSigs;
 pub const printSemantic = printer.printSemantic;
 pub const takeDiagnostic = api.takeDiagnostic;
+pub const takeFallbackSource = diagnostic.takeFallbackSource;
 pub const clearDiagnostic = api.clearDiagnostic;
 
 test {

@@ -7,3 +7,4 @@ pub const diagnostic = @import("diagnostic.zig");
 
 pub const parseProgram = root.parseProgram;
 pub const takeDiagnostic = diagnostic.take;
+pub const takeFallbackSource = diagnostic.takeFallbackSource;

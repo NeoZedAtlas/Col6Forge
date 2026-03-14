@@ -45,6 +45,10 @@ pub fn takeDiagnostic() ?diagnostic.CodegenDiagnostic {
     return diagnostic.take();
 }
 
+pub fn takeFallbackSource() ?diagnostic.FallbackSource {
+    return diagnostic.takeFallbackSource();
+}
+
 pub fn takeLastBreakdownSample() ?CodegenBreakdownSample {
     return llvm.takeLastBreakdownSample();
 }

@@ -40,7 +40,7 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             }
         },
         .call => |call| {
-            self.current_source = if (call.source.line != 0) call.source else null;
+            self.setCurrentSource(if (call.source.line != 0) call.source else null);
             const idx = try symbols_mod.ensureSymbol(self, call.name);
             self.symbols.items[idx].is_external = true;
             for (call.args) |arg| {
@@ -100,19 +100,19 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         },
         .inquire => |inq| {
             for (inq.controls) |ctrl| {
-                self.current_source = if (ctrl.source.line != 0) ctrl.source else self.sourceForExpr(ctrl.value);
+                self.setCurrentSource(if (ctrl.source.line != 0) ctrl.source else self.sourceForExpr(ctrl.value));
                 try expressions.resolveExpr(self, ctrl.value);
             }
         },
         .close => |cls| {
             for (cls.controls) |ctrl| {
-                self.current_source = if (ctrl.source.line != 0) ctrl.source else self.sourceForExpr(ctrl.value);
+                self.setCurrentSource(if (ctrl.source.line != 0) ctrl.source else self.sourceForExpr(ctrl.value));
                 try expressions.resolveExpr(self, ctrl.value);
             }
         },
         .allocate => |allocate| {
             for (allocate.items) |item| {
-                self.current_source = if (item.source.line != 0) item.source else null;
+                self.setCurrentSource(if (item.source.line != 0) item.source else null);
                 _ = try symbols_mod.ensureSymbol(self, item.name);
                 for (item.dims) |dim| {
                     try expressions.resolveExpr(self, dim);

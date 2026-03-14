@@ -575,6 +575,12 @@ fn setParseDiagnostic(
         );
         return;
     }
+    if (parser.takeFallbackSource()) |fallback| {
+        const raw_line = sourceLineAt(contents, fallback.line);
+        const line_text = if (raw_line.len > 0) raw_line else fallback.line_text;
+        setDefaultDiagnosticAt(input_path, fallback.line, fallback.column, line_text, "CF2000", "failed to parse source", err);
+        return;
+    }
 
     const line_no: usize = if (logical_lines.len > 0) logical_lines[0].span.start_line else 1;
     const line_text = sourceLineAt(contents, line_no);
@@ -595,6 +601,12 @@ fn setSemanticDiagnostic(input_path: []const u8, contents: []const u8, err: anye
         );
         return;
     }
+    if (semantic.takeFallbackSource()) |fallback| {
+        const raw_line = sourceLineAt(contents, fallback.line);
+        const line_text = if (raw_line.len > 0) raw_line else fallback.line_text;
+        setDefaultDiagnosticAt(input_path, fallback.line, fallback.column, line_text, "CF3199", "semantic analysis failed", err);
+        return;
+    }
     setDefaultDiagnostic(input_path, contents, "CF3199", "semantic analysis failed", err);
 }
 
@@ -610,6 +622,13 @@ fn setCodegenDiagnostic(input_path: []const u8, contents: []const u8, err: anyer
             cg_info.message,
             line_text,
         );
+        return;
+    }
+    if (codegen.takeFallbackSource()) |fallback| {
+        const info = codegen.diagnostic.codegenErrorInfo(err);
+        const raw_line = sourceLineAt(contents, fallback.line);
+        const line_text = if (raw_line.len > 0) raw_line else fallback.line_text;
+        setDefaultDiagnosticAt(input_path, fallback.line, fallback.column, line_text, info.code, info.message, err);
         return;
     }
     const info = codegen.diagnostic.codegenErrorInfo(err);

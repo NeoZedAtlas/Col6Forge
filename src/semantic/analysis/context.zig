@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const diag = @import("../diagnostic.zig");
 const symbols = @import("../symbol/mod.zig");
 const scope = @import("../scope.zig");
 const intrinsics = @import("intrinsics.zig");
@@ -270,10 +271,37 @@ pub const Context = struct {
 
     pub fn setCurrentStmt(self: *Context, stmt: ast.Stmt) void {
         self.current_stmt = stmt;
+        diag.noteFallbackSource(
+            if (stmt.source_line == 0) 1 else stmt.source_line,
+            if (stmt.source_column == 0) 1 else stmt.source_column,
+            stmt.source_text,
+        );
     }
 
     pub fn clearCurrentStmt(self: *Context) void {
         self.current_stmt = null;
+    }
+
+    pub fn setCurrentDeclSource(self: *Context, source: ?ast.DeclSource) void {
+        self.current_decl_source = source;
+        if (source) |decl_source| {
+            diag.noteFallbackSource(
+                if (decl_source.line == 0) 1 else decl_source.line,
+                if (decl_source.column == 0) 1 else decl_source.column,
+                decl_source.text,
+            );
+        }
+    }
+
+    pub fn setCurrentSource(self: *Context, source: ?ast.SourceRef) void {
+        self.current_source = source;
+        if (source) |src| {
+            diag.noteFallbackSource(
+                if (src.line == 0) 1 else src.line,
+                if (src.column == 0) 1 else src.column,
+                src.text,
+            );
+        }
     }
 
     pub fn sourceForExpr(self: *const Context, expr_node: *ast.Expr) ?ast.SourceRef {

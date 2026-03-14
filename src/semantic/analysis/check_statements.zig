@@ -25,11 +25,11 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             const target_ty = try checkExprType(self, assign.target);
             const value_ty = try checkExprType(self, assign.value);
             if (!isAssignmentTarget(self, assign.target)) {
-                self.current_source = self.sourceForExpr(assign.target);
+                self.setCurrentSource(self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
             }
             if (!isAssignmentCompatible(target_ty, value_ty)) {
-                self.current_source = self.sourceForExpr(assign.value) orelse self.sourceForExpr(assign.target);
+                self.setCurrentSource(self.sourceForExpr(assign.value) orelse self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
             }
         },
@@ -42,7 +42,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
         .use_stmt => {},
         .call => |call| {
             const call_idx = resolve_symbols.findSymbolIndex(self, call.name);
-            self.current_source = if (call.source.line != 0) call.source else null;
+            self.setCurrentSource(if (call.source.line != 0) call.source else null);
             try checkKnownProcedureCallArity(
                 self,
                 call.name,
@@ -94,11 +94,11 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 try checkExpr(self, ctrl.value);
                 if (ctrl.name) |name| {
                     if (std.ascii.eqlIgnoreCase(name, "STATUS")) {
-                        self.current_source = if (ctrl.source.line != 0) ctrl.source else self.sourceForExpr(ctrl.value);
+                        self.setCurrentSource(if (ctrl.source.line != 0) ctrl.source else self.sourceForExpr(ctrl.value));
                         try checkCharControlExpr(self, ctrl.value);
                         if (controlLiteralText(ctrl.value)) |text| {
                             if (!textInSet(text, &.{ "KEEP", "DELETE" })) {
-                                self.current_source = if (ctrl.source.line != 0) ctrl.source else self.sourceForExpr(ctrl.value);
+                                self.setCurrentSource(if (ctrl.source.line != 0) ctrl.source else self.sourceForExpr(ctrl.value));
                                 return error.InvalidIoControlValue;
                             }
                         }
@@ -111,11 +111,11 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 const idx = resolve_symbols.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
                 const sym = self.symbols.items[idx];
                 if (sym.dims.len == 0) {
-                    self.current_source = if (item.source.line != 0) item.source else null;
+                    self.setCurrentSource(if (item.source.line != 0) item.source else null);
                     return error.UnsupportedAllocateSyntax;
                 }
                 if (sym.dims.len != item.dims.len) {
-                    self.current_source = if (item.source.line != 0) item.source else null;
+                    self.setCurrentSource(if (item.source.line != 0) item.source else null);
                     return error.InvalidSubscript;
                 }
                 for (item.dims) |dim| {
@@ -171,11 +171,11 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             const target_ty = try checkExprType(self, where.target);
             const value_ty = try checkExprType(self, where.value);
             if (!isAssignmentTarget(self, where.target)) {
-                self.current_source = self.sourceForExpr(where.target);
+                self.setCurrentSource(self.sourceForExpr(where.target));
                 return error.AssignmentTypeMismatch;
             }
             if (!isAssignmentCompatible(target_ty, value_ty)) {
-                self.current_source = self.sourceForExpr(where.value) orelse self.sourceForExpr(where.target);
+                self.setCurrentSource(self.sourceForExpr(where.value) orelse self.sourceForExpr(where.target));
                 return error.AssignmentTypeMismatch;
             }
         },
@@ -207,24 +207,24 @@ fn checkAllocateDim(self: *context.Context, expr: *ast.Expr) CheckError!void {
             if (range.lower) |lower| {
                 const lower_ty = try checkExprType(self, lower);
                 if (!isIntegerLike(lower_ty)) {
-                    self.current_source = self.sourceForExpr(lower);
+                    self.setCurrentSource(self.sourceForExpr(lower));
                     return error.InvalidSubscript;
                 }
             }
             const upper_ty = try checkExprType(self, range.upper);
             if (!isIntegerLike(upper_ty)) {
-                self.current_source = self.sourceForExpr(range.upper);
+                self.setCurrentSource(self.sourceForExpr(range.upper));
                 return error.InvalidSubscript;
             }
             if (range.stride != null) {
-                self.current_source = self.sourceForExpr(range.stride.?);
+                self.setCurrentSource(self.sourceForExpr(range.stride.?));
                 return error.UnsupportedAllocateSyntax;
             }
         },
         else => {
             const ty = try checkExprType(self, expr);
             if (!isIntegerLike(ty)) {
-                self.current_source = self.sourceForExpr(expr);
+                self.setCurrentSource(self.sourceForExpr(expr));
                 return error.InvalidSubscript;
             }
         },
@@ -234,7 +234,7 @@ fn checkAllocateDim(self: *context.Context, expr: *ast.Expr) CheckError!void {
 fn checkLogicalConditionExpr(self: *context.Context, expr: *ast.Expr) CheckError!void {
     const ty = try checkExprType(self, expr);
     if (ty != .logical) {
-        self.current_source = self.sourceForExpr(expr);
+        self.setCurrentSource(self.sourceForExpr(expr));
         return error.InvalidConditionType;
     }
 }
@@ -260,19 +260,19 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
             if (range.lower) |lower| {
                 const lower_ty = try checkExprType(self, lower);
                 if (!isIntegerLike(lower_ty)) {
-                    self.current_source = self.sourceForExpr(lower);
+                    self.setCurrentSource(self.sourceForExpr(lower));
                     return error.InvalidSubscript;
                 }
             }
             const upper_ty = try checkExprType(self, range.upper);
             if (!isIntegerLike(upper_ty)) {
-                self.current_source = self.sourceForExpr(range.upper);
+                self.setCurrentSource(self.sourceForExpr(range.upper));
                 return error.InvalidSubscript;
             }
             if (range.stride) |stride| {
                 const stride_ty = try checkExprType(self, stride);
                 if (!isIntegerLike(stride_ty)) {
-                    self.current_source = self.sourceForExpr(stride);
+                    self.setCurrentSource(self.sourceForExpr(stride));
                     return error.InvalidSubscript;
                 }
             }
@@ -282,19 +282,19 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
             const resolved_ty = try resolve_expr.exprType(self, expr);
             if (resolved_ty != .character) {
                 if (sub.args.len != 0) {
-                    self.current_source = self.sourceForExpr(expr);
+                    self.setCurrentSource(self.sourceForExpr(expr));
                     return error.InvalidSubscript;
                 }
                 const start_expr = sub.start orelse return error.InvalidSubscript;
                 const end_expr = sub.end orelse return error.InvalidSubscript;
                 const start_ty = try checkExprType(self, start_expr);
                 if (!isIntegerLike(start_ty)) {
-                    self.current_source = self.sourceForExpr(start_expr);
+                    self.setCurrentSource(self.sourceForExpr(start_expr));
                     return error.InvalidSubscript;
                 }
                 const end_ty = try checkExprType(self, end_expr);
                 if (!isIntegerLike(end_ty)) {
-                    self.current_source = self.sourceForExpr(end_expr);
+                    self.setCurrentSource(self.sourceForExpr(end_expr));
                     return error.InvalidSubscript;
                 }
                 return resolved_ty;
@@ -303,14 +303,14 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
             if (sub.start) |start| {
                 const start_ty = try checkExprType(self, start);
                 if (!isIntegerLike(start_ty)) {
-                    self.current_source = self.sourceForExpr(start);
+                    self.setCurrentSource(self.sourceForExpr(start));
                     return error.InvalidSubscript;
                 }
             }
             if (sub.end) |end_expr| {
                 const end_ty = try checkExprType(self, end_expr);
                 if (!isIntegerLike(end_ty)) {
-                    self.current_source = self.sourceForExpr(end_expr);
+                    self.setCurrentSource(self.sourceForExpr(end_expr));
                     return error.InvalidSubscript;
                 }
             }
@@ -324,17 +324,17 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
             if (kind == .subscript) {
                 if (sym.dims.len == 0) {
-                    self.current_source = self.sourceForExpr(expr);
+                    self.setCurrentSource(self.sourceForExpr(expr));
                     return error.InvalidSubscript;
                 }
                 if (call.args.len != sym.dims.len) {
-                    self.current_source = self.sourceForExpr(expr);
+                    self.setCurrentSource(self.sourceForExpr(expr));
                     return error.InvalidSubscript;
                 }
                 for (call.args) |arg| {
                     const arg_ty = try checkExprType(self, arg);
                     if (!isIntegerLike(arg_ty)) {
-                        self.current_source = self.sourceForExpr(arg);
+                        self.setCurrentSource(self.sourceForExpr(arg));
                         return error.InvalidSubscript;
                     }
                 }
@@ -346,12 +346,12 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                     if (check_homogeneous) {
                         if (first_ty == null) {
                             if (!isNumeric(arg_ty) or arg_ty == .complex or arg_ty == .complex_double) {
-                                self.current_source = self.sourceForExpr(arg);
+                                self.setCurrentSource(self.sourceForExpr(arg));
                                 return error.InvalidArithmeticOperands;
                             }
                             first_ty = arg_ty;
                         } else if (arg_ty != first_ty.?) {
-                            self.current_source = self.sourceForExpr(arg);
+                            self.setCurrentSource(self.sourceForExpr(arg));
                             return error.InvalidArithmeticOperands;
                         }
                     }
@@ -462,11 +462,11 @@ fn checkKnownProcedureCallArity(
 
 fn checkOpenControl(self: *context.Context, node: ?*ast.Expr, allowed: []const []const u8) CheckError!void {
     const expr_node = node orelse return;
-    self.current_source = self.sourceForExpr(expr_node);
+    self.setCurrentSource(self.sourceForExpr(expr_node));
     try checkCharControlExpr(self, expr_node);
     if (controlLiteralText(expr_node)) |text| {
         if (!textInSet(text, allowed)) {
-            self.current_source = self.sourceForExpr(expr_node);
+            self.setCurrentSource(self.sourceForExpr(expr_node));
             return error.InvalidIoControlValue;
         }
     }
@@ -475,7 +475,7 @@ fn checkOpenControl(self: *context.Context, node: ?*ast.Expr, allowed: []const [
 fn checkCharControlExpr(self: *context.Context, expr_node: *ast.Expr) CheckError!void {
     const ty = try resolve_expr.exprType(self, expr_node);
     if (ty != .character) {
-        self.current_source = self.sourceForExpr(expr_node);
+        self.setCurrentSource(self.sourceForExpr(expr_node));
         return error.InvalidIoControlType;
     }
 }

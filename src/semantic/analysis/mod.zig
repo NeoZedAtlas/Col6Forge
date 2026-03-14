@@ -79,6 +79,10 @@ fn recordSemanticError(ctx: *context.Context, err: anyerror) void {
         diag.set(line, col, info.code, info.message, stmt.source_text);
         return;
     }
+    if (diag.fallbackSource()) |source| {
+        diag.set(source.line, source.column, info.code, info.message, source.line_text);
+        return;
+    }
     diag.set(1, 1, info.code, info.message, "");
 }
 
@@ -145,11 +149,11 @@ test "semantic UnexpectedTypeDecl maps to CF3107 with declaration source" {
         null,
         .{},
     );
-    ctx.current_decl_source = .{
+    ctx.setCurrentDeclSource(.{
         .line = 3,
         .column = 7,
         .text = "INTEGER X",
-    };
+    });
 
     diag.clear();
     recordSemanticError(&ctx, error.UnexpectedTypeDecl);
@@ -158,4 +162,50 @@ test "semantic UnexpectedTypeDecl maps to CF3107 with declaration source" {
     try testing.expectEqual(@as(usize, 7), got.column);
     try testing.expect(std.mem.eql(u8, got.code, "CF3107"));
     try testing.expect(std.mem.eql(u8, got.line_text, "INTEGER X"));
+}
+
+test "semantic fallback uses last noted statement when active context is cleared" {
+    const testing = std.testing;
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(testing.allocator);
+    defer known_function_type_specs.deinit();
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(testing.allocator);
+    defer known_procedure_sigs.deinit();
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(testing.allocator);
+    defer known_host_parameters.deinit();
+
+    const stmt = ast.Stmt{
+        .label = null,
+        .node = .{ .stop = {} },
+        .source_line = 5,
+        .source_column = 11,
+        .source_text = "      STOP",
+    };
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &.{},
+        .decls = &.{},
+        .decl_sources = &.{},
+        .stmts = &.{stmt},
+    };
+    var ctx = context.Context.init(
+        testing.allocator,
+        unit,
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        null,
+        .{},
+    );
+
+    diag.clear();
+    ctx.setCurrentStmt(stmt);
+    ctx.clearCurrentStmt();
+    recordSemanticError(&ctx, error.MissingScope);
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 5), got.line);
+    try testing.expectEqual(@as(usize, 11), got.column);
+    try testing.expect(std.mem.eql(u8, got.code, "CF3102"));
+    try testing.expect(std.mem.eql(u8, got.line_text, "      STOP"));
 }

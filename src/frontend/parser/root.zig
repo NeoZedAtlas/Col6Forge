@@ -106,6 +106,7 @@ const Parser = struct {
     fn parseProgram(self: *Parser) !Program {
         var units = std.array_list.Managed(ProgramUnit).init(self.arena);
         while (self.index < self.lines.len) {
+            noteFallbackForLine(self.lines[self.index]);
             if (self.isStandaloneEndAt(self.index)) {
                 self.index += 1;
                 continue;
@@ -138,6 +139,7 @@ const Parser = struct {
         var in_interface = false;
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
+            noteFallbackForLine(line);
             if (self.isModuleEndAt(self.index)) {
                 self.index += 1;
                 return;
@@ -177,6 +179,7 @@ const Parser = struct {
         if (!saw_contains) return;
 
         while (self.index < self.lines.len) {
+            noteFallbackForLine(self.lines[self.index]);
             if (self.isModuleEndAt(self.index)) {
                 self.index += 1;
                 return;
@@ -197,6 +200,7 @@ const Parser = struct {
         if (self.index >= self.lines.len) return error.UnexpectedEOF;
         const expr_mark = self.expr_capture.mark();
         const header_line = self.lines[self.index];
+        noteFallbackForLine(header_line);
         const header_tokens = self.tokensForIndex(self.index) catch |err| {
             setLexerOrLineDiagnostic(header_line, err);
             return err;
@@ -246,6 +250,7 @@ const Parser = struct {
         }
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
+            noteFallbackForLine(line);
             const tokens = self.tokensForIndex(self.index) catch |err| {
                 setLexerOrLineDiagnostic(line, err);
                 return err;
@@ -494,6 +499,14 @@ fn lineAtIndexOrLast(lines: []logical_line.LogicalLine, idx: usize, fallback: lo
     if (lines.len == 0) return fallback;
     if (idx < lines.len) return lines[idx];
     return lines[lines.len - 1];
+}
+
+fn noteFallbackForLine(line: logical_line.LogicalLine) void {
+    parse_diag.noteFallbackSource(
+        line.span.start_line,
+        if (line.segments.len > 0) line.segments[0].column else 1,
+        line.text,
+    );
 }
 
 fn sourceFromLine(line: logical_line.LogicalLine) DeclSource {

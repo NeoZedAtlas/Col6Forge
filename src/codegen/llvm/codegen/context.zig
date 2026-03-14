@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const input = @import("../../input.zig");
 const ast = @import("../../../ast/nodes.zig");
+const diag = @import("../../diagnostic.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
 const utils = @import("utils.zig");
@@ -556,6 +557,11 @@ pub const Context = struct {
 
     pub fn setCurrentStmt(self: *Context, stmt: input.Stmt) void {
         self.current_stmt = stmt;
+        diag.noteFallbackSource(
+            if (stmt.source_line == 0) 1 else stmt.source_line,
+            if (stmt.source_column == 0) 1 else stmt.source_column,
+            stmt.source_text,
+        );
     }
 
     pub fn clearCurrentStmt(self: *Context) void {
@@ -564,6 +570,13 @@ pub const Context = struct {
 
     pub fn setCurrentSource(self: *Context, source: ?ast.SourceRef) void {
         self.current_source = source;
+        if (source) |src| {
+            diag.noteFallbackSource(
+                if (src.line == 0) 1 else src.line,
+                if (src.column == 0) 1 else src.column,
+                src.text,
+            );
+        }
     }
 
     pub fn clearCurrentSource(self: *Context) void {

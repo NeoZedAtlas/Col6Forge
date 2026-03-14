@@ -1,4 +1,5 @@
 const std = @import("std");
+const ast = @import("../../../ast/nodes.zig");
 const input = @import("../../input.zig");
 const context = @import("context.zig");
 const llvm_types = @import("../types.zig");
@@ -224,6 +225,7 @@ pub fn emitModuleToWriter(
     defer intrinsic_wrappers.deinit();
 
     for (program.units) |unit| {
+        noteFallbackForUnit(unit);
         const format_start = nowNs();
         const sem_unit = sem_map.get(unit.name) orelse {
             markFailure(&breakdown, .format_maps);
@@ -351,6 +353,32 @@ fn buildFormatMaps(allocator: std.mem.Allocator, builder: anytype, unit: input.P
     );
     try applyAssignedFormatAliases(&label_map, assigned_aliases.items);
     return .{ .labels = label_map, .inline_items = inline_map };
+}
+
+fn unitFallbackSource(unit: input.ProgramUnit) ?input.SourceRef {
+    if (unit.stmts.len > 0) {
+        const stmt = unit.stmts[0];
+        return .{
+            .line = if (stmt.source_line == 0) 1 else stmt.source_line,
+            .column = if (stmt.source_column == 0) 1 else stmt.source_column,
+            .text = stmt.source_text,
+        };
+    }
+    if (unit.decl_sources.len > 0) {
+        const decl_source = unit.decl_sources[0];
+        return .{
+            .line = if (decl_source.line == 0) 1 else decl_source.line,
+            .column = if (decl_source.column == 0) 1 else decl_source.column,
+            .text = decl_source.text,
+        };
+    }
+    return null;
+}
+
+fn noteFallbackForUnit(unit: input.ProgramUnit) void {
+    if (unitFallbackSource(unit)) |source| {
+        codegen_diag.noteFallbackSource(source.line, source.column, source.text);
+    }
 }
 
 fn collectFormatsAndInlineFromStmts(
@@ -509,8 +537,8 @@ fn applyAssignedFormatAliases(
 }
 
 fn setCodegenDiagForUnit(unit: input.ProgramUnit, err: anyerror) void {
-    if (unit.stmts.len > 0) {
-        codegen_diag.setFromStmt(unit.stmts[0], err);
+    if (unitFallbackSource(unit)) |source| {
+        codegen_diag.setFromSource(source, err);
         return;
     }
     codegen_diag.setAt(1, 1, "", err);
@@ -878,6 +906,43 @@ test "codegen diagnostic reports direct io unit site when REC is missing" {
     try testing.expectEqual(@as(usize, 13), diag.column);
     try testing.expectEqualStrings("CF4133", diag.code);
     try testing.expectEqualStrings(write_text, diag.line_text);
+}
+
+test "setCodegenDiagForUnit falls back to declaration source when unit has no statements" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const decl_items = try a.alloc(input.Declarator, 1);
+    decl_items[0] = .{ .name = "X" };
+    const decls = try a.alloc(input.Decl, 1);
+    decls[0] = .{ .type_decl = .{
+        .type_kind = .integer,
+        .kind_selector = null,
+        .items = decl_items,
+    } };
+    const decl_sources = try a.alloc(ast.DeclSource, 1);
+    decl_sources[0] = .{ .line = 4, .column = 7, .text = "      INTEGER X" };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = decls,
+        .decl_sources = decl_sources,
+        .stmts = &.{},
+    };
+
+    codegen_diag.clear();
+    setCodegenDiagForUnit(unit, error.MissingSemanticUnit);
+    const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 4), diag.line);
+    try testing.expectEqual(@as(usize, 7), diag.column);
+    try testing.expectEqualStrings("CF4102", diag.code);
+    try testing.expectEqualStrings("      INTEGER X", diag.line_text);
 }
 
 test "emitModuleToWriter emits module header and empty function" {
