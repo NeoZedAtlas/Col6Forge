@@ -167,6 +167,34 @@ fn indexOfKnownProcedureSig(list: []const Col6Forge.sema.KnownProcedureSig, name
     return null;
 }
 
+pub fn emitPipelineToWriter(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    writer: anytype,
+    bounds_check: bool,
+    pause_mode: Col6Forge.PauseMode,
+    target: ?[]const u8,
+    time_report: bool,
+    known_function_types: []const Col6Forge.sema.KnownFunctionType,
+    known_procedure_sigs: []const Col6Forge.sema.KnownProcedureSig,
+) !void {
+    try Col6Forge.runPipelineToWriterWithOptions(
+        allocator,
+        input_path,
+        .llvm,
+        writer,
+        .{
+            .bounds_check = bounds_check,
+            .pause_mode = pause_mode,
+            .target = target,
+            .time_report = time_report,
+            .coarse_source_map = false,
+            .known_function_types = known_function_types,
+            .known_procedure_sigs = known_procedure_sigs,
+        },
+    );
+}
+
 fn emitPipelineToFile(
     allocator: std.mem.Allocator,
     input_path: []const u8,
@@ -182,20 +210,16 @@ fn emitPipelineToFile(
     defer out_file.close();
     var out_buf: [32 * 1024]u8 = undefined;
     var out_writer = out_file.writer(&out_buf);
-    try Col6Forge.runPipelineToWriterWithOptions(
+    try emitPipelineToWriter(
         allocator,
         input_path,
-        .llvm,
         &out_writer.interface,
-        .{
-            .bounds_check = bounds_check,
-            .pause_mode = pause_mode,
-            .target = target,
-            .time_report = time_report,
-            .coarse_source_map = false,
-            .known_function_types = known_function_types,
-            .known_procedure_sigs = known_procedure_sigs,
-        },
+        bounds_check,
+        pause_mode,
+        target,
+        time_report,
+        known_function_types,
+        known_procedure_sigs,
     );
     try out_writer.interface.flush();
 }

@@ -1,0 +1,4 @@
+tests/diagnostic_golden_cc/fixed_parse_continuation.f:3:8: error[CF2004]: missing required identifier
+help: see docs/errors.md#CF2004
+     1 )
+       ^

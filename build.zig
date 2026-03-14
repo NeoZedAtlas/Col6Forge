@@ -407,6 +407,14 @@ pub fn build(b: *std.Build) void {
         run_diagnostic_golden.addArgs(args);
     }
 
+    const cc_diagnostic_golden_step = b.step("cc-diagnostic-golden", "Run cc translation diagnostic golden file tests");
+    const run_cc_diagnostic_golden = b.addRunArtifact(diagnostic_golden_runner);
+    run_cc_diagnostic_golden.addArgs(&.{ "--mode", "cc-translate" });
+    cc_diagnostic_golden_step.dependOn(&run_cc_diagnostic_golden.step);
+    if (b.args) |args| {
+        run_cc_diagnostic_golden.addArgs(args);
+    }
+
     const verify_step = b.step("verify", "Run NIST F78 verification tests");
     const verify_fcvs21_f95 = b.option(bool, "fcvs21_f95", "Verify with the Fortran 95 adapted NIST F78 suite (example: zig build verify -Dfcvs21_f95 -- --filter FM715)") orelse false;
     const verify_fcsv78 = b.option(bool, "fcsv78", "Verify with the original NIST F78 suite (example: zig build verify -Dfcsv78 -- --filter FM715)") orelse false;

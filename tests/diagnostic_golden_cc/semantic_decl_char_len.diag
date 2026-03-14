@@ -1,0 +1,4 @@
+tests/diagnostic_golden_cc/semantic_decl_char_len.f:2:7: error[CF3103]: invalid CHARACTER length specification
+help: see docs/errors.md#CF3103
+      CHARACTER*(*) A
+      ^
