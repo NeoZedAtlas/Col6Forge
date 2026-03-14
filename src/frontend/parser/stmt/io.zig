@@ -12,6 +12,22 @@ const Expr = ast.Expr;
 
 const ParseStmtError = anyerror;
 
+fn currentSource(lp: LineParser) ast.SourceRef {
+    if (lp.index < lp.tokens.len) {
+        const tok = lp.tokens[lp.index];
+        return .{
+            .line = tok.line,
+            .column = tok.column,
+            .text = lp.line.text,
+        };
+    }
+    return .{
+        .line = lp.line.span.start_line,
+        .column = if (lp.line.segments.len > 0) lp.line.segments[0].column else 1,
+        .text = lp.line.text,
+    };
+}
+
 pub fn parseWriteStatement(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError!StmtNode {
     _ = lp.consumeKeyword("WRITE");
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
@@ -547,8 +563,13 @@ fn parseControlList(arena: std.mem.Allocator, lp: *LineParser) ParseStmtError![]
             _ = lp.expect(.equals) orelse return error.UnexpectedToken;
             name_opt = lp.tokenText(name_tok);
         }
+        const value_source = currentSource(lp.*);
         const value = try expr.parseExpr(lp, arena, 0);
-        try controls.append(.{ .name = name_opt, .value = value });
+        try controls.append(.{
+            .name = name_opt,
+            .value = value,
+            .source = value_source,
+        });
     }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     return controls.toOwnedSlice();

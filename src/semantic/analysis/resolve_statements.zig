@@ -18,8 +18,10 @@ pub fn preinstallUseImports(self: *context.Context) ResolveError!void {
 
 pub fn resolveStmt(self: *context.Context, stmt: ast.Stmt) ResolveError!void {
     const prev_stmt = self.current_stmt;
+    const prev_source = self.current_source;
     self.setCurrentStmt(stmt);
     defer self.current_stmt = prev_stmt;
+    defer self.current_source = prev_source;
     return resolveStmtNode(self, stmt.node);
 }
 
@@ -38,6 +40,7 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             }
         },
         .call => |call| {
+            self.current_source = if (call.source.line != 0) call.source else null;
             const idx = try symbols_mod.ensureSymbol(self, call.name);
             self.symbols.items[idx].is_external = true;
             for (call.args) |arg| {
@@ -97,16 +100,19 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         },
         .inquire => |inq| {
             for (inq.controls) |ctrl| {
+                self.current_source = if (ctrl.source.line != 0) ctrl.source else self.sourceForExpr(ctrl.value);
                 try expressions.resolveExpr(self, ctrl.value);
             }
         },
         .close => |cls| {
             for (cls.controls) |ctrl| {
+                self.current_source = if (ctrl.source.line != 0) ctrl.source else self.sourceForExpr(ctrl.value);
                 try expressions.resolveExpr(self, ctrl.value);
             }
         },
         .allocate => |allocate| {
             for (allocate.items) |item| {
+                self.current_source = if (item.source.line != 0) item.source else null;
                 _ = try symbols_mod.ensureSymbol(self, item.name);
                 for (item.dims) |dim| {
                     try expressions.resolveExpr(self, dim);
@@ -202,21 +208,21 @@ fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_nam
     const sym = &self.symbols.items[idx];
     sym.name = local_name;
 
-        if (symbols_mod.lookupKnownProcedureSig(self, remote_name)) |sig| {
-            sym.is_external = true;
-            sym.kind = switch (sig.kind) {
-                .function => .function,
-                .subroutine => .subroutine,
-                else => sym.kind,
-            };
-            if (sig.kind == .function) {
-                if (symbols_mod.lookupKnownFunctionResolvedSpec(self, remote_name)) |type_spec| {
-                    sym.applyTypeSpec(type_spec);
-                    sym.type_explicit = true;
-                }
+    if (symbols_mod.lookupKnownProcedureSig(self, remote_name)) |sig| {
+        sym.is_external = true;
+        sym.kind = switch (sig.kind) {
+            .function => .function,
+            .subroutine => .subroutine,
+            else => sym.kind,
+        };
+        if (sig.kind == .function) {
+            if (symbols_mod.lookupKnownFunctionResolvedSpec(self, remote_name)) |type_spec| {
+                sym.applyTypeSpec(type_spec);
+                sym.type_explicit = true;
             }
-            return;
         }
+        return;
+    }
 
     if (symbols_mod.lookupKnownFunctionResolvedSpec(self, remote_name)) |type_spec| {
         sym.is_external = true;

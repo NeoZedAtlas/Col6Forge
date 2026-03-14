@@ -79,7 +79,9 @@ pub const CharFormat = format_nodes.CharFormat;
 pub const LogicalFormat = format_nodes.LogicalFormat;
 
 pub const ImpliedDo = expr_nodes.ImpliedDo;
+pub const SourceRef = expr_nodes.SourceRef;
 pub const Expr = expr_nodes.Expr;
+pub const ExprSource = expr_nodes.ExprSource;
 pub const DimRange = expr_nodes.DimRange;
 pub const Literal = expr_nodes.Literal;
 pub const LiteralKind = expr_nodes.LiteralKind;

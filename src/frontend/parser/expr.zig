@@ -7,6 +7,8 @@ const lexer = @import("../lexer.zig");
 const LineParser = context.LineParser;
 const Expr = ast.Expr;
 const BinaryOp = ast.BinaryOp;
+const SourceRef = ast.SourceRef;
+const ExprSource = ast.ExprSource;
 
 const ParseExprError = error{ UnexpectedEOF, UnexpectedToken, ExpressionDepthExceeded } || std.mem.Allocator.Error;
 const max_expression_depth: usize = 512;
@@ -21,6 +23,52 @@ const prec_power: u8 = 7;
 
 pub const min_prec_power: u8 = prec_power;
 
+pub const SourceCapture = struct {
+    allocator: std.mem.Allocator,
+    items: std.array_list.Managed(ExprSource),
+    index: std.AutoHashMap(usize, SourceRef),
+
+    pub fn init(allocator: std.mem.Allocator) SourceCapture {
+        return .{
+            .allocator = allocator,
+            .items = std.array_list.Managed(ExprSource).init(allocator),
+            .index = std.AutoHashMap(usize, SourceRef).init(allocator),
+        };
+    }
+
+    pub fn mark(self: *const SourceCapture) usize {
+        return self.items.items.len;
+    }
+
+    pub fn sliceFrom(self: *SourceCapture, start: usize) ![]ExprSource {
+        return self.allocator.dupe(ExprSource, self.items.items[start..]);
+    }
+
+    fn register(self: *SourceCapture, expr_node: *Expr, source: SourceRef) !void {
+        try self.items.append(.{
+            .expr = expr_node,
+            .source = source,
+        });
+        try self.index.put(@intFromPtr(expr_node), source);
+    }
+
+    fn sourceForExpr(self: *const SourceCapture, expr_node: *Expr) ?SourceRef {
+        return self.index.get(@intFromPtr(expr_node));
+    }
+};
+
+threadlocal var active_capture: ?*SourceCapture = null;
+
+pub fn pushSourceCapture(capture: *SourceCapture) ?*SourceCapture {
+    const prev = active_capture;
+    active_capture = capture;
+    return prev;
+}
+
+pub fn restoreSourceCapture(prev: ?*SourceCapture) void {
+    active_capture = prev;
+}
+
 pub fn parseExpr(lp: *LineParser, arena: std.mem.Allocator, min_prec: u8) ParseExprError!*Expr {
     return parseExprDepth(lp, arena, min_prec, 0);
 }
@@ -31,14 +79,18 @@ fn parseExprDepth(lp: *LineParser, arena: std.mem.Allocator, min_prec: u8, depth
     while (true) {
         const op_info = peekBinaryOp(lp.*) orelse break;
         if (op_info.prec < min_prec) break;
+        const source = sourceForExpr(left) orelse currentSource(lp.*);
         var consumed: usize = 0;
         while (consumed < op_info.token_count) : (consumed += 1) {
             _ = lp.next();
         }
         const next_min = if (op_info.right_assoc) op_info.prec else op_info.prec + 1;
         const right = try parseExprDepth(lp, arena, next_min, depth + 1);
-        const node = try arena.create(Expr);
-        node.* = .{ .binary = .{ .op = op_info.op, .left = left, .right = right } };
+        const node = try makeExprNode(
+            arena,
+            .{ .binary = .{ .op = op_info.op, .left = left, .right = right } },
+            source,
+        );
         left = node;
     }
     return left;
@@ -50,11 +102,10 @@ pub fn parseDimExpr(lp: *LineParser, arena: std.mem.Allocator) ParseExprError!*E
 
 fn parseDimExprDepth(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseExprError!*Expr {
     if (depth >= max_expression_depth) return error.ExpressionDepthExceeded;
+    const start_source = currentSource(lp.*);
     if (lp.peekIs(.star)) {
         const tok = lp.next();
-        const node = try arena.create(Expr);
-        node.* = .{ .literal = .{ .kind = .assumed_size, .text = lp.tokenText(tok) } };
-        return node;
+        return makeExprNode(arena, .{ .literal = .{ .kind = .assumed_size, .text = lp.tokenText(tok) } }, start_source);
     }
     var lower: ?*Expr = null;
     if (!lp.peekIs(.colon)) {
@@ -65,12 +116,18 @@ fn parseDimExprDepth(lp: *LineParser, arena: std.mem.Allocator, depth: usize) Pa
         var assumed_shape = false;
         if (lp.peekIs(.star)) {
             const tok = lp.next();
-            const assumed = try arena.create(Expr);
-            assumed.* = .{ .literal = .{ .kind = .assumed_size, .text = lp.tokenText(tok) } };
+            const assumed = try makeExprNode(
+                arena,
+                .{ .literal = .{ .kind = .assumed_size, .text = lp.tokenText(tok) } },
+                currentSourceForFallback(lp.*, start_source),
+            );
             upper = assumed;
         } else if (lp.peekIs(.colon) or isDimRangeTerminator(lp.*)) {
-            const assumed = try arena.create(Expr);
-            assumed.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
+            const assumed = try makeExprNode(
+                arena,
+                .{ .literal = .{ .kind = .assumed_size, .text = "*" } },
+                currentSourceForFallback(lp.*, start_source),
+            );
             upper = assumed;
             assumed_shape = true;
         } else {
@@ -82,9 +139,11 @@ fn parseDimExprDepth(lp: *LineParser, arena: std.mem.Allocator, depth: usize) Pa
             stride = try parseExprDepth(lp, arena, 0, depth + 1);
         }
 
-        const node = try arena.create(Expr);
-        node.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride, .assumed_shape = assumed_shape } };
-        return node;
+        return makeExprNode(
+            arena,
+            .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride, .assumed_shape = assumed_shape } },
+            start_source,
+        );
     }
     return lower orelse error.UnexpectedToken;
 }
@@ -95,6 +154,7 @@ fn isDimRangeTerminator(lp: LineParser) bool {
 
 fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseExprError!*Expr {
     const tok = lp.peek() orelse return error.UnexpectedEOF;
+    const start_source = currentSource(lp.*);
     switch (tok.kind) {
         .identifier => {
             const name = lp.readName(arena) orelse return error.UnexpectedToken;
@@ -111,9 +171,11 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                         end_expr = try parseExprDepth(lp, arena, 0, depth + 1);
                     }
                     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-                    const node = try arena.create(Expr);
-                    node.* = .{ .substring = .{ .name = name, .args = args, .start = start_expr, .end = end_expr } };
-                    return node;
+                    return makeExprNode(
+                        arena,
+                        .{ .substring = .{ .name = name, .args = args, .start = start_expr, .end = end_expr } },
+                        start_source,
+                    );
                 } else {
                     var args = std.array_list.Managed(*Expr).init(arena);
                     while (!lp.peekIs(.r_paren)) {
@@ -130,9 +192,11 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                         var lookahead = lp.*;
                         _ = lookahead.consume(.l_paren);
                         if (!hasSubstringRange(lookahead)) {
-                            const node = try arena.create(Expr);
-                            node.* = .{ .call_or_subscript = .{ .name = name, .args = call_args } };
-                            return node;
+                            return makeExprNode(
+                                arena,
+                                .{ .call_or_subscript = .{ .name = name, .args = call_args } },
+                                start_source,
+                            );
                         }
                         _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
                         var start_expr: ?*Expr = null;
@@ -145,42 +209,36 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                             end_expr = try parseExprDepth(lp, arena, 0, depth + 1);
                         }
                         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-                        const node = try arena.create(Expr);
-                        node.* = .{ .substring = .{ .name = name, .args = call_args, .start = start_expr, .end = end_expr } };
-                        return node;
+                        return makeExprNode(
+                            arena,
+                            .{ .substring = .{ .name = name, .args = call_args, .start = start_expr, .end = end_expr } },
+                            start_source,
+                        );
                     }
-                    const node = try arena.create(Expr);
-                    node.* = .{ .call_or_subscript = .{ .name = name, .args = call_args } };
-                    return node;
+                    return makeExprNode(
+                        arena,
+                        .{ .call_or_subscript = .{ .name = name, .args = call_args } },
+                        start_source,
+                    );
                 }
             }
-            const node = try arena.create(Expr);
-            node.* = .{ .identifier = name };
-            return node;
+            return makeExprNode(arena, .{ .identifier = name }, start_source);
         },
         .integer => {
             _ = lp.next();
-            const node = try arena.create(Expr);
-            node.* = .{ .literal = .{ .kind = .integer, .text = lp.tokenText(tok) } };
-            return node;
+            return makeExprNode(arena, .{ .literal = .{ .kind = .integer, .text = lp.tokenText(tok) } }, start_source);
         },
         .real => {
             _ = lp.next();
-            const node = try arena.create(Expr);
-            node.* = .{ .literal = .{ .kind = .real, .text = lp.tokenText(tok) } };
-            return node;
+            return makeExprNode(arena, .{ .literal = .{ .kind = .real, .text = lp.tokenText(tok) } }, start_source);
         },
         .string => {
             _ = lp.next();
-            const node = try arena.create(Expr);
-            node.* = .{ .literal = .{ .kind = .string, .text = lp.tokenText(tok) } };
-            return node;
+            return makeExprNode(arena, .{ .literal = .{ .kind = .string, .text = lp.tokenText(tok) } }, start_source);
         },
         .hollerith => {
             _ = lp.next();
-            const node = try arena.create(Expr);
-            node.* = .{ .literal = .{ .kind = .hollerith, .text = lp.tokenText(tok) } };
-            return node;
+            return makeExprNode(arena, .{ .literal = .{ .kind = .hollerith, .text = lp.tokenText(tok) } }, start_source);
         },
         .l_paren => {
             _ = lp.next();
@@ -188,51 +246,78 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
             if (lp.consume(.comma)) {
                 const imag = try parseExprDepth(lp, arena, 0, depth + 1);
                 _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-                const node = try arena.create(Expr);
-                node.* = .{ .complex_literal = .{ .real = real, .imag = imag } };
-                return node;
+                return makeExprNode(
+                    arena,
+                    .{ .complex_literal = .{ .real = real, .imag = imag } },
+                    start_source,
+                );
             }
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
             return real;
         },
         .plus => {
             _ = lp.next();
-            const expr = try parseExprDepth(lp, arena, min_prec_power, depth + 1);
-            const node = try arena.create(Expr);
-            node.* = .{ .unary = .{ .op = .plus, .expr = expr } };
-            return node;
+            const operand = try parseExprDepth(lp, arena, min_prec_power, depth + 1);
+            return makeExprNode(arena, .{ .unary = .{ .op = .plus, .expr = operand } }, start_source);
         },
         .minus => {
             _ = lp.next();
-            const expr = try parseExprDepth(lp, arena, min_prec_power, depth + 1);
-            const node = try arena.create(Expr);
-            node.* = .{ .unary = .{ .op = .minus, .expr = expr } };
-            return node;
+            const operand = try parseExprDepth(lp, arena, min_prec_power, depth + 1);
+            return makeExprNode(arena, .{ .unary = .{ .op = .minus, .expr = operand } }, start_source);
         },
         .dot_op => {
             if (dotOpIs(lp.*, "TRUE")) {
                 _ = lp.next();
-                const node = try arena.create(Expr);
-                node.* = .{ .literal = .{ .kind = .logical, .text = "1" } };
-                return node;
+                return makeExprNode(arena, .{ .literal = .{ .kind = .logical, .text = "1" } }, start_source);
             }
             if (dotOpIs(lp.*, "FALSE")) {
                 _ = lp.next();
-                const node = try arena.create(Expr);
-                node.* = .{ .literal = .{ .kind = .logical, .text = "0" } };
-                return node;
+                return makeExprNode(arena, .{ .literal = .{ .kind = .logical, .text = "0" } }, start_source);
             }
             if (dotOpIs(lp.*, "NOT")) {
                 _ = lp.next();
-                const expr = try parseExprDepth(lp, arena, 3, depth + 1);
-                const node = try arena.create(Expr);
-                node.* = .{ .unary = .{ .op = .not, .expr = expr } };
-                return node;
+                const operand = try parseExprDepth(lp, arena, 3, depth + 1);
+                return makeExprNode(arena, .{ .unary = .{ .op = .not, .expr = operand } }, start_source);
             }
             return error.UnexpectedToken;
         },
         else => return error.UnexpectedToken,
     }
+}
+
+fn makeExprNode(arena: std.mem.Allocator, value: Expr, source: SourceRef) ParseExprError!*Expr {
+    const node = try arena.create(Expr);
+    node.* = value;
+    if (active_capture) |capture| {
+        try capture.register(node, source);
+    }
+    return node;
+}
+
+fn currentSource(lp: LineParser) SourceRef {
+    if (lp.index < lp.tokens.len) {
+        const tok = lp.tokens[lp.index];
+        return .{
+            .line = tok.line,
+            .column = tok.column,
+            .text = lp.line.text,
+        };
+    }
+    return .{
+        .line = lp.line.span.start_line,
+        .column = if (lp.line.segments.len > 0) lp.line.segments[0].column else 1,
+        .text = lp.line.text,
+    };
+}
+
+fn currentSourceForFallback(lp: LineParser, fallback: SourceRef) SourceRef {
+    if (lp.index < lp.tokens.len) return currentSource(lp);
+    return fallback;
+}
+
+fn sourceForExpr(expr_node: *Expr) ?SourceRef {
+    const capture = active_capture orelse return null;
+    return capture.sourceForExpr(expr_node);
 }
 
 fn hasSubstringRange(lp: LineParser) bool {

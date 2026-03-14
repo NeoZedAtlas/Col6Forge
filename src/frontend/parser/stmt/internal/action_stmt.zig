@@ -17,6 +17,22 @@ const UseOnlyItem = ast.UseOnlyItem;
 const AllocateItem = ast.AllocateItem;
 const DoContext = control_flow.DoContext;
 
+fn currentSource(lp: LineParser) ast.SourceRef {
+    if (lp.index < lp.tokens.len) {
+        const tok = lp.tokens[lp.index];
+        return .{
+            .line = tok.line,
+            .column = tok.column,
+            .text = lp.line.text,
+        };
+    }
+    return .{
+        .line = lp.line.span.start_line,
+        .column = if (lp.line.segments.len > 0) lp.line.segments[0].column else 1,
+        .text = lp.line.text,
+    };
+}
+
 pub const ActionParseMode = enum { top_level, inline_if };
 
 pub const ActionCallbacks = struct {
@@ -63,6 +79,7 @@ pub fn parseActionStmtNode(
             if (lp.isKeywordSplit("CLOSE")) return try io.parseCloseStatement(arena, lp);
             if (lp.isKeywordSplit("CALL")) {
                 _ = lp.consumeKeyword("CALL");
+                const call_source = currentSource(lp.*);
                 const name = lp.readName(arena) orelse return error.MissingName;
                 var args = std.array_list.Managed(CallArg).init(arena);
                 if (lp.consume(.l_paren)) {
@@ -82,7 +99,11 @@ pub fn parseActionStmtNode(
                     }
                     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
                 }
-                return .{ .call = .{ .name = name, .args = try args.toOwnedSlice() } };
+                return .{ .call = .{
+                    .name = name,
+                    .args = try args.toOwnedSlice(),
+                    .source = call_source,
+                } };
             }
             if (lp.isKeywordSplit("CYCLE")) {
                 _ = lp.consumeKeyword("CYCLE");
@@ -250,6 +271,7 @@ pub fn parseAllocateStatement(arena: std.mem.Allocator, lp: *LineParser) anyerro
 
     var items = std.array_list.Managed(AllocateItem).init(arena);
     while (!lp.peekIs(.r_paren)) {
+        const item_source = currentSource(lp.*);
         const name = lp.readName(arena) orelse return error.MissingName;
         _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
 
@@ -262,6 +284,7 @@ pub fn parseAllocateStatement(arena: std.mem.Allocator, lp: *LineParser) anyerro
         try items.append(.{
             .name = name,
             .dims = try dims.toOwnedSlice(),
+            .source = item_source,
         });
         if (!lp.consume(.comma)) break;
     }

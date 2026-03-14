@@ -11,6 +11,9 @@ const ResolvedRefKind = symbols.ResolvedRefKind;
 pub const ResolveError = anyerror;
 
 pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
+    const prev_source = self.current_source;
+    self.current_source = self.sourceForExpr(expr);
+    defer self.current_source = prev_source;
     invalidateExprTypeCache(self, expr);
     switch (expr.*) {
         .identifier => |name| {
@@ -224,6 +227,9 @@ fn isStatementFunctionDefinitionTarget(
 }
 
 pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
+    const prev_source = self.current_source;
+    self.current_source = self.sourceForExpr(expr);
+    defer self.current_source = prev_source;
     return (try exprTypeSpecCached(self, expr)).lowered_kind;
 }
 
@@ -232,6 +238,9 @@ fn exprTypeCached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.Type
 }
 
 pub fn exprTypeSpec(self: *context.Context, expr: *ast.Expr) ResolveError!symbols.TypeSpec {
+    const prev_source = self.current_source;
+    self.current_source = self.sourceForExpr(expr);
+    defer self.current_source = prev_source;
     return exprTypeSpecCached(self, expr);
 }
 

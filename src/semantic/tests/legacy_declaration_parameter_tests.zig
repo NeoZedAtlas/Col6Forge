@@ -225,7 +225,10 @@ test "semantic reports CF3108 for assignment type mismatch" {
 
     try testing.expectError(error.AssignmentTypeMismatch, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 9), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3108"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "I='AB'"));
 }
 
 test "semantic accepts ACHAR and IACHAR intrinsic typing" {
@@ -399,7 +402,10 @@ test "semantic reports CF3109 for invalid array subscript rank" {
 
     try testing.expectError(error.InvalidSubscript, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 9), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3109"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "I=A(1,2)"));
 }
 
 test "semantic reports CF3109 when scalar is used as array" {
@@ -420,7 +426,10 @@ test "semantic reports CF3109 when scalar is used as array" {
 
     try testing.expectError(error.InvalidSubscript, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 7), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3109"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "X(5)=10"));
 }
 
 test "semantic accepts statement function definition target" {
@@ -463,7 +472,10 @@ test "semantic reports CF3110 for procedure argument count mismatch" {
 
     try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expectEqual(@as(usize, 12), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "CALL T(1)"));
 }
 
 test "semantic reports CF3111 for non-constant PARAMETER value" {

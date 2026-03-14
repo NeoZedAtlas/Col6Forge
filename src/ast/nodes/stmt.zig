@@ -4,6 +4,7 @@ const format_nodes = @import("format.zig");
 const Expr = expr_nodes.Expr;
 const FormatItem = format_nodes.FormatItem;
 const FormatSpec = format_nodes.FormatSpec;
+const SourceRef = expr_nodes.SourceRef;
 
 pub const Stmt = struct {
     label: ?[]const u8,
@@ -70,6 +71,7 @@ pub const UseOnlyItem = struct {
 pub const CallStmt = struct {
     name: []const u8,
     args: []CallArg,
+    source: SourceRef = .{},
 };
 
 pub const CallArg = union(enum) {
@@ -133,6 +135,7 @@ pub const AllocateStmt = struct {
 pub const AllocateItem = struct {
     name: []const u8,
     dims: []*Expr,
+    source: SourceRef = .{},
 };
 
 pub const DeallocateStmt = struct {
@@ -142,6 +145,7 @@ pub const DeallocateStmt = struct {
 pub const ControlItem = struct {
     name: ?[]const u8,
     value: *Expr,
+    source: SourceRef = .{},
 };
 
 pub const RewindStmt = struct {

@@ -25,6 +25,9 @@ pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.Lo
     parse_diag.clear();
     const token_cache = try arena_allocator.alloc(?[]lexer.Token, lines.len);
     @memset(token_cache, null);
+    var expr_capture = expr.SourceCapture.init(arena_allocator);
+    const prev_capture = expr.pushSourceCapture(&expr_capture);
+    defer expr.restoreSourceCapture(prev_capture);
     var parser = Parser{
         .arena = arena_allocator,
         .lines = lines,
@@ -32,6 +35,7 @@ pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.Lo
         .index = 0,
         .block_data_counter = 0,
         .implicit_program_counter = 0,
+        .expr_capture = &expr_capture,
     };
     const program = try parser.parseProgram();
     return expandEntries(arena_allocator, program);
@@ -44,6 +48,7 @@ const Parser = struct {
     index: usize,
     block_data_counter: usize,
     implicit_program_counter: usize,
+    expr_capture: *expr.SourceCapture,
 
     fn tokensForIndex(self: *Parser, line_index: usize) ![]lexer.Token {
         if (self.token_cache[line_index]) |cached| return cached;
@@ -190,6 +195,7 @@ const Parser = struct {
 
     fn parseProgramUnit(self: *Parser) !ProgramUnit {
         if (self.index >= self.lines.len) return error.UnexpectedEOF;
+        const expr_mark = self.expr_capture.mark();
         const header_line = self.lines[self.index];
         const header_tokens = self.tokensForIndex(self.index) catch |err| {
             setLexerOrLineDiagnostic(header_line, err);
@@ -212,12 +218,12 @@ const Parser = struct {
         };
         if (parsed_implicit_program) {
             const implicit = try self.syntheticProgramHeader();
-            return self.parseProgramUnitBody(implicit, false, header_line);
+            return self.parseProgramUnitBody(implicit, false, header_line, expr_mark);
         }
         if (!parsed_implicit_program) {
             self.index += 1;
         }
-        return self.parseProgramUnitBody(header, true, header_line);
+        return self.parseProgramUnitBody(header, true, header_line, expr_mark);
     }
 
     fn parseProgramUnitBody(
@@ -225,6 +231,7 @@ const Parser = struct {
         header: ProgramUnitHeader,
         skip_duplicate_header: bool,
         header_line: logical_line.LogicalLine,
+        expr_mark: usize,
     ) !ProgramUnit {
         var decls = std.array_list.Managed(Decl).init(self.arena);
         var decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
@@ -296,6 +303,7 @@ const Parser = struct {
             .decls = try decls.toOwnedSlice(),
             .decl_sources = try decl_sources.toOwnedSlice(),
             .stmts = try stmts.toOwnedSlice(),
+            .expr_sources = try self.expr_capture.sliceFrom(expr_mark),
         };
     }
 
@@ -630,10 +638,13 @@ fn prependDecls(
     return .{
         .kind = unit.kind,
         .name = unit.name,
+        .result_name = unit.result_name,
+        .alt_return_dummy_count = unit.alt_return_dummy_count,
         .args = unit.args,
         .decls = decls,
         .decl_sources = decl_sources,
         .stmts = unit.stmts,
+        .expr_sources = unit.expr_sources,
     };
 }
 

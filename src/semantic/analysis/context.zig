@@ -78,6 +78,7 @@ pub const Context = struct {
     const_eval_cache: std.AutoHashMap(usize, ?symbols.ConstValue),
     expr_type_cache: std.AutoHashMap(usize, ast.TypeKind),
     expr_type_spec_cache: std.AutoHashMap(usize, symbols.TypeSpec),
+    expr_source_index: std.AutoHashMap(usize, ast.SourceRef),
     common_block_names: std.StringHashMap(void),
     common_blocks_indexed: bool,
     equivalence_nodes: std.StringHashMap(usize),
@@ -88,6 +89,7 @@ pub const Context = struct {
     current_scope: ?scope.ScopeId,
     current_owner: ?Owner,
     current_decl_source: ?ast.DeclSource,
+    current_source: ?ast.SourceRef,
     current_stmt: ?ast.Stmt,
     known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
     known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
@@ -130,6 +132,7 @@ pub const Context = struct {
             .const_eval_cache = std.AutoHashMap(usize, ?symbols.ConstValue).init(arena),
             .expr_type_cache = std.AutoHashMap(usize, ast.TypeKind).init(arena),
             .expr_type_spec_cache = std.AutoHashMap(usize, symbols.TypeSpec).init(arena),
+            .expr_source_index = std.AutoHashMap(usize, ast.SourceRef).init(arena),
             .common_block_names = std.StringHashMap(void).init(arena),
             .common_blocks_indexed = false,
             .equivalence_nodes = std.StringHashMap(usize).init(arena),
@@ -140,6 +143,7 @@ pub const Context = struct {
             .current_scope = null,
             .current_owner = null,
             .current_decl_source = null,
+            .current_source = null,
             .current_stmt = null,
             .known_function_type_specs = known_function_type_specs,
             .known_procedure_sigs = known_procedure_sigs,
@@ -149,6 +153,9 @@ pub const Context = struct {
             .use_imports_preinstalled = false,
         };
         ctx.current_unit = &ctx.unit;
+        for (ctx.unit.expr_sources) |expr_source| {
+            ctx.expr_source_index.put(@intFromPtr(expr_source.expr), expr_source.source) catch {};
+        }
         return ctx;
     }
 
@@ -267,6 +274,10 @@ pub const Context = struct {
 
     pub fn clearCurrentStmt(self: *Context) void {
         self.current_stmt = null;
+    }
+
+    pub fn sourceForExpr(self: *const Context, expr_node: *ast.Expr) ?ast.SourceRef {
+        return self.expr_source_index.get(@intFromPtr(expr_node));
     }
 
     pub fn invalidateSymbolLookupCache(self: *Context) void {

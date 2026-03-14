@@ -143,7 +143,10 @@ test "semantic reports CF3110 for function argument count mismatch" {
 
     try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 9), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "X=F(1)"));
 }
 
 test "semantic reports CF3116 for duplicate declaration" {
@@ -356,7 +359,7 @@ test "semantic reports CF3119 for CHARACTER arithmetic operand" {
     try testing.expectError(error.InvalidArithmeticOperands, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), diag.line);
-    try testing.expectEqual(@as(usize, 7), diag.column);
+    try testing.expectEqual(@as(usize, 9), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3119"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "I='A'+1"));
 }

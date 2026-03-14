@@ -6,6 +6,12 @@ pub const ImpliedDo = struct {
     step: ?*Expr,
 };
 
+pub const SourceRef = struct {
+    line: usize = 0,
+    column: usize = 0,
+    text: []const u8 = "",
+};
+
 pub const Expr = union(enum) {
     identifier: []const u8,
     literal: Literal,
@@ -16,6 +22,11 @@ pub const Expr = union(enum) {
     binary: BinaryExpr,
     complex_literal: ComplexLiteral,
     implied_do: ImpliedDo,
+};
+
+pub const ExprSource = struct {
+    expr: *Expr,
+    source: SourceRef = .{},
 };
 
 pub const DimRange = struct {

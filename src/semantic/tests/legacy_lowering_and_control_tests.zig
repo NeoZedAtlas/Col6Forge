@@ -275,7 +275,10 @@ test "semantic reports CF3124 for non-character OPEN control type" {
 
     try testing.expectError(error.InvalidIoControlType, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expectEqual(@as(usize, 27), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3124"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "OPEN(UNIT=10,ACCESS=1)"));
 }
 
 test "semantic reports CF3125 for invalid OPEN control literal value" {
@@ -295,7 +298,10 @@ test "semantic reports CF3125 for invalid OPEN control literal value" {
 
     try testing.expectError(error.InvalidIoControlValue, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expectEqual(@as(usize, 27), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3125"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "OPEN(UNIT=10,ACCESS='RANDOM')"));
 }
 
 test "semantic accepts OPEN control literal with trailing blanks" {
@@ -334,7 +340,10 @@ test "semantic reports CF3130 for INTEGER IF condition" {
 
     try testing.expectError(error.InvalidConditionType, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 11), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3130"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "IF (I) I=1"));
 }
 
 test "semantic reports CF3130 for REAL DO WHILE condition" {
@@ -357,5 +366,8 @@ test "semantic reports CF3130 for REAL DO WHILE condition" {
 
     try testing.expectError(error.InvalidConditionType, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 17), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3130"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "DO WHILE (R)"));
 }

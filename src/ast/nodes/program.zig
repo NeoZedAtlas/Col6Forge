@@ -1,4 +1,5 @@
 const decl_nodes = @import("decl.zig");
+const expr_nodes = @import("expr.zig");
 const stmt_nodes = @import("stmt.zig");
 
 pub const Program = struct {
@@ -21,6 +22,7 @@ pub const ProgramUnit = struct {
     decls: []decl_nodes.Decl,
     decl_sources: []DeclSource = &.{},
     stmts: []stmt_nodes.Stmt,
+    expr_sources: []expr_nodes.ExprSource = &.{},
 };
 
 pub const DeclSource = struct {
