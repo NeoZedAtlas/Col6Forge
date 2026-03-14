@@ -57,6 +57,9 @@ fn validatedCharacterValuePlan(plan: CharacterValuePlan) !CharacterValuePlan {
 }
 
 pub fn emitLValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
+    const prev_source = ctx.current_source;
+    ctx.setCurrentSource(ctx.sourceForExpr(expr));
+    defer ctx.setCurrentSource(prev_source);
     switch (expr.*) {
         .identifier => |name| {
             return ctx.getPointer(name);
@@ -91,6 +94,9 @@ pub fn emitExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef
 }
 
 fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize) EmitError!ValueRef {
+    const prev_source = ctx.current_source;
+    ctx.setCurrentSource(ctx.sourceForExpr(expr));
+    defer ctx.setCurrentSource(prev_source);
     switch (expr.*) {
         .identifier => |name| {
             if (subst_depth > 0) {
@@ -530,6 +536,9 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
 }
 
 fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize) EmitError!?CharacterValuePlan {
+    const prev_source = ctx.current_source;
+    ctx.setCurrentSource(ctx.sourceForExpr(expr));
+    defer ctx.setCurrentSource(prev_source);
     switch (expr.*) {
         .identifier => |name| {
             if (subst_depth > 0) {

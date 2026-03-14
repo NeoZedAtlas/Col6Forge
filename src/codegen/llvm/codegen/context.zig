@@ -153,8 +153,10 @@ pub const Context = struct {
     runtime_array_descs: std.AutoHashMap(usize, RuntimeArrayDescriptor),
     int_literal_cache: std.AutoHashMap(i64, []const u8),
     heap_temps_to_free: std.array_list.Managed(ValueRef),
+    expr_source_index: std.AutoHashMap(usize, ast.SourceRef),
     known_procedure_sigs: *const CaseInsensitiveStringHashMap(input.sema.KnownProcedureSig),
     options: CodegenOptions,
+    current_source: ?ast.SourceRef,
     current_stmt: ?input.Stmt,
 
     pub fn init(
@@ -203,8 +205,10 @@ pub const Context = struct {
             .runtime_array_descs = std.AutoHashMap(usize, RuntimeArrayDescriptor).init(allocator),
             .int_literal_cache = std.AutoHashMap(i64, []const u8).init(allocator),
             .heap_temps_to_free = std.array_list.Managed(ValueRef).init(allocator),
+            .expr_source_index = std.AutoHashMap(usize, ast.SourceRef).init(allocator),
             .known_procedure_sigs = known_procedure_sigs,
             .options = options,
+            .current_source = null,
             .current_stmt = null,
         };
         errdefer ctx.assigned_goto_slots.deinit();
@@ -220,6 +224,9 @@ pub const Context = struct {
             if (!ctx.symbol_index.contains(sym.name)) {
                 try ctx.symbol_index.put(sym.name, idx);
             }
+        }
+        for (unit.expr_sources) |expr_source| {
+            try ctx.expr_source_index.put(@intFromPtr(expr_source.expr), expr_source.source);
         }
         return ctx;
     }
@@ -269,6 +276,7 @@ pub const Context = struct {
         self.runtime_array_descs.deinit();
         self.int_literal_cache.deinit();
         self.heap_temps_to_free.deinit();
+        self.expr_source_index.deinit();
     }
 
     pub fn registerHeapTempToFree(self: *Context, ptr: ValueRef) !void {
@@ -552,6 +560,18 @@ pub const Context = struct {
 
     pub fn clearCurrentStmt(self: *Context) void {
         self.current_stmt = null;
+    }
+
+    pub fn setCurrentSource(self: *Context, source: ?ast.SourceRef) void {
+        self.current_source = source;
+    }
+
+    pub fn clearCurrentSource(self: *Context) void {
+        self.current_source = null;
+    }
+
+    pub fn sourceForExpr(self: *const Context, expr: *const input.Expr) ?ast.SourceRef {
+        return self.expr_source_index.get(@intFromPtr(expr));
     }
 
     fn allocIndexedName(self: *Context, prefix: []const u8, index: usize, with_percent: bool) ![]const u8 {

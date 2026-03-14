@@ -141,7 +141,10 @@ pub fn emitDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitE
     try emitDirectReadCall(ctx, builder, prepared.unit_i32, prepared.rec_i32, prepared.expanded_args.items);
 }
 fn prepareDirectArgs(ctx: *Context, builder: anytype, stmt: anytype) EmitError!PreparedDirectArgs {
-    const rec_expr = stmt.rec orelse return error.MissingRecordNumber;
+    const rec_expr = stmt.rec orelse {
+        ctx.setCurrentSource(ctx.sourceForExpr(stmt.unit));
+        return error.MissingRecordNumber;
+    };
     const unit_value = try expr.emitExpr(ctx, builder, stmt.unit);
     const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
     const rec_value = try expr.emitExpr(ctx, builder, rec_expr);

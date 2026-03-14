@@ -70,6 +70,8 @@ pub const AssignedGotoStmt = ast.AssignedGotoStmt;
 pub const DoLoopStmt = ast.DoLoopStmt;
 pub const DoInfiniteStmt = ast.DoInfiniteStmt;
 pub const ImpliedDo = ast.ImpliedDo;
+pub const SourceRef = ast.SourceRef;
+pub const ExprSource = ast.ExprSource;
 
 pub const Expr = ast.Expr;
 pub const DimRange = ast.DimRange;

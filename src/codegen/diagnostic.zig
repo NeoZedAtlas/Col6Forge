@@ -61,6 +61,13 @@ pub fn setFromStmt(stmt: input.Stmt, err: anyerror) void {
     set(line, column, info.code, info.message, stmt.source_text);
 }
 
+pub fn setFromSource(source: input.SourceRef, err: anyerror) void {
+    const info = codegenErrorInfo(err);
+    const line = if (source.line == 0) 1 else source.line;
+    const column = if (source.column == 0) 1 else source.column;
+    set(line, column, info.code, info.message, source.text);
+}
+
 pub fn setAt(line: usize, column: usize, line_text: []const u8, err: anyerror) void {
     const info = codegenErrorInfo(err);
     set(line, column, info.code, info.message, line_text);

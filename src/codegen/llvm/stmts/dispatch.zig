@@ -101,11 +101,18 @@ pub fn emitStmt(
     next_block: []const u8,
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!bool {
+    const prev_source = ctx.current_source;
     ctx.setCurrentStmt(stmt);
+    ctx.clearCurrentSource();
     defer ctx.clearCurrentStmt();
+    defer ctx.setCurrentSource(prev_source);
 
     return emitStmtInner(ctx, builder, stmt, next_block, local_label_map) catch |err| {
-        codegen_diag.setFromStmt(stmt, err);
+        if (ctx.current_source) |source| {
+            codegen_diag.setFromSource(source, err);
+        } else {
+            codegen_diag.setFromStmt(stmt, err);
+        }
         return err;
     };
 }

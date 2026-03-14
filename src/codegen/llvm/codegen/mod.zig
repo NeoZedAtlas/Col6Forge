@@ -255,7 +255,9 @@ pub fn emitModuleToWriter(
         stmts.emitFunction(&ctx, &builder) catch |err| {
             markFailure(&breakdown, .unit_emit);
             if (!codegen_diag.has()) {
-                if (ctx.current_stmt) |stmt| {
+                if (ctx.current_source) |source| {
+                    codegen_diag.setFromSource(source, err);
+                } else if (ctx.current_stmt) |stmt| {
                     codegen_diag.setFromStmt(stmt, err);
                 } else {
                     setCodegenDiagForUnit(unit, err);
@@ -621,6 +623,261 @@ fn makeLocalCharacterSymbol(name: []const u8, len: usize, dims: []*input.Expr) i
     );
     sym.type_explicit = true;
     return sym;
+}
+
+fn makeIntrinsicFunctionSymbol(name: []const u8, ty: input.TypeKind) input.sema.Symbol {
+    var sym = input.sema.Symbol.init(
+        name,
+        input.sema.TypeSpec.fromResolvedKind(ty, ty, null),
+        &[_]*input.Expr{},
+        .function,
+        .local,
+    );
+    sym.type_explicit = true;
+    sym.is_intrinsic = true;
+    return sym;
+}
+
+fn makeSourceRef(line: usize, column: usize, text: []const u8) input.SourceRef {
+    return .{
+        .line = line,
+        .column = column,
+        .text = text,
+    };
+}
+
+test "codegen diagnostic reports intrinsic call site for invalid intrinsic arity" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const stmt_text = "      X = LEN('A', 'B')";
+    const target_expr = try makeIdentExpr(a, "X");
+    const arg_a = try makeLiteralExpr(a, .string, "'A'");
+    const arg_b = try makeLiteralExpr(a, .string, "'B'");
+    const call_args = try a.alloc(*input.Expr, 2);
+    call_args[0] = arg_a;
+    call_args[1] = arg_b;
+    const call_expr = try a.create(input.Expr);
+    call_expr.* = .{ .call_or_subscript = .{ .name = "LEN", .args = call_args } };
+
+    const stmt_list = try a.alloc(input.Stmt, 1);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .assignment = .{ .target = target_expr, .value = call_expr } },
+        .source_line = 2,
+        .source_column = 7,
+        .source_text = stmt_text,
+    };
+
+    const expr_sources = try a.alloc(input.ExprSource, 1);
+    expr_sources[0] = .{
+        .expr = call_expr,
+        .source = makeSourceRef(2, 11, stmt_text),
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+        .expr_sources = expr_sources,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 2);
+    sem_symbols[0] = makeLocalScalarSymbol("X", .integer);
+    sem_symbols[1] = makeIntrinsicFunctionSymbol("LEN", .integer);
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var sink = std.array_list.Managed(u8).init(allocator);
+    defer sink.deinit();
+    var writer = sink.writer();
+    try testing.expectError(error.InvalidIntrinsicCall, emitModuleToWriter(&writer, allocator, program, sem_prog, "diag_intrinsic_arity.f", .{}));
+    const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expectEqual(@as(usize, 11), diag.column);
+    try testing.expectEqualStrings("CF4110", diag.code);
+    try testing.expectEqualStrings(stmt_text, diag.line_text);
+}
+
+test "codegen diagnostic reports concat expression site for unsupported character lowering" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const stmt_text = "      C = 'A' // I";
+    const target_expr = try makeIdentExpr(a, "C");
+    const left_expr = try makeLiteralExpr(a, .string, "'A'");
+    const right_expr = try makeIdentExpr(a, "I");
+    const concat_expr = try a.create(input.Expr);
+    concat_expr.* = .{ .binary = .{
+        .op = .concat,
+        .left = left_expr,
+        .right = right_expr,
+    } };
+
+    const stmt_list = try a.alloc(input.Stmt, 1);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .assignment = .{ .target = target_expr, .value = concat_expr } },
+        .source_line = 2,
+        .source_column = 7,
+        .source_text = stmt_text,
+    };
+
+    const expr_sources = try a.alloc(input.ExprSource, 1);
+    expr_sources[0] = .{
+        .expr = concat_expr,
+        .source = makeSourceRef(2, 11, stmt_text),
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+        .expr_sources = expr_sources,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 2);
+    sem_symbols[0] = makeLocalCharacterSymbol("C", 2, &[_]*input.Expr{});
+    sem_symbols[1] = makeLocalScalarSymbol("I", .integer);
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var sink = std.array_list.Managed(u8).init(allocator);
+    defer sink.deinit();
+    var writer = sink.writer();
+    try testing.expectError(error.UnsupportedConcat, emitModuleToWriter(&writer, allocator, program, sem_prog, "diag_concat_site.f", .{}));
+    const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expectEqual(@as(usize, 11), diag.column);
+    try testing.expectEqualStrings("CF4124", diag.code);
+    try testing.expectEqualStrings(stmt_text, diag.line_text);
+}
+
+test "codegen diagnostic reports direct io unit site when REC is missing" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const open_text = "      OPEN(UNIT=10,ACCESS='DIRECT',RECL=4)";
+    const write_text = "      WRITE(10) A";
+    const open_unit = try makeLiteralExpr(a, .integer, "10");
+    const access_expr = try makeLiteralExpr(a, .string, "'DIRECT'");
+    const recl_expr = try makeLiteralExpr(a, .integer, "4");
+    const write_unit = try makeLiteralExpr(a, .integer, "10");
+    const arg_expr = try makeIdentExpr(a, "A");
+    const write_args = try a.alloc(*input.Expr, 1);
+    write_args[0] = arg_expr;
+
+    const stmt_list = try a.alloc(input.Stmt, 2);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .open = .{
+            .unit = open_unit,
+            .recl = recl_expr,
+            .file = null,
+            .access = access_expr,
+            .form = null,
+            .blank = null,
+            .status = null,
+            .err_label = null,
+            .iostat = null,
+        } },
+        .source_line = 2,
+        .source_column = 7,
+        .source_text = open_text,
+    };
+    stmt_list[1] = .{
+        .label = null,
+        .node = .{ .write = .{
+            .unit = write_unit,
+            .format = .none,
+            .rec = null,
+            .args = write_args,
+            .err_label = null,
+            .iostat = null,
+        } },
+        .source_line = 3,
+        .source_column = 7,
+        .source_text = write_text,
+    };
+
+    const expr_sources = try a.alloc(input.ExprSource, 4);
+    expr_sources[0] = .{ .expr = open_unit, .source = makeSourceRef(2, 17, open_text) };
+    expr_sources[1] = .{ .expr = access_expr, .source = makeSourceRef(2, 27, open_text) };
+    expr_sources[2] = .{ .expr = recl_expr, .source = makeSourceRef(2, 41, open_text) };
+    expr_sources[3] = .{ .expr = write_unit, .source = makeSourceRef(3, 13, write_text) };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+        .expr_sources = expr_sources,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 1);
+    sem_symbols[0] = makeLocalScalarSymbol("A", .integer);
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var sink = std.array_list.Managed(u8).init(allocator);
+    defer sink.deinit();
+    var writer = sink.writer();
+    try testing.expectError(error.MissingRecordNumber, emitModuleToWriter(&writer, allocator, program, sem_prog, "diag_missing_rec.f", .{}));
+    const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 13), diag.column);
+    try testing.expectEqualStrings("CF4133", diag.code);
+    try testing.expectEqualStrings(write_text, diag.line_text);
 }
 
 test "emitModuleToWriter emits module header and empty function" {

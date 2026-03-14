@@ -518,6 +518,9 @@ fn updateCharMap(map: *std.StringHashMap([]const u8), ctx: *Context, key: []cons
 }
 
 pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!void {
+    const prev_source = ctx.current_source;
+    ctx.setCurrentSource(if (call.source.line != 0) call.source else prev_source);
+    defer ctx.setCurrentSource(prev_source);
     const args = try collectCallExprArgs(ctx.allocator, call);
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
     if (sym.storage == .dummy and sym.is_external) {
@@ -530,6 +533,9 @@ pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!v
 }
 
 pub fn emitCallValue(ctx: *Context, builder: anytype, call: ast.CallStmt, ret_ty: ir.IRType) EmitError!ValueRef {
+    const prev_source = ctx.current_source;
+    ctx.setCurrentSource(if (call.source.line != 0) call.source else prev_source);
+    defer ctx.setCurrentSource(prev_source);
     const args = try collectCallExprArgs(ctx.allocator, call);
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
     if (sym.storage == .dummy and sym.is_external) {
@@ -788,8 +794,7 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
         else if (sym.loweredKind() == .logical) blk: {
             const storage_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
             break :blk try expr.loadValue(ctx, builder, ret_ptr, storage_ty);
-        } else
-            try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
+        } else try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
         if (ret_ty == .complex_f32 and (ctx.abiReturnType(ret_ty) == .i64 or ctx.abiReturnType(ret_ty) == .v2f32)) {
             // ABI boundary returns COMPLEX*8 using a target-specific packed form.
             const complex_abi_ret_ty = ctx.abiReturnType(ret_ty);
