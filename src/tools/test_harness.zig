@@ -162,6 +162,14 @@ const suites = [_]Suite{
         .enabled_by_default = true,
     },
     .{
+        .name = "diagnostic-golden",
+        .build_step = "diagnostic-golden",
+        .exe_name = exeName("diagnostic_golden_runner"),
+        .description = "Diagnostic golden file tests",
+        .kind = .golden,
+        .enabled_by_default = true,
+    },
+    .{
         .name = "nist",
         .build_step = "verify",
         .exe_name = exeName("verify_runner"),

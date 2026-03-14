@@ -1,0 +1,4 @@
+tests/diagnostic_golden/semantic_expr_operands.f:3:13: error[CF3119]: invalid operand type for expression operator
+help: see docs/errors.md#CF3119
+      I='A'+1
+            ^

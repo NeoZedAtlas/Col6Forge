@@ -152,6 +152,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const diagnostic_golden_runner = b.addExecutable(.{
+        .name = "diagnostic_golden_runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/diagnostic_golden_runner.zig"),
+            .target = target,
+            .optimize = tools_optimize,
+            .imports = &.{
+                .{ .name = "Col6Forge", .module = mod },
+            },
+        }),
+    });
+
     const verify_runner = b.addExecutable(.{
         .name = "verify_runner",
         .root_module = b.createModule(.{
@@ -260,6 +272,7 @@ pub fn build(b: *std.Build) void {
     b.addNamedLazyPath("col6forge_src_dir", b.path("src"));
 
     const install_golden_runner = b.addInstallArtifact(golden_runner, .{});
+    const install_diagnostic_golden_runner = b.addInstallArtifact(diagnostic_golden_runner, .{});
     const install_verify_runner = b.addInstallArtifact(verify_runner, .{});
     const install_gcc_dg_runner = b.addInstallArtifact(gcc_dg_runner, .{});
     const install_blas_runner = b.addInstallArtifact(blas_runner, .{});
@@ -272,6 +285,7 @@ pub fn build(b: *std.Build) void {
 
     const tools_step = b.step("tools", "Install all developer runner tools");
     tools_step.dependOn(&install_golden_runner.step);
+    tools_step.dependOn(&install_diagnostic_golden_runner.step);
     tools_step.dependOn(&install_verify_runner.step);
     tools_step.dependOn(&install_gcc_dg_runner.step);
     tools_step.dependOn(&install_blas_runner.step);
@@ -364,6 +378,7 @@ pub fn build(b: *std.Build) void {
     // Compile all developer runners without install/copy overhead.
     const tools_check_step = b.step("tools-check", "Compile developer runner tools without install");
     tools_check_step.dependOn(&golden_runner.step);
+    tools_check_step.dependOn(&diagnostic_golden_runner.step);
     tools_check_step.dependOn(&verify_runner.step);
     tools_check_step.dependOn(&gcc_dg_runner.step);
     tools_check_step.dependOn(&blas_runner.step);
@@ -383,6 +398,13 @@ pub fn build(b: *std.Build) void {
     golden_step.dependOn(&run_golden.step);
     if (b.args) |args| {
         run_golden.addArgs(args);
+    }
+
+    const diagnostic_golden_step = b.step("diagnostic-golden", "Run diagnostic golden file tests");
+    const run_diagnostic_golden = b.addRunArtifact(diagnostic_golden_runner);
+    diagnostic_golden_step.dependOn(&run_diagnostic_golden.step);
+    if (b.args) |args| {
+        run_diagnostic_golden.addArgs(args);
     }
 
     const verify_step = b.step("verify", "Run NIST F78 verification tests");
