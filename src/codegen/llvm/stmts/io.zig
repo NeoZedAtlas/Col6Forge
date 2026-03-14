@@ -10,6 +10,7 @@ const formatted = @import("io/formatted/mod.zig");
 const direct = @import("io/direct.zig");
 const list_directed = @import("io/list_directed.zig");
 const unformatted = @import("io/unformatted.zig");
+const runtime_source = @import("io/runtime_source.zig");
 const io_utils = @import("io/utils.zig");
 const file_control = @import("io/file_control.zig");
 const PreparedFormatContext = formatted.PreparedFormatContext;
@@ -26,6 +27,8 @@ const emitListDirectedReadStatus = list_directed.emitListDirectedReadStatus;
 const emitUnformattedWrite = unformatted.emitUnformattedWrite;
 const emitUnformattedRead = unformatted.emitUnformattedRead;
 const emitUnformattedReadStatus = unformatted.emitUnformattedReadStatus;
+const emitRuntimeReadContextBegin = runtime_source.emitRuntimeReadContextBegin;
+const emitRuntimeReadContextEnd = runtime_source.emitRuntimeReadContextEnd;
 const emitIoStatusBranches = io_utils.emitIoStatusBranches;
 const storeRuntimeI32Value = io_utils.storeRuntimeI32Value;
 
@@ -139,7 +142,9 @@ pub fn emitRead(
 ) EmitError!bool {
     return switch (try classifyRead(ctx, builder, read)) {
         .direct => |needs_status| blk: {
+            const has_runtime_source = try emitRuntimeReadContextBegin(ctx, builder);
             try emitDirectRead(ctx, builder, read);
+            if (has_runtime_source) try emitRuntimeReadContextEnd(ctx, builder);
             if (needs_status) {
                 const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
                 break :blk emitIoStatusBranches(ctx, builder, read, zero, next_block, local_label_map);
@@ -148,22 +153,32 @@ pub fn emitRead(
         },
         .list_directed => |needs_status| blk: {
             if (needs_status) {
+                const has_runtime_source = try emitRuntimeReadContextBegin(ctx, builder);
                 const status = try emitListDirectedReadStatus(ctx, builder, read);
+                if (has_runtime_source) try emitRuntimeReadContextEnd(ctx, builder);
                 break :blk emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
             }
+            const has_runtime_source = try emitRuntimeReadContextBegin(ctx, builder);
             try emitListDirectedRead(ctx, builder, read);
+            if (has_runtime_source) try emitRuntimeReadContextEnd(ctx, builder);
             break :blk false;
         },
         .unformatted => |needs_status| blk: {
             if (needs_status) {
+                const has_runtime_source = try emitRuntimeReadContextBegin(ctx, builder);
                 const status = try emitUnformattedReadStatus(ctx, builder, read);
+                if (has_runtime_source) try emitRuntimeReadContextEnd(ctx, builder);
                 break :blk emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
             }
+            const has_runtime_source = try emitRuntimeReadContextBegin(ctx, builder);
             try emitUnformattedRead(ctx, builder, read);
+            if (has_runtime_source) try emitRuntimeReadContextEnd(ctx, builder);
             break :blk false;
         },
         .formatted => |prepared| blk: {
+            const has_runtime_source = try emitRuntimeReadContextBegin(ctx, builder);
             const status = try emitPreparedFormattedRead(ctx, builder, read, prepared);
+            if (has_runtime_source) try emitRuntimeReadContextEnd(ctx, builder);
             if (prepared.needs_status) {
                 break :blk emitIoStatusBranches(ctx, builder, read, status, next_block, local_label_map);
             }

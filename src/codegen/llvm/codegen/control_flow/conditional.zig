@@ -404,6 +404,7 @@ const TestHarness = struct {
     inline_formats: std.AutoHashMap(usize, context.FormatInfo),
     string_pool: context.StringPool,
     intrinsic_wrappers: std.StringHashMap(context.IntrinsicWrapperKind),
+    known_procedure_sigs: context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig),
     ctx: Context,
 
     fn init(allocator: std.mem.Allocator) !TestHarness {
@@ -433,8 +434,10 @@ const TestHarness = struct {
         var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
         var string_pool = context.StringPool.init(a);
         var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
+        var known_procedure_sigs = context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig).initContext(a, .{});
         var ctx = try Context.init(
             a,
+            "test.f",
             unit,
             &sem_unit,
             &decls,
@@ -443,6 +446,7 @@ const TestHarness = struct {
             &inline_formats,
             &string_pool,
             &intrinsic_wrappers,
+            &known_procedure_sigs,
             .{},
         );
         try ctx.locals.put("A", .{ .name = "%a", .ty = .ptr, .is_ptr = true });
@@ -457,6 +461,7 @@ const TestHarness = struct {
             .inline_formats = inline_formats,
             .string_pool = string_pool,
             .intrinsic_wrappers = intrinsic_wrappers,
+            .known_procedure_sigs = known_procedure_sigs,
             .ctx = ctx,
         };
     }
@@ -469,6 +474,7 @@ const TestHarness = struct {
         self.inline_formats.deinit();
         self.string_pool.deinit();
         self.intrinsic_wrappers.deinit();
+        self.known_procedure_sigs.deinit();
         self.arena.deinit();
     }
 };

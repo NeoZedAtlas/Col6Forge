@@ -8,6 +8,7 @@ extern fn exit(status: c_int) noreturn;
 
 extern fn col6forge_rt_stdin() ?*FILE;
 extern fn col6forge_io_should_abort() c_int;
+extern fn col6forge_report_runtime_io_fatal() void;
 extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
@@ -119,6 +120,7 @@ fn listReadFailWithContext(
             col6forgeCloseListInput(unit, input.*, commit_pos);
             input_closed.* = true;
         }
+        col6forge_report_runtime_io_fatal();
         exit(2);
     }
     return code;
@@ -311,7 +313,10 @@ fn destroyListReadStreamState(state: ?*ListReadStreamState) void {
 
 fn beginListReadStream(unit: c_int, status_mode: c_int) ?*ListReadStreamState {
     const input = col6forgeOpenListInput(unit) orelse {
-        if (status_mode == 0 and col6forge_io_should_abort() != 0) exit(2);
+        if (status_mode == 0 and col6forge_io_should_abort() != 0) {
+            col6forge_report_runtime_io_fatal();
+            exit(2);
+        }
         return allocListReadStreamState(unit, null, status_mode, 1);
     };
     return allocListReadStreamState(unit, input, status_mode, 0);
@@ -321,6 +326,7 @@ fn listReadStreamFail(stream: *ListReadStreamState, code: c_int) c_int {
     if (stream.status == 0) stream.status = code;
     if (stream.status_mode == 0 and col6forge_io_should_abort() != 0) {
         closeListReadStreamState(stream);
+        col6forge_report_runtime_io_fatal();
         exit(2);
     }
     return stream.status;
@@ -759,7 +765,10 @@ pub export fn col6forge_read_list_v(
     const total = runtimeArgCount(arg_count);
     const input = col6forgeOpenListInput(unit) orelse {
         if (status_mode != 0) return 1;
-        if (col6forge_io_should_abort() != 0) exit(2);
+        if (col6forge_io_should_abort() != 0) {
+            col6forge_report_runtime_io_fatal();
+            exit(2);
+        }
         return 1;
     };
     var commit_pos = false;
@@ -916,7 +925,10 @@ pub export fn col6forge_read_list_mix_v_n(
 
     const input = col6forgeOpenListInput(unit) orelse {
         if (status_mode != 0) return 1;
-        if (col6forge_io_should_abort() != 0) exit(2);
+        if (col6forge_io_should_abort() != 0) {
+            col6forge_report_runtime_io_fatal();
+            exit(2);
+        }
         return 1;
     };
     var commit_pos = false;

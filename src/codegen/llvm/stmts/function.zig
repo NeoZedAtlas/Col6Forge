@@ -947,8 +947,10 @@ test "emitFunction emits a simple assignment" {
     var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
     var string_pool = context.StringPool.init(a);
     var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
+    var known_procedure_sigs = context.CaseInsensitiveStringHashMap(sema.KnownProcedureSig).initContext(a, .{});
     defer intrinsic_wrappers.deinit();
-    var ctx = try Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, .{});
+    defer known_procedure_sigs.deinit();
+    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{});
     defer ctx.deinit();
 
     var buffer = std.array_list.Managed(u8).init(allocator);
@@ -1008,8 +1010,10 @@ test "emitFunction lowers default INTEGER to i64 when target layout widens it" {
     var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
     var string_pool = context.StringPool.init(a);
     var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
+    var known_procedure_sigs = context.CaseInsensitiveStringHashMap(sema.KnownProcedureSig).initContext(a, .{});
     defer intrinsic_wrappers.deinit();
-    var ctx = try Context.init(a, unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, .{
+    defer known_procedure_sigs.deinit();
+    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{
         .target_layout = .{ .default_integer_bits = 64 },
     });
     defer ctx.deinit();

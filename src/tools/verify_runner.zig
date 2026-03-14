@@ -15,6 +15,10 @@ const RuntimeBackend = enum {
 };
 
 const CACHE_SCHEMA_VERSION: u32 = 3;
+const HOST_CACHE_TAG = std.fmt.comptimePrint(
+    "{s}-{s}-{s}",
+    .{ @tagName(builtin.os.tag), @tagName(builtin.cpu.arch), @tagName(builtin.abi) },
+);
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -50,7 +54,7 @@ pub fn main() !void {
     const root_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(root_path);
 
-    const cache_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "verify", "cache" });
+    const cache_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "verify", "cache", HOST_CACHE_TAG });
     defer allocator.free(cache_rel);
     if (options.clean_cache) {
         cleanupWorkDir(cache_rel);

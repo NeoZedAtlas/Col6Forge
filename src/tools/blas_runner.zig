@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const builtin = @import("builtin");
 const Col6Forge = @import("Col6Forge");
 
@@ -8,6 +8,10 @@ const RuntimeBackend = enum {
 };
 
 const CACHE_SCHEMA_VERSION: u32 = 2;
+const HOST_CACHE_TAG = std.fmt.comptimePrint(
+    "{s}-{s}-{s}",
+    .{ @tagName(builtin.os.tag), @tagName(builtin.cpu.arch), @tagName(builtin.abi) },
+);
 
 const ALLBLAS = [_][]const u8{
     "lsame.f",
@@ -297,7 +301,7 @@ pub fn main() !void {
     const root_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(root_path);
 
-    const cache_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "blas-verify", "cache" });
+    const cache_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "blas-verify", "cache", HOST_CACHE_TAG });
     defer allocator.free(cache_rel);
     if (options.clean_cache) cleanupWorkDir(cache_rel);
     try std.fs.cwd().makePath(cache_rel);

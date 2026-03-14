@@ -1,0 +1,4 @@
+tests/diagnostic_golden/codegen_dynamic_concat.f:3:7: error[CF4124]: unsupported character substring/concatenation lowering
+help: see docs/errors.md#CF4124
+      C = A // B
+      ^

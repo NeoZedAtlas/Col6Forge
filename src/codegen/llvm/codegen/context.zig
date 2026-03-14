@@ -123,6 +123,7 @@ pub const StringPool = struct {
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
+    source_name: []const u8,
     unit: ProgramUnit,
     sem: *const input.SemanticUnit,
     decls: *std.StringHashMap(IRDecl),
@@ -162,6 +163,7 @@ pub const Context = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        source_name: []const u8,
         unit: ProgramUnit,
         sem: *const input.SemanticUnit,
         decls: *std.StringHashMap(IRDecl),
@@ -175,6 +177,7 @@ pub const Context = struct {
     ) !Context {
         var ctx = Context{
             .allocator = allocator,
+            .source_name = source_name,
             .unit = unit,
             .sem = sem,
             .decls = decls,

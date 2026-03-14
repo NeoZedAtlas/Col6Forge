@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 const builtin = @import("builtin");
 const Col6Forge = @import("Col6Forge");
 const fallback_policy = @import("fallback_policy.zig");
@@ -9,6 +9,10 @@ const RuntimeBackend = enum {
 };
 
 const CACHE_SCHEMA_VERSION: u32 = 2;
+const HOST_CACHE_TAG = std.fmt.comptimePrint(
+    "{s}-{s}-{s}",
+    .{ @tagName(builtin.os.tag), @tagName(builtin.cpu.arch), @tagName(builtin.abi) },
+);
 const MAX_RUN_INPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RUN_OUTPUT_BYTES: usize = 128 * 1024 * 1024;
 
@@ -152,7 +156,7 @@ pub fn main() !void {
     const root_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(root_path);
 
-    const cache_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "lapack-verify", "cache" });
+    const cache_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "lapack-verify", "cache", HOST_CACHE_TAG });
     defer allocator.free(cache_rel);
     if (options.clean_cache) cleanupWorkDir(cache_rel);
     try std.fs.cwd().makePath(cache_rel);
@@ -187,7 +191,7 @@ pub fn main() !void {
         return;
     }
 
-    const common_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "lapack-verify", "common" });
+    const common_rel = try std.fs.path.join(allocator, &.{ "zig-cache", "lapack-verify", "common", HOST_CACHE_TAG });
     defer allocator.free(common_rel);
     try std.fs.cwd().makePath(common_rel);
     const common_abs = try std.fs.path.join(allocator, &.{ root_path, common_rel });
@@ -1695,7 +1699,7 @@ fn runProcessStreamToFilesWithInputPath(
 
     return runProcessPipeToFiles(
         allocator,
-        &.{ exe_path },
+        &.{exe_path},
         cwd,
         input,
         &stdout_file,

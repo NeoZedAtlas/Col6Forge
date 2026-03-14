@@ -7,6 +7,7 @@ extern fn exit(status: c_int) noreturn;
 
 extern fn col6forge_rt_stdin() ?*FILE;
 extern fn col6forge_io_should_abort() c_int;
+extern fn col6forge_report_runtime_io_fatal() void;
 extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 extern fn col6forge_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
@@ -144,6 +145,7 @@ fn abortReadFatal(unit: c_int, is_stdin: bool, managed_read_stream: bool, stream
         col6forge_unit_stream_release_read(unit, @ptrCast(stream.?), start_pos, 0);
     }
     if (col6forge_io_should_abort() != 0) {
+        col6forge_report_runtime_io_fatal();
         exit(2);
     }
 }
