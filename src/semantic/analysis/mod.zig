@@ -96,30 +96,11 @@ pub const UnitAnalyzer = struct {
 };
 
 fn recordSemanticError(ctx: *context.Context, err: anyerror) void {
-    if (ctx.hasDiagnostic()) return;
+    if (ctx.usesExplicitDiagnosticBag() and ctx.hasDiagnostic()) return;
+    const before = ctx.hasDiagnostic();
+    ctx.recordSemanticError(err);
+    if (!before or ctx.hasDiagnostic()) return;
     const info = catalog.semanticInfoFor(err);
-    if (ctx.current_source) |source| {
-        const line = if (source.line == 0) 1 else source.line;
-        const col = if (source.column == 0) 1 else source.column;
-        ctx.setDiagnostic(line, col, info.code, info.message, source.text);
-        return;
-    }
-    if (ctx.current_decl_source) |decl_src| {
-        const line = if (decl_src.line == 0) 1 else decl_src.line;
-        const col = if (decl_src.column == 0) 1 else decl_src.column;
-        ctx.setDiagnostic(line, col, info.code, info.message, decl_src.text);
-        return;
-    }
-    if (ctx.current_stmt) |stmt| {
-        const line = if (stmt.source_line == 0) 1 else stmt.source_line;
-        const col = if (stmt.source_column == 0) 1 else stmt.source_column;
-        ctx.setDiagnostic(line, col, info.code, info.message, stmt.source_text);
-        return;
-    }
-    if (ctx.fallbackSource()) |source| {
-        ctx.setDiagnostic(source.line, source.column, info.code, info.message, source.line_text);
-        return;
-    }
     ctx.setDiagnostic(1, 1, info.code, info.message, "");
 }
 

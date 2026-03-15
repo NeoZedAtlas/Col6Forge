@@ -10,7 +10,8 @@ const StorageClass = symbols.StorageClass;
 const CharacterLengthKind = symbols.CharacterLengthKind;
 
 pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
-    const resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.derived_type_name, decl.kind_selector);
+    var resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.derived_type_name, decl.kind_selector);
+    resolved_type = resolved_type.withPolymorphic(decl.polymorphic);
     for (decl.items) |item| {
         try applyDeclarator(self, resolved_type, item, .local, true, decl.allocatable);
     }

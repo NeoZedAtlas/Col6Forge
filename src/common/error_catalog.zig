@@ -73,6 +73,9 @@ pub const semantic = struct {
     pub const data_value_count_mismatch = ErrorInfo{ .code = "CF3128", .message = "DATA statement target/value count mismatch" };
     pub const data_expansion_too_large = ErrorInfo{ .code = "CF3129", .message = "DATA statement expansion exceeds semantic safety limit" };
     pub const invalid_condition_type = ErrorInfo{ .code = "CF3130", .message = "IF/DO WHILE condition must be LOGICAL expression" };
+    pub const invalid_allocate_type_spec = ErrorInfo{ .code = "CF3131", .message = "Error in type-spec at ALLOCATE" };
+    pub const abstract_allocate_type = ErrorInfo{ .code = "CF3132", .message = "allocated type may not be ABSTRACT" };
+    pub const allocate_type_incompatible = ErrorInfo{ .code = "CF3133", .message = "allocate-object is type incompatible with typespec" };
     pub const generic = ErrorInfo{ .code = "CF3199", .message = "semantic analysis failed" };
 };
 
@@ -170,6 +173,9 @@ pub fn semanticInfoFor(err: anyerror) ErrorInfo {
         error.DataValueCountMismatch => semantic.data_value_count_mismatch,
         error.DataExpansionTooLarge => semantic.data_expansion_too_large,
         error.InvalidConditionType => semantic.invalid_condition_type,
+        error.InvalidAllocateTypeSpec => semantic.invalid_allocate_type_spec,
+        error.AbstractAllocateType => semantic.abstract_allocate_type,
+        error.AllocateTypeIncompatible => semantic.allocate_type_incompatible,
         else => semantic.generic,
     };
 }
@@ -271,6 +277,9 @@ pub const doc_entries = [_]DocEntry{
     doc(semantic.data_value_count_mismatch, "semantic"),
     doc(semantic.data_expansion_too_large, "semantic"),
     doc(semantic.invalid_condition_type, "semantic"),
+    doc(semantic.invalid_allocate_type_spec, "semantic"),
+    doc(semantic.abstract_allocate_type, "semantic"),
+    doc(semantic.allocate_type_incompatible, "semantic"),
     doc(semantic.generic, "semantic"),
     doc(codegen.multiple_program_units, "codegen"),
     doc(codegen.missing_semantic_unit, "codegen"),

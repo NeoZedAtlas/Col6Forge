@@ -321,6 +321,15 @@ const Parser = struct {
                     break;
                 }
             }
+            if (isDerivedTypeStartTokens(line, tokens)) {
+                const decl_node = self.parseDerivedTypeDef() catch |err| {
+                    setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
+                    return err;
+                };
+                try decls.append(decl_node);
+                try decl_sources.append(sourceFromLine(line));
+                continue;
+            }
             if (decl.isDeclarationStart(stmt_lp)) {
                 const decl_node = decl.parseDecl(&stmt_lp, self.arena) catch |err| {
                     setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
@@ -334,15 +343,6 @@ const Parser = struct {
                 try decls.append(decl_node);
                 try decl_sources.append(sourceFromLine(line));
                 self.index += 1;
-                continue;
-            }
-            if (isDerivedTypeStartTokens(line, tokens)) {
-                const decl_node = self.parseDerivedTypeDef() catch |err| {
-                    setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
-                    return err;
-                };
-                try decls.append(decl_node);
-                try decl_sources.append(sourceFromLine(line));
                 continue;
             }
             var stmt_node = stmt.parseStatementWithDiagnostics(self.arena, self.lines, &self.index, &do_ctx, &param_ints, &param_strings, &array_names, self.diag_bag, self.lex_diag_bag) catch |err| {
@@ -398,7 +398,7 @@ const Parser = struct {
         const header_line = self.lines[self.index];
         const header_tokens = try self.tokensForIndex(self.index);
         var lp = LineParser.init(header_line, header_tokens);
-        const name = try parseDerivedTypeHeaderName(self.arena, &lp);
+        const header = try parseDerivedTypeHeader(self.arena, &lp);
         self.index += 1;
 
         while (self.index < self.lines.len) {
@@ -407,7 +407,11 @@ const Parser = struct {
             const tokens = try self.tokensForIndex(self.index);
             if (isDerivedTypeEndTokens(line, tokens)) {
                 self.index += 1;
-                return .{ .derived_type_def = .{ .name = name } };
+                return .{ .derived_type_def = .{
+                    .name = header.name,
+                    .parent_name = header.parent_name,
+                    .abstract = header.abstract,
+                } };
             }
             self.index += 1;
         }
@@ -420,6 +424,7 @@ const TypeInfo = struct {
     kind_selector: ?*ast.Expr = null,
     char_len: ?*ast.Expr,
     derived_type_name: ?[]const u8 = null,
+    polymorphic: bool = false,
 };
 
 const ProgramUnitHeader = struct {
@@ -502,6 +507,7 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
             .type_kind = info.type_kind,
             .kind_selector = info.kind_selector,
             .derived_type_name = info.derived_type_name,
+            .polymorphic = info.polymorphic,
             .items = decl_items,
             .allocatable = false,
         } };
@@ -620,11 +626,31 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
     if (try decl.consumeDoublePrecisionType(lp)) {
         return .{ .type_kind = .double_precision, .kind_selector = null, .char_len = null };
     }
-    if (lp.consumeKeyword("TYPE")) {
+    if (lp.isKeywordSplit("TYPE")) {
+        var lookahead = lp.*;
+        _ = lookahead.consumeKeyword("TYPE");
+        if (!lookahead.peekIs(.l_paren)) return null;
+        lp.* = lookahead;
         _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
         const name = lp.readName(arena) orelse return error.MissingName;
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         return .{ .type_kind = .derived, .kind_selector = null, .char_len = null, .derived_type_name = name };
+    }
+    if (lp.isKeywordSplit("CLASS")) {
+        var lookahead = lp.*;
+        _ = lookahead.consumeKeyword("CLASS");
+        if (!lookahead.peekIs(.l_paren)) return null;
+        lp.* = lookahead;
+        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        const name = lp.readName(arena) orelse return error.MissingName;
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        return .{
+            .type_kind = .derived,
+            .kind_selector = null,
+            .char_len = null,
+            .derived_type_name = name,
+            .polymorphic = true,
+        };
     }
     return null;
 }
@@ -633,7 +659,6 @@ fn isDerivedTypeStartTokens(line: logical_line.LogicalLine, tokens: []lexer.Toke
     var lp = LineParser.init(line, tokens);
     if (!lp.consumeKeyword("TYPE")) return false;
     if (lp.peekIs(.l_paren)) return false;
-    if (lp.peekIs(.comma)) return false;
     return true;
 }
 
@@ -643,14 +668,34 @@ fn isDerivedTypeEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token)
     return lp.consumeKeyword("TYPE");
 }
 
-fn parseDerivedTypeHeaderName(arena: std.mem.Allocator, lp: *LineParser) ![]const u8 {
+const DerivedTypeHeader = struct {
+    name: []const u8,
+    parent_name: ?[]const u8 = null,
+    abstract: bool = false,
+};
+
+fn parseDerivedTypeHeader(arena: std.mem.Allocator, lp: *LineParser) !DerivedTypeHeader {
     if (!lp.consumeKeyword("TYPE")) return error.UnexpectedToken;
-    if (lp.peekIs(.comma)) return error.UnexpectedToken;
+    var header: DerivedTypeHeader = .{ .name = "" };
+    while (lp.consume(.comma)) {
+        if (lp.consumeKeyword("ABSTRACT")) {
+            header.abstract = true;
+            continue;
+        }
+        if (lp.consumeKeyword("EXTENDS")) {
+            _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+            header.parent_name = lp.readName(arena) orelse return error.MissingName;
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            continue;
+        }
+        return error.UnexpectedToken;
+    }
     if (lp.peekIs(.colon)) {
         _ = lp.expect(.colon) orelse return error.UnexpectedToken;
         _ = lp.expect(.colon) orelse return error.UnexpectedToken;
     }
-    return lp.readName(arena) orelse error.MissingName;
+    header.name = lp.readName(arena) orelse return error.MissingName;
+    return header;
 }
 
 fn consumeProcedurePrefixes(lp: *LineParser) void {
@@ -1330,6 +1375,62 @@ test "parseProgram captures derived type definition and declaration" {
     try testing.expectEqualStrings("A", unit.decls[1].type_decl.derived_type_name.?);
 }
 
+test "parseProgram handles implicit main with TYPE double-colon and CLASS declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      TYPE :: REAL_TYPE\n" ++
+        "      END TYPE\n" ++
+        "      CLASS(REAL_TYPE), ALLOCATABLE :: OBJ\n" ++
+        "      ALLOCATE(REAL_TYPE :: OBJ)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqual(@as(usize, 2), unit.decls.len);
+    try testing.expect(unit.decls[0] == .derived_type_def);
+    try testing.expectEqualStrings("REAL_TYPE", unit.decls[0].derived_type_def.name);
+    try testing.expect(unit.decls[1] == .type_decl);
+    try testing.expectEqual(ast.TypeKind.derived, unit.decls[1].type_decl.type_kind);
+    try testing.expect(unit.decls[1].type_decl.polymorphic);
+    try testing.expectEqualStrings("REAL_TYPE", unit.decls[1].type_decl.derived_type_name.?);
+}
+
+test "parseProgram handles derived type EXTENDS and ABSTRACT attributes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S()\n" ++
+        "      TYPE :: T1\n" ++
+        "      END TYPE\n" ++
+        "      TYPE, EXTENDS(T1) :: T2\n" ++
+        "      END TYPE\n" ++
+        "      TYPE, ABSTRACT :: U0\n" ++
+        "      END TYPE\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    const unit = program.units[0];
+    try testing.expectEqual(@as(usize, 3), unit.decls.len);
+    try testing.expectEqualStrings("T1", unit.decls[0].derived_type_def.name);
+    try testing.expectEqualStrings("T2", unit.decls[1].derived_type_def.name);
+    try testing.expectEqualStrings("T1", unit.decls[1].derived_type_def.parent_name.?);
+    try testing.expect(unit.decls[2].derived_type_def.abstract);
+}
+
 test "parseProgram captures explicit RESULT variable name in function header" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1699,6 +1800,35 @@ test "parseProgram reports free-form continued declaration parse errors on the r
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 3), diag.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
+}
+
+test "parseProgram handles free-form implicit main with derived type and class allocate" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "type :: real_type\n" ++
+        "end type\n" ++
+        "class(real_type), allocatable :: obj\n" ++
+        "real(8), allocatable :: r8\n" ++
+        "allocate(real_type :: obj)\n" ++
+        "allocate(real(kind=8) :: r8)\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqual(@as(usize, 3), unit.decls.len);
+    try testing.expect(unit.decls[0] == .derived_type_def);
+    try testing.expectEqualStrings("real_type", unit.decls[0].derived_type_def.name);
+    try testing.expect(unit.decls[1] == .type_decl);
+    try testing.expect(unit.decls[1].type_decl.polymorphic);
+    try testing.expectEqualStrings("real_type", unit.decls[1].type_decl.derived_type_name.?);
 }
 
 test "parseProgramWithDiagnostics captures parse errors in explicit bag" {

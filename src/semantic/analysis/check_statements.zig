@@ -107,6 +107,9 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             }
         },
         .allocate => |allocate| {
+            if (allocate.type_spec) |type_spec| {
+                try checkAllocateTypeSpecCompatibility(self, allocate, type_spec);
+            }
             for (allocate.items) |item| {
                 const idx = resolve_symbols.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
                 const sym = self.symbols.items[idx];
@@ -403,6 +406,32 @@ fn isAssignmentCompatible(target: ast.TypeKind, value: ast.TypeKind) bool {
     if (target == .character or value == .character) return target == .character and value == .character;
     if (target == .logical or value == .logical) return target == .logical and value == .logical;
     return isNumeric(target) and isNumeric(value);
+}
+
+fn checkAllocateTypeSpecCompatibility(
+    self: *context.Context,
+    allocate: ast.AllocateStmt,
+    type_spec: ast.AllocateTypeSpec,
+) CheckError!void {
+    if (type_spec.type_kind != .derived) return;
+    const type_name = type_spec.derived_type_name orelse return error.InvalidAllocateTypeSpec;
+    const spec_info = resolve_symbols.lookupDerivedType(self, type_name) orelse return error.InvalidAllocateTypeSpec;
+    if (spec_info.abstract) return error.AbstractAllocateType;
+
+    for (allocate.items) |item| {
+        const idx = resolve_symbols.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
+        const sym = self.symbols.items[idx];
+        if (sym.loweredKind() != .derived) return error.AllocateTypeIncompatible;
+        const declared_name = sym.type_spec.derived_type_name orelse return error.AllocateTypeIncompatible;
+        const compatible = if (sym.type_spec.polymorphic)
+            resolve_symbols.isSameOrExtension(self, type_name, declared_name)
+        else
+            std.ascii.eqlIgnoreCase(type_name, declared_name);
+        if (!compatible) {
+            self.setCurrentSource(if (item.source.line != 0) item.source else null);
+            return error.AllocateTypeIncompatible;
+        }
+    }
 }
 
 fn isNumeric(kind: ast.TypeKind) bool {

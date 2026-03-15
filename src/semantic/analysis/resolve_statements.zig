@@ -112,10 +112,6 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         },
         .allocate => |allocate| {
             if (allocate.type_spec) |type_spec| {
-                if (type_spec.type_kind == .derived) {
-                    const type_name = type_spec.derived_type_name orelse return error.UnexpectedTypeDecl;
-                    if (!symbols_mod.hasDerivedType(self, type_name)) return error.UnexpectedTypeDecl;
-                }
                 if (type_spec.kind_selector) |kind_selector| {
                     try expressions.resolveExpr(self, kind_selector);
                 }

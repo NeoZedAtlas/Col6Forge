@@ -24,14 +24,27 @@ pub fn installBuiltinConstants(self: *context.Context) !void {
     try putBuiltinConstant(self, "iso_fortran_env", "error_unit", integer_spec, .{ .integer = 0 });
 }
 
-pub fn registerDerivedType(self: *context.Context, name: []const u8) !void {
-    if (self.derived_types.contains(name)) return;
-    const key = try lowerDup(self.arena, name);
-    try self.derived_types.put(key, {});
+pub fn registerDerivedType(self: *context.Context, info: context.Context.DerivedTypeInfo) !void {
+    if (hasDerivedType(self, info.name)) return;
+    const key = try lowerDup(self.arena, info.name);
+    try self.derived_types.put(key, info);
 }
 
 pub fn hasDerivedType(self: *const context.Context, name: []const u8) bool {
-    return getLowercaseMapValue(void, &self.derived_types, name) != null;
+    return getLowercaseMapValue(context.Context.DerivedTypeInfo, &self.derived_types, name) != null;
+}
+
+pub fn lookupDerivedType(self: *const context.Context, name: []const u8) ?context.Context.DerivedTypeInfo {
+    return getLowercaseMapValue(context.Context.DerivedTypeInfo, &self.derived_types, name);
+}
+
+pub fn isSameOrExtension(self: *const context.Context, candidate: []const u8, base: []const u8) bool {
+    var current = lookupDerivedType(self, candidate) orelse return false;
+    while (true) {
+        if (std.ascii.eqlIgnoreCase(current.name, base)) return true;
+        const parent = current.parent_name orelse return false;
+        current = lookupDerivedType(self, parent) orelse return false;
+    }
 }
 
 pub fn findBuiltinConstant(self: *context.Context, name: []const u8) ?context.Context.BuiltinConstant {

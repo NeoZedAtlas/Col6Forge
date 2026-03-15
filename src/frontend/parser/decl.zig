@@ -16,7 +16,7 @@ const ImplicitRule = ast.ImplicitRule;
 const Declarator = ast.Declarator;
 
 pub fn isDeclarationStart(lp: LineParser) bool {
-    if (lp.isKeywordSplit("INTEGER") or lp.isKeywordSplit("REAL") or lp.isKeywordSplit("COMPLEX") or lp.isKeywordSplit("LOGICAL") or lp.isKeywordSplit("CHARACTER")) {
+    if (lp.isKeywordSplit("INTEGER") or lp.isKeywordSplit("REAL") or lp.isKeywordSplit("COMPLEX") or lp.isKeywordSplit("LOGICAL") or lp.isKeywordSplit("CHARACTER") or lp.isKeywordSplit("CLASS")) {
         return true;
     }
     if (isDoublePrecisionTypeStart(lp)) return true;
@@ -181,6 +181,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         .type_kind = type_spec.type_kind,
         .kind_selector = type_spec.kind_selector,
         .derived_type_name = type_spec.derived_type_name,
+        .polymorphic = type_spec.polymorphic,
         .items = items,
         .save = attrs.save,
         .allocatable = attrs.allocatable,
@@ -238,6 +239,7 @@ const ParsedTypeSpec = struct {
     type_kind: TypeKind,
     kind_selector: ?*ast.Expr = null,
     derived_type_name: ?[]const u8 = null,
+    polymorphic: bool = false,
 };
 
 const ParsedCharacterLen = struct {
@@ -263,6 +265,7 @@ pub fn tryParseAllocateTypeSpec(lp: *LineParser, arena: std.mem.Allocator) !?ast
         .type_kind = type_spec.type_kind,
         .kind_selector = type_spec.kind_selector,
         .derived_type_name = type_spec.derived_type_name,
+        .polymorphic = type_spec.polymorphic,
         .char_len = char_len.expr,
         .char_len_deferred = char_len.deferred,
     };
@@ -303,6 +306,12 @@ fn parseTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
         const name = lp.readName(arena) orelse return error.MissingName;
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         return .{ .type_kind = .derived, .derived_type_name = name };
+    }
+    if (lp.consumeKeyword("CLASS")) {
+        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        const name = lp.readName(arena) orelse return error.MissingName;
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        return .{ .type_kind = .derived, .derived_type_name = name, .polymorphic = true };
     }
     return error.UnknownType;
 }

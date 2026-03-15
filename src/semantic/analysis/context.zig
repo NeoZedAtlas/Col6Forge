@@ -1,11 +1,18 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const catalog = @import("../../common/error_catalog.zig");
 const diag = @import("../diagnostic.zig");
 const symbols = @import("../symbol/mod.zig");
 const scope = @import("../scope.zig");
 const intrinsics = @import("intrinsics.zig");
 
 pub const Context = struct {
+    pub const DerivedTypeInfo = struct {
+        name: []const u8,
+        parent_name: ?[]const u8 = null,
+        abstract: bool = false,
+    };
+
     pub const IntegerBounds = struct {
         min: i64,
         max: i64,
@@ -75,7 +82,7 @@ pub const Context = struct {
     known_procedure_sig_cache: std.StringHashMap(?ProcedureSig),
     intrinsic_arity_cache: std.StringHashMap(?intrinsics.Arity),
     builtin_constants: std.StringHashMap(BuiltinConstant),
-    derived_types: std.StringHashMap(void),
+    derived_types: std.StringHashMap(DerivedTypeInfo),
     const_string_pool: std.StringHashMap([]const u8),
     const_eval_cache: std.AutoHashMap(usize, ?symbols.ConstValue),
     expr_type_cache: std.AutoHashMap(usize, ast.TypeKind),
@@ -153,7 +160,7 @@ pub const Context = struct {
             .known_procedure_sig_cache = std.StringHashMap(?ProcedureSig).init(arena),
             .intrinsic_arity_cache = std.StringHashMap(?intrinsics.Arity).init(arena),
             .builtin_constants = std.StringHashMap(BuiltinConstant).init(arena),
-            .derived_types = std.StringHashMap(void).init(arena),
+            .derived_types = std.StringHashMap(DerivedTypeInfo).init(arena),
             .const_string_pool = std.StringHashMap([]const u8).init(arena),
             .const_eval_cache = std.AutoHashMap(usize, ?symbols.ConstValue).init(arena),
             .expr_type_cache = std.AutoHashMap(usize, ast.TypeKind).init(arena),
@@ -191,6 +198,10 @@ pub const Context = struct {
         return diag.has();
     }
 
+    pub fn usesExplicitDiagnosticBag(self: *const Context) bool {
+        return self.diag_bag != null;
+    }
+
     pub fn setDiagnostic(self: *Context, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
         if (self.diag_bag) |bag| {
             bag.set(line, column, code, message, line_text);
@@ -210,6 +221,33 @@ pub const Context = struct {
     pub fn fallbackSource(self: *const Context) ?diag.FallbackSource {
         if (self.diag_bag) |bag| return bag.fallbackSource();
         return diag.fallbackSource();
+    }
+
+    pub fn recordSemanticError(self: *Context, err: anyerror) void {
+        if (!self.usesExplicitDiagnosticBag() and self.hasDiagnostic()) return;
+
+        const info = catalog.semanticInfoFor(err);
+        if (self.current_source) |source| {
+            const line = if (source.line == 0) 1 else source.line;
+            const col = if (source.column == 0) 1 else source.column;
+            self.setDiagnostic(line, col, info.code, info.message, source.text);
+            return;
+        }
+        if (self.current_decl_source) |decl_src| {
+            const line = if (decl_src.line == 0) 1 else decl_src.line;
+            const col = if (decl_src.column == 0) 1 else decl_src.column;
+            self.setDiagnostic(line, col, info.code, info.message, decl_src.text);
+            return;
+        }
+        if (self.current_stmt) |stmt| {
+            const line = if (stmt.source_line == 0) 1 else stmt.source_line;
+            const col = if (stmt.source_column == 0) 1 else stmt.source_column;
+            self.setDiagnostic(line, col, info.code, info.message, stmt.source_text);
+            return;
+        }
+        if (self.fallbackSource()) |source| {
+            self.setDiagnostic(source.line, source.column, info.code, info.message, source.line_text);
+        }
     }
 
     pub fn internConstString(self: *Context, text: []const u8) ![]const u8 {

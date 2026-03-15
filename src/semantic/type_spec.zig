@@ -14,6 +14,7 @@ pub const TypeSpec = struct {
     char_len_kind: CharacterLengthKind = .none,
     char_len: ?usize = null,
     derived_type_name: ?[]const u8 = null,
+    polymorphic: bool = false,
 
     pub fn fromKind(kind: ast.TypeKind) TypeSpec {
         return .{
@@ -23,6 +24,7 @@ pub const TypeSpec = struct {
             .char_len_kind = if (kind == .character) .constant else .none,
             .char_len = if (kind == .character) 1 else null,
             .derived_type_name = null,
+            .polymorphic = false,
         };
     }
 
@@ -41,6 +43,7 @@ pub const TypeSpec = struct {
         }
         if (lowered_kind != .derived) {
             spec.derived_type_name = null;
+            spec.polymorphic = false;
         }
         return spec;
     }
@@ -51,6 +54,16 @@ pub const TypeSpec = struct {
         spec.lowered_kind = .derived;
         spec.derived_type_name = name;
         return spec;
+    }
+
+    pub fn withPolymorphic(self: TypeSpec, polymorphic: bool) TypeSpec {
+        var out = self;
+        if (out.lowered_kind != .derived) {
+            out.polymorphic = false;
+            return out;
+        }
+        out.polymorphic = polymorphic;
+        return out;
     }
 
     pub fn withCharacterLength(

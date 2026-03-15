@@ -30,6 +30,7 @@ pub const TypeDecl = struct {
     type_kind: TypeKind,
     kind_selector: ?*Expr = null,
     derived_type_name: ?[]const u8 = null,
+    polymorphic: bool = false,
     items: []Declarator,
     save: bool = false,
     allocatable: bool = false,
@@ -37,6 +38,8 @@ pub const TypeDecl = struct {
 
 pub const DerivedTypeDef = struct {
     name: []const u8,
+    parent_name: ?[]const u8 = null,
+    abstract: bool = false,
 };
 
 pub const DimensionDecl = struct {

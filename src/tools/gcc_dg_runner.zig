@@ -1119,12 +1119,13 @@ fn emitPipelineToFile(
     input_path: []const u8,
     emit: Col6Forge.EmitKind,
     output_path: []const u8,
+    diag_bag: *Col6Forge.diag.Bag,
 ) !void {
     var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
     defer out_file.close();
     var out_buf: [32 * 1024]u8 = undefined;
     var out_writer = out_file.writer(&out_buf);
-    try Col6Forge.runPipelineToWriterWithOptions(
+    try Col6Forge.runPipelineToWriterWithOptionsAndDiagnostics(
         allocator,
         input_path,
         emit,
@@ -1133,6 +1134,7 @@ fn emitPipelineToFile(
             .coarse_source_map = false,
             .capture_profile = false,
         },
+        diag_bag,
     );
     try out_writer.interface.flush();
 }
@@ -1141,9 +1143,35 @@ fn formatPipelineFailureText(
     allocator: std.mem.Allocator,
     log_state: *LogState,
     input_path: []const u8,
+    diag_bag: *Col6Forge.diag.Bag,
     err: anyerror,
     log_output: bool,
 ) ![]const u8 {
+    if (diag_bag.has()) {
+        var rendered: std.ArrayList(u8) = .empty;
+        errdefer rendered.deinit(allocator);
+
+        while (diag_bag.take()) |d| {
+            try rendered.writer(allocator).print("{s}:{d}:{d}: error[{s}]: {s}\n", .{
+                d.file_path,
+                d.line,
+                d.column,
+                d.code,
+                d.message,
+            });
+            if (d.line_text.len != 0) {
+                try rendered.writer(allocator).print("{s}\n", .{d.line_text});
+                const caret_col = if (d.column == 0) 1 else d.column;
+                var i: usize = 1;
+                while (i < caret_col) : (i += 1) try rendered.append(allocator, ' ');
+                try rendered.appendSlice(allocator, "^\n");
+            }
+        }
+        const text = try rendered.toOwnedSlice(allocator);
+        if (log_output) log_state.stderr("{s}", .{text});
+        return text;
+    }
+
     if (Col6Forge.takeLastPipelineDiagnostic()) |d| {
         if (log_output) {
             log_state.stderr("{s}:{d}:{d}: error[{s}]: {s}\n", .{ d.file_path, d.line, d.column, d.code, d.message });
@@ -1348,10 +1376,12 @@ fn processCase(
     var compile_failed = false;
     var diag_text: []const u8 = "";
     var warning_diag_text: []const u8 = "";
+    var pipeline_diag_bag = Col6Forge.diag.Bag.init(allocator);
+    defer pipeline_diag_bag.deinit();
 
-    emitPipelineToFile(allocator, abs_input_path, options.emit, ll_path) catch |err| {
+    emitPipelineToFile(allocator, abs_input_path, options.emit, ll_path, &pipeline_diag_bag) catch |err| {
         compile_failed = true;
-        diag_text = try formatPipelineFailureText(allocator, log_state, abs_input_path, err, !expect_failure);
+        diag_text = try formatPipelineFailureText(allocator, log_state, abs_input_path, &pipeline_diag_bag, err, !expect_failure);
     };
 
     if (!compile_failed) {

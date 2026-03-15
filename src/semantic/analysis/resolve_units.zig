@@ -23,6 +23,7 @@ pub const Resolver = struct {
 
     pub fn run(self: *Resolver) !void {
         const ctx = self.ctx;
+        var first_stmt_error: ?anyerror = null;
         try ctx.initScopeTree();
         _ = try ctx.pushScopeWithOwner(unitScopeKind(ctx.unit.kind), ctx.unit.name, ctx.unit.kind);
         try symbols_mod.initImplicitDefaults(ctx);
@@ -35,7 +36,11 @@ pub const Resolver = struct {
         try statements.preinstallUseImports(ctx);
         for (ctx.unit.decls) |decl| {
             if (decl == .derived_type_def) {
-                try symbols_mod.registerDerivedType(ctx, decl.derived_type_def.name);
+                try symbols_mod.registerDerivedType(ctx, .{
+                    .name = decl.derived_type_def.name,
+                    .parent_name = decl.derived_type_def.parent_name,
+                    .abstract = decl.derived_type_def.abstract,
+                });
             }
         }
         if (ctx.unit.decl_sources.len != 0) {
@@ -59,8 +64,14 @@ pub const Resolver = struct {
         // First pass resolves statement-level symbol/shape ambiguity (e.g. statement
         // function disambiguation) before intrinsic-array conversion lowering.
         for (ctx.unit.stmts) |stmt| {
-            try statements.resolveStmt(ctx, stmt);
+            statements.resolveStmt(ctx, stmt) catch |err| {
+                if (!ctx.usesExplicitDiagnosticBag()) return err;
+                if (first_stmt_error == null) first_stmt_error = err;
+                ctx.recordSemanticError(err);
+                continue;
+            };
         }
+        if (first_stmt_error) |err| return err;
         // Intrinsic array-conversion lowering is mandatory for currently supported
         // backend forms. Unsupported shapes must remain fatal here.
         try rewrite_calls.lowerIntrinsicArrayConversions(ctx);
@@ -69,8 +80,14 @@ pub const Resolver = struct {
         // the final lowered AST.
         clearStmtResolutionCaches(ctx);
         for (ctx.unit.stmts) |stmt| {
-            try statements.resolveStmt(ctx, stmt);
+            statements.resolveStmt(ctx, stmt) catch |err| {
+                if (!ctx.usesExplicitDiagnosticBag()) return err;
+                if (first_stmt_error == null) first_stmt_error = err;
+                ctx.recordSemanticError(err);
+                continue;
+            };
         }
+        if (first_stmt_error) |err| return err;
         ctx.popScope();
     }
 };

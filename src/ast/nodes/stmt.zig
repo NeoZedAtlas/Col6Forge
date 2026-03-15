@@ -132,6 +132,7 @@ pub const AllocateTypeSpec = struct {
     type_kind: @import("decl.zig").TypeKind,
     kind_selector: ?*Expr = null,
     derived_type_name: ?[]const u8 = null,
+    polymorphic: bool = false,
     char_len: ?*Expr = null,
     char_len_deferred: bool = false,
 };

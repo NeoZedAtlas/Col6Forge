@@ -629,10 +629,7 @@ fn setParseDiagnostic(
     logical_lines: []logical_line.LogicalLine,
     err: anyerror,
 ) void {
-    if (parse_diag_bag.latest()) |parse_info| {
-        const raw_line = sourceLineAt(contents, parse_info.line);
-        const line_text = if (raw_line.len > 0) raw_line else parse_info.line_text;
-        diag_bag.add(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text);
+    if (appendParserDiagnostics(diag_bag, parse_diag_bag, input_path, contents)) {
         return;
     }
     if (parse_diag_bag.fallbackSource()) |fallback| {
@@ -648,10 +645,7 @@ fn setParseDiagnostic(
 }
 
 fn setSemanticDiagnostic(diag_bag: *diag.Bag, semantic_diag_bag: *semantic.diagnostic.Bag, input_path: []const u8, contents: []const u8, err: anyerror) void {
-    if (semantic_diag_bag.latest()) |sem_info| {
-        const raw_line = sourceLineAt(contents, sem_info.line);
-        const line_text = if (raw_line.len > 0) raw_line else sem_info.line_text;
-        diag_bag.add(input_path, sem_info.line, sem_info.column, sem_info.code, sem_info.message, line_text);
+    if (appendSemanticDiagnostics(diag_bag, semantic_diag_bag, input_path, contents)) {
         return;
     }
     if (semantic_diag_bag.fallbackSource()) |fallback| {
@@ -664,10 +658,7 @@ fn setSemanticDiagnostic(diag_bag: *diag.Bag, semantic_diag_bag: *semantic.diagn
 }
 
 fn setCodegenDiagnostic(diag_bag: *diag.Bag, codegen_diag_bag: *codegen.diagnostic.Bag, input_path: []const u8, contents: []const u8, err: anyerror) void {
-    if (codegen_diag_bag.latest()) |cg_info| {
-        const raw_line = sourceLineAt(contents, cg_info.line);
-        const line_text = if (raw_line.len > 0) raw_line else cg_info.line_text;
-        diag_bag.add(input_path, cg_info.line, cg_info.column, cg_info.code, cg_info.message, line_text);
+    if (appendCodegenDiagnostics(diag_bag, codegen_diag_bag, input_path, contents)) {
         return;
     }
     if (codegen_diag_bag.fallbackSource()) |fallback| {
@@ -687,6 +678,39 @@ fn setDefaultDiagnostic(diag_bag: *diag.Bag, input_path: []const u8, contents: [
     setDefaultDiagnosticAt(diag_bag, input_path, line_no, 1, line_text, code, base_message, err);
 }
 
+fn appendParserDiagnostics(diag_bag: *diag.Bag, parse_diag_bag: *parser.diagnostic.Bag, input_path: []const u8, contents: []const u8) bool {
+    var appended = false;
+    while (parse_diag_bag.take()) |parse_info| {
+        const raw_line = sourceLineAt(contents, parse_info.line);
+        const line_text = if (raw_line.len > 0) raw_line else parse_info.line_text;
+        diag_bag.add(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text);
+        appended = true;
+    }
+    return appended;
+}
+
+fn appendSemanticDiagnostics(diag_bag: *diag.Bag, semantic_diag_bag: *semantic.diagnostic.Bag, input_path: []const u8, contents: []const u8) bool {
+    var appended = false;
+    while (semantic_diag_bag.take()) |sem_info| {
+        const raw_line = sourceLineAt(contents, sem_info.line);
+        const line_text = if (raw_line.len > 0) raw_line else sem_info.line_text;
+        diag_bag.add(input_path, sem_info.line, sem_info.column, sem_info.code, sem_info.message, line_text);
+        appended = true;
+    }
+    return appended;
+}
+
+fn appendCodegenDiagnostics(diag_bag: *diag.Bag, codegen_diag_bag: *codegen.diagnostic.Bag, input_path: []const u8, contents: []const u8) bool {
+    var appended = false;
+    while (codegen_diag_bag.take()) |cg_info| {
+        const raw_line = sourceLineAt(contents, cg_info.line);
+        const line_text = if (raw_line.len > 0) raw_line else cg_info.line_text;
+        diag_bag.add(input_path, cg_info.line, cg_info.column, cg_info.code, cg_info.message, line_text);
+        appended = true;
+    }
+    return appended;
+}
+
 fn setDefaultDiagnosticAt(
     diag_bag: *diag.Bag,
     input_path: []const u8,
@@ -704,7 +728,7 @@ fn setDefaultDiagnosticAt(
 
 fn publishCompatFromBag(diag_bag: *diag.Bag) void {
     clearLastDiagnostic();
-    if (diag_bag.take()) |pipeline_diag| {
+    if (diag_bag.latest()) |pipeline_diag| {
         setLastDiagnostic(
             pipeline_diag.file_path,
             pipeline_diag.line,
