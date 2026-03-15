@@ -80,15 +80,21 @@ pub const Bag = struct {
     }
 };
 
+const compat_allocator = std.heap.page_allocator;
+
 const DiagStorage = struct {
     line: usize = 1,
     column: usize = 1,
-    code_buf: [16]u8 = [_]u8{0} ** 16,
-    code_len: usize = 0,
-    message_buf: [256]u8 = [_]u8{0} ** 256,
-    message_len: usize = 0,
-    line_buf: [512]u8 = [_]u8{0} ** 512,
-    line_len: usize = 0,
+    code: ?[]u8 = null,
+    message: ?[]u8 = null,
+    line_text: ?[]u8 = null,
+
+    fn clear(self: *DiagStorage) void {
+        if (self.code) |buf| compat_allocator.free(buf);
+        if (self.message) |buf| compat_allocator.free(buf);
+        if (self.line_text) |buf| compat_allocator.free(buf);
+        self.* = .{};
+    }
 };
 
 threadlocal var diag_storage: DiagStorage = .{};
@@ -102,6 +108,7 @@ pub fn setActiveBag(bag: ?*Bag) ?*Bag {
 }
 
 pub fn publishCompatFromBag(bag: *Bag) void {
+    diag_storage.clear();
     has_diag = false;
     if (bag.take()) |diag| {
         setCompatDiagnostic(diag.line, diag.column, diag.code, diag.message, diag.line_text);
@@ -135,6 +142,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
         bag.clear();
         return lexLogicalLineImpl(allocator, line, bag);
     }
+    diag_storage.clear();
     has_diag = false;
     return lexLogicalLineImpl(allocator, line, null);
 }
@@ -330,9 +338,9 @@ pub fn takeDiagnostic() ?LexDiagnostic {
     return .{
         .line = diag_storage.line,
         .column = diag_storage.column,
-        .code = diag_storage.code_buf[0..diag_storage.code_len],
-        .message = diag_storage.message_buf[0..diag_storage.message_len],
-        .line_text = diag_storage.line_buf[0..diag_storage.line_len],
+        .code = diag_storage.code orelse "",
+        .message = diag_storage.message orelse "",
+        .line_text = diag_storage.line_text orelse "",
     };
 }
 
@@ -439,21 +447,22 @@ fn setLexDiagnostic(
 }
 
 fn setCompatDiagnostic(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
-    var next: DiagStorage = .{
-        .line = if (line == 0) 1 else line,
-        .column = if (column == 0) 1 else column,
-    };
-    next.code_len = copyTrunc(&next.code_buf, code);
-    next.message_len = copyTrunc(&next.message_buf, message);
-    next.line_len = copyTrunc(&next.line_buf, line_text);
+    const next = makeDiagStorage(line, column, code, message, line_text) catch return;
+    diag_storage.clear();
     diag_storage = next;
     has_diag = true;
 }
 
-fn copyTrunc(buf: []u8, text: []const u8) usize {
-    const n = @min(buf.len, text.len);
-    @memcpy(buf[0..n], text[0..n]);
-    return n;
+fn makeDiagStorage(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) !DiagStorage {
+    var next: DiagStorage = .{
+        .line = if (line == 0) 1 else line,
+        .column = if (column == 0) 1 else column,
+    };
+    errdefer next.clear();
+    next.code = try compat_allocator.dupe(u8, code);
+    next.message = try compat_allocator.dupe(u8, message);
+    next.line_text = try compat_allocator.dupe(u8, line_text);
+    return next;
 }
 
 test "lexLogicalLine tokenizes basic expression" {

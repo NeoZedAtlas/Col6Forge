@@ -28,17 +28,23 @@ pub const PipelineResult = struct {
     output: []const u8,
 };
 
+const compat_allocator = std.heap.page_allocator;
+
 const DiagStorage = struct {
-    file_path_buf: [1024]u8 = [_]u8{0} ** 1024,
-    file_path_len: usize = 0,
+    file_path: ?[]u8 = null,
     line: usize = 1,
     column: usize = 1,
-    code_buf: [16]u8 = [_]u8{0} ** 16,
-    code_len: usize = 0,
-    message_buf: [256]u8 = [_]u8{0} ** 256,
-    message_len: usize = 0,
-    line_text_buf: [512]u8 = [_]u8{0} ** 512,
-    line_text_len: usize = 0,
+    code: ?[]u8 = null,
+    message: ?[]u8 = null,
+    line_text: ?[]u8 = null,
+
+    fn clear(self: *DiagStorage) void {
+        if (self.file_path) |buf| compat_allocator.free(buf);
+        if (self.code) |buf| compat_allocator.free(buf);
+        if (self.message) |buf| compat_allocator.free(buf);
+        if (self.line_text) |buf| compat_allocator.free(buf);
+        self.* = .{};
+    }
 };
 
 threadlocal var diag_storage: DiagStorage = .{};
@@ -326,12 +332,12 @@ pub fn takeLastDiagnostic() ?diag.Diagnostic {
     if (!has_diag) return null;
     has_diag = false;
     return .{
-        .file_path = diag_storage.file_path_buf[0..diag_storage.file_path_len],
+        .file_path = diag_storage.file_path orelse "",
         .line = diag_storage.line,
         .column = diag_storage.column,
-        .code = diag_storage.code_buf[0..diag_storage.code_len],
-        .message = diag_storage.message_buf[0..diag_storage.message_len],
-        .line_text = diag_storage.line_text_buf[0..diag_storage.line_text_len],
+        .code = diag_storage.code orelse "",
+        .message = diag_storage.message orelse "",
+        .line_text = diag_storage.line_text orelse "",
     };
 }
 
@@ -357,14 +363,14 @@ pub fn writePipelineErrorDiagnostic(writer: *std.Io.Writer, input_path: []const 
         });
     }
 
-    var msg_buf: [256]u8 = undefined;
-    const message = std.fmt.bufPrint(&msg_buf, "pipeline error: {s}", .{@errorName(err)}) catch "pipeline error";
+    const message = std.fmt.allocPrint(compat_allocator, "pipeline error: {s}", .{@errorName(err)}) catch null;
+    defer if (message) |buf| compat_allocator.free(buf);
     return diag.writeDiagnostic(writer, .{
         .file_path = input_path,
         .line = 1,
         .column = 1,
         .code = "CF0000",
-        .message = message,
+        .message = if (message) |buf| buf else "pipeline error",
         .line_text = "",
     });
 }
@@ -690,9 +696,9 @@ fn setDefaultDiagnosticAt(
     base_message: []const u8,
     err: anyerror,
 ) void {
-    var message_buf: [256]u8 = undefined;
-    const message = std.fmt.bufPrint(&message_buf, "{s} ({s})", .{ base_message, @errorName(err) }) catch base_message;
-    diag_bag.add(input_path, line, column, code, message, line_text);
+    const message = std.fmt.allocPrint(diag_bag.allocator, "{s} ({s})", .{ base_message, @errorName(err) }) catch null;
+    defer if (message) |buf| diag_bag.allocator.free(buf);
+    diag_bag.add(input_path, line, column, code, if (message) |buf| buf else base_message, line_text);
 }
 
 fn publishCompatFromBag(diag_bag: *diag.Bag) void {
@@ -717,19 +723,14 @@ fn setLastDiagnostic(
     message: []const u8,
     line_text: []const u8,
 ) void {
-    var next: DiagStorage = .{
-        .line = if (line == 0) 1 else line,
-        .column = if (column == 0) 1 else column,
-    };
-    next.file_path_len = copyTrunc(&next.file_path_buf, input_path);
-    next.code_len = copyTrunc(&next.code_buf, code);
-    next.message_len = copyTrunc(&next.message_buf, message);
-    next.line_text_len = copyTrunc(&next.line_text_buf, line_text);
+    const next = makeCompatDiagnostic(input_path, line, column, code, message, line_text) catch return;
+    diag_storage.clear();
     diag_storage = next;
     has_diag = true;
 }
 
 fn clearLastDiagnostic() void {
+    diag_storage.clear();
     has_diag = false;
 }
 
@@ -737,10 +738,24 @@ fn clearLastProfile() void {
     has_profile = false;
 }
 
-fn copyTrunc(buf: []u8, text: []const u8) usize {
-    const n = @min(buf.len, text.len);
-    @memcpy(buf[0..n], text[0..n]);
-    return n;
+fn makeCompatDiagnostic(
+    input_path: []const u8,
+    line: usize,
+    column: usize,
+    code: []const u8,
+    message: []const u8,
+    line_text: []const u8,
+) !DiagStorage {
+    var next: DiagStorage = .{
+        .line = if (line == 0) 1 else line,
+        .column = if (column == 0) 1 else column,
+    };
+    errdefer next.clear();
+    next.file_path = try compat_allocator.dupe(u8, input_path);
+    next.code = try compat_allocator.dupe(u8, code);
+    next.message = try compat_allocator.dupe(u8, message);
+    next.line_text = try compat_allocator.dupe(u8, line_text);
+    return next;
 }
 
 fn sourceLineAt(contents: []const u8, line_no: usize) []const u8 {
@@ -817,6 +832,36 @@ test "runPipeline reports semantic declaration diagnostics against the original 
     try testing.expectEqual(@as(usize, 7), diag_info.column);
     try testing.expectEqualStrings("CF3103", diag_info.code);
     try testing.expectEqualStrings("      CHARACTER*(*) A", diag_info.line_text);
+}
+
+test "runPipeline compat diagnostic preserves long source lines without truncation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const long_ident = try allocator.alloc(u8, 640);
+    defer allocator.free(long_ident);
+    @memset(long_ident, 'A');
+
+    const long_line = try std.fmt.allocPrint(allocator, "      {s} =\n", .{long_ident});
+    defer allocator.free(long_line);
+    const source = try std.fmt.allocPrint(
+        allocator,
+        "      PROGRAM P\n{s}      END\n",
+        .{long_line},
+    );
+    defer allocator.free(source);
+
+    const file_path = try writeTempSourceFile(&tmp, allocator, "long_diag_line.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqualStrings("CF2001", diag_info.code);
+    try testing.expectEqual(@as(usize, 2), diag_info.line);
+    try testing.expectEqualStrings(long_line[0 .. long_line.len - 1], diag_info.line_text);
 }
 
 test "runPipeline reports semantic expression diagnostics against the original source line" {

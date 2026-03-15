@@ -83,15 +83,21 @@ pub const Bag = struct {
     }
 };
 
+const compat_allocator = std.heap.page_allocator;
+
 const Storage = struct {
     line: usize = 1,
     column: usize = 1,
-    code_buf: [16]u8 = [_]u8{0} ** 16,
-    code_len: usize = 0,
-    message_buf: [256]u8 = [_]u8{0} ** 256,
-    message_len: usize = 0,
-    line_buf: [512]u8 = [_]u8{0} ** 512,
-    line_len: usize = 0,
+    code: ?[]u8 = null,
+    message: ?[]u8 = null,
+    line_text: ?[]u8 = null,
+
+    fn clear(self: *Storage) void {
+        if (self.code) |buf| compat_allocator.free(buf);
+        if (self.message) |buf| compat_allocator.free(buf);
+        if (self.line_text) |buf| compat_allocator.free(buf);
+        self.* = .{};
+    }
 };
 
 threadlocal var storage: Storage = .{};
@@ -123,6 +129,8 @@ pub fn clear() void {
     }
     has_diag = false;
     has_fallback = false;
+    storage.clear();
+    fallback_storage.clear();
 }
 
 pub fn has() bool {
@@ -135,13 +143,8 @@ pub fn set(line: usize, column: usize, code: []const u8, message: []const u8, li
         bag.set(line, column, code, message, line_text);
         return;
     }
-    var next: Storage = .{
-        .line = if (line == 0) 1 else line,
-        .column = if (column == 0) 1 else column,
-    };
-    next.code_len = copyTrunc(&next.code_buf, code);
-    next.message_len = copyTrunc(&next.message_buf, message);
-    next.line_len = copyTrunc(&next.line_buf, line_text);
+    const next = makeStorage(line, column, code, message, line_text) catch return;
+    storage.clear();
     storage = next;
     has_diag = true;
 }
@@ -153,9 +156,9 @@ pub fn take() ?ParseDiagnostic {
     return .{
         .line = storage.line,
         .column = storage.column,
-        .code = storage.code_buf[0..storage.code_len],
-        .message = storage.message_buf[0..storage.message_len],
-        .line_text = storage.line_buf[0..storage.line_len],
+        .code = storage.code orelse "",
+        .message = storage.message orelse "",
+        .line_text = storage.line_text orelse "",
     };
 }
 
@@ -168,7 +171,8 @@ pub fn noteFallbackSource(line: usize, column: usize, line_text: []const u8) voi
         .line = if (line == 0) 1 else line,
         .column = if (column == 0) 1 else column,
     };
-    next.line_len = copyTrunc(&next.line_buf, line_text);
+    next.line_text = compat_allocator.dupe(u8, line_text) catch return;
+    fallback_storage.clear();
     fallback_storage = next;
     has_fallback = true;
 }
@@ -179,7 +183,7 @@ pub fn fallbackSource() ?FallbackSource {
     return .{
         .line = fallback_storage.line,
         .column = fallback_storage.column,
-        .line_text = fallback_storage.line_buf[0..fallback_storage.line_len],
+        .line_text = fallback_storage.line_text orelse "",
     };
 }
 
@@ -211,10 +215,16 @@ pub fn errorInfo(err: anyerror) struct { code: []const u8, message: []const u8 }
     };
 }
 
-fn copyTrunc(buf: []u8, text: []const u8) usize {
-    const n = @min(buf.len, text.len);
-    @memcpy(buf[0..n], text[0..n]);
-    return n;
+fn makeStorage(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) !Storage {
+    var next: Storage = .{
+        .line = if (line == 0) 1 else line,
+        .column = if (column == 0) 1 else column,
+    };
+    errdefer next.clear();
+    next.code = try compat_allocator.dupe(u8, code);
+    next.message = try compat_allocator.dupe(u8, message);
+    next.line_text = try compat_allocator.dupe(u8, line_text);
+    return next;
 }
 
 test "parser diagnostic fallback remembers last noted source" {
