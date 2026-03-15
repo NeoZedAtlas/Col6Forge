@@ -5,6 +5,7 @@ const lexer = @import("../../../lexer.zig");
 const context = @import("../../token_stream.zig");
 const decl = @import("../../decl.zig");
 const expr = @import("../../expr.zig");
+const parse_diag = @import("../../diagnostic.zig");
 const array_info = @import("../../array_info.zig");
 const helpers = @import("../helpers.zig");
 const action_stmt = @import("action_stmt.zig");
@@ -33,7 +34,35 @@ pub const ParseStatementFn = *const fn (
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
 ) anyerror!Stmt;
+
+fn setLexerOrLineDiagnostic(
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+    line: logical_line.LogicalLine,
+    err: anyerror,
+) void {
+    if (lex_diag_bag.take()) |lex_diag| {
+        diag_bag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
+        return;
+    }
+    const info = parse_diag.errorInfo(err);
+    diag_bag.set(line.span.start_line, defaultSourceColumn(line), info.code, info.message, line.text);
+}
+
+fn lexLine(
+    arena: std.mem.Allocator,
+    line: logical_line.LogicalLine,
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+) ![]lexer.Token {
+    return lexer.lexLogicalLineWithDiagnostics(arena, line, lex_diag_bag) catch |err| {
+        setLexerOrLineDiagnostic(diag_bag, lex_diag_bag, line, err);
+        return err;
+    };
+}
 
 fn defaultSourceColumn(line: logical_line.LogicalLine) usize {
     return if (line.segments.len > 0) line.segments[0].column else 1;
@@ -76,6 +105,8 @@ pub fn parseIfStatement(
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
     parse_statement_fn: ParseStatementFn,
     action_callbacks: action_stmt.ActionCallbacks,
 ) anyerror!Stmt {
@@ -105,30 +136,30 @@ pub fn parseIfStatement(
     if (lp.isKeywordSplit("THEN")) {
         _ = lp.consumeKeyword("THEN");
         index.* += 1;
-        const then_stmts = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parse_statement_fn);
+        const then_stmts = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parse_statement_fn);
         var else_stmts: []Stmt = &.{};
         var else_if_blocks = std.array_list.Managed(ElseIfBlock).init(arena);
         var else_block: ?[]Stmt = null;
 
         while (index.* < lines.len) {
             const next_line = lines[index.*];
-            const next_tokens = try lexer.lexLogicalLine(arena, next_line);
+            const next_tokens = try lexLine(arena, next_line, diag_bag, lex_diag_bag);
             defer arena.free(next_tokens);
             var next_lp = LineParser.init(next_line, next_tokens);
             if (next_lp.isKeywordSplit("ELSEIF")) {
-                const else_if_block = try parseElseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parse_statement_fn);
+                const else_if_block = try parseElseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parse_statement_fn);
                 try else_if_blocks.append(else_if_block);
                 continue;
             }
             if (!next_lp.isKeywordSplit("ELSE")) break;
             _ = next_lp.consumeKeyword("ELSE");
             if (next_lp.isKeywordSplit("IF")) {
-                const else_if_block = try parseElseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parse_statement_fn);
+                const else_if_block = try parseElseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parse_statement_fn);
                 try else_if_blocks.append(else_if_block);
                 continue;
             }
             index.* += 1;
-            const parsed_else = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parse_statement_fn);
+            const parsed_else = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parse_statement_fn);
             else_block = try prependLabeledContinue(arena, next_line, parsed_else);
             break;
         }
@@ -157,7 +188,7 @@ pub fn parseIfStatement(
         }
         if (index.* >= lines.len) return error.UnexpectedEOF;
         const end_line = lines[index.*];
-        const end_tokens = try lexer.lexLogicalLine(arena, end_line);
+        const end_tokens = try lexLine(arena, end_line, diag_bag, lex_diag_bag);
         defer arena.free(end_tokens);
         var end_lp = LineParser.init(end_line, end_tokens);
         if (!end_lp.isKeywordSplit("ENDIF") and !helpers.isEndIfLine(end_lp)) return error.ExpectedEndIf;
@@ -186,10 +217,12 @@ pub fn parseElseIfBlock(
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
     parse_statement_fn: ParseStatementFn,
 ) anyerror!ElseIfBlock {
     const line = lines[index.*];
-    const tokens = try lexer.lexLogicalLine(arena, line);
+    const tokens = try lexLine(arena, line, diag_bag, lex_diag_bag);
     defer arena.free(tokens);
     var lp = LineParser.init(line, tokens);
     if (lp.isKeywordSplit("ELSEIF")) {
@@ -204,7 +237,7 @@ pub fn parseElseIfBlock(
     if (!lp.isKeywordSplit("THEN")) return error.UnexpectedToken;
     _ = lp.consumeKeyword("THEN");
     index.* += 1;
-    const stmts = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parse_statement_fn);
+    const stmts = try parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parse_statement_fn);
     return .{
         .cond = cond,
         .stmts = stmts,
@@ -223,19 +256,21 @@ pub fn parseIfBlock(
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
     parse_statement_fn: ParseStatementFn,
 ) anyerror![]Stmt {
     var stmts = std.array_list.Managed(Stmt).init(arena);
     while (index.* < lines.len) {
         const line = lines[index.*];
-        const tokens = try lexer.lexLogicalLine(arena, line);
+        const tokens = try lexLine(arena, line, diag_bag, lex_diag_bag);
         defer arena.free(tokens);
         var lp = LineParser.init(line, tokens);
         if (lp.isKeywordSplit("ELSE") or lp.isKeywordSplit("ELSEIF") or lp.isKeywordSplit("ENDIF") or helpers.isEndIfLine(lp)) {
             break;
         }
         if (decl.isDeclarationStart(lp)) return error.DeclarationInIfBlock;
-        var node = try parse_statement_fn(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
+        var node = try parse_statement_fn(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag);
         setStmtSourceIfMissing(&node, line);
         try stmts.append(node);
     }

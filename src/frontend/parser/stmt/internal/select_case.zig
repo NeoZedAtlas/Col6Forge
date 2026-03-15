@@ -5,6 +5,7 @@ const lexer = @import("../../../lexer.zig");
 const context = @import("../../token_stream.zig");
 const decl = @import("../../decl.zig");
 const expr = @import("../../expr.zig");
+const parse_diag = @import("../../diagnostic.zig");
 const array_info = @import("../../array_info.zig");
 
 const LineParser = context.LineParser;
@@ -20,9 +21,37 @@ pub const ParseStatementFn = *const fn (
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
 ) anyerror!Stmt;
 
 pub const IsEndSelectLineFn = *const fn (LineParser) bool;
+
+fn setLexerOrLineDiagnostic(
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+    line: logical_line.LogicalLine,
+    err: anyerror,
+) void {
+    if (lex_diag_bag.take()) |lex_diag| {
+        diag_bag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
+        return;
+    }
+    const info = parse_diag.errorInfo(err);
+    diag_bag.set(line.span.start_line, defaultSourceColumn(line), info.code, info.message, line.text);
+}
+
+fn lexLine(
+    arena: std.mem.Allocator,
+    line: logical_line.LogicalLine,
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+) ![]lexer.Token {
+    return lexer.lexLogicalLineWithDiagnostics(arena, line, lex_diag_bag) catch |err| {
+        setLexerOrLineDiagnostic(diag_bag, lex_diag_bag, line, err);
+        return err;
+    };
+}
 
 const CaseClause = struct {
     condition: *Expr,
@@ -105,6 +134,8 @@ pub fn parseSelectCaseStatement(
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
     parse_statement_fn: ParseStatementFn,
 ) anyerror!Stmt {
     if (!lp.consumeKeyword("SELECTCASE")) {
@@ -133,7 +164,7 @@ pub fn parseSelectCaseStatement(
 
     while (index.* < lines.len) {
         const line = lines[index.*];
-        const tokens = try lexer.lexLogicalLine(arena, line);
+        const tokens = try lexLine(arena, line, diag_bag, lex_diag_bag);
         defer arena.free(tokens);
         var case_lp = LineParser.init(line, tokens);
         if (isEndSelectLine(case_lp)) {
@@ -148,7 +179,7 @@ pub fn parseSelectCaseStatement(
 
         const case_cond = try parseCaseHeader(arena, &case_lp, selector_for_clauses);
         index.* += 1;
-        const parsed_block_stmts = try parseSelectCaseBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parse_statement_fn);
+        const parsed_block_stmts = try parseSelectCaseBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parse_statement_fn);
         const block_stmts = try prependLabeledContinue(arena, line, parsed_block_stmts);
         if (case_cond) |condition| {
             try clauses.append(.{ .condition = condition, .stmts = block_stmts });
@@ -263,19 +294,21 @@ fn parseSelectCaseBlock(
     param_ints: *const std.StringHashMap(i64),
     param_strings: *const std.StringHashMap(ast.Literal),
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
     parse_statement_fn: ParseStatementFn,
 ) anyerror![]Stmt {
     var stmts = std.array_list.Managed(Stmt).init(arena);
     while (index.* < lines.len) {
         const line = lines[index.*];
-        const tokens = try lexer.lexLogicalLine(arena, line);
+        const tokens = try lexLine(arena, line, diag_bag, lex_diag_bag);
         defer arena.free(tokens);
         const lp = LineParser.init(line, tokens);
         if (isCaseLine(lp) or isEndSelectLine(lp)) {
             break;
         }
         if (decl.isDeclarationStart(lp)) return error.DeclarationInIfBlock;
-        var node = try parse_statement_fn(arena, lines, index, do_ctx, param_ints, param_strings, array_names);
+        var node = try parse_statement_fn(arena, lines, index, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag);
         setStmtSourceIfMissing(&node, line);
         try stmts.append(node);
     }

@@ -1,7 +1,9 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const fixed_form = @import("../../fixed_form.zig");
+const lexer = @import("../../lexer.zig");
 const array_info = @import("../array_info.zig");
+const parse_diag = @import("../diagnostic.zig");
 const control_flow = @import("control_flow.zig");
 
 pub const api = @import("internal/api.zig");
@@ -13,6 +15,8 @@ pub const control_flow_bridge = @import("internal/control_flow_bridge.zig");
 pub const DoContext = control_flow.DoContext;
 pub const parseStatement = api.parseStatement;
 pub const parseIfBlock = api.parseIfBlock;
+pub const parseStatementWithDiagnostics = api.parseStatementWithDiagnostics;
+pub const parseIfBlockWithDiagnostics = api.parseIfBlockWithDiagnostics;
 
 test "parseStatement parses assignment" {
     const testing = std.testing;
@@ -55,6 +59,47 @@ test "parseStatement treats split IFX name as assignment target" {
     try testing.expectEqual(@as(usize, 1), idx);
     try testing.expect(stmt_node.node == .assignment);
     try testing.expectEqualStrings("IFX", stmt_node.node.assignment.target.identifier);
+}
+
+test "parseStatementWithDiagnostics captures lexer errors in explicit bag" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A=$\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    var lex_diag_bag = lexer.Bag.init(arena.allocator());
+    defer lex_diag_bag.deinit();
+
+    try testing.expectError(
+        error.UnexpectedCharacter,
+        parseStatementWithDiagnostics(
+            arena.allocator(),
+            lines,
+            &idx,
+            &do_ctx,
+            &param_ints,
+            &param_strings,
+            &array_names,
+            &diag_bag,
+            &lex_diag_bag,
+        ),
+    );
+
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqualStrings("CF1001", diag.code);
+    try testing.expectEqual(@as(usize, 1), diag.line);
+    try testing.expect(parse_diag.take() == null);
 }
 
 test "parseStatement handles READ with UNIT equals star" {

@@ -133,9 +133,26 @@ pub fn tokenKindName(kind: TokenKind) []const u8 {
 pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLine) ![]Token {
     if (active_bag) |bag| {
         bag.clear();
-    } else {
-        has_diag = false;
+        return lexLogicalLineImpl(allocator, line, bag);
     }
+    has_diag = false;
+    return lexLogicalLineImpl(allocator, line, null);
+}
+
+pub fn lexLogicalLineWithDiagnostics(
+    allocator: std.mem.Allocator,
+    line: logical_line.LogicalLine,
+    diag_bag: *Bag,
+) ![]Token {
+    diag_bag.clear();
+    return lexLogicalLineImpl(allocator, line, diag_bag);
+}
+
+fn lexLogicalLineImpl(
+    allocator: std.mem.Allocator,
+    line: logical_line.LogicalLine,
+    diag_bag: ?*Bag,
+) ![]Token {
     var tokens = std.array_list.Managed(Token).init(allocator);
     const text = line.text;
     var i: usize = 0;
@@ -183,12 +200,12 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
             const digit_end = i;
             if (i < text.len and (text[i] == 'H' or text[i] == 'h')) {
                 const count = parseDecimal(text[start..digit_end]) orelse {
-                    setLexDiagnostic(line, start, "CF1003", "Hollerith length overflow");
+                    setLexDiagnostic(line, start, "CF1003", "Hollerith length overflow", diag_bag);
                     return error.HollerithLengthOverflow;
                 };
                 i += 1;
                 if (count > text.len - i) {
-                    setLexDiagnostic(line, start, "CF1002", "invalid Hollerith literal");
+                    setLexDiagnostic(line, start, "CF1002", "invalid Hollerith literal", diag_bag);
                     return error.InvalidHollerith;
                 }
                 const end = i + count;
@@ -298,7 +315,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
                 i += 1;
             },
             else => {
-                setLexDiagnostic(line, i, "CF1001", "unexpected character");
+                setLexDiagnostic(line, i, "CF1001", "unexpected character", diag_bag);
                 return error.UnexpectedCharacter;
             },
         }
@@ -406,9 +423,15 @@ fn isDotOperatorStart(text: []const u8, dot_index: usize) bool {
     return k > j and m < text.len and text[m] == '.';
 }
 
-fn setLexDiagnostic(line: logical_line.LogicalLine, index: usize, code: []const u8, message: []const u8) void {
+fn setLexDiagnostic(
+    line: logical_line.LogicalLine,
+    index: usize,
+    code: []const u8,
+    message: []const u8,
+    diag_bag: ?*Bag,
+) void {
     const pos = logical_line.mapIndexToPos(line, index);
-    if (active_bag) |bag| {
+    if (diag_bag) |bag| {
         bag.add(pos.line, pos.column, code, message, line.text);
         return;
     }

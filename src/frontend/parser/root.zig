@@ -40,10 +40,6 @@ pub fn parseProgramWithDiagnostics(
     diag_bag.clear();
     var lex_diag_bag = lexer.Bag.init(arena_allocator);
     defer lex_diag_bag.deinit();
-    const prev_parse_bag = parse_diag.setActiveBag(diag_bag);
-    defer _ = parse_diag.setActiveBag(prev_parse_bag);
-    const prev_lex_bag = lexer.setActiveBag(&lex_diag_bag);
-    defer _ = lexer.setActiveBag(prev_lex_bag);
 
     const token_cache = try arena_allocator.alloc(?[]lexer.Token, lines.len);
     @memset(token_cache, null);
@@ -58,6 +54,8 @@ pub fn parseProgramWithDiagnostics(
         .block_data_counter = 0,
         .implicit_program_counter = 0,
         .expr_capture = &expr_capture,
+        .diag_bag = diag_bag,
+        .lex_diag_bag = &lex_diag_bag,
     };
     const program = try parser.parseProgram();
     return expandEntries(arena_allocator, program);
@@ -71,10 +69,12 @@ const Parser = struct {
     block_data_counter: usize,
     implicit_program_counter: usize,
     expr_capture: *expr.SourceCapture,
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
 
     fn tokensForIndex(self: *Parser, line_index: usize) ![]lexer.Token {
         if (self.token_cache[line_index]) |cached| return cached;
-        const tokens = try lexer.lexLogicalLine(self.arena, self.lines[line_index]);
+        const tokens = try lexer.lexLogicalLineWithDiagnostics(self.arena, self.lines[line_index], self.lex_diag_bag);
         self.token_cache[line_index] = tokens;
         return tokens;
     }
@@ -128,7 +128,7 @@ const Parser = struct {
     fn parseProgram(self: *Parser) !Program {
         var units = std.array_list.Managed(ProgramUnit).init(self.arena);
         while (self.index < self.lines.len) {
-            noteFallbackForLine(self.lines[self.index]);
+            noteFallbackForLine(self.diag_bag, self.lines[self.index]);
             if (self.isStandaloneEndAt(self.index)) {
                 self.index += 1;
                 continue;
@@ -161,7 +161,7 @@ const Parser = struct {
         var in_interface = false;
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
-            noteFallbackForLine(line);
+            noteFallbackForLine(self.diag_bag, line);
             if (self.isModuleEndAt(self.index)) {
                 self.index += 1;
                 return;
@@ -201,7 +201,7 @@ const Parser = struct {
         if (!saw_contains) return;
 
         while (self.index < self.lines.len) {
-            noteFallbackForLine(self.lines[self.index]);
+            noteFallbackForLine(self.diag_bag, self.lines[self.index]);
             if (self.isModuleEndAt(self.index)) {
                 self.index += 1;
                 return;
@@ -222,9 +222,9 @@ const Parser = struct {
         if (self.index >= self.lines.len) return error.UnexpectedEOF;
         const expr_mark = self.expr_capture.mark();
         const header_line = self.lines[self.index];
-        noteFallbackForLine(header_line);
+        noteFallbackForLine(self.diag_bag, header_line);
         const header_tokens = self.tokensForIndex(self.index) catch |err| {
-            setLexerOrLineDiagnostic(header_line, err);
+            setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, header_line, err);
             return err;
         };
         var lp = LineParser.init(header_line, header_tokens);
@@ -238,7 +238,7 @@ const Parser = struct {
                 break :blk try self.syntheticProgramHeader();
             },
             else => {
-                setParseDiagnosticFromStream(header_line, lp, err);
+                setParseDiagnosticFromStream(self.diag_bag, header_line, lp, err);
                 return err;
             },
         };
@@ -272,9 +272,9 @@ const Parser = struct {
         }
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
-            noteFallbackForLine(line);
+            noteFallbackForLine(self.diag_bag, line);
             const tokens = self.tokensForIndex(self.index) catch |err| {
-                setLexerOrLineDiagnostic(line, err);
+                setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, line, err);
                 return err;
             };
             var stmt_lp = LineParser.init(line, tokens);
@@ -296,7 +296,7 @@ const Parser = struct {
             }
             if (decl.isDeclarationStart(stmt_lp)) {
                 const decl_node = decl.parseDecl(&stmt_lp, self.arena) catch |err| {
-                    setParseDiagnosticFromStream(line, stmt_lp, err);
+                    setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
                     return err;
                 };
                 if (decl_node == .parameter) {
@@ -309,11 +309,11 @@ const Parser = struct {
                 self.index += 1;
                 continue;
             }
-            var stmt_node = stmt.parseStatement(self.arena, self.lines, &self.index, &do_ctx, &param_ints, &param_strings, &array_names) catch |err| {
-                if (!parse_diag.has()) {
+            var stmt_node = stmt.parseStatementWithDiagnostics(self.arena, self.lines, &self.index, &do_ctx, &param_ints, &param_strings, &array_names, self.diag_bag, self.lex_diag_bag) catch |err| {
+                if (!self.diag_bag.has()) {
                     const err_line = lineAtIndexOrLast(self.lines, self.index, line);
                     const err_col = if (err_line.segments.len > 0) err_line.segments[0].column else 1;
-                    setParseDiagnosticForLine(err_line, err_line.span.start_line, err_col, err);
+                    setParseDiagnosticForLine(self.diag_bag, err_line, err_line.span.start_line, err_col, err);
                 }
                 return err;
             };
@@ -523,8 +523,8 @@ fn lineAtIndexOrLast(lines: []logical_line.LogicalLine, idx: usize, fallback: lo
     return lines[lines.len - 1];
 }
 
-fn noteFallbackForLine(line: logical_line.LogicalLine) void {
-    parse_diag.noteFallbackSource(
+fn noteFallbackForLine(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine) void {
+    diag_bag.noteFallbackSource(
         line.span.start_line,
         if (line.segments.len > 0) line.segments[0].column else 1,
         line.text,
@@ -539,15 +539,20 @@ fn sourceFromLine(line: logical_line.LogicalLine) DeclSource {
     };
 }
 
-fn setLexerOrLineDiagnostic(line: logical_line.LogicalLine, err: anyerror) void {
-    if (lexer.takeDiagnostic()) |lex_diag| {
-        parse_diag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
+fn setLexerOrLineDiagnostic(
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+    line: logical_line.LogicalLine,
+    err: anyerror,
+) void {
+    if (lex_diag_bag.take()) |lex_diag| {
+        diag_bag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
         return;
     }
-    setParseDiagnosticForLine(line, line.span.start_line, 1, err);
+    setParseDiagnosticForLine(diag_bag, line, line.span.start_line, 1, err);
 }
 
-fn setParseDiagnosticFromStream(line: logical_line.LogicalLine, lp: LineParser, err: anyerror) void {
+fn setParseDiagnosticFromStream(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine, lp: LineParser, err: anyerror) void {
     var line_no = line.span.start_line;
     var column: usize = 1;
     if (lp.index < lp.tokens.len) {
@@ -557,12 +562,18 @@ fn setParseDiagnosticFromStream(line: logical_line.LogicalLine, lp: LineParser, 
         line_no = lp.tokens[lp.tokens.len - 1].range.end.line;
         column = lp.tokens[lp.tokens.len - 1].range.end.column;
     }
-    setParseDiagnosticForLine(line, line_no, column, err);
+    setParseDiagnosticForLine(diag_bag, line, line_no, column, err);
 }
 
-fn setParseDiagnosticForLine(line: logical_line.LogicalLine, line_no: usize, column: usize, err: anyerror) void {
+fn setParseDiagnosticForLine(
+    diag_bag: *parse_diag.Bag,
+    line: logical_line.LogicalLine,
+    line_no: usize,
+    column: usize,
+    err: anyerror,
+) void {
     const info = parseErrorInfo(err);
-    parse_diag.set(line_no, column, info.code, info.message, line.text);
+    diag_bag.set(line_no, column, info.code, info.message, line.text);
 }
 
 fn stampStmtSource(stmt_node: *ast.Stmt, line: logical_line.LogicalLine) void {

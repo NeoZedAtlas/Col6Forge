@@ -38,7 +38,7 @@ fn makeStmtWithSource(line: logical_line.LogicalLine, label: ?[]const u8, node: 
     };
 }
 
-fn setParseDiagnosticFromStream(line: logical_line.LogicalLine, lp: LineParser, err: anyerror) void {
+fn setParseDiagnosticFromStream(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine, lp: LineParser, err: anyerror) void {
     const info = parse_diag.errorInfo(err);
     var line_no = line.span.start_line;
     var column: usize = 1;
@@ -49,7 +49,33 @@ fn setParseDiagnosticFromStream(line: logical_line.LogicalLine, lp: LineParser, 
         line_no = lp.tokens[lp.tokens.len - 1].range.end.line;
         column = lp.tokens[lp.tokens.len - 1].range.end.column;
     }
-    parse_diag.set(line_no, column, info.code, info.message, line.text);
+    diag_bag.set(line_no, column, info.code, info.message, line.text);
+}
+
+fn setLexerOrLineDiagnostic(
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+    line: logical_line.LogicalLine,
+    err: anyerror,
+) void {
+    if (lex_diag_bag.take()) |lex_diag| {
+        diag_bag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
+        return;
+    }
+    const info = parse_diag.errorInfo(err);
+    diag_bag.set(line.span.start_line, defaultSourceColumn(line), info.code, info.message, line.text);
+}
+
+fn lexLine(
+    arena: std.mem.Allocator,
+    line: logical_line.LogicalLine,
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+) ![]lexer.Token {
+    return lexer.lexLogicalLineWithDiagnostics(arena, line, lex_diag_bag) catch |err| {
+        setLexerOrLineDiagnostic(diag_bag, lex_diag_bag, line, err);
+        return err;
+    };
 }
 
 fn actionCallbacks() action_stmt.ActionCallbacks {
@@ -70,12 +96,44 @@ pub fn parseStatement(
     param_strings: *const std.StringHashMap(ast.Literal),
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
 ) anyerror!Stmt {
+    var diag_bag = parse_diag.Bag.init(arena);
+    defer diag_bag.deinit();
+    var lex_diag_bag = lexer.Bag.init(arena);
+    defer lex_diag_bag.deinit();
+    return parseStatementWithDiagnostics(
+        arena,
+        lines,
+        index,
+        do_ctx,
+        param_ints,
+        param_strings,
+        array_names,
+        &diag_bag,
+        &lex_diag_bag,
+    ) catch |err| {
+        parse_diag.publishCompatFromBag(&diag_bag);
+        lexer.publishCompatFromBag(&lex_diag_bag);
+        return err;
+    };
+}
+
+pub fn parseStatementWithDiagnostics(
+    arena: std.mem.Allocator,
+    lines: []logical_line.LogicalLine,
+    index: *usize,
+    do_ctx: *DoContext,
+    param_ints: *const std.StringHashMap(i64),
+    param_strings: *const std.StringHashMap(ast.Literal),
+    array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+) anyerror!Stmt {
     if (do_ctx.popPending()) |pending| {
         try control_flow_bridge.closeCompletedLabeledDoLoops(do_ctx, pending.label);
         return pending;
     }
     const line = lines[index.*];
-    const tokens = try lexer.lexLogicalLine(arena, line);
+    const tokens = try lexLine(arena, line, diag_bag, lex_diag_bag);
     defer arena.free(tokens);
     var lp = LineParser.init(line, tokens);
     const label = line.label;
@@ -119,7 +177,7 @@ pub fn parseStatement(
         _ = do_lp.expect(.colon) orelse return error.UnexpectedToken;
         if (!do_lp.consumeKeyword("DO")) return error.UnexpectedToken;
         const stmt_node = control_flow.parseDoStatement(arena, &do_lp, do_ctx) catch |err| {
-            setParseDiagnosticFromStream(line, do_lp, err);
+            setParseDiagnosticFromStream(diag_bag, line, do_lp, err);
             return err;
         };
         if (control_flow_bridge.loopEndLabel(stmt_node)) |cycle_label| {
@@ -134,23 +192,23 @@ pub fn parseStatement(
             index.* += 1;
             return makeStmtWithSource(line, label, stmt_node);
         }
-        var stmt = if_stmt.parseIfStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, parseStatement, actionCallbacks()) catch |err| {
-            if (!parse_diag.has()) setParseDiagnosticFromStream(line, lp, err);
+        var stmt = if_stmt.parseIfStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parseStatementWithDiagnostics, actionCallbacks()) catch |err| {
+            if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
             return err;
         };
         setStmtSourceIfMissing(&stmt, line);
         return stmt;
     }
     if (select_case.isSelectCaseStart(lp)) {
-        var stmt = select_case.parseSelectCaseStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, parseStatement) catch |err| {
-            if (!parse_diag.has()) setParseDiagnosticFromStream(line, lp, err);
+        var stmt = select_case.parseSelectCaseStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parseStatementWithDiagnostics) catch |err| {
+            if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
             return err;
         };
         setStmtSourceIfMissing(&stmt, line);
         return stmt;
     }
     const action_node = action_stmt.parseActionStmtNode(arena, line, &lp, do_ctx, .top_level, actionCallbacks()) catch |err| {
-        if (!parse_diag.has()) setParseDiagnosticFromStream(line, lp, err);
+        if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
         return err;
     };
     index.* += 1;
@@ -166,7 +224,50 @@ pub fn parseIfBlock(
     param_strings: *const std.StringHashMap(ast.Literal),
     array_names: *const std.StringHashMap(array_info.ArrayInfo),
 ) anyerror![]Stmt {
-    return if_stmt.parseIfBlock(arena, lines, index, do_ctx, param_ints, param_strings, array_names, parseStatement);
+    var diag_bag = parse_diag.Bag.init(arena);
+    defer diag_bag.deinit();
+    var lex_diag_bag = lexer.Bag.init(arena);
+    defer lex_diag_bag.deinit();
+    return parseIfBlockWithDiagnostics(
+        arena,
+        lines,
+        index,
+        do_ctx,
+        param_ints,
+        param_strings,
+        array_names,
+        &diag_bag,
+        &lex_diag_bag,
+    ) catch |err| {
+        parse_diag.publishCompatFromBag(&diag_bag);
+        lexer.publishCompatFromBag(&lex_diag_bag);
+        return err;
+    };
+}
+
+pub fn parseIfBlockWithDiagnostics(
+    arena: std.mem.Allocator,
+    lines: []logical_line.LogicalLine,
+    index: *usize,
+    do_ctx: *DoContext,
+    param_ints: *const std.StringHashMap(i64),
+    param_strings: *const std.StringHashMap(ast.Literal),
+    array_names: *const std.StringHashMap(array_info.ArrayInfo),
+    diag_bag: *parse_diag.Bag,
+    lex_diag_bag: *lexer.Bag,
+) anyerror![]Stmt {
+    return if_stmt.parseIfBlock(
+        arena,
+        lines,
+        index,
+        do_ctx,
+        param_ints,
+        param_strings,
+        array_names,
+        diag_bag,
+        lex_diag_bag,
+        parseStatementWithDiagnostics,
+    );
 }
 
 fn tryParseAmbiguousAssignment(
