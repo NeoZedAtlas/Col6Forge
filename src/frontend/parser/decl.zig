@@ -65,14 +65,14 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
     if (lp.isKeywordSplit("DIMENSION")) {
         _ = lp.consumeKeyword("DIMENSION");
-        const items = try parseDeclarators(lp, arena, null, null);
+        const items = try parseDeclarators(lp, arena, .{}, null);
         return .{ .dimension = .{ .items = items } };
     }
     if (lp.isKeywordSplit("ALLOCATABLE")) {
         _ = lp.consumeKeyword("ALLOCATABLE");
         _ = consumeDoubleColon(lp);
-        const items = try parseDeclarators(lp, arena, null, null);
-        return .{ .dimension = .{ .items = items } };
+        const items = try parseDeclarators(lp, arena, .{}, null);
+        return .{ .dimension = .{ .items = items, .allocatable = true } };
     }
     if (lp.isKeywordSplit("PARAMETER")) {
         _ = lp.consumeKeyword("PARAMETER");
@@ -175,10 +175,10 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
 
     const type_spec = try parseTypeKind(lp, arena);
-    var default_char_len: ?*ast.Expr = null;
+    var default_char_len: ParsedCharacterLen = .{};
     if (type_spec.type_kind == .character) {
         if (lp.consume(.star) or lp.peekIs(.l_paren)) {
-            default_char_len = try parseCharacterLen(lp, arena);
+            default_char_len = try parseCharacterLenSpec(lp, arena);
         }
     }
     const attrs = try consumeDeclAttributes(lp, arena);
@@ -188,6 +188,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         .kind_selector = type_spec.kind_selector,
         .items = items,
         .save = attrs.save,
+        .allocatable = attrs.allocatable,
     } };
 }
 
@@ -246,6 +247,11 @@ const ParsedTypeSpec = struct {
     kind_selector: ?*ast.Expr = null,
 };
 
+const ParsedCharacterLen = struct {
+    expr: ?*ast.Expr = null,
+    deferred: bool = false,
+};
+
 fn parseTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
     if (lp.isKeywordSplit("INTEGER")) {
         _ = lp.consumeKeyword("INTEGER");
@@ -286,6 +292,7 @@ const DeclAttributes = struct {
     parameter: bool = false,
     dimension: ?[]*ast.Expr = null,
     save: bool = false,
+    allocatable: bool = false,
 };
 
 fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAttributes {
@@ -304,6 +311,9 @@ fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAttribu
             }
             if (context.eqNoCase(attr_name, "SAVE")) {
                 attrs.save = true;
+            }
+            if (context.eqNoCase(attr_name, "ALLOCATABLE")) {
+                attrs.allocatable = true;
             }
             if (context.eqNoCase(attr_name, "DIMENSION")) {
                 if (lp.consume(.l_paren)) {
@@ -437,17 +447,17 @@ fn parseKindSelectorExprInParens(lp: *LineParser, arena: std.mem.Allocator) !?*a
 fn parseDeclarators(
     lp: *LineParser,
     arena: std.mem.Allocator,
-    default_char_len: ?*ast.Expr,
+    default_char_len: ParsedCharacterLen,
     default_dims: ?[]*ast.Expr,
 ) ![]Declarator {
     var items = std.array_list.Managed(Declarator).init(arena);
     while (lp.peek()) |_| {
         const name = lp.readName(arena) orelse return error.MissingName;
         var dims = std.array_list.Managed(*ast.Expr).init(arena);
-        var char_len: ?*ast.Expr = default_char_len;
+        var char_len = default_char_len;
         var init_value: ?*ast.Expr = null;
         if (lp.consume(.star)) {
-            char_len = try parseCharacterLen(lp, arena);
+            char_len = try parseCharacterLenSpec(lp, arena);
         }
         if (lp.consume(.l_paren)) {
             while (!lp.peekIs(.r_paren)) {
@@ -459,7 +469,7 @@ fn parseDeclarators(
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         }
         if (lp.consume(.star)) {
-            char_len = try parseCharacterLen(lp, arena);
+            char_len = try parseCharacterLenSpec(lp, arena);
         }
         if (lp.consume(.equals)) {
             init_value = try expr.parseExpr(lp, arena, 0);
@@ -471,7 +481,8 @@ fn parseDeclarators(
         try items.append(.{
             .name = name,
             .dims = dim_items,
-            .char_len = char_len,
+            .char_len = char_len.expr,
+            .char_len_deferred = char_len.deferred,
             .init = init_value,
         });
         if (!lp.consume(.comma)) break;
@@ -485,9 +496,9 @@ fn parseCommonDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_cha
         if (lp.peekIs(.slash)) break;
         const name = lp.readName(arena) orelse return error.MissingName;
         var dims = std.array_list.Managed(*ast.Expr).init(arena);
-        var char_len: ?*ast.Expr = default_char_len;
+        var char_len = ParsedCharacterLen{ .expr = default_char_len };
         if (lp.consume(.star)) {
-            char_len = try parseCharacterLen(lp, arena);
+            char_len = try parseCharacterLenSpec(lp, arena);
         }
         if (lp.consume(.l_paren)) {
             while (!lp.peekIs(.r_paren)) {
@@ -499,12 +510,13 @@ fn parseCommonDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_cha
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         }
         if (lp.consume(.star)) {
-            char_len = try parseCharacterLen(lp, arena);
+            char_len = try parseCharacterLenSpec(lp, arena);
         }
         try items.append(.{
             .name = name,
             .dims = try dims.toOwnedSlice(),
-            .char_len = char_len,
+            .char_len = char_len.expr,
+            .char_len_deferred = char_len.deferred,
         });
         if (!lp.consume(.comma)) break;
         if (lp.peekIs(.slash)) break;
@@ -512,21 +524,25 @@ fn parseCommonDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_cha
     return items.toOwnedSlice();
 }
 
-pub fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
+fn parseCharacterLenSpec(lp: *LineParser, arena: std.mem.Allocator) !ParsedCharacterLen {
     if (lp.consume(.l_paren)) {
         if (lp.consume(.star)) {
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
             const node = try arena.create(ast.Expr);
             node.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
-            return node;
+            return .{ .expr = node };
         }
-        var len_expr: ?*ast.Expr = null;
+        var parsed: ParsedCharacterLen = .{};
         while (!lp.peekIs(.r_paren)) {
             if (lp.peek()) |tok| {
                 if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "LEN")) {
                     _ = lp.next();
                     _ = lp.expect(.equals) orelse return error.UnexpectedToken;
-                    len_expr = try expr.parseExpr(lp, arena, 0);
+                    if (lp.consume(.colon)) {
+                        parsed.deferred = true;
+                    } else {
+                        parsed.expr = try expr.parseExpr(lp, arena, 0);
+                    }
                     _ = lp.consume(.comma);
                     continue;
                 }
@@ -539,20 +555,30 @@ pub fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
                 }
             }
             // Positional CHARACTER(n) form.
-            if (len_expr == null) {
-                len_expr = try expr.parseExpr(lp, arena, 0);
+            if (parsed.expr == null and !parsed.deferred and lp.consume(.colon)) {
+                parsed.deferred = true;
+            } else if (parsed.expr == null and !parsed.deferred) {
+                parsed.expr = try expr.parseExpr(lp, arena, 0);
             } else {
                 _ = try expr.parseExpr(lp, arena, 0);
             }
             _ = lp.consume(.comma);
         }
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-        if (len_expr) |parsed| return parsed;
+        if (parsed.deferred) return parsed;
+        if (parsed.expr != null) return parsed;
         const default_len = try arena.create(ast.Expr);
         default_len.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
-        return default_len;
+        parsed.expr = default_len;
+        return parsed;
     }
-    return try parseLegacyStarSelectorExpr(lp, arena);
+    return .{ .expr = try parseLegacyStarSelectorExpr(lp, arena) };
+}
+
+pub fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
+    const parsed = try parseCharacterLenSpec(lp, arena);
+    if (parsed.deferred) return error.UnexpectedToken;
+    return parsed.expr orelse error.UnexpectedToken;
 }
 
 pub fn parseLegacyStarSelectorExpr(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
@@ -1422,10 +1448,39 @@ test "parseDecl treats standalone ALLOCATABLE array declarations as deferred-sha
     switch (decl_node) {
         .dimension => |dim| {
             try testing.expectEqual(@as(usize, 2), dim.items.len);
+            try testing.expect(dim.allocatable);
             try testing.expectEqualStrings("SUM", dim.items[0].name);
             try testing.expectEqual(@as(usize, 1), dim.items[0].dims.len);
             try testing.expectEqualStrings("WORK", dim.items[1].name);
             try testing.expectEqual(@as(usize, 2), dim.items[1].dims.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl preserves deferred CHARACTER length for allocatable declarations" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CHARACTER(LEN=:), ALLOCATABLE :: S(:)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.character, td.type_kind);
+            try testing.expect(td.allocatable);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expect(td.items[0].char_len == null);
+            try testing.expect(td.items[0].char_len_deferred);
+            try testing.expectEqual(@as(usize, 1), td.items[0].dims.len);
         },
         else => return error.UnexpectedToken,
     }

@@ -200,13 +200,16 @@ fn inferDummyArgTypeSpec(
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
-                    return applyDummyCharLen(type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector), item.char_len);
+                    return applyDummyDeclaratorCharLen(type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector), item);
                 }
             },
             else => {},
         }
     }
-    return applyDummyCharLen(implicitTypeSpecForName(unit, name), if (declarator) |item| item.char_len else null);
+    return if (declarator) |item|
+        applyDummyDeclaratorCharLen(implicitTypeSpecForName(unit, name), item)
+    else
+        applyDummyCharLen(implicitTypeSpecForName(unit, name), null);
 }
 
 fn implicitTypeSpecForName(unit: ast.ProgramUnit, name: []const u8) symbols.TypeSpec {
@@ -231,6 +234,11 @@ fn applyDummyCharLen(type_spec: symbols.TypeSpec, char_len_expr: ?*ast.Expr) sym
         if (char_len != null) .constant else if (char_len_expr != null) .deferred else .constant,
         char_len orelse if (char_len_expr == null) 1 else null,
     );
+}
+
+fn applyDummyDeclaratorCharLen(type_spec: symbols.TypeSpec, declarator: ast.Declarator) symbols.TypeSpec {
+    if (declarator.char_len_deferred) return type_spec.withCharacterLength(.deferred, null);
+    return applyDummyCharLen(type_spec, declarator.char_len);
 }
 
 fn inferConstantCharLen(len_expr: ?*ast.Expr) ?usize {

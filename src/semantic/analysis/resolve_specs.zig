@@ -68,6 +68,9 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                     return error.DuplicateDeclaration;
                 }
                 self.symbols.items[idx].dims = item.dims;
+                if (dim.allocatable) {
+                    self.symbols.items[idx].is_allocatable = true;
+                }
             }
         },
         .parameter => |param| {
@@ -110,7 +113,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         .common => |common| {
             for (common.blocks) |block| {
                 for (block.items) |item| {
-                    try decls.applyDeclarator(self, symbols_mod.implicitTypeSpec(self, item.name), item, .common, false);
+                    try decls.applyDeclarator(self, symbols_mod.implicitTypeSpec(self, item.name), item, .common, false, false);
                 }
             }
         },

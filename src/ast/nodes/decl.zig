@@ -29,10 +29,12 @@ pub const TypeDecl = struct {
     kind_selector: ?*Expr = null,
     items: []Declarator,
     save: bool = false,
+    allocatable: bool = false,
 };
 
 pub const DimensionDecl = struct {
     items: []Declarator,
+    allocatable: bool = false,
 };
 
 pub const ParameterDecl = struct {
@@ -91,5 +93,6 @@ pub const Declarator = struct {
     name: []const u8,
     dims: []*Expr,
     char_len: ?*Expr,
+    char_len_deferred: bool = false,
     init: ?*Expr = null,
 };

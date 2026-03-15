@@ -459,11 +459,13 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
             .name = name,
             .dims = &.{},
             .char_len = info.char_len,
+            .char_len_deferred = false,
         };
         type_decl = .{ .type_decl = .{
             .type_kind = info.type_kind,
             .kind_selector = info.kind_selector,
             .items = decl_items,
+            .allocatable = false,
         } };
     }
 

@@ -37,6 +37,7 @@ pub fn inferFunctionTypeSpec(unit: ast.ProgramUnit) symbols.TypeSpec {
 
 fn applyDeclaratorLen(type_spec: symbols.TypeSpec, item: ast.Declarator) symbols.TypeSpec {
     if (type_spec.lowered_kind != .character) return type_spec.withCharacterLength(.none, null);
+    if (item.char_len_deferred) return type_spec.withCharacterLength(.deferred, null);
     const char_len = inferConstantCharLen(item.char_len);
     return type_spec.withCharacterLength(
         if (char_len != null) .constant else if (item.char_len != null) .deferred else .constant,

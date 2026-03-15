@@ -12,7 +12,7 @@ const CharacterLengthKind = symbols.CharacterLengthKind;
 pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
     const resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.kind_selector);
     for (decl.items) |item| {
-        try applyDeclarator(self, resolved_type, item, .local, true);
+        try applyDeclarator(self, resolved_type, item, .local, true, decl.allocatable);
     }
 }
 
@@ -25,6 +25,7 @@ pub fn applyDeclarator(
     item: ast.Declarator,
     storage: StorageClass,
     explicit_type: bool,
+    allocatable: bool,
 ) !void {
     const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
     var sym = &self.symbols.items[idx];
@@ -49,6 +50,9 @@ pub fn applyDeclarator(
     } else if (sym.storage != .dummy and sym.storage != .common) {
         sym.storage = storage;
     }
+    if (allocatable) {
+        sym.is_allocatable = true;
+    }
 
     // Use the resolved symbol type after declaration merge. Non-type declarations
     // (e.g. COMMON/DIMENSION) must not accidentally erase CHARACTER length.
@@ -61,6 +65,13 @@ pub fn applyDeclarator(
         sym.effectiveCharLen() orelse 1
     else
         1;
+    if (item.char_len_deferred) {
+        if (allowsDeferredCharacterLength(sym.*)) {
+            sym.applyTypeSpec(sym.type_spec.withCharacterLength(.deferred, null));
+            return;
+        }
+        return error.InvalidCharLen;
+    }
     if (item.char_len) |len_expr| {
         if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) {
             sym.applyTypeSpec(sym.type_spec.withCharacterLength(.assumed, null));
@@ -97,6 +108,7 @@ pub fn applyDeclarator(
 fn allowsDeferredCharacterLength(sym: symbols.Symbol) bool {
     if (sym.storage == .dummy) return true;
     if (sym.kind == .function) return true;
+    if (sym.is_allocatable) return true;
     return false;
 }
 

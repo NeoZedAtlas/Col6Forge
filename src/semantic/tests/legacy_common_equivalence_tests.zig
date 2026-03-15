@@ -271,6 +271,35 @@ test "semantic accepts assumed CHARACTER*(*) for dummy argument" {
     try testing.expect(found);
 }
 
+test "semantic accepts deferred CHARACTER length for allocatable arrays" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER(LEN=:), ALLOCATABLE :: STR(:)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "STR")) continue;
+        found = true;
+        try testing.expect(sym.isCharacter());
+        try testing.expect(sym.is_allocatable);
+        try testing.expectEqual(symbols.StorageClass.local, sym.storage);
+        try testing.expectEqual(symbols.CharacterLengthKind.deferred, sym.effectiveCharLenKind());
+        try testing.expect(sym.effectiveCharLen() == null);
+    }
+    try testing.expect(found);
+}
+
 test "semantic COMMON declaration does not erase explicit CHARACTER length" {
     const testing = std.testing;
     const allocator = testing.allocator;
