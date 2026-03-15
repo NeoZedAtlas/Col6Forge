@@ -92,6 +92,7 @@ pub const Context = struct {
     current_decl_source: ?ast.DeclSource,
     current_source: ?ast.SourceRef,
     current_stmt: ?ast.Stmt,
+    diag_bag: ?*diag.Bag,
     known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
     known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
     known_host_parameters: *const std.StringHashMap(symbols.Symbol),
@@ -112,6 +113,28 @@ pub const Context = struct {
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
         known_host_owner: ?[]const u8,
         target_layout: TargetLayout,
+    ) Context {
+        return initWithDiagnostics(
+            arena,
+            unit,
+            known_function_type_specs,
+            known_procedure_sigs,
+            known_host_parameters,
+            known_host_owner,
+            target_layout,
+            null,
+        );
+    }
+
+    pub fn initWithDiagnostics(
+        arena: std.mem.Allocator,
+        unit: ast.ProgramUnit,
+        known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
+        known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
+        known_host_parameters: *const std.StringHashMap(symbols.Symbol),
+        known_host_owner: ?[]const u8,
+        target_layout: TargetLayout,
+        diag_bag: ?*diag.Bag,
     ) Context {
         var ctx = Context{
             .arena = arena,
@@ -146,6 +169,7 @@ pub const Context = struct {
             .current_decl_source = null,
             .current_source = null,
             .current_stmt = null,
+            .diag_bag = diag_bag,
             .known_function_type_specs = known_function_type_specs,
             .known_procedure_sigs = known_procedure_sigs,
             .known_host_parameters = known_host_parameters,
@@ -158,6 +182,32 @@ pub const Context = struct {
             ctx.expr_source_index.put(@intFromPtr(expr_source.expr), expr_source.source) catch {};
         }
         return ctx;
+    }
+
+    pub fn hasDiagnostic(self: *const Context) bool {
+        if (self.diag_bag) |bag| return bag.has();
+        return diag.has();
+    }
+
+    pub fn setDiagnostic(self: *Context, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
+        if (self.diag_bag) |bag| {
+            bag.set(line, column, code, message, line_text);
+            return;
+        }
+        diag.set(line, column, code, message, line_text);
+    }
+
+    pub fn noteFallbackSource(self: *Context, line: usize, column: usize, line_text: []const u8) void {
+        if (self.diag_bag) |bag| {
+            bag.noteFallbackSource(line, column, line_text);
+            return;
+        }
+        diag.noteFallbackSource(line, column, line_text);
+    }
+
+    pub fn fallbackSource(self: *const Context) ?diag.FallbackSource {
+        if (self.diag_bag) |bag| return bag.fallbackSource();
+        return diag.fallbackSource();
     }
 
     pub fn internConstString(self: *Context, text: []const u8) ![]const u8 {
@@ -271,7 +321,7 @@ pub const Context = struct {
 
     pub fn setCurrentStmt(self: *Context, stmt: ast.Stmt) void {
         self.current_stmt = stmt;
-        diag.noteFallbackSource(
+        self.noteFallbackSource(
             if (stmt.source_line == 0) 1 else stmt.source_line,
             if (stmt.source_column == 0) 1 else stmt.source_column,
             stmt.source_text,
@@ -285,7 +335,7 @@ pub const Context = struct {
     pub fn setCurrentDeclSource(self: *Context, source: ?ast.DeclSource) void {
         self.current_decl_source = source;
         if (source) |decl_source| {
-            diag.noteFallbackSource(
+            self.noteFallbackSource(
                 if (decl_source.line == 0) 1 else decl_source.line,
                 if (decl_source.column == 0) 1 else decl_source.column,
                 decl_source.text,
@@ -296,7 +346,7 @@ pub const Context = struct {
     pub fn setCurrentSource(self: *Context, source: ?ast.SourceRef) void {
         self.current_source = source;
         if (source) |src| {
-            diag.noteFallbackSource(
+            self.noteFallbackSource(
                 if (src.line == 0) 1 else src.line,
                 if (src.column == 0) 1 else src.column,
                 src.text,

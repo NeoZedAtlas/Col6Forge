@@ -7,7 +7,6 @@ const constants = @import("resolve_const.zig");
 const expressions = @import("resolve_expr.zig");
 const decls = @import("resolve_decls.zig");
 const check_const = @import("check_const.zig");
-const diag = @import("../diagnostic.zig");
 const type_kind_selector = @import("../type_kind_selector.zig");
 
 const ResolvedRefKind = symbols.ResolvedRefKind;
@@ -185,7 +184,7 @@ fn setParameterNotConstantDiagnostic(self: *context.Context, name: []const u8) v
         .{name},
     ) catch "PARAMETER value is not a constant expression";
     const loc = currentDeclLocation(self);
-    diag.set(loc.line, loc.column, "CF3111", message, loc.text);
+    self.setDiagnostic(loc.line, loc.column, "CF3111", message, loc.text);
 }
 
 fn setParameterTypeMismatchDiagnostic(
@@ -201,7 +200,7 @@ fn setParameterTypeMismatchDiagnostic(
         .{ name, typeKindName(expected), constValueKindName(actual) },
     ) catch "PARAMETER value type is incompatible with declaration";
     const loc = currentDeclLocation(self);
-    diag.set(loc.line, loc.column, "CF3112", message, loc.text);
+    self.setDiagnostic(loc.line, loc.column, "CF3112", message, loc.text);
 }
 
 fn currentDeclLocation(self: *context.Context) struct { line: usize, column: usize, text: []const u8 } {

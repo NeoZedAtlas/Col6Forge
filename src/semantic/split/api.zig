@@ -1,5 +1,7 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const fixed_form = @import("../../frontend/fixed_form.zig");
+const parser = @import("../../frontend/parser/mod.zig");
 const analyzer = @import("../analysis/mod.zig");
 const context = @import("../context.zig");
 const diagnostic = @import("../diagnostic.zig");
@@ -82,8 +84,6 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
     diag_bag: *diagnostic.Bag,
 ) !SemanticProgram {
     diag_bag.clear();
-    const prev_diag_bag = diagnostic.setActiveBag(diag_bag);
-    defer _ = diagnostic.setActiveBag(prev_diag_bag);
 
     const mutable_program = program;
     var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena);
@@ -124,7 +124,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
 
     var units = std.array_list.Managed(SemanticUnit).init(arena);
     for (mutable_program.units) |*unit| {
-        var unit_analyzer = analyzer.UnitAnalyzer.init(
+        var unit_analyzer = analyzer.UnitAnalyzer.initWithDiagnostics(
             arena,
             unit,
             &.{},
@@ -133,6 +133,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             &known_host_symbols,
             active_host_owner,
             options.target_layout,
+            diag_bag,
         );
         const sem_unit = try unit_analyzer.analyze();
         try units.append(sem_unit);
@@ -147,7 +148,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             active_host_owner = null;
         }
     }
-    try common_validation.validateCommonBlocks(arena, mutable_program, units.items);
+    try common_validation.validateCommonBlocksWithDiagnostics(arena, mutable_program, units.items, diag_bag);
     return .{ .units = try units.toOwnedSlice() };
 }
 
@@ -270,4 +271,42 @@ pub fn takeDiagnostic() ?diagnostic.SemanticDiagnostic {
 
 pub fn clearDiagnostic() void {
     diagnostic.clear();
+}
+
+test "analyzeProgramWithKnownAndOptionsAndDiagnostics keeps semantic diagnostics in explicit bag" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        \\      SUBROUTINE S
+        \\      CHARACTER*0 A
+        \\      END
+        \\
+    ;
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_bag = diagnostic.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    try testing.expectError(
+        error.InvalidCharLen,
+        analyzeProgramWithKnownAndOptionsAndDiagnostics(
+            arena.allocator(),
+            program,
+            &.{},
+            &.{},
+            .{},
+            &diag_bag,
+        ),
+    );
+
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqualStrings("CF3103", diag.code);
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expect(diagnostic.take() == null);
 }

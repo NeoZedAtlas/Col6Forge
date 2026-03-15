@@ -23,6 +23,22 @@ const CommonLocalBlock = struct {
 };
 
 pub fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_units: []const SemanticUnit) !void {
+    var diag_bag = diagnostic.Bag.init(arena);
+    defer diag_bag.deinit();
+    validateCommonBlocksWithDiagnostics(arena, program, sem_units, &diag_bag) catch |err| {
+        diagnostic.publishCompatFromBag(&diag_bag);
+        return err;
+    };
+    diagnostic.publishCompatFromBag(&diag_bag);
+}
+
+pub fn validateCommonBlocksWithDiagnostics(
+    arena: std.mem.Allocator,
+    program: ast.Program,
+    sem_units: []const SemanticUnit,
+    diag_bag: *diagnostic.Bag,
+) !void {
+    diag_bag.clear();
     var global = std.StringHashMap(CommonBlockSig).init(arena);
     for (program.units, 0..) |unit, unit_idx| {
         if (unit_idx >= sem_units.len) break;
@@ -69,7 +85,7 @@ pub fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_
             const block = entry.value_ptr;
             const items = block.items.items;
             const total_size = totalCommonSize(items) catch {
-                setCommonMismatchDiagnostic(block.source);
+                setCommonMismatchDiagnostic(diag_bag, block.source);
                 return error.CommonBlockMismatch;
             };
             if (key.len == 0) {
@@ -88,7 +104,7 @@ pub fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_
             }
             if (global.getPtr(key)) |prev| {
                 if (!commonSigsCompatible(prev.items, items)) {
-                    setCommonMismatchDiagnostic(block.source);
+                    setCommonMismatchDiagnostic(diag_bag, block.source);
                     return error.CommonBlockMismatch;
                 }
                 if (total_size > prev.total_size) {
@@ -150,8 +166,8 @@ pub fn totalCommonSize(items: []const CommonItemSig) !usize {
     return total;
 }
 
-pub fn setCommonMismatchDiagnostic(source: ast.DeclSource) void {
+pub fn setCommonMismatchDiagnostic(diag_bag: *diagnostic.Bag, source: ast.DeclSource) void {
     const line = if (source.line == 0) 1 else source.line;
     const col = if (source.column == 0) 1 else source.column;
-    diagnostic.set(line, col, "CF3115", "COMMON block layout mismatch across program units", source.text);
+    diag_bag.set(line, col, "CF3115", "COMMON block layout mismatch across program units", source.text);
 }

@@ -20,6 +20,30 @@ pub const UnitAnalyzer = struct {
         known_host_owner: ?[]const u8,
         target_layout: context.Context.TargetLayout,
     ) UnitAnalyzer {
+        return initWithDiagnostics(
+            arena,
+            unit,
+            initial_implicit,
+            known_function_type_specs,
+            known_procedure_sigs,
+            known_host_parameters,
+            known_host_owner,
+            target_layout,
+            null,
+        );
+    }
+
+    pub fn initWithDiagnostics(
+        arena: std.mem.Allocator,
+        unit: *ast.ProgramUnit,
+        initial_implicit: []const symbols.ImplicitRule,
+        known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
+        known_procedure_sigs: *const std.StringHashMap(context.Context.ProcedureSig),
+        known_host_parameters: *const std.StringHashMap(symbols.Symbol),
+        known_host_owner: ?[]const u8,
+        target_layout: context.Context.TargetLayout,
+        diag_bag: ?*diag.Bag,
+    ) UnitAnalyzer {
         var ctx = context.Context.init(
             arena,
             unit.*,
@@ -29,6 +53,18 @@ pub const UnitAnalyzer = struct {
             known_host_owner,
             target_layout,
         );
+        if (diag_bag != null) {
+            ctx = context.Context.initWithDiagnostics(
+                arena,
+                unit.*,
+                known_function_type_specs,
+                known_procedure_sigs,
+                known_host_parameters,
+                known_host_owner,
+                target_layout,
+                diag_bag,
+            );
+        }
         ctx.bindUnitBacking(unit);
         return .{
             .ctx = ctx,
@@ -59,31 +95,31 @@ pub const UnitAnalyzer = struct {
 };
 
 fn recordSemanticError(ctx: *context.Context, err: anyerror) void {
-    if (diag.has()) return;
+    if (ctx.hasDiagnostic()) return;
     const info = semanticErrorInfo(err);
     if (ctx.current_source) |source| {
         const line = if (source.line == 0) 1 else source.line;
         const col = if (source.column == 0) 1 else source.column;
-        diag.set(line, col, info.code, info.message, source.text);
+        ctx.setDiagnostic(line, col, info.code, info.message, source.text);
         return;
     }
     if (ctx.current_decl_source) |decl_src| {
         const line = if (decl_src.line == 0) 1 else decl_src.line;
         const col = if (decl_src.column == 0) 1 else decl_src.column;
-        diag.set(line, col, info.code, info.message, decl_src.text);
+        ctx.setDiagnostic(line, col, info.code, info.message, decl_src.text);
         return;
     }
     if (ctx.current_stmt) |stmt| {
         const line = if (stmt.source_line == 0) 1 else stmt.source_line;
         const col = if (stmt.source_column == 0) 1 else stmt.source_column;
-        diag.set(line, col, info.code, info.message, stmt.source_text);
+        ctx.setDiagnostic(line, col, info.code, info.message, stmt.source_text);
         return;
     }
-    if (diag.fallbackSource()) |source| {
-        diag.set(source.line, source.column, info.code, info.message, source.line_text);
+    if (ctx.fallbackSource()) |source| {
+        ctx.setDiagnostic(source.line, source.column, info.code, info.message, source.line_text);
         return;
     }
-    diag.set(1, 1, info.code, info.message, "");
+    ctx.setDiagnostic(1, 1, info.code, info.message, "");
 }
 
 fn semanticErrorInfo(err: anyerror) struct { code: []const u8, message: []const u8 } {
