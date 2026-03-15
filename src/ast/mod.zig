@@ -41,6 +41,7 @@ pub const ReadStmt = nodes.ReadStmt;
 pub const OpenStmt = nodes.OpenStmt;
 pub const InquireStmt = nodes.InquireStmt;
 pub const CloseStmt = nodes.CloseStmt;
+pub const AllocateTypeSpec = nodes.AllocateTypeSpec;
 pub const AllocateStmt = nodes.AllocateStmt;
 pub const AllocateItem = nodes.AllocateItem;
 pub const DeallocateStmt = nodes.DeallocateStmt;

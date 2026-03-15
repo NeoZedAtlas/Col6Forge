@@ -202,6 +202,13 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         if (is_return_symbol and (is_character_function or is_complex_sret_function)) continue;
         if (ctx.locals.contains(sym.name)) continue;
         if (isSaved(&save_info, sym.name) and !is_return_symbol) continue;
+        if (sym.is_allocatable and sym.dims.len == 0) {
+            try ctx.locals.put(sym.name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
+            if (sym.isCharacter()) {
+                try ctx.char_arg_lens.put(sym.name, .{ .name = try ctx.intLiteral(0), .ty = .i32, .is_ptr = false });
+            }
+            continue;
+        }
         if (symbolHasDeferredDims(sym)) {
             if (is_return_symbol and ctx.unit.kind == .function and !is_character_function and !is_complex_sret_function) {
                 const ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
@@ -212,6 +219,9 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             }
             try ctx.locals.put(sym.name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
             try installDeferredArrayDescriptor(ctx, builder, sym);
+            if (sym.isCharacter()) {
+                try ctx.char_arg_lens.put(sym.name, .{ .name = try ctx.intLiteral(0), .ty = .i32, .is_ptr = false });
+            }
             continue;
         }
         if (sym.isCharacter()) {

@@ -26,11 +26,8 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     var offset = try emitColumnMajorOffset(ctx, builder, sym, call.args);
 
     if (sym.isCharacter()) {
-        const char_len = common.constantCharacterLen(sym) orelse return error.ArraysUnsupported;
-        if (char_len != 1) {
-            const scale = ValueRef{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = offset.ty, .is_ptr = false };
-            offset = try binary.emitMul(ctx, builder, offset, scale);
-        }
+        const scale = try dispatch.emitCharacterSymbolLenValueI64(ctx, builder, call.name, sym);
+        offset = try binary.emitMul(ctx, builder, offset, scale);
     }
 
     const gep = try ctx.nextTemp();
@@ -83,11 +80,8 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
     }
     var idx1_adj = try binary.emitSub(ctx, builder, idx1, oneIndexValue());
     if (sym.isCharacter()) {
-        const char_len = common.constantCharacterLen(sym) orelse return error.ArraysUnsupported;
-        if (char_len != 1) {
-            const scale = ValueRef{ .name = try ctx.intLiteral(@intCast(char_len)), .ty = idx1_adj.ty, .is_ptr = false };
-            idx1_adj = try binary.emitMul(ctx, builder, idx1_adj, scale);
-        }
+        const scale = try dispatch.emitCharacterSymbolLenValueI64(ctx, builder, call.name, sym);
+        idx1_adj = try binary.emitMul(ctx, builder, idx1_adj, scale);
     }
     const gep = try ctx.nextTemp();
     try builder.gep(gep, elem_ty, base_ptr, idx1_adj);

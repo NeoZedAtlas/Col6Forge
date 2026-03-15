@@ -128,8 +128,16 @@ pub const CloseStmt = struct {
     controls: []ControlItem,
 };
 
+pub const AllocateTypeSpec = struct {
+    type_kind: @import("decl.zig").TypeKind,
+    kind_selector: ?*Expr = null,
+    char_len: ?*Expr = null,
+    char_len_deferred: bool = false,
+};
+
 pub const AllocateStmt = struct {
     items: []AllocateItem,
+    type_spec: ?AllocateTypeSpec = null,
 };
 
 pub const AllocateItem = struct {

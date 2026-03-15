@@ -1008,6 +1008,33 @@ test "parseStatement parses ALLOCATE items" {
     try testing.expectEqual(@as(usize, 1), idx);
 }
 
+test "parseStatement parses ALLOCATE type-spec for scalar character object" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      ALLOCATE(CHARACTER(LEN=BAR()) :: RES)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .allocate);
+    try testing.expect(stmt_node.node.allocate.type_spec != null);
+    try testing.expectEqual(ast.TypeKind.character, stmt_node.node.allocate.type_spec.?.type_kind);
+    try testing.expect(stmt_node.node.allocate.type_spec.?.char_len != null);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.allocate.items.len);
+    try testing.expectEqualStrings("RES", stmt_node.node.allocate.items[0].name);
+    try testing.expectEqual(@as(usize, 0), stmt_node.node.allocate.items[0].dims.len);
+    try testing.expectEqual(@as(usize, 1), idx);
+}
+
 test "parseStatement parses DEALLOCATE items" {
     const testing = std.testing;
     const allocator = testing.allocator;

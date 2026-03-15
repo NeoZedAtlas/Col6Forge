@@ -111,6 +111,14 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             }
         },
         .allocate => |allocate| {
+            if (allocate.type_spec) |type_spec| {
+                if (type_spec.kind_selector) |kind_selector| {
+                    try expressions.resolveExpr(self, kind_selector);
+                }
+                if (type_spec.char_len) |char_len| {
+                    try expressions.resolveExpr(self, char_len);
+                }
+            }
             for (allocate.items) |item| {
                 self.setCurrentSource(if (item.source.line != 0) item.source else null);
                 _ = try symbols_mod.ensureSymbol(self, item.name);

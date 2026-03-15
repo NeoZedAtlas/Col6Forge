@@ -10,6 +10,9 @@ const codegen_diag = @import("../../diagnostic.zig");
 const stmts = @import("../stmts/function.zig");
 const utils = @import("utils.zig");
 const format_items = @import("../../../format/items.zig");
+const fixed_form = @import("../../../frontend/fixed_form.zig");
+const parser = @import("../../../frontend/parser/mod.zig");
+const split_api = @import("../../../semantic/split/api.zig");
 
 const Program = input.Program;
 const FormatInfo = context.FormatInfo;
@@ -1253,6 +1256,37 @@ test "emitModuleToWriter adds hidden descriptor args for deferred-shape dummy ar
 
     const output = buffer.items;
     try testing.expect(std.mem.indexOf(u8, output, "define void @s_(ptr %arg0, ptr %arg1, ptr %arg2)") != null);
+}
+
+test "emitModuleToWriter supports CHARACTER allocate type-spec for deferred-length allocatable scalar" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      MODULE X\n" ++
+        "      CONTAINS\n" ++
+        "      PURE FUNCTION FOO() RESULT(RES)\n" ++
+        "      CHARACTER(LEN=:), ALLOCATABLE :: RES\n" ++
+        "      INTEGER BAR\n" ++
+        "      BAR = 1\n" ++
+        "      ALLOCATE(CHARACTER(BAR) :: RES)\n" ++
+        "      END FUNCTION FOO\n" ++
+        "      END MODULE X\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "char_alloc_typespec.f", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "call ptr @malloc") != null);
 }
 
 test "emitModuleToWriter keeps assumed-size lower-bound dummy arrays on legacy ABI" {

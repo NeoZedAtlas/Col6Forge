@@ -38,6 +38,7 @@ pub const ReadStmt = ast.ReadStmt;
 pub const OpenStmt = ast.OpenStmt;
 pub const InquireStmt = ast.InquireStmt;
 pub const CloseStmt = ast.CloseStmt;
+pub const AllocateTypeSpec = ast.AllocateTypeSpec;
 pub const AllocateStmt = ast.AllocateStmt;
 pub const AllocateItem = ast.AllocateItem;
 pub const DeallocateStmt = ast.DeallocateStmt;

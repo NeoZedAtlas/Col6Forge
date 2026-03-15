@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
 const logical_line = @import("../../../logical_line.zig");
 const context = @import("../../token_stream.zig");
+const decl_parser = @import("../../decl.zig");
 const expr = @import("../../expr.zig");
 const control_flow = @import("../control_flow.zig");
 const data_stmt = @import("../data.zig");
@@ -269,18 +270,19 @@ pub fn parseAllocateStatement(arena: std.mem.Allocator, lp: *LineParser) anyerro
     if (!lp.consumeKeyword("ALLOCATE")) return error.UnexpectedToken;
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
 
+    const type_spec = try decl_parser.tryParseAllocateTypeSpec(lp, arena);
     var items = std.array_list.Managed(AllocateItem).init(arena);
     while (!lp.peekIs(.r_paren)) {
         const item_source = currentSource(lp.*);
         const name = lp.readName(arena) orelse return error.MissingName;
-        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
-
         var dims = std.array_list.Managed(*Expr).init(arena);
-        while (!lp.peekIs(.r_paren)) {
-            try dims.append(try expr.parseDimExpr(lp, arena));
-            if (!lp.consume(.comma)) break;
+        if (lp.consume(.l_paren)) {
+            while (!lp.peekIs(.r_paren)) {
+                try dims.append(try expr.parseDimExpr(lp, arena));
+                if (!lp.consume(.comma)) break;
+            }
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         }
-        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         try items.append(.{
             .name = name,
             .dims = try dims.toOwnedSlice(),
@@ -289,7 +291,7 @@ pub fn parseAllocateStatement(arena: std.mem.Allocator, lp: *LineParser) anyerro
         if (!lp.consume(.comma)) break;
     }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-    return .{ .allocate = .{ .items = try items.toOwnedSlice() } };
+    return .{ .allocate = .{ .items = try items.toOwnedSlice(), .type_spec = type_spec } };
 }
 
 pub fn parseDeallocateStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!StmtNode {

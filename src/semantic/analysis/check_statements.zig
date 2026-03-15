@@ -110,6 +110,9 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             for (allocate.items) |item| {
                 const idx = resolve_symbols.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
                 const sym = self.symbols.items[idx];
+                if (sym.dims.len == 0 and item.dims.len == 0 and sym.is_allocatable) {
+                    continue;
+                }
                 if (sym.dims.len == 0) {
                     self.setCurrentSource(if (item.source.line != 0) item.source else null);
                     return error.UnsupportedAllocateSyntax;
@@ -127,6 +130,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             for (deallocate.items) |name| {
                 const idx = resolve_symbols.findSymbolIndex(self, name) orelse return error.UnknownSymbol;
                 const sym = self.symbols.items[idx];
+                if (sym.dims.len == 0 and sym.is_allocatable) continue;
                 if (sym.dims.len == 0) return error.UnsupportedAllocateSyntax;
             }
         },

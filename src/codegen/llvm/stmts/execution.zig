@@ -68,11 +68,11 @@ pub fn emitContinuationDirective(ctx: *Context, builder: anytype, stmt: ast.Stmt
 
 pub fn emitAllocate(ctx: *Context, builder: anytype, allocate: ast.AllocateStmt) EmitError!void {
     for (allocate.items) |item| {
-        try emitAllocateItem(ctx, builder, item);
+        try emitAllocateItem(ctx, builder, allocate.type_spec, item);
     }
 }
 
-fn emitAllocateItem(ctx: *Context, builder: anytype, item: ast.AllocateItem) EmitError!void {
+fn emitAllocateItem(ctx: *Context, builder: anytype, type_spec: ?ast.AllocateTypeSpec, item: ast.AllocateItem) EmitError!void {
     var dim_specs = std.array_list.Managed(AllocateDimSpec).init(ctx.allocator);
     defer dim_specs.deinit();
 
@@ -84,28 +84,43 @@ fn emitAllocateItem(ctx: *Context, builder: anytype, item: ast.AllocateItem) Emi
     }
 
     const sym = ctx.findSymbol(item.name) orelse return error.UnknownSymbol;
-    const desc = ctx.runtimeArrayDescriptor(item.name) orelse return error.UnsupportedAllocateSyntax;
-    if (desc.rank != dim_specs.items.len) return error.InvalidSubscript;
+    const elem_size = try emitAllocateElementSize(ctx, builder, sym, type_spec);
+    const total_bytes = if (dim_specs.items.len == 0)
+        elem_size
+    else
+        try expr.emitMul(ctx, builder, extent_product, elem_size);
 
-    // ALLOCATE currently targets deferred-shape arrays backed by runtime
-    // descriptor slots; release previous allocation before replacing the base.
+    if (ctx.runtimeArrayDescriptor(item.name)) |desc| {
+        if (desc.rank != dim_specs.items.len) return error.InvalidSubscript;
+
+        try freeManagedArrayPointerIfAllocated(ctx, builder, item.name);
+
+        const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &.{.i64}, false);
+        const ptr_tmp = try ctx.nextTemp();
+        try builder.callTyped(ptr_tmp, .ptr, malloc_name, &.{total_bytes});
+        const base_ptr = ValueRef{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true };
+        try ctx.locals.put(item.name, base_ptr);
+        try ctx.markManagedAllocation(item.name);
+        try updateAllocatedCharacterLen(ctx, builder, sym, type_spec);
+
+        var running_multiplier = constI64(ctx, 1);
+        for (dim_specs.items, 0..) |dim_spec, dim_idx| {
+            try builder.store(dim_spec.lower, desc.lower_slots[dim_idx]);
+            try builder.store(dim_spec.extent, desc.extent_slots[dim_idx]);
+            try builder.store(running_multiplier, desc.multiplier_slots[dim_idx]);
+            running_multiplier = try expr.emitMul(ctx, builder, running_multiplier, dim_spec.extent);
+        }
+        return;
+    }
+
     try freeManagedArrayPointerIfAllocated(ctx, builder, item.name);
-
-    const elem_size = constI64(ctx, @intCast(try elementByteSize(sym)));
-    const total_bytes = try expr.emitMul(ctx, builder, extent_product, elem_size);
     const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &.{.i64}, false);
     const ptr_tmp = try ctx.nextTemp();
     try builder.callTyped(ptr_tmp, .ptr, malloc_name, &.{total_bytes});
     const base_ptr = ValueRef{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true };
     try ctx.locals.put(item.name, base_ptr);
     try ctx.markManagedAllocation(item.name);
-    var running_multiplier = constI64(ctx, 1);
-    for (dim_specs.items, 0..) |dim_spec, dim_idx| {
-        try builder.store(dim_spec.lower, desc.lower_slots[dim_idx]);
-        try builder.store(dim_spec.extent, desc.extent_slots[dim_idx]);
-        try builder.store(running_multiplier, desc.multiplier_slots[dim_idx]);
-        running_multiplier = try expr.emitMul(ctx, builder, running_multiplier, dim_spec.extent);
-    }
+    try updateAllocatedCharacterLen(ctx, builder, sym, type_spec);
 }
 
 pub fn emitDeallocate(ctx: *Context, builder: anytype, deallocate: ast.DeallocateStmt) EmitError!void {
@@ -115,16 +130,26 @@ pub fn emitDeallocate(ctx: *Context, builder: anytype, deallocate: ast.Deallocat
 }
 
 fn emitDeallocateItem(ctx: *Context, builder: anytype, name: []const u8) EmitError!void {
-    const desc = ctx.runtimeArrayDescriptor(name) orelse return error.UnsupportedAllocateSyntax;
+    if (ctx.runtimeArrayDescriptor(name)) |desc| {
+        try freeManagedArrayPointerIfAllocated(ctx, builder, name);
+        ctx.clearManagedAllocation(name);
+        try ctx.locals.put(name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
 
-    try freeManagedArrayPointerIfAllocated(ctx, builder, name);
-    ctx.clearManagedAllocation(name);
-    try ctx.locals.put(name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
+        for (0..desc.rank) |dim_idx| {
+            try builder.store(constI64(ctx, 1), desc.lower_slots[dim_idx]);
+            try builder.store(constI64(ctx, 0), desc.extent_slots[dim_idx]);
+            try builder.store(constI64(ctx, if (dim_idx == 0) 1 else 0), desc.multiplier_slots[dim_idx]);
+        }
+    } else {
+        try freeManagedArrayPointerIfAllocated(ctx, builder, name);
+        ctx.clearManagedAllocation(name);
+        try ctx.locals.put(name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
+    }
 
-    for (0..desc.rank) |dim_idx| {
-        try builder.store(constI64(ctx, 1), desc.lower_slots[dim_idx]);
-        try builder.store(constI64(ctx, 0), desc.extent_slots[dim_idx]);
-        try builder.store(constI64(ctx, if (dim_idx == 0) 1 else 0), desc.multiplier_slots[dim_idx]);
+    if (ctx.findSymbol(name)) |sym| {
+        if (sym.isCharacter() and sym.effectiveCharLenKind() == .deferred) {
+            try ctx.char_arg_lens.put(name, .{ .name = try ctx.intLiteral(0), .ty = .i32, .is_ptr = false });
+        }
     }
 }
 
@@ -187,6 +212,59 @@ fn elementByteSize(sym: ast.sema.Symbol) EmitError!usize {
         .logical => 4,
         .character => try common.requireConstantCharacterLen(sym),
     };
+}
+
+fn emitAllocateElementSize(
+    ctx: *Context,
+    builder: anytype,
+    sym: ast.sema.Symbol,
+    type_spec: ?ast.AllocateTypeSpec,
+) EmitError!ValueRef {
+    if (!sym.isCharacter()) {
+        return constI64(ctx, @intCast(try elementByteSize(sym)));
+    }
+
+    if (type_spec) |spec| {
+        if (spec.type_kind != .character) return error.UnsupportedAllocateSyntax;
+        return emitAllocateCharacterLenI64(ctx, builder, spec, sym);
+    }
+
+    return try expr_dispatch.emitCharacterSymbolLenValueI64(ctx, builder, sym.name, sym);
+}
+
+fn emitAllocateCharacterLenI64(
+    ctx: *Context,
+    builder: anytype,
+    spec: ast.AllocateTypeSpec,
+    sym: ast.sema.Symbol,
+) EmitError!ValueRef {
+    _ = sym;
+    if (spec.char_len_deferred) return error.UnsupportedAllocateSyntax;
+    if (spec.char_len) |char_len_expr| {
+        var len_val = try expr.emitExpr(ctx, builder, char_len_expr);
+        if (len_val.ty != .i64) len_val = try expr.coerce(ctx, builder, len_val, .i64);
+        return len_val;
+    }
+    return constI64(ctx, 1);
+}
+
+fn updateAllocatedCharacterLen(
+    ctx: *Context,
+    builder: anytype,
+    sym: ast.sema.Symbol,
+    type_spec: ?ast.AllocateTypeSpec,
+) EmitError!void {
+    if (!sym.isCharacter()) return;
+    if (sym.effectiveCharLenKind() != .deferred) return;
+
+    var len_i64 = if (type_spec) |spec|
+        try emitAllocateCharacterLenI64(ctx, builder, spec, sym)
+    else
+        try expr_dispatch.emitCharacterSymbolLenValueI64(ctx, builder, sym.name, sym);
+    if (len_i64.ty != .i32) {
+        len_i64 = try expr.coerce(ctx, builder, len_i64, .i32);
+    }
+    try ctx.char_arg_lens.put(sym.name, len_i64);
 }
 
 pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!void {

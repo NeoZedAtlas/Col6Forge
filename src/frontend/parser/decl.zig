@@ -252,6 +252,28 @@ const ParsedCharacterLen = struct {
     deferred: bool = false,
 };
 
+pub fn tryParseAllocateTypeSpec(lp: *LineParser, arena: std.mem.Allocator) !?ast.AllocateTypeSpec {
+    var lookahead = lp.*;
+    const type_spec = parseTypeKind(&lookahead, arena) catch |err| switch (err) {
+        error.UnknownType => return null,
+        else => return err,
+    };
+    var char_len: ParsedCharacterLen = .{};
+    if (type_spec.type_kind == .character) {
+        if (lookahead.consume(.star) or lookahead.peekIs(.l_paren)) {
+            char_len = try parseCharacterLenSpec(&lookahead, arena);
+        }
+    }
+    if (!consumeDoubleColon(&lookahead)) return null;
+    lp.* = lookahead;
+    return .{
+        .type_kind = type_spec.type_kind,
+        .kind_selector = type_spec.kind_selector,
+        .char_len = char_len.expr,
+        .char_len_deferred = char_len.deferred,
+    };
+}
+
 fn parseTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
     if (lp.isKeywordSplit("INTEGER")) {
         _ = lp.consumeKeyword("INTEGER");
