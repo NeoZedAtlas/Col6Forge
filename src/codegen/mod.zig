@@ -3,6 +3,7 @@ pub const llvm = @import("llvm/codegen/mod.zig");
 pub const input = @import("input.zig");
 pub const diagnostic = @import("diagnostic.zig");
 const std = @import("std");
+const catalog = @import("../common/error_catalog.zig");
 const fixed_form = @import("../frontend/fixed_form.zig");
 const parser = @import("../frontend/parser/mod.zig");
 const sema = @import("../semantic/mod.zig");
@@ -138,7 +139,7 @@ test "emitModuleWithOptionsAndDiagnostics keeps codegen diagnostics in explicit 
     );
 
     const diag = diag_bag.take() orelse return error.TestExpectedEqual;
-    try testing.expectEqualStrings("CF4110", diag.code);
+    try testing.expectEqualStrings(catalog.codegen.invalid_intrinsic_call.code, diag.code);
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expect(diagnostic.take() == null);
 }

@@ -97,7 +97,7 @@ pub const UnitAnalyzer = struct {
 
 fn recordSemanticError(ctx: *context.Context, err: anyerror) void {
     if (ctx.hasDiagnostic()) return;
-    const info = semanticErrorInfo(err);
+    const info = catalog.semanticInfoFor(err);
     if (ctx.current_source) |source| {
         const line = if (source.line == 0) 1 else source.line;
         const col = if (source.column == 0) 1 else source.column;
@@ -123,43 +123,7 @@ fn recordSemanticError(ctx: *context.Context, err: anyerror) void {
     ctx.setDiagnostic(1, 1, info.code, info.message, "");
 }
 
-fn semanticErrorInfo(err: anyerror) catalog.ErrorInfo {
-    return switch (err) {
-        error.MissingUnitScope => catalog.semantic.missing_unit_scope,
-        error.MissingScope => catalog.semantic.missing_scope,
-        error.InvalidCharLen => catalog.semantic.invalid_char_len,
-        error.PowerUnsupported => catalog.semantic.power_unsupported,
-        error.UnsupportedImpliedDo => catalog.semantic.unsupported_implied_do,
-        error.NumberTooLong => catalog.semantic.number_too_long,
-        error.UnexpectedTypeDecl => catalog.semantic.unexpected_type_decl,
-        error.AssignmentTypeMismatch => catalog.semantic.assignment_type_mismatch,
-        error.InvalidSubscript => catalog.semantic.invalid_subscript,
-        error.InvalidArgumentCount => catalog.semantic.invalid_argument_count,
-        error.ParameterNotConstant => catalog.semantic.parameter_not_constant,
-        error.ParameterTypeMismatch => catalog.semantic.parameter_type_mismatch,
-        error.InvalidEquivalence => catalog.semantic.invalid_equivalence,
-        error.EquivalenceCycle => catalog.semantic.equivalence_cycle,
-        error.CommonBlockMismatch => catalog.semantic.common_block_mismatch,
-        error.DuplicateDeclaration => catalog.semantic.duplicate_declaration,
-        error.DivisionByZero => catalog.semantic.division_by_zero,
-        error.NegativeIntegerExponent => catalog.semantic.negative_integer_exponent,
-        error.InvalidArithmeticOperands => catalog.semantic.invalid_arithmetic_operands,
-        error.InvalidEntryStatement => catalog.semantic.invalid_entry_statement,
-        error.InvalidFormatStatement => catalog.semantic.invalid_format_statement,
-        error.UnknownCommonBlock => catalog.semantic.unknown_common_block,
-        error.InvalidLogicalIfNesting => catalog.semantic.invalid_logical_if_nesting,
-        error.InvalidIoControlType => catalog.semantic.invalid_io_control_type,
-        error.InvalidIoControlValue => catalog.semantic.invalid_io_control_value,
-        error.InvalidImplicitRule => catalog.semantic.invalid_implicit_rule,
-        error.UnsupportedIntrinsicType => catalog.semantic.unsupported_intrinsic_type,
-        error.DataValueCountMismatch => catalog.semantic.data_value_count_mismatch,
-        error.DataExpansionTooLarge => catalog.semantic.data_expansion_too_large,
-        error.InvalidConditionType => catalog.semantic.invalid_condition_type,
-        else => catalog.semantic.generic,
-    };
-}
-
-test "semantic UnexpectedTypeDecl maps to CF3107 with declaration source" {
+test "semantic UnexpectedTypeDecl maps to the unexpected_type_decl diagnostic with declaration source" {
     const testing = std.testing;
 
     var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(testing.allocator);
@@ -197,7 +161,7 @@ test "semantic UnexpectedTypeDecl maps to CF3107 with declaration source" {
     const got = diag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), got.line);
     try testing.expectEqual(@as(usize, 7), got.column);
-    try testing.expect(std.mem.eql(u8, got.code, "CF3107"));
+    try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.unexpected_type_decl.code));
     try testing.expect(std.mem.eql(u8, got.line_text, "INTEGER X"));
 }
 
@@ -243,6 +207,6 @@ test "semantic fallback uses last noted statement when active context is cleared
     const got = diag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 5), got.line);
     try testing.expectEqual(@as(usize, 11), got.column);
-    try testing.expect(std.mem.eql(u8, got.code, "CF3102"));
+    try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.missing_scope.code));
     try testing.expect(std.mem.eql(u8, got.line_text, "      STOP"));
 }

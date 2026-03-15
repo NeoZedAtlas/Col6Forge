@@ -153,24 +153,7 @@ pub fn takeFallbackSource() ?FallbackSource {
 }
 
 pub fn errorInfo(err: anyerror) catalog.ErrorInfo {
-    return switch (err) {
-        error.UnexpectedToken => catalog.parser.unexpected_token,
-        error.UnexpectedEOF => catalog.parser.unexpected_eof,
-        error.ExpectedProgramUnit => catalog.parser.expected_program_unit,
-        error.MissingName => catalog.parser.missing_name,
-        error.ExpectedPrecision => catalog.parser.expected_precision,
-        error.UnsupportedComplexKind => catalog.parser.unsupported_complex_kind,
-        error.UnknownType => catalog.parser.unknown_type,
-        error.ExpectedEndIf => catalog.parser.expected_end_if,
-        error.DeclarationInIfBlock => catalog.parser.declaration_in_if_block,
-        error.EndDoWithoutDo => catalog.parser.end_do_without_do,
-        error.ExpressionDepthExceeded => catalog.parser.expression_depth_exceeded,
-        error.UnsupportedModuleUnit => catalog.parser.unsupported_module_unit,
-        error.DataExpansionTooLarge => catalog.parser.data_expansion_too_large,
-        error.FormatExpansionTooLarge => catalog.parser.format_expansion_too_large,
-        error.InvalidEquivalenceGroup => catalog.parser.invalid_equivalence_group,
-        else => catalog.parser.failed_to_understand,
-    };
+    return catalog.parserInfoFor(err);
 }
 
 test "parser diagnostic fallback remembers last noted source" {

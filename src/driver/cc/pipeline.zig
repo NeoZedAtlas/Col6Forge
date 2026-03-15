@@ -259,6 +259,6 @@ test "emitPipelineToFile preserves fine-grained fixed-form diagnostics for cc tr
     const diag_info = Col6Forge.takeLastPipelineDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), diag_info.line);
     try testing.expectEqual(@as(usize, 8), diag_info.column);
-    try testing.expectEqualStrings("CF2001", diag_info.code);
+    try testing.expectEqualStrings(Col6Forge.error_catalog.parser.unexpected_token.code, diag_info.code);
     try testing.expectEqualStrings("     1 )", diag_info.line_text);
 }

@@ -5,6 +5,7 @@ const context = @import("context.zig");
 const llvm_types = @import("../types.zig");
 const builder_mod = @import("builder.zig");
 const common = @import("common.zig");
+const catalog = @import("../../../common/error_catalog.zig");
 const codegen_diag = @import("../../diagnostic.zig");
 const stmts = @import("../stmts/function.zig");
 const utils = @import("utils.zig");
@@ -798,7 +799,7 @@ test "codegen diagnostic reports intrinsic call site for invalid intrinsic arity
     const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expectEqual(@as(usize, 11), diag.column);
-    try testing.expectEqualStrings("CF4110", diag.code);
+    try testing.expectEqualStrings(catalog.codegen.invalid_intrinsic_call.code, diag.code);
     try testing.expectEqualStrings(stmt_text, diag.line_text);
 }
 
@@ -869,7 +870,7 @@ test "codegen diagnostic reports concat expression site for unsupported characte
     const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expectEqual(@as(usize, 11), diag.column);
-    try testing.expectEqualStrings("CF4124", diag.code);
+    try testing.expectEqualStrings(catalog.codegen.unsupported_substring.code, diag.code);
     try testing.expectEqualStrings(stmt_text, diag.line_text);
 }
 
@@ -962,7 +963,7 @@ test "codegen diagnostic reports direct io unit site when REC is missing" {
     const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 13), diag.column);
-    try testing.expectEqualStrings("CF4133", diag.code);
+    try testing.expectEqualStrings(catalog.codegen.missing_record_number.code, diag.code);
     try testing.expectEqualStrings(write_text, diag.line_text);
 }
 
@@ -1065,7 +1066,7 @@ test "setCodegenDiagForUnit falls back to declaration source when unit has no st
     const diag = diag_bag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 4), diag.line);
     try testing.expectEqual(@as(usize, 7), diag.column);
-    try testing.expectEqualStrings("CF4102", diag.code);
+    try testing.expectEqualStrings(catalog.codegen.missing_semantic_unit.code, diag.code);
     try testing.expectEqualStrings("      INTEGER X", diag.line_text);
 }
 

@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const catalog = @import("../../common/error_catalog.zig");
 const fixed_form = @import("../../frontend/fixed_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const analyzer = @import("../analysis/mod.zig");
@@ -306,7 +307,7 @@ test "analyzeProgramWithKnownAndOptionsAndDiagnostics keeps semantic diagnostics
     );
 
     const diag = diag_bag.take() orelse return error.TestExpectedEqual;
-    try testing.expectEqualStrings("CF3103", diag.code);
+    try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag.code);
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expect(diagnostic.take() == null);
 }

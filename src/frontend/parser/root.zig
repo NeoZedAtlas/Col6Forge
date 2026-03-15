@@ -573,7 +573,7 @@ fn setParseDiagnosticForLine(
     column: usize,
     err: anyerror,
 ) void {
-    const info = parseErrorInfo(err);
+    const info = catalog.parserInfoFor(err);
     diag_bag.set(line_no, column, info.code, info.message, line.text);
 }
 
@@ -587,27 +587,6 @@ fn stampStmtSource(stmt_node: *ast.Stmt, line: logical_line.LogicalLine) void {
     if (stmt_node.source_text.len == 0) {
         stmt_node.source_text = line.text;
     }
-}
-
-fn parseErrorInfo(err: anyerror) catalog.ErrorInfo {
-    return switch (err) {
-        error.UnexpectedToken => catalog.parser.unexpected_token,
-        error.UnexpectedEOF => catalog.parser.unexpected_eof,
-        error.ExpectedProgramUnit => catalog.parser.expected_program_unit,
-        error.MissingName => catalog.parser.missing_name,
-        error.ExpectedPrecision => catalog.parser.expected_precision,
-        error.UnsupportedComplexKind => catalog.parser.unsupported_complex_kind,
-        error.UnknownType => catalog.parser.unknown_type,
-        error.ExpectedEndIf => catalog.parser.expected_end_if,
-        error.DeclarationInIfBlock => catalog.parser.declaration_in_if_block,
-        error.EndDoWithoutDo => catalog.parser.end_do_without_do,
-        error.ExpressionDepthExceeded => catalog.parser.expression_depth_exceeded,
-        error.UnsupportedModuleUnit => catalog.parser.unsupported_module_unit,
-        error.DataExpansionTooLarge => catalog.parser.data_expansion_too_large,
-        error.FormatExpansionTooLarge => catalog.parser.format_expansion_too_large,
-        error.InvalidEquivalenceGroup => catalog.parser.invalid_equivalence_group,
-        else => catalog.parser.failed_to_understand,
-    };
 }
 
 fn isStandaloneEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
@@ -1428,7 +1407,7 @@ test "parseProgram reports continued declaration parse errors on the real source
     const diag = parse_diag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 8), diag.column);
-    try testing.expectEqualStrings("CF2001", diag.code);
+    try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
 }
 
 test "parseProgram reports continued IF parse errors on the real source line" {
@@ -1451,7 +1430,7 @@ test "parseProgram reports continued IF parse errors on the real source line" {
     const diag = parse_diag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 8), diag.column);
-    try testing.expectEqualStrings("CF2001", diag.code);
+    try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
 }
 
 test "parseProgram reports free-form continued declaration parse errors on the real source line" {
@@ -1473,7 +1452,7 @@ test "parseProgram reports free-form continued declaration parse errors on the r
     const diag = parse_diag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 3), diag.column);
-    try testing.expectEqualStrings("CF2001", diag.code);
+    try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
 }
 
 test "parseProgramWithDiagnostics captures parse errors in explicit bag" {
@@ -1497,7 +1476,7 @@ test "parseProgramWithDiagnostics captures parse errors in explicit bag" {
     const diag = diag_bag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 3), diag.column);
-    try testing.expectEqualStrings("CF2001", diag.code);
+    try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
     try testing.expectEqualStrings("  )", diag.line_text);
     try testing.expect(parse_diag.take() == null);
 }

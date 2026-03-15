@@ -809,7 +809,7 @@ test "runPipeline reports parse diagnostics against the original continued sourc
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), diag_info.line);
     try testing.expectEqual(@as(usize, 8), diag_info.column);
-    try testing.expectEqualStrings("CF2001", diag_info.code);
+    try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
     try testing.expectEqualStrings("     1 )", diag_info.line_text);
 }
 
@@ -831,7 +831,7 @@ test "runPipeline reports semantic declaration diagnostics against the original 
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 2), diag_info.line);
     try testing.expectEqual(@as(usize, 7), diag_info.column);
-    try testing.expectEqualStrings("CF3103", diag_info.code);
+    try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag_info.code);
     try testing.expectEqualStrings("      CHARACTER*(*) A", diag_info.line_text);
 }
 
@@ -860,7 +860,7 @@ test "runPipeline compat diagnostic preserves long source lines without truncati
 
     try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
-    try testing.expectEqualStrings("CF2001", diag_info.code);
+    try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
     try testing.expectEqual(@as(usize, 2), diag_info.line);
     try testing.expectEqualStrings(long_line[0 .. long_line.len - 1], diag_info.line_text);
 }
@@ -884,7 +884,7 @@ test "runPipeline reports semantic expression diagnostics against the original s
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), diag_info.line);
     try testing.expectEqual(@as(usize, 7), diag_info.column);
-    try testing.expectEqualStrings("CF3119", diag_info.code);
+    try testing.expectEqualStrings(catalog.semantic.invalid_arithmetic_operands.code, diag_info.code);
     try testing.expectEqualStrings("      I='A'+1", diag_info.line_text);
 }
 
@@ -907,7 +907,7 @@ test "runPipeline reports free-form continued parse diagnostics against the orig
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 3), diag_info.line);
     try testing.expectEqual(@as(usize, 3), diag_info.column);
-    try testing.expectEqualStrings("CF2001", diag_info.code);
+    try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
     try testing.expectEqualStrings("  )", diag_info.line_text);
 }
 
@@ -936,7 +936,7 @@ test "runPipelineWithOptionsAndDiagnostics keeps diagnostics in explicit bag" {
     const diag_info = diag_bag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 2), diag_info.line);
     try testing.expectEqual(@as(usize, 7), diag_info.column);
-    try testing.expectEqualStrings("CF3103", diag_info.code);
+    try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag_info.code);
     try testing.expectEqualStrings("      CHARACTER*(*) A", diag_info.line_text);
     try testing.expect(takeLastDiagnostic() == null);
 }

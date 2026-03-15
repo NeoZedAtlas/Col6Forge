@@ -1,6 +1,13 @@
+const std = @import("std");
+
 pub const ErrorInfo = struct {
     code: []const u8,
     message: []const u8,
+};
+
+pub const DocEntry = struct {
+    info: ErrorInfo,
+    stage: []const u8,
 };
 
 pub const pipeline = struct {
@@ -73,7 +80,6 @@ pub const codegen = struct {
     pub const multiple_program_units = ErrorInfo{ .code = "CF4101", .message = "multiple PROGRAM units are not supported in one module" };
     pub const missing_semantic_unit = ErrorInfo{ .code = "CF4102", .message = "missing semantic unit for program unit during code generation" };
     pub const common_block_mismatch = ErrorInfo{ .code = "CF4103", .message = "COMMON block layout mismatch across units" };
-    pub const invalid_equivalence = ErrorInfo{ .code = "CF4103", .message = "COMMON/EQUIVALENCE storage model is inconsistent during code generation" };
     pub const missing_format_label = ErrorInfo{ .code = "CF4104", .message = "FORMAT statement or format reference is missing label" };
     pub const duplicate_format_label = ErrorInfo{ .code = "CF4105", .message = "duplicate FORMAT label in the same unit" };
     pub const missing_label = ErrorInfo{ .code = "CF4106", .message = "referenced statement label does not exist" };
@@ -93,9 +99,7 @@ pub const codegen = struct {
     pub const arrays_unsupported = ErrorInfo{ .code = "CF4120", .message = "array operation currently unsupported in this lowering path" };
     pub const assumed_size_dim_unsupported = ErrorInfo{ .code = "CF4121", .message = "assumed-size dimension unsupported in this context" };
     pub const invalid_array_dim = ErrorInfo{ .code = "CF4122", .message = "invalid or non-constant array dimension/size" };
-    pub const non_constant_character_length = ErrorInfo{ .code = "CF4122", .message = "non-constant CHARACTER length in storage-backed lowering path" };
     pub const unsupported_implied_do = ErrorInfo{ .code = "CF4123", .message = "unsupported implied DO expansion" };
-    pub const implied_do_expansion_too_large = ErrorInfo{ .code = "CF4123", .message = "implied DO expansion exceeds compilation limit" };
     pub const unsupported_substring = ErrorInfo{ .code = "CF4124", .message = "unsupported character substring/concatenation lowering" };
     pub const invalid_statement_function = ErrorInfo{ .code = "CF4125", .message = "invalid statement function definition or invocation" };
     pub const ambiguous_call_or_subscript = ErrorInfo{ .code = "CF4126", .message = "cannot disambiguate between function call and array subscript" };
@@ -106,5 +110,242 @@ pub const codegen = struct {
     pub const emit_limit_exceeded = ErrorInfo{ .code = "CF4131", .message = "IR emission limit exceeded" };
     pub const unexpected_token = ErrorInfo{ .code = "CF4132", .message = "unexpected statement kind reached in code generation" };
     pub const missing_record_number = ErrorInfo{ .code = "CF4133", .message = "direct-access I/O requires REC= record number" };
+    pub const invalid_equivalence = ErrorInfo{ .code = "CF4134", .message = "COMMON/EQUIVALENCE storage model is inconsistent during code generation" };
+    pub const non_constant_character_length = ErrorInfo{ .code = "CF4135", .message = "non-constant CHARACTER length in storage-backed lowering path" };
+    pub const implied_do_expansion_too_large = ErrorInfo{ .code = "CF4136", .message = "implied DO expansion exceeds compilation limit" };
     pub const generic = ErrorInfo{ .code = "CF4199", .message = "code generation failed" };
 };
+
+pub fn parserInfoFor(err: anyerror) ErrorInfo {
+    return switch (err) {
+        error.UnexpectedToken => parser.unexpected_token,
+        error.UnexpectedEOF => parser.unexpected_eof,
+        error.ExpectedProgramUnit => parser.expected_program_unit,
+        error.MissingName => parser.missing_name,
+        error.ExpectedPrecision => parser.expected_precision,
+        error.UnsupportedComplexKind => parser.unsupported_complex_kind,
+        error.UnknownType => parser.unknown_type,
+        error.ExpectedEndIf => parser.expected_end_if,
+        error.DeclarationInIfBlock => parser.declaration_in_if_block,
+        error.EndDoWithoutDo => parser.end_do_without_do,
+        error.ExpressionDepthExceeded => parser.expression_depth_exceeded,
+        error.UnsupportedModuleUnit => parser.unsupported_module_unit,
+        error.DataExpansionTooLarge => parser.data_expansion_too_large,
+        error.FormatExpansionTooLarge => parser.format_expansion_too_large,
+        error.InvalidEquivalenceGroup => parser.invalid_equivalence_group,
+        else => parser.failed_to_understand,
+    };
+}
+
+pub fn semanticInfoFor(err: anyerror) ErrorInfo {
+    return switch (err) {
+        error.MissingUnitScope => semantic.missing_unit_scope,
+        error.MissingScope => semantic.missing_scope,
+        error.InvalidCharLen => semantic.invalid_char_len,
+        error.PowerUnsupported => semantic.power_unsupported,
+        error.UnsupportedImpliedDo => semantic.unsupported_implied_do,
+        error.NumberTooLong => semantic.number_too_long,
+        error.UnexpectedTypeDecl => semantic.unexpected_type_decl,
+        error.AssignmentTypeMismatch => semantic.assignment_type_mismatch,
+        error.InvalidSubscript => semantic.invalid_subscript,
+        error.InvalidArgumentCount => semantic.invalid_argument_count,
+        error.ParameterNotConstant => semantic.parameter_not_constant,
+        error.ParameterTypeMismatch => semantic.parameter_type_mismatch,
+        error.InvalidEquivalence => semantic.invalid_equivalence,
+        error.EquivalenceCycle => semantic.equivalence_cycle,
+        error.CommonBlockMismatch => semantic.common_block_mismatch,
+        error.DuplicateDeclaration => semantic.duplicate_declaration,
+        error.DivisionByZero => semantic.division_by_zero,
+        error.NegativeIntegerExponent => semantic.negative_integer_exponent,
+        error.InvalidArithmeticOperands => semantic.invalid_arithmetic_operands,
+        error.InvalidEntryStatement => semantic.invalid_entry_statement,
+        error.InvalidFormatStatement => semantic.invalid_format_statement,
+        error.UnknownCommonBlock => semantic.unknown_common_block,
+        error.InvalidLogicalIfNesting => semantic.invalid_logical_if_nesting,
+        error.InvalidIoControlType => semantic.invalid_io_control_type,
+        error.InvalidIoControlValue => semantic.invalid_io_control_value,
+        error.InvalidImplicitRule => semantic.invalid_implicit_rule,
+        error.UnsupportedIntrinsicType => semantic.unsupported_intrinsic_type,
+        error.DataValueCountMismatch => semantic.data_value_count_mismatch,
+        error.DataExpansionTooLarge => semantic.data_expansion_too_large,
+        error.InvalidConditionType => semantic.invalid_condition_type,
+        else => semantic.generic,
+    };
+}
+
+pub fn codegenInfoFor(err: anyerror) ErrorInfo {
+    return switch (err) {
+        error.MultipleProgramUnits => codegen.multiple_program_units,
+        error.MissingSemanticUnit => codegen.missing_semantic_unit,
+        error.CommonBlockMismatch => codegen.common_block_mismatch,
+        error.InvalidEquivalence, error.EquivalenceCycle => codegen.invalid_equivalence,
+        error.FormatMissingLabel, error.MissingFormatLabel => codegen.missing_format_label,
+        error.DuplicateFormatLabel => codegen.duplicate_format_label,
+        error.MissingLabel => codegen.missing_label,
+        error.InvalidDoLabel => codegen.invalid_do_label,
+        error.UnknownSymbol => codegen.unknown_symbol,
+        error.UnsupportedIntrinsicType => codegen.unsupported_intrinsic_type,
+        error.InvalidIntrinsicCall => codegen.invalid_intrinsic_call,
+        error.UnsupportedCast => codegen.unsupported_cast,
+        error.UnsupportedLiteral => codegen.unsupported_literal,
+        error.UnsupportedLogicalOp => codegen.unsupported_logical_op,
+        error.PowerUnsupported => codegen.power_unsupported,
+        error.UnsupportedComplexType => codegen.unsupported_complex_type,
+        error.UnsupportedComplexComparison => codegen.unsupported_complex_comparison,
+        error.UnsupportedComplexOp => codegen.unsupported_complex_op,
+        error.InvalidAssignmentTarget => codegen.invalid_assignment_target,
+        error.InvalidSubscript => codegen.invalid_subscript,
+        error.ArraysUnsupported => codegen.arrays_unsupported,
+        error.AssumedSizeDimUnsupported => codegen.assumed_size_dim_unsupported,
+        error.ArrayDimNotConstant, error.InvalidArrayDim, error.ArraySizeOverflow => codegen.invalid_array_dim,
+        error.NonConstantCharacterLength => codegen.non_constant_character_length,
+        error.UnsupportedImpliedDo => codegen.unsupported_implied_do,
+        error.ImpliedDoExpansionTooLarge => codegen.implied_do_expansion_too_large,
+        error.UnsupportedSubstring, error.UnsupportedConcat => codegen.unsupported_substring,
+        error.InvalidStatementFunctionDefinition, error.InvalidStatementFunctionCall => codegen.invalid_statement_function,
+        error.AmbiguousCallOrSubscript => codegen.ambiguous_call_or_subscript,
+        error.UnsupportedProgramUnit => codegen.unsupported_program_unit,
+        error.InvalidAbiState => codegen.invalid_abi_state,
+        error.ControlFlowUnsupported, error.UnsupportedArithmeticIf => codegen.control_flow_unsupported,
+        error.UnknownIntrinsic => codegen.unknown_intrinsic,
+        error.EmitLimitExceeded => codegen.emit_limit_exceeded,
+        error.UnexpectedToken => codegen.unexpected_token,
+        error.MissingRecordNumber => codegen.missing_record_number,
+        else => codegen.generic,
+    };
+}
+
+pub const doc_entries = [_]DocEntry{
+    doc(pipeline.generic, "pipeline"),
+    doc(pipeline.input_not_found, "pipeline"),
+    doc(pipeline.normalize_failed, "pipeline"),
+    doc(lexer.unexpected_character, "lexer"),
+    doc(lexer.invalid_hollerith, "lexer"),
+    doc(lexer.hollerith_length_overflow, "lexer"),
+    doc(parser.generic, "parser"),
+    doc(parser.unexpected_token, "parser"),
+    doc(parser.unexpected_eof, "parser"),
+    doc(parser.expected_program_unit, "parser"),
+    doc(parser.missing_name, "parser"),
+    doc(parser.expected_precision, "parser"),
+    doc(parser.unsupported_complex_kind, "parser"),
+    doc(parser.unknown_type, "parser"),
+    doc(parser.expected_end_if, "parser"),
+    doc(parser.declaration_in_if_block, "parser"),
+    doc(parser.end_do_without_do, "parser"),
+    doc(parser.expression_depth_exceeded, "parser"),
+    doc(parser.unsupported_module_unit, "parser"),
+    doc(parser.data_expansion_too_large, "parser"),
+    doc(parser.format_expansion_too_large, "parser"),
+    doc(parser.invalid_equivalence_group, "parser"),
+    doc(parser.failed_to_understand, "parser"),
+    doc(semantic.missing_unit_scope, "semantic"),
+    doc(semantic.missing_scope, "semantic"),
+    doc(semantic.invalid_char_len, "semantic"),
+    doc(semantic.power_unsupported, "semantic"),
+    doc(semantic.unsupported_implied_do, "semantic"),
+    doc(semantic.number_too_long, "semantic"),
+    doc(semantic.unexpected_type_decl, "semantic"),
+    doc(semantic.assignment_type_mismatch, "semantic"),
+    doc(semantic.invalid_subscript, "semantic"),
+    doc(semantic.invalid_argument_count, "semantic"),
+    doc(semantic.parameter_not_constant, "semantic"),
+    doc(semantic.parameter_type_mismatch, "semantic"),
+    doc(semantic.invalid_equivalence, "semantic"),
+    doc(semantic.equivalence_cycle, "semantic"),
+    doc(semantic.common_block_mismatch, "semantic"),
+    doc(semantic.duplicate_declaration, "semantic"),
+    doc(semantic.division_by_zero, "semantic"),
+    doc(semantic.negative_integer_exponent, "semantic"),
+    doc(semantic.invalid_arithmetic_operands, "semantic"),
+    doc(semantic.invalid_entry_statement, "semantic"),
+    doc(semantic.invalid_format_statement, "semantic"),
+    doc(semantic.unknown_common_block, "semantic"),
+    doc(semantic.invalid_logical_if_nesting, "semantic"),
+    doc(semantic.invalid_io_control_type, "semantic"),
+    doc(semantic.invalid_io_control_value, "semantic"),
+    doc(semantic.invalid_implicit_rule, "semantic"),
+    doc(semantic.unsupported_intrinsic_type, "semantic"),
+    doc(semantic.data_value_count_mismatch, "semantic"),
+    doc(semantic.data_expansion_too_large, "semantic"),
+    doc(semantic.invalid_condition_type, "semantic"),
+    doc(semantic.generic, "semantic"),
+    doc(codegen.multiple_program_units, "codegen"),
+    doc(codegen.missing_semantic_unit, "codegen"),
+    doc(codegen.common_block_mismatch, "codegen"),
+    doc(codegen.missing_format_label, "codegen"),
+    doc(codegen.duplicate_format_label, "codegen"),
+    doc(codegen.missing_label, "codegen"),
+    doc(codegen.invalid_do_label, "codegen"),
+    doc(codegen.unknown_symbol, "codegen"),
+    doc(codegen.unsupported_intrinsic_type, "codegen"),
+    doc(codegen.invalid_intrinsic_call, "codegen"),
+    doc(codegen.unsupported_cast, "codegen"),
+    doc(codegen.unsupported_literal, "codegen"),
+    doc(codegen.unsupported_logical_op, "codegen"),
+    doc(codegen.power_unsupported, "codegen"),
+    doc(codegen.unsupported_complex_type, "codegen"),
+    doc(codegen.unsupported_complex_comparison, "codegen"),
+    doc(codegen.unsupported_complex_op, "codegen"),
+    doc(codegen.invalid_assignment_target, "codegen"),
+    doc(codegen.invalid_subscript, "codegen"),
+    doc(codegen.arrays_unsupported, "codegen"),
+    doc(codegen.assumed_size_dim_unsupported, "codegen"),
+    doc(codegen.invalid_array_dim, "codegen"),
+    doc(codegen.unsupported_implied_do, "codegen"),
+    doc(codegen.unsupported_substring, "codegen"),
+    doc(codegen.invalid_statement_function, "codegen"),
+    doc(codegen.ambiguous_call_or_subscript, "codegen"),
+    doc(codegen.unsupported_program_unit, "codegen"),
+    doc(codegen.invalid_abi_state, "codegen"),
+    doc(codegen.control_flow_unsupported, "codegen"),
+    doc(codegen.unknown_intrinsic, "codegen"),
+    doc(codegen.emit_limit_exceeded, "codegen"),
+    doc(codegen.unexpected_token, "codegen"),
+    doc(codegen.missing_record_number, "codegen"),
+    doc(codegen.invalid_equivalence, "codegen"),
+    doc(codegen.non_constant_character_length, "codegen"),
+    doc(codegen.implied_do_expansion_too_large, "codegen"),
+    doc(codegen.generic, "codegen"),
+};
+
+pub fn allDocs() []const DocEntry {
+    return &doc_entries;
+}
+
+fn doc(info: ErrorInfo, stage: []const u8) DocEntry {
+    return .{ .info = info, .stage = stage };
+}
+
+fn isDigit(byte: u8) bool {
+    return byte >= '0' and byte <= '9';
+}
+
+fn verifyDocEntries() void {
+    inline for (doc_entries, 0..) |entry, idx| {
+        if (entry.stage.len == 0) {
+            @compileError("empty stage in error catalog for " ++ entry.info.code);
+        }
+        if (entry.info.message.len == 0) {
+            @compileError("empty message in error catalog for " ++ entry.info.code);
+        }
+        if (entry.info.code.len != 6 or entry.info.code[0] != 'C' or entry.info.code[1] != 'F' or
+            !isDigit(entry.info.code[2]) or !isDigit(entry.info.code[3]) or !isDigit(entry.info.code[4]) or !isDigit(entry.info.code[5]))
+        {
+            @compileError("invalid error code format in error catalog: " ++ entry.info.code);
+        }
+        if (idx > 0 and std.mem.order(u8, doc_entries[idx - 1].info.code, entry.info.code) != .lt) {
+            @compileError("error catalog entries must be sorted by ascending code: " ++ doc_entries[idx - 1].info.code ++ " then " ++ entry.info.code);
+        }
+        inline for (doc_entries[idx + 1 ..]) |other| {
+            if (std.mem.eql(u8, entry.info.code, other.info.code)) {
+                @compileError("duplicate error code in error catalog: " ++ entry.info.code);
+            }
+        }
+    }
+}
+
+comptime {
+    @setEvalBranchQuota(100000);
+    verifyDocEntries();
+}

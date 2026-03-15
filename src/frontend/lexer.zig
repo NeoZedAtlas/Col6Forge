@@ -516,7 +516,7 @@ test "lexLogicalLine rejects overflowing Hollerith length" {
     const diag_opt = takeDiagnostic();
     try testing.expect(diag_opt != null);
     const diag = diag_opt.?;
-    try testing.expectEqualStrings("CF1003", diag.code);
+    try testing.expectEqualStrings(catalog.lexer.hollerith_length_overflow.code, diag.code);
 }
 
 test "lexLogicalLine keeps kind suffix as part of numeric literal" {

@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const catalog = @import("../../../common/error_catalog.zig");
 const fixed_form = @import("../../fixed_form.zig");
 const lexer = @import("../../lexer.zig");
 const array_info = @import("../array_info.zig");
@@ -97,7 +98,7 @@ test "parseStatementWithDiagnostics captures lexer errors in explicit bag" {
     );
 
     const diag = diag_bag.take() orelse return error.TestExpectedEqual;
-    try testing.expectEqualStrings("CF1001", diag.code);
+    try testing.expectEqualStrings(catalog.lexer.unexpected_character.code, diag.code);
     try testing.expectEqual(@as(usize, 1), diag.line);
     try testing.expect(parse_diag.take() == null);
 }

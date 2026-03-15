@@ -1,541 +1,465 @@
 # Col6Forge Error Codes
 
-This document lists compiler diagnostics identified by `CFxxxx`.
+This file is generated from `src/common/error_catalog.zig`.
+Edit the source catalog instead of editing this document directly.
 
-## Usage
-
-When the compiler reports:
+Each diagnostic is identified by a stable `CFxxxx` code:
 
 ```text
-...: error[CF2001]: ...
+...: error[CFxxxx]: ...
 ```
-
-look up `CF2001` in this file.
-
 ## CF0000
 
-- Stage: pipeline (generic fallback)
-- Meaning: unclassified pipeline failure.
-- Typical fix: check the detailed error text and rerun with a minimized input.
+- Stage: pipeline
+- Default message: unclassified pipeline failure
 
 ## CF0001
 
-- Stage: input loading
-- Meaning: input source file was not found.
-- Typical fix: verify the input path and current working directory.
+- Stage: pipeline
+- Default message: input file not found
 
 ## CF0002
 
-- Stage: source normalization
-- Meaning: source form preprocessing failed (fixed/free form normalization).
-- Typical fix: check file encoding/content for malformed lines and retry.
+- Stage: pipeline
+- Default message: failed to normalize source form
 
 ## CF1001
 
 - Stage: lexer
-- Meaning: unexpected character in source line.
-- Typical fix: remove or replace non-Fortran token/character at the reported column.
+- Default message: unexpected character
 
 ## CF1002
 
 - Stage: lexer
-- Meaning: invalid Hollerith literal (declared length exceeds remaining characters).
-- Typical fix: correct Hollerith length prefix or literal content length.
+- Default message: invalid Hollerith literal
 
 ## CF1003
 
 - Stage: lexer
-- Meaning: Hollerith length prefix overflows internal integer range.
-- Typical fix: use a realistic Hollerith length and avoid extremely large length prefixes.
+- Default message: Hollerith length overflow
 
 ## CF2000
 
-- Stage: parser (generic fallback)
-- Meaning: parser failed but no precise parser subcode was attached.
-- Typical fix: inspect the reported line and reduce the statement to a valid F77 form.
+- Stage: parser
+- Default message: failed to parse source
 
 ## CF2001
 
 - Stage: parser
-- Meaning: unexpected token in current statement.
-- Typical fix: check punctuation/keyword order (parentheses, commas, `=` etc.).
+- Default message: unexpected token in statement
 
 ## CF2002
 
 - Stage: parser
-- Meaning: unexpected end of file.
-- Typical fix: add missing `END`, `ENDIF`, `END DO`, closing parenthesis, or trailing statement pieces.
+- Default message: unexpected end of file
 
 ## CF2003
 
 - Stage: parser
-- Meaning: expected program unit header (`PROGRAM`/`SUBROUTINE`/`FUNCTION`/`BLOCK DATA`).
-- Typical fix: ensure each unit starts with a valid header line.
+- Default message: expected PROGRAM/SUBROUTINE/FUNCTION/BLOCK DATA
 
 ## CF2004
 
 - Stage: parser
-- Meaning: required identifier name is missing.
-- Typical fix: add the missing variable/procedure/block name.
+- Default message: missing required identifier
 
 ## CF2005
 
 - Stage: parser
-- Meaning: `DOUBLE` must be followed by `PRECISION`.
-- Typical fix: use `DOUBLE PRECISION` exactly.
+- Default message: expected PRECISION after DOUBLE
 
 ## CF2006
 
 - Stage: parser
-- Meaning: unsupported `COMPLEX*kind`.
-- Typical fix: use supported kinds (`COMPLEX*8` or `COMPLEX*16`).
+- Default message: unsupported COMPLEX kind; use COMPLEX*8 or COMPLEX*16
 
 ## CF2007
 
 - Stage: parser
-- Meaning: unknown type specifier.
-- Typical fix: use supported F77 type keywords (`INTEGER`, `REAL`, `LOGICAL`, `CHARACTER`, `COMPLEX`, `DOUBLE PRECISION`).
+- Default message: unknown type in declaration
 
 ## CF2008
 
 - Stage: parser
-- Meaning: IF block is missing `END IF` / `ENDIF`.
-- Typical fix: close each block IF explicitly.
+- Default message: IF block is missing END IF/ENDIF
 
 ## CF2009
 
 - Stage: parser
-- Meaning: declaration appeared inside executable IF block.
-- Typical fix: move declaration to declaration section before executable statements.
+- Default message: declaration is not allowed inside IF executable block
 
 ## CF2010
 
 - Stage: parser
-- Meaning: `END DO`/`ENDDO` without matching `DO`.
-- Typical fix: ensure loop delimiters are balanced.
+- Default message: END DO/ENDDO found without matching DO
 
 ## CF2011
 
 - Stage: parser
-- Meaning: expression nesting exceeds parser recursion limit.
-- Typical fix: simplify deeply nested expressions or split into intermediate assignments.
+- Default message: expression nesting exceeds parser limit
 
 ## CF2012
 
 - Stage: parser
-- Meaning: `MODULE ... END MODULE` program units are not supported yet.
-- Typical fix: use supported F77-style top-level units (`PROGRAM`/`SUBROUTINE`/`FUNCTION`/`BLOCK DATA`) or wait for module support.
+- Default message: MODULE program units are not supported yet
 
 ## CF2013
 
 - Stage: parser
-- Meaning: `DATA` statement expansion exceeds parser safety limit.
-- Typical fix: reduce `DATA` repetition/expansion size or split initialization across multiple statements.
+- Default message: DATA statement expansion exceeds parser safety limit
 
 ## CF2014
 
 - Stage: parser
-- Meaning: `FORMAT` statement expansion exceeds parser safety limit.
-- Typical fix: simplify the `FORMAT` expression or split large repeated groups.
+- Default message: FORMAT statement expansion exceeds parser safety limit
 
 ## CF2015
 
 - Stage: parser
-- Meaning: `EQUIVALENCE` group must contain at least two designators.
-- Typical fix: ensure each `EQUIVALENCE` group lists two or more storage designators.
+- Default message: EQUIVALENCE group must contain at least two designators
 
 ## CF2099
 
-- Stage: parser (catch-all)
-- Meaning: parser failed on unsupported or malformed construct.
-- Typical fix: simplify statement or check unsupported syntax against project scope.
+- Stage: parser
+- Default message: parser failed to understand source
 
 ## CF3101
 
-- Stage: semantic analysis
-- Meaning: semantic pass cannot enter the program unit scope.
-- Typical fix: report as compiler bug with minimal reproducer.
+- Stage: semantic
+- Default message: semantic analysis missing unit scope
 
 ## CF3102
 
-- Stage: semantic analysis
-- Meaning: semantic pass lost active scope state.
-- Typical fix: report as compiler bug with minimal reproducer.
+- Stage: semantic
+- Default message: semantic analysis missing active scope
 
 ## CF3103
 
-- Stage: semantic analysis
-- Meaning: invalid `CHARACTER` length expression.
-- Typical fix: use positive constant or supported parameter expression for character length.
+- Stage: semantic
+- Default message: invalid CHARACTER length specification
 
 ## CF3104
 
-- Stage: semantic analysis
-- Meaning: unsupported `**` operand combination during semantic processing.
-- Typical fix: simplify POWER operands to supported numeric types.
+- Stage: semantic
+- Default message: unsupported POWER expression in semantic fold
 
 ## CF3105
 
-- Stage: semantic analysis
-- Meaning: implied DO construct unsupported in this semantic path.
-- Typical fix: rewrite construct or use simpler equivalent form.
+- Stage: semantic
+- Default message: unsupported implied DO in semantic analysis
 
 ## CF3106
 
-- Stage: semantic analysis
-- Meaning: numeric literal too long for compile-time evaluator.
-- Typical fix: reduce literal magnitude/length or avoid const-eval path.
+- Stage: semantic
+- Default message: numeric literal too long for semantic evaluator
 
 ## CF3107
 
-- Stage: semantic analysis
-- Meaning: unexpected type declaration reached specification-declaration resolver path.
-- Typical fix: report as compiler bug with minimal reproducer.
+- Stage: semantic
+- Default message: unexpected type declaration in specification resolver
 
 ## CF3108
 
-- Stage: semantic analysis
-- Meaning: assignment target/value types are incompatible.
-- Typical fix: cast/convert value or adjust declaration types so assignment is valid.
+- Stage: semantic
+- Default message: assignment type mismatch
 
 ## CF3109
 
-- Stage: semantic analysis
-- Meaning: invalid array subscript count or non-integer subscript expression.
-- Typical fix: match declared array rank and use integer index expressions.
+- Stage: semantic
+- Default message: invalid array subscript count or type
 
 ## CF3110
 
-- Stage: semantic analysis
-- Meaning: procedure/intrinsic argument count does not match declaration/expected arity.
-- Typical fix: pass the required number of arguments.
+- Stage: semantic
+- Default message: procedure call argument count mismatch
 
 ## CF3111
 
-- Stage: semantic analysis
-- Meaning: `PARAMETER` initializer is not a constant expression.
-- Typical fix: use literals/constant expressions or previously defined parameters only.
+- Stage: semantic
+- Default message: PARAMETER value is not a constant expression
 
 ## CF3112
 
-- Stage: semantic analysis
-- Meaning: `PARAMETER` initializer type is incompatible with declared type.
-- Typical fix: make the declared type and initializer type consistent.
+- Stage: semantic
+- Default message: PARAMETER value type is incompatible with declaration
 
 ## CF3113
 
-- Stage: semantic analysis
-- Meaning: invalid `EQUIVALENCE` designator or incompatible equivalent types.
-- Typical fix: only equivalence valid storage designators with compatible types.
+- Stage: semantic
+- Default message: invalid EQUIVALENCE designator or incompatible types
 
 ## CF3114
 
-- Stage: semantic analysis
-- Meaning: cyclic/redundant `EQUIVALENCE` relationship detected.
-- Typical fix: remove cyclic/redundant equivalence pairs.
+- Stage: semantic
+- Default message: cyclic/redundant EQUIVALENCE relationship detected
 
 ## CF3115
 
-- Stage: semantic analysis
-- Meaning: `COMMON` block layout/type sequence mismatches across program units.
-- Typical fix: keep `COMMON` block item types/order/sizes consistent in all units.
+- Stage: semantic
+- Default message: COMMON block layout mismatch across program units
 
 ## CF3116
 
-- Stage: semantic analysis
-- Meaning: symbol is declared more than once in the same scope.
-- Typical fix: keep only one explicit declaration for each symbol.
+- Stage: semantic
+- Default message: duplicate declaration for the same symbol
 
 ## CF3117
 
-- Stage: semantic analysis
-- Meaning: constant expression performs division by zero.
-- Typical fix: rewrite constant expression to avoid zero divisor.
+- Stage: semantic
+- Default message: division by zero in constant expression
 
 ## CF3118
 
-- Stage: semantic analysis
-- Meaning: integer power uses a negative exponent in constant evaluation.
-- Typical fix: use non-negative integer exponent or convert expression to real arithmetic.
+- Stage: semantic
+- Default message: negative integer exponent in constant expression
 
 ## CF3119
 
-- Stage: semantic analysis
-- Meaning: arithmetic expression uses non-numeric operands.
-- Typical fix: ensure `+ - * / **` operands are numeric types.
+- Stage: semantic
+- Default message: invalid operand type for expression operator
 
 ## CF3120
 
-- Stage: semantic analysis
-- Meaning: invalid `ENTRY` statement placement or duplicated argument names.
-- Typical fix: place `ENTRY` only in `FUNCTION`/`SUBROUTINE` and use unique argument names.
+- Stage: semantic
+- Default message: invalid ENTRY statement placement or arguments
 
 ## CF3121
 
-- Stage: semantic analysis
-- Meaning: `FORMAT` statement appears without a statement label.
-- Typical fix: attach a numeric label to each `FORMAT` statement.
+- Stage: semantic
+- Default message: FORMAT statement requires a statement label
 
 ## CF3122
 
-- Stage: semantic analysis
-- Meaning: `SAVE` references a `COMMON` block name not declared in the unit.
-- Typical fix: declare the `COMMON` block before using `SAVE /name/`.
+- Stage: semantic
+- Default message: SAVE references unknown COMMON block
 
 ## CF3123
 
-- Stage: semantic analysis
-- Meaning: logical IF statement nests another IF statement.
-- Typical fix: rewrite as block IF/ENDIF form.
+- Stage: semantic
+- Default message: LOGICAL IF statement cannot contain nested IF
 
 ## CF3124
 
-- Stage: semantic analysis
-- Meaning: `OPEN`/`CLOSE` control specifier requires a CHARACTER expression.
-- Typical fix: pass a CHARACTER variable or string literal for control keywords.
+- Stage: semantic
+- Default message: I/O control specifier requires CHARACTER expression
 
 ## CF3125
 
-- Stage: semantic analysis
-- Meaning: literal value for an I/O control specifier is not recognized.
-- Typical fix: use a standard keyword such as `DIRECT`/`SEQUENTIAL`, `FORMATTED`/`UNFORMATTED`, `NULL`/`ZERO`, `KEEP`/`DELETE`.
+- Stage: semantic
+- Default message: invalid literal value for I/O control specifier
 
 ## CF3126
 
-- Stage: semantic analysis
-- Meaning: overlapping `IMPLICIT` letter ranges were declared in the same scope.
-- Typical fix: make each `IMPLICIT` letter range disjoint or consolidate the declarations.
+- Stage: semantic
+- Default message: overlapping IMPLICIT letter ranges in the same scope
 
 ## CF3127
 
-- Stage: semantic analysis
-- Meaning: unsupported intrinsic argument type or array conversion shape reached semantic lowering.
-- Typical fix: rewrite the intrinsic call using supported scalar argument types or simpler array shapes.
+- Stage: semantic
+- Default message: unsupported intrinsic argument or array conversion shape in semantic lowering
 
 ## CF3128
 
-- Stage: semantic analysis
-- Meaning: `DATA` statement target/value counts do not match.
-- Typical fix: ensure the expanded `DATA` value list matches the number of initialized targets.
+- Stage: semantic
+- Default message: DATA statement target/value count mismatch
 
 ## CF3129
 
-- Stage: semantic analysis
-- Meaning: `DATA` statement expansion exceeds semantic safety limit.
-- Typical fix: reduce `DATA` repetition/expansion size or split initialization into smaller statements.
+- Stage: semantic
+- Default message: DATA statement expansion exceeds semantic safety limit
 
 ## CF3130
 
-- Stage: semantic analysis
-- Meaning: `IF`/`DO WHILE` condition is not a `LOGICAL` expression.
-- Typical fix: supply a `LOGICAL` condition instead of `INTEGER`, `REAL`, or other non-logical expressions.
+- Stage: semantic
+- Default message: IF/DO WHILE condition must be LOGICAL expression
 
 ## CF3199
 
-- Stage: semantic analysis (catch-all)
-- Meaning: semantic phase failed.
-- Typical fix: inspect the failing statement and reduce to a minimal reproducer.
+- Stage: semantic
+- Default message: semantic analysis failed
 
 ## CF4101
 
-- Stage: code generation
-- Meaning: multiple `PROGRAM` units in one emitted module.
-- Typical fix: compile units separately or keep a single main `PROGRAM`.
+- Stage: codegen
+- Default message: multiple PROGRAM units are not supported in one module
 
 ## CF4102
 
-- Stage: code generation
-- Meaning: semantic unit missing while lowering a program unit.
-- Typical fix: report as compiler bug with reproducer.
+- Stage: codegen
+- Default message: missing semantic unit for program unit during code generation
 
 ## CF4103
 
-- Stage: code generation
-- Meaning: incompatible `COMMON` layout detected between units.
-- Typical fix: make `COMMON` declarations consistent across all units.
+- Stage: codegen
+- Default message: COMMON block layout mismatch across units
 
 ## CF4104
 
-- Stage: code generation
-- Meaning: format label missing for `FORMAT`/formatted I/O use.
-- Typical fix: add valid numeric label and ensure reference matches.
+- Stage: codegen
+- Default message: FORMAT statement or format reference is missing label
 
 ## CF4105
 
-- Stage: code generation
-- Meaning: duplicate `FORMAT` label in same unit.
-- Typical fix: make labels unique.
+- Stage: codegen
+- Default message: duplicate FORMAT label in the same unit
 
 ## CF4106
 
-- Stage: code generation
-- Meaning: missing target statement label.
-- Typical fix: ensure every referenced label exists.
+- Stage: codegen
+- Default message: referenced statement label does not exist
 
 ## CF4107
 
-- Stage: code generation
-- Meaning: invalid DO end-label structure.
-- Typical fix: fix loop end labels and nesting order.
+- Stage: codegen
+- Default message: invalid DO end label structure
 
 ## CF4108
 
-- Stage: code generation
-- Meaning: symbol not found while lowering statement/expression.
-- Typical fix: verify declaration/implicit typing and symbol spelling.
+- Stage: codegen
+- Default message: symbol not found during code generation
 
 ## CF4109
 
-- Stage: code generation
-- Meaning: unsupported intrinsic argument/return type.
-- Typical fix: adjust intrinsic arguments to supported scalar types.
+- Stage: codegen
+- Default message: unsupported intrinsic argument or return type
 
 ## CF4110
 
-- Stage: code generation
-- Meaning: invalid intrinsic call shape (arity/signature).
-- Typical fix: call intrinsic with correct argument count/types.
+- Stage: codegen
+- Default message: invalid intrinsic call arity or shape
 
 ## CF4111
 
-- Stage: code generation
-- Meaning: unsupported cast/conversion.
-- Typical fix: insert explicit supported conversion sequence.
+- Stage: codegen
+- Default message: unsupported type conversion in code generation
 
 ## CF4112
 
-- Stage: code generation
-- Meaning: literal form unsupported by current lowering path.
-- Typical fix: simplify literal form.
+- Stage: codegen
+- Default message: unsupported literal in code generation
 
 ## CF4113
 
-- Stage: code generation
-- Meaning: unsupported logical operation for operand types.
-- Typical fix: use logical operands/types expected by operation.
+- Stage: codegen
+- Default message: unsupported logical operation for current types
 
 ## CF4114
 
-- Stage: code generation
-- Meaning: unsupported POWER lowering.
-- Typical fix: simplify exponentiation expression.
+- Stage: codegen
+- Default message: unsupported POWER lowering in code generation
 
 ## CF4115
 
-- Stage: code generation
-- Meaning: unsupported `COMPLEX` type usage.
-- Typical fix: reduce expression to supported complex operations.
+- Stage: codegen
+- Default message: unsupported COMPLEX type operation
 
 ## CF4116
 
-- Stage: code generation
-- Meaning: unsupported `COMPLEX` comparison.
-- Typical fix: compare supported components explicitly.
+- Stage: codegen
+- Default message: unsupported COMPLEX comparison operator
 
 ## CF4117
 
-- Stage: code generation
-- Meaning: unsupported `COMPLEX` arithmetic operation.
-- Typical fix: rewrite expression using supported forms.
+- Stage: codegen
+- Default message: unsupported COMPLEX arithmetic operation
 
 ## CF4118
 
-- Stage: code generation
-- Meaning: invalid assignment target.
-- Typical fix: ensure left side is a valid lvalue variable/subscript.
+- Stage: codegen
+- Default message: invalid assignment target for lvalue emission
 
 ## CF4119
 
-- Stage: code generation
-- Meaning: invalid subscript usage.
-- Typical fix: provide correct subscript count/index expressions.
+- Stage: codegen
+- Default message: invalid array subscript shape or index count
 
 ## CF4120
 
-- Stage: code generation
-- Meaning: array operation unsupported in this lowering path.
-- Typical fix: simplify or avoid unsupported array form.
+- Stage: codegen
+- Default message: array operation currently unsupported in this lowering path
 
 ## CF4121
 
-- Stage: code generation
-- Meaning: assumed-size dimension unsupported here.
-- Typical fix: use explicit constant bounds where required.
+- Stage: codegen
+- Default message: assumed-size dimension unsupported in this context
 
 ## CF4122
 
-- Stage: code generation
-- Meaning: invalid/non-constant array dimension or overflowed array size.
-- Typical fix: use valid constant positive bounds with safe size.
+- Stage: codegen
+- Default message: invalid or non-constant array dimension/size
 
 ## CF4123
 
-- Stage: code generation
-- Meaning: implied DO expansion unsupported.
-- Typical fix: unroll or rewrite as explicit loops/statements.
+- Stage: codegen
+- Default message: unsupported implied DO expansion
 
 ## CF4124
 
-- Stage: code generation
-- Meaning: unsupported character substring/concatenation path.
-- Typical fix: simplify character expression form.
+- Stage: codegen
+- Default message: unsupported character substring/concatenation lowering
 
 ## CF4125
 
-- Stage: code generation
-- Meaning: invalid statement function definition/call.
-- Typical fix: match argument list and valid statement function form.
+- Stage: codegen
+- Default message: invalid statement function definition or invocation
 
 ## CF4126
 
-- Stage: code generation
-- Meaning: ambiguous call vs subscript usage.
-- Typical fix: disambiguate symbol declaration (array vs function).
+- Stage: codegen
+- Default message: cannot disambiguate between function call and array subscript
 
 ## CF4127
 
-- Stage: code generation
-- Meaning: unsupported program unit kind.
-- Typical fix: restrict to supported unit forms in current compiler scope.
+- Stage: codegen
+- Default message: unsupported program unit kind for LLVM emission
 
 ## CF4128
 
-- Stage: code generation
-- Meaning: invalid ABI lowering state.
-- Typical fix: report as compiler bug with minimal reproducer.
+- Stage: codegen
+- Default message: invalid ABI state while lowering function call
 
 ## CF4129
 
-- Stage: code generation
-- Meaning: unsupported control-flow lowering pattern.
-- Typical fix: simplify control flow (labels/IF/GOTO form).
+- Stage: codegen
+- Default message: unsupported control-flow form in lowering
 
 ## CF4130
 
-- Stage: code generation
-- Meaning: unknown intrinsic for lowering.
-- Typical fix: avoid unsupported intrinsic or add fallback implementation.
+- Stage: codegen
+- Default message: unknown intrinsic name for code generation
 
 ## CF4131
 
-- Stage: code generation
-- Meaning: internal IR emission limit exceeded.
-- Typical fix: split source or report as compiler bug.
+- Stage: codegen
+- Default message: IR emission limit exceeded
 
 ## CF4132
 
-- Stage: code generation
-- Meaning: unexpected statement kind reached in lowering path.
-- Typical fix: report as compiler bug with reproducer.
+- Stage: codegen
+- Default message: unexpected statement kind reached in code generation
 
 ## CF4133
 
-- Stage: code generation
-- Meaning: direct-access I/O missing `REC=` record number.
-- Typical fix: add `REC=...` control specifier.
+- Stage: codegen
+- Default message: direct-access I/O requires REC= record number
+
+## CF4134
+
+- Stage: codegen
+- Default message: COMMON/EQUIVALENCE storage model is inconsistent during code generation
+
+## CF4135
+
+- Stage: codegen
+- Default message: non-constant CHARACTER length in storage-backed lowering path
+
+## CF4136
+
+- Stage: codegen
+- Default message: implied DO expansion exceeds compilation limit
 
 ## CF4199
 
-- Stage: code generation (catch-all)
-- Meaning: generic code generation failure.
-- Typical fix: inspect statement and reduce to minimal reproducer.
+- Stage: codegen
+- Default message: code generation failed
+

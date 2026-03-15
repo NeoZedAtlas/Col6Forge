@@ -1,4 +1,5 @@
 const std = @import("std");
+const Col6Forge = @import("Col6Forge");
 
 const Rule = struct {
     name: []const u8,
@@ -45,6 +46,7 @@ pub fn main() !void {
 
     var failures: usize = 0;
     try scanTree(allocator, "src", &failures);
+    verifyErrorCatalog(&failures);
     if (failures > 0) {
         std.log.err("architecture audit failed: {d} issue(s)", .{failures});
         return error.ArchitectureAuditFailed;
@@ -79,6 +81,7 @@ fn scanTree(allocator: std.mem.Allocator, root: []const u8, failures: *usize) !v
 
 fn isAllowedCompatFile(rel_path: []const u8) bool {
     return std.mem.eql(u8, rel_path, "src/semantic/symbol/entity.zig") or
+        std.mem.eql(u8, rel_path, "src/tools/error_catalog_docgen.zig") or
         std.mem.eql(u8, rel_path, "src/tools/architecture_audit.zig");
 }
 
@@ -105,6 +108,53 @@ fn scanFile(rel_path: []const u8, text: []const u8, failures: *usize) !void {
             failures.* += 1;
         }
     }
+
+    scanBareErrorCodeLiterals(rel_path, text, failures);
+}
+
+fn scanBareErrorCodeLiterals(rel_path: []const u8, text: []const u8, failures: *usize) void {
+    if (shouldSkipBareErrorCodeAudit(rel_path)) return;
+
+    var idx: usize = 0;
+    while (idx + 7 < text.len) : (idx += 1) {
+        if (text[idx] != '"') continue;
+        if (text[idx + 1] != 'C' or text[idx + 2] != 'F') continue;
+        if (!std.ascii.isDigit(text[idx + 3]) or !std.ascii.isDigit(text[idx + 4]) or !std.ascii.isDigit(text[idx + 5]) or !std.ascii.isDigit(text[idx + 6])) continue;
+        if (text[idx + 7] != '"') continue;
+
+        reportViolation(rel_path, text, idx, "bare error code literal", text[idx + 1 .. idx + 7]);
+        failures.* += 1;
+    }
+}
+
+fn shouldSkipBareErrorCodeAudit(rel_path: []const u8) bool {
+    return std.mem.eql(u8, rel_path, "src/common/error_catalog.zig") or
+        std.mem.indexOf(u8, rel_path, "/tests/") != null or
+        isAllowedCompatFile(rel_path);
+}
+
+fn verifyErrorCatalog(failures: *usize) void {
+    const docs = Col6Forge.error_catalog.allDocs();
+
+    for (docs, 0..) |entry, idx| {
+        if (entry.stage.len == 0 or entry.info.code.len == 0 or entry.info.message.len == 0) {
+            std.log.err("error catalog entry {d} is incomplete", .{idx});
+            failures.* += 1;
+        }
+        if (idx > 0 and std.mem.order(u8, docs[idx - 1].info.code, entry.info.code) != .lt) {
+            std.log.err(
+                "error catalog ordering regression: {s} then {s}",
+                .{ docs[idx - 1].info.code, entry.info.code },
+            );
+            failures.* += 1;
+        }
+        for (docs[idx + 1 ..]) |other| {
+            if (std.mem.eql(u8, entry.info.code, other.info.code)) {
+                std.log.err("duplicate error code in catalog: {s}", .{entry.info.code});
+                failures.* += 1;
+            }
+        }
+    }
 }
 
 fn reportViolation(rel_path: []const u8, text: []const u8, idx: usize, name: []const u8, needle: []const u8) void {
@@ -114,5 +164,6 @@ fn reportViolation(rel_path: []const u8, text: []const u8, idx: usize, name: []c
 
 test "allowed compat file is exempt" {
     try std.testing.expect(isAllowedCompatFile("src/semantic/symbol/entity.zig"));
+    try std.testing.expect(isAllowedCompatFile("src/tools/error_catalog_docgen.zig"));
     try std.testing.expect(!isAllowedCompatFile("src/semantic/analysis/resolve_symbols.zig"));
 }
