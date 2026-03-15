@@ -1,7 +1,6 @@
 const std = @import("std");
 const ast = @import("../../input.zig");
 const context = @import("../codegen/context.zig");
-const codegen_diag = @import("../../diagnostic.zig");
 const cfg = @import("cfg.zig");
 const control = @import("../codegen/control_flow/mod.zig");
 const execution = @import("execution.zig");
@@ -109,9 +108,9 @@ pub fn emitStmt(
 
     return emitStmtInner(ctx, builder, stmt, next_block, local_label_map) catch |err| {
         if (ctx.current_source) |source| {
-            codegen_diag.setFromSource(source, err);
+            ctx.setDiagnosticFromSource(source, err);
         } else {
-            codegen_diag.setFromStmt(stmt, err);
+            ctx.setDiagnosticFromStmt(stmt, err);
         }
         return err;
     };

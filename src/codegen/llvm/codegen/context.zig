@@ -160,6 +160,7 @@ pub const Context = struct {
     options: CodegenOptions,
     current_source: ?ast.SourceRef,
     current_stmt: ?input.Stmt,
+    diag_bag: ?*diag.Bag,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -174,6 +175,38 @@ pub const Context = struct {
         intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
         known_procedure_sigs: *const CaseInsensitiveStringHashMap(input.sema.KnownProcedureSig),
         options: CodegenOptions,
+    ) !Context {
+        return initWithDiagnostics(
+            allocator,
+            source_name,
+            unit,
+            sem,
+            decls,
+            defined,
+            formats,
+            inline_formats,
+            string_pool,
+            intrinsic_wrappers,
+            known_procedure_sigs,
+            options,
+            null,
+        );
+    }
+
+    pub fn initWithDiagnostics(
+        allocator: std.mem.Allocator,
+        source_name: []const u8,
+        unit: ProgramUnit,
+        sem: *const input.SemanticUnit,
+        decls: *std.StringHashMap(IRDecl),
+        defined: *std.StringHashMap(void),
+        formats: *const std.StringHashMap(FormatInfo),
+        inline_formats: *const std.AutoHashMap(usize, FormatInfo),
+        string_pool: *StringPool,
+        intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
+        known_procedure_sigs: *const CaseInsensitiveStringHashMap(input.sema.KnownProcedureSig),
+        options: CodegenOptions,
+        diag_bag: ?*diag.Bag,
     ) !Context {
         var ctx = Context{
             .allocator = allocator,
@@ -214,6 +247,7 @@ pub const Context = struct {
             .options = options,
             .current_source = null,
             .current_stmt = null,
+            .diag_bag = diag_bag,
         };
         errdefer ctx.assigned_goto_slots.deinit();
         errdefer ctx.mangled_name_cache.deinit();
@@ -233,6 +267,51 @@ pub const Context = struct {
             try ctx.expr_source_index.put(@intFromPtr(expr_source.expr), expr_source.source);
         }
         return ctx;
+    }
+
+    pub fn hasDiagnostic(self: *const Context) bool {
+        if (self.diag_bag) |bag| return bag.has();
+        return diag.has();
+    }
+
+    pub fn setDiagnostic(self: *Context, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
+        if (self.diag_bag) |bag| {
+            bag.set(line, column, code, message, line_text);
+            return;
+        }
+        diag.set(line, column, code, message, line_text);
+    }
+
+    pub fn noteFallback(self: *Context, line: usize, column: usize, line_text: []const u8) void {
+        if (self.diag_bag) |bag| {
+            bag.noteFallbackSource(line, column, line_text);
+            return;
+        }
+        diag.noteFallbackSource(line, column, line_text);
+    }
+
+    pub fn fallbackSource(self: *const Context) ?diag.FallbackSource {
+        if (self.diag_bag) |bag| return bag.fallbackSource();
+        return diag.fallbackSource();
+    }
+
+    pub fn setDiagnosticFromStmt(self: *Context, stmt: input.Stmt, err: anyerror) void {
+        const info = diag.codegenErrorInfo(err);
+        const line = if (stmt.source_line == 0) 1 else stmt.source_line;
+        const column = if (stmt.source_column == 0) 1 else stmt.source_column;
+        self.setDiagnostic(line, column, info.code, info.message, stmt.source_text);
+    }
+
+    pub fn setDiagnosticFromSource(self: *Context, source: input.SourceRef, err: anyerror) void {
+        const info = diag.codegenErrorInfo(err);
+        const line = if (source.line == 0) 1 else source.line;
+        const column = if (source.column == 0) 1 else source.column;
+        self.setDiagnostic(line, column, info.code, info.message, source.text);
+    }
+
+    pub fn setDiagnosticAt(self: *Context, line: usize, column: usize, line_text: []const u8, err: anyerror) void {
+        const info = diag.codegenErrorInfo(err);
+        self.setDiagnostic(line, column, info.code, info.message, line_text);
     }
 
     pub fn lookupKnownProcedureSig(self: *const Context, name: []const u8) ?input.sema.KnownProcedureSig {
@@ -560,7 +639,7 @@ pub const Context = struct {
 
     pub fn setCurrentStmt(self: *Context, stmt: input.Stmt) void {
         self.current_stmt = stmt;
-        diag.noteFallbackSource(
+        self.noteFallback(
             if (stmt.source_line == 0) 1 else stmt.source_line,
             if (stmt.source_column == 0) 1 else stmt.source_column,
             stmt.source_text,
@@ -574,7 +653,7 @@ pub const Context = struct {
     pub fn setCurrentSource(self: *Context, source: ?ast.SourceRef) void {
         self.current_source = source;
         if (source) |src| {
-            diag.noteFallbackSource(
+            self.noteFallback(
                 if (src.line == 0) 1 else src.line,
                 if (src.column == 0) 1 else src.column,
                 src.text,

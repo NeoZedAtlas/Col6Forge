@@ -101,10 +101,28 @@ pub fn emitModule(
     source_name: []const u8,
     options: CodegenOptions,
 ) ![]const u8 {
+    var diag_bag = codegen_diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+    const output = emitModuleWithDiagnostics(allocator, program, sem, source_name, options, &diag_bag) catch |err| {
+        codegen_diag.publishCompatFromBag(&diag_bag);
+        return err;
+    };
+    codegen_diag.publishCompatFromBag(&diag_bag);
+    return output;
+}
+
+pub fn emitModuleWithDiagnostics(
+    allocator: std.mem.Allocator,
+    program: Program,
+    sem: input.sema.SemanticProgram,
+    source_name: []const u8,
+    options: CodegenOptions,
+    diag_bag: *codegen_diag.Bag,
+) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
     errdefer buffer.deinit();
     var writer = buffer.writer();
-    try emitModuleToWriter(&writer, allocator, program, sem, source_name, options);
+    try emitModuleToWriterWithDiagnostics(&writer, allocator, program, sem, source_name, options, diag_bag);
     return buffer.toOwnedSlice();
 }
 
@@ -116,6 +134,25 @@ pub fn emitModuleToWriter(
     source_name: []const u8,
     options: CodegenOptions,
 ) !void {
+    var diag_bag = codegen_diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+    emitModuleToWriterWithDiagnostics(writer, allocator, program, sem, source_name, options, &diag_bag) catch |err| {
+        codegen_diag.publishCompatFromBag(&diag_bag);
+        return err;
+    };
+    codegen_diag.publishCompatFromBag(&diag_bag);
+}
+
+pub fn emitModuleToWriterWithDiagnostics(
+    writer: anytype,
+    allocator: std.mem.Allocator,
+    program: Program,
+    sem: input.sema.SemanticProgram,
+    source_name: []const u8,
+    options: CodegenOptions,
+    diag_bag: *codegen_diag.Bag,
+) !void {
+    diag_bag.clear();
     clearLastBreakdownSample();
     var breakdown: CodegenBreakdownSample = .{};
     const total_start = nowNs();
@@ -159,7 +196,8 @@ pub fn emitModuleToWriter(
         switch (unit.kind) {
             .program => {
                 if (program_mangled != null) {
-                    codegen_diag.setAt(1, 1, "", error.MultipleProgramUnits);
+                    const info = codegen_diag.codegenErrorInfo(error.MultipleProgramUnits);
+                    diag_bag.set(1, 1, info.code, info.message, "");
                     return error.MultipleProgramUnits;
                 }
                 program_mangled = mangled;
@@ -186,7 +224,7 @@ pub fn emitModuleToWriter(
     for (program.units) |unit| {
         const sem_unit = sem_map.get(unit.name) orelse {
             markFailure(&breakdown, .common_layouts);
-            setCodegenDiagForUnit(unit, error.MissingSemanticUnit);
+            setCodegenDiagForUnit(diag_bag, unit, error.MissingSemanticUnit);
             return error.MissingSemanticUnit;
         };
         const layouts = try common.buildUnitCommonLayoutsWithOptions(scratch, unit, sem_unit, .{
@@ -196,7 +234,7 @@ pub fn emitModuleToWriter(
             if (common_blocks.getPtr(layout.key)) |info| {
                 if (!commonLayoutsCompatible(info.items, layout.items)) {
                     markFailure(&breakdown, .common_layouts);
-                    setCodegenDiagForUnit(unit, error.CommonBlockMismatch);
+                    setCodegenDiagForUnit(diag_bag, unit, error.CommonBlockMismatch);
                     return error.CommonBlockMismatch;
                 }
                 if (layout.items.len > info.items.len) info.items = layout.items;
@@ -225,22 +263,22 @@ pub fn emitModuleToWriter(
     defer intrinsic_wrappers.deinit();
 
     for (program.units) |unit| {
-        noteFallbackForUnit(unit);
+        noteFallbackForUnit(diag_bag, unit);
         const format_start = nowNs();
         const sem_unit = sem_map.get(unit.name) orelse {
             markFailure(&breakdown, .format_maps);
-            setCodegenDiagForUnit(unit, error.MissingSemanticUnit);
+            setCodegenDiagForUnit(diag_bag, unit, error.MissingSemanticUnit);
             return error.MissingSemanticUnit;
         };
-        var format_maps = buildFormatMaps(scratch, &builder, unit) catch |err| {
+        var format_maps = buildFormatMaps(scratch, &builder, unit, diag_bag) catch |err| {
             markFailure(&breakdown, .format_maps);
-            setCodegenDiagForUnit(unit, err);
+            setCodegenDiagForUnit(diag_bag, unit, err);
             return err;
         };
         breakdown.format_maps_ns += elapsedNs(format_start);
 
         const unit_emit_start = nowNs();
-        var ctx = try context.Context.init(
+        var ctx = try context.Context.initWithDiagnostics(
             scratch,
             source_name,
             unit,
@@ -253,17 +291,18 @@ pub fn emitModuleToWriter(
             &intrinsic_wrappers,
             &known_procedure_sigs,
             options,
+            diag_bag,
         );
         defer ctx.deinit();
         stmts.emitFunction(&ctx, &builder) catch |err| {
             markFailure(&breakdown, .unit_emit);
-            if (!codegen_diag.has()) {
+            if (!ctx.hasDiagnostic()) {
                 if (ctx.current_source) |source| {
-                    codegen_diag.setFromSource(source, err);
+                    ctx.setDiagnosticFromSource(source, err);
                 } else if (ctx.current_stmt) |stmt| {
-                    codegen_diag.setFromStmt(stmt, err);
+                    ctx.setDiagnosticFromStmt(stmt, err);
                 } else {
-                    setCodegenDiagForUnit(unit, err);
+                    setCodegenDiagForUnit(diag_bag, unit, err);
                 }
             }
             return err;
@@ -335,7 +374,12 @@ fn emitIabsWrapper(builder: anytype, name: []const u8, options: CodegenOptions) 
     try builder.functionEnd();
 }
 
-fn buildFormatMaps(allocator: std.mem.Allocator, builder: anytype, unit: input.ProgramUnit) !FormatMaps {
+fn buildFormatMaps(
+    allocator: std.mem.Allocator,
+    builder: anytype,
+    unit: input.ProgramUnit,
+    diag_bag: *codegen_diag.Bag,
+) !FormatMaps {
     var label_map = std.StringHashMap(FormatInfo).init(allocator);
     var inline_map = std.AutoHashMap(usize, FormatInfo).init(allocator);
     var assigned_aliases = std.array_list.Managed(AssignedFormatAlias).init(allocator);
@@ -351,6 +395,7 @@ fn buildFormatMaps(allocator: std.mem.Allocator, builder: anytype, unit: input.P
         &inline_map,
         &inline_index,
         &assigned_aliases,
+        diag_bag,
     );
     try applyAssignedFormatAliases(&label_map, assigned_aliases.items);
     return .{ .labels = label_map, .inline_items = inline_map };
@@ -376,9 +421,9 @@ fn unitFallbackSource(unit: input.ProgramUnit) ?input.SourceRef {
     return null;
 }
 
-fn noteFallbackForUnit(unit: input.ProgramUnit) void {
+fn noteFallbackForUnit(diag_bag: *codegen_diag.Bag, unit: input.ProgramUnit) void {
     if (unitFallbackSource(unit)) |source| {
-        codegen_diag.noteFallbackSource(source.line, source.column, source.text);
+        diag_bag.noteFallbackSource(source.line, source.column, source.text);
     }
 }
 
@@ -391,6 +436,7 @@ fn collectFormatsAndInlineFromStmts(
     inline_map: *std.AutoHashMap(usize, FormatInfo),
     inline_index: *usize,
     assigned_aliases: *std.array_list.Managed(AssignedFormatAlias),
+    diag_bag: *codegen_diag.Bag,
 ) anyerror!void {
     for (stmt_list) |stmt_item| {
         collectFormatsAndInlineFromNode(
@@ -403,8 +449,12 @@ fn collectFormatsAndInlineFromStmts(
             inline_map,
             inline_index,
             assigned_aliases,
+            diag_bag,
         ) catch |err| {
-            codegen_diag.setFromStmt(stmt_item, err);
+            const info = codegen_diag.codegenErrorInfo(err);
+            const line = if (stmt_item.source_line == 0) 1 else stmt_item.source_line;
+            const column = if (stmt_item.source_column == 0) 1 else stmt_item.source_column;
+            diag_bag.set(line, column, info.code, info.message, stmt_item.source_text);
             return err;
         };
     }
@@ -420,6 +470,7 @@ fn collectFormatsAndInlineFromNode(
     inline_map: *std.AutoHashMap(usize, FormatInfo),
     inline_index: *usize,
     assigned_aliases: *std.array_list.Managed(AssignedFormatAlias),
+    diag_bag: *codegen_diag.Bag,
 ) anyerror!void {
     switch (node) {
         .format => |fmt| {
@@ -496,6 +547,7 @@ fn collectFormatsAndInlineFromNode(
                 inline_map,
                 inline_index,
                 assigned_aliases,
+                diag_bag,
             );
             try collectFormatsAndInlineFromStmts(
                 allocator,
@@ -506,6 +558,7 @@ fn collectFormatsAndInlineFromNode(
                 inline_map,
                 inline_index,
                 assigned_aliases,
+                diag_bag,
             );
         },
         .if_single => |ifs| {
@@ -519,6 +572,7 @@ fn collectFormatsAndInlineFromNode(
                 inline_map,
                 inline_index,
                 assigned_aliases,
+                diag_bag,
             );
         },
         else => {},
@@ -537,12 +591,15 @@ fn applyAssignedFormatAliases(
     }
 }
 
-fn setCodegenDiagForUnit(unit: input.ProgramUnit, err: anyerror) void {
+fn setCodegenDiagForUnit(diag_bag: *codegen_diag.Bag, unit: input.ProgramUnit, err: anyerror) void {
+    const info = codegen_diag.codegenErrorInfo(err);
     if (unitFallbackSource(unit)) |source| {
-        codegen_diag.setFromSource(source, err);
+        const line = if (source.line == 0) 1 else source.line;
+        const column = if (source.column == 0) 1 else source.column;
+        diag_bag.set(line, column, info.code, info.message, source.text);
         return;
     }
-    codegen_diag.setAt(1, 1, "", err);
+    diag_bag.set(1, 1, info.code, info.message, "");
 }
 
 fn buildPrintfFormat(allocator: std.mem.Allocator, items: []const input.FormatItem) ![]const u8 {
@@ -1002,9 +1059,10 @@ test "setCodegenDiagForUnit falls back to declaration source when unit has no st
         .stmts = &.{},
     };
 
-    codegen_diag.clear();
-    setCodegenDiagForUnit(unit, error.MissingSemanticUnit);
-    const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
+    var diag_bag = codegen_diag.Bag.init(a);
+    defer diag_bag.deinit();
+    setCodegenDiagForUnit(&diag_bag, unit, error.MissingSemanticUnit);
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
     try testing.expectEqual(@as(usize, 4), diag.line);
     try testing.expectEqual(@as(usize, 7), diag.column);
     try testing.expectEqualStrings("CF4102", diag.code);
