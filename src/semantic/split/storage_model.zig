@@ -461,6 +461,7 @@ fn symbolElementByteSize(sym: Symbol) ?i64 {
         // legacy F77/LAPACK code this storage model is used for.
         .logical => 4,
         .character => @intCast(sym.effectiveCharLen() orelse 1),
+        .derived => null,
     };
 }
 

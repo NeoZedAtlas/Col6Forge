@@ -33,6 +33,11 @@ pub const Resolver = struct {
         try symbols_mod.installUnitSymbol(ctx);
         try symbols_mod.installDummyArgs(ctx);
         try statements.preinstallUseImports(ctx);
+        for (ctx.unit.decls) |decl| {
+            if (decl == .derived_type_def) {
+                try symbols_mod.registerDerivedType(ctx, decl.derived_type_def.name);
+            }
+        }
         if (ctx.unit.decl_sources.len != 0) {
             std.debug.assert(ctx.unit.decl_sources.len == ctx.unit.decls.len);
         }
@@ -44,6 +49,7 @@ pub const Resolver = struct {
             }
             switch (decl) {
                 .type_decl => |type_decl| try decls.applyTypeDecl(ctx, type_decl),
+                .derived_type_def => {},
                 else => try specs.applySpec(ctx, decl),
             }
             ctx.setCurrentDeclSource(null);

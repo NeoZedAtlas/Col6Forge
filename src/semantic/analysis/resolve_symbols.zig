@@ -24,6 +24,16 @@ pub fn installBuiltinConstants(self: *context.Context) !void {
     try putBuiltinConstant(self, "iso_fortran_env", "error_unit", integer_spec, .{ .integer = 0 });
 }
 
+pub fn registerDerivedType(self: *context.Context, name: []const u8) !void {
+    if (self.derived_types.contains(name)) return;
+    const key = try lowerDup(self.arena, name);
+    try self.derived_types.put(key, {});
+}
+
+pub fn hasDerivedType(self: *const context.Context, name: []const u8) bool {
+    return getLowercaseMapValue(void, &self.derived_types, name) != null;
+}
+
 pub fn findBuiltinConstant(self: *context.Context, name: []const u8) ?context.Context.BuiltinConstant {
     return getLowercaseMapValue(context.Context.BuiltinConstant, &self.builtin_constants, name);
 }

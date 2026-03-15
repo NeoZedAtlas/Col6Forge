@@ -259,6 +259,7 @@ fn byteSizeForSymbol(ctx: *Context, sym: anytype) ?i64 {
         .complex_double => 16,
         .logical => scalarByteSize(ctx.defaultIntegerIRType()),
         .character => @as(i64, @intCast(common.symbolCharacterLenOrOne(sym))),
+        .derived => null,
     };
 }
 
@@ -275,6 +276,7 @@ fn blockTransferKindForSymbol(ctx: *Context, sym: anytype) ?struct { kind: u8, e
             if (char_len > std.math.maxInt(i32)) return null;
             break :blk .{ .kind = 's', .elem_len = @intCast(char_len) };
         },
+        .derived => null,
     };
 }
 

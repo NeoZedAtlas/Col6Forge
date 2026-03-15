@@ -34,6 +34,9 @@ fn printDecl(writer: anytype, decl: ast.Decl) !void {
         .type_decl => |td| {
             try writer.print(";   decl type {s} items({d})\n", .{ typeKindName(td.type_kind), td.items.len });
         },
+        .derived_type_def => |derived| {
+            try writer.print(";   decl derived-type {s}\n", .{derived.name});
+        },
         .dimension => |dim| {
             try writer.print(";   decl dimension items({d})\n", .{dim.items.len});
         },
@@ -689,6 +692,7 @@ fn typeKindName(kind: ast.TypeKind) []const u8 {
         .complex_double => "COMPLEX*16",
         .logical => "LOGICAL",
         .character => "CHARACTER",
+        .derived => "TYPE",
     };
 }
 

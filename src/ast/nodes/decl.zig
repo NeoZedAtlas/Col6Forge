@@ -10,11 +10,13 @@ pub const TypeKind = enum {
     complex_double,
     logical,
     character,
+    derived,
 };
 
 pub const Decl = union(enum) {
     implicit: ImplicitDecl,
     type_decl: TypeDecl,
+    derived_type_def: DerivedTypeDef,
     dimension: DimensionDecl,
     parameter: ParameterDecl,
     common: CommonDecl,
@@ -27,9 +29,14 @@ pub const Decl = union(enum) {
 pub const TypeDecl = struct {
     type_kind: TypeKind,
     kind_selector: ?*Expr = null,
+    derived_type_name: ?[]const u8 = null,
     items: []Declarator,
     save: bool = false,
     allocatable: bool = false,
+};
+
+pub const DerivedTypeDef = struct {
+    name: []const u8,
 };
 
 pub const DimensionDecl = struct {

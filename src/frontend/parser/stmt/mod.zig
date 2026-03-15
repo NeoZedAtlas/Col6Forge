@@ -1035,6 +1035,31 @@ test "parseStatement parses ALLOCATE type-spec for scalar character object" {
     try testing.expectEqual(@as(usize, 1), idx);
 }
 
+test "parseStatement parses ALLOCATE bare derived type-spec" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      ALLOCATE(A :: B(1))\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const stmt_node = try parseStatement(arena.allocator(), lines, 0);
+
+    switch (stmt_node.node) {
+        .allocate => |allocate| {
+            try testing.expect(allocate.type_spec != null);
+            try testing.expectEqual(ast.TypeKind.derived, allocate.type_spec.?.type_kind);
+            try testing.expectEqualStrings("A", allocate.type_spec.?.derived_type_name.?);
+            try testing.expectEqual(@as(usize, 1), allocate.items.len);
+            try testing.expectEqualStrings("B", allocate.items[0].name);
+            try testing.expectEqual(@as(usize, 1), allocate.items[0].dims.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
 test "parseStatement parses DEALLOCATE items" {
     const testing = std.testing;
     const allocator = testing.allocator;

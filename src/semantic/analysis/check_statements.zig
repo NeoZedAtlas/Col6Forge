@@ -399,6 +399,7 @@ fn isAssignmentTarget(self: *context.Context, expr: *ast.Expr) bool {
 }
 
 fn isAssignmentCompatible(target: ast.TypeKind, value: ast.TypeKind) bool {
+    if (target == .derived or value == .derived) return target == .derived and value == .derived;
     if (target == .character or value == .character) return target == .character and value == .character;
     if (target == .logical or value == .logical) return target == .logical and value == .logical;
     return isNumeric(target) and isNumeric(value);

@@ -13,6 +13,7 @@ pub const TypeSpec = struct {
     kind_value: ?i64 = null,
     char_len_kind: CharacterLengthKind = .none,
     char_len: ?usize = null,
+    derived_type_name: ?[]const u8 = null,
 
     pub fn fromKind(kind: ast.TypeKind) TypeSpec {
         return .{
@@ -21,6 +22,7 @@ pub const TypeSpec = struct {
             .kind_value = null,
             .char_len_kind = if (kind == .character) .constant else .none,
             .char_len = if (kind == .character) 1 else null,
+            .derived_type_name = null,
         };
     }
 
@@ -37,6 +39,17 @@ pub const TypeSpec = struct {
             spec.char_len_kind = .none;
             spec.char_len = null;
         }
+        if (lowered_kind != .derived) {
+            spec.derived_type_name = null;
+        }
+        return spec;
+    }
+
+    pub fn fromDerived(name: []const u8) TypeSpec {
+        var spec = fromKind(.derived);
+        spec.declared_kind = .derived;
+        spec.lowered_kind = .derived;
+        spec.derived_type_name = name;
         return spec;
     }
 

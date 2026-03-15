@@ -10,7 +10,7 @@ const StorageClass = symbols.StorageClass;
 const CharacterLengthKind = symbols.CharacterLengthKind;
 
 pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
-    const resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.kind_selector);
+    const resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.derived_type_name, decl.kind_selector);
     for (decl.items) |item| {
         try applyDeclarator(self, resolved_type, item, .local, true, decl.allocatable);
     }
@@ -115,8 +115,14 @@ fn allowsDeferredCharacterLength(sym: symbols.Symbol) bool {
 fn resolvedDeclTypeSpec(
     self: *context.Context,
     base_type_kind: ast.TypeKind,
+    derived_type_name: ?[]const u8,
     kind_selector: ?*ast.Expr,
 ) !symbols.TypeSpec {
+    if (base_type_kind == .derived) {
+        const name = derived_type_name orelse return error.UnexpectedTypeDecl;
+        if (!symbols_mod.hasDerivedType(self, name)) return error.UnexpectedTypeDecl;
+        return symbols.TypeSpec.fromDerived(name);
+    }
     if (kind_selector == null) return symbols.TypeSpec.fromResolvedKind(base_type_kind, base_type_kind, null);
     const selector_value = try constants.evalConst(self, kind_selector.?);
     return type_kind_selector.resolveSpecWithConst(base_type_kind, kind_selector, selector_value);

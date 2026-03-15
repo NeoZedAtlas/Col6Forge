@@ -27,7 +27,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {
         .implicit => |imp| {
             for (imp.rules) |rule| {
-                const resolved_rule_type = try resolvedDeclTypeSpec(self, rule.type_kind, rule.kind_selector);
+                const resolved_rule_type = try resolvedDeclTypeSpec(self, rule.type_kind, null, rule.kind_selector);
                 const resolved_rule_kind = resolved_rule_type.lowered_kind;
                 try ensureImplicitRuleNoOverlap(self, rule.start, rule.end);
                 var char_len: ?usize = null;
@@ -61,6 +61,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 applyImplicitRuleToExistingSymbols(self, implicit_rule);
             }
         },
+        .derived_type_def => {},
         .dimension => |dim| {
             for (dim.items) |item| {
                 const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
@@ -227,6 +228,7 @@ fn typeKindName(kind: ast.TypeKind) []const u8 {
         .complex_double => "DOUBLE COMPLEX",
         .logical => "LOGICAL",
         .character => "CHARACTER",
+        .derived => "TYPE",
     };
 }
 
@@ -243,8 +245,14 @@ fn constValueKindName(value: symbols.ConstValue) []const u8 {
 fn resolvedDeclTypeSpec(
     self: *context.Context,
     base_type_kind: ast.TypeKind,
+    derived_type_name: ?[]const u8,
     kind_selector: ?*ast.Expr,
 ) !symbols.TypeSpec {
+    if (base_type_kind == .derived) {
+        const name = derived_type_name orelse return error.UnexpectedTypeDecl;
+        if (!symbols_mod.hasDerivedType(self, name)) return error.UnexpectedTypeDecl;
+        return symbols.TypeSpec.fromDerived(name);
+    }
     if (kind_selector == null) return symbols.TypeSpec.fromResolvedKind(base_type_kind, base_type_kind, null);
     const selector_value = try constants.evalConst(self, kind_selector.?);
     return type_kind_selector.resolveSpecWithConst(base_type_kind, kind_selector, selector_value);
@@ -537,6 +545,7 @@ fn symbolElemByteSize(sym: symbols.Symbol) ?i64 {
         .complex_double => 16,
         .logical => 4,
         .character => @intCast(sym.effectiveCharLen() orelse 1),
+        .derived => null,
     };
 }
 

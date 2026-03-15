@@ -17,6 +17,7 @@ pub fn typeFromKindWithLayout(kind: input.TypeKind, target_layout: input.sema.Ta
         .complex_double => .complex_f64,
         .logical => .i1,
         .character => .ptr,
+        .derived => .ptr,
     };
 }
 

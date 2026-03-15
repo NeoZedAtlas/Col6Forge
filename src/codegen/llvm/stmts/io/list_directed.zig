@@ -166,6 +166,7 @@ fn blockTransferKindForSymbol(ctx: *Context, sym: anytype) ?u8 {
         .complex_double => 'z',
         .logical => 'l',
         .character => null,
+        .derived => null,
     };
 }
 

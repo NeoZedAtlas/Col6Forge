@@ -211,6 +211,7 @@ fn elementByteSize(sym: ast.sema.Symbol) EmitError!usize {
         .complex_double => 16,
         .logical => 4,
         .character => try common.requireConstantCharacterLen(sym),
+        .derived => @sizeOf(usize),
     };
 }
 
