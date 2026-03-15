@@ -14,6 +14,7 @@ const stmt_helpers = @import("stmt/helpers.zig");
 const array_info = @import("array_info.zig");
 
 const Program = ast.Program;
+const LexicalOwnerKind = ast.LexicalOwnerKind;
 const ProgramUnitKind = ast.ProgramUnitKind;
 const ProgramUnit = ast.ProgramUnit;
 const Decl = ast.Decl;
@@ -54,6 +55,8 @@ pub fn parseProgramWithDiagnostics(
         .index = 0,
         .block_data_counter = 0,
         .implicit_program_counter = 0,
+        .pending_owner_name = null,
+        .pending_owner_kind = null,
         .expr_capture = &expr_capture,
         .diag_bag = diag_bag,
         .lex_diag_bag = &lex_diag_bag,
@@ -69,6 +72,8 @@ const Parser = struct {
     index: usize,
     block_data_counter: usize,
     implicit_program_counter: usize,
+    pending_owner_name: ?[]const u8,
+    pending_owner_kind: ?LexicalOwnerKind,
     expr_capture: *expr.SourceCapture,
     diag_bag: *parse_diag.Bag,
     lex_diag_bag: *lexer.Bag,
@@ -135,6 +140,8 @@ const Parser = struct {
                 continue;
             }
             if (self.isProgramUnitEndAt(self.index)) {
+                self.pending_owner_name = null;
+                self.pending_owner_kind = null;
                 self.index += 1;
                 continue;
             }
@@ -148,6 +155,10 @@ const Parser = struct {
             }
             const unit = try self.parseProgramUnit();
             try units.append(unit);
+            if (unitHasContains(unit)) {
+                self.pending_owner_name = unit.name;
+                self.pending_owner_kind = .procedure;
+            }
         }
         return .{ .units = try units.toOwnedSlice() };
     }
@@ -155,6 +166,7 @@ const Parser = struct {
     fn parseModuleContainer(self: *Parser, units: *std.array_list.Managed(ProgramUnit)) !void {
         // Parse the module declaration section conservatively, then parse
         // contained procedures and prepend supported module declarations.
+        const module_name = try self.moduleHeaderName(self.index);
         self.index += 1;
         var module_decls = std.array_list.Managed(Decl).init(self.arena);
         var module_decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
@@ -212,6 +224,8 @@ const Parser = struct {
                 continue;
             }
             var unit = try self.parseProgramUnit();
+            unit.owner_name = module_name;
+            unit.owner_kind = .module;
             if (module_decls.items.len != 0) {
                 unit = try prependDecls(self.arena, unit, module_decls.items, module_decl_sources.items);
             }
@@ -243,14 +257,19 @@ const Parser = struct {
                 return err;
             },
         };
+        var unit: ProgramUnit = undefined;
         if (parsed_implicit_program) {
             const implicit = try self.syntheticProgramHeader();
-            return self.parseProgramUnitBody(implicit, false, header_line, expr_mark);
-        }
-        if (!parsed_implicit_program) {
+            unit = try self.parseProgramUnitBody(implicit, false, header_line, expr_mark);
+        } else {
             self.index += 1;
+            unit = try self.parseProgramUnitBody(header, true, header_line, expr_mark);
         }
-        return self.parseProgramUnitBody(header, true, header_line, expr_mark);
+        if (self.pending_owner_name) |owner_name| {
+            unit.owner_name = owner_name;
+            unit.owner_kind = self.pending_owner_kind;
+        }
+        return unit;
     }
 
     fn parseProgramUnitBody(
@@ -287,6 +306,7 @@ const Parser = struct {
             }
             if (!do_ctx.hasPending()) {
                 if (stmt_lp.isKeywordSplit("CONTAINS")) {
+                    try stmts.append(makeContainsStmt(line));
                     self.index += 1;
                     break;
                 }
@@ -325,6 +345,7 @@ const Parser = struct {
         return .{
             .kind = header.kind,
             .name = header.name,
+            .bind_name = header.bind_name,
             .result_name = header.result_name,
             .args = header.args,
             .alt_return_dummy_count = header.alt_return_dummy_count,
@@ -341,11 +362,20 @@ const Parser = struct {
         return .{
             .kind = .program,
             .name = name,
+            .bind_name = null,
             .result_name = null,
             .args = &.{},
             .alt_return_dummy_count = 0,
             .type_decl = null,
         };
+    }
+
+    fn moduleHeaderName(self: *Parser, line_index: usize) ![]const u8 {
+        const line = self.lines[line_index];
+        const tokens = try self.tokensForIndex(line_index);
+        var lp = LineParser.init(line, tokens);
+        if (!lp.consumeKeyword("MODULE")) return error.ExpectedProgramUnit;
+        return lp.readName(self.arena) orelse error.MissingName;
     }
 };
 
@@ -358,6 +388,7 @@ const TypeInfo = struct {
 const ProgramUnitHeader = struct {
     kind: ProgramUnitKind,
     name: []const u8,
+    bind_name: ?[]const u8,
     result_name: ?[]const u8,
     args: []const []const u8,
     alt_return_dummy_count: usize,
@@ -419,6 +450,7 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
         result_name = lp.readName(arena) orelse return error.MissingName;
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     }
+    const bind_name = try parseBindName(arena, lp);
 
     var type_decl: ?Decl = null;
     if (type_info) |info| {
@@ -438,11 +470,57 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
     return .{
         .kind = kind,
         .name = name,
+        .bind_name = bind_name,
         .result_name = result_name,
         .args = try args_list.toOwnedSlice(),
         .alt_return_dummy_count = alt_return_dummy_count,
         .type_decl = type_decl,
     };
+}
+
+fn parseBindName(arena: std.mem.Allocator, lp: *LineParser) !?[]const u8 {
+    if (!lp.consumeKeyword("BIND")) return null;
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+
+    var bind_name: ?[]const u8 = null;
+    while (!lp.peekIs(.r_paren)) {
+        if (lp.peek()) |tok| {
+            if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "NAME")) {
+                _ = lp.next();
+                _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+                const string_tok = lp.expect(.string) orelse return error.UnexpectedToken;
+                bind_name = try decodeHeaderStringLiteral(arena, lp.tokenText(string_tok));
+            } else {
+                _ = lp.next();
+            }
+        } else {
+            return error.UnexpectedToken;
+        }
+        _ = lp.consume(.comma);
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return bind_name;
+}
+
+fn decodeHeaderStringLiteral(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
+    if (text.len < 2) return error.InvalidStringLiteral;
+    const quote = text[0];
+    if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) return error.InvalidStringLiteral;
+
+    var buffer = std.array_list.Managed(u8).init(arena);
+    errdefer buffer.deinit();
+
+    var i: usize = 1;
+    while (i + 1 < text.len) {
+        if (text[i] == quote and i + 2 < text.len and text[i + 1] == quote) {
+            try buffer.append(quote);
+            i += 2;
+            continue;
+        }
+        try buffer.append(text[i]);
+        i += 1;
+    }
+    return buffer.toOwnedSlice();
 }
 
 fn isDuplicateProgramUnitLine(arena: std.mem.Allocator, line: logical_line.LogicalLine, header: ProgramUnitHeader) bool {
@@ -516,6 +594,26 @@ fn consumeProcedurePrefixes(lp: *LineParser) void {
         if (lp.consumeKeyword("IMPURE")) continue;
         break;
     }
+}
+
+fn unitHasContains(unit: ProgramUnit) bool {
+    for (unit.stmts) |stmt_node| {
+        if (stmt_node.node != .cont) continue;
+        const text = std.mem.trim(u8, stmt_node.source_text, " \t");
+        if (std.ascii.eqlIgnoreCase(text, "contains")) return true;
+    }
+    return false;
+}
+
+fn makeContainsStmt(line: logical_line.LogicalLine) Stmt {
+    const first_column = if (line.segments.len > 0) line.segments[0].column else 1;
+    return .{
+        .label = null,
+        .node = .{ .cont = {} },
+        .source_line = line.span.start_line,
+        .source_column = first_column,
+        .source_text = line.text,
+    };
 }
 
 fn lineAtIndexOrLast(lines: []logical_line.LogicalLine, idx: usize, fallback: logical_line.LogicalLine) logical_line.LogicalLine {
@@ -664,6 +762,9 @@ fn prependDecls(
     return .{
         .kind = unit.kind,
         .name = unit.name,
+        .owner_name = unit.owner_name,
+        .owner_kind = unit.owner_kind,
+        .bind_name = unit.bind_name,
         .result_name = unit.result_name,
         .alt_return_dummy_count = unit.alt_return_dummy_count,
         .args = unit.args,
@@ -1019,6 +1120,9 @@ test "parseProgram handles CONTAINS internal function blocks" {
     try testing.expectEqual(@as(usize, 2), program.units.len);
     try testing.expectEqualStrings("OUTER", program.units[0].name);
     try testing.expectEqualStrings("SXVALS", program.units[1].name);
+    try testing.expect(program.units[0].stmts[2].node == .cont);
+    try testing.expectEqualStrings("OUTER", program.units[1].owner_name.?);
+    try testing.expectEqual(ast.LexicalOwnerKind.procedure, program.units[1].owner_kind.?);
 }
 
 test "parseProgram skips END PROGRAM after internal procedures" {
@@ -1340,6 +1444,27 @@ test "parseProgram handles MODULE container with contained procedure" {
     const program = try parseProgram(arena.allocator(), lines);
     try testing.expectEqual(@as(usize, 1), program.units.len);
     try testing.expectEqualStrings("FOO", program.units[0].name);
+    try testing.expectEqualStrings("MINPACK_MODULE", program.units[0].owner_name.?);
+    try testing.expectEqual(ast.LexicalOwnerKind.module, program.units[0].owner_kind.?);
+}
+
+test "parseProgram captures BIND(C) procedure name" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE FOO() BIND(C, NAME=\"bar\")\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    try testing.expectEqualStrings("FOO", program.units[0].name);
+    try testing.expectEqualStrings("bar", program.units[0].bind_name.?);
 }
 
 test "parseProgram prepends supported module declarations to contained procedures" {

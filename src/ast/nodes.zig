@@ -7,6 +7,7 @@ const expr_nodes = @import("nodes/expr.zig");
 pub const Program = program_nodes.Program;
 pub const ProgramUnitKind = program_nodes.ProgramUnitKind;
 pub const ProgramUnit = program_nodes.ProgramUnit;
+pub const LexicalOwnerKind = program_nodes.LexicalOwnerKind;
 pub const DeclSource = program_nodes.DeclSource;
 
 pub const TypeKind = decl_nodes.TypeKind;

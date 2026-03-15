@@ -192,7 +192,7 @@ pub fn emitModuleToWriterWithDiagnostics(
     var block_data_mangled = std.array_list.Managed([]const u8).init(scratch);
     defer block_data_mangled.deinit();
     for (program.units) |unit| {
-        const mangled = try utils.mangleName(scratch, unit.name);
+        const mangled = try utils.mangleProcedureUnitName(scratch, unit);
         try defined.put(mangled, {});
         switch (unit.kind) {
             .program => {
@@ -385,7 +385,7 @@ fn buildFormatMaps(
     var inline_map = std.AutoHashMap(usize, FormatInfo).init(allocator);
     var assigned_aliases = std.array_list.Managed(AssignedFormatAlias).init(allocator);
     defer assigned_aliases.deinit();
-    const unit_mangled = try utils.mangleName(allocator, unit.name);
+    const unit_mangled = try utils.mangleProcedureUnitName(allocator, unit);
     var inline_index: usize = 0;
     try collectFormatsAndInlineFromStmts(
         allocator,

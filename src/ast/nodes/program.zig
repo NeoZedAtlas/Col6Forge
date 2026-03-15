@@ -13,9 +13,17 @@ pub const ProgramUnitKind = enum {
     block_data,
 };
 
+pub const LexicalOwnerKind = enum {
+    procedure,
+    module,
+};
+
 pub const ProgramUnit = struct {
     kind: ProgramUnitKind,
     name: []const u8,
+    owner_name: ?[]const u8 = null,
+    owner_kind: ?LexicalOwnerKind = null,
+    bind_name: ?[]const u8 = null,
     result_name: ?[]const u8 = null,
     args: []const []const u8,
     alt_return_dummy_count: usize = 0,

@@ -42,7 +42,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     const unit_has_contains = unitHasContains(ctx.unit);
     const uses_explicit_result_name = ctx.unit.kind == .function and !std.ascii.eqlIgnoreCase(return_symbol_name, ctx.unit.name);
 
-    const func_name = utils.mangleName(ctx.allocator, ctx.unit.name) catch return error.OutOfMemory;
+    const func_name = utils.mangleProcedureUnitName(ctx.allocator, ctx.unit) catch return error.OutOfMemory;
     const prev_fn_name = ctx.current_function_ir_name;
     ctx.current_function_ir_name = func_name;
     defer ctx.current_function_ir_name = prev_fn_name;
@@ -468,7 +468,7 @@ fn emitDeclaratorInitializerAssign(
 }
 
 fn savedInitGuardName(ctx: *Context) ![]const u8 {
-    const unit_mangled = try utils.mangleName(ctx.allocator, ctx.unit.name);
+    const unit_mangled = try utils.mangleProcedureUnitName(ctx.allocator, ctx.unit);
     return std.fmt.allocPrint(ctx.allocator, "save_init_guard_{s}", .{unit_mangled});
 }
 
@@ -780,7 +780,7 @@ fn installSavedGlobals(ctx: *Context, builder: anytype, save_info: *const SaveIn
         if (sym.kind == .parameter or sym.kind == .subroutine or is_return_symbol) continue;
         if (ctx.locals.contains(sym.name)) continue;
 
-        const global_name = try utils.savedGlobalName(ctx.allocator, ctx.unit.name, sym.name);
+        const global_name = try utils.savedGlobalName(ctx.allocator, ctx.unit, sym.name);
         const base_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{global_name});
 
         var total_size: usize = 1;

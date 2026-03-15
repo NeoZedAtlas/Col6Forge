@@ -8,6 +8,7 @@ pub const print = @import("print.zig");
 pub const Program = nodes.Program;
 pub const ProgramUnitKind = nodes.ProgramUnitKind;
 pub const ProgramUnit = nodes.ProgramUnit;
+pub const LexicalOwnerKind = nodes.LexicalOwnerKind;
 pub const DeclSource = nodes.DeclSource;
 pub const TypeKind = nodes.TypeKind;
 pub const Decl = nodes.Decl;

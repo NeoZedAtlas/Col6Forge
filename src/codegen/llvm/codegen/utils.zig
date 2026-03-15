@@ -1,5 +1,6 @@
 const std = @import("std");
 const ir = @import("../../ir.zig");
+const ast = @import("../../../ast/nodes.zig");
 
 pub const IRType = ir.IRType;
 
@@ -22,6 +23,22 @@ pub fn mangleName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
     return buffer.toOwnedSlice();
 }
 
+pub fn mangleProcedureUnitName(allocator: std.mem.Allocator, unit: ast.ProgramUnit) ![]const u8 {
+    if (unit.bind_name) |bind_name| {
+        return lowerName(allocator, bind_name);
+    }
+    if (unit.owner_name) |owner_name| {
+        const owner_prefix = switch (unit.owner_kind orelse .procedure) {
+            .procedure => "proc",
+            .module => "mod",
+        };
+        const owner_mangled = try lowerName(allocator, owner_name);
+        const name_mangled = try lowerName(allocator, unit.name);
+        return std.fmt.allocPrint(allocator, "{s}_{s}__{s}_", .{ owner_prefix, owner_mangled, name_mangled });
+    }
+    return mangleName(allocator, unit.name);
+}
+
 pub fn lowerName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
     var buffer = std.array_list.Managed(u8).init(allocator);
     for (name) |ch| {
@@ -30,8 +47,8 @@ pub fn lowerName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
     return buffer.toOwnedSlice();
 }
 
-pub fn savedGlobalName(allocator: std.mem.Allocator, unit_name: []const u8, symbol_name: []const u8) ![]const u8 {
-    const unit_mangled = try mangleName(allocator, unit_name);
+pub fn savedGlobalName(allocator: std.mem.Allocator, unit: ast.ProgramUnit, symbol_name: []const u8) ![]const u8 {
+    const unit_mangled = try mangleProcedureUnitName(allocator, unit);
     const sym_lower = try lowerName(allocator, symbol_name);
     return std.fmt.allocPrint(allocator, "save_{s}{s}", .{ unit_mangled, sym_lower });
 }
@@ -139,6 +156,50 @@ pub fn zeroValue(ty: IRType) ValueRef {
 
 pub fn oneValue() ValueRef {
     return .{ .name = "1", .ty = .i32, .is_ptr = false };
+}
+
+test "mangleProcedureUnitName namespaces owned procedures and honors bind names" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const module_unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "FUN",
+        .owner_name = "MOD_A",
+        .owner_kind = .module,
+        .args = &.{},
+        .decls = &.{},
+        .stmts = &.{},
+    };
+    const internal_unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "INNER",
+        .owner_name = "OUTER",
+        .owner_kind = .procedure,
+        .args = &.{},
+        .decls = &.{},
+        .stmts = &.{},
+    };
+    const bind_unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "FOO",
+        .bind_name = "Bar",
+        .args = &.{},
+        .decls = &.{},
+        .stmts = &.{},
+    };
+
+    const module_name = try mangleProcedureUnitName(allocator, module_unit);
+    defer allocator.free(module_name);
+    try testing.expectEqualStrings("mod_mod_a__fun_", module_name);
+
+    const internal_name = try mangleProcedureUnitName(allocator, internal_unit);
+    defer allocator.free(internal_name);
+    try testing.expectEqualStrings("proc_outer__inner_", internal_name);
+
+    const bind_name = try mangleProcedureUnitName(allocator, bind_unit);
+    defer allocator.free(bind_name);
+    try testing.expectEqualStrings("bar", bind_name);
 }
 
 pub fn formatInt(allocator: std.mem.Allocator, value: i64) []const u8 {

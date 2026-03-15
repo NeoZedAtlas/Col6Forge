@@ -425,12 +425,13 @@ fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     const sym = ctx.findSymbol(sub.name) orelse return null;
     if (!sym.isCharacter()) return null;
     const base_len_usize = common.constantCharacterLen(sym) orelse return null;
-    const base_len: i64 = @intCast(base_len_usize);
+    const base_len = std.math.cast(i64, base_len_usize) orelse return null;
     const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;
     const end_val = if (sub.end) |end_expr| intLiteralValue(end_expr) orelse return null else base_len;
-    const length = end_val - start_val + 1;
+    const span = checkedSub(end_val, start_val) orelse return null;
+    const length = checkedAdd(span, 1) orelse return null;
     if (length <= 0) return null;
-    return @intCast(length);
+    return std.math.cast(usize, length);
 }
 
 fn intLiteralValue(expr: *Expr) ?i64 {
@@ -440,7 +441,7 @@ fn intLiteralValue(expr: *Expr) ?i64 {
             const value = intLiteralValue(un.expr) orelse return null;
             return switch (un.op) {
                 .plus => value,
-                .minus => -value,
+                .minus => checkedNeg(value),
                 else => null,
             };
         },
@@ -448,10 +449,10 @@ fn intLiteralValue(expr: *Expr) ?i64 {
             const left = intLiteralValue(bin.left) orelse return null;
             const right = intLiteralValue(bin.right) orelse return null;
             return switch (bin.op) {
-                .add => left + right,
-                .sub => left - right,
-                .mul => left * right,
-                .div => if (right == 0) null else @divTrunc(left, right),
+                .add => checkedAdd(left, right),
+                .sub => checkedSub(left, right),
+                .mul => checkedMul(left, right),
+                .div => checkedDivTrunc(left, right),
                 .power => if (right < 0) null else powInt(left, right),
                 else => null,
             };
@@ -460,14 +461,52 @@ fn intLiteralValue(expr: *Expr) ?i64 {
     };
 }
 
-fn powInt(base: i64, exp: i64) i64 {
+fn powInt(base: i64, exp: i64) ?i64 {
     if (exp <= 0) return 1;
     var result: i64 = 1;
     var i: i64 = 0;
     while (i < exp) : (i += 1) {
-        result *= base;
+        result = checkedMul(result, base) orelse return null;
     }
     return result;
+}
+
+fn checkedAdd(left: i64, right: i64) ?i64 {
+    const sum, const overflow = @addWithOverflow(left, right);
+    if (overflow != 0) return null;
+    return sum;
+}
+
+fn checkedSub(left: i64, right: i64) ?i64 {
+    const diff, const overflow = @subWithOverflow(left, right);
+    if (overflow != 0) return null;
+    return diff;
+}
+
+fn checkedMul(left: i64, right: i64) ?i64 {
+    const product, const overflow = @mulWithOverflow(left, right);
+    if (overflow != 0) return null;
+    return product;
+}
+
+fn checkedNeg(value: i64) ?i64 {
+    return checkedSub(0, value);
+}
+
+fn checkedDivTrunc(left: i64, right: i64) ?i64 {
+    if (right == 0) return null;
+    if (left == std.math.minInt(i64) and right == -1) return null;
+    return @divTrunc(left, right);
+}
+
+test "intLiteralValue returns null on overflowing integer powers" {
+    const testing = std.testing;
+
+    var base = Expr{ .literal = .{ .kind = .integer, .text = "2" } };
+    var exp = Expr{ .literal = .{ .kind = .integer, .text = "63" } };
+    var pow = Expr{ .binary = .{ .op = .power, .left = &base, .right = &exp } };
+
+    try testing.expect(intLiteralValue(&pow) == null);
 }
 
 fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize) EmitError!?ValueRef {
