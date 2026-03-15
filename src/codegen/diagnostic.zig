@@ -106,13 +106,6 @@ threadlocal var storage: Storage = .{};
 threadlocal var has_diag: bool = false;
 threadlocal var fallback_storage: Storage = .{};
 threadlocal var has_fallback: bool = false;
-threadlocal var active_bag: ?*Bag = null;
-
-pub fn setActiveBag(bag: ?*Bag) ?*Bag {
-    const previous = active_bag;
-    active_bag = bag;
-    return previous;
-}
 
 pub fn publishCompatFromBag(bag: *Bag) void {
     clear();
@@ -125,10 +118,6 @@ pub fn publishCompatFromBag(bag: *Bag) void {
 }
 
 pub fn clear() void {
-    if (active_bag) |bag| {
-        bag.clear();
-        return;
-    }
     has_diag = false;
     has_fallback = false;
     storage.clear();
@@ -136,15 +125,10 @@ pub fn clear() void {
 }
 
 pub fn has() bool {
-    if (active_bag) |bag| return bag.has();
     return has_diag;
 }
 
 pub fn set(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
-    if (active_bag) |bag| {
-        bag.set(line, column, code, message, line_text);
-        return;
-    }
     const next = makeStorage(line, column, code, message, line_text) catch return;
     storage.clear();
     storage = next;
@@ -152,7 +136,6 @@ pub fn set(line: usize, column: usize, code: []const u8, message: []const u8, li
 }
 
 pub fn take() ?CodegenDiagnostic {
-    if (active_bag) |bag| return bag.take();
     if (!has_diag) return null;
     has_diag = false;
     return .{
@@ -165,10 +148,6 @@ pub fn take() ?CodegenDiagnostic {
 }
 
 pub fn noteFallbackSource(line: usize, column: usize, line_text: []const u8) void {
-    if (active_bag) |bag| {
-        bag.noteFallbackSource(line, column, line_text);
-        return;
-    }
     var next: Storage = .{
         .line = if (line == 0) 1 else line,
         .column = if (column == 0) 1 else column,
@@ -180,7 +159,6 @@ pub fn noteFallbackSource(line: usize, column: usize, line_text: []const u8) voi
 }
 
 pub fn fallbackSource() ?FallbackSource {
-    if (active_bag) |bag| return bag.fallbackSource();
     if (!has_fallback) return null;
     return .{
         .line = fallback_storage.line,
@@ -190,7 +168,6 @@ pub fn fallbackSource() ?FallbackSource {
 }
 
 pub fn takeFallbackSource() ?FallbackSource {
-    if (active_bag) |bag| return bag.takeFallbackSource();
     const source = fallbackSource() orelse return null;
     has_fallback = false;
     return source;

@@ -99,13 +99,6 @@ const DiagStorage = struct {
 
 threadlocal var diag_storage: DiagStorage = .{};
 threadlocal var has_diag: bool = false;
-threadlocal var active_bag: ?*Bag = null;
-
-pub fn setActiveBag(bag: ?*Bag) ?*Bag {
-    const previous = active_bag;
-    active_bag = bag;
-    return previous;
-}
 
 pub fn publishCompatFromBag(bag: *Bag) void {
     diag_storage.clear();
@@ -138,10 +131,6 @@ pub fn tokenKindName(kind: TokenKind) []const u8 {
 }
 
 pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLine) ![]Token {
-    if (active_bag) |bag| {
-        bag.clear();
-        return lexLogicalLineImpl(allocator, line, bag);
-    }
     diag_storage.clear();
     has_diag = false;
     return lexLogicalLineImpl(allocator, line, null);
@@ -332,7 +321,6 @@ fn lexLogicalLineImpl(
 }
 
 pub fn takeDiagnostic() ?LexDiagnostic {
-    if (active_bag) |bag| return bag.take();
     if (!has_diag) return null;
     has_diag = false;
     return .{
