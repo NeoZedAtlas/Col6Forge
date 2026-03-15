@@ -14,6 +14,75 @@ pub const FallbackSource = struct {
     line_text: []const u8,
 };
 
+pub const Bag = struct {
+    allocator: std.mem.Allocator,
+    items: std.array_list.Managed(ParseDiagnostic),
+    fallback: ?FallbackSource = null,
+
+    pub fn init(allocator: std.mem.Allocator) Bag {
+        return .{
+            .allocator = allocator,
+            .items = std.array_list.Managed(ParseDiagnostic).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Bag) void {
+        self.items.deinit();
+    }
+
+    pub fn clear(self: *Bag) void {
+        self.items.clearRetainingCapacity();
+        self.fallback = null;
+    }
+
+    pub fn has(self: *const Bag) bool {
+        return self.items.items.len != 0;
+    }
+
+    pub fn set(self: *Bag, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
+        const owned = self.makeOwned(line, column, code, message, line_text) catch return;
+        self.items.append(owned) catch {};
+    }
+
+    pub fn take(self: *Bag) ?ParseDiagnostic {
+        if (self.items.items.len == 0) return null;
+        return self.items.orderedRemove(0);
+    }
+
+    pub fn latest(self: *const Bag) ?ParseDiagnostic {
+        if (self.items.items.len == 0) return null;
+        return self.items.items[self.items.items.len - 1];
+    }
+
+    pub fn noteFallbackSource(self: *Bag, line: usize, column: usize, line_text: []const u8) void {
+        self.fallback = .{
+            .line = if (line == 0) 1 else line,
+            .column = if (column == 0) 1 else column,
+            .line_text = self.allocator.dupe(u8, line_text) catch return,
+        };
+    }
+
+    pub fn fallbackSource(self: *const Bag) ?FallbackSource {
+        return self.fallback;
+    }
+
+    pub fn takeFallbackSource(self: *Bag) ?FallbackSource {
+        const source = self.fallback orelse return null;
+        self.fallback = null;
+        return source;
+    }
+
+    fn makeOwned(self: *Bag, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) !ParseDiagnostic {
+        return .{
+            .line = if (line == 0) 1 else line,
+            .column = if (column == 0) 1 else column,
+            .code = try self.allocator.dupe(u8, code),
+            .message = try self.allocator.dupe(u8, message),
+            .line_text = try self.allocator.dupe(u8, line_text),
+        };
+    }
+};
+
 const Storage = struct {
     line: usize = 1,
     column: usize = 1,
@@ -29,17 +98,43 @@ threadlocal var storage: Storage = .{};
 threadlocal var has_diag: bool = false;
 threadlocal var fallback_storage: Storage = .{};
 threadlocal var has_fallback: bool = false;
+threadlocal var active_bag: ?*Bag = null;
+
+pub fn setActiveBag(bag: ?*Bag) ?*Bag {
+    const previous = active_bag;
+    active_bag = bag;
+    return previous;
+}
+
+pub fn publishCompatFromBag(bag: *Bag) void {
+    clear();
+    if (bag.take()) |diag| {
+        set(diag.line, diag.column, diag.code, diag.message, diag.line_text);
+    }
+    if (bag.fallbackSource()) |source| {
+        noteFallbackSource(source.line, source.column, source.line_text);
+    }
+}
 
 pub fn clear() void {
+    if (active_bag) |bag| {
+        bag.clear();
+        return;
+    }
     has_diag = false;
     has_fallback = false;
 }
 
 pub fn has() bool {
+    if (active_bag) |bag| return bag.has();
     return has_diag;
 }
 
 pub fn set(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
+    if (active_bag) |bag| {
+        bag.set(line, column, code, message, line_text);
+        return;
+    }
     var next: Storage = .{
         .line = if (line == 0) 1 else line,
         .column = if (column == 0) 1 else column,
@@ -52,6 +147,7 @@ pub fn set(line: usize, column: usize, code: []const u8, message: []const u8, li
 }
 
 pub fn take() ?ParseDiagnostic {
+    if (active_bag) |bag| return bag.take();
     if (!has_diag) return null;
     has_diag = false;
     return .{
@@ -64,6 +160,10 @@ pub fn take() ?ParseDiagnostic {
 }
 
 pub fn noteFallbackSource(line: usize, column: usize, line_text: []const u8) void {
+    if (active_bag) |bag| {
+        bag.noteFallbackSource(line, column, line_text);
+        return;
+    }
     var next: Storage = .{
         .line = if (line == 0) 1 else line,
         .column = if (column == 0) 1 else column,
@@ -74,6 +174,7 @@ pub fn noteFallbackSource(line: usize, column: usize, line_text: []const u8) voi
 }
 
 pub fn fallbackSource() ?FallbackSource {
+    if (active_bag) |bag| return bag.fallbackSource();
     if (!has_fallback) return null;
     return .{
         .line = fallback_storage.line,
@@ -83,6 +184,7 @@ pub fn fallbackSource() ?FallbackSource {
 }
 
 pub fn takeFallbackSource() ?FallbackSource {
+    if (active_bag) |bag| return bag.takeFallbackSource();
     const source = fallbackSource() orelse return null;
     has_fallback = false;
     return source;

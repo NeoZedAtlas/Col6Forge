@@ -180,8 +180,25 @@ pub fn runPipelineWithOptions(
     emit: EmitKind,
     options: PipelineOptions,
 ) !PipelineResult {
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+    const result = runPipelineWithOptionsAndDiagnostics(allocator, input_path, emit, options, &diag_bag) catch |err| {
+        publishCompatFromBag(&diag_bag);
+        return err;
+    };
+    publishCompatFromBag(&diag_bag);
+    return result;
+}
+
+pub fn runPipelineWithOptionsAndDiagnostics(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    emit: EmitKind,
+    options: PipelineOptions,
+    diag_bag: *diag.Bag,
+) !PipelineResult {
     _ = emit;
-    clearLastDiagnostic();
+    diag_bag.clear();
     clearLastProfile();
     var profile = PipelineProfile{
         .time_report = options.time_report,
@@ -205,7 +222,7 @@ pub fn runPipelineWithOptions(
         profile.read_ns = elapsedNs(read_start);
         profile.markFailure(.read);
         if (err == error.FileNotFound) {
-            setLastDiagnostic(input_path, 1, 1, "CF0001", "input file not found", "");
+            diag_bag.add(input_path, 1, 1, "CF0001", "input file not found", "");
         }
         return err;
     };
@@ -216,13 +233,13 @@ pub fn runPipelineWithOptions(
     const logical_lines = source_form.normalizePath(.auto, allocator, input_path, contents, options.coarse_source_map) catch |err| {
         profile.normalize_ns = elapsedNs(normalize_start);
         profile.markFailure(.normalize);
-        setDefaultDiagnostic(input_path, contents, "CF0002", "failed to normalize source form", err);
+        setDefaultDiagnostic(diag_bag, input_path, contents, "CF0002", "failed to normalize source form", err);
         return err;
     };
     profile.normalize_ns = elapsedNs(normalize_start);
     defer source_form.freeLogicalLines(allocator, logical_lines);
 
-    const output = emitLlvmModule(allocator, input_path, contents, logical_lines, options, &profile) catch |err| {
+    const output = emitLlvmModule(allocator, input_path, contents, logical_lines, options, diag_bag, &profile) catch |err| {
         profile.markFailure(.pipeline);
         return err;
     };
@@ -240,8 +257,25 @@ pub fn runPipelineToWriterWithOptions(
     writer: anytype,
     options: PipelineOptions,
 ) !void {
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+    runPipelineToWriterWithOptionsAndDiagnostics(allocator, input_path, emit, writer, options, &diag_bag) catch |err| {
+        publishCompatFromBag(&diag_bag);
+        return err;
+    };
+    publishCompatFromBag(&diag_bag);
+}
+
+pub fn runPipelineToWriterWithOptionsAndDiagnostics(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    emit: EmitKind,
+    writer: anytype,
+    options: PipelineOptions,
+    diag_bag: *diag.Bag,
+) !void {
     _ = emit;
-    clearLastDiagnostic();
+    diag_bag.clear();
     clearLastProfile();
     var profile = PipelineProfile{
         .time_report = options.time_report,
@@ -265,7 +299,7 @@ pub fn runPipelineToWriterWithOptions(
         profile.read_ns = elapsedNs(read_start);
         profile.markFailure(.read);
         if (err == error.FileNotFound) {
-            setLastDiagnostic(input_path, 1, 1, "CF0001", "input file not found", "");
+            diag_bag.add(input_path, 1, 1, "CF0001", "input file not found", "");
         }
         return err;
     };
@@ -276,13 +310,13 @@ pub fn runPipelineToWriterWithOptions(
     const logical_lines = source_form.normalizePath(.auto, allocator, input_path, contents, options.coarse_source_map) catch |err| {
         profile.normalize_ns = elapsedNs(normalize_start);
         profile.markFailure(.normalize);
-        setDefaultDiagnostic(input_path, contents, "CF0002", "failed to normalize source form", err);
+        setDefaultDiagnostic(diag_bag, input_path, contents, "CF0002", "failed to normalize source form", err);
         return err;
     };
     profile.normalize_ns = elapsedNs(normalize_start);
     defer source_form.freeLogicalLines(allocator, logical_lines);
 
-    emitLlvmModuleToWriter(allocator, input_path, contents, logical_lines, writer, options, &profile) catch |err| {
+    emitLlvmModuleToWriter(allocator, input_path, contents, logical_lines, writer, options, diag_bag, &profile) catch |err| {
         profile.markFailure(.pipeline);
         return err;
     };
@@ -341,11 +375,14 @@ fn emitLlvmModule(
     contents: []const u8,
     logical_lines: []logical_line.LogicalLine,
     options: PipelineOptions,
+    diag_bag: *diag.Bag,
     profile: ?*PipelineProfile,
 ) ![]const u8 {
     if (logical_lines.len == 0) {
         const codegen_start = nowNs();
-        const output = codegen.emitModuleWithOptions(
+        var codegen_diag_bag = codegen.diagnostic.Bag.init(allocator);
+        defer codegen_diag_bag.deinit();
+        const output = codegen.emitModuleWithOptionsAndDiagnostics(
             allocator,
             .{ .units = &.{} },
             .{ .units = &.{} },
@@ -357,13 +394,14 @@ fn emitLlvmModule(
                 .target_layout = options.semantic_target_layout,
                 .known_procedure_sigs = options.known_procedure_sigs,
             },
+            &codegen_diag_bag,
         ) catch |err| {
             if (profile) |p| {
                 p.codegen_ns = elapsedNs(codegen_start);
                 applyCodegenBreakdown(p);
                 p.markFailure(.codegen);
             }
-            setCodegenDiagnostic(input_path, contents, err);
+            setCodegenDiagnostic(diag_bag, &codegen_diag_bag, input_path, contents, err);
             return err;
         };
         if (profile) |p| {
@@ -374,36 +412,43 @@ fn emitLlvmModule(
     }
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
+    var parse_diag_bag = parser.diagnostic.Bag.init(arena.allocator());
+    defer parse_diag_bag.deinit();
     const parse_start = nowNs();
-    const program = parser.parseProgram(arena.allocator(), logical_lines) catch |err| {
+    const program = parser.parseProgramWithDiagnostics(arena.allocator(), logical_lines, &parse_diag_bag) catch |err| {
         if (profile) |p| {
             p.parse_ns = elapsedNs(parse_start);
             p.markFailure(.parse);
         }
-        setParseDiagnostic(input_path, contents, logical_lines, err);
+        setParseDiagnostic(diag_bag, &parse_diag_bag, input_path, contents, logical_lines, err);
         return err;
     };
     if (profile) |p| p.parse_ns = elapsedNs(parse_start);
 
+    var semantic_diag_bag = semantic.diagnostic.Bag.init(arena.allocator());
+    defer semantic_diag_bag.deinit();
     const semantic_start = nowNs();
-    const sem = semantic.analyzeProgramWithKnownAndOptions(
+    const sem = semantic.analyzeProgramWithKnownAndOptionsAndDiagnostics(
         arena.allocator(),
         program,
         options.known_function_types,
         options.known_procedure_sigs,
         .{ .target_layout = options.semantic_target_layout },
+        &semantic_diag_bag,
     ) catch |err| {
         if (profile) |p| {
             p.semantic_ns = elapsedNs(semantic_start);
             p.markFailure(.semantic);
         }
-        setSemanticDiagnostic(input_path, contents, err);
+        setSemanticDiagnostic(diag_bag, &semantic_diag_bag, input_path, contents, err);
         return err;
     };
     if (profile) |p| p.semantic_ns = elapsedNs(semantic_start);
 
+    var codegen_diag_bag = codegen.diagnostic.Bag.init(allocator);
+    defer codegen_diag_bag.deinit();
     const codegen_start = nowNs();
-    const output = codegen.emitModuleWithOptions(
+    const output = codegen.emitModuleWithOptionsAndDiagnostics(
         allocator,
         program,
         sem,
@@ -415,13 +460,14 @@ fn emitLlvmModule(
             .target_layout = options.semantic_target_layout,
             .known_procedure_sigs = options.known_procedure_sigs,
         },
+        &codegen_diag_bag,
     ) catch |err| {
         if (profile) |p| {
             p.codegen_ns = elapsedNs(codegen_start);
             applyCodegenBreakdown(p);
             p.markFailure(.codegen);
         }
-        setCodegenDiagnostic(input_path, contents, err);
+        setCodegenDiagnostic(diag_bag, &codegen_diag_bag, input_path, contents, err);
         return err;
     };
     if (profile) |p| {
@@ -438,11 +484,14 @@ fn emitLlvmModuleToWriter(
     logical_lines: []logical_line.LogicalLine,
     writer: anytype,
     options: PipelineOptions,
+    diag_bag: *diag.Bag,
     profile: ?*PipelineProfile,
 ) !void {
     if (logical_lines.len == 0) {
         const codegen_start = nowNs();
-        codegen.emitModuleToWriterWithOptions(
+        var codegen_diag_bag = codegen.diagnostic.Bag.init(allocator);
+        defer codegen_diag_bag.deinit();
+        codegen.emitModuleToWriterWithOptionsAndDiagnostics(
             writer,
             allocator,
             .{ .units = &.{} },
@@ -455,13 +504,14 @@ fn emitLlvmModuleToWriter(
                 .target_layout = options.semantic_target_layout,
                 .known_procedure_sigs = options.known_procedure_sigs,
             },
+            &codegen_diag_bag,
         ) catch |err| {
             if (profile) |p| {
                 p.codegen_ns = elapsedNs(codegen_start);
                 applyCodegenBreakdown(p);
                 p.markFailure(.codegen);
             }
-            setCodegenDiagnostic(input_path, contents, err);
+            setCodegenDiagnostic(diag_bag, &codegen_diag_bag, input_path, contents, err);
             return err;
         };
         if (profile) |p| {
@@ -472,36 +522,43 @@ fn emitLlvmModuleToWriter(
     }
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
+    var parse_diag_bag = parser.diagnostic.Bag.init(arena.allocator());
+    defer parse_diag_bag.deinit();
     const parse_start = nowNs();
-    const program = parser.parseProgram(arena.allocator(), logical_lines) catch |err| {
+    const program = parser.parseProgramWithDiagnostics(arena.allocator(), logical_lines, &parse_diag_bag) catch |err| {
         if (profile) |p| {
             p.parse_ns = elapsedNs(parse_start);
             p.markFailure(.parse);
         }
-        setParseDiagnostic(input_path, contents, logical_lines, err);
+        setParseDiagnostic(diag_bag, &parse_diag_bag, input_path, contents, logical_lines, err);
         return err;
     };
     if (profile) |p| p.parse_ns = elapsedNs(parse_start);
 
+    var semantic_diag_bag = semantic.diagnostic.Bag.init(arena.allocator());
+    defer semantic_diag_bag.deinit();
     const semantic_start = nowNs();
-    const sem = semantic.analyzeProgramWithKnownAndOptions(
+    const sem = semantic.analyzeProgramWithKnownAndOptionsAndDiagnostics(
         arena.allocator(),
         program,
         options.known_function_types,
         options.known_procedure_sigs,
         .{ .target_layout = options.semantic_target_layout },
+        &semantic_diag_bag,
     ) catch |err| {
         if (profile) |p| {
             p.semantic_ns = elapsedNs(semantic_start);
             p.markFailure(.semantic);
         }
-        setSemanticDiagnostic(input_path, contents, err);
+        setSemanticDiagnostic(diag_bag, &semantic_diag_bag, input_path, contents, err);
         return err;
     };
     if (profile) |p| p.semantic_ns = elapsedNs(semantic_start);
 
+    var codegen_diag_bag = codegen.diagnostic.Bag.init(allocator);
+    defer codegen_diag_bag.deinit();
     const codegen_start = nowNs();
-    codegen.emitModuleToWriterWithOptions(
+    codegen.emitModuleToWriterWithOptionsAndDiagnostics(
         writer,
         allocator,
         program,
@@ -514,13 +571,14 @@ fn emitLlvmModuleToWriter(
             .target_layout = options.semantic_target_layout,
             .known_procedure_sigs = options.known_procedure_sigs,
         },
+        &codegen_diag_bag,
     ) catch |err| {
         if (profile) |p| {
             p.codegen_ns = elapsedNs(codegen_start);
             applyCodegenBreakdown(p);
             p.markFailure(.codegen);
         }
-        setCodegenDiagnostic(input_path, contents, err);
+        setCodegenDiagnostic(diag_bag, &codegen_diag_bag, input_path, contents, err);
         return err;
     };
     if (profile) |p| {
@@ -557,91 +615,73 @@ fn stageName(stage: PipelineStage) []const u8 {
 }
 
 fn setParseDiagnostic(
+    diag_bag: *diag.Bag,
+    parse_diag_bag: *parser.diagnostic.Bag,
     input_path: []const u8,
     contents: []const u8,
     logical_lines: []logical_line.LogicalLine,
     err: anyerror,
 ) void {
-    if (parser.takeDiagnostic()) |parse_info| {
+    if (parse_diag_bag.latest()) |parse_info| {
         const raw_line = sourceLineAt(contents, parse_info.line);
         const line_text = if (raw_line.len > 0) raw_line else parse_info.line_text;
-        setLastDiagnostic(
-            input_path,
-            parse_info.line,
-            parse_info.column,
-            parse_info.code,
-            parse_info.message,
-            line_text,
-        );
+        diag_bag.add(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text);
         return;
     }
-    if (parser.takeFallbackSource()) |fallback| {
+    if (parse_diag_bag.fallbackSource()) |fallback| {
         const raw_line = sourceLineAt(contents, fallback.line);
         const line_text = if (raw_line.len > 0) raw_line else fallback.line_text;
-        setDefaultDiagnosticAt(input_path, fallback.line, fallback.column, line_text, "CF2000", "failed to parse source", err);
+        setDefaultDiagnosticAt(diag_bag, input_path, fallback.line, fallback.column, line_text, "CF2000", "failed to parse source", err);
         return;
     }
 
     const line_no: usize = if (logical_lines.len > 0) logical_lines[0].span.start_line else 1;
     const line_text = sourceLineAt(contents, line_no);
-    setDefaultDiagnosticAt(input_path, line_no, 1, line_text, "CF2000", "failed to parse source", err);
+    setDefaultDiagnosticAt(diag_bag, input_path, line_no, 1, line_text, "CF2000", "failed to parse source", err);
 }
 
-fn setSemanticDiagnostic(input_path: []const u8, contents: []const u8, err: anyerror) void {
-    if (semantic.takeDiagnostic()) |sem_info| {
+fn setSemanticDiagnostic(diag_bag: *diag.Bag, semantic_diag_bag: *semantic.diagnostic.Bag, input_path: []const u8, contents: []const u8, err: anyerror) void {
+    if (semantic_diag_bag.latest()) |sem_info| {
         const raw_line = sourceLineAt(contents, sem_info.line);
         const line_text = if (raw_line.len > 0) raw_line else sem_info.line_text;
-        setLastDiagnostic(
-            input_path,
-            sem_info.line,
-            sem_info.column,
-            sem_info.code,
-            sem_info.message,
-            line_text,
-        );
+        diag_bag.add(input_path, sem_info.line, sem_info.column, sem_info.code, sem_info.message, line_text);
         return;
     }
-    if (semantic.takeFallbackSource()) |fallback| {
+    if (semantic_diag_bag.fallbackSource()) |fallback| {
         const raw_line = sourceLineAt(contents, fallback.line);
         const line_text = if (raw_line.len > 0) raw_line else fallback.line_text;
-        setDefaultDiagnosticAt(input_path, fallback.line, fallback.column, line_text, "CF3199", "semantic analysis failed", err);
+        setDefaultDiagnosticAt(diag_bag, input_path, fallback.line, fallback.column, line_text, "CF3199", "semantic analysis failed", err);
         return;
     }
-    setDefaultDiagnostic(input_path, contents, "CF3199", "semantic analysis failed", err);
+    setDefaultDiagnostic(diag_bag, input_path, contents, "CF3199", "semantic analysis failed", err);
 }
 
-fn setCodegenDiagnostic(input_path: []const u8, contents: []const u8, err: anyerror) void {
-    if (codegen.takeDiagnostic()) |cg_info| {
+fn setCodegenDiagnostic(diag_bag: *diag.Bag, codegen_diag_bag: *codegen.diagnostic.Bag, input_path: []const u8, contents: []const u8, err: anyerror) void {
+    if (codegen_diag_bag.latest()) |cg_info| {
         const raw_line = sourceLineAt(contents, cg_info.line);
         const line_text = if (raw_line.len > 0) raw_line else cg_info.line_text;
-        setLastDiagnostic(
-            input_path,
-            cg_info.line,
-            cg_info.column,
-            cg_info.code,
-            cg_info.message,
-            line_text,
-        );
+        diag_bag.add(input_path, cg_info.line, cg_info.column, cg_info.code, cg_info.message, line_text);
         return;
     }
-    if (codegen.takeFallbackSource()) |fallback| {
+    if (codegen_diag_bag.fallbackSource()) |fallback| {
         const info = codegen.diagnostic.codegenErrorInfo(err);
         const raw_line = sourceLineAt(contents, fallback.line);
         const line_text = if (raw_line.len > 0) raw_line else fallback.line_text;
-        setDefaultDiagnosticAt(input_path, fallback.line, fallback.column, line_text, info.code, info.message, err);
+        setDefaultDiagnosticAt(diag_bag, input_path, fallback.line, fallback.column, line_text, info.code, info.message, err);
         return;
     }
     const info = codegen.diagnostic.codegenErrorInfo(err);
-    setDefaultDiagnostic(input_path, contents, info.code, info.message, err);
+    setDefaultDiagnostic(diag_bag, input_path, contents, info.code, info.message, err);
 }
 
-fn setDefaultDiagnostic(input_path: []const u8, contents: []const u8, code: []const u8, base_message: []const u8, err: anyerror) void {
+fn setDefaultDiagnostic(diag_bag: *diag.Bag, input_path: []const u8, contents: []const u8, code: []const u8, base_message: []const u8, err: anyerror) void {
     const line_no: usize = 1;
     const line_text = sourceLineAt(contents, line_no);
-    setDefaultDiagnosticAt(input_path, line_no, 1, line_text, code, base_message, err);
+    setDefaultDiagnosticAt(diag_bag, input_path, line_no, 1, line_text, code, base_message, err);
 }
 
 fn setDefaultDiagnosticAt(
+    diag_bag: *diag.Bag,
     input_path: []const u8,
     line: usize,
     column: usize,
@@ -652,7 +692,21 @@ fn setDefaultDiagnosticAt(
 ) void {
     var message_buf: [256]u8 = undefined;
     const message = std.fmt.bufPrint(&message_buf, "{s} ({s})", .{ base_message, @errorName(err) }) catch base_message;
-    setLastDiagnostic(input_path, line, column, code, message, line_text);
+    diag_bag.add(input_path, line, column, code, message, line_text);
+}
+
+fn publishCompatFromBag(diag_bag: *diag.Bag) void {
+    clearLastDiagnostic();
+    if (diag_bag.take()) |pipeline_diag| {
+        setLastDiagnostic(
+            pipeline_diag.file_path,
+            pipeline_diag.line,
+            pipeline_diag.column,
+            pipeline_diag.code,
+            pipeline_diag.message,
+            pipeline_diag.line_text,
+        );
+    }
 }
 
 fn setLastDiagnostic(
@@ -809,4 +863,34 @@ test "runPipeline reports free-form continued parse diagnostics against the orig
     try testing.expectEqual(@as(usize, 3), diag_info.column);
     try testing.expectEqualStrings("CF2001", diag_info.code);
     try testing.expectEqualStrings("  )", diag_info.line_text);
+}
+
+test "runPipelineWithOptionsAndDiagnostics keeps diagnostics in explicit bag" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*(*) A\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "explicit_semantic_diag.f", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+    clearLastDiagnostic();
+
+    try testing.expectError(
+        error.InvalidCharLen,
+        runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag),
+    );
+    const diag_info = diag_bag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag_info.line);
+    try testing.expectEqual(@as(usize, 7), diag_info.column);
+    try testing.expectEqualStrings("CF3103", diag_info.code);
+    try testing.expectEqualStrings("      CHARACTER*(*) A", diag_info.line_text);
+    try testing.expect(takeLastDiagnostic() == null);
 }

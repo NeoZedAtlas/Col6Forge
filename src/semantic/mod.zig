@@ -40,6 +40,7 @@ pub const analyzeProgram = api.analyzeProgram;
 pub const analyzeProgramWithKnown = api.analyzeProgramWithKnown;
 pub const analyzeProgramWithOptions = api.analyzeProgramWithOptions;
 pub const analyzeProgramWithKnownAndOptions = api.analyzeProgramWithKnownAndOptions;
+pub const analyzeProgramWithKnownAndOptionsAndDiagnostics = api.analyzeProgramWithKnownAndOptionsAndDiagnostics;
 pub const inferFunctionType = function_type.inferFunctionType;
 pub const inferFunctionTypeSpec = function_type.inferFunctionTypeSpec;
 pub const inferProcedureArgSigs = api.inferProcedureArgSigs;

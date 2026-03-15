@@ -22,7 +22,29 @@ const Stmt = ast.Stmt;
 const LineParser = context.LineParser;
 
 pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.LogicalLine) !Program {
-    parse_diag.clear();
+    var diag_bag = parse_diag.Bag.init(arena_allocator);
+    defer diag_bag.deinit();
+    const program = parseProgramWithDiagnostics(arena_allocator, lines, &diag_bag) catch |err| {
+        parse_diag.publishCompatFromBag(&diag_bag);
+        return err;
+    };
+    parse_diag.publishCompatFromBag(&diag_bag);
+    return program;
+}
+
+pub fn parseProgramWithDiagnostics(
+    arena_allocator: std.mem.Allocator,
+    lines: []logical_line.LogicalLine,
+    diag_bag: *parse_diag.Bag,
+) !Program {
+    diag_bag.clear();
+    var lex_diag_bag = lexer.Bag.init(arena_allocator);
+    defer lex_diag_bag.deinit();
+    const prev_parse_bag = parse_diag.setActiveBag(diag_bag);
+    defer _ = parse_diag.setActiveBag(prev_parse_bag);
+    const prev_lex_bag = lexer.setActiveBag(&lex_diag_bag);
+    defer _ = lexer.setActiveBag(prev_lex_bag);
+
     const token_cache = try arena_allocator.alloc(?[]lexer.Token, lines.len);
     @memset(token_cache, null);
     var expr_capture = expr.SourceCapture.init(arena_allocator);
@@ -1440,4 +1462,30 @@ test "parseProgram reports free-form continued declaration parse errors on the r
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 3), diag.column);
     try testing.expectEqualStrings("CF2001", diag.code);
+}
+
+test "parseProgramWithDiagnostics captures parse errors in explicit bag" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "integer :: a, &\n" ++
+        "  )\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    try testing.expectError(error.UnexpectedToken, parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag));
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqual(@as(usize, 3), diag.column);
+    try testing.expectEqualStrings("CF2001", diag.code);
+    try testing.expectEqualStrings("  )", diag.line_text);
+    try testing.expect(parse_diag.take() == null);
 }

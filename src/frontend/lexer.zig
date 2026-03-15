@@ -40,6 +40,46 @@ pub const LexDiagnostic = struct {
     line_text: []const u8,
 };
 
+pub const Bag = struct {
+    allocator: std.mem.Allocator,
+    items: std.array_list.Managed(LexDiagnostic),
+
+    pub fn init(allocator: std.mem.Allocator) Bag {
+        return .{
+            .allocator = allocator,
+            .items = std.array_list.Managed(LexDiagnostic).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Bag) void {
+        self.items.deinit();
+    }
+
+    pub fn clear(self: *Bag) void {
+        self.items.clearRetainingCapacity();
+    }
+
+    pub fn add(self: *Bag, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
+        const owned = self.makeOwned(line, column, code, message, line_text) catch return;
+        self.items.append(owned) catch {};
+    }
+
+    pub fn take(self: *Bag) ?LexDiagnostic {
+        if (self.items.items.len == 0) return null;
+        return self.items.orderedRemove(0);
+    }
+
+    fn makeOwned(self: *Bag, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) !LexDiagnostic {
+        return .{
+            .line = if (line == 0) 1 else line,
+            .column = if (column == 0) 1 else column,
+            .code = try self.allocator.dupe(u8, code),
+            .message = try self.allocator.dupe(u8, message),
+            .line_text = try self.allocator.dupe(u8, line_text),
+        };
+    }
+};
+
 const DiagStorage = struct {
     line: usize = 1,
     column: usize = 1,
@@ -53,6 +93,20 @@ const DiagStorage = struct {
 
 threadlocal var diag_storage: DiagStorage = .{};
 threadlocal var has_diag: bool = false;
+threadlocal var active_bag: ?*Bag = null;
+
+pub fn setActiveBag(bag: ?*Bag) ?*Bag {
+    const previous = active_bag;
+    active_bag = bag;
+    return previous;
+}
+
+pub fn publishCompatFromBag(bag: *Bag) void {
+    has_diag = false;
+    if (bag.take()) |diag| {
+        setCompatDiagnostic(diag.line, diag.column, diag.code, diag.message, diag.line_text);
+    }
+}
 
 pub fn tokenKindName(kind: TokenKind) []const u8 {
     return switch (kind) {
@@ -77,7 +131,11 @@ pub fn tokenKindName(kind: TokenKind) []const u8 {
 }
 
 pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLine) ![]Token {
-    has_diag = false;
+    if (active_bag) |bag| {
+        bag.clear();
+    } else {
+        has_diag = false;
+    }
     var tokens = std.array_list.Managed(Token).init(allocator);
     const text = line.text;
     var i: usize = 0;
@@ -249,6 +307,7 @@ pub fn lexLogicalLine(allocator: std.mem.Allocator, line: logical_line.LogicalLi
 }
 
 pub fn takeDiagnostic() ?LexDiagnostic {
+    if (active_bag) |bag| return bag.take();
     if (!has_diag) return null;
     has_diag = false;
     return .{
@@ -349,13 +408,21 @@ fn isDotOperatorStart(text: []const u8, dot_index: usize) bool {
 
 fn setLexDiagnostic(line: logical_line.LogicalLine, index: usize, code: []const u8, message: []const u8) void {
     const pos = logical_line.mapIndexToPos(line, index);
+    if (active_bag) |bag| {
+        bag.add(pos.line, pos.column, code, message, line.text);
+        return;
+    }
+    setCompatDiagnostic(pos.line, pos.column, code, message, line.text);
+}
+
+fn setCompatDiagnostic(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
     var next: DiagStorage = .{
-        .line = if (pos.line == 0) 1 else pos.line,
-        .column = if (pos.column == 0) 1 else pos.column,
+        .line = if (line == 0) 1 else line,
+        .column = if (column == 0) 1 else column,
     };
     next.code_len = copyTrunc(&next.code_buf, code);
     next.message_len = copyTrunc(&next.message_buf, message);
-    next.line_len = copyTrunc(&next.line_buf, line.text);
+    next.line_len = copyTrunc(&next.line_buf, line_text);
     diag_storage = next;
     has_diag = true;
 }

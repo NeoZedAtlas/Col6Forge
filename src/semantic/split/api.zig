@@ -63,7 +63,28 @@ pub fn analyzeProgramWithKnownAndOptions(
     known_proc_sigs: []const KnownProcedureSig,
     options: AnalyzeOptions,
 ) !SemanticProgram {
-    diagnostic.clear();
+    var diag_bag = diagnostic.Bag.init(arena);
+    defer diag_bag.deinit();
+    const result = analyzeProgramWithKnownAndOptionsAndDiagnostics(arena, program, known_fn_types, known_proc_sigs, options, &diag_bag) catch |err| {
+        diagnostic.publishCompatFromBag(&diag_bag);
+        return err;
+    };
+    diagnostic.publishCompatFromBag(&diag_bag);
+    return result;
+}
+
+pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
+    arena: std.mem.Allocator,
+    program: ast.Program,
+    known_fn_types: []const KnownFunctionType,
+    known_proc_sigs: []const KnownProcedureSig,
+    options: AnalyzeOptions,
+    diag_bag: *diagnostic.Bag,
+) !SemanticProgram {
+    diag_bag.clear();
+    const prev_diag_bag = diagnostic.setActiveBag(diag_bag);
+    defer _ = diagnostic.setActiveBag(prev_diag_bag);
+
     const mutable_program = program;
     var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena);
     var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena);
