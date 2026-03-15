@@ -1,4 +1,5 @@
 const std = @import("std");
+const catalog = @import("../../common/error_catalog.zig");
 const compat = @import("../../common/compat_diagnostic_storage.zig");
 
 pub const ParseDiagnostic = struct {
@@ -151,24 +152,24 @@ pub fn takeFallbackSource() ?FallbackSource {
     return source;
 }
 
-pub fn errorInfo(err: anyerror) struct { code: []const u8, message: []const u8 } {
+pub fn errorInfo(err: anyerror) catalog.ErrorInfo {
     return switch (err) {
-        error.UnexpectedToken => .{ .code = "CF2001", .message = "unexpected token in statement" },
-        error.UnexpectedEOF => .{ .code = "CF2002", .message = "unexpected end of file" },
-        error.ExpectedProgramUnit => .{ .code = "CF2003", .message = "expected PROGRAM/SUBROUTINE/FUNCTION/BLOCK DATA" },
-        error.MissingName => .{ .code = "CF2004", .message = "missing required identifier" },
-        error.ExpectedPrecision => .{ .code = "CF2005", .message = "expected PRECISION after DOUBLE" },
-        error.UnsupportedComplexKind => .{ .code = "CF2006", .message = "unsupported COMPLEX kind; use COMPLEX*8 or COMPLEX*16" },
-        error.UnknownType => .{ .code = "CF2007", .message = "unknown type in declaration" },
-        error.ExpectedEndIf => .{ .code = "CF2008", .message = "IF block is missing END IF/ENDIF" },
-        error.DeclarationInIfBlock => .{ .code = "CF2009", .message = "declaration is not allowed inside IF executable block" },
-        error.EndDoWithoutDo => .{ .code = "CF2010", .message = "END DO/ENDDO found without matching DO" },
-        error.ExpressionDepthExceeded => .{ .code = "CF2011", .message = "expression nesting exceeds parser limit" },
-        error.UnsupportedModuleUnit => .{ .code = "CF2012", .message = "MODULE program units are not supported yet" },
-        error.DataExpansionTooLarge => .{ .code = "CF2013", .message = "DATA statement expansion exceeds parser safety limit" },
-        error.FormatExpansionTooLarge => .{ .code = "CF2014", .message = "FORMAT statement expansion exceeds parser safety limit" },
-        error.InvalidEquivalenceGroup => .{ .code = "CF2015", .message = "EQUIVALENCE group must contain at least two designators" },
-        else => .{ .code = "CF2099", .message = "parser failed to understand source" },
+        error.UnexpectedToken => catalog.parser.unexpected_token,
+        error.UnexpectedEOF => catalog.parser.unexpected_eof,
+        error.ExpectedProgramUnit => catalog.parser.expected_program_unit,
+        error.MissingName => catalog.parser.missing_name,
+        error.ExpectedPrecision => catalog.parser.expected_precision,
+        error.UnsupportedComplexKind => catalog.parser.unsupported_complex_kind,
+        error.UnknownType => catalog.parser.unknown_type,
+        error.ExpectedEndIf => catalog.parser.expected_end_if,
+        error.DeclarationInIfBlock => catalog.parser.declaration_in_if_block,
+        error.EndDoWithoutDo => catalog.parser.end_do_without_do,
+        error.ExpressionDepthExceeded => catalog.parser.expression_depth_exceeded,
+        error.UnsupportedModuleUnit => catalog.parser.unsupported_module_unit,
+        error.DataExpansionTooLarge => catalog.parser.data_expansion_too_large,
+        error.FormatExpansionTooLarge => catalog.parser.format_expansion_too_large,
+        error.InvalidEquivalenceGroup => catalog.parser.invalid_equivalence_group,
+        else => catalog.parser.failed_to_understand,
     };
 }
 

@@ -12,6 +12,7 @@ const ScopedRule = struct {
 };
 
 const forbidden_global = [_]Rule{
+    .{ .name = "source doc dependency", .needle = "docs/errors.md" },
     .{ .name = "legacy formatted entry", .needle = "emitWriteFormatted(" },
     .{ .name = "legacy formatted entry", .needle = "emitReadFormatted(" },
     .{ .name = "legacy formatted entry", .needle = "emitSpecialFormattedWrite(" },

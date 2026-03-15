@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const catalog = @import("../../common/error_catalog.zig");
 const diagnostic = @import("../diagnostic.zig");
 const symbols = @import("../symbol/mod.zig");
 const storage_model = @import("storage_model.zig");
@@ -169,5 +170,5 @@ pub fn totalCommonSize(items: []const CommonItemSig) !usize {
 pub fn setCommonMismatchDiagnostic(diag_bag: *diagnostic.Bag, source: ast.DeclSource) void {
     const line = if (source.line == 0) 1 else source.line;
     const col = if (source.column == 0) 1 else source.column;
-    diag_bag.set(line, col, "CF3115", "COMMON block layout mismatch across program units", source.text);
+    diag_bag.set(line, col, catalog.semantic.common_block_mismatch.code, catalog.semantic.common_block_mismatch.message, source.text);
 }

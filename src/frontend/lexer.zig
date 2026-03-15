@@ -1,6 +1,7 @@
 const std = @import("std");
 const logical_line = @import("logical_line.zig");
 const fixed_form = @import("fixed_form.zig");
+const catalog = @import("../common/error_catalog.zig");
 const source_mod = @import("../common/source.zig");
 const compat = @import("../common/compat_diagnostic_storage.zig");
 
@@ -181,12 +182,12 @@ fn lexLogicalLineImpl(
             const digit_end = i;
             if (i < text.len and (text[i] == 'H' or text[i] == 'h')) {
                 const count = parseDecimal(text[start..digit_end]) orelse {
-                    setLexDiagnostic(line, start, "CF1003", "Hollerith length overflow", diag_bag);
+                    setLexDiagnostic(line, start, catalog.lexer.hollerith_length_overflow.code, catalog.lexer.hollerith_length_overflow.message, diag_bag);
                     return error.HollerithLengthOverflow;
                 };
                 i += 1;
                 if (count > text.len - i) {
-                    setLexDiagnostic(line, start, "CF1002", "invalid Hollerith literal", diag_bag);
+                    setLexDiagnostic(line, start, catalog.lexer.invalid_hollerith.code, catalog.lexer.invalid_hollerith.message, diag_bag);
                     return error.InvalidHollerith;
                 }
                 const end = i + count;
@@ -296,7 +297,7 @@ fn lexLogicalLineImpl(
                 i += 1;
             },
             else => {
-                setLexDiagnostic(line, i, "CF1001", "unexpected character", diag_bag);
+                setLexDiagnostic(line, i, catalog.lexer.unexpected_character.code, catalog.lexer.unexpected_character.message, diag_bag);
                 return error.UnexpectedCharacter;
             },
         }

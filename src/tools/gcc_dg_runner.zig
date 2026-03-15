@@ -1147,9 +1147,6 @@ fn formatPipelineFailureText(
     if (Col6Forge.takeLastPipelineDiagnostic()) |d| {
         if (log_output) {
             log_state.stderr("{s}:{d}:{d}: error[{s}]: {s}\n", .{ d.file_path, d.line, d.column, d.code, d.message });
-            if (d.code.len > 0) {
-                log_state.stderr("help: see docs/errors.md#{s}\n", .{d.code});
-            }
             if (d.line_text.len > 0) {
                 log_state.stderr("{s}\n", .{d.line_text});
                 const caret_col = if (d.column == 0) 1 else d.column;
@@ -1164,7 +1161,7 @@ fn formatPipelineFailureText(
     }
 
     const fallback = try std.fmt.allocPrint(allocator, "pipeline error: {s}", .{@errorName(err)});
-    if (log_output) log_state.stderr("{s}:1:1: error[CF0000]: {s}\n", .{ input_path, fallback });
+    if (log_output) log_state.stderr("{s}:1:1: error[{s}]: {s}\n", .{ input_path, Col6Forge.error_catalog.pipeline.generic.code, fallback });
     return fallback;
 }
 

@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const catalog = @import("../../common/error_catalog.zig");
 const context = @import("context.zig");
 const symbols = @import("../symbol/mod.zig");
 const symbols_mod = @import("resolve_symbols.zig");
@@ -184,7 +185,7 @@ fn setParameterNotConstantDiagnostic(self: *context.Context, name: []const u8) v
         .{name},
     ) catch "PARAMETER value is not a constant expression";
     const loc = currentDeclLocation(self);
-    self.setDiagnostic(loc.line, loc.column, "CF3111", message, loc.text);
+    self.setDiagnostic(loc.line, loc.column, catalog.semantic.parameter_not_constant.code, message, loc.text);
 }
 
 fn setParameterTypeMismatchDiagnostic(
@@ -200,7 +201,7 @@ fn setParameterTypeMismatchDiagnostic(
         .{ name, typeKindName(expected), constValueKindName(actual) },
     ) catch "PARAMETER value type is incompatible with declaration";
     const loc = currentDeclLocation(self);
-    self.setDiagnostic(loc.line, loc.column, "CF3112", message, loc.text);
+    self.setDiagnostic(loc.line, loc.column, catalog.semantic.parameter_type_mismatch.code, message, loc.text);
 }
 
 fn currentDeclLocation(self: *context.Context) struct { line: usize, column: usize, text: []const u8 } {

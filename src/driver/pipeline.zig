@@ -1,5 +1,6 @@
 const std = @import("std");
 const diag = @import("../common/diagnostic.zig");
+const catalog = @import("../common/error_catalog.zig");
 const source_form = @import("../frontend/source_form.zig");
 const logical_line = @import("../frontend/logical_line.zig");
 const parser = @import("../frontend/parser/mod.zig");
@@ -228,7 +229,7 @@ pub fn runPipelineWithOptionsAndDiagnostics(
         profile.read_ns = elapsedNs(read_start);
         profile.markFailure(.read);
         if (err == error.FileNotFound) {
-            diag_bag.add(input_path, 1, 1, "CF0001", "input file not found", "");
+            diag_bag.add(input_path, 1, 1, catalog.pipeline.input_not_found.code, catalog.pipeline.input_not_found.message, "");
         }
         return err;
     };
@@ -239,7 +240,7 @@ pub fn runPipelineWithOptionsAndDiagnostics(
     const logical_lines = source_form.normalizePath(.auto, allocator, input_path, contents, options.coarse_source_map) catch |err| {
         profile.normalize_ns = elapsedNs(normalize_start);
         profile.markFailure(.normalize);
-        setDefaultDiagnostic(diag_bag, input_path, contents, "CF0002", "failed to normalize source form", err);
+        setDefaultDiagnostic(diag_bag, input_path, contents, catalog.pipeline.normalize_failed.code, catalog.pipeline.normalize_failed.message, err);
         return err;
     };
     profile.normalize_ns = elapsedNs(normalize_start);
@@ -305,7 +306,7 @@ pub fn runPipelineToWriterWithOptionsAndDiagnostics(
         profile.read_ns = elapsedNs(read_start);
         profile.markFailure(.read);
         if (err == error.FileNotFound) {
-            diag_bag.add(input_path, 1, 1, "CF0001", "input file not found", "");
+            diag_bag.add(input_path, 1, 1, catalog.pipeline.input_not_found.code, catalog.pipeline.input_not_found.message, "");
         }
         return err;
     };
@@ -316,7 +317,7 @@ pub fn runPipelineToWriterWithOptionsAndDiagnostics(
     const logical_lines = source_form.normalizePath(.auto, allocator, input_path, contents, options.coarse_source_map) catch |err| {
         profile.normalize_ns = elapsedNs(normalize_start);
         profile.markFailure(.normalize);
-        setDefaultDiagnostic(diag_bag, input_path, contents, "CF0002", "failed to normalize source form", err);
+        setDefaultDiagnostic(diag_bag, input_path, contents, catalog.pipeline.normalize_failed.code, catalog.pipeline.normalize_failed.message, err);
         return err;
     };
     profile.normalize_ns = elapsedNs(normalize_start);
@@ -357,8 +358,8 @@ pub fn writePipelineErrorDiagnostic(writer: *std.Io.Writer, input_path: []const 
             .file_path = input_path,
             .line = 1,
             .column = 1,
-            .code = "CF0001",
-            .message = "input file not found",
+            .code = catalog.pipeline.input_not_found.code,
+            .message = catalog.pipeline.input_not_found.message,
             .line_text = "",
         });
     }
@@ -369,7 +370,7 @@ pub fn writePipelineErrorDiagnostic(writer: *std.Io.Writer, input_path: []const 
         .file_path = input_path,
         .line = 1,
         .column = 1,
-        .code = "CF0000",
+        .code = catalog.pipeline.generic.code,
         .message = if (message) |buf| buf else "pipeline error",
         .line_text = "",
     });
@@ -637,13 +638,13 @@ fn setParseDiagnostic(
     if (parse_diag_bag.fallbackSource()) |fallback| {
         const raw_line = sourceLineAt(contents, fallback.line);
         const line_text = if (raw_line.len > 0) raw_line else fallback.line_text;
-        setDefaultDiagnosticAt(diag_bag, input_path, fallback.line, fallback.column, line_text, "CF2000", "failed to parse source", err);
+        setDefaultDiagnosticAt(diag_bag, input_path, fallback.line, fallback.column, line_text, catalog.parser.generic.code, catalog.parser.generic.message, err);
         return;
     }
 
     const line_no: usize = if (logical_lines.len > 0) logical_lines[0].span.start_line else 1;
     const line_text = sourceLineAt(contents, line_no);
-    setDefaultDiagnosticAt(diag_bag, input_path, line_no, 1, line_text, "CF2000", "failed to parse source", err);
+    setDefaultDiagnosticAt(diag_bag, input_path, line_no, 1, line_text, catalog.parser.generic.code, catalog.parser.generic.message, err);
 }
 
 fn setSemanticDiagnostic(diag_bag: *diag.Bag, semantic_diag_bag: *semantic.diagnostic.Bag, input_path: []const u8, contents: []const u8, err: anyerror) void {
@@ -656,10 +657,10 @@ fn setSemanticDiagnostic(diag_bag: *diag.Bag, semantic_diag_bag: *semantic.diagn
     if (semantic_diag_bag.fallbackSource()) |fallback| {
         const raw_line = sourceLineAt(contents, fallback.line);
         const line_text = if (raw_line.len > 0) raw_line else fallback.line_text;
-        setDefaultDiagnosticAt(diag_bag, input_path, fallback.line, fallback.column, line_text, "CF3199", "semantic analysis failed", err);
+        setDefaultDiagnosticAt(diag_bag, input_path, fallback.line, fallback.column, line_text, catalog.semantic.generic.code, catalog.semantic.generic.message, err);
         return;
     }
-    setDefaultDiagnostic(diag_bag, input_path, contents, "CF3199", "semantic analysis failed", err);
+    setDefaultDiagnostic(diag_bag, input_path, contents, catalog.semantic.generic.code, catalog.semantic.generic.message, err);
 }
 
 fn setCodegenDiagnostic(diag_bag: *diag.Bag, codegen_diag_bag: *codegen.diagnostic.Bag, input_path: []const u8, contents: []const u8, err: anyerror) void {
