@@ -5,6 +5,7 @@ const llvm_types = @import("../../types.zig");
 const common = @import("../common.zig");
 const context = @import("../context.zig");
 const utils = @import("../utils.zig");
+const evaluator = @import("../../../../semantic/evaluator.zig");
 
 const binary = @import("binary.zig");
 const call = @import("call.zig");
@@ -543,6 +544,7 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
             };
         },
         .substring => |sub| {
+            try validateConstantSubstringBounds(ctx, sub);
             const sym = ctx.findSymbol(sub.name) orelse return null;
             if (!sym.isCharacter()) return null;
             var end_val = try emitCharacterSymbolLenValue(ctx, sub.name, sym);
@@ -672,6 +674,7 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
             }
         },
         .substring => |sub| {
+            try validateConstantSubstringBounds(ctx, sub);
             const sym = ctx.findSymbol(sub.name) orelse return null;
             if (!sym.isCharacter()) return null;
             const base_ptr = if (sub.args.len > 0)
@@ -752,6 +755,148 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
         },
         else => return null,
     }
+}
+
+fn validateConstantSubstringBounds(ctx: *Context, sub: ast.SubstringExpr) EmitError!void {
+    const sym = ctx.findSymbol(sub.name) orelse return;
+    if (!sym.isCharacter()) return;
+    const base_len_usize = common.constantCharacterLen(sym) orelse return;
+    const base_len = std.math.cast(i64, base_len_usize) orelse return;
+
+    if (sub.start) |start_expr| {
+        if (try integerExprExceedsBound(start_expr, base_len)) {
+            return error.SubstringExceedsStringLength;
+        }
+    }
+    if (sub.end) |end_expr| {
+        if (try integerExprExceedsBound(end_expr, base_len)) {
+            return error.SubstringExceedsStringLength;
+        }
+    }
+}
+
+fn integerExprExceedsBound(expr: *Expr, bound: i64) EmitError!bool {
+    if (intLiteralValue(expr)) |value| return value > bound;
+
+    const value = evaluator.evalConst(expr, null) catch |err| switch (err) {
+        error.NumberTooLong => return integerExprHasPositiveOverflow(expr),
+        error.NegativeIntegerExponent,
+        error.DivisionByZero,
+        error.PowerUnsupported,
+        => return false,
+        else => return false,
+    } orelse return false;
+    return switch (value) {
+        .integer => |int_value| int_value > bound,
+        else => false,
+    };
+}
+
+fn integerExprHasPositiveOverflow(expr: *Expr) bool {
+    return integerExprSign(expr) == .positive;
+}
+
+const IntegerExprSign = enum {
+    negative,
+    zero,
+    positive,
+};
+
+fn integerExprSign(expr: *Expr) ?IntegerExprSign {
+    return switch (expr.*) {
+        .literal => |lit| if (lit.kind == .integer) integerLiteralSign(lit.text) else null,
+        .unary => |un| {
+            const inner_sign = integerExprSign(un.expr) orelse return null;
+            return switch (un.op) {
+                .plus => inner_sign,
+                .minus => negateSign(inner_sign),
+                else => null,
+            };
+        },
+        .binary => |bin| {
+            const left_sign = integerExprSign(bin.left) orelse return null;
+            const right_sign = integerExprSign(bin.right) orelse return null;
+            return switch (bin.op) {
+                .add => combineAddSigns(left_sign, right_sign),
+                .sub => combineSubSigns(left_sign, right_sign),
+                .mul => combineMulSigns(left_sign, right_sign),
+                .div => combineDivSigns(left_sign, right_sign),
+                .power => combinePowerSign(left_sign, bin.right),
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
+fn integerLiteralSign(text: []const u8) ?IntegerExprSign {
+    var idx: usize = 0;
+    while (idx < text.len and (text[idx] == ' ' or text[idx] == '\t')) : (idx += 1) {}
+    if (idx >= text.len) return null;
+
+    var negative = false;
+    if (text[idx] == '+' or text[idx] == '-') {
+        negative = text[idx] == '-';
+        idx += 1;
+    }
+
+    var saw_digit = false;
+    var all_zero = true;
+    while (idx < text.len) : (idx += 1) {
+        const ch = text[idx];
+        if (ch == '_') break;
+        if (ch == ' ' or ch == '\t') continue;
+        if (!std.ascii.isDigit(ch)) return null;
+        saw_digit = true;
+        if (ch != '0') all_zero = false;
+    }
+    if (!saw_digit or all_zero) return .zero;
+    return if (negative) .negative else .positive;
+}
+
+fn negateSign(sign: IntegerExprSign) IntegerExprSign {
+    return switch (sign) {
+        .negative => .positive,
+        .zero => .zero,
+        .positive => .negative,
+    };
+}
+
+fn combineAddSigns(left: IntegerExprSign, right: IntegerExprSign) ?IntegerExprSign {
+    if (left == .zero) return right;
+    if (right == .zero) return left;
+    if (left == right) return left;
+    return null;
+}
+
+fn combineSubSigns(left: IntegerExprSign, right: IntegerExprSign) ?IntegerExprSign {
+    if (right == .zero) return left;
+    if (left == .zero) return negateSign(right);
+    if (left == .positive and right == .negative) return .positive;
+    if (left == .negative and right == .positive) return .negative;
+    return null;
+}
+
+fn combineMulSigns(left: IntegerExprSign, right: IntegerExprSign) IntegerExprSign {
+    if (left == .zero or right == .zero) return .zero;
+    return if (left == right) .positive else .negative;
+}
+
+fn combineDivSigns(left: IntegerExprSign, right: IntegerExprSign) ?IntegerExprSign {
+    if (right == .zero) return null;
+    if (left == .zero) return .zero;
+    return if (left == right) .positive else .negative;
+}
+
+fn combinePowerSign(base_sign: IntegerExprSign, exp_expr: *Expr) ?IntegerExprSign {
+    const exp = intLiteralValue(exp_expr) orelse return null;
+    if (exp < 0) return null;
+    if (exp == 0) return .positive;
+    return switch (base_sign) {
+        .zero => .zero,
+        .positive => .positive,
+        .negative => if (@mod(exp, 2) == 0) .positive else .negative,
+    };
 }
 
 pub fn emitCharacterSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) !ValueRef {

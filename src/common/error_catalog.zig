@@ -113,6 +113,7 @@ pub const codegen = struct {
     pub const invalid_equivalence = ErrorInfo{ .code = "CF4134", .message = "COMMON/EQUIVALENCE storage model is inconsistent during code generation" };
     pub const non_constant_character_length = ErrorInfo{ .code = "CF4135", .message = "non-constant CHARACTER length in storage-backed lowering path" };
     pub const implied_do_expansion_too_large = ErrorInfo{ .code = "CF4136", .message = "implied DO expansion exceeds compilation limit" };
+    pub const substring_exceeds_string_length = ErrorInfo{ .code = "CF4137", .message = "substring bound exceeds the string length" };
     pub const generic = ErrorInfo{ .code = "CF4199", .message = "code generation failed" };
 };
 
@@ -201,6 +202,7 @@ pub fn codegenInfoFor(err: anyerror) ErrorInfo {
         error.NonConstantCharacterLength => codegen.non_constant_character_length,
         error.UnsupportedImpliedDo => codegen.unsupported_implied_do,
         error.ImpliedDoExpansionTooLarge => codegen.implied_do_expansion_too_large,
+        error.SubstringExceedsStringLength => codegen.substring_exceeds_string_length,
         error.UnsupportedSubstring, error.UnsupportedConcat => codegen.unsupported_substring,
         error.InvalidStatementFunctionDefinition, error.InvalidStatementFunctionCall => codegen.invalid_statement_function,
         error.AmbiguousCallOrSubscript => codegen.ambiguous_call_or_subscript,
@@ -306,6 +308,7 @@ pub const doc_entries = [_]DocEntry{
     doc(codegen.invalid_equivalence, "codegen"),
     doc(codegen.non_constant_character_length, "codegen"),
     doc(codegen.implied_do_expansion_too_large, "codegen"),
+    doc(codegen.substring_exceeds_string_length, "codegen"),
     doc(codegen.generic, "codegen"),
 };
 

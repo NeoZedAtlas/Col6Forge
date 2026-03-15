@@ -874,6 +874,91 @@ test "codegen diagnostic reports concat expression site for unsupported characte
     try testing.expectEqualStrings(stmt_text, diag.line_text);
 }
 
+test "codegen diagnostic reports substring bound beyond fixed character length" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const stmt_text = "      C = C(1:2_8**32_8+3_8)";
+    const target_expr = try makeIdentExpr(a, "C");
+    const start_expr = try makeLiteralExpr(a, .integer, "1");
+    const pow_base = try makeLiteralExpr(a, .integer, "2_8");
+    const pow_exp = try makeLiteralExpr(a, .integer, "32_8");
+    const pow_expr = try a.create(input.Expr);
+    pow_expr.* = .{ .binary = .{
+        .op = .power,
+        .left = pow_base,
+        .right = pow_exp,
+    } };
+    const extra_expr = try makeLiteralExpr(a, .integer, "3_8");
+    const end_expr = try a.create(input.Expr);
+    end_expr.* = .{ .binary = .{
+        .op = .add,
+        .left = pow_expr,
+        .right = extra_expr,
+    } };
+    const substring_expr = try a.create(input.Expr);
+    substring_expr.* = .{ .substring = .{
+        .name = "C",
+        .args = &.{},
+        .start = start_expr,
+        .end = end_expr,
+    } };
+
+    const stmt_list = try a.alloc(input.Stmt, 1);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .assignment = .{ .target = target_expr, .value = substring_expr } },
+        .source_line = 2,
+        .source_column = 7,
+        .source_text = stmt_text,
+    };
+
+    const expr_sources = try a.alloc(input.ExprSource, 1);
+    expr_sources[0] = .{
+        .expr = substring_expr,
+        .source = makeSourceRef(2, 11, stmt_text),
+    };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+        .expr_sources = expr_sources,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const sem_symbols = try a.alloc(input.sema.Symbol, 1);
+    sem_symbols[0] = makeLocalCharacterSymbol("C", 2, &[_]*input.Expr{});
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = sem_symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var sink = std.array_list.Managed(u8).init(allocator);
+    defer sink.deinit();
+    var writer = sink.writer();
+    try testing.expectError(error.SubstringExceedsStringLength, emitModuleToWriter(&writer, allocator, program, sem_prog, "diag_substring_bounds.f", .{}));
+    const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 2), diag.line);
+    try testing.expectEqual(@as(usize, 11), diag.column);
+    try testing.expectEqualStrings(catalog.codegen.substring_exceeds_string_length.code, diag.code);
+    try testing.expectEqualStrings(stmt_text, diag.line_text);
+}
+
 test "codegen diagnostic reports direct io unit site when REC is missing" {
     const testing = std.testing;
     const allocator = testing.allocator;

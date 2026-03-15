@@ -27,7 +27,7 @@ pub fn isDeclarationStart(lp: LineParser) bool {
             }
         }
     }
-    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE") or lp.isKeywordSplit("PROCEDURE");
+    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("ALLOCATABLE") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE") or lp.isKeywordSplit("PROCEDURE");
 }
 
 pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
@@ -65,6 +65,12 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
     if (lp.isKeywordSplit("DIMENSION")) {
         _ = lp.consumeKeyword("DIMENSION");
+        const items = try parseDeclarators(lp, arena, null, null);
+        return .{ .dimension = .{ .items = items } };
+    }
+    if (lp.isKeywordSplit("ALLOCATABLE")) {
+        _ = lp.consumeKeyword("ALLOCATABLE");
+        _ = consumeDoubleColon(lp);
         const items = try parseDeclarators(lp, arena, null, null);
         return .{ .dimension = .{ .items = items } };
     }
@@ -1393,6 +1399,33 @@ test "parseDecl handles COMPLEX KIND=16 selector" {
             }
             try testing.expectEqual(@as(usize, 1), td.items.len);
             try testing.expectEqualStrings("Z", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl treats standalone ALLOCATABLE array declarations as deferred-shape dimensions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      ALLOCATABLE :: SUM(:), WORK(:,:)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .dimension => |dim| {
+            try testing.expectEqual(@as(usize, 2), dim.items.len);
+            try testing.expectEqualStrings("SUM", dim.items[0].name);
+            try testing.expectEqual(@as(usize, 1), dim.items[0].dims.len);
+            try testing.expectEqualStrings("WORK", dim.items[1].name);
+            try testing.expectEqual(@as(usize, 2), dim.items[1].dims.len);
         },
         else => return error.UnexpectedToken,
     }
