@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("../common/compat_diagnostic_storage.zig");
 
 pub const SemanticDiagnostic = struct {
     line: usize,
@@ -83,26 +84,9 @@ pub const Bag = struct {
     }
 };
 
-const compat_allocator = std.heap.page_allocator;
-
-const Storage = struct {
-    line: usize = 1,
-    column: usize = 1,
-    code: ?[]u8 = null,
-    message: ?[]u8 = null,
-    line_text: ?[]u8 = null,
-
-    fn clear(self: *Storage) void {
-        if (self.code) |buf| compat_allocator.free(buf);
-        if (self.message) |buf| compat_allocator.free(buf);
-        if (self.line_text) |buf| compat_allocator.free(buf);
-        self.* = .{};
-    }
-};
-
-threadlocal var storage: Storage = .{};
+threadlocal var storage: compat.Storage = .{};
 threadlocal var has_diag: bool = false;
-threadlocal var fallback_storage: Storage = .{};
+threadlocal var fallback_storage: compat.Storage = .{};
 threadlocal var has_fallback: bool = false;
 
 pub fn publishCompatFromBag(bag: *Bag) void {
@@ -127,7 +111,7 @@ pub fn has() bool {
 }
 
 pub fn set(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
-    const next = makeStorage(line, column, code, message, line_text) catch return;
+    const next = compat.makeStorage(line, column, code, message, line_text) catch return;
     storage.clear();
     storage = next;
     has_diag = true;
@@ -146,11 +130,7 @@ pub fn take() ?SemanticDiagnostic {
 }
 
 pub fn noteFallbackSource(line: usize, column: usize, line_text: []const u8) void {
-    var next: Storage = .{
-        .line = if (line == 0) 1 else line,
-        .column = if (column == 0) 1 else column,
-    };
-    next.line_text = compat_allocator.dupe(u8, line_text) catch return;
+    const next = compat.makeFallbackStorage(line, column, line_text) catch return;
     fallback_storage.clear();
     fallback_storage = next;
     has_fallback = true;
@@ -169,16 +149,4 @@ pub fn takeFallbackSource() ?FallbackSource {
     const source = fallbackSource() orelse return null;
     has_fallback = false;
     return source;
-}
-
-fn makeStorage(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) !Storage {
-    var next: Storage = .{
-        .line = if (line == 0) 1 else line,
-        .column = if (column == 0) 1 else column,
-    };
-    errdefer next.clear();
-    next.code = try compat_allocator.dupe(u8, code);
-    next.message = try compat_allocator.dupe(u8, message);
-    next.line_text = try compat_allocator.dupe(u8, line_text);
-    return next;
 }

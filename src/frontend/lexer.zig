@@ -2,6 +2,7 @@ const std = @import("std");
 const logical_line = @import("logical_line.zig");
 const fixed_form = @import("fixed_form.zig");
 const source_mod = @import("../common/source.zig");
+const compat = @import("../common/compat_diagnostic_storage.zig");
 
 pub const TokenKind = enum {
     identifier,
@@ -80,24 +81,7 @@ pub const Bag = struct {
     }
 };
 
-const compat_allocator = std.heap.page_allocator;
-
-const DiagStorage = struct {
-    line: usize = 1,
-    column: usize = 1,
-    code: ?[]u8 = null,
-    message: ?[]u8 = null,
-    line_text: ?[]u8 = null,
-
-    fn clear(self: *DiagStorage) void {
-        if (self.code) |buf| compat_allocator.free(buf);
-        if (self.message) |buf| compat_allocator.free(buf);
-        if (self.line_text) |buf| compat_allocator.free(buf);
-        self.* = .{};
-    }
-};
-
-threadlocal var diag_storage: DiagStorage = .{};
+threadlocal var diag_storage: compat.Storage = .{};
 threadlocal var has_diag: bool = false;
 
 pub fn publishCompatFromBag(bag: *Bag) void {
@@ -435,22 +419,10 @@ fn setLexDiagnostic(
 }
 
 fn setCompatDiagnostic(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
-    const next = makeDiagStorage(line, column, code, message, line_text) catch return;
+    const next = compat.makeStorage(line, column, code, message, line_text) catch return;
     diag_storage.clear();
     diag_storage = next;
     has_diag = true;
-}
-
-fn makeDiagStorage(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) !DiagStorage {
-    var next: DiagStorage = .{
-        .line = if (line == 0) 1 else line,
-        .column = if (column == 0) 1 else column,
-    };
-    errdefer next.clear();
-    next.code = try compat_allocator.dupe(u8, code);
-    next.message = try compat_allocator.dupe(u8, message);
-    next.line_text = try compat_allocator.dupe(u8, line_text);
-    return next;
 }
 
 test "lexLogicalLine tokenizes basic expression" {
