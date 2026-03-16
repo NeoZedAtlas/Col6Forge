@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const catalog = @import("../../common/error_catalog.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const resolve_expr = @import("resolve_expr.zig");
@@ -66,6 +67,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 true,
                 call_idx,
             );
+            try checkProcedureActualArgsForCall(self, call.name, call.args);
             for (call.args) |arg| {
                 switch (arg) {
                     .expr => |actual| try checkExpr(self, actual.value),
@@ -436,6 +438,7 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                 }
                 try checkExplicitInterfaceRequirementForExprArgs(self, call.name, call.args, idx);
                 try checkKnownProcedureCallArity(self, call.name, call.args.len, 0, false, idx);
+                try checkProcedureActualArgsForExprCall(self, call.name, call.args);
             }
             return try resolve_expr.exprType(self, expr);
         },
@@ -654,6 +657,101 @@ fn countCallExprArgs(args: []ast.CallArg) usize {
     return count;
 }
 
+fn checkProcedureActualArgsForCall(
+    self: *context.Context,
+    callee_name: []const u8,
+    args: []const ast.CallArg,
+) CheckError!void {
+    const sig = resolve_symbols.lookupKnownProcedureSig(self, callee_name) orelse return;
+    if (sig.args.len == 0) return;
+    var formal_idx: usize = 0;
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        if (formal_idx >= sig.args.len) break;
+        const actual = arg.expr;
+        try checkProcedureActualArg(self, sig.args[formal_idx], actual.value);
+        formal_idx += 1;
+    }
+}
+
+fn checkProcedureActualArgsForExprCall(
+    self: *context.Context,
+    callee_name: []const u8,
+    args: []*ast.Expr,
+) CheckError!void {
+    const sig = resolve_symbols.lookupKnownProcedureSig(self, callee_name) orelse return;
+    if (sig.args.len == 0) return;
+    const count = @min(sig.args.len, args.len);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        try checkProcedureActualArg(self, sig.args[idx], args[idx]);
+    }
+}
+
+fn checkProcedureActualArg(
+    self: *context.Context,
+    formal: context.Context.ProcedureSig.ArgSig,
+    actual_expr: *ast.Expr,
+) CheckError!void {
+    if (!formal.is_procedure) return;
+    switch (actual_expr.*) {
+        .identifier => |name| {
+            const actual_sig = resolve_symbols.lookupKnownProcedureSig(self, name);
+            if (actual_sig) |sig| {
+                if (formal.procedure_kind) |expected_kind| {
+                    if (sig.kind != expected_kind) {
+                        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+                    }
+                }
+                if (formal.procedure_arg_count != sig.arg_count or formal.procedure_alt_return_count != sig.alt_return_count) {
+                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
+                }
+                return;
+            }
+
+            if (lookupIntrinsicArity(self, name)) |arity| {
+                if (formal.procedure_kind != null and formal.procedure_kind.? != .function) {
+                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+                }
+                if (formal.procedure_arg_count < arity.min) {
+                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
+                }
+                if (arity.max) |max| {
+                    if (formal.procedure_arg_count > max) {
+                        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
+                    }
+                }
+                return;
+            }
+
+            if (formal.procedure_kind == .function) {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+            }
+        },
+        else => {
+            if (formal.procedure_kind == .function) {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+            }
+        },
+    }
+}
+
+fn emitProcedureActualDiagnostic(
+    self: *context.Context,
+    expr: *ast.Expr,
+    err: anyerror,
+    message: []const u8,
+) CheckError {
+    const source = self.sourceForExpr(expr);
+    if (source) |src| {
+        const line = if (src.line == 0) 1 else src.line;
+        const column = if (src.column == 0) 1 else src.column;
+        self.setDiagnostic(line, column, catalog.semantic.invalid_argument_count.code, message, src.text);
+        self.setCurrentSource(src);
+    }
+    return err;
+}
+
 fn countCallAltReturnArgs(args: []ast.CallArg) usize {
     var count: usize = 0;
     for (args) |arg| {
@@ -678,12 +776,25 @@ fn checkKnownProcedureCallArity(
     }
 
     if (resolve_symbols.lookupKnownProcedureSig(self, name)) |sig| {
-        if (is_call_stmt and sig.kind != .subroutine) return error.InvalidArgumentCount;
-        if (!is_call_stmt and sig.kind != .function) return error.InvalidArgumentCount;
+        if (is_call_stmt and sig.kind != .subroutine) {
+            return emitNamedProcedureDiagnostic(self, name, error.InvalidArgumentCount, "actual argument is not a subroutine");
+        }
+        if (!is_call_stmt and sig.kind != .function) {
+            return emitNamedProcedureDiagnostic(self, name, error.InvalidArgumentCount, "actual argument is not a function");
+        }
         const min_expr = minimumRequiredProcedureArgs(sig);
-        if (got_expr < min_expr or got_expr > sig.arg_count) return error.InvalidArgumentCount;
-        if (is_call_stmt and got_alt_return != sig.alt_return_count) return error.InvalidArgumentCount;
-        if (!is_call_stmt and got_alt_return != 0) return error.InvalidArgumentCount;
+        if (got_expr < min_expr) {
+            return emitNamedProcedureDiagnostic(self, name, error.InvalidArgumentCount, "Missing actual argument");
+        }
+        if (got_expr > sig.arg_count) {
+            return emitNamedProcedureDiagnostic(self, name, error.InvalidArgumentCount, "wrong number of arguments");
+        }
+        if (is_call_stmt and got_alt_return != sig.alt_return_count) {
+            return emitNamedProcedureDiagnostic(self, name, error.InvalidArgumentCount, "wrong number of arguments");
+        }
+        if (!is_call_stmt and got_alt_return != 0) {
+            return emitNamedProcedureDiagnostic(self, name, error.InvalidArgumentCount, "wrong number of arguments");
+        }
         return;
     }
 
@@ -694,6 +805,33 @@ fn checkKnownProcedureCallArity(
             if (got_expr > max) return error.InvalidArgumentCount;
         }
     }
+}
+
+fn emitNamedProcedureDiagnostic(
+    self: *context.Context,
+    name: []const u8,
+    err: anyerror,
+    message: []const u8,
+) CheckError {
+    if (self.current_source) |src| {
+        const line = if (src.line == 0) 1 else src.line;
+        const column = if (src.column == 0) 1 else src.column;
+        self.setDiagnostic(line, column, catalog.semantic.invalid_argument_count.code, message, src.text);
+        return err;
+    }
+    if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
+        const sym = self.symbols.items[idx];
+        const line_text = self.current_stmt orelse return err;
+        _ = sym;
+        self.setDiagnostic(
+            if (line_text.source_line == 0) 1 else line_text.source_line,
+            if (line_text.source_column == 0) 1 else line_text.source_column,
+            catalog.semantic.invalid_argument_count.code,
+            message,
+            line_text.source_text,
+        );
+    }
+    return err;
 }
 
 fn checkExplicitInterfaceRequirementForCallArgs(

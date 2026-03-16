@@ -93,7 +93,9 @@ fn moduleNameMatches(module_name: []const u8, normalized: []const u8) bool {
 }
 
 pub fn installUnitSymbol(self: *context.Context) !void {
+    if (self.unit.kind == .module) return;
     const kind: SymbolKind = switch (self.unit.kind) {
+        .module => unreachable,
         .program => .subroutine,
         .subroutine => .subroutine,
         .function => .function,

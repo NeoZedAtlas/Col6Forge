@@ -19,6 +19,8 @@ pub const Decl = union(enum) {
     procedure: ProcedureDecl,
     derived_type_def: DerivedTypeDef,
     interface_block: InterfaceBlock,
+    import: NameListDecl,
+    intent: IntentDecl,
     dimension: DimensionDecl,
     parameter: ParameterDecl,
     common: CommonDecl,
@@ -61,6 +63,15 @@ pub const ProcedureDecl = struct {
     save: bool = false,
 };
 
+pub const InterfaceProcedure = struct {
+    kind: @import("program.zig").ProgramUnitKind,
+    name: []const u8,
+    args: []const []const u8,
+    alt_return_dummy_count: usize = 0,
+    type_spec: ?ProcedureTypeSpec = null,
+    decls: []const Decl = &.{},
+};
+
 pub const DerivedTypeDef = struct {
     name: []const u8,
     parent_name: ?[]const u8 = null,
@@ -74,6 +85,7 @@ pub const InterfaceBlock = struct {
     module_procedures: []const []const u8 = &.{},
     specific_procedures: []const []const u8 = &.{},
     procedures: []const []const u8 = &.{},
+    procedure_headers: []const InterfaceProcedure = &.{},
 };
 
 pub const DimensionDecl = struct {
@@ -120,6 +132,17 @@ pub const ImplicitRule = struct {
 };
 
 pub const NameListDecl = struct {
+    names: []const []const u8,
+};
+
+pub const IntentKind = enum {
+    in,
+    out,
+    inout,
+};
+
+pub const IntentDecl = struct {
+    kind: IntentKind,
     names: []const []const u8,
 };
 

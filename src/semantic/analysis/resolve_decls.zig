@@ -156,6 +156,7 @@ fn resolveProcedureDeclarator(
         .name => |name| blk: {
             if (symbols_mod.lookupKnownProcedureSig(self, name)) |sig| {
                 const kind: symbols.SymbolKind = switch (sig.kind) {
+                    .module => .variable,
                     .function => .function,
                     .subroutine => .subroutine,
                     else => .variable,

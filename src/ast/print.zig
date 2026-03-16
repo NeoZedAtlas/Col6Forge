@@ -5,6 +5,7 @@ pub fn printProgram(writer: anytype, program: ast.Program) !void {
     try writer.print("; AST units: {d}\n", .{program.units.len});
     for (program.units) |unit| {
         const kind_text = switch (unit.kind) {
+            .module => "module",
             .program => "program",
             .subroutine => "subroutine",
             .function => "function",
@@ -66,6 +67,17 @@ fn printDecl(writer: anytype, decl: ast.Decl) !void {
                 for (interface_block.procedures, 0..) |proc_name, idx| {
                     if (idx != 0) try writer.print(",", .{});
                     try writer.print("{s}", .{proc_name});
+                }
+            }
+            if (interface_block.procedure_headers.len != 0) {
+                try writer.print(" headers=", .{});
+                for (interface_block.procedure_headers, 0..) |proc_header, idx| {
+                    if (idx != 0) try writer.print(",", .{});
+                    try writer.print("{s}/{s}/{d}", .{
+                        proc_header.name,
+                        @tagName(proc_header.kind),
+                        proc_header.args.len,
+                    });
                 }
             }
             try writer.print("\n", .{});

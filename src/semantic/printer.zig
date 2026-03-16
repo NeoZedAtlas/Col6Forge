@@ -7,6 +7,7 @@ pub fn printSemantic(writer: anytype, program: SemanticProgram) !void {
     try writer.print("; semantic units: {d}\n", .{program.units.len});
     for (program.units) |unit| {
         const kind_text = switch (unit.kind) {
+            .module => "module",
             .program => "program",
             .subroutine => "subroutine",
             .function => "function",

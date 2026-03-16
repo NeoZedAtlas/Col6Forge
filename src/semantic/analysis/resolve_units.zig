@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const catalog = @import("../../common/error_catalog.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const decls = @import("resolve_decls.zig");
@@ -73,13 +74,28 @@ pub const Resolver = struct {
             }
             ctx.setCurrentDeclSource(null);
         }
-        if (ctx.unit.owner_name != null and ctx.unit.owner_kind != .module) {
+        if (ctx.unit.owner_name != null) {
             if (findExplicitInterfaceDeclSource(ctx, ctx.unit.name)) |decl_source| {
-                ctx.setCurrentDeclSource(decl_source);
-                if (!ctx.usesExplicitDiagnosticBag()) return error.HasExplicitInterface;
-                if (first_stmt_error == null) first_stmt_error = error.HasExplicitInterface;
-                ctx.recordSemanticError(error.HasExplicitInterface);
-                ctx.setCurrentDeclSource(null);
+                const allow_module_match = ctx.unit.owner_kind == .module and ctx.unit.is_module_procedure;
+                if (!allow_module_match) {
+                    ctx.setCurrentDeclSource(decl_source);
+                    const has_custom_diag = ctx.unit.owner_kind == .module and !ctx.unit.is_module_procedure;
+                    if (ctx.unit.owner_kind == .module and !ctx.unit.is_module_procedure) {
+                        ctx.setDiagnostic(
+                            if (decl_source.line == 0) 1 else decl_source.line,
+                            if (decl_source.column == 0) 1 else decl_source.column,
+                            catalog.semantic.has_explicit_interface.code,
+                            "procedure defined in interface body; PROCEDURE attribute conflicts with PROCEDURE attribute",
+                            decl_source.text,
+                        );
+                    }
+                    if (!ctx.usesExplicitDiagnosticBag()) return error.HasExplicitInterface;
+                    if (first_stmt_error == null) first_stmt_error = error.HasExplicitInterface;
+                    if (!has_custom_diag) {
+                        ctx.recordSemanticError(error.HasExplicitInterface);
+                    }
+                    ctx.setCurrentDeclSource(null);
+                }
             }
         }
         try validateAssumedCharacterLengths(ctx);
@@ -117,6 +133,7 @@ pub const Resolver = struct {
 
 fn unitScopeKind(kind: ast.ProgramUnitKind) scope.ScopeKind {
     return switch (kind) {
+        .module => .module,
         .program, .function, .subroutine, .block_data => .procedure,
     };
 }

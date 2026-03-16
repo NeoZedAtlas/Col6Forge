@@ -188,6 +188,7 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         .entry => |entry| {
             const entry_idx = try symbols_mod.ensureSymbol(self, entry.name);
             self.symbols.items[entry_idx].kind = switch (self.unit.kind) {
+                .module => .subroutine,
                 .subroutine => .subroutine,
                 .function => .function,
                 else => .subroutine,
@@ -225,6 +226,7 @@ fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_nam
         sym.is_external = true;
         sym.is_pointer = sig.is_pointer;
         sym.kind = switch (sig.kind) {
+            .module => sym.kind,
             .function => .function,
             .subroutine => .subroutine,
             else => sym.kind,

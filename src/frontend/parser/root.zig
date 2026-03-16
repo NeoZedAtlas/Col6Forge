@@ -202,6 +202,15 @@ const Parser = struct {
                     .decls = stored_decls,
                     .decl_sources = stored_decl_sources,
                 });
+                try units.append(.{
+                    .kind = .module,
+                    .name = module_name,
+                    .args = &.{},
+                    .decls = @constCast(stored_decls),
+                    .decl_sources = @constCast(stored_decl_sources),
+                    .stmts = &.{},
+                    .expr_sources = &.{},
+                });
                 self.index += 1;
                 return;
             }
@@ -260,6 +269,15 @@ const Parser = struct {
         try self.module_preludes.put(module_name, .{
             .decls = stored_decls,
             .decl_sources = stored_decl_sources,
+        });
+        try units.append(.{
+            .kind = .module,
+            .name = module_name,
+            .args = &.{},
+            .decls = @constCast(stored_decls),
+            .decl_sources = @constCast(stored_decl_sources),
+            .stmts = &.{},
+            .expr_sources = &.{},
         });
         if (!saw_contains) return;
 
@@ -421,6 +439,7 @@ const Parser = struct {
         var unit = ProgramUnit{
             .kind = header.kind,
             .name = header.name,
+            .is_module_procedure = header.is_module_procedure,
             .bind_name = header.bind_name,
             .result_name = header.result_name,
             .args = header.args,
@@ -455,6 +474,7 @@ const Parser = struct {
         return .{
             .kind = .program,
             .name = name,
+            .is_module_procedure = false,
             .bind_name = null,
             .result_name = null,
             .args = &.{},
@@ -508,7 +528,7 @@ const Parser = struct {
         return error.UnexpectedEOF;
     }
 
-    fn parseInterfaceBlock(self: *Parser) !Decl {
+    fn parseInterfaceBlock(self: *Parser) anyerror!Decl {
         if (self.index >= self.lines.len) return error.UnexpectedEOF;
         const header_line = self.lines[self.index];
         const header_tokens = try self.tokensForIndex(self.index);
@@ -520,6 +540,7 @@ const Parser = struct {
         var module_procedures = std.array_list.Managed([]const u8).init(self.arena);
         var specific_procedures = std.array_list.Managed([]const u8).init(self.arena);
         var procedures = std.array_list.Managed([]const u8).init(self.arena);
+        var procedure_headers = std.array_list.Managed(ast.InterfaceProcedure).init(self.arena);
 
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
@@ -534,6 +555,7 @@ const Parser = struct {
                         .module_procedures = try module_procedures.toOwnedSlice(),
                         .specific_procedures = try specific_procedures.toOwnedSlice(),
                         .procedures = try procedures.toOwnedSlice(),
+                        .procedure_headers = try procedure_headers.toOwnedSlice(),
                     } };
                 },
                 .invalid_end_interface => {
@@ -567,7 +589,12 @@ const Parser = struct {
                 var block_data_counter: usize = 0;
                 const header = parseProgramUnitHeader(self.arena, &body_lp, &block_data_counter) catch null;
                 if (header != null) {
-                    try procedures.append(header.?.name);
+                    const expr_mark = self.expr_capture.mark();
+                    self.index += 1;
+                    const proc_unit = try self.parseProgramUnitBody(header.?, true, line, expr_mark);
+                    try procedures.append(proc_unit.name);
+                    try procedure_headers.append(interfaceProcedureFromUnit(proc_unit));
+                    continue;
                 }
             }
             self.index += 1;
@@ -576,6 +603,28 @@ const Parser = struct {
         return error.UnexpectedEOF;
     }
 };
+
+fn interfaceProcedureFromUnit(unit: ProgramUnit) ast.InterfaceProcedure {
+    return .{
+        .kind = unit.kind,
+        .name = unit.name,
+        .args = unit.args,
+        .alt_return_dummy_count = unit.alt_return_dummy_count,
+        .type_spec = if (unit.decls.len != 0)
+            switch (unit.decls[0]) {
+                .type_decl => |type_decl| .{
+                    .type_kind = type_decl.type_kind,
+                    .kind_selector = type_decl.kind_selector,
+                    .derived_type_name = type_decl.derived_type_name,
+                    .polymorphic = type_decl.polymorphic,
+                },
+                else => null,
+            }
+        else
+            null,
+        .decls = unit.decls,
+    };
+}
 
 const InterfaceEndStatus = enum {
     none,
@@ -843,6 +892,7 @@ const TypeInfo = struct {
 const ProgramUnitHeader = struct {
     kind: ProgramUnitKind,
     name: []const u8,
+    is_module_procedure: bool,
     bind_name: ?[]const u8,
     result_name: ?[]const u8,
     args: []const []const u8,
@@ -854,9 +904,10 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
     var kind: ProgramUnitKind = undefined;
     var type_info: ?TypeInfo = null;
     var allow_missing_name = false;
+    var saw_module_prefix = false;
 
     consumeProcedurePrefixes(lp);
-    _ = lp.consumeKeyword("MODULE");
+    saw_module_prefix = lp.consumeKeyword("MODULE");
 
     if (lp.isKeywordSplit("PROGRAM")) {
         _ = lp.consumeKeyword("PROGRAM");
@@ -874,7 +925,7 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
     } else {
         type_info = try parseTypePrefix(arena, lp) orelse return error.ExpectedProgramUnit;
         consumeProcedurePrefixes(lp);
-        _ = lp.consumeKeyword("MODULE");
+        saw_module_prefix = lp.consumeKeyword("MODULE");
         if (!lp.isKeywordSplit("FUNCTION")) return error.ExpectedProgramUnit;
         _ = lp.consumeKeyword("FUNCTION");
         kind = .function;
@@ -931,6 +982,7 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
     return .{
         .kind = kind,
         .name = name,
+        .is_module_procedure = saw_module_prefix,
         .bind_name = bind_name,
         .result_name = result_name,
         .args = try args_list.toOwnedSlice(),
@@ -1300,6 +1352,7 @@ fn prependDecls(
     return .{
         .kind = unit.kind,
         .name = unit.name,
+        .is_module_procedure = unit.is_module_procedure,
         .owner_name = unit.owner_name,
         .owner_kind = unit.owner_kind,
         .bind_name = unit.bind_name,
@@ -2117,10 +2170,12 @@ test "parseProgram handles MODULE container with contained procedure" {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const program = try parseProgram(arena.allocator(), lines);
-    try testing.expectEqual(@as(usize, 1), program.units.len);
-    try testing.expectEqualStrings("FOO", program.units[0].name);
-    try testing.expectEqualStrings("MINPACK_MODULE", program.units[0].owner_name.?);
-    try testing.expectEqual(ast.LexicalOwnerKind.module, program.units[0].owner_kind.?);
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+    try testing.expectEqual(ast.ProgramUnitKind.module, program.units[0].kind);
+    try testing.expectEqualStrings("MINPACK_MODULE", program.units[0].name);
+    try testing.expectEqualStrings("FOO", program.units[1].name);
+    try testing.expectEqualStrings("MINPACK_MODULE", program.units[1].owner_name.?);
+    try testing.expectEqual(ast.LexicalOwnerKind.module, program.units[1].owner_kind.?);
 }
 
 test "parseProgram captures BIND(C) procedure name" {
@@ -2466,6 +2521,10 @@ test "parseProgram recognizes pure module subroutine headers in interface bodies
     const interface_block = program.units[0].decls[0].interface_block;
     try testing.expectEqual(@as(usize, 1), interface_block.procedures.len);
     try testing.expectEqualStrings("assign_m", interface_block.procedures[0]);
+    try testing.expectEqual(@as(usize, 1), interface_block.procedure_headers.len);
+    try testing.expectEqual(ast.ProgramUnitKind.subroutine, interface_block.procedure_headers[0].kind);
+    try testing.expectEqualStrings("assign_m", interface_block.procedure_headers[0].name);
+    try testing.expect(program.units[0].is_module_procedure);
 }
 
 test "parseProgram records PROCEDURE declarations in generic interface bodies" {
@@ -2495,6 +2554,7 @@ test "parseProgram records PROCEDURE declarations in generic interface bodies" {
     try testing.expectEqualStrings("assignment(=)", interface_block.name.?);
     try testing.expectEqual(@as(usize, 1), interface_block.specific_procedures.len);
     try testing.expectEqualStrings("op_assign_vs_ch", interface_block.specific_procedures[0]);
+    try testing.expectEqual(@as(usize, 0), interface_block.procedure_headers.len);
 }
 
 test "parseProgram imports module prelude from module without contains" {

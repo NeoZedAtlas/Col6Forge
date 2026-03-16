@@ -16,6 +16,7 @@ pub const TypeDecl = nodes.TypeDecl;
 pub const ProcedureTypeSpec = nodes.ProcedureTypeSpec;
 pub const ProcedureInterface = nodes.ProcedureInterface;
 pub const ProcedureDecl = nodes.ProcedureDecl;
+pub const InterfaceProcedure = nodes.InterfaceProcedure;
 pub const DerivedTypeDef = nodes.DerivedTypeDef;
 pub const InterfaceBlock = nodes.InterfaceBlock;
 pub const DimensionDecl = nodes.DimensionDecl;

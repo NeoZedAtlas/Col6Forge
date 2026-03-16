@@ -64,6 +64,10 @@ pub const Context = struct {
             requires_descriptor: bool = false,
             rank: usize = 0,
             optional: bool = false,
+            is_procedure: bool = false,
+            procedure_kind: ?ast.ProgramUnitKind = null,
+            procedure_arg_count: usize = 0,
+            procedure_alt_return_count: usize = 0,
         };
 
         kind: ast.ProgramUnitKind,

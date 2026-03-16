@@ -22,10 +22,30 @@ pub fn isDeclarationStart(lp: LineParser) bool {
     }
     if (isDoublePrecisionTypeStart(lp)) return true;
     if (isDerivedTypeDeclStart(lp)) return true;
-    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("ALLOCATABLE") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE") or lp.isKeywordSplit("PROCEDURE");
+    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("ALLOCATABLE") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE") or lp.isKeywordSplit("PROCEDURE") or lp.isKeywordSplit("IMPORT") or lp.isKeywordSplit("INTENT");
 }
 
 pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
+    if (lp.isKeywordSplit("IMPORT")) {
+        _ = lp.consumeKeyword("IMPORT");
+        _ = consumeDoubleColon(lp);
+        return .{ .import = .{ .names = try parseNameList(lp, arena) } };
+    }
+    if (lp.isKeywordSplit("INTENT")) {
+        _ = lp.consumeKeyword("INTENT");
+        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        const kind = if (lp.consumeKeyword("INOUT"))
+            ast.IntentKind.inout
+        else if (lp.consumeKeyword("OUT"))
+            ast.IntentKind.out
+        else if (lp.consumeKeyword("IN"))
+            ast.IntentKind.in
+        else
+            return error.UnexpectedToken;
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        _ = consumeDoubleColon(lp);
+        return .{ .intent = .{ .kind = kind, .names = try parseNameList(lp, arena) } };
+    }
     if (lp.isKeywordSplit("IMPLICIT")) {
         _ = lp.consumeKeyword("IMPLICIT");
         if (lp.isKeywordSplit("NONE")) {

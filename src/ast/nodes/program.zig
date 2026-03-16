@@ -7,6 +7,7 @@ pub const Program = struct {
 };
 
 pub const ProgramUnitKind = enum {
+    module,
     program,
     subroutine,
     function,
@@ -23,6 +24,7 @@ pub const ProgramUnit = struct {
     name: []const u8,
     owner_name: ?[]const u8 = null,
     owner_kind: ?LexicalOwnerKind = null,
+    is_module_procedure: bool = false,
     bind_name: ?[]const u8 = null,
     result_name: ?[]const u8 = null,
     args: []const []const u8,

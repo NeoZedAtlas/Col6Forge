@@ -63,9 +63,23 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .procedure => return error.UnexpectedTypeDecl,
         .derived_type_def => {},
-        .interface_block => {},
+        .import => {},
+        .intent => {},
+        .interface_block => |interface_block| {
+            try validateExplicitInterfaceBlock(self, interface_block);
+        },
         .dimension => |dim| {
             for (dim.items) |item| {
+                if (hasCurrentUnitExplicitInterfaceProcedure(self, item.name)) {
+                    setAttributeConflictDiagnostic(
+                        self,
+                        if (dim.allocatable)
+                            "function result declared outside of INTERFACE body"
+                        else
+                            "function result declared outside its INTERFACE body",
+                    );
+                    return error.DuplicateDeclaration;
+                }
                 const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
                 if (item.dims.len > 0 and self.symbols.items[idx].dims.len > 0) {
                     return error.DuplicateDeclaration;
@@ -155,13 +169,29 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .external => |ext| {
             for (ext.names) |name| {
+                if (hasCurrentUnitExplicitInterfaceProcedure(self, name)) {
+                    setAttributeConflictDiagnostic(self, "Duplicate EXTERNAL attribute");
+                    return error.DuplicateDeclaration;
+                }
                 const idx = try symbols_mod.ensureDeclaredSymbol(self, name);
+                if (self.symbols.items[idx].is_intrinsic) {
+                    setAttributeConflictDiagnostic(self, "EXTERNAL attribute conflicts with INTRINSIC attribute");
+                    return error.DuplicateDeclaration;
+                }
                 self.symbols.items[idx].is_external = true;
             }
         },
         .intrinsic => |intr| {
             for (intr.names) |name| {
+                if (hasCurrentUnitExplicitInterfaceProcedure(self, name)) {
+                    setAttributeConflictDiagnostic(self, "EXTERNAL attribute conflicts with INTRINSIC attribute");
+                    return error.DuplicateDeclaration;
+                }
                 const idx = try symbols_mod.ensureDeclaredSymbol(self, name);
+                if (self.symbols.items[idx].is_external) {
+                    setAttributeConflictDiagnostic(self, "EXTERNAL attribute conflicts with INTRINSIC attribute");
+                    return error.DuplicateDeclaration;
+                }
                 self.symbols.items[idx].is_intrinsic = true;
             }
         },
@@ -219,6 +249,80 @@ fn currentDeclLocation(self: *context.Context) struct { line: usize, column: usi
         };
     }
     return .{ .line = 1, .column = 1, .text = "" };
+}
+
+fn hasCurrentUnitExplicitInterfaceProcedure(self: *context.Context, target_name: []const u8) bool {
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            if (std.ascii.eqlIgnoreCase(proc_header.name, target_name)) return true;
+        }
+    }
+    return false;
+}
+
+fn setAttributeConflictDiagnostic(self: *context.Context, message: []const u8) void {
+    const loc = currentDeclLocation(self);
+    self.setDiagnostic(loc.line, loc.column, catalog.semantic.duplicate_declaration.code, message, loc.text);
+}
+
+fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: ast.InterfaceBlock) !void {
+    for (interface_block.procedure_headers) |proc_header| {
+        if (proc_header.kind != .function) continue;
+        if (symbols_mod.findSymbolIndex(self, proc_header.name)) |idx| {
+            const sym = self.symbols.items[idx];
+            if (sym.dims.len != 0 or sym.is_allocatable) {
+                setAttributeConflictDiagnostic(self, "function result declared outside its INTERFACE body");
+                return error.DuplicateDeclaration;
+            }
+        }
+        const attrs = interfaceProcedureResultAttrs(proc_header);
+        if (attrs.has_deferred_shape and !attrs.allocatable) {
+            setAttributeConflictDiagnostic(self, "function result cannot have a deferred shape");
+            return error.DuplicateDeclaration;
+        }
+    }
+}
+
+const InterfaceProcedureResultAttrs = struct {
+    has_deferred_shape: bool = false,
+    allocatable: bool = false,
+};
+
+fn interfaceProcedureResultAttrs(proc_header: ast.InterfaceProcedure) InterfaceProcedureResultAttrs {
+    var attrs: InterfaceProcedureResultAttrs = .{};
+    for (proc_header.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, proc_header.name)) continue;
+                    if (hasDeferredShape(item.dims)) attrs.has_deferred_shape = true;
+                    if (type_decl.allocatable) attrs.allocatable = true;
+                }
+            },
+            .dimension => |dimension_decl| {
+                for (dimension_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, proc_header.name)) continue;
+                    if (hasDeferredShape(item.dims)) attrs.has_deferred_shape = true;
+                    if (dimension_decl.allocatable) attrs.allocatable = true;
+                }
+            },
+            else => {},
+        }
+    }
+    return attrs;
+}
+
+fn hasDeferredShape(dims: []const *ast.Expr) bool {
+    for (dims) |dim| {
+        switch (dim.*) {
+            .dim_range => |range| {
+                if (range.assumed_shape and range.lower == null) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn typeKindName(kind: ast.TypeKind) []const u8 {

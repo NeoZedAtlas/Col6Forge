@@ -207,9 +207,11 @@ pub fn emitModuleToWriterWithDiagnostics(
     var block_data_mangled = std.array_list.Managed([]const u8).init(scratch);
     defer block_data_mangled.deinit();
     for (program.units) |unit| {
+        if (unit.kind == .module) continue;
         const mangled = try utils.mangleProcedureUnitName(scratch, unit);
         try defined.put(mangled, {});
         switch (unit.kind) {
+            .module => unreachable,
             .program => {
                 if (program_mangled != null) {
                     const info = codegen_diag.codegenErrorInfo(error.MultipleProgramUnits);
@@ -276,6 +278,7 @@ pub fn emitModuleToWriterWithDiagnostics(
     defer intrinsic_wrappers.deinit();
 
     for (program.units, 0..) |unit, unit_idx| {
+        if (unit.kind == .module) continue;
         noteFallbackForUnit(diag_bag, unit);
         const format_start = nowNs();
         const sem_unit = &sem.units[unit_idx];
