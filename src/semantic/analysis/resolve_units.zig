@@ -40,6 +40,7 @@ pub const Resolver = struct {
                     .name = decl.derived_type_def.name,
                     .parent_name = decl.derived_type_def.parent_name,
                     .abstract = decl.derived_type_def.abstract,
+                    .components = try buildDerivedComponentInfo(ctx, decl.derived_type_def),
                 });
             }
         }
@@ -131,4 +132,35 @@ fn clearStmtResolutionCaches(ctx: *context.Context) void {
     ctx.ref_symbol_index.clearRetainingCapacity();
     ctx.expr_type_cache.clearRetainingCapacity();
     ctx.expr_type_spec_cache.clearRetainingCapacity();
+}
+
+fn buildDerivedComponentInfo(
+    ctx: *context.Context,
+    derived: ast.DerivedTypeDef,
+) ![]const context.Context.DerivedTypeInfo.ComponentInfo {
+    var components = std.array_list.Managed(context.Context.DerivedTypeInfo.ComponentInfo).init(ctx.arena);
+    for (derived.components) |type_decl| {
+        for (type_decl.items) |item| {
+            var spec = symbols.TypeSpec.fromResolvedKind(type_decl.type_kind, type_decl.type_kind, null);
+            if (type_decl.type_kind == .derived) {
+                const name = type_decl.derived_type_name orelse return error.UnexpectedTypeDecl;
+                spec = symbols.TypeSpec.fromDerived(name);
+            }
+            if (spec.lowered_kind == .character) {
+                if (item.char_len_deferred) {
+                    spec = spec.withCharacterLength(.deferred, null);
+                } else if (item.char_len != null) {
+                    spec = spec.withCharacterLength(.deferred, null);
+                } else {
+                    spec = spec.withCharacterLength(.constant, 1);
+                }
+            }
+            try components.append(.{
+                .name = item.name,
+                .type_spec = spec,
+                .dims = item.dims,
+            });
+        }
+    }
+    return try components.toOwnedSlice();
 }

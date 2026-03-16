@@ -323,6 +323,17 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
             }
             return .character;
         },
+        .component => |comp| {
+            _ = try checkExprType(self, comp.base);
+            for (comp.args) |arg| {
+                const arg_ty = try checkExprType(self, arg);
+                if (!isIntegerLike(arg_ty)) {
+                    self.setCurrentSource(self.sourceForExpr(arg));
+                    return error.InvalidSubscript;
+                }
+            }
+            return try resolve_expr.exprType(self, expr);
+        },
         .call_or_subscript => |call| {
             const idx = symbolIndexForResolvedCall(self, expr) orelse
                 (resolve_symbols.findSymbolIndex(self, call.name) orelse return error.MissingScope);
@@ -389,6 +400,7 @@ fn isAssignmentTarget(self: *context.Context, expr: *ast.Expr) bool {
     return switch (expr.*) {
         .identifier => true,
         .substring => true,
+        .component => true,
         .call_or_subscript => |call| blk: {
             const idx = symbolIndexForResolvedCall(self, expr) orelse
                 (resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false);

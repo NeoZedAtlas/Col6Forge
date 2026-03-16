@@ -436,6 +436,16 @@ fn cloneExprWithSubst(
             cloned.* = .{ .substring = .{ .name = sub.name, .args = args, .start = start_expr, .end = end_expr } };
             return cloned;
         },
+        .component => |comp| {
+            const base = try cloneExprWithSubst(ctx, comp.base, name, replacement);
+            const args = try ctx.arena.alloc(*ast.Expr, comp.args.len);
+            for (comp.args, 0..) |arg, idx| {
+                args[idx] = try cloneExprWithSubst(ctx, arg, name, replacement);
+            }
+            const cloned = try ctx.arena.create(ast.Expr);
+            cloned.* = .{ .component = .{ .base = base, .name = comp.name, .args = args } };
+            return cloned;
+        },
         .dim_range => |range| {
             const lower = if (range.lower) |l| try cloneExprWithSubst(ctx, l, name, replacement) else null;
             const upper = try cloneExprWithSubst(ctx, range.upper, name, replacement);
@@ -521,6 +531,13 @@ fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
         .complex_literal => |lit| exprContainsIdentifier(lit.real, name) or exprContainsIdentifier(lit.imag, name),
         .call_or_subscript => |call| blk: {
             for (call.args) |arg| {
+                if (exprContainsIdentifier(arg, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .component => |comp| blk: {
+            if (exprContainsIdentifier(comp.base, name)) break :blk true;
+            for (comp.args) |arg| {
                 if (exprContainsIdentifier(arg, name)) break :blk true;
             }
             break :blk false;

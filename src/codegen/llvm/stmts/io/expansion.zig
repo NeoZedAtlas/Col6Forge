@@ -460,6 +460,14 @@ fn cloneExprWithSubst(
             const end_expr = if (sub.end) |e| try cloneExprWithSubst(ctx, allocator, e, name, replacement) else null;
             cloned.* = .{ .substring = .{ .name = sub.name, .args = args, .start = start_expr, .end = end_expr } };
         },
+        .component => |comp| {
+            const base = try cloneExprWithSubst(ctx, allocator, comp.base, name, replacement);
+            const args = try allocator.alloc(*ast.Expr, comp.args.len);
+            for (comp.args, 0..) |arg, idx| {
+                args[idx] = try cloneExprWithSubst(ctx, allocator, arg, name, replacement);
+            }
+            cloned.* = .{ .component = .{ .base = base, .name = comp.name, .args = args } };
+        },
         .dim_range => |range| {
             const lower = if (range.lower) |l| try cloneExprWithSubst(ctx, allocator, l, name, replacement) else null;
             const upper = try cloneExprWithSubst(ctx, allocator, range.upper, name, replacement);

@@ -17,6 +17,7 @@ pub const TokenKind = enum {
     r_paren,
     comma,
     colon,
+    percent,
     equals,
     greater,
     plus,
@@ -54,10 +55,12 @@ pub const Bag = struct {
     }
 
     pub fn deinit(self: *Bag) void {
+        self.clear();
         self.items.deinit();
     }
 
     pub fn clear(self: *Bag) void {
+        for (self.items.items) |item| self.freeOwned(item);
         self.items.clearRetainingCapacity();
     }
 
@@ -71,6 +74,10 @@ pub const Bag = struct {
         return self.items.orderedRemove(0);
     }
 
+    pub fn release(self: *Bag, diag: LexDiagnostic) void {
+        self.freeOwned(diag);
+    }
+
     fn makeOwned(self: *Bag, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) !LexDiagnostic {
         return .{
             .line = if (line == 0) 1 else line,
@@ -79,6 +86,12 @@ pub const Bag = struct {
             .message = try self.allocator.dupe(u8, message),
             .line_text = try self.allocator.dupe(u8, line_text),
         };
+    }
+
+    fn freeOwned(self: *Bag, diag: LexDiagnostic) void {
+        self.allocator.free(diag.code);
+        self.allocator.free(diag.message);
+        self.allocator.free(diag.line_text);
     }
 };
 
@@ -89,6 +102,7 @@ pub fn publishCompatFromBag(bag: *Bag) void {
     diag_storage.clear();
     has_diag = false;
     if (bag.take()) |diag| {
+        defer bag.release(diag);
         setCompatDiagnostic(diag.line, diag.column, diag.code, diag.message, diag.line_text);
     }
 }
@@ -106,6 +120,7 @@ pub fn tokenKindName(kind: TokenKind) []const u8 {
         .r_paren => "r_paren",
         .comma => "comma",
         .colon => "colon",
+        .percent => "percent",
         .equals => "equals",
         .greater => "greater",
         .plus => "plus",
@@ -265,6 +280,10 @@ fn lexLogicalLineImpl(
             },
             ':' => {
                 try tokens.append(makeToken(line, .colon, i, i + 1));
+                i += 1;
+            },
+            '%' => {
+                try tokens.append(makeToken(line, .percent, i, i + 1));
                 i += 1;
             },
             '=' => {

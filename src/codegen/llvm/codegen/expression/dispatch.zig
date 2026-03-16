@@ -85,6 +85,9 @@ pub fn emitLValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
             const plan = (try emitCharacterValuePlan(ctx, builder, expr)) orelse return error.UnsupportedSubstring;
             return plan.ptr;
         },
+        .component => |comp| {
+            return memory.emitComponentPtr(ctx, builder, comp);
+        },
         .implied_do => return error.InvalidAssignmentTarget,
         else => return error.InvalidAssignmentTarget,
     }
@@ -119,6 +122,14 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                 return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
             }
             const ptr = try ctx.getPointer(name);
+            if (sym.loweredKind() == .derived) {
+                if (sym.storage == .dummy) {
+                    return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
+                }
+                const tmp = try ctx.nextTemp();
+                try builder.load(tmp, .ptr, ptr);
+                return .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+            }
             const ty = ctx.typeFromKind(sym.loweredKind());
             const load_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
             const tmp = try ctx.nextTemp();
@@ -131,6 +142,14 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
         },
         .literal => |lit| {
             return casting.emitLiteral(ctx, builder, lit);
+        },
+        .component => |comp| {
+            const ptr = try memory.emitComponentPtr(ctx, builder, comp);
+            const ty = try ctx.componentIRType(comp);
+            if (ty == .ptr) return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
+            const tmp = try ctx.nextTemp();
+            try builder.load(tmp, ty, ptr);
+            return .{ .name = tmp, .ty = ty, .is_ptr = false };
         },
         .complex_literal => |lit| {
             var real_val = try emitExprImpl(ctx, builder, lit.real, subst_depth);

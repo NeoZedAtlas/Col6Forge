@@ -21,10 +21,12 @@ pub const Bag = struct {
     }
 
     pub fn deinit(self: *Bag) void {
+        self.clear();
         self.items.deinit();
     }
 
     pub fn clear(self: *Bag) void {
+        for (self.items.items) |item| self.freeOwned(item);
         self.items.clearRetainingCapacity();
     }
 
@@ -55,6 +57,10 @@ pub const Bag = struct {
         return self.items.orderedRemove(0);
     }
 
+    pub fn release(self: *Bag, diag: Diagnostic) void {
+        self.freeOwned(diag);
+    }
+
     fn makeOwned(
         self: *Bag,
         file_path: []const u8,
@@ -72,6 +78,13 @@ pub const Bag = struct {
             .message = try self.allocator.dupe(u8, message),
             .line_text = try self.allocator.dupe(u8, line_text),
         };
+    }
+
+    fn freeOwned(self: *Bag, diag: Diagnostic) void {
+        self.allocator.free(diag.file_path);
+        self.allocator.free(diag.code);
+        self.allocator.free(diag.message);
+        self.allocator.free(diag.line_text);
     }
 };
 

@@ -224,6 +224,21 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             }
             continue;
         }
+        if (sym.loweredKind() == .derived and sym.dims.len == 0) {
+            const type_name = sym.type_spec.derived_type_name orelse return error.UnknownSymbol;
+            const layout = ctx.findDerivedTypeLayout(type_name) orelse return error.UnknownSymbol;
+            const slot_name = try ctx.nextTemp();
+            try builder.alloca(slot_name, .ptr);
+            const object_name = try ctx.nextTemp();
+            if (layout.size <= 1) {
+                try builder.alloca(object_name, .i8);
+            } else {
+                try builder.allocaArray(object_name, .i8, layout.size);
+            }
+            try builder.store(.{ .name = object_name, .ty = .ptr, .is_ptr = true }, .{ .name = slot_name, .ty = .ptr, .is_ptr = true });
+            try ctx.locals.put(sym.name, .{ .name = slot_name, .ty = .ptr, .is_ptr = true });
+            continue;
+        }
         if (sym.isCharacter()) {
             const char_len = try common.requireConstantCharacterLen(sym);
             const alloca_name = try ctx.nextTemp();

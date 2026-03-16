@@ -59,6 +59,7 @@ fn setLexerOrLineDiagnostic(
     err: anyerror,
 ) void {
     if (lex_diag_bag.take()) |lex_diag| {
+        defer lex_diag_bag.release(lex_diag);
         diag_bag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
         return;
     }

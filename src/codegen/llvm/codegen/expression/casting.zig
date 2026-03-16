@@ -237,6 +237,7 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
         },
         .dim_range => return .i32,
         .substring => return .ptr,
+        .component => |comp| return ctx.componentIRType(comp),
         .call_or_subscript => |call| {
             var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
             if (kind == .unknown) {

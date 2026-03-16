@@ -9,6 +9,7 @@ pub const TypeSpec = sema.TypeSpec;
 
 pub const Decl = ast.Decl;
 pub const TypeDecl = ast.TypeDecl;
+pub const DerivedTypeDef = ast.DerivedTypeDef;
 pub const DimensionDecl = ast.DimensionDecl;
 pub const ParameterDecl = ast.ParameterDecl;
 pub const ParamAssign = ast.ParamAssign;
@@ -80,6 +81,7 @@ pub const Literal = ast.Literal;
 pub const LiteralKind = ast.LiteralKind;
 pub const CallOrSubscript = ast.CallOrSubscript;
 pub const SubstringExpr = ast.SubstringExpr;
+pub const ComponentExpr = ast.ComponentExpr;
 pub const ComplexLiteral = ast.ComplexLiteral;
 pub const UnaryExpr = ast.UnaryExpr;
 pub const UnaryOp = ast.UnaryOp;

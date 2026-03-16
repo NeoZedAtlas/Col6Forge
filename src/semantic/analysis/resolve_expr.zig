@@ -157,6 +157,26 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             try recordResolvedRef(self, expr, sub.name, .call, idx);
             try cacheExprType(self, expr, symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null));
         },
+        .component => |comp| {
+            try resolveExpr(self, comp.base);
+            for (comp.args) |arg| {
+                try resolveExpr(self, arg);
+            }
+            const base_spec = try exprTypeSpecCached(self, comp.base);
+            if (base_spec.lowered_kind != .derived) return error.InvalidSubscript;
+            const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
+            const component = symbols_mod.lookupDerivedComponent(self, derived_name, comp.name) orelse return error.InvalidSubscript;
+            if (component.dims.len == 0) {
+                if (comp.args.len != 0) return error.InvalidSubscript;
+            } else {
+                if (comp.args.len != component.dims.len) return error.InvalidSubscript;
+                for (comp.args) |arg| {
+                    const arg_ty = try resolvedExprType(self, arg);
+                    if (arg_ty != .integer) return error.InvalidSubscript;
+                }
+            }
+            try cacheExprType(self, expr, component.type_spec);
+        },
         .dim_range => |range| {
             if (range.lower) |lower| try resolveExpr(self, lower);
             try resolveExpr(self, range.upper);
@@ -287,6 +307,13 @@ fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!sy
             const sym = self.symbols.items[idx];
             if (isArraySectionSubstring(sym, sub)) return sym.type_spec;
             return symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null);
+        },
+        .component => |comp| {
+            const base_spec = try exprTypeSpecCached(self, comp.base);
+            if (base_spec.lowered_kind != .derived) return error.InvalidSubscript;
+            const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
+            const component = symbols_mod.lookupDerivedComponent(self, derived_name, comp.name) orelse return error.InvalidSubscript;
+            return component.type_spec;
         },
         .dim_range => return symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
         .literal => |lit| {

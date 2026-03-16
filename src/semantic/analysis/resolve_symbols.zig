@@ -38,6 +38,21 @@ pub fn lookupDerivedType(self: *const context.Context, name: []const u8) ?contex
     return getLowercaseMapValue(context.Context.DerivedTypeInfo, &self.derived_types, name);
 }
 
+pub fn lookupDerivedComponent(
+    self: *const context.Context,
+    type_name: []const u8,
+    component_name: []const u8,
+) ?context.Context.DerivedTypeInfo.ComponentInfo {
+    var current = lookupDerivedType(self, type_name) orelse return null;
+    while (true) {
+        for (current.components) |component| {
+            if (std.ascii.eqlIgnoreCase(component.name, component_name)) return component;
+        }
+        const parent = current.parent_name orelse return null;
+        current = lookupDerivedType(self, parent) orelse return null;
+    }
+}
+
 pub fn isSameOrExtension(self: *const context.Context, candidate: []const u8, base: []const u8) bool {
     var current = lookupDerivedType(self, candidate) orelse return false;
     while (true) {

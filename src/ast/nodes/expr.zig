@@ -17,6 +17,7 @@ pub const Expr = union(enum) {
     literal: Literal,
     call_or_subscript: CallOrSubscript,
     substring: SubstringExpr,
+    component: ComponentExpr,
     dim_range: DimRange,
     unary: UnaryExpr,
     binary: BinaryExpr,
@@ -60,6 +61,12 @@ pub const SubstringExpr = struct {
     args: []*Expr,
     start: ?*Expr,
     end: ?*Expr,
+};
+
+pub const ComponentExpr = struct {
+    base: *Expr,
+    name: []const u8,
+    args: []*Expr = &.{},
 };
 
 pub const ComplexLiteral = struct {

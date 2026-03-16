@@ -247,6 +247,10 @@ fn rewriteExpr(
             if (sub.start) |start| changed = (try rewriteExpr(ctx, state, start, source_stmt, prelude, allow_prelude)) or changed;
             if (sub.end) |end_expr| changed = (try rewriteExpr(ctx, state, end_expr, source_stmt, prelude, allow_prelude)) or changed;
         },
+        .component => |*comp| {
+            changed = (try rewriteExpr(ctx, state, comp.base, source_stmt, prelude, allow_prelude)) or changed;
+            for (comp.args) |arg| changed = (try rewriteExpr(ctx, state, arg, source_stmt, prelude, allow_prelude)) or changed;
+        },
         .implied_do => |*implied| {
             changed = (try rewriteExpr(ctx, state, implied.start, source_stmt, prelude, allow_prelude)) or changed;
             changed = (try rewriteExpr(ctx, state, implied.end, source_stmt, prelude, allow_prelude)) or changed;
@@ -374,6 +378,14 @@ fn isArrayValuedExpr(ctx: *context.Context, expr: *ast.Expr) bool {
                 if (isArrayValuedExpr(ctx, end_expr)) return true;
             }
             return false;
+        },
+        .component => |comp| {
+            if (isArrayValuedExpr(ctx, comp.base)) return true;
+            for (comp.args) |arg| {
+                if (arg.* == .dim_range) return true;
+                if (isArrayValuedExpr(ctx, arg)) return true;
+            }
+            return comp.args.len != 0;
         },
         .implied_do => return true,
         .call_or_subscript => |call| {
@@ -663,6 +675,14 @@ fn cloneExpr(ctx: *context.Context, node: *ast.Expr) !*ast.Expr {
                     .end = end_expr,
                 },
             };
+        },
+        .component => |comp| {
+            const base = try cloneExpr(ctx, comp.base);
+            const args = try ctx.arena.alloc(*ast.Expr, comp.args.len);
+            for (comp.args, 0..) |arg, idx| {
+                args[idx] = try cloneExpr(ctx, arg);
+            }
+            cloned.* = .{ .component = .{ .base = base, .name = comp.name, .args = args } };
         },
         .dim_range => |range| {
             const lower = if (range.lower) |l| try cloneExpr(ctx, l) else null;

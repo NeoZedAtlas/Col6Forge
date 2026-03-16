@@ -171,7 +171,6 @@ const Parser = struct {
         var module_decls = std.array_list.Managed(Decl).init(self.arena);
         var module_decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
         var saw_contains = false;
-        var in_interface = false;
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
             noteFallbackForLine(self.diag_bag, line);
@@ -185,15 +184,17 @@ const Parser = struct {
                 break;
             }
             if (self.isInterfaceStartAt(self.index)) {
-                in_interface = true;
-                self.index += 1;
-                continue;
-            }
-            if (in_interface) {
-                if (self.isInterfaceEndAt(self.index)) {
-                    in_interface = false;
-                }
-                self.index += 1;
+                const decl_node = self.parseInterfaceBlock() catch |err| {
+                    const tokens = self.tokensForIndex(self.index) catch |tok_err| {
+                        setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, line, tok_err);
+                        return tok_err;
+                    };
+                    const lp = LineParser.init(line, tokens);
+                    setParseDiagnosticFromStream(self.diag_bag, line, lp, err);
+                    return err;
+                };
+                try module_decls.append(decl_node);
+                try module_decl_sources.append(sourceFromLine(line));
                 continue;
             }
             const tokens = self.tokensForIndex(self.index) catch {
@@ -330,6 +331,15 @@ const Parser = struct {
                 try decl_sources.append(sourceFromLine(line));
                 continue;
             }
+            if (isInterfaceStartTokens(line, tokens)) {
+                const decl_node = self.parseInterfaceBlock() catch |err| {
+                    setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
+                    return err;
+                };
+                try decls.append(decl_node);
+                try decl_sources.append(sourceFromLine(line));
+                continue;
+            }
             if (decl.isDeclarationStart(stmt_lp)) {
                 const decl_node = decl.parseDecl(&stmt_lp, self.arena) catch |err| {
                     setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
@@ -400,6 +410,7 @@ const Parser = struct {
         var lp = LineParser.init(header_line, header_tokens);
         const header = try parseDerivedTypeHeader(self.arena, &lp);
         self.index += 1;
+        var components = std.array_list.Managed(ast.TypeDecl).init(self.arena);
 
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
@@ -411,7 +422,37 @@ const Parser = struct {
                     .name = header.name,
                     .parent_name = header.parent_name,
                     .abstract = header.abstract,
+                    .components = try components.toOwnedSlice(),
                 } };
+            }
+            var body_lp = LineParser.init(line, tokens);
+            if (decl.isDeclarationStart(body_lp)) {
+                const component_decl = try decl.parseDecl(&body_lp, self.arena);
+                if (component_decl == .type_decl) {
+                    try components.append(component_decl.type_decl);
+                }
+            }
+            self.index += 1;
+        }
+        return error.UnexpectedEOF;
+    }
+
+    fn parseInterfaceBlock(self: *Parser) !Decl {
+        if (self.index >= self.lines.len) return error.UnexpectedEOF;
+        const header_line = self.lines[self.index];
+        const header_tokens = try self.tokensForIndex(self.index);
+        var lp = LineParser.init(header_line, header_tokens);
+        const is_abstract = lp.consumeKeyword("ABSTRACT");
+        if (!lp.consumeKeyword("INTERFACE")) return error.UnexpectedToken;
+        self.index += 1;
+
+        while (self.index < self.lines.len) {
+            const line = self.lines[self.index];
+            noteFallbackForLine(self.diag_bag, line);
+            const tokens = try self.tokensForIndex(self.index);
+            if (isInterfaceEndTokens(line, tokens)) {
+                self.index += 1;
+                return .{ .interface_block = .{ .abstract = is_abstract } };
             }
             self.index += 1;
         }
@@ -757,6 +798,7 @@ fn setLexerOrLineDiagnostic(
     err: anyerror,
 ) void {
     if (lex_diag_bag.take()) |lex_diag| {
+        defer lex_diag_bag.release(lex_diag);
         diag_bag.set(lex_diag.line, lex_diag.column, lex_diag.code, lex_diag.message, lex_diag.line_text);
         return;
     }
@@ -1752,6 +1794,7 @@ test "parseProgram reports continued declaration parse errors on the real source
 
     try testing.expectError(error.UnexpectedToken, parseProgram(arena.allocator(), lines));
     const diag = parse_diag.take() orelse return error.TestExpectedEqual;
+    defer parse_diag.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 8), diag.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
@@ -1775,6 +1818,7 @@ test "parseProgram reports continued IF parse errors on the real source line" {
 
     try testing.expectError(error.UnexpectedToken, parseProgram(arena.allocator(), lines));
     const diag = parse_diag.take() orelse return error.TestExpectedEqual;
+    defer parse_diag.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 8), diag.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
@@ -1797,6 +1841,7 @@ test "parseProgram reports free-form continued declaration parse errors on the r
 
     try testing.expectError(error.UnexpectedToken, parseProgram(arena.allocator(), lines));
     const diag = parse_diag.take() orelse return error.TestExpectedEqual;
+    defer parse_diag.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 3), diag.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
@@ -1831,6 +1876,62 @@ test "parseProgram handles free-form implicit main with derived type and class a
     try testing.expectEqualStrings("real_type", unit.decls[1].type_decl.derived_type_name.?);
 }
 
+test "parseProgram handles interface blocks inside procedure bodies" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "contains\n" ++
+        "  subroutine s1(f1)\n" ++
+        "    interface\n" ++
+        "      function f1(i)\n" ++
+        "      end function f1\n" ++
+        "    end interface\n" ++
+        "  end subroutine s1\n" ++
+        "end module m1\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqualStrings("s1", unit.name);
+    try testing.expectEqual(@as(usize, 1), unit.decls.len);
+    try testing.expect(unit.decls[0] == .interface_block);
+}
+
+test "parseProgram preserves module interface blocks in contained procedures" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  interface\n" ++
+        "    subroutine foo(x)\n" ++
+        "    end subroutine foo\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine bar()\n" ++
+        "  end subroutine bar\n" ++
+        "end module m1\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqualStrings("bar", unit.name);
+    try testing.expectEqual(@as(usize, 1), unit.decls.len);
+    try testing.expect(unit.decls[0] == .interface_block);
+}
+
 test "parseProgramWithDiagnostics captures parse errors in explicit bag" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1850,6 +1951,7 @@ test "parseProgramWithDiagnostics captures parse errors in explicit bag" {
 
     try testing.expectError(error.UnexpectedToken, parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag));
     const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 3), diag.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);

@@ -37,6 +37,10 @@ fn printDecl(writer: anytype, decl: ast.Decl) !void {
         .derived_type_def => |derived| {
             try writer.print(";   decl derived-type {s}\n", .{derived.name});
         },
+        .interface_block => |interface_block| {
+            const mode = if (interface_block.abstract) "abstract" else "plain";
+            try writer.print(";   decl interface-block {s}\n", .{mode});
+        },
         .dimension => |dim| {
             try writer.print(";   decl dimension items({d})\n", .{dim.items.len});
         },
@@ -500,6 +504,18 @@ fn printExpr(writer: anytype, expr: *ast.Expr, depth: usize) !void {
                 try printIndent(writer, depth + 1);
                 try writer.writeAll("end:\n");
                 try printExpr(writer, end, depth + 2);
+            }
+        },
+        .component => |comp| {
+            try printIndent(writer, depth);
+            try writer.print("expr component {s} args({d})\n", .{ comp.name, comp.args.len });
+            try printIndent(writer, depth + 1);
+            try writer.writeAll("base:\n");
+            try printExpr(writer, comp.base, depth + 2);
+            for (comp.args, 0..) |arg, idx| {
+                try printIndent(writer, depth + 1);
+                try writer.print("arg[{d}]:\n", .{idx});
+                try printExpr(writer, arg, depth + 2);
             }
         },
         .dim_range => |range| {

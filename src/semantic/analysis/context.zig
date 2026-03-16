@@ -8,9 +8,16 @@ const intrinsics = @import("intrinsics.zig");
 
 pub const Context = struct {
     pub const DerivedTypeInfo = struct {
+        pub const ComponentInfo = struct {
+            name: []const u8,
+            type_spec: symbols.TypeSpec,
+            dims: []*ast.Expr = &.{},
+        };
+
         name: []const u8,
         parent_name: ?[]const u8 = null,
         abstract: bool = false,
+        components: []const ComponentInfo = &.{},
     };
 
     pub const IntegerBounds = struct {

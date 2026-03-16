@@ -88,6 +88,65 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
     return .{ .name = gep, .ty = .ptr, .is_ptr = true };
 }
 
+pub fn emitComponentPtr(ctx: *Context, builder: anytype, comp: ast.ComponentExpr) anyerror!ValueRef {
+    const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+    const component = ctx.lookupDerivedComponentLayout(base_type_name, comp.name) orelse return error.UnknownSymbol;
+    var base_ptr = try emitDerivedObjectPtr(ctx, builder, comp.base);
+    if (component.offset != 0) {
+        const gep_name = try ctx.nextTemp();
+        try builder.gep(gep_name, .i8, base_ptr, i64Const(ctx, @intCast(component.offset)));
+        base_ptr = .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+    }
+    if (component.dims.len == 0) {
+        if (comp.args.len != 0) return error.InvalidSubscript;
+        return base_ptr;
+    }
+    if (comp.args.len != component.dims.len) return error.InvalidSubscript;
+
+    var offset = try emitComponentOffset(ctx, builder, component.dims, comp.args);
+    if (component.elem_size != 1) {
+        offset = try binary.emitMul(ctx, builder, offset, i64Const(ctx, @intCast(component.elem_size)));
+    }
+    const gep_name = try ctx.nextTemp();
+    try builder.gep(gep_name, .i8, base_ptr, offset);
+    return .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+}
+
+fn emitDerivedObjectPtr(ctx: *Context, builder: anytype, expr: *Expr) anyerror!ValueRef {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
+            const ptr = try ctx.getPointer(name);
+            if (sym.storage == .dummy) break :blk ptr;
+            const tmp = try ctx.nextTemp();
+            try builder.load(tmp, .ptr, ptr);
+            break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = true };
+        },
+        .component => |comp| emitComponentPtr(ctx, builder, comp),
+        else => error.UnknownSymbol,
+    };
+}
+
+fn emitComponentOffset(ctx: *Context, builder: anytype, dims: []*Expr, args: []*Expr) anyerror!ValueRef {
+    var offset = i64Const(ctx, 0);
+    var idx: usize = 0;
+    while (idx < dims.len) : (idx += 1) {
+        var index_val = try emitIndex(ctx, builder, args[idx]);
+        if (index_val.ty != .i64) index_val = try casting.coerce(ctx, builder, index_val, .i64);
+        const lower = try emitDimLower(ctx, builder, dims[idx]);
+        var stride = i64Const(ctx, 1);
+        var prior: usize = 0;
+        while (prior < idx) : (prior += 1) {
+            const extent = try emitDimValue(ctx, builder, dims[prior]);
+            stride = try binary.emitMul(ctx, builder, stride, extent);
+        }
+        const adjusted = try binary.emitSub(ctx, builder, index_val, lower);
+        const term = try binary.emitMul(ctx, builder, adjusted, stride);
+        offset = try binary.emitAdd(ctx, builder, offset, term);
+    }
+    return offset;
+}
+
 pub fn emitDimValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     switch (expr.*) {
         .literal => |lit| {
@@ -178,6 +237,10 @@ pub fn loadI32(ctx: *Context, builder: anytype, ptr_name: []const u8) !ValueRef 
 
 fn oneIndexValue() ValueRef {
     return .{ .name = "1", .ty = index_ty, .is_ptr = false };
+}
+
+fn i64Const(ctx: *Context, value: i64) ValueRef {
+    return .{ .name = ctx.intLiteral(value) catch "0", .ty = .i64, .is_ptr = false };
 }
 
 fn emitBoundsCheck(ctx: *Context, builder: anytype, index: ValueRef, lower: ValueRef, upper: ValueRef) !void {

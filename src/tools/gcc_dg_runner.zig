@@ -1152,6 +1152,7 @@ fn formatPipelineFailureText(
         errdefer rendered.deinit(allocator);
 
         while (diag_bag.take()) |d| {
+            defer diag_bag.release(d);
             try rendered.writer(allocator).print("{s}:{d}:{d}: error[{s}]: {s}\n", .{
                 d.file_path,
                 d.line,

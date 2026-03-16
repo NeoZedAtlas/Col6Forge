@@ -77,6 +77,23 @@ pub const RuntimeArrayDescriptor = struct {
     multiplier_slots: []ValueRef,
 };
 
+pub const DerivedComponentLayout = struct {
+    name: []const u8,
+    type_spec: input.TypeSpec,
+    dims: []*input.Expr = &.{},
+    offset: usize,
+    elem_size: usize,
+    size: usize,
+    alignment: usize,
+};
+
+pub const DerivedTypeLayout = struct {
+    name: []const u8,
+    components: []const DerivedComponentLayout,
+    size: usize,
+    alignment: usize,
+};
+
 pub const IntrinsicWrapperKind = enum {
     iabs,
 };
@@ -153,6 +170,7 @@ pub const Context = struct {
     char_arg_lens: CaseInsensitiveStringHashMap(ValueRef),
     managed_allocatables: CaseInsensitiveStringHashMap(void),
     runtime_array_descs: std.AutoHashMap(usize, RuntimeArrayDescriptor),
+    derived_type_layouts: CaseInsensitiveStringHashMap(DerivedTypeLayout),
     int_literal_cache: std.AutoHashMap(i64, []const u8),
     heap_temps_to_free: std.array_list.Managed(ValueRef),
     expr_source_index: std.AutoHashMap(usize, ast.SourceRef),
@@ -240,6 +258,7 @@ pub const Context = struct {
             .char_arg_lens = CaseInsensitiveStringHashMap(ValueRef).initContext(allocator, .{}),
             .managed_allocatables = CaseInsensitiveStringHashMap(void).initContext(allocator, .{}),
             .runtime_array_descs = std.AutoHashMap(usize, RuntimeArrayDescriptor).init(allocator),
+            .derived_type_layouts = CaseInsensitiveStringHashMap(DerivedTypeLayout).initContext(allocator, .{}),
             .int_literal_cache = std.AutoHashMap(i64, []const u8).init(allocator),
             .heap_temps_to_free = std.array_list.Managed(ValueRef).init(allocator),
             .expr_source_index = std.AutoHashMap(usize, ast.SourceRef).init(allocator),
@@ -266,6 +285,7 @@ pub const Context = struct {
         for (unit.expr_sources) |expr_source| {
             try ctx.expr_source_index.put(@intFromPtr(expr_source.expr), expr_source.source);
         }
+        try ctx.buildDerivedTypeLayouts();
         return ctx;
     }
 
@@ -357,6 +377,11 @@ pub const Context = struct {
             self.allocator.free(entry.value_ptr.multiplier_slots);
         }
         self.runtime_array_descs.deinit();
+        var layout_it = self.derived_type_layouts.iterator();
+        while (layout_it.next()) |entry| {
+            self.allocator.free(entry.value_ptr.components);
+        }
+        self.derived_type_layouts.deinit();
         self.int_literal_cache.deinit();
         self.heap_temps_to_free.deinit();
         self.expr_source_index.deinit();
@@ -432,12 +457,50 @@ pub const Context = struct {
         return self.locals.get(name) orelse error.UnknownSymbol;
     }
 
-    pub fn findSymbol(self: *Context, name: []const u8) ?input.sema.Symbol {
+    pub fn findSymbol(self: *const Context, name: []const u8) ?input.sema.Symbol {
         if (self.symbol_index_exact.get(name)) |idx_exact| {
             return self.sem.symbols[idx_exact].normalized();
         }
         const idx = self.symbol_index.get(name) orelse return null;
         return self.sem.symbols[idx].normalized();
+    }
+
+    pub fn findDerivedTypeLayout(self: *const Context, name: []const u8) ?DerivedTypeLayout {
+        return self.derived_type_layouts.get(name);
+    }
+
+    pub fn lookupDerivedComponentLayout(self: *const Context, type_name: []const u8, component_name: []const u8) ?DerivedComponentLayout {
+        const layout = self.findDerivedTypeLayout(type_name) orelse return null;
+        for (layout.components) |component| {
+            if (std.ascii.eqlIgnoreCase(component.name, component_name)) return component;
+        }
+        return null;
+    }
+
+    pub fn derivedTypeNameForExpr(self: *const Context, expr: *const input.Expr) ?[]const u8 {
+        return switch (expr.*) {
+            .identifier => |name| blk: {
+                const sym = self.findSymbol(name) orelse break :blk null;
+                if (sym.loweredKind() != .derived) break :blk null;
+                break :blk sym.type_spec.derived_type_name;
+            },
+            .component => |comp| blk: {
+                const base_name = self.derivedTypeNameForExpr(comp.base) orelse break :blk null;
+                const component = self.lookupDerivedComponentLayout(base_name, comp.name) orelse break :blk null;
+                if (component.type_spec.lowered_kind != .derived) break :blk null;
+                break :blk component.type_spec.derived_type_name;
+            },
+            else => null,
+        };
+    }
+
+    pub fn componentIRType(self: *const Context, comp: input.ComponentExpr) !IRType {
+        const base_name = self.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+        const component = self.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
+        return if (component.type_spec.lowered_kind == .character or component.type_spec.lowered_kind == .derived)
+            .ptr
+        else
+            llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, self.options.target_layout);
     }
 
     pub fn arrayElemCountForSymbol(self: *Context, sym: input.sema.Symbol) !usize {
@@ -697,7 +760,107 @@ pub const Context = struct {
         if (self.symbol_index_exact.get(name)) |idx| return idx;
         return self.symbol_index.get(name);
     }
+
+    fn buildDerivedTypeLayouts(self: *Context) !void {
+        for (self.unit.decls) |decl| {
+            if (decl != .derived_type_def) continue;
+            var components = std.array_list.Managed(DerivedComponentLayout).init(self.allocator);
+            var size: usize = 0;
+            var alignment: usize = 1;
+            for (decl.derived_type_def.components) |type_decl| {
+                for (type_decl.items) |item| {
+                    const elem = try self.componentElemSizeAlign(type_decl, item);
+                    const count = common.arrayElementCount(self.sem, item.dims) catch |err| switch (err) {
+                        error.ArrayDimNotConstant => return error.ArraysUnsupported,
+                        else => return err,
+                    };
+                    const offset = alignForward(size, elem.alignment);
+                    const total_size = elem.size * count;
+                    try components.append(.{
+                        .name = item.name,
+                        .type_spec = elem.type_spec,
+                        .dims = item.dims,
+                        .offset = offset,
+                        .elem_size = elem.size,
+                        .size = total_size,
+                        .alignment = elem.alignment,
+                    });
+                    size = offset + total_size;
+                    alignment = @max(alignment, elem.alignment);
+                }
+            }
+            size = alignForward(size, alignment);
+            try self.derived_type_layouts.put(decl.derived_type_def.name, .{
+                .name = decl.derived_type_def.name,
+                .components = try components.toOwnedSlice(),
+                .size = size,
+                .alignment = alignment,
+            });
+        }
+    }
+
+    const ComponentElemInfo = struct {
+        type_spec: input.TypeSpec,
+        size: usize,
+        alignment: usize,
+    };
+
+    fn componentElemSizeAlign(self: *Context, type_decl: input.TypeDecl, item: input.Declarator) !ComponentElemInfo {
+        var spec = input.TypeSpec.fromResolvedKind(type_decl.type_kind, type_decl.type_kind, null);
+        if (type_decl.type_kind == .derived) {
+            const derived_name = type_decl.derived_type_name orelse return error.UnknownSymbol;
+            const layout = self.findDerivedTypeLayout(derived_name) orelse return error.UnknownSymbol;
+            spec = input.TypeSpec.fromDerived(derived_name);
+            return .{ .type_spec = spec, .size = layout.size, .alignment = layout.alignment };
+        }
+        if (type_decl.type_kind == .character) {
+            const char_len = if (item.char_len_deferred) null else inferConstantCharLen(item.char_len);
+            if (char_len == null) return error.NonConstantCharacterLength;
+            spec = spec.withCharacterLength(.constant, char_len.?);
+            return .{ .type_spec = spec, .size = char_len.?, .alignment = 1 };
+        }
+        const ir_ty = llvm_types.typeFromKindWithLayout(type_decl.type_kind, self.options.target_layout);
+        const sa = sizeAlignForIRType(ir_ty);
+        return .{ .type_spec = spec, .size = sa.size, .alignment = sa.alignment };
+    }
 };
+
+const SizeAlign = struct {
+    size: usize,
+    alignment: usize,
+};
+
+fn sizeAlignForIRType(ty: IRType) SizeAlign {
+    return switch (ty) {
+        .i1 => .{ .size = 1, .alignment = 1 },
+        .i8 => .{ .size = 1, .alignment = 1 },
+        .i32 => .{ .size = 4, .alignment = 4 },
+        .i64 => .{ .size = 8, .alignment = 8 },
+        .f32 => .{ .size = 4, .alignment = 4 },
+        .f64 => .{ .size = 8, .alignment = 8 },
+        .v2f32 => .{ .size = 8, .alignment = 8 },
+        .complex_f32 => .{ .size = 8, .alignment = 4 },
+        .complex_f64 => .{ .size = 16, .alignment = 8 },
+        .ptr => .{ .size = @sizeOf(usize), .alignment = @alignOf(usize) },
+        .void => .{ .size = 0, .alignment = 1 },
+    };
+}
+
+fn alignForward(value: usize, alignment: usize) usize {
+    if (alignment <= 1) return value;
+    return (value + alignment - 1) & ~(alignment - 1);
+}
+
+fn inferConstantCharLen(expr: ?*input.Expr) ?usize {
+    const node = expr orelse return 1;
+    return switch (node.*) {
+        .literal => |lit| switch (lit.kind) {
+            .integer => std.fmt.parseInt(usize, lit.text, 10) catch null,
+            else => null,
+        },
+        else => null,
+    };
+}
 
 fn canonicalNumericLabel(label: []const u8) []const u8 {
     if (label.len == 0) return label;

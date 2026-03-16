@@ -315,6 +315,7 @@ test "analyzeProgramWithKnownAndOptionsAndDiagnostics keeps semantic diagnostics
     );
 
     const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
     try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag.code);
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expect(diagnostic.take() == null);

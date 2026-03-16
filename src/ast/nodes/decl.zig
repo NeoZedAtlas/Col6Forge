@@ -17,6 +17,7 @@ pub const Decl = union(enum) {
     implicit: ImplicitDecl,
     type_decl: TypeDecl,
     derived_type_def: DerivedTypeDef,
+    interface_block: InterfaceBlock,
     dimension: DimensionDecl,
     parameter: ParameterDecl,
     common: CommonDecl,
@@ -34,11 +35,17 @@ pub const TypeDecl = struct {
     items: []Declarator,
     save: bool = false,
     allocatable: bool = false,
+    pointer: bool = false,
 };
 
 pub const DerivedTypeDef = struct {
     name: []const u8,
     parent_name: ?[]const u8 = null,
+    abstract: bool = false,
+    components: []const TypeDecl = &.{},
+};
+
+pub const InterfaceBlock = struct {
     abstract: bool = false,
 };
 

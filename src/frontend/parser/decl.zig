@@ -59,13 +59,13 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
     if (lp.isKeywordSplit("DIMENSION")) {
         _ = lp.consumeKeyword("DIMENSION");
-        const items = try parseDeclarators(lp, arena, .{}, null);
+        const items = try parseDeclarators(lp, arena, .{}, null, false);
         return .{ .dimension = .{ .items = items } };
     }
     if (lp.isKeywordSplit("ALLOCATABLE")) {
         _ = lp.consumeKeyword("ALLOCATABLE");
         _ = consumeDoubleColon(lp);
-        const items = try parseDeclarators(lp, arena, .{}, null);
+        const items = try parseDeclarators(lp, arena, .{}, null, false);
         return .{ .dimension = .{ .items = items, .allocatable = true } };
     }
     if (lp.isKeywordSplit("PARAMETER")) {
@@ -176,7 +176,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         }
     }
     const attrs = try consumeDeclAttributes(lp, arena);
-    const items = try parseDeclarators(lp, arena, default_char_len, attrs.dimension);
+    const items = try parseDeclarators(lp, arena, default_char_len, attrs.dimension, attrs.pointer);
     return .{ .type_decl = .{
         .type_kind = type_spec.type_kind,
         .kind_selector = type_spec.kind_selector,
@@ -185,6 +185,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         .items = items,
         .save = attrs.save,
         .allocatable = attrs.allocatable,
+        .pointer = attrs.pointer,
     } };
 }
 
@@ -370,6 +371,7 @@ const DeclAttributes = struct {
     dimension: ?[]*ast.Expr = null,
     save: bool = false,
     allocatable: bool = false,
+    pointer: bool = false,
 };
 
 fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAttributes {
@@ -391,6 +393,9 @@ fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAttribu
             }
             if (context.eqNoCase(attr_name, "ALLOCATABLE")) {
                 attrs.allocatable = true;
+            }
+            if (context.eqNoCase(attr_name, "POINTER")) {
+                attrs.pointer = true;
             }
             if (context.eqNoCase(attr_name, "DIMENSION")) {
                 if (lp.consume(.l_paren)) {
@@ -526,6 +531,7 @@ fn parseDeclarators(
     arena: std.mem.Allocator,
     default_char_len: ParsedCharacterLen,
     default_dims: ?[]*ast.Expr,
+    pointer_attr: bool,
 ) ![]Declarator {
     var items = std.array_list.Managed(Declarator).init(arena);
     while (lp.peek()) |_| {
@@ -549,6 +555,7 @@ fn parseDeclarators(
             char_len = try parseCharacterLenSpec(lp, arena);
         }
         if (lp.consume(.equals)) {
+            _ = if (pointer_attr) lp.consume(.greater) else false;
             init_value = try expr.parseExpr(lp, arena, 0);
         }
         var dim_items = try dims.toOwnedSlice();
@@ -1613,6 +1620,31 @@ test "parseDecl handles derived TYPE declaration" {
             try testing.expectEqual(@as(usize, 1), td.items.len);
             try testing.expectEqualStrings("B", td.items[0].name);
             try testing.expectEqual(@as(usize, 1), td.items[0].dims.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl accepts POINTER declarator initialization with null intrinsic" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "real(kind(1.d0)), pointer :: x(:) => null()\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expect(td.pointer);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expect(td.items[0].init != null);
         },
         else => return error.UnexpectedToken,
     }

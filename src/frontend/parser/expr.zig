@@ -171,11 +171,12 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                         end_expr = try parseExprDepth(lp, arena, 0, depth + 1);
                     }
                     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-                    return makeExprNode(
+                    const node = try makeExprNode(
                         arena,
                         .{ .substring = .{ .name = name, .args = args, .start = start_expr, .end = end_expr } },
                         start_source,
                     );
+                    return parseComponentSuffixes(lp, arena, node, depth + 1, start_source);
                 } else {
                     var args = std.array_list.Managed(*Expr).init(arena);
                     while (!lp.peekIs(.r_paren)) {
@@ -209,20 +210,23 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                             end_expr = try parseExprDepth(lp, arena, 0, depth + 1);
                         }
                         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-                        return makeExprNode(
+                        const node = try makeExprNode(
                             arena,
                             .{ .substring = .{ .name = name, .args = call_args, .start = start_expr, .end = end_expr } },
                             start_source,
                         );
+                        return parseComponentSuffixes(lp, arena, node, depth + 1, start_source);
                     }
-                    return makeExprNode(
+                    const node = try makeExprNode(
                         arena,
                         .{ .call_or_subscript = .{ .name = name, .args = call_args } },
                         start_source,
                     );
+                    return parseComponentSuffixes(lp, arena, node, depth + 1, start_source);
                 }
             }
-            return makeExprNode(arena, .{ .identifier = name }, start_source);
+            const node = try makeExprNode(arena, .{ .identifier = name }, start_source);
+            return parseComponentSuffixes(lp, arena, node, depth + 1, start_source);
         },
         .integer => {
             _ = lp.next();
@@ -283,6 +287,38 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
         },
         else => return error.UnexpectedToken,
     }
+}
+
+fn parseComponentSuffixes(
+    lp: *LineParser,
+    arena: std.mem.Allocator,
+    base: *Expr,
+    depth: usize,
+    source: SourceRef,
+) ParseExprError!*Expr {
+    if (depth >= max_expression_depth) return error.ExpressionDepthExceeded;
+    var current = base;
+    while (lp.consume(.percent)) {
+        const name = lp.readName(arena) orelse return error.UnexpectedToken;
+        var args = std.array_list.Managed(*Expr).init(arena);
+        if (lp.consume(.l_paren)) {
+            while (!lp.peekIs(.r_paren)) {
+                const arg_expr = if (hasArgumentDimRange(lp.*))
+                    try parseDimExprDepth(lp, arena, depth + 1)
+                else
+                    try parseExprDepth(lp, arena, 0, depth + 1);
+                try args.append(arg_expr);
+                _ = lp.consume(.comma);
+            }
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        }
+        current = try makeExprNode(arena, .{ .component = .{
+            .base = current,
+            .name = name,
+            .args = try args.toOwnedSlice(),
+        } }, source);
+    }
+    return current;
 }
 
 fn makeExprNode(arena: std.mem.Allocator, value: Expr, source: SourceRef) ParseExprError!*Expr {

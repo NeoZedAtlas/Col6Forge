@@ -800,6 +800,7 @@ test "codegen diagnostic reports intrinsic call site for invalid intrinsic arity
     var writer = sink.writer();
     try testing.expectError(error.InvalidIntrinsicCall, emitModuleToWriter(&writer, allocator, program, sem_prog, "diag_intrinsic_arity.f", .{}));
     const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
+    defer codegen_diag.release(diag);
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expectEqual(@as(usize, 11), diag.column);
     try testing.expectEqualStrings(catalog.codegen.invalid_intrinsic_call.code, diag.code);
@@ -871,6 +872,7 @@ test "codegen diagnostic reports concat expression site for unsupported characte
     var writer = sink.writer();
     try testing.expectError(error.UnsupportedConcat, emitModuleToWriter(&writer, allocator, program, sem_prog, "diag_concat_site.f", .{}));
     const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
+    defer codegen_diag.release(diag);
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expectEqual(@as(usize, 11), diag.column);
     try testing.expectEqualStrings(catalog.codegen.unsupported_substring.code, diag.code);
@@ -956,6 +958,7 @@ test "codegen diagnostic reports substring bound beyond fixed character length" 
     var writer = sink.writer();
     try testing.expectError(error.SubstringExceedsStringLength, emitModuleToWriter(&writer, allocator, program, sem_prog, "diag_substring_bounds.f", .{}));
     const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
+    defer codegen_diag.release(diag);
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expectEqual(@as(usize, 11), diag.column);
     try testing.expectEqualStrings(catalog.codegen.substring_exceeds_string_length.code, diag.code);
@@ -1049,6 +1052,7 @@ test "codegen diagnostic reports direct io unit site when REC is missing" {
     var writer = sink.writer();
     try testing.expectError(error.MissingRecordNumber, emitModuleToWriter(&writer, allocator, program, sem_prog, "diag_missing_rec.f", .{}));
     const diag = codegen_diag.take() orelse return error.TestExpectedEqual;
+    defer codegen_diag.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 13), diag.column);
     try testing.expectEqualStrings(catalog.codegen.missing_record_number.code, diag.code);
@@ -1152,6 +1156,7 @@ test "setCodegenDiagForUnit falls back to declaration source when unit has no st
     defer diag_bag.deinit();
     setCodegenDiagForUnit(&diag_bag, unit, error.MissingSemanticUnit);
     const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
     try testing.expectEqual(@as(usize, 4), diag.line);
     try testing.expectEqual(@as(usize, 7), diag.column);
     try testing.expectEqualStrings(catalog.codegen.missing_semantic_unit.code, diag.code);

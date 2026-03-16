@@ -98,6 +98,7 @@ test "parseStatementWithDiagnostics captures lexer errors in explicit bag" {
     );
 
     const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
     try testing.expectEqualStrings(catalog.lexer.unexpected_character.code, diag.code);
     try testing.expectEqual(@as(usize, 1), diag.line);
     try testing.expect(parse_diag.take() == null);

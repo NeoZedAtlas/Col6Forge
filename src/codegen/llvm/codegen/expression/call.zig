@@ -1236,6 +1236,14 @@ fn isArrayValuedExpr(ctx: *Context, expr: *Expr) bool {
             }
             return false;
         },
+        .component => |comp| {
+            if (isArrayValuedExpr(ctx, comp.base)) return true;
+            for (comp.args) |arg| {
+                if (arg.* == .dim_range) return true;
+                if (isArrayValuedExpr(ctx, arg)) return true;
+            }
+            return comp.args.len != 0;
+        },
         .implied_do => return true,
         .call_or_subscript => |call_or_sub| {
             var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;

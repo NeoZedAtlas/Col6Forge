@@ -62,6 +62,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
             }
         },
         .derived_type_def => {},
+        .interface_block => {},
         .dimension => |dim| {
             for (dim.items) |item| {
                 const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);

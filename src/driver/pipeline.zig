@@ -681,6 +681,7 @@ fn setDefaultDiagnostic(diag_bag: *diag.Bag, input_path: []const u8, contents: [
 fn appendParserDiagnostics(diag_bag: *diag.Bag, parse_diag_bag: *parser.diagnostic.Bag, input_path: []const u8, contents: []const u8) bool {
     var appended = false;
     while (parse_diag_bag.take()) |parse_info| {
+        defer parse_diag_bag.release(parse_info);
         const raw_line = sourceLineAt(contents, parse_info.line);
         const line_text = if (raw_line.len > 0) raw_line else parse_info.line_text;
         diag_bag.add(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text);
@@ -692,6 +693,7 @@ fn appendParserDiagnostics(diag_bag: *diag.Bag, parse_diag_bag: *parser.diagnost
 fn appendSemanticDiagnostics(diag_bag: *diag.Bag, semantic_diag_bag: *semantic.diagnostic.Bag, input_path: []const u8, contents: []const u8) bool {
     var appended = false;
     while (semantic_diag_bag.take()) |sem_info| {
+        defer semantic_diag_bag.release(sem_info);
         const raw_line = sourceLineAt(contents, sem_info.line);
         const line_text = if (raw_line.len > 0) raw_line else sem_info.line_text;
         diag_bag.add(input_path, sem_info.line, sem_info.column, sem_info.code, sem_info.message, line_text);
@@ -703,6 +705,7 @@ fn appendSemanticDiagnostics(diag_bag: *diag.Bag, semantic_diag_bag: *semantic.d
 fn appendCodegenDiagnostics(diag_bag: *diag.Bag, codegen_diag_bag: *codegen.diagnostic.Bag, input_path: []const u8, contents: []const u8) bool {
     var appended = false;
     while (codegen_diag_bag.take()) |cg_info| {
+        defer codegen_diag_bag.release(cg_info);
         const raw_line = sourceLineAt(contents, cg_info.line);
         const line_text = if (raw_line.len > 0) raw_line else cg_info.line_text;
         diag_bag.add(input_path, cg_info.line, cg_info.column, cg_info.code, cg_info.message, line_text);
@@ -958,6 +961,7 @@ test "runPipelineWithOptionsAndDiagnostics keeps diagnostics in explicit bag" {
         runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag),
     );
     const diag_info = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag_info);
     try testing.expectEqual(@as(usize, 2), diag_info.line);
     try testing.expectEqual(@as(usize, 7), diag_info.column);
     try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag_info.code);

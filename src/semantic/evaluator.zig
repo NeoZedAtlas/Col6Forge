@@ -80,6 +80,7 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
             } };
         },
         .substring => return null,
+        .component => return null,
         .call_or_subscript => |call| return evalConstCall(call, resolver),
         .dim_range => return null,
         .implied_do => return null,
