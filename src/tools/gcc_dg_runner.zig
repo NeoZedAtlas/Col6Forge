@@ -1121,22 +1121,20 @@ fn emitPipelineToFile(
     output_path: []const u8,
     diag_bag: *Col6Forge.diag.Bag,
 ) !void {
-    var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
-    defer out_file.close();
-    var out_buf: [32 * 1024]u8 = undefined;
-    var out_writer = out_file.writer(&out_buf);
-    try Col6Forge.runPipelineToWriterWithOptionsAndDiagnostics(
+    const result = try Col6Forge.runPipelineWithOptionsAndDiagnostics(
         allocator,
         input_path,
         emit,
-        &out_writer.interface,
         .{
             .coarse_source_map = false,
             .capture_profile = false,
         },
         diag_bag,
     );
-    try out_writer.interface.flush();
+    defer allocator.free(result.output);
+    var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
+    defer out_file.close();
+    try out_file.writeAll(result.output);
 }
 
 fn formatPipelineFailureText(

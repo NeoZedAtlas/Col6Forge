@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const fixed_form = @import("../../frontend/fixed_form.zig");
+const free_form = @import("../../frontend/free_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const api = @import("../split/api.zig");
 
@@ -129,4 +130,33 @@ test "inferProcedureArgSigs captures OPTIONAL procedure dummy metadata" {
     try testing.expectEqual(@as(usize, 1), arg_sigs.len);
     try testing.expect(arg_sigs[0].optional);
     try testing.expectEqual(ast.TypeKind.integer, arg_sigs[0].type_spec.lowered_kind);
+}
+
+test "inferProcedureArgSigs preserves derived dummy type names" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  type :: varying_string\n" ++
+        "  end type varying_string\n" ++
+        "contains\n" ++
+        "  subroutine s(var)\n" ++
+        "    type(varying_string) :: var\n" ++
+        "  end subroutine s\n" ++
+        "end program p\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[1]);
+    try testing.expectEqual(@as(usize, 1), arg_sigs.len);
+    try testing.expectEqual(ast.TypeKind.derived, arg_sigs[0].type_spec.lowered_kind);
+    try testing.expectEqualStrings("varying_string", arg_sigs[0].type_spec.derived_type_name.?);
 }

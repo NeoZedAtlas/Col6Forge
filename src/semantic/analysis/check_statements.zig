@@ -28,7 +28,9 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 self.setCurrentSource(self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
             }
-            if (!isAssignmentCompatible(target_ty, value_ty)) {
+            if (!isAssignmentCompatible(target_ty, value_ty) and
+                !isDefinedAssignmentCompatible(self, assign.target, assign.value))
+            {
                 self.setCurrentSource(self.sourceForExpr(assign.value) orelse self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
             }
@@ -509,6 +511,54 @@ fn isAssignmentCompatible(target: ast.TypeKind, value: ast.TypeKind) bool {
     if (target == .character or value == .character) return target == .character and value == .character;
     if (target == .logical or value == .logical) return target == .logical and value == .logical;
     return isNumeric(target) and isNumeric(value);
+}
+
+fn isDefinedAssignmentCompatible(self: *context.Context, target: *ast.Expr, value: *ast.Expr) bool {
+    const sig = resolve_symbols.lookupKnownProcedureSig(self, "assignment(=)") orelse return false;
+    if (sig.kind != .subroutine) return false;
+    if (sig.arg_count != 2 or sig.alt_return_count != 0) return false;
+    if (minimumRequiredProcedureArgs(sig) > 2) return false;
+
+    var actuals = [_]*ast.Expr{ target, value };
+    return procedureSigMatchesActuals(self, sig, &actuals);
+}
+
+fn procedureSigMatchesActuals(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    actuals: []const *ast.Expr,
+) bool {
+    if (sig.args.len == 0) return sig.arg_count == actuals.len;
+    if (actuals.len > sig.arg_count) return false;
+
+    var actual_index: usize = 0;
+    for (sig.args) |arg| {
+        if (actual_index >= actuals.len) return arg.optional;
+        const actual_spec = resolve_expr.exprTypeSpec(self, actuals[actual_index]) catch return false;
+        if (!dummyArgTypeCompatible(self, arg.type_spec, actual_spec)) return false;
+        actual_index += 1;
+    }
+    return actual_index == actuals.len;
+}
+
+fn dummyArgTypeCompatible(
+    self: *context.Context,
+    expected: symbols.TypeSpec,
+    actual: symbols.TypeSpec,
+) bool {
+    if (expected.lowered_kind != actual.lowered_kind) return false;
+    if (expected.lowered_kind != .derived) return true;
+
+    if (expected.polymorphic and expected.derived_type_name == null) {
+        return actual.lowered_kind == .derived;
+    }
+
+    const expected_name = expected.derived_type_name orelse return false;
+    const actual_name = actual.derived_type_name orelse return false;
+    return if (expected.polymorphic)
+        resolve_symbols.isSameOrExtension(self, actual_name, expected_name)
+    else
+        std.ascii.eqlIgnoreCase(expected_name, actual_name);
 }
 
 fn checkAllocateTypeSpecCompatibility(

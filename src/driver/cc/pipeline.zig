@@ -266,3 +266,107 @@ test "emitPipelineToFile preserves fine-grained fixed-form diagnostics for cc tr
     try testing.expectEqualStrings(Col6Forge.error_catalog.parser.unexpected_token.code, diag_info.code);
     try testing.expectEqualStrings("     1 )", diag_info.line_text);
 }
+
+test "emitPipelineToFile accepts repository interface_assignment_4" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const output_path = try writeTempSourceFile(&tmp, allocator, "translated.ll", "");
+    defer allocator.free(output_path);
+
+    try emitPipelineToFile(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90",
+        output_path,
+        false,
+        .auto,
+        null,
+        false,
+        &.{},
+        &.{},
+    );
+}
+
+test "translateFortranInputs accepts repository interface_assignment_4 with collected known symbols" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const work_rel = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(work_rel);
+
+    const inputs = [_][]const u8{ "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90" };
+    const known = try collectFortranKnownSymbols(allocator, &inputs);
+    defer {
+        for (known.function_types) |entry| allocator.free(entry.name);
+        allocator.free(known.function_types);
+        for (known.procedure_sigs) |entry| {
+            allocator.free(entry.name);
+            if (entry.args.len != 0) allocator.free(entry.args);
+        }
+        allocator.free(known.procedure_sigs);
+    }
+
+    const translated = try translateFortranInputs(
+        allocator,
+        work_rel,
+        &inputs,
+        false,
+        .auto,
+        null,
+        false,
+        known.function_types,
+        known.procedure_sigs,
+    );
+    defer {
+        for (translated.ll_paths) |path| allocator.free(path);
+        allocator.free(translated.ll_paths);
+    }
+    try testing.expectEqual(@as(usize, 1), translated.ll_paths.len);
+}
+
+test "translateFortranInputs accepts repository interface_assignment_4 with collected known symbols and GPA" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const work_rel = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(work_rel);
+
+    const inputs = [_][]const u8{ "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90" };
+    const known = try collectFortranKnownSymbols(allocator, &inputs);
+    defer {
+        for (known.function_types) |entry| allocator.free(entry.name);
+        allocator.free(known.function_types);
+        for (known.procedure_sigs) |entry| {
+            allocator.free(entry.name);
+            if (entry.args.len != 0) allocator.free(entry.args);
+        }
+        allocator.free(known.procedure_sigs);
+    }
+
+    const translated = try translateFortranInputs(
+        allocator,
+        work_rel,
+        &inputs,
+        false,
+        .auto,
+        null,
+        false,
+        known.function_types,
+        known.procedure_sigs,
+    );
+    defer {
+        for (translated.ll_paths) |path| allocator.free(path);
+        allocator.free(translated.ll_paths);
+    }
+    try std.testing.expectEqual(@as(usize, 1), translated.ll_paths.len);
+}

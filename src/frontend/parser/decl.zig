@@ -656,9 +656,7 @@ fn parseCharacterLenSpec(lp: *LineParser, arena: std.mem.Allocator) !ParsedChara
     if (lp.consume(.l_paren)) {
         if (lp.consume(.star)) {
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-            const node = try arena.create(ast.Expr);
-            node.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
-            return .{ .expr = node };
+            return .{ .expr = try makeAssumedCharLenExpr(arena) };
         }
         var parsed: ParsedCharacterLen = .{};
         while (!lp.peekIs(.r_paren)) {
@@ -668,6 +666,8 @@ fn parseCharacterLenSpec(lp: *LineParser, arena: std.mem.Allocator) !ParsedChara
                     _ = lp.expect(.equals) orelse return error.UnexpectedToken;
                     if (lp.consume(.colon)) {
                         parsed.deferred = true;
+                    } else if (lp.consume(.star)) {
+                        parsed.expr = try makeAssumedCharLenExpr(arena);
                     } else {
                         parsed.expr = try expr.parseExpr(lp, arena, 0);
                     }
@@ -685,6 +685,8 @@ fn parseCharacterLenSpec(lp: *LineParser, arena: std.mem.Allocator) !ParsedChara
             // Positional CHARACTER(n) form.
             if (parsed.expr == null and !parsed.deferred and lp.consume(.colon)) {
                 parsed.deferred = true;
+            } else if (parsed.expr == null and !parsed.deferred and lp.consume(.star)) {
+                parsed.expr = try makeAssumedCharLenExpr(arena);
             } else if (parsed.expr == null and !parsed.deferred) {
                 parsed.expr = try expr.parseExpr(lp, arena, 0);
             } else {
@@ -701,6 +703,12 @@ fn parseCharacterLenSpec(lp: *LineParser, arena: std.mem.Allocator) !ParsedChara
         return parsed;
     }
     return .{ .expr = try parseLegacyStarSelectorExpr(lp, arena) };
+}
+
+fn makeAssumedCharLenExpr(arena: std.mem.Allocator) !*ast.Expr {
+    const node = try arena.create(ast.Expr);
+    node.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
+    return node;
 }
 
 pub fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
@@ -1266,6 +1274,35 @@ test "parseDecl handles assumed character length" {
     const allocator = testing.allocator;
 
     const source = "      CHARACTER*(*) CF717\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.character, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expect(td.items[0].char_len != null);
+            switch (td.items[0].char_len.?.*) {
+                .literal => |lit| try testing.expectEqual(ast.LiteralKind.assumed_size, lit.kind),
+                else => return error.UnexpectedToken,
+            }
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles CHARACTER(LEN=*) declarator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CHARACTER(LEN=*), INTENT(IN) :: EXP\n";
     const lines = try fixed_form.normalizeFixedForm(allocator, source);
     defer fixed_form.freeLogicalLines(allocator, lines);
     const tokens = try lexer.lexLogicalLine(allocator, lines[0]);

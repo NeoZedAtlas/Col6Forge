@@ -235,3 +235,45 @@ test "module procedure explicit interface body does not conflict with module con
     _ = try analyzer_instance.analyze();
     try testing.expect(diag.take() == null);
 }
+
+test "defined assignment declared with procedure is accepted for incompatible intrinsic types" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "implicit none\n" ++
+        "\n" ++
+        "type :: varying_string\n" ++
+        "end type\n" ++
+        "\n" ++
+        "interface assignment(=)\n" ++
+        "   procedure op_assign_VS_CH\n" ++
+        "end interface\n" ++
+        "\n" ++
+        "contains\n" ++
+        "\n" ++
+        "subroutine op_assign_VS_CH (var, exp)\n" ++
+        "  type(varying_string), intent(out) :: var\n" ++
+        "  character(LEN=*), intent(in)      :: exp\n" ++
+        "end subroutine\n" ++
+        "\n" ++
+        "subroutine split_VS\n" ++
+        "  type(varying_string) :: string\n" ++
+        "  call split_CH(string)\n" ++
+        "end subroutine\n" ++
+        "\n" ++
+        "subroutine split_CH (string)\n" ++
+        "  type(varying_string) :: string\n" ++
+        "  string = \"\"\n" ++
+        "end subroutine\n" ++
+        "\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try @import("../split/api.zig").analyzeProgram(arena.allocator(), program);
+    try testing.expectEqual(@as(usize, 4), sem.units.len);
+}

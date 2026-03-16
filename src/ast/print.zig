@@ -54,6 +54,13 @@ fn printDecl(writer: anytype, decl: ast.Decl) !void {
                     try writer.print("{s}", .{proc_name});
                 }
             }
+            if (interface_block.specific_procedures.len != 0) {
+                try writer.print(" specific-procedures=", .{});
+                for (interface_block.specific_procedures, 0..) |proc_name, idx| {
+                    if (idx != 0) try writer.print(",", .{});
+                    try writer.print("{s}", .{proc_name});
+                }
+            }
             if (interface_block.procedures.len != 0) {
                 try writer.print(" procedures=", .{});
                 for (interface_block.procedures, 0..) |proc_name, idx| {

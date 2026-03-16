@@ -979,6 +979,151 @@ test "runPipelineWithOptionsAndDiagnostics keeps diagnostics in explicit bag" {
     try testing.expect(takeLastDiagnostic() == null);
 }
 
+test "runPipelineWithOptionsAndDiagnostics accepts defined assignment declared with procedure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "! { dg-do compile }\r\n" ++
+        "!\r\n" ++
+        "! PR 40743: [4.5 Regression] ICE when compiling iso_varying_string.f95 at revision 149591\r\n" ++
+        "!\r\n" ++
+        "! Reduced from http://www.fortran.com/iso_varying_string.f95\r\n" ++
+        "! Contributed by Janus Weil <janus@gcc.gnu.org>\r\n" ++
+        "\r\n" ++
+        "  implicit none\r\n" ++
+        "\r\n" ++
+        "  type :: varying_string\r\n" ++
+        "  end type\r\n" ++
+        "\r\n" ++
+        "  interface assignment(=)\r\n" ++
+        "     procedure op_assign_VS_CH\r\n" ++
+        "  end interface\r\n" ++
+        "\r\n" ++
+        "contains\r\n" ++
+        "\r\n" ++
+        "  subroutine op_assign_VS_CH (var, exp)\r\n" ++
+        "    type(varying_string), intent(out) :: var\r\n" ++
+        "    character(LEN=*), intent(in)      :: exp\r\n" ++
+        "  end subroutine\r\n" ++
+        "\r\n" ++
+        "  subroutine split_VS\r\n" ++
+        "    type(varying_string) :: string\r\n" ++
+        "    call split_CH(string)\r\n" ++
+        "  end subroutine\r\n" ++
+        "\r\n" ++
+        "  subroutine split_CH (string)\r\n" ++
+        "    type(varying_string) :: string\r\n" ++
+        "    string = \"\"\r\n" ++
+        "  end subroutine\r\n" ++
+        "\r\n" ++
+        "end\r\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "defined_assignment_pipeline.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag);
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository interface_assignment_4 case" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90",
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository interface_assignment_4 absolute path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const absolute_path = try std.fs.cwd().realpathAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90",
+    );
+    defer allocator.free(absolute_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        absolute_path,
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineToWriterWithOptionsAndDiagnostics accepts repository interface_assignment_4 absolute path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const absolute_path = try std.fs.cwd().realpathAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90",
+    );
+    defer allocator.free(absolute_path);
+
+    var output = std.ArrayList(u8).init(allocator);
+    defer output.deinit();
+    var writer = output.writer();
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try runPipelineToWriterWithOptionsAndDiagnostics(
+        allocator,
+        absolute_path,
+        .llvm,
+        &writer,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+    try testing.expect(output.items.len != 0);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository interface_assignment_4 with GPA allocator" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const absolute_path = try std.fs.cwd().realpathAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90",
+    );
+    defer allocator.free(absolute_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        absolute_path,
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try std.testing.expect(diag_bag.take() == null);
+}
+
 test "releaseLastDiagnostic clears compat storage after take" {
     const testing = std.testing;
 

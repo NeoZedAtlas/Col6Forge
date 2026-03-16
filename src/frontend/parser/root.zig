@@ -518,20 +518,35 @@ const Parser = struct {
         const interface_name = try parseInterfaceGenericName(self.arena, &lp);
         self.index += 1;
         var module_procedures = std.array_list.Managed([]const u8).init(self.arena);
+        var specific_procedures = std.array_list.Managed([]const u8).init(self.arena);
         var procedures = std.array_list.Managed([]const u8).init(self.arena);
 
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
             noteFallbackForLine(self.diag_bag, line);
             const tokens = try self.tokensForIndex(self.index);
-            if (isInterfaceEndTokens(line, tokens)) {
-                self.index += 1;
-                return .{ .interface_block = .{
-                    .abstract = is_abstract,
-                    .name = interface_name,
-                    .module_procedures = try module_procedures.toOwnedSlice(),
-                    .procedures = try procedures.toOwnedSlice(),
-                } };
+            switch (try classifyInterfaceEnd(self.arena, line, tokens, interface_name)) {
+                .valid => {
+                    self.index += 1;
+                    return .{ .interface_block = .{
+                        .abstract = is_abstract,
+                        .name = interface_name,
+                        .module_procedures = try module_procedures.toOwnedSlice(),
+                        .specific_procedures = try specific_procedures.toOwnedSlice(),
+                        .procedures = try procedures.toOwnedSlice(),
+                    } };
+                },
+                .invalid_end_interface => {
+                    noteInvalidInterfaceEnd(self.diag_bag, line, interface_name);
+                    self.index += 1;
+                    continue;
+                },
+                .other_end_stmt => {
+                    noteMissingInterfaceEnd(self.diag_bag, line);
+                    self.index += 1;
+                    continue;
+                },
+                .none => {},
             }
             var body_lp = LineParser.init(line, tokens);
             if (body_lp.consumeKeyword("MODULE") and body_lp.consumeKeyword("PROCEDURE")) {
@@ -539,6 +554,13 @@ const Parser = struct {
                 while (true) {
                     const procedure_name = body_lp.readName(self.arena) orelse return error.MissingName;
                     try module_procedures.append(procedure_name);
+                    if (!body_lp.consume(.comma)) break;
+                }
+            } else if (body_lp.consumeKeyword("PROCEDURE")) {
+                _ = stmt.action_stmt.consumeDoubleColon(&body_lp);
+                while (true) {
+                    const procedure_name = body_lp.readName(self.arena) orelse return error.MissingName;
+                    try specific_procedures.append(procedure_name);
                     if (!body_lp.consume(.comma)) break;
                 }
             } else {
@@ -550,9 +572,56 @@ const Parser = struct {
             }
             self.index += 1;
         }
+        noteUnexpectedInterfaceEof(self.diag_bag, self.lines[self.lines.len - 1]);
         return error.UnexpectedEOF;
     }
 };
+
+const InterfaceEndStatus = enum {
+    none,
+    valid,
+    invalid_end_interface,
+    other_end_stmt,
+};
+
+fn classifyInterfaceEnd(
+    arena: std.mem.Allocator,
+    line: logical_line.LogicalLine,
+    tokens: []lexer.Token,
+    expected_name: ?[]const u8,
+) !InterfaceEndStatus {
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("END")) return .none;
+    if (!lp.consumeKeyword("INTERFACE")) return .other_end_stmt;
+    if (lp.peek() == null) return .valid;
+
+    const end_name = parseInterfaceGenericName(arena, &lp) catch return .invalid_end_interface;
+    if (lp.peek() != null) return .invalid_end_interface;
+    if (expected_name == null) return .invalid_end_interface;
+    return if (std.ascii.eqlIgnoreCase(expected_name.?, end_name orelse return .invalid_end_interface))
+        .valid
+    else
+        .invalid_end_interface;
+}
+
+fn noteInvalidInterfaceEnd(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine, interface_name: ?[]const u8) void {
+    diag_bag.set(line.span.start_line, 1, catalog.parser.unexpected_token.code, invalidInterfaceEndMessage(interface_name), line.text);
+}
+
+fn noteMissingInterfaceEnd(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine) void {
+    diag_bag.set(line.span.start_line, 1, catalog.parser.unexpected_token.code, "Expecting END INTERFACE", line.text);
+}
+
+fn noteUnexpectedInterfaceEof(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine) void {
+    diag_bag.set(line.span.start_line, 1, catalog.parser.unexpected_eof.code, "Unexpected end of file", line.text);
+}
+
+fn invalidInterfaceEndMessage(interface_name: ?[]const u8) []const u8 {
+    const name = interface_name orelse return "Expecting END INTERFACE";
+    if (std.mem.startsWith(u8, name, "operator(")) return "Expecting END INTERFACE OPERATOR";
+    if (std.mem.startsWith(u8, name, "assignment(")) return "Expecting END INTERFACE ASSIGNMENT";
+    return "Expecting END INTERFACE";
+}
 
 const ImportedPreludeDecls = struct {
     decls: []const Decl,
@@ -2399,6 +2468,35 @@ test "parseProgram recognizes pure module subroutine headers in interface bodies
     try testing.expectEqualStrings("assign_m", interface_block.procedures[0]);
 }
 
+test "parseProgram records PROCEDURE declarations in generic interface bodies" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  interface assignment(=)\n" ++
+        "    procedure op_assign_vs_ch\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine op_assign_vs_ch(var, exp)\n" ++
+        "    integer :: var\n" ++
+        "    character(len=*), intent(in) :: exp\n" ++
+        "  end subroutine op_assign_vs_ch\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+    const interface_block = program.units[0].decls[0].interface_block;
+    try testing.expectEqualStrings("assignment(=)", interface_block.name.?);
+    try testing.expectEqual(@as(usize, 1), interface_block.specific_procedures.len);
+    try testing.expectEqualStrings("op_assign_vs_ch", interface_block.specific_procedures[0]);
+}
+
 test "parseProgram imports module prelude from module without contains" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -2603,4 +2701,38 @@ test "parseProgramWithDiagnostics reports missing operator generic import from m
     defer diag_bag.release(second);
     try testing.expectEqual(@as(usize, 16), second.line);
     try testing.expect(std.mem.indexOf(u8, second.message, "operator .ne.") != null);
+}
+
+test "parseProgramWithDiagnostics reports malformed operator interface end" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  interface operator ( .gt. )\n" ++
+        "  end interface operator (.lt.)\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    try testing.expectError(error.UnexpectedEOF, parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag));
+
+    const first = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(first);
+    try testing.expectEqual(@as(usize, 3), first.line);
+    try testing.expectEqualStrings("Expecting END INTERFACE OPERATOR", first.message);
+
+    const second = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(second);
+    try testing.expectEqual(@as(usize, 4), second.line);
+    try testing.expectEqualStrings("Expecting END INTERFACE", second.message);
+
+    const third = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(third);
+    try testing.expectEqualStrings("Unexpected end of file", third.message);
 }

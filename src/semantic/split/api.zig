@@ -170,10 +170,9 @@ fn installSingleTargetGenericInterfaces(
             if (decl != .interface_block) continue;
             const interface_block = decl.interface_block;
             const generic_name = interface_block.name orelse continue;
-            if (interface_block.module_procedures.len != 1) continue;
             if (intrinsics.isIntrinsicName(generic_name)) continue;
+            const target_name = singleTargetInterfaceProcedureName(interface_block) orelse continue;
 
-            const target_name = interface_block.module_procedures[0];
             const proc_sig = lookupCaseInsensitive(context.Context.ProcedureSig, known_procedure_sigs, target_name) orelse continue;
             const proc_key = try symbol_lookup.lowerDup(arena, generic_name);
             try known_procedure_sigs.put(proc_key, proc_sig);
@@ -184,6 +183,17 @@ fn installSingleTargetGenericInterfaces(
             try known_function_type_specs.put(type_key, type_spec);
         }
     }
+}
+
+fn singleTargetInterfaceProcedureName(interface_block: ast.InterfaceBlock) ?[]const u8 {
+    const module_count = interface_block.module_procedures.len;
+    const specific_count = interface_block.specific_procedures.len;
+    const procedure_count = interface_block.procedures.len;
+    const total = module_count + specific_count + procedure_count;
+    if (total != 1) return null;
+    if (module_count == 1) return interface_block.module_procedures[0];
+    if (specific_count == 1) return interface_block.specific_procedures[0];
+    return interface_block.procedures[0];
 }
 
 fn lookupCaseInsensitive(
@@ -271,7 +281,7 @@ fn inferDummyArgTypeSpec(
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
-                    return applyDummyDeclaratorCharLen(type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector), item);
+                    return applyDummyDeclaratorCharLen(typeDeclTypeSpec(type_decl), item);
                 }
             },
             .procedure => |procedure_decl| {
@@ -280,8 +290,7 @@ fn inferDummyArgTypeSpec(
                     switch (procedure_decl.interface) {
                         .type_spec => |proc_type| {
                             return applyDummyDeclaratorCharLen(
-                                type_kind_selector.resolveSpec(proc_type.type_kind, proc_type.kind_selector)
-                                    .withPolymorphic(proc_type.polymorphic),
+                                procedureTypeSpec(proc_type),
                                 item,
                             );
                         },
@@ -301,6 +310,30 @@ fn inferDummyArgTypeSpec(
         applyDummyDeclaratorCharLen(implicitTypeSpecForName(unit, name), item)
     else
         applyDummyCharLen(implicitTypeSpecForName(unit, name), null);
+}
+
+fn typeDeclTypeSpec(type_decl: ast.TypeDecl) symbols.TypeSpec {
+    if (type_decl.type_kind != .derived) {
+        return type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector)
+            .withPolymorphic(type_decl.polymorphic);
+    }
+    const base = if (type_decl.derived_type_name) |derived_name|
+        symbols.TypeSpec.fromDerived(derived_name)
+    else
+        symbols.TypeSpec.fromKind(.derived);
+    return base.withPolymorphic(type_decl.polymorphic);
+}
+
+fn procedureTypeSpec(proc_type: ast.ProcedureTypeSpec) symbols.TypeSpec {
+    if (proc_type.type_kind != .derived) {
+        return type_kind_selector.resolveSpec(proc_type.type_kind, proc_type.kind_selector)
+            .withPolymorphic(proc_type.polymorphic);
+    }
+    const base = if (proc_type.derived_type_name) |derived_name|
+        symbols.TypeSpec.fromDerived(derived_name)
+    else
+        symbols.TypeSpec.fromKind(.derived);
+    return base.withPolymorphic(proc_type.polymorphic);
 }
 
 fn implicitTypeSpecForName(unit: ast.ProgramUnit, name: []const u8) symbols.TypeSpec {
@@ -456,6 +489,97 @@ test "analyzeProgram installs single-target generic interface aliases with point
         try testing.expect(sym.loweredKind() == .real);
     }
     try testing.expect(found_x);
+}
+
+test "analyzeProgram installs single-target generic assignment aliases declared with procedure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  implicit none\n" ++
+        "  type :: varying_string\n" ++
+        "  end type varying_string\n" ++
+        "  interface assignment(=)\n" ++
+        "    procedure op_assign_vs_ch\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine op_assign_vs_ch(var, exp)\n" ++
+        "    type(varying_string), intent(out) :: var\n" ++
+        "    character(len=*), intent(in) :: exp\n" ++
+        "  end subroutine op_assign_vs_ch\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    try testing.expectEqual(@as(usize, 2), sem.units.len);
+    const unit = sem.units[1];
+    var found_assignment = false;
+    for (unit.symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "assignment(=)")) continue;
+        found_assignment = true;
+        try testing.expect(sym.kind == .subroutine);
+    }
+    try testing.expect(found_assignment);
+}
+
+test "analyzeProgramWithKnownAndOptionsAndDiagnostics accepts defined assignment declared with procedure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "implicit none\n" ++
+        "\n" ++
+        "type :: varying_string\n" ++
+        "end type\n" ++
+        "\n" ++
+        "interface assignment(=)\n" ++
+        "   procedure op_assign_VS_CH\n" ++
+        "end interface\n" ++
+        "\n" ++
+        "contains\n" ++
+        "\n" ++
+        "subroutine op_assign_VS_CH (var, exp)\n" ++
+        "  type(varying_string), intent(out) :: var\n" ++
+        "  character(LEN=*), intent(in)      :: exp\n" ++
+        "end subroutine\n" ++
+        "\n" ++
+        "subroutine split_VS\n" ++
+        "  type(varying_string) :: string\n" ++
+        "  call split_CH(string)\n" ++
+        "end subroutine\n" ++
+        "\n" ++
+        "subroutine split_CH (string)\n" ++
+        "  type(varying_string) :: string\n" ++
+        "  string = \"\"\n" ++
+        "end subroutine\n" ++
+        "\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_bag = diagnostic.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    const sem = try analyzeProgramWithKnownAndOptionsAndDiagnostics(
+        arena.allocator(),
+        program,
+        &.{},
+        &.{},
+        .{},
+        &diag_bag,
+    );
+
+    try testing.expectEqual(@as(usize, 4), sem.units.len);
+    try testing.expect(diag_bag.take() == null);
 }
 
 test "analyzeProgram accepts renamed derived types imported through module preludes without contains" {
