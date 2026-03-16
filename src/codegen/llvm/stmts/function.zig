@@ -341,7 +341,6 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         }
     }
     try emitDeclaratorInitializers(ctx, builder, &save_info);
-
     const block_names = try ctx.buildBlockNames();
     defer {
         for (block_names, 0..) |name, idx| {

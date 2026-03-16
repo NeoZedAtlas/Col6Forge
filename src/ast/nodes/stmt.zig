@@ -67,11 +67,14 @@ pub const AssignLabelStmt = struct {
 pub const UseStmt = struct {
     module_name: []const u8,
     only_items: []const UseOnlyItem,
+    source: SourceRef = .{},
 };
 
 pub const UseOnlyItem = struct {
     local_name: []const u8,
     remote_name: []const u8,
+    generic_spec: bool = false,
+    generic_display_name: []const u8 = "",
 };
 
 pub const CallStmt = struct {
@@ -154,7 +157,7 @@ pub const AllocateStmt = struct {
 };
 
 pub const AllocateItem = struct {
-    name: []const u8,
+    target: *Expr,
     dims: []*Expr,
     source: SourceRef = .{},
 };

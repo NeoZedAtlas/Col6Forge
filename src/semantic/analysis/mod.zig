@@ -6,6 +6,8 @@ const context = @import("context.zig");
 const resolve_units = @import("resolve_units.zig");
 const check_units = @import("check_units.zig");
 const diag = @import("../diagnostic.zig");
+const free_form = @import("../../frontend/free_form.zig");
+const parser = @import("../../frontend/parser/mod.zig");
 
 pub const UnitAnalyzer = struct {
     ctx: context.Context,
@@ -190,4 +192,46 @@ test "semantic fallback uses last noted statement when active context is cleared
     try testing.expectEqual(@as(usize, 11), got.column);
     try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.missing_scope.code));
     try testing.expect(std.mem.eql(u8, got.line_text, "      STOP"));
+}
+
+test "module procedure explicit interface body does not conflict with module contained definition" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  interface assign\n" ++
+        "    module subroutine s()\n" ++
+        "    end subroutine s\n" ++
+        "  end interface assign\n" ++
+        "contains\n" ++
+        "  module subroutine s()\n" ++
+        "  end subroutine s\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        null,
+        .{},
+    );
+    _ = try analyzer_instance.analyze();
+    try testing.expect(diag.take() == null);
 }

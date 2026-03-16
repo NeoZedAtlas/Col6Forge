@@ -166,6 +166,39 @@ fn evalConstCall(call: ast.CallOrSubscript, resolver: ?ConstResolver) anyerror!?
             }
             return .{ .integer = selectedRealKindForPrecision(p) };
         },
+        .bit_size => {
+            if (call.args.len != 1) return null;
+            const bits = (try evalConstBitSize(call.args[0], resolver)) orelse return null;
+            return .{ .integer = bits };
+        },
+        .real => {
+            if (call.args.len == 0 or call.args.len > 2) return null;
+            const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+            return switch (arg) {
+                .integer => |v| .{ .real = .{ .value = @floatFromInt(v), .is_double = true } },
+                .real => |v| .{ .real = .{ .value = v.value, .is_double = true } },
+                else => null,
+            };
+        },
+        .log => {
+            if (call.args.len != 1) return null;
+            const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+            return .{ .real = .{ .value = @log(toReal(arg)), .is_double = true } };
+        },
+        .ceiling => {
+            if (call.args.len == 0 or call.args.len > 2) return null;
+            const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+            return .{ .integer = @intFromFloat(@ceil(toReal(arg))) };
+        },
+        .int => {
+            if (call.args.len == 0 or call.args.len > 2) return null;
+            const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+            return switch (arg) {
+                .integer => arg,
+                .real => |v| .{ .integer = @intFromFloat(@trunc(v.value)) },
+                else => null,
+            };
+        },
     }
 }
 
@@ -183,6 +216,11 @@ const ConstCallKind = enum {
     min,
     max,
     selected_real_kind,
+    bit_size,
+    real,
+    log,
+    ceiling,
+    int,
 };
 
 const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
@@ -201,6 +239,12 @@ const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "MIN", .min },
     .{ "MAX", .max },
     .{ "SELECTED_REAL_KIND", .selected_real_kind },
+    .{ "BIT_SIZE", .bit_size },
+    .{ "REAL", .real },
+    .{ "LOG", .log },
+    .{ "DLOG", .log },
+    .{ "CEILING", .ceiling },
+    .{ "INT", .int },
 });
 
 fn constCallKind(name: []const u8) ?ConstCallKind {
@@ -269,6 +313,51 @@ fn selectedRealKindForPrecision(precision: i64) i64 {
     if (precision <= 6) return 4;
     if (precision <= 15) return 8;
     return -1;
+}
+
+fn evalConstBitSize(expr: *const ast.Expr, resolver: ?ConstResolver) !?i64 {
+    return switch (expr.*) {
+        .literal => |lit| switch (lit.kind) {
+            .integer, .logical => try literalBitSize(lit.text, resolver, 32),
+            .real => try literalBitSize(lit.text, resolver, if (realLiteralHasDoublePrecisionHint(lit.text)) 64 else 32),
+            else => null,
+        },
+        .identifier, .unary, .binary, .call_or_subscript => blk: {
+            _ = (try evalConst(expr, resolver)) orelse return null;
+            break :blk 32;
+        },
+        else => null,
+    };
+}
+
+fn literalBitSize(text: []const u8, resolver: ?ConstResolver, default_bits: i64) !?i64 {
+    const suffix = literalKindSuffix(text) orelse return default_bits;
+    const kind_value = (try evalKindSelectorValue(suffix, resolver)) orelse return default_bits;
+    return kindValueToBitSize(kind_value);
+}
+
+fn evalKindSelectorValue(suffix: []const u8, resolver: ?ConstResolver) !?i64 {
+    if (suffix.len == 0) return null;
+    if (std.ascii.isDigit(suffix[0])) return try parseInt(suffix);
+    if (resolver) |res| {
+        if (res.resolve(suffix)) |value| {
+            return switch (value) {
+                .integer => |v| v,
+                else => null,
+            };
+        }
+    }
+    if (std.ascii.eqlIgnoreCase(suffix, "int8")) return 1;
+    if (std.ascii.eqlIgnoreCase(suffix, "int16")) return 2;
+    if (std.ascii.eqlIgnoreCase(suffix, "int32")) return 4;
+    if (std.ascii.eqlIgnoreCase(suffix, "int64")) return 8;
+    if (std.ascii.eqlIgnoreCase(suffix, "real32")) return 4;
+    if (std.ascii.eqlIgnoreCase(suffix, "real64")) return 8;
+    return null;
+}
+
+fn kindValueToBitSize(kind_value: i64) i64 {
+    return if (kind_value > 0 and kind_value <= 16) kind_value * 8 else kind_value;
 }
 
 fn parseInt(text: []const u8) !i64 {
@@ -643,6 +732,13 @@ fn nullResolveConst(_: *anyopaque, _: []const u8) ?ConstValue {
     return null;
 }
 
+fn testResolveConst(_: *anyopaque, name: []const u8) ?ConstValue {
+    if (std.ascii.eqlIgnoreCase(name, "block_kind")) return .{ .integer = 8 };
+    if (std.ascii.eqlIgnoreCase(name, "dp")) return .{ .integer = 8 };
+    if (std.ascii.eqlIgnoreCase(name, "block_size")) return .{ .integer = 64 };
+    return null;
+}
+
 test "const call dispatch recognizes DATAN alias" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -717,6 +813,86 @@ test "const call dispatch handles SELECTED_REAL_KIND" {
     const value = (try evalConst(call, null)) orelse return error.TestExpectedEqual;
     switch (value) {
         .integer => |v| try testing.expectEqual(@as(i64, 8), v),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "const call dispatch handles BIT_SIZE with named kind suffix" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const arg = try a.create(ast.Expr);
+    arg.* = .{ .literal = .{ .kind = .integer, .text = "0_block_kind" } };
+    const args = try a.alloc(*ast.Expr, 1);
+    args[0] = arg;
+
+    const call = try a.create(ast.Expr);
+    call.* = .{ .call_or_subscript = .{ .name = "bit_size", .args = args } };
+
+    var sentinel: u8 = 0;
+    const resolver = ConstResolver{
+        .ctx = &sentinel,
+        .resolveFn = testResolveConst,
+    };
+    const value = (try evalConst(call, resolver)) orelse return error.TestExpectedEqual;
+    switch (value) {
+        .integer => |v| try testing.expectEqual(@as(i64, 64), v),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "const call dispatch handles INT CEILING LOG REAL chain" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const block_size = try a.create(ast.Expr);
+    block_size.* = .{ .identifier = "block_size" };
+    const dp = try a.create(ast.Expr);
+    dp.* = .{ .identifier = "dp" };
+    const two_dp = try a.create(ast.Expr);
+    two_dp.* = .{ .literal = .{ .kind = .real, .text = "2._dp" } };
+
+    const real_args = try a.alloc(*ast.Expr, 2);
+    real_args[0] = block_size;
+    real_args[1] = dp;
+    const real_call = try a.create(ast.Expr);
+    real_call.* = .{ .call_or_subscript = .{ .name = "real", .args = real_args } };
+
+    const log_lhs_args = try a.alloc(*ast.Expr, 1);
+    log_lhs_args[0] = real_call;
+    const log_lhs = try a.create(ast.Expr);
+    log_lhs.* = .{ .call_or_subscript = .{ .name = "log", .args = log_lhs_args } };
+
+    const log_rhs_args = try a.alloc(*ast.Expr, 1);
+    log_rhs_args[0] = two_dp;
+    const log_rhs = try a.create(ast.Expr);
+    log_rhs.* = .{ .call_or_subscript = .{ .name = "log", .args = log_rhs_args } };
+
+    const ratio = try a.create(ast.Expr);
+    ratio.* = .{ .binary = .{ .op = .div, .left = log_lhs, .right = log_rhs } };
+
+    const ceiling_args = try a.alloc(*ast.Expr, 1);
+    ceiling_args[0] = ratio;
+    const ceiling_call = try a.create(ast.Expr);
+    ceiling_call.* = .{ .call_or_subscript = .{ .name = "ceiling", .args = ceiling_args } };
+
+    const int_args = try a.alloc(*ast.Expr, 1);
+    int_args[0] = ceiling_call;
+    const int_call = try a.create(ast.Expr);
+    int_call.* = .{ .call_or_subscript = .{ .name = "int", .args = int_args } };
+
+    var sentinel: u8 = 0;
+    const resolver = ConstResolver{
+        .ctx = &sentinel,
+        .resolveFn = testResolveConst,
+    };
+    const value = (try evalConst(int_call, resolver)) orelse return error.TestExpectedEqual;
+    switch (value) {
+        .integer => |v| try testing.expectEqual(@as(i64, 6), v),
         else => return error.TestExpectedEqual,
     }
 }

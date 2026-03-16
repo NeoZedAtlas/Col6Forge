@@ -13,6 +13,7 @@ pub const Context = struct {
             type_spec: symbols.TypeSpec,
             dims: []*ast.Expr = &.{},
             pointer: bool = false,
+            allocatable: bool = false,
         };
 
         name: []const u8,

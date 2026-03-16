@@ -91,6 +91,7 @@ pub const DerivedComponentLayout = struct {
 
 pub const DerivedTypeLayout = struct {
     name: []const u8,
+    parent_name: ?[]const u8 = null,
     components: []const DerivedComponentLayout,
     size: usize,
     alignment: usize,
@@ -472,11 +473,14 @@ pub const Context = struct {
     }
 
     pub fn lookupDerivedComponentLayout(self: *const Context, type_name: []const u8, component_name: []const u8) ?DerivedComponentLayout {
-        const layout = self.findDerivedTypeLayout(type_name) orelse return null;
-        for (layout.components) |component| {
-            if (std.ascii.eqlIgnoreCase(component.name, component_name)) return component;
+        var current = self.findDerivedTypeLayout(type_name) orelse return null;
+        while (true) {
+            for (current.components) |component| {
+                if (std.ascii.eqlIgnoreCase(component.name, component_name)) return component;
+            }
+            const parent_name = current.parent_name orelse return null;
+            current = self.findDerivedTypeLayout(parent_name) orelse return null;
         }
-        return null;
     }
 
     pub fn derivedTypeNameForExpr(self: *const Context, expr: *const input.Expr) ?[]const u8 {
@@ -795,6 +799,12 @@ pub const Context = struct {
         var components = std.array_list.Managed(DerivedComponentLayout).init(self.allocator);
         var size: usize = 0;
         var alignment: usize = 1;
+        if (derived.parent_name) |parent_name| {
+            const parent_layout = self.findDerivedTypeLayout(parent_name) orelse return error.UnknownSymbol;
+            try components.appendSlice(parent_layout.components);
+            size = parent_layout.size;
+            alignment = parent_layout.alignment;
+        }
         for (derived.components) |type_decl| {
             for (type_decl.items) |item| {
                 const elem = try self.componentElemSizeAlign(type_decl, item);
@@ -806,7 +816,7 @@ pub const Context = struct {
                         else => return err,
                     };
                 const offset = alignForward(size, elem.alignment);
-                const total_size = elem.size * count;
+                const total_size = elem.storage_size * count;
                 try components.append(.{
                     .name = item.name,
                     .type_spec = elem.type_spec,
@@ -814,7 +824,7 @@ pub const Context = struct {
                     .pointer = type_decl.pointer,
                     .allocatable = type_decl.allocatable,
                     .offset = offset,
-                    .elem_size = elem.size,
+                    .elem_size = elem.element_size,
                     .size = total_size,
                     .alignment = elem.alignment,
                 });
@@ -825,6 +835,7 @@ pub const Context = struct {
         size = alignForward(size, alignment);
         return .{
             .name = derived.name,
+            .parent_name = derived.parent_name,
             .components = try components.toOwnedSlice(),
             .size = size,
             .alignment = alignment,
@@ -833,36 +844,62 @@ pub const Context = struct {
 
     const ComponentElemInfo = struct {
         type_spec: input.TypeSpec,
-        size: usize,
+        storage_size: usize,
+        element_size: usize,
         alignment: usize,
     };
 
     fn componentElemSizeAlign(self: *Context, type_decl: input.TypeDecl, item: input.Declarator) !ComponentElemInfo {
+        const direct = try self.componentDirectElemSizeAlign(type_decl, item);
+        if (!(type_decl.pointer or type_decl.allocatable)) return direct;
+        const descriptor_bytes = componentDescriptorBytes(item.dims.len);
+        return .{
+            .type_spec = direct.type_spec,
+            .storage_size = @sizeOf(usize) + descriptor_bytes,
+            .element_size = direct.element_size,
+            .alignment = @max(@alignOf(usize), @alignOf(i64)),
+        };
+    }
+
+    fn componentDirectElemSizeAlign(self: *Context, type_decl: input.TypeDecl, item: input.Declarator) !ComponentElemInfo {
         var spec = input.TypeSpec.fromResolvedKind(type_decl.type_kind, type_decl.type_kind, null);
-        if (type_decl.pointer or type_decl.allocatable) {
-            if (type_decl.type_kind == .derived) {
-                const derived_name = type_decl.derived_type_name orelse return error.UnknownSymbol;
-                spec = input.TypeSpec.fromDerived(derived_name);
-            }
-            return .{ .type_spec = spec, .size = @sizeOf(usize), .alignment = @alignOf(usize) };
-        }
         if (type_decl.type_kind == .derived) {
             const derived_name = type_decl.derived_type_name orelse return error.UnknownSymbol;
             const layout = self.findDerivedTypeLayout(derived_name) orelse return error.UnknownSymbol;
             spec = input.TypeSpec.fromDerived(derived_name);
-            return .{ .type_spec = spec, .size = layout.size, .alignment = layout.alignment };
+            return .{
+                .type_spec = spec,
+                .storage_size = layout.size,
+                .element_size = layout.size,
+                .alignment = layout.alignment,
+            };
         }
         if (type_decl.type_kind == .character) {
             const char_len = if (item.char_len_deferred) null else inferConstantCharLen(item.char_len);
             if (char_len == null) return error.NonConstantCharacterLength;
             spec = spec.withCharacterLength(.constant, char_len.?);
-            return .{ .type_spec = spec, .size = char_len.?, .alignment = 1 };
+            return .{
+                .type_spec = spec,
+                .storage_size = char_len.?,
+                .element_size = char_len.?,
+                .alignment = 1,
+            };
         }
         const ir_ty = llvm_types.typeFromKindWithLayout(type_decl.type_kind, self.options.target_layout);
         const sa = sizeAlignForIRType(ir_ty);
-        return .{ .type_spec = spec, .size = sa.size, .alignment = sa.alignment };
+        return .{
+            .type_spec = spec,
+            .storage_size = sa.size,
+            .element_size = sa.size,
+            .alignment = sa.alignment,
+        };
     }
 };
+
+fn componentDescriptorBytes(rank: usize) usize {
+    if (rank == 0) return 0;
+    return rank * 3 * @sizeOf(i64);
+}
 
 const SizeAlign = struct {
     size: usize,

@@ -99,18 +99,27 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
 }
 
 pub fn emitComponentPtr(ctx: *Context, builder: anytype, comp: ast.ComponentExpr) anyerror!ValueRef {
-    const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
-    const component = ctx.lookupDerivedComponentLayout(base_type_name, comp.name) orelse return error.UnknownSymbol;
-    var base_ptr = try emitDerivedObjectPtr(ctx, builder, comp.base);
-    if (component.offset != 0) {
+    const component = try lookupComponentLayout(ctx, comp);
+    if (component.allocatable) {
+        if (comp.args.len != 0 and comp.args.len != component.dims.len) return error.InvalidSubscript;
+        const data_ptr = try emitLoadedComponentDataPtr(ctx, builder, comp);
+        if (comp.args.len == 0) return data_ptr;
+
+        var offset = try emitDynamicComponentOffset(ctx, builder, comp, component);
+        if (component.elem_size != 1) {
+            offset = try binary.emitMul(ctx, builder, offset, i64Const(ctx, @intCast(component.elem_size)));
+        }
         const gep_name = try ctx.nextTemp();
-        try builder.gep(gep_name, .i8, base_ptr, i64Const(ctx, @intCast(component.offset)));
-        base_ptr = .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+        try builder.gep(gep_name, .i8, data_ptr, offset);
+        return .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
     }
-    if (component.dims.len == 0 or component.pointer) {
-        if (!component.pointer and comp.args.len != 0) return error.InvalidSubscript;
+
+    const base_ptr = try emitComponentStoragePtr(ctx, builder, comp);
+    if (component.dims.len == 0) {
+        if (comp.args.len != 0) return error.InvalidSubscript;
         return base_ptr;
     }
+    if (comp.args.len == 0) return base_ptr;
     if (comp.args.len != component.dims.len) return error.InvalidSubscript;
 
     var offset = try emitComponentOffset(ctx, builder, component.dims, comp.args);
@@ -120,6 +129,63 @@ pub fn emitComponentPtr(ctx: *Context, builder: anytype, comp: ast.ComponentExpr
     const gep_name = try ctx.nextTemp();
     try builder.gep(gep_name, .i8, base_ptr, offset);
     return .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+}
+
+pub fn emitComponentStoragePtr(ctx: *Context, builder: anytype, comp: ast.ComponentExpr) anyerror!ValueRef {
+    const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+    const component = ctx.lookupDerivedComponentLayout(base_type_name, comp.name) orelse return error.UnknownSymbol;
+    var base_ptr = try emitDerivedObjectPtr(ctx, builder, comp.base);
+    if (component.offset != 0) {
+        const gep_name = try ctx.nextTemp();
+        try builder.gep(gep_name, .i8, base_ptr, i64Const(ctx, @intCast(component.offset)));
+        base_ptr = .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+    }
+    return base_ptr;
+}
+
+pub fn emitLoadedComponentDataPtr(ctx: *Context, builder: anytype, comp: ast.ComponentExpr) anyerror!ValueRef {
+    const component = try lookupComponentLayout(ctx, comp);
+    if (!(component.pointer or component.allocatable)) return emitComponentStoragePtr(ctx, builder, comp);
+    const slot_ptr = try emitComponentStoragePtr(ctx, builder, comp);
+    const tmp = try ctx.nextTemp();
+    try builder.load(tmp, .ptr, slot_ptr);
+    return .{ .name = tmp, .ty = .ptr, .is_ptr = true };
+}
+
+pub fn emitComponentDimLower(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    dim_index: usize,
+) anyerror!ValueRef {
+    const slot = try emitComponentDescriptorSlotPtr(ctx, builder, comp, .lower, dim_index);
+    const tmp = try ctx.nextTemp();
+    try builder.load(tmp, .i64, slot);
+    return .{ .name = tmp, .ty = .i64, .is_ptr = false };
+}
+
+pub fn emitComponentDimExtent(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    dim_index: usize,
+) anyerror!ValueRef {
+    const slot = try emitComponentDescriptorSlotPtr(ctx, builder, comp, .extent, dim_index);
+    const tmp = try ctx.nextTemp();
+    try builder.load(tmp, .i64, slot);
+    return .{ .name = tmp, .ty = .i64, .is_ptr = false };
+}
+
+pub fn emitComponentDimMultiplier(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    dim_index: usize,
+) anyerror!ValueRef {
+    const slot = try emitComponentDescriptorSlotPtr(ctx, builder, comp, .multiplier, dim_index);
+    const tmp = try ctx.nextTemp();
+    try builder.load(tmp, .i64, slot);
+    return .{ .name = tmp, .ty = .i64, .is_ptr = false };
 }
 
 fn emitDerivedObjectPtr(ctx: *Context, builder: anytype, expr: *Expr) anyerror!ValueRef {
@@ -160,6 +226,60 @@ fn emitComponentOffset(ctx: *Context, builder: anytype, dims: []*Expr, args: []*
         offset = try binary.emitAdd(ctx, builder, offset, term);
     }
     return offset;
+}
+
+fn emitDynamicComponentOffset(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    component: context.DerivedComponentLayout,
+) anyerror!ValueRef {
+    var offset = i64Const(ctx, 0);
+    var idx: usize = 0;
+    while (idx < component.dims.len) : (idx += 1) {
+        var index_val = try emitIndex(ctx, builder, comp.args[idx]);
+        if (index_val.ty != .i64) index_val = try casting.coerce(ctx, builder, index_val, .i64);
+        const lower = try emitComponentDimLower(ctx, builder, comp, idx);
+        const stride = try emitComponentDimMultiplier(ctx, builder, comp, idx);
+        const adjusted = try binary.emitSub(ctx, builder, index_val, lower);
+        const term = try binary.emitMul(ctx, builder, adjusted, stride);
+        offset = try binary.emitAdd(ctx, builder, offset, term);
+    }
+    return offset;
+}
+
+fn lookupComponentLayout(ctx: *Context, comp: ast.ComponentExpr) !context.DerivedComponentLayout {
+    const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+    return ctx.lookupDerivedComponentLayout(base_type_name, comp.name) orelse return error.UnknownSymbol;
+}
+
+pub const DescriptorSlotKind = enum {
+    lower,
+    extent,
+    multiplier,
+};
+
+pub fn emitComponentDescriptorSlotPtr(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    kind: DescriptorSlotKind,
+    dim_index: usize,
+) anyerror!ValueRef {
+    const component = try lookupComponentLayout(ctx, comp);
+    if (!(component.pointer or component.allocatable)) return error.UnknownSymbol;
+    if (dim_index >= component.dims.len) return error.InvalidSubscript;
+    const storage_ptr = try emitComponentStoragePtr(ctx, builder, comp);
+    const ptr_size = @sizeOf(usize);
+    const dim_span = component.dims.len * @sizeOf(i64);
+    const base_offset: usize = switch (kind) {
+        .lower => ptr_size + dim_index * @sizeOf(i64),
+        .extent => ptr_size + dim_span + dim_index * @sizeOf(i64),
+        .multiplier => ptr_size + dim_span * 2 + dim_index * @sizeOf(i64),
+    };
+    const gep_name = try ctx.nextTemp();
+    try builder.gep(gep_name, .i8, storage_ptr, i64Const(ctx, @intCast(base_offset)));
+    return .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
 }
 
 pub fn emitDimValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {

@@ -125,7 +125,7 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             }
             for (allocate.items) |item| {
                 self.setCurrentSource(if (item.source.line != 0) item.source else null);
-                _ = try symbols_mod.ensureSymbol(self, item.name);
+                try expressions.resolveExpr(self, item.target);
                 for (item.dims) |dim| {
                     try expressions.resolveExpr(self, dim);
                 }
@@ -205,6 +205,7 @@ fn installUseImports(self: *context.Context, use_stmt: ast.UseStmt) ResolveError
 
     const may_have_builtin_consts = isIsoFortranEnvModule(use_stmt.module_name);
     for (use_stmt.only_items) |item| {
+        if (item.generic_spec) continue;
         if (may_have_builtin_consts) {
             if (symbols_mod.findBuiltinModuleConstant(self, use_stmt.module_name, item.remote_name)) |builtin| {
                 try bindBuiltinUseImport(self, item.local_name, builtin);

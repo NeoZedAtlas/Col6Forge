@@ -194,7 +194,7 @@ const Parser = struct {
                 var stored_decls: []const Decl = try module_decls.toOwnedSlice();
                 var stored_decl_sources: []const DeclSource = try module_decl_sources.toOwnedSlice();
                 if (module_uses.items.len != 0) {
-                    const imported = try importPreludeDecls(self.arena, stored_decls, stored_decl_sources, module_uses.items, &self.module_preludes);
+                    const imported = try importPreludeDecls(self.arena, stored_decls, stored_decl_sources, module_uses.items, &self.module_preludes, self.diag_bag);
                     stored_decls = imported.decls;
                     stored_decl_sources = imported.decl_sources;
                 }
@@ -253,7 +253,7 @@ const Parser = struct {
         var stored_decls: []const Decl = try module_decls.toOwnedSlice();
         var stored_decl_sources: []const DeclSource = try module_decl_sources.toOwnedSlice();
         if (module_uses.items.len != 0) {
-            const imported = try importPreludeDecls(self.arena, stored_decls, stored_decl_sources, module_uses.items, &self.module_preludes);
+            const imported = try importPreludeDecls(self.arena, stored_decls, stored_decl_sources, module_uses.items, &self.module_preludes, self.diag_bag);
             stored_decls = imported.decls;
             stored_decl_sources = imported.decl_sources;
         }
@@ -515,7 +515,7 @@ const Parser = struct {
         var lp = LineParser.init(header_line, header_tokens);
         const is_abstract = lp.consumeKeyword("ABSTRACT");
         if (!lp.consumeKeyword("INTERFACE")) return error.UnexpectedToken;
-        const interface_name = lp.readName(self.arena);
+        const interface_name = try parseInterfaceGenericName(self.arena, &lp);
         self.index += 1;
         var module_procedures = std.array_list.Managed([]const u8).init(self.arena);
         var procedures = std.array_list.Managed([]const u8).init(self.arena);
@@ -535,6 +535,7 @@ const Parser = struct {
             }
             var body_lp = LineParser.init(line, tokens);
             if (body_lp.consumeKeyword("MODULE") and body_lp.consumeKeyword("PROCEDURE")) {
+                _ = stmt.action_stmt.consumeDoubleColon(&body_lp);
                 while (true) {
                     const procedure_name = body_lp.readName(self.arena) orelse return error.MissingName;
                     try module_procedures.append(procedure_name);
@@ -564,20 +565,23 @@ fn importPreludeDecls(
     decl_sources: []const DeclSource,
     module_uses: []const ast.UseStmt,
     preludes: *const std.StringHashMap(ModulePrelude),
+    diag_bag: *parse_diag.Bag,
 ) !ImportedPreludeDecls {
     var imported_decls = decls;
     var imported_sources = decl_sources;
-    var seen = std.StringHashMap(void).init(arena);
+    var seen_full_imports = std.StringHashMap(void).init(arena);
     for (module_uses) |module_use| {
-        if (seen.contains(module_use.module_name)) continue;
         const prelude = preludes.get(module_use.module_name) orelse continue;
+        if (module_use.only_items.len == 0) {
+            if (seen_full_imports.contains(module_use.module_name)) continue;
+        }
         const selected = if (module_use.only_items.len == 0)
             ImportedPreludeDecls{
                 .decls = prelude.decls,
                 .decl_sources = prelude.decl_sources,
             }
         else
-            try selectPreludeDecls(arena, prelude, module_use.only_items);
+            try selectPreludeDecls(arena, prelude, module_use, diag_bag);
         const combined_decls = try arena.alloc(Decl, selected.decls.len + imported_decls.len);
         @memcpy(combined_decls[0..selected.decls.len], selected.decls);
         @memcpy(combined_decls[selected.decls.len..], imported_decls);
@@ -587,7 +591,9 @@ fn importPreludeDecls(
         @memcpy(combined_sources[0..selected.decl_sources.len], selected.decl_sources);
         @memcpy(combined_sources[selected.decl_sources.len..], imported_sources);
         imported_sources = combined_sources;
-        try seen.put(module_use.module_name, {});
+        if (module_use.only_items.len == 0) {
+            try seen_full_imports.put(module_use.module_name, {});
+        }
     }
     return .{ .decls = imported_decls, .decl_sources = imported_sources };
 }
@@ -601,26 +607,97 @@ fn tryParsePreludeUseImport(lp: *LineParser, arena: std.mem.Allocator) !?ast.Use
 fn selectPreludeDecls(
     arena: std.mem.Allocator,
     prelude: ModulePrelude,
-    only_items: []const ast.UseOnlyItem,
+    use_stmt: ast.UseStmt,
+    diag_bag: *parse_diag.Bag,
 ) !ImportedPreludeDecls {
     var selected_decls = std.array_list.Managed(Decl).init(arena);
     var selected_sources = std.array_list.Managed(DeclSource).init(arena);
+    var seen = std.StringHashMap(void).init(arena);
+    var missing_generic = false;
 
-    for (only_items) |item| {
-        for (prelude.decls, 0..) |decl_node, decl_idx| {
-            const exported_name = preludeDeclExportedName(decl_node) orelse continue;
-            if (!std.ascii.eqlIgnoreCase(exported_name, item.remote_name)) continue;
-            try selected_decls.append(try renamePreludeDecl(arena, decl_node, item.local_name, only_items));
-            if (decl_idx < prelude.decl_sources.len) {
-                try selected_sources.append(prelude.decl_sources[decl_idx]);
-            }
+    for (use_stmt.only_items) |item| {
+        if (item.generic_spec and !preludeHasDeclExport(prelude, item.remote_name)) {
+            noteMissingGenericUseImport(diag_bag, use_stmt, item);
+            missing_generic = true;
+            continue;
         }
+        try appendPreludeDeclByName(
+            arena,
+            prelude,
+            item.remote_name,
+            item.local_name,
+            use_stmt.only_items,
+            &selected_decls,
+            &selected_sources,
+            &seen,
+        );
     }
+
+    if (missing_generic) return error.UnexpectedToken;
 
     return .{
         .decls = try selected_decls.toOwnedSlice(),
         .decl_sources = try selected_sources.toOwnedSlice(),
     };
+}
+
+fn preludeHasDeclExport(prelude: ModulePrelude, remote_name: []const u8) bool {
+    for (prelude.decls) |decl_node| {
+        const exported_name = preludeDeclExportedName(decl_node) orelse continue;
+        if (std.ascii.eqlIgnoreCase(exported_name, remote_name)) return true;
+    }
+    return false;
+}
+
+fn noteMissingGenericUseImport(diag_bag: *parse_diag.Bag, use_stmt: ast.UseStmt, item: ast.UseOnlyItem) void {
+    const message = if (std.mem.startsWith(u8, item.remote_name, "operator("))
+        std.fmt.allocPrint(diag_bag.allocator, "operator {s} referenced in USE, ONLY list not found in module '{s}'", .{ item.generic_display_name, use_stmt.module_name }) catch return
+    else
+        std.fmt.allocPrint(diag_bag.allocator, "generic {s} referenced in USE, ONLY list not found in module '{s}'", .{ item.remote_name, use_stmt.module_name }) catch return;
+    defer diag_bag.allocator.free(message);
+    diag_bag.set(
+        if (use_stmt.source.line == 0) 1 else use_stmt.source.line,
+        if (use_stmt.source.column == 0) 1 else use_stmt.source.column,
+        catalog.parser.generic.code,
+        message,
+        use_stmt.source.text,
+    );
+}
+
+fn appendPreludeDeclByName(
+    arena: std.mem.Allocator,
+    prelude: ModulePrelude,
+    remote_name: []const u8,
+    local_name: []const u8,
+    only_items: []const ast.UseOnlyItem,
+    out_decls: *std.array_list.Managed(Decl),
+    out_sources: *std.array_list.Managed(DeclSource),
+    seen: *std.StringHashMap(void),
+) !void {
+    if (seen.contains(remote_name)) return;
+    for (prelude.decls, 0..) |decl_node, decl_idx| {
+        const exported_name = preludeDeclExportedName(decl_node) orelse continue;
+        if (!std.ascii.eqlIgnoreCase(exported_name, remote_name)) continue;
+        try seen.put(remote_name, {});
+        try out_decls.append(try renamePreludeDecl(arena, decl_node, local_name, only_items));
+        if (decl_idx < prelude.decl_sources.len) {
+            try out_sources.append(prelude.decl_sources[decl_idx]);
+        }
+        if (decl_node == .derived_type_def) {
+            const derived = decl_node.derived_type_def;
+            if (derived.parent_name) |parent_name| {
+                const renamed_parent = renamePreludeTypeName(parent_name, only_items);
+                try appendPreludeDeclByName(arena, prelude, parent_name, renamed_parent, only_items, out_decls, out_sources, seen);
+            }
+            for (derived.components) |component| {
+                if (component.derived_type_name) |type_name| {
+                    const renamed_type = renamePreludeTypeName(type_name, only_items);
+                    try appendPreludeDeclByName(arena, prelude, type_name, renamed_type, only_items, out_decls, out_sources, seen);
+                }
+            }
+        }
+        return;
+    }
 }
 
 fn preludeDeclExportedName(decl_node: Decl) ?[]const u8 {
@@ -710,6 +787,7 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
     var allow_missing_name = false;
 
     consumeProcedurePrefixes(lp);
+    _ = lp.consumeKeyword("MODULE");
 
     if (lp.isKeywordSplit("PROGRAM")) {
         _ = lp.consumeKeyword("PROGRAM");
@@ -727,6 +805,7 @@ fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_
     } else {
         type_info = try parseTypePrefix(arena, lp) orelse return error.ExpectedProgramUnit;
         consumeProcedurePrefixes(lp);
+        _ = lp.consumeKeyword("MODULE");
         if (!lp.isKeywordSplit("FUNCTION")) return error.ExpectedProgramUnit;
         _ = lp.consumeKeyword("FUNCTION");
         kind = .function;
@@ -1909,7 +1988,34 @@ fn isInterfaceStartTokens(line: logical_line.LogicalLine, tokens: []lexer.Token)
         return lp.consumeKeyword("INTERFACE");
     }
     if (!lp.consumeKeyword("INTERFACE")) return false;
+    if (lp.peek() == null) return true;
+    if (lp.consumeKeyword("ASSIGNMENT")) {
+        if (!lp.consume(.l_paren)) return false;
+        if (!lp.consume(.equals)) return false;
+        if (!lp.consume(.r_paren)) return false;
+        return lp.peek() == null;
+    }
+    if (lp.consumeKeyword("OPERATOR")) {
+        if (!lp.consume(.l_paren)) return false;
+        while (!lp.peekIs(.r_paren)) {
+            if (lp.peek() == null) return false;
+            _ = lp.next();
+        }
+        _ = lp.next();
+        return lp.peek() == null;
+    }
     return true;
+}
+
+fn parseInterfaceGenericName(arena: std.mem.Allocator, lp: *LineParser) !?[]const u8 {
+    if (lp.peek() == null) return null;
+    if (lp.isKeywordSplit("ASSIGNMENT")) {
+        return (try stmt.action_stmt.parseAssignmentGenericSpec(arena, lp)).normalized_name;
+    }
+    if (lp.isKeywordSplit("OPERATOR")) {
+        return (try stmt.action_stmt.parseOperatorGenericSpec(arena, lp)).normalized_name;
+    }
+    return lp.readName(arena);
 }
 
 fn isInterfaceEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
@@ -2238,6 +2344,61 @@ test "parseProgram captures generic interface module procedures" {
     try testing.expectEqualStrings("get_x", interface_block.module_procedures[0]);
 }
 
+test "parseProgram captures assignment interface generic name and module procedure double-colon" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  interface assignment (=)\n" ++
+        "    module procedure :: assign_m\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine assign_m()\n" ++
+        "  end subroutine assign_m\n" ++
+        "end module m1\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const interface_block = program.units[0].decls[0].interface_block;
+    try testing.expectEqualStrings("assignment(=)", interface_block.name.?);
+    try testing.expectEqual(@as(usize, 1), interface_block.module_procedures.len);
+    try testing.expectEqualStrings("assign_m", interface_block.module_procedures[0]);
+}
+
+test "parseProgram recognizes pure module subroutine headers in interface bodies" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  interface assign\n" ++
+        "    pure module subroutine assign_m(x)\n" ++
+        "    end subroutine assign_m\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  pure module subroutine assign_m(x)\n" ++
+        "    integer :: x\n" ++
+        "  end subroutine assign_m\n" ++
+        "end module m1\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const interface_block = program.units[0].decls[0].interface_block;
+    try testing.expectEqual(@as(usize, 1), interface_block.procedures.len);
+    try testing.expectEqualStrings("assign_m", interface_block.procedures[0]);
+}
+
 test "parseProgram imports module prelude from module without contains" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -2400,4 +2561,46 @@ test "parseProgramWithDiagnostics captures parse errors in explicit bag" {
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag.code);
     try testing.expectEqualStrings("  )", diag.line_text);
     try testing.expect(parse_diag.take() == null);
+}
+
+test "parseProgramWithDiagnostics reports missing operator generic import from module prelude" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m_eq\n" ++
+        "  interface operator (==)\n" ++
+        "     module procedure :: my_cmp\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  elemental function my_cmp(a, b) result(c)\n" ++
+        "    integer, intent(in) :: a, b\n" ++
+        "    logical :: c\n" ++
+        "    c = a == b\n" ++
+        "  end function my_cmp\n" ++
+        "end module m_eq\n" ++
+        "\n" ++
+        "module m8\n" ++
+        "  use m_eq, only: operator(==), operator(.eq.)\n" ++
+        "  use m_eq, only: operator(/=)\n" ++
+        "  use m_eq, only: operator(.ne.)\n" ++
+        "end module m8\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    try testing.expectError(error.UnexpectedToken, parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag));
+    const first = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(first);
+    try testing.expectEqual(@as(usize, 15), first.line);
+    try testing.expect(std.mem.indexOf(u8, first.message, "operator /=") != null);
+
+    const second = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(second);
+    try testing.expectEqual(@as(usize, 16), second.line);
+    try testing.expect(std.mem.indexOf(u8, second.message, "operator .ne.") != null);
 }

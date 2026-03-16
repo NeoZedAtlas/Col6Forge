@@ -169,15 +169,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             if (base_spec.lowered_kind != .derived) return error.InvalidSubscript;
             const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
             const component = symbols_mod.lookupDerivedComponent(self, derived_name, comp.name) orelse return error.InvalidSubscript;
-            if (component.dims.len == 0 or component.pointer) {
-                if (!component.pointer and comp.args.len != 0) return error.InvalidSubscript;
-            } else {
-                if (comp.args.len != component.dims.len) return error.InvalidSubscript;
-                for (comp.args) |arg| {
-                    const arg_ty = try resolvedExprType(self, arg);
-                    if (arg_ty != .integer) return error.InvalidSubscript;
-                }
-            }
+            try validateComponentArgs(self, component.dims, comp.args);
             try cacheExprType(self, expr, component.type_spec);
         },
         .dim_range => |range| {
@@ -468,6 +460,41 @@ fn intrinsicReturnType(
 
 fn isArraySectionSubstring(sym: symbols.Symbol, sub: ast.SubstringExpr) bool {
     return !sym.isCharacter() and sub.args.len == 0 and sub.start != null and sub.end != null;
+}
+
+fn validateComponentArgs(
+    self: *context.Context,
+    dims: []*ast.Expr,
+    args: []*ast.Expr,
+) ResolveError!void {
+    if (dims.len == 0) {
+        if (args.len != 0) return error.InvalidSubscript;
+        return;
+    }
+    if (args.len == 0) return;
+    if (args.len != dims.len) return error.InvalidSubscript;
+    for (args) |arg| {
+        switch (arg.*) {
+            .dim_range => |range| {
+                if (range.lower) |lower| {
+                    const lower_ty = try resolvedExprType(self, lower);
+                    if (lower_ty != .integer) return error.InvalidSubscript;
+                }
+                if (!(range.upper.* == .literal and range.upper.literal.kind == .assumed_size)) {
+                    const upper_ty = try resolvedExprType(self, range.upper);
+                    if (upper_ty != .integer) return error.InvalidSubscript;
+                }
+                if (range.stride) |stride| {
+                    const stride_ty = try resolvedExprType(self, stride);
+                    if (stride_ty != .integer) return error.InvalidSubscript;
+                }
+            },
+            else => {
+                const arg_ty = try resolvedExprType(self, arg);
+                if (arg_ty != .integer) return error.InvalidSubscript;
+            },
+        }
+    }
 }
 
 fn invalidateExprTypeCache(self: *context.Context, expr: *ast.Expr) void {

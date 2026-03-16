@@ -185,10 +185,20 @@ pub fn emitModuleToWriterWithDiagnostics(
     var known_procedure_sigs = context.CaseInsensitiveStringHashMap(input.sema.KnownProcedureSig).initContext(scratch, .{});
     defer known_procedure_sigs.deinit();
 
-    var sem_map = std.StringHashMap(*const input.sema.SemanticUnit).init(scratch);
-    defer sem_map.deinit();
-    for (sem.units) |*unit| {
-        try sem_map.put(unit.name, unit);
+    if (sem.units.len != program.units.len) {
+        markFailure(&breakdown, .prelude);
+        setCodegenDiagForUnit(diag_bag, if (program.units.len == 0) input.ProgramUnit{
+            .kind = .program,
+            .name = source_name,
+            .bind_name = null,
+            .result_name = null,
+            .args = &.{},
+            .decls = &.{},
+            .decl_sources = &.{},
+            .stmts = &.{},
+            .expr_sources = &.{},
+        } else program.units[0], error.MissingSemanticUnit);
+        return error.MissingSemanticUnit;
     }
     for (options.known_procedure_sigs) |sig| {
         try known_procedure_sigs.put(sig.name, sig);
@@ -228,12 +238,8 @@ pub fn emitModuleToWriterWithDiagnostics(
     const common_start = nowNs();
     var common_blocks = std.StringHashMap(common.CommonBlockInfo).init(scratch);
     defer common_blocks.deinit();
-    for (program.units) |unit| {
-        const sem_unit = sem_map.get(unit.name) orelse {
-            markFailure(&breakdown, .common_layouts);
-            setCodegenDiagForUnit(diag_bag, unit, error.MissingSemanticUnit);
-            return error.MissingSemanticUnit;
-        };
+    for (program.units, 0..) |unit, unit_idx| {
+        const sem_unit = &sem.units[unit_idx];
         const layouts = try common.buildUnitCommonLayoutsWithOptions(scratch, unit, sem_unit, .{
             .target_layout = options.target_layout,
         });
@@ -269,14 +275,10 @@ pub fn emitModuleToWriterWithDiagnostics(
     var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(scratch);
     defer intrinsic_wrappers.deinit();
 
-    for (program.units) |unit| {
+    for (program.units, 0..) |unit, unit_idx| {
         noteFallbackForUnit(diag_bag, unit);
         const format_start = nowNs();
-        const sem_unit = sem_map.get(unit.name) orelse {
-            markFailure(&breakdown, .format_maps);
-            setCodegenDiagForUnit(diag_bag, unit, error.MissingSemanticUnit);
-            return error.MissingSemanticUnit;
-        };
+        const sem_unit = &sem.units[unit_idx];
         var format_maps = buildFormatMaps(scratch, &builder, unit, diag_bag) catch |err| {
             markFailure(&breakdown, .format_maps);
             setCodegenDiagForUnit(diag_bag, unit, err);

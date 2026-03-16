@@ -5,6 +5,7 @@ const context = @import("../codegen/context.zig");
 const expr = @import("../codegen/expression/mod.zig");
 const expr_call = @import("../codegen/expression/call.zig");
 const expr_dispatch = @import("../codegen/expression/dispatch.zig");
+const expr_memory = @import("../codegen/expression/memory.zig");
 const utils = @import("../codegen/utils.zig");
 const cfg = @import("cfg.zig");
 const ir = @import("../../ir.zig");
@@ -73,34 +74,48 @@ pub fn emitAllocate(ctx: *Context, builder: anytype, allocate: ast.AllocateStmt)
 }
 
 fn emitAllocateItem(ctx: *Context, builder: anytype, type_spec: ?ast.AllocateTypeSpec, item: ast.AllocateItem) EmitError!void {
+    return switch (item.target.*) {
+        .identifier => |name| emitAllocateNamedItem(ctx, builder, type_spec, name, item.dims),
+        .component => |comp| emitAllocateComponentItem(ctx, builder, type_spec, comp, item.dims),
+        else => error.UnsupportedAllocateSyntax,
+    };
+}
+
+fn emitAllocateNamedItem(
+    ctx: *Context,
+    builder: anytype,
+    type_spec: ?ast.AllocateTypeSpec,
+    name: []const u8,
+    dims: []*ast.Expr,
+) EmitError!void {
     var dim_specs = std.array_list.Managed(AllocateDimSpec).init(ctx.allocator);
     defer dim_specs.deinit();
 
     var extent_product = constI64(ctx, 1);
-    for (item.dims) |dim| {
+    for (dims) |dim| {
         const dim_spec = try emitAllocateDimSpec(ctx, builder, dim);
         try dim_specs.append(dim_spec);
         extent_product = try expr.emitMul(ctx, builder, extent_product, dim_spec.extent);
     }
 
-    const sym = ctx.findSymbol(item.name) orelse return error.UnknownSymbol;
+    const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
     const elem_size = try emitAllocateElementSize(ctx, builder, sym, type_spec);
     const total_bytes = if (dim_specs.items.len == 0)
         elem_size
     else
         try expr.emitMul(ctx, builder, extent_product, elem_size);
 
-    if (ctx.runtimeArrayDescriptor(item.name)) |desc| {
+    if (ctx.runtimeArrayDescriptor(name)) |desc| {
         if (desc.rank != dim_specs.items.len) return error.InvalidSubscript;
 
-        try freeManagedArrayPointerIfAllocated(ctx, builder, item.name);
+        try freeManagedArrayPointerIfAllocated(ctx, builder, name);
 
         const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &.{.i64}, false);
         const ptr_tmp = try ctx.nextTemp();
         try builder.callTyped(ptr_tmp, .ptr, malloc_name, &.{total_bytes});
         const base_ptr = ValueRef{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true };
-        try ctx.locals.put(item.name, base_ptr);
-        try ctx.markManagedAllocation(item.name);
+        try ctx.locals.put(name, base_ptr);
+        try ctx.markManagedAllocation(name);
         try updateAllocatedCharacterLen(ctx, builder, sym, type_spec);
 
         var running_multiplier = constI64(ctx, 1);
@@ -113,14 +128,64 @@ fn emitAllocateItem(ctx: *Context, builder: anytype, type_spec: ?ast.AllocateTyp
         return;
     }
 
-    try freeManagedArrayPointerIfAllocated(ctx, builder, item.name);
+    try freeManagedArrayPointerIfAllocated(ctx, builder, name);
     const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &.{.i64}, false);
     const ptr_tmp = try ctx.nextTemp();
     try builder.callTyped(ptr_tmp, .ptr, malloc_name, &.{total_bytes});
     const base_ptr = ValueRef{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true };
-    try ctx.locals.put(item.name, base_ptr);
-    try ctx.markManagedAllocation(item.name);
+    try ctx.locals.put(name, base_ptr);
+    try ctx.markManagedAllocation(name);
     try updateAllocatedCharacterLen(ctx, builder, sym, type_spec);
+}
+
+fn emitAllocateComponentItem(
+    ctx: *Context,
+    builder: anytype,
+    type_spec: ?ast.AllocateTypeSpec,
+    comp: ast.ComponentExpr,
+    dims: []*ast.Expr,
+) EmitError!void {
+    const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+    const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
+    if (!(component.allocatable or component.pointer)) return error.UnsupportedAllocateSyntax;
+
+    var dim_specs = std.array_list.Managed(AllocateDimSpec).init(ctx.allocator);
+    defer dim_specs.deinit();
+    var extent_product = constI64(ctx, 1);
+    for (dims) |dim| {
+        const dim_spec = try emitAllocateDimSpec(ctx, builder, dim);
+        try dim_specs.append(dim_spec);
+        extent_product = try expr.emitMul(ctx, builder, extent_product, dim_spec.extent);
+    }
+    if (component.dims.len != dim_specs.items.len) return error.InvalidSubscript;
+
+    const elem_size = try emitAllocateLayoutElementSize(ctx, builder, component, type_spec);
+    const total_bytes = if (dim_specs.items.len == 0)
+        elem_size
+    else
+        try expr.emitMul(ctx, builder, extent_product, elem_size);
+
+    const storage_ptr = try expr_memory.emitComponentStoragePtr(ctx, builder, comp);
+    const current_ptr = try expr_memory.emitLoadedComponentDataPtr(ctx, builder, comp);
+    const free_name = try ctx.ensureDeclRaw("free", .void, &[_]llvm_types.IRType{.ptr}, false);
+    try builder.callTyped(null, .void, free_name, &.{current_ptr});
+
+    const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &.{.i64}, false);
+    const ptr_tmp = try ctx.nextTemp();
+    try builder.callTyped(ptr_tmp, .ptr, malloc_name, &.{total_bytes});
+    const base_ptr = ValueRef{ .name = ptr_tmp, .ty = .ptr, .is_ptr = true };
+    try builder.store(base_ptr, storage_ptr);
+
+    var running_multiplier = constI64(ctx, 1);
+    for (dim_specs.items, 0..) |dim_spec, dim_idx| {
+        const lower_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .lower, dim_idx);
+        const extent_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .extent, dim_idx);
+        const multiplier_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .multiplier, dim_idx);
+        try builder.store(dim_spec.lower, lower_slot);
+        try builder.store(dim_spec.extent, extent_slot);
+        try builder.store(running_multiplier, multiplier_slot);
+        running_multiplier = try expr.emitMul(ctx, builder, running_multiplier, dim_spec.extent);
+    }
 }
 
 pub fn emitDeallocate(ctx: *Context, builder: anytype, deallocate: ast.DeallocateStmt) EmitError!void {
@@ -233,6 +298,25 @@ fn emitAllocateElementSize(
     return try expr_dispatch.emitCharacterSymbolLenValueI64(ctx, builder, sym.name, sym);
 }
 
+fn emitAllocateLayoutElementSize(
+    ctx: *Context,
+    builder: anytype,
+    component: context.DerivedComponentLayout,
+    type_spec: ?ast.AllocateTypeSpec,
+) EmitError!ValueRef {
+    if (component.type_spec.lowered_kind != .character) {
+        return constI64(ctx, @intCast(component.elem_size));
+    }
+    if (type_spec) |spec| {
+        if (spec.type_kind != .character) return error.UnsupportedAllocateSyntax;
+        return emitAllocateCharacterLenI64(ctx, builder, spec, undefined);
+    }
+    if (component.type_spec.char_len) |char_len| {
+        return constI64(ctx, @intCast(char_len));
+    }
+    return error.NonConstantCharacterLength;
+}
+
 fn emitAllocateCharacterLenI64(
     ctx: *Context,
     builder: anytype,
@@ -285,7 +369,9 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
         trackCharAssignment(ctx, assign.target, null);
         return;
     }
+    if (try emitWholeArrayCopyAssignment(ctx, builder, assign)) return;
     if (try emitContiguousSectionScalarAssignment(ctx, builder, assign)) return;
+    if (try emitContiguousComponentSectionScalarAssignment(ctx, builder, assign)) return;
     if (try emitWholeArrayScalarAssignment(ctx, builder, assign)) return;
     if (charLenForExpr(ctx, assign.target)) |char_len| {
         const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
@@ -416,6 +502,60 @@ fn emitWholeArrayScalarAssignment(ctx: *Context, builder: anytype, assign: ast.A
     return true;
 }
 
+fn emitWholeArrayCopyAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    const target = wholeArrayComponentTransfer(assign.target) orelse return false;
+    const value = wholeArrayComponentTransfer(assign.value) orelse return false;
+
+    const target_base_name = ctx.derivedTypeNameForExpr(target.base) orelse return error.UnknownSymbol;
+    const value_base_name = ctx.derivedTypeNameForExpr(value.base) orelse return error.UnknownSymbol;
+    const target_component = ctx.lookupDerivedComponentLayout(target_base_name, target.name) orelse return error.UnknownSymbol;
+    const value_component = ctx.lookupDerivedComponentLayout(value_base_name, value.name) orelse return error.UnknownSymbol;
+    if (target_component.pointer or target_component.allocatable) return false;
+    if (value_component.pointer or value_component.allocatable) return false;
+    if (target_component.size != value_component.size) return false;
+
+    const dst_ptr = try expr_memory.emitComponentStoragePtr(ctx, builder, target);
+    const src_ptr = try expr_memory.emitComponentStoragePtr(ctx, builder, value);
+    try emitMemMove(ctx, builder, dst_ptr, src_ptr, constI64(ctx, @intCast(target_component.size)));
+    return true;
+}
+
+fn emitContiguousComponentSectionScalarAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    if (assign.target.* != .component) return false;
+    const comp = assign.target.component;
+    if (comp.args.len == 0) return false;
+
+    const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return false;
+    const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return false;
+    if (!component.allocatable) return false;
+    if (component.type_spec.lowered_kind == .character or component.type_spec.lowered_kind == .derived) return false;
+    if (comp.args.len != component.dims.len) return false;
+
+    var total_count = constI64(ctx, 1);
+    var has_range = false;
+    for (comp.args, 0..) |arg, dim_idx| {
+        if (arg.* != .dim_range) return false;
+        const range = arg.dim_range;
+        has_range = true;
+        if (!rangeLowerIsOne(range)) return false;
+        if (range.stride != null) return false;
+        var extent = if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size)
+            try expr_memory.emitComponentDimExtent(ctx, builder, comp, dim_idx)
+        else
+            try expr.emitExpr(ctx, builder, range.upper);
+        if (extent.ty != .i64) extent = try expr.coerce(ctx, builder, extent, .i64);
+        total_count = try expr.emitMul(ctx, builder, total_count, extent);
+    }
+    if (!has_range) return false;
+
+    const base_ptr = try expr_memory.emitLoadedComponentDataPtr(ctx, builder, comp);
+    const elem_ty = llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, ctx.options.target_layout);
+    const value = try expr.emitExpr(ctx, builder, assign.value);
+    const coerced = try expr.coerce(ctx, builder, value, elem_ty);
+    try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, total_count, coerced);
+    return true;
+}
+
 fn emitDynamicElemCount(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) EmitError!ValueRef {
     var total = constI64(ctx, 1);
     for (sym.dims, 0..) |dim, dim_idx| {
@@ -470,6 +610,29 @@ fn emitLinearFillLoop(
     try builder.br(loop_head);
 
     try builder.label(loop_exit);
+}
+
+fn wholeArrayComponentTransfer(expr_node: *ast.Expr) ?ast.ComponentExpr {
+    if (expr_node.* != .component) return null;
+    const comp = expr_node.component;
+    if (comp.args.len != 0) return null;
+    return comp;
+}
+
+fn emitMemMove(
+    ctx: *Context,
+    builder: anytype,
+    dst_ptr: ValueRef,
+    src_ptr: ValueRef,
+    byte_count: ValueRef,
+) EmitError!void {
+    const memmove_name = try ctx.ensureDeclRaw(
+        "llvm.memmove.p0.p0.i64",
+        .void,
+        &[_]llvm_types.IRType{ .ptr, .ptr, .i64, .i1 },
+        false,
+    );
+    try builder.callTyped(null, .void, memmove_name, &.{ dst_ptr, src_ptr, byte_count, .{ .name = "false", .ty = .i1, .is_ptr = false } });
 }
 
 fn rangeLowerIsOne(range: ast.DimRange) bool {

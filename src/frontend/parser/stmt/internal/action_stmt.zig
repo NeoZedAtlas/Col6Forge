@@ -295,25 +295,63 @@ pub fn parseAllocateStatement(arena: std.mem.Allocator, lp: *LineParser) anyerro
     const type_spec = try decl_parser.tryParseAllocateTypeSpec(lp, arena);
     var items = std.array_list.Managed(AllocateItem).init(arena);
     while (!lp.peekIs(.r_paren)) {
-        const item_source = currentSource(lp.*);
-        const name = lp.readName(arena) orelse return error.MissingName;
-        var dims = std.array_list.Managed(*Expr).init(arena);
-        if (lp.consume(.l_paren)) {
-            while (!lp.peekIs(.r_paren)) {
-                try dims.append(try expr.parseDimExpr(lp, arena));
-                if (!lp.consume(.comma)) break;
-            }
-            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-        }
-        try items.append(.{
-            .name = name,
-            .dims = try dims.toOwnedSlice(),
-            .source = item_source,
-        });
+        try items.append(try parseAllocateItem(arena, lp));
         if (!lp.consume(.comma)) break;
     }
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     return .{ .allocate = .{ .items = try items.toOwnedSlice(), .type_spec = type_spec } };
+}
+
+fn parseAllocateItem(arena: std.mem.Allocator, lp: *LineParser) !AllocateItem {
+    const item_source = currentSource(lp.*);
+    const raw_target = try expr.parseExpr(lp, arena, 0);
+    const normalized = try normalizeAllocateTarget(arena, raw_target);
+    return .{
+        .target = normalized.target,
+        .dims = normalized.dims,
+        .source = item_source,
+    };
+}
+
+const NormalizedAllocateTarget = struct {
+    target: *Expr,
+    dims: []*Expr,
+};
+
+fn normalizeAllocateTarget(arena: std.mem.Allocator, raw_target: *Expr) !NormalizedAllocateTarget {
+    return switch (raw_target.*) {
+        .identifier => .{
+            .target = raw_target,
+            .dims = &.{},
+        },
+        .call_or_subscript => |call| .{
+            .target = try cloneAllocateTargetExpr(arena, .{ .identifier = call.name }),
+            .dims = call.args,
+        },
+        .component => |comp| blk: {
+            if (comp.args.len == 0) {
+                break :blk .{
+                    .target = raw_target,
+                    .dims = &.{},
+                };
+            }
+            break :blk .{
+                .target = try cloneAllocateTargetExpr(arena, .{ .component = .{
+                    .base = comp.base,
+                    .name = comp.name,
+                    .args = &.{},
+                } }),
+                .dims = comp.args,
+            };
+        },
+        else => error.UnsupportedAllocateSyntax,
+    };
+}
+
+fn cloneAllocateTargetExpr(arena: std.mem.Allocator, value: Expr) !*Expr {
+    const node = try arena.create(Expr);
+    node.* = value;
+    return node;
 }
 
 pub fn parseDeallocateStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!StmtNode {
@@ -357,6 +395,11 @@ pub fn parseUseStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!Stm
         .use_stmt = .{
             .module_name = module_name,
             .only_items = try only_items.toOwnedSlice(),
+            .source = .{
+                .line = lp.line.span.start_line,
+                .column = 1,
+                .text = lp.line.text,
+            },
         },
     };
 }
@@ -368,20 +411,115 @@ fn parseUseRenameItems(
     require_rename: bool,
 ) !void {
     while (lp.peek() != null) {
-        const local_name = lp.readName(arena) orelse return error.MissingName;
+        const local_item = try parseUseOnlyName(arena, lp);
+        const local_name = local_item.name;
         var remote_name = local_name;
+        var generic_spec = local_item.generic_spec;
+        var generic_display_name = local_item.generic_display_name;
         if (consumeUseRenameArrow(lp)) {
-            remote_name = lp.readName(arena) orelse return error.MissingName;
+            const remote_item = try parseUseOnlyName(arena, lp);
+            remote_name = remote_item.name;
+            generic_spec = remote_item.generic_spec;
+            generic_display_name = remote_item.generic_display_name;
         } else if (lp.peekIs(.equals) or require_rename) {
             return error.UnexpectedToken;
         }
         try only_items.append(.{
             .local_name = local_name,
             .remote_name = remote_name,
+            .generic_spec = generic_spec,
+            .generic_display_name = generic_display_name,
         });
         if (!lp.consume(.comma)) break;
     }
     if (lp.peek() != null) return error.UnexpectedToken;
+}
+
+const ParsedUseOnlyName = struct {
+    name: []const u8,
+    generic_spec: bool = false,
+    generic_display_name: []const u8 = "",
+};
+
+fn parseUseOnlyName(arena: std.mem.Allocator, lp: *LineParser) !ParsedUseOnlyName {
+    if (lp.isKeywordSplit("ASSIGNMENT")) {
+        const parsed = try parseAssignmentGenericSpec(arena, lp);
+        return .{
+            .name = parsed.normalized_name,
+            .generic_spec = true,
+            .generic_display_name = parsed.display_name,
+        };
+    }
+    if (lp.isKeywordSplit("OPERATOR")) {
+        const parsed = try parseOperatorGenericSpec(arena, lp);
+        return .{
+            .name = parsed.normalized_name,
+            .generic_spec = true,
+            .generic_display_name = parsed.display_name,
+        };
+    }
+    return .{
+        .name = lp.readName(arena) orelse return error.MissingName,
+        .generic_spec = false,
+    };
+}
+
+const ParsedGenericSpec = struct {
+    normalized_name: []const u8,
+    display_name: []const u8,
+};
+
+pub fn parseAssignmentGenericSpec(arena: std.mem.Allocator, lp: *LineParser) !ParsedGenericSpec {
+    if (!lp.consumeKeyword("ASSIGNMENT")) return error.UnexpectedToken;
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return .{
+        .normalized_name = try arena.dupe(u8, "assignment(=)"),
+        .display_name = try arena.dupe(u8, "="),
+    };
+}
+
+pub fn parseOperatorGenericSpec(arena: std.mem.Allocator, lp: *LineParser) !ParsedGenericSpec {
+    if (!lp.consumeKeyword("OPERATOR")) return error.UnexpectedToken;
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+
+    var text = std.array_list.Managed(u8).init(arena);
+    while (!lp.peekIs(.r_paren)) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        _ = lp.next();
+        try text.appendSlice(lp.tokenText(tok));
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+
+    const compact = try compactOperatorTokenText(arena, text.items);
+    const normalized = try normalizeOperatorTokenText(arena, compact);
+    return .{
+        .normalized_name = try std.fmt.allocPrint(arena, "operator({s})", .{normalized}),
+        .display_name = compact,
+    };
+}
+
+fn compactOperatorTokenText(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
+    var buf: [32]u8 = undefined;
+    var out_len: usize = 0;
+    for (text) |ch| {
+        if (std.ascii.isWhitespace(ch)) continue;
+        if (out_len >= buf.len) return arena.dupe(u8, text);
+        buf[out_len] = std.ascii.toLower(ch);
+        out_len += 1;
+    }
+    return arena.dupe(u8, buf[0..out_len]);
+}
+
+fn normalizeOperatorTokenText(arena: std.mem.Allocator, compact: []const u8) ![]const u8 {
+    if (std.mem.eql(u8, compact, ".eq.")) return arena.dupe(u8, "==");
+    if (std.mem.eql(u8, compact, ".ne.")) return arena.dupe(u8, "/=");
+    if (std.mem.eql(u8, compact, ".le.")) return arena.dupe(u8, "<=");
+    if (std.mem.eql(u8, compact, ".lt.")) return arena.dupe(u8, "<");
+    if (std.mem.eql(u8, compact, ".ge.")) return arena.dupe(u8, ">=");
+    if (std.mem.eql(u8, compact, ".gt.")) return arena.dupe(u8, ">");
+    return arena.dupe(u8, compact);
 }
 
 fn shouldTreatDoAsAssignment(lp: LineParser) bool {
@@ -410,7 +548,7 @@ fn tryParseAmbiguousAssignment(
     return helpers.tryParseBlankInsensitiveAssignment(arena, line, lp);
 }
 
-fn consumeDoubleColon(lp: *LineParser) bool {
+pub fn consumeDoubleColon(lp: *LineParser) bool {
     var scan = lp.*;
     if (!scan.consume(.colon)) return false;
     if (!scan.consume(.colon)) return false;

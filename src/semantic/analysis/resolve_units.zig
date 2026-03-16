@@ -73,7 +73,7 @@ pub const Resolver = struct {
             }
             ctx.setCurrentDeclSource(null);
         }
-        if (ctx.unit.owner_name != null) {
+        if (ctx.unit.owner_name != null and ctx.unit.owner_kind != .module) {
             if (findExplicitInterfaceDeclSource(ctx, ctx.unit.name)) |decl_source| {
                 ctx.setCurrentDeclSource(decl_source);
                 if (!ctx.usesExplicitDiagnosticBag()) return error.HasExplicitInterface;
@@ -194,6 +194,7 @@ fn buildDerivedComponentInfo(
                 .type_spec = spec,
                 .dims = item.dims,
                 .pointer = type_decl.pointer,
+                .allocatable = type_decl.allocatable,
             });
         }
     }

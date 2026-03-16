@@ -180,10 +180,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                 } else {
                     var args = std.array_list.Managed(*Expr).init(arena);
                     while (!lp.peekIs(.r_paren)) {
-                        const arg_expr = if (hasArgumentDimRange(lp.*))
-                            try parseDimExprDepth(lp, arena, depth + 1)
-                        else
-                            try parseExprDepth(lp, arena, 0, depth + 1);
+                        const arg_expr = try parseCallArgExpr(lp, arena, depth + 1);
                         try args.append(arg_expr);
                         _ = lp.consume(.comma);
                     }
@@ -303,10 +300,7 @@ fn parseComponentSuffixes(
         var args = std.array_list.Managed(*Expr).init(arena);
         if (lp.consume(.l_paren)) {
             while (!lp.peekIs(.r_paren)) {
-                const arg_expr = if (hasArgumentDimRange(lp.*))
-                    try parseDimExprDepth(lp, arena, depth + 1)
-                else
-                    try parseExprDepth(lp, arena, 0, depth + 1);
+                const arg_expr = try parseCallArgExpr(lp, arena, depth + 1);
                 try args.append(arg_expr);
                 _ = lp.consume(.comma);
             }
@@ -319,6 +313,21 @@ fn parseComponentSuffixes(
         } }, source);
     }
     return current;
+}
+
+fn parseCallArgExpr(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseExprError!*Expr {
+    if (lp.peek()) |name_tok| {
+        if (name_tok.kind == .identifier and lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .equals) {
+            if (lp.index + 2 >= lp.tokens.len or lp.tokens[lp.index + 2].kind != .greater) {
+                _ = lp.next();
+                _ = lp.next();
+            }
+        }
+    }
+    return if (hasArgumentDimRange(lp.*))
+        parseDimExprDepth(lp, arena, depth)
+    else
+        parseExprDepth(lp, arena, 0, depth);
 }
 
 fn makeExprNode(arena: std.mem.Allocator, value: Expr, source: SourceRef) ParseExprError!*Expr {
@@ -621,6 +630,32 @@ test "parseExpr handles dim-range triplet stride in subscripts" {
             try testing.expect(range.stride != null);
             try testing.expect(range.stride.?.* == .literal);
             try testing.expectEqualStrings("2", range.stride.?.literal.text);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr accepts keyword actual arguments in calls" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      SIZE(A, KIND=BITS_KIND)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .call_or_subscript => |call| {
+            try testing.expectEqualStrings("SIZE", call.name);
+            try testing.expectEqual(@as(usize, 2), call.args.len);
+            try testing.expect(call.args[1].* == .identifier);
+            try testing.expectEqualStrings("BITS_KIND", call.args[1].identifier);
         },
         else => return error.UnexpectedToken,
     }

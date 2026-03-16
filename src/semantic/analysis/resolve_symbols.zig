@@ -22,6 +22,12 @@ pub fn installBuiltinConstants(self: *context.Context) !void {
     try putBuiltinConstant(self, "iso_fortran_env", "output_unit", integer_spec, .{ .integer = 6 });
     try putBuiltinConstant(self, "iso_fortran_env", "input_unit", integer_spec, .{ .integer = 5 });
     try putBuiltinConstant(self, "iso_fortran_env", "error_unit", integer_spec, .{ .integer = 0 });
+    try putBuiltinConstant(self, "iso_fortran_env", "int8", integer_spec, .{ .integer = 1 });
+    try putBuiltinConstant(self, "iso_fortran_env", "int16", integer_spec, .{ .integer = 2 });
+    try putBuiltinConstant(self, "iso_fortran_env", "int32", integer_spec, .{ .integer = 4 });
+    try putBuiltinConstant(self, "iso_fortran_env", "int64", integer_spec, .{ .integer = 8 });
+    try putBuiltinConstant(self, "iso_fortran_env", "real32", integer_spec, .{ .integer = 4 });
+    try putBuiltinConstant(self, "iso_fortran_env", "real64", integer_spec, .{ .integer = 8 });
 }
 
 pub fn registerDerivedType(self: *context.Context, info: context.Context.DerivedTypeInfo) !void {

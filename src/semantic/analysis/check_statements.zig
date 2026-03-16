@@ -124,16 +124,19 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 try checkAllocateTypeSpecCompatibility(self, allocate, type_spec);
             }
             for (allocate.items) |item| {
-                const idx = resolve_symbols.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
-                const sym = self.symbols.items[idx];
-                if (sym.dims.len == 0 and item.dims.len == 0 and sym.is_allocatable) {
-                    continue;
-                }
-                if (sym.dims.len == 0) {
-                    self.setCurrentSource(if (item.source.line != 0) item.source else null);
+                const target_info = try resolveAllocateTargetInfo(self, item.target);
+                if (!target_info.allocatable and !target_info.pointer) {
+                    self.setCurrentSource(if (item.source.line != 0) item.source else self.sourceForExpr(item.target));
                     return error.UnsupportedAllocateSyntax;
                 }
-                if (sym.dims.len != item.dims.len) {
+                if (target_info.rank == 0 and item.dims.len == 0) {
+                    continue;
+                }
+                if (target_info.rank == 0) {
+                    self.setCurrentSource(if (item.source.line != 0) item.source else self.sourceForExpr(item.target));
+                    return error.UnsupportedAllocateSyntax;
+                }
+                if (target_info.rank != item.dims.len) {
                     self.setCurrentSource(if (item.source.line != 0) item.source else null);
                     return error.InvalidSubscript;
                 }
@@ -338,11 +341,53 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
         },
         .component => |comp| {
             _ = try checkExprType(self, comp.base);
+            const base_spec = try resolve_expr.exprTypeSpec(self, comp.base);
+            if (base_spec.lowered_kind != .derived) {
+                self.setCurrentSource(self.sourceForExpr(comp.base));
+                return error.InvalidSubscript;
+            }
+            const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
+            const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse return error.InvalidSubscript;
+            if (component.dims.len == 0 and comp.args.len != 0) {
+                self.setCurrentSource(self.sourceForExpr(expr));
+                return error.InvalidSubscript;
+            }
+            if (component.dims.len != 0 and comp.args.len != 0 and comp.args.len != component.dims.len) {
+                self.setCurrentSource(self.sourceForExpr(expr));
+                return error.InvalidSubscript;
+            }
             for (comp.args) |arg| {
-                const arg_ty = try checkExprType(self, arg);
-                if (!isIntegerLike(arg_ty)) {
-                    self.setCurrentSource(self.sourceForExpr(arg));
-                    return error.InvalidSubscript;
+                switch (arg.*) {
+                    .dim_range => |range| {
+                        if (range.lower) |lower| {
+                            const lower_ty = try checkExprType(self, lower);
+                            if (!isIntegerLike(lower_ty)) {
+                                self.setCurrentSource(self.sourceForExpr(lower));
+                                return error.InvalidSubscript;
+                            }
+                        }
+                        if (!(range.upper.* == .literal and range.upper.literal.kind == .assumed_size)) {
+                            const upper_ty = try checkExprType(self, range.upper);
+                            if (!isIntegerLike(upper_ty)) {
+                                self.setCurrentSource(self.sourceForExpr(range.upper));
+                                return error.InvalidSubscript;
+                            }
+                        }
+                        if (range.stride) |stride| {
+                            const stride_ty = try checkExprType(self, stride);
+                            if (!isIntegerLike(stride_ty)) {
+                                self.setCurrentSource(self.sourceForExpr(stride));
+                                return error.InvalidSubscript;
+                            }
+                        }
+                    },
+                    else => {
+                        const arg_ty = try checkExprType(self, arg);
+                        if (!isIntegerLike(arg_ty)) {
+                            self.setCurrentSource(self.sourceForExpr(arg));
+                            return error.InvalidSubscript;
+                        }
+                    },
                 }
             }
             return try resolve_expr.exprType(self, expr);
@@ -477,11 +522,10 @@ fn checkAllocateTypeSpecCompatibility(
     if (spec_info.abstract) return error.AbstractAllocateType;
 
     for (allocate.items) |item| {
-        const idx = resolve_symbols.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
-        const sym = self.symbols.items[idx];
-        if (sym.loweredKind() != .derived) return error.AllocateTypeIncompatible;
-        const declared_name = sym.type_spec.derived_type_name orelse return error.AllocateTypeIncompatible;
-        const compatible = if (sym.type_spec.polymorphic)
+        const target_spec = try allocateTargetTypeSpec(self, item.target);
+        if (target_spec.lowered_kind != .derived) return error.AllocateTypeIncompatible;
+        const declared_name = target_spec.derived_type_name orelse return error.AllocateTypeIncompatible;
+        const compatible = if (target_spec.polymorphic)
             resolve_symbols.isSameOrExtension(self, type_name, declared_name)
         else
             std.ascii.eqlIgnoreCase(type_name, declared_name);
@@ -490,6 +534,55 @@ fn checkAllocateTypeSpecCompatibility(
             return error.AllocateTypeIncompatible;
         }
     }
+}
+
+const AllocateTargetInfo = struct {
+    rank: usize,
+    allocatable: bool = false,
+    pointer: bool = false,
+};
+
+fn resolveAllocateTargetInfo(self: *context.Context, expr: *ast.Expr) CheckError!AllocateTargetInfo {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse return error.UnknownSymbol;
+            const sym = self.symbols.items[idx];
+            break :blk .{
+                .rank = sym.dims.len,
+                .allocatable = sym.is_allocatable,
+                .pointer = sym.is_pointer,
+            };
+        },
+        .component => |comp| blk: {
+            const base_spec = try resolve_expr.exprTypeSpec(self, comp.base);
+            if (base_spec.lowered_kind != .derived) return error.InvalidSubscript;
+            const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
+            const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse return error.InvalidSubscript;
+            break :blk .{
+                .rank = component.dims.len,
+                .allocatable = component.allocatable,
+                .pointer = component.pointer,
+            };
+        },
+        else => error.UnsupportedAllocateSyntax,
+    };
+}
+
+fn allocateTargetTypeSpec(self: *context.Context, expr: *ast.Expr) CheckError!symbols.TypeSpec {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse return error.UnknownSymbol;
+            break :blk self.symbols.items[idx].type_spec;
+        },
+        .component => |comp| blk: {
+            const base_spec = try resolve_expr.exprTypeSpec(self, comp.base);
+            if (base_spec.lowered_kind != .derived) return error.InvalidSubscript;
+            const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
+            const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse return error.InvalidSubscript;
+            break :blk component.type_spec;
+        },
+        else => error.UnsupportedAllocateSyntax,
+    };
 }
 
 fn isNumeric(kind: ast.TypeKind) bool {
