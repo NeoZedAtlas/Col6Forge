@@ -23,6 +23,11 @@ const Stmt = ast.Stmt;
 
 const LineParser = context.LineParser;
 
+const ModulePrelude = struct {
+    decls: []const Decl,
+    decl_sources: []const DeclSource,
+};
+
 pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.LogicalLine) !Program {
     var diag_bag = parse_diag.Bag.init(arena_allocator);
     defer diag_bag.deinit();
@@ -57,6 +62,7 @@ pub fn parseProgramWithDiagnostics(
         .implicit_program_counter = 0,
         .pending_owner_name = null,
         .pending_owner_kind = null,
+        .module_preludes = std.StringHashMap(ModulePrelude).init(arena_allocator),
         .expr_capture = &expr_capture,
         .diag_bag = diag_bag,
         .lex_diag_bag = &lex_diag_bag,
@@ -74,6 +80,7 @@ const Parser = struct {
     implicit_program_counter: usize,
     pending_owner_name: ?[]const u8,
     pending_owner_kind: ?LexicalOwnerKind,
+    module_preludes: std.StringHashMap(ModulePrelude),
     expr_capture: *expr.SourceCapture,
     diag_bag: *parse_diag.Bag,
     lex_diag_bag: *lexer.Bag,
@@ -170,6 +177,7 @@ const Parser = struct {
         self.index += 1;
         var module_decls = std.array_list.Managed(Decl).init(self.arena);
         var module_decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
+        var module_use_names = std.array_list.Managed([]const u8).init(self.arena);
         var saw_contains = false;
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
@@ -202,6 +210,11 @@ const Parser = struct {
                 continue;
             };
             var lp = LineParser.init(line, tokens);
+            if (try tryParsePreludeUseImport(&lp, self.arena)) |used_module_name| {
+                try module_use_names.append(used_module_name);
+                self.index += 1;
+                continue;
+            }
             if (isDerivedTypeStartTokens(line, tokens)) {
                 const decl_node = try self.parseDerivedTypeDef();
                 try module_decls.append(decl_node);
@@ -220,6 +233,18 @@ const Parser = struct {
         }
         if (!saw_contains) return;
 
+        var stored_decls: []const Decl = try module_decls.toOwnedSlice();
+        var stored_decl_sources: []const DeclSource = try module_decl_sources.toOwnedSlice();
+        if (module_use_names.items.len != 0) {
+            const imported = try importPreludeDecls(self.arena, stored_decls, stored_decl_sources, module_use_names.items, &self.module_preludes);
+            stored_decls = imported.decls;
+            stored_decl_sources = imported.decl_sources;
+        }
+        try self.module_preludes.put(module_name, .{
+            .decls = stored_decls,
+            .decl_sources = stored_decl_sources,
+        });
+
         while (self.index < self.lines.len) {
             noteFallbackForLine(self.diag_bag, self.lines[self.index]);
             if (self.isModuleEndAt(self.index)) {
@@ -233,8 +258,8 @@ const Parser = struct {
             var unit = try self.parseProgramUnit();
             unit.owner_name = module_name;
             unit.owner_kind = .module;
-            if (module_decls.items.len != 0) {
-                unit = try prependDecls(self.arena, unit, module_decls.items, module_decl_sources.items);
+            if (stored_decls.len != 0) {
+                unit = try prependDecls(self.arena, unit, stored_decls, stored_decl_sources);
             }
             try units.append(unit);
         }
@@ -367,7 +392,7 @@ const Parser = struct {
             try stmts.append(stmt_node);
         }
 
-        return .{
+        var unit = ProgramUnit{
             .kind = header.kind,
             .name = header.name,
             .bind_name = header.bind_name,
@@ -379,6 +404,23 @@ const Parser = struct {
             .stmts = try stmts.toOwnedSlice(),
             .expr_sources = try self.expr_capture.sliceFrom(expr_mark),
         };
+        unit = try self.importUsedModulePreludes(unit);
+        return unit;
+    }
+
+    fn importUsedModulePreludes(self: *Parser, unit: ProgramUnit) !ProgramUnit {
+        var imported = unit;
+        var seen = std.StringHashMap(void).init(self.arena);
+        for (unit.stmts) |stmt_node| {
+            if (stmt_node.node != .use_stmt) continue;
+            const use_stmt = stmt_node.node.use_stmt;
+            if (use_stmt.only_items.len != 0) continue;
+            if (seen.contains(use_stmt.module_name)) continue;
+            const prelude = self.module_preludes.get(use_stmt.module_name) orelse continue;
+            imported = try prependDecls(self.arena, imported, prelude.decls, prelude.decl_sources);
+            try seen.put(use_stmt.module_name, {});
+        }
+        return imported;
     }
 
     fn syntheticProgramHeader(self: *Parser) !ProgramUnitHeader {
@@ -427,7 +469,10 @@ const Parser = struct {
             }
             var body_lp = LineParser.init(line, tokens);
             if (decl.isDeclarationStart(body_lp)) {
-                const component_decl = try decl.parseDecl(&body_lp, self.arena);
+                const component_decl = decl.parseDecl(&body_lp, self.arena) catch |err| {
+                    setParseDiagnosticFromStream(self.diag_bag, line, body_lp, err);
+                    return err;
+                };
                 if (component_decl == .type_decl) {
                     try components.append(component_decl.type_decl);
                 }
@@ -444,7 +489,9 @@ const Parser = struct {
         var lp = LineParser.init(header_line, header_tokens);
         const is_abstract = lp.consumeKeyword("ABSTRACT");
         if (!lp.consumeKeyword("INTERFACE")) return error.UnexpectedToken;
+        const interface_name = lp.readName(self.arena);
         self.index += 1;
+        var module_procedures = std.array_list.Managed([]const u8).init(self.arena);
 
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
@@ -452,13 +499,80 @@ const Parser = struct {
             const tokens = try self.tokensForIndex(self.index);
             if (isInterfaceEndTokens(line, tokens)) {
                 self.index += 1;
-                return .{ .interface_block = .{ .abstract = is_abstract } };
+                return .{ .interface_block = .{
+                    .abstract = is_abstract,
+                    .name = interface_name,
+                    .module_procedures = try module_procedures.toOwnedSlice(),
+                } };
+            }
+            var body_lp = LineParser.init(line, tokens);
+            if (body_lp.consumeKeyword("MODULE") and body_lp.consumeKeyword("PROCEDURE")) {
+                while (true) {
+                    const procedure_name = body_lp.readName(self.arena) orelse return error.MissingName;
+                    try module_procedures.append(procedure_name);
+                    if (!body_lp.consume(.comma)) break;
+                }
             }
             self.index += 1;
         }
         return error.UnexpectedEOF;
     }
 };
+
+const ImportedPreludeDecls = struct {
+    decls: []const Decl,
+    decl_sources: []const DeclSource,
+};
+
+fn importPreludeDecls(
+    arena: std.mem.Allocator,
+    decls: []const Decl,
+    decl_sources: []const DeclSource,
+    module_names: []const []const u8,
+    preludes: *const std.StringHashMap(ModulePrelude),
+) !ImportedPreludeDecls {
+    var imported_decls = decls;
+    var imported_sources = decl_sources;
+    var seen = std.StringHashMap(void).init(arena);
+    for (module_names) |module_name| {
+        if (seen.contains(module_name)) continue;
+        const prelude = preludes.get(module_name) orelse continue;
+        const combined_decls = try arena.alloc(Decl, prelude.decls.len + imported_decls.len);
+        @memcpy(combined_decls[0..prelude.decls.len], prelude.decls);
+        @memcpy(combined_decls[prelude.decls.len..], imported_decls);
+        imported_decls = combined_decls;
+
+        const combined_sources = try arena.alloc(DeclSource, prelude.decl_sources.len + imported_sources.len);
+        @memcpy(combined_sources[0..prelude.decl_sources.len], prelude.decl_sources);
+        @memcpy(combined_sources[prelude.decl_sources.len..], imported_sources);
+        imported_sources = combined_sources;
+        try seen.put(module_name, {});
+    }
+    return .{ .decls = imported_decls, .decl_sources = imported_sources };
+}
+
+fn tryParsePreludeUseImport(lp: *LineParser, arena: std.mem.Allocator) !?[]const u8 {
+    if (!lp.consumeKeyword("USE")) return null;
+    if (lp.consume(.comma)) {
+        while (!consumeDoubleColon(lp)) {
+            if (lp.peek() == null) return error.UnexpectedToken;
+            _ = lp.next();
+        }
+    }
+    _ = consumeDoubleColon(lp);
+    const module_name = lp.readName(arena) orelse return error.MissingName;
+    if (!lp.consume(.comma)) return module_name;
+    if (!lp.consumeKeyword("ONLY")) return module_name;
+    return null;
+}
+
+fn consumeDoubleColon(lp: *LineParser) bool {
+    var scan = lp.*;
+    if (!scan.consume(.colon)) return false;
+    if (!scan.consume(.colon)) return false;
+    lp.* = scan;
+    return true;
+}
 
 const TypeInfo = struct {
     type_kind: ast.TypeKind,
@@ -1930,6 +2044,74 @@ test "parseProgram preserves module interface blocks in contained procedures" {
     try testing.expectEqualStrings("bar", unit.name);
     try testing.expectEqual(@as(usize, 1), unit.decls.len);
     try testing.expect(unit.decls[0] == .interface_block);
+}
+
+test "parseProgram imports used module preludes into later module preludes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  type t1\n" ++
+        "    integer :: value\n" ++
+        "  end type t1\n" ++
+        "end module m1\n" ++
+        "module m2\n" ++
+        "  use m1\n" ++
+        "  type t2\n" ++
+        "    type(t1) :: base\n" ++
+        "  end type t2\n" ++
+        "contains\n" ++
+        "  subroutine s(x)\n" ++
+        "    type(t2), intent(in) :: x\n" ++
+        "  end subroutine s\n" ++
+        "end module m2\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqualStrings("s", unit.name);
+    try testing.expectEqual(@as(usize, 2), unit.decls.len);
+    try testing.expect(unit.decls[0] == .derived_type_def);
+    try testing.expectEqualStrings("t1", unit.decls[0].derived_type_def.name);
+    try testing.expect(unit.decls[1] == .derived_type_def);
+    try testing.expectEqualStrings("t2", unit.decls[1].derived_type_def.name);
+}
+
+test "parseProgram captures generic interface module procedures" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  interface x_\n" ++
+        "    module procedure get_x\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  function get_x()\n" ++
+        "    integer :: get_x\n" ++
+        "    get_x = 1\n" ++
+        "  end function get_x\n" ++
+        "end module m1\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqual(@as(usize, 1), unit.decls.len);
+    const interface_block = unit.decls[0].interface_block;
+    try testing.expectEqualStrings("x_", interface_block.name.?);
+    try testing.expectEqual(@as(usize, 1), interface_block.module_procedures.len);
+    try testing.expectEqualStrings("get_x", interface_block.module_procedures[0]);
 }
 
 test "parseProgramWithDiagnostics captures parse errors in explicit bag" {

@@ -137,6 +137,7 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
             TypeSpec.fromResolvedKind(.real, .real, null);
         var symbol = Symbol.init(name, proc_spec, &.{}, proc_kind, .local);
         symbol.is_external = true;
+        symbol.is_pointer = sig.is_pointer;
         return internSymbol(self, symbol);
     }
     const known_fn_spec = lookupKnownFunctionResolvedSpec(self, name);

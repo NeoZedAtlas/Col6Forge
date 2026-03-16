@@ -27,6 +27,7 @@ pub const Declarator = ast.Declarator;
 pub const Stmt = ast.Stmt;
 pub const StmtNode = ast.StmtNode;
 pub const Assignment = ast.Assignment;
+pub const PointerAssignment = ast.PointerAssignment;
 pub const AssignLabelStmt = ast.AssignLabelStmt;
 pub const UseStmt = ast.UseStmt;
 pub const UseOnlyItem = ast.UseOnlyItem;

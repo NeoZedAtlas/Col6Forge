@@ -20,7 +20,12 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     if (sym.dims.len == 0) return error.ArraysUnsupported;
     if (call.args.len == 0) return error.InvalidSubscript;
     if (call.args.len != sym.dims.len) return error.InvalidSubscript;
-    const base_ptr = try ctx.getPointer(call.name);
+    var base_ptr = try ctx.getPointer(call.name);
+    if (sym.is_pointer) {
+        const loaded_name = try ctx.nextTemp();
+        try builder.load(loaded_name, .ptr, base_ptr);
+        base_ptr = .{ .name = loaded_name, .ty = .ptr, .is_ptr = true };
+    }
     const elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout);
 
     var offset = try emitColumnMajorOffset(ctx, builder, sym, call.args);
@@ -65,7 +70,12 @@ fn emitColumnMajorOffset(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, 
 pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) !ValueRef {
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
     if (sym.dims.len == 0) return error.ArraysUnsupported;
-    const base_ptr = try ctx.getPointer(call.name);
+    var base_ptr = try ctx.getPointer(call.name);
+    if (sym.is_pointer) {
+        const loaded_name = try ctx.nextTemp();
+        try builder.load(loaded_name, .ptr, base_ptr);
+        base_ptr = .{ .name = loaded_name, .ty = .ptr, .is_ptr = true };
+    }
     const elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout);
 
     if (call.args.len != 1) return error.InvalidSubscript;
@@ -97,8 +107,8 @@ pub fn emitComponentPtr(ctx: *Context, builder: anytype, comp: ast.ComponentExpr
         try builder.gep(gep_name, .i8, base_ptr, i64Const(ctx, @intCast(component.offset)));
         base_ptr = .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
     }
-    if (component.dims.len == 0) {
-        if (comp.args.len != 0) return error.InvalidSubscript;
+    if (component.dims.len == 0 or component.pointer) {
+        if (!component.pointer and comp.args.len != 0) return error.InvalidSubscript;
         return base_ptr;
     }
     if (comp.args.len != component.dims.len) return error.InvalidSubscript;
@@ -117,6 +127,11 @@ fn emitDerivedObjectPtr(ctx: *Context, builder: anytype, expr: *Expr) anyerror!V
         .identifier => |name| blk: {
             const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
             const ptr = try ctx.getPointer(name);
+            if (sym.is_pointer) {
+                const tmp = try ctx.nextTemp();
+                try builder.load(tmp, .ptr, ptr);
+                break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = true };
+            }
             if (sym.storage == .dummy) break :blk ptr;
             const tmp = try ctx.nextTemp();
             try builder.load(tmp, .ptr, ptr);

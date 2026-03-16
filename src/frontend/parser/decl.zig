@@ -3,6 +3,7 @@ const ast = @import("../../ast/nodes.zig");
 const context = @import("token_stream.zig");
 const expr = @import("expr.zig");
 const fixed_form = @import("../fixed_form.zig");
+const free_form = @import("../free_form.zig");
 const lexer = @import("../lexer.zig");
 const logical_line = @import("../logical_line.zig");
 
@@ -504,18 +505,22 @@ fn parseKindSelectorExprInParens(lp: *LineParser, arena: std.mem.Allocator) !?*a
     while (!lp.peekIs(.r_paren)) {
         if (lp.peek()) |tok| {
             if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "KIND")) {
-                _ = lp.next();
-                _ = lp.expect(.equals) orelse return error.UnexpectedToken;
-                selector = try expr.parseExpr(lp, arena, 0);
-                _ = lp.consume(.comma);
-                continue;
+                if (lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .equals) {
+                    _ = lp.next();
+                    _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+                    selector = try expr.parseExpr(lp, arena, 0);
+                    _ = lp.consume(.comma);
+                    continue;
+                }
             }
             if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "LEN")) {
-                _ = lp.next();
-                _ = lp.expect(.equals) orelse return error.UnexpectedToken;
-                _ = try expr.parseExpr(lp, arena, 0);
-                _ = lp.consume(.comma);
-                continue;
+                if (lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .equals) {
+                    _ = lp.next();
+                    _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+                    _ = try expr.parseExpr(lp, arena, 0);
+                    _ = lp.consume(.comma);
+                    continue;
+                }
             }
         }
         const parsed = try expr.parseExpr(lp, arena, 0);
@@ -1632,6 +1637,31 @@ test "parseDecl accepts POINTER declarator initialization with null intrinsic" {
     const source = "real(kind(1.d0)), pointer :: x(:) => null()\n";
     const lines = try fixed_form.normalizeFixedForm(allocator, source);
     defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expect(td.pointer);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expect(td.items[0].init != null);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl accepts free-form POINTER declarator initialization with null intrinsic" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "real(kind(1.d0)), pointer :: x(:) => null()\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
     const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
     defer allocator.free(tokens);
     var lp = LineParser.init(lines[0], tokens);

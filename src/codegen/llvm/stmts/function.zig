@@ -55,7 +55,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         is_character_function = sym.isCharacter();
         is_complex_sret_function = ctx.abiUsesHiddenResultPtr(ctx.typeFromKind(sym.loweredKind()));
         if (!is_character_function) {
-            const nominal_ret_ty = ctx.typeFromKind(sym.loweredKind());
+            const nominal_ret_ty = if (sym.is_pointer) llvm_types.IRType.ptr else ctx.typeFromKind(sym.loweredKind());
             return_ty = ctx.abiFunctionReturnType(nominal_ret_ty);
         }
     } else if (has_alt_return) {
@@ -202,6 +202,17 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         if (is_return_symbol and (is_character_function or is_complex_sret_function)) continue;
         if (ctx.locals.contains(sym.name)) continue;
         if (isSaved(&save_info, sym.name) and !is_return_symbol) continue;
+        if (sym.is_pointer) {
+            const slot_name = try ctx.nextTemp();
+            try builder.alloca(slot_name, .ptr);
+            const slot_ptr = ValueRef{ .name = slot_name, .ty = .ptr, .is_ptr = true };
+            try builder.store(.{ .name = "null", .ty = .ptr, .is_ptr = false }, slot_ptr);
+            try ctx.locals.put(sym.name, slot_ptr);
+            if (symbolHasDeferredDims(sym)) {
+                try installDeferredArrayDescriptor(ctx, builder, sym);
+            }
+            continue;
+        }
         if (sym.is_allocatable and sym.dims.len == 0) {
             try ctx.locals.put(sym.name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
             if (sym.isCharacter()) {

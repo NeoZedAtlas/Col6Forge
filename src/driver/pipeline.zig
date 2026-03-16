@@ -342,6 +342,10 @@ pub fn takeLastDiagnostic() ?diag.Diagnostic {
     };
 }
 
+pub fn releaseLastDiagnostic(_: diag.Diagnostic) void {
+    diag_storage.clear();
+}
+
 pub fn takeLastProfileSample() ?PipelineProfileSample {
     if (!has_profile) return null;
     has_profile = false;
@@ -350,6 +354,7 @@ pub fn takeLastProfileSample() ?PipelineProfileSample {
 
 pub fn writePipelineErrorDiagnostic(writer: *std.Io.Writer, input_path: []const u8, err: anyerror) !void {
     if (takeLastDiagnostic()) |pipeline_diag| {
+        defer releaseLastDiagnostic(pipeline_diag);
         return diag.writeDiagnostic(writer, pipeline_diag);
     }
 
@@ -834,6 +839,7 @@ test "runPipeline reports parse diagnostics against the original continued sourc
 
     try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
     try testing.expectEqual(@as(usize, 3), diag_info.line);
     try testing.expectEqual(@as(usize, 8), diag_info.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
@@ -856,6 +862,7 @@ test "runPipeline reports semantic declaration diagnostics against the original 
 
     try testing.expectError(error.InvalidCharLen, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
     try testing.expectEqual(@as(usize, 2), diag_info.line);
     try testing.expectEqual(@as(usize, 7), diag_info.column);
     try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag_info.code);
@@ -887,6 +894,7 @@ test "runPipeline compat diagnostic preserves long source lines without truncati
 
     try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
     try testing.expectEqual(@as(usize, 2), diag_info.line);
     try testing.expectEqualStrings(long_line[0 .. long_line.len - 1], diag_info.line_text);
@@ -909,6 +917,7 @@ test "runPipeline reports semantic expression diagnostics against the original s
 
     try testing.expectError(error.InvalidArithmeticOperands, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
     try testing.expectEqual(@as(usize, 3), diag_info.line);
     try testing.expectEqual(@as(usize, 7), diag_info.column);
     try testing.expectEqualStrings(catalog.semantic.invalid_arithmetic_operands.code, diag_info.code);
@@ -932,6 +941,7 @@ test "runPipeline reports free-form continued parse diagnostics against the orig
 
     try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
     try testing.expectEqual(@as(usize, 3), diag_info.line);
     try testing.expectEqual(@as(usize, 3), diag_info.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
@@ -966,5 +976,16 @@ test "runPipelineWithOptionsAndDiagnostics keeps diagnostics in explicit bag" {
     try testing.expectEqual(@as(usize, 7), diag_info.column);
     try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag_info.code);
     try testing.expectEqualStrings("      CHARACTER*(*) A", diag_info.line_text);
+    try testing.expect(takeLastDiagnostic() == null);
+}
+
+test "releaseLastDiagnostic clears compat storage after take" {
+    const testing = std.testing;
+
+    clearLastDiagnostic();
+    setLastDiagnostic("x.f", 2, 3, "CF0000", "msg", "line");
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqualStrings("x.f", diag_info.file_path);
+    releaseLastDiagnostic(diag_info);
     try testing.expect(takeLastDiagnostic() == null);
 }

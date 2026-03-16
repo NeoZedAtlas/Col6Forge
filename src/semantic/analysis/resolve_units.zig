@@ -159,6 +159,7 @@ fn buildDerivedComponentInfo(
                 .name = item.name,
                 .type_spec = spec,
                 .dims = item.dims,
+                .pointer = type_decl.pointer,
             });
         }
     }

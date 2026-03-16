@@ -47,6 +47,8 @@ pub const DerivedTypeDef = struct {
 
 pub const InterfaceBlock = struct {
     abstract: bool = false,
+    name: ?[]const u8 = null,
+    module_procedures: []const []const u8 = &.{},
 };
 
 pub const DimensionDecl = struct {

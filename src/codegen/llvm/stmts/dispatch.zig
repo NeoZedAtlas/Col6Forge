@@ -129,6 +129,11 @@ fn emitStmtInner(
             try brIfNeeded(builder, next_block);
             return true;
         },
+        .pointer_assignment => |assign| {
+            try execution.emitPointerAssignment(ctx, builder, assign);
+            try brIfNeeded(builder, next_block);
+            return true;
+        },
         .assign_label => |assign| {
             try execution.emitAssignLabel(ctx, builder, assign);
             try brIfNeeded(builder, next_block);

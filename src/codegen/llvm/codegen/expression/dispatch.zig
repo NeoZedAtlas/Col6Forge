@@ -117,6 +117,12 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             if (sym.kind == .parameter) {
                 if (sym.const_value) |cv| return casting.emitConstTyped(ctx, builder, cv, sym.loweredKind());
             }
+            if (sym.is_pointer) {
+                const ptr = try ctx.getPointer(name);
+                const tmp = try ctx.nextTemp();
+                try builder.load(tmp, .ptr, ptr);
+                return .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+            }
             if (sym.isCharacter()) {
                 const ptr = try ctx.getPointer(name);
                 return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
@@ -145,7 +151,14 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
         },
         .component => |comp| {
             const ptr = try memory.emitComponentPtr(ctx, builder, comp);
+            const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+            const component = ctx.lookupDerivedComponentLayout(base_type_name, comp.name) orelse return error.UnknownSymbol;
             const ty = try ctx.componentIRType(comp);
+            if (component.pointer) {
+                const tmp = try ctx.nextTemp();
+                try builder.load(tmp, .ptr, ptr);
+                return .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+            }
             if (ty == .ptr) return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
             const tmp = try ctx.nextTemp();
             try builder.load(tmp, ty, ptr);
@@ -234,7 +247,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             if (sym.is_intrinsic) {
                 return intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args);
             }
-            const ret_ty = ctx.typeFromKind(sym.loweredKind());
+            const ret_ty = if (sym.is_pointer) ir.IRType.ptr else ctx.typeFromKind(sym.loweredKind());
             const is_character_function = sym.kind == .function and sym.isCharacter();
             if (is_character_function) {
                 const plan = (try emitCharacterValuePlanImpl(ctx, builder, expr, subst_depth)) orelse return error.NonConstantCharacterLength;

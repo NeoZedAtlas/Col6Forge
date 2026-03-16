@@ -2,8 +2,10 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const catalog = @import("../../common/error_catalog.zig");
 const fixed_form = @import("../../frontend/fixed_form.zig");
+const free_form = @import("../../frontend/free_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const analyzer = @import("../analysis/mod.zig");
+const intrinsics = @import("../analysis/intrinsics.zig");
 const context = @import("../context.zig");
 const diagnostic = @import("../diagnostic.zig");
 const symbols = @import("../symbol/mod.zig");
@@ -32,6 +34,7 @@ pub const KnownProcedureSig = struct {
     arg_count: usize,
     alt_return_count: usize = 0,
     args: []const ArgSig = &.{},
+    is_pointer: bool = false,
 };
 
 pub const AnalyzeOptions = struct {
@@ -103,6 +106,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             .arg_count = known.arg_count,
             .alt_return_count = known.alt_return_count,
             .args = known.args,
+            .is_pointer = known.is_pointer,
         });
     }
 
@@ -119,9 +123,11 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
                 .arg_count = unit.args.len,
                 .alt_return_count = unit.alt_return_dummy_count,
                 .args = try inferProcedureArgSigs(arena, unit),
+                .is_pointer = function_type.inferProcedureIsPointer(unit),
             });
         }
     }
+    try installSingleTargetGenericInterfaces(arena, mutable_program, &known_function_type_specs, &known_procedure_sigs);
 
     var units = std.array_list.Managed(SemanticUnit).init(arena);
     for (mutable_program.units) |*unit| {
@@ -151,6 +157,51 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
     }
     try common_validation.validateCommonBlocksWithDiagnostics(arena, mutable_program, units.items, diag_bag);
     return .{ .units = try units.toOwnedSlice() };
+}
+
+fn installSingleTargetGenericInterfaces(
+    arena: std.mem.Allocator,
+    program: ast.Program,
+    known_function_type_specs: *std.StringHashMap(symbols.TypeSpec),
+    known_procedure_sigs: *std.StringHashMap(context.Context.ProcedureSig),
+) !void {
+    for (program.units) |unit| {
+        for (unit.decls) |decl| {
+            if (decl != .interface_block) continue;
+            const interface_block = decl.interface_block;
+            const generic_name = interface_block.name orelse continue;
+            if (interface_block.module_procedures.len != 1) continue;
+            if (intrinsics.isIntrinsicName(generic_name)) continue;
+
+            const target_name = interface_block.module_procedures[0];
+            const proc_sig = lookupCaseInsensitive(context.Context.ProcedureSig, known_procedure_sigs, target_name) orelse continue;
+            const proc_key = try symbol_lookup.lowerDup(arena, generic_name);
+            try known_procedure_sigs.put(proc_key, proc_sig);
+
+            if (proc_sig.kind != .function) continue;
+            const type_spec = lookupCaseInsensitive(symbols.TypeSpec, known_function_type_specs, target_name) orelse continue;
+            const type_key = try symbol_lookup.lowerDup(arena, generic_name);
+            try known_function_type_specs.put(type_key, type_spec);
+        }
+    }
+}
+
+fn lookupCaseInsensitive(
+    comptime T: type,
+    map: *const std.StringHashMap(T),
+    name: []const u8,
+) ?T {
+    var key_buf: [64]u8 = undefined;
+    if (name.len <= key_buf.len) {
+        for (name, 0..) |ch, i| key_buf[i] = std.ascii.toLower(ch);
+        return map.get(key_buf[0..name.len]);
+    }
+    var it = map.iterator();
+    while (it.next()) |entry| {
+        if (entry.key_ptr.*.len != name.len) continue;
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+    }
+    return null;
 }
 
 pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![]const KnownProcedureSig.ArgSig {
@@ -319,4 +370,50 @@ test "analyzeProgramWithKnownAndOptionsAndDiagnostics keeps semantic diagnostics
     try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag.code);
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expect(diagnostic.take() == null);
+}
+
+test "analyzeProgram installs single-target generic interface aliases with pointer metadata" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  type t\n" ++
+        "    real, pointer :: x(:)\n" ++
+        "  end type t\n" ++
+        "  interface x_\n" ++
+        "    module procedure get_x\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  function get_x(v)\n" ++
+        "    real, pointer :: get_x(:)\n" ++
+        "    type(t), intent(in) :: v\n" ++
+        "    get_x => v%x\n" ++
+        "  end function get_x\n" ++
+        "end module m1\n" ++
+        "subroutine s(v)\n" ++
+        "  use m1\n" ++
+        "  type(t), intent(in) :: v\n" ++
+        "  real, pointer :: p(:)\n" ++
+        "  p => x_(v)\n" ++
+        "end subroutine s\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    try testing.expectEqual(@as(usize, 2), sem.units.len);
+    const caller = sem.units[1];
+    var found_x = false;
+    for (caller.symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "x_")) continue;
+        found_x = true;
+        try testing.expect(sym.kind == .function);
+        try testing.expect(sym.is_pointer);
+        try testing.expect(sym.loweredKind() == .real);
+    }
+    try testing.expect(found_x);
 }

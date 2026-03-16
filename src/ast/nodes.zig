@@ -31,6 +31,7 @@ pub const Declarator = decl_nodes.Declarator;
 pub const Stmt = stmt_nodes.Stmt;
 pub const StmtNode = stmt_nodes.StmtNode;
 pub const Assignment = stmt_nodes.Assignment;
+pub const PointerAssignment = stmt_nodes.PointerAssignment;
 pub const AssignLabelStmt = stmt_nodes.AssignLabelStmt;
 pub const UseStmt = stmt_nodes.UseStmt;
 pub const UseOnlyItem = stmt_nodes.UseOnlyItem;

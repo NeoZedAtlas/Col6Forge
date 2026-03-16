@@ -12,6 +12,7 @@ pub const Context = struct {
             name: []const u8,
             type_spec: symbols.TypeSpec,
             dims: []*ast.Expr = &.{},
+            pointer: bool = false,
         };
 
         name: []const u8,
@@ -66,6 +67,7 @@ pub const Context = struct {
         arg_count: usize,
         alt_return_count: usize = 0,
         args: []const ArgSig = &.{},
+        is_pointer: bool = false,
     };
 
     pub const BuiltinConstant = struct {

@@ -13,7 +13,7 @@ pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
     var resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.derived_type_name, decl.kind_selector);
     resolved_type = resolved_type.withPolymorphic(decl.polymorphic);
     for (decl.items) |item| {
-        try applyDeclarator(self, resolved_type, item, .local, true, decl.allocatable);
+        try applyDeclarator(self, resolved_type, item, .local, true, decl.allocatable, decl.pointer);
     }
 }
 
@@ -27,6 +27,7 @@ pub fn applyDeclarator(
     storage: StorageClass,
     explicit_type: bool,
     allocatable: bool,
+    pointer: bool,
 ) !void {
     const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
     var sym = &self.symbols.items[idx];
@@ -53,6 +54,9 @@ pub fn applyDeclarator(
     }
     if (allocatable) {
         sym.is_allocatable = true;
+    }
+    if (pointer) {
+        sym.is_pointer = true;
     }
 
     // Use the resolved symbol type after declaration merge. Non-type declarations
@@ -110,6 +114,7 @@ fn allowsDeferredCharacterLength(sym: symbols.Symbol) bool {
     if (sym.storage == .dummy) return true;
     if (sym.kind == .function) return true;
     if (sym.is_allocatable) return true;
+    if (sym.is_pointer) return true;
     return false;
 }
 

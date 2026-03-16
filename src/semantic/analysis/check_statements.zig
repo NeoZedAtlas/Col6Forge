@@ -33,6 +33,18 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 return error.AssignmentTypeMismatch;
             }
         },
+        .pointer_assignment => |assign| {
+            _ = try checkExprType(self, assign.target);
+            _ = try checkExprType(self, assign.value);
+            if (!isPointerTarget(self, assign.target)) {
+                self.setCurrentSource(self.sourceForExpr(assign.target));
+                return error.AssignmentTypeMismatch;
+            }
+            if (!isPointerValuedExpr(self, assign.value)) {
+                self.setCurrentSource(self.sourceForExpr(assign.value) orelse self.sourceForExpr(assign.target));
+                return error.AssignmentTypeMismatch;
+            }
+        },
         .assign_label => |assign| {
             _ = std.fmt.parseInt(i64, assign.label, 10) catch return error.InvalidLabelValue;
             const idx = resolve_symbols.findSymbolIndex(self, assign.target) orelse return error.AssignmentTypeMismatch;
@@ -408,6 +420,38 @@ fn isAssignmentTarget(self: *context.Context, expr: *ast.Expr) bool {
             const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
             break :blk kind == .subscript or kind == .call;
+        },
+        else => false,
+    };
+}
+
+fn isPointerTarget(self: *context.Context, expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const sym = resolve_symbols.findSymbolIndex(self, name) orelse break :blk false;
+            break :blk self.symbols.items[sym].is_pointer;
+        },
+        .component => |comp| blk: {
+            const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch break :blk false;
+            if (base_spec.lowered_kind != .derived) break :blk false;
+            const derived_name = base_spec.derived_type_name orelse break :blk false;
+            const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse break :blk false;
+            break :blk component.pointer;
+        },
+        else => false,
+    };
+}
+
+fn isPointerValuedExpr(self: *context.Context, expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .identifier, .component => isPointerTarget(self, expr),
+        .call_or_subscript => |call| blk: {
+            const idx = symbolIndexForResolvedCall(self, expr) orelse
+                (resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false);
+            const sym = self.symbols.items[idx];
+            const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
+                (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
+            break :blk kind == .call and sym.is_pointer;
         },
         else => false,
     };

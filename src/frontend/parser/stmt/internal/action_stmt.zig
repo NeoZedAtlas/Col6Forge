@@ -240,6 +240,15 @@ pub fn parseActionStmtNode(
         return stmt_node;
     }
     const target = try expr.parseExpr(lp, arena, 0);
+    if (lp.peekIs(.equals)) {
+        var scan = lp.*;
+        _ = scan.next();
+        if (scan.consume(.greater)) {
+            lp.* = scan;
+            const value_ptr = try expr.parseExpr(lp, arena, 0);
+            return .{ .pointer_assignment = .{ .target = target, .value = value_ptr } };
+        }
+    }
     _ = lp.expect(.equals) orelse return error.UnexpectedToken;
     const value = try expr.parseExpr(lp, arena, 0);
     return .{ .assignment = .{ .target = target, .value = value } };

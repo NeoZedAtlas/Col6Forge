@@ -7,6 +7,28 @@ pub fn inferFunctionType(unit: ast.ProgramUnit) ast.TypeKind {
     return inferFunctionTypeSpec(unit).lowered_kind;
 }
 
+pub fn inferProcedureIsPointer(unit: ast.ProgramUnit) bool {
+    if (unit.kind != .function) return false;
+    const explicit_result_name = if (unit.result_name) |name|
+        if (!std.ascii.eqlIgnoreCase(name, unit.name)) name else null
+    else
+        null;
+    for (unit.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (explicit_result_name) |result_name| {
+                        if (std.ascii.eqlIgnoreCase(item.name, result_name)) return type_decl.pointer;
+                    }
+                    if (std.ascii.eqlIgnoreCase(item.name, unit.name)) return type_decl.pointer;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
 pub fn inferFunctionTypeSpec(unit: ast.ProgramUnit) symbols.TypeSpec {
     const explicit_result_name = if (unit.result_name) |name|
         if (!std.ascii.eqlIgnoreCase(name, unit.name)) name else null

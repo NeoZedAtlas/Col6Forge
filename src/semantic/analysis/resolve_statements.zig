@@ -31,6 +31,10 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             try expressions.resolveExpr(self, assign.target);
             try expressions.resolveExpr(self, assign.value);
         },
+        .pointer_assignment => |assign| {
+            try expressions.resolveExpr(self, assign.target);
+            try expressions.resolveExpr(self, assign.value);
+        },
         .assign_label => |assign| {
             _ = try symbols_mod.ensureSymbol(self, assign.target);
         },
@@ -218,6 +222,7 @@ fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_nam
 
     if (symbols_mod.lookupKnownProcedureSig(self, remote_name)) |sig| {
         sym.is_external = true;
+        sym.is_pointer = sig.is_pointer;
         sym.kind = switch (sig.kind) {
             .function => .function,
             .subroutine => .subroutine,

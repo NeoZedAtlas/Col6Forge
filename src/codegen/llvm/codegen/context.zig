@@ -81,6 +81,7 @@ pub const DerivedComponentLayout = struct {
     name: []const u8,
     type_spec: input.TypeSpec,
     dims: []*input.Expr = &.{},
+    pointer: bool = false,
     offset: usize,
     elem_size: usize,
     size: usize,
@@ -497,7 +498,7 @@ pub const Context = struct {
     pub fn componentIRType(self: *const Context, comp: input.ComponentExpr) !IRType {
         const base_name = self.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
         const component = self.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
-        return if (component.type_spec.lowered_kind == .character or component.type_spec.lowered_kind == .derived)
+        return if (component.pointer or component.type_spec.lowered_kind == .character or component.type_spec.lowered_kind == .derived)
             .ptr
         else
             llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, self.options.target_layout);
@@ -770,16 +771,20 @@ pub const Context = struct {
             for (decl.derived_type_def.components) |type_decl| {
                 for (type_decl.items) |item| {
                     const elem = try self.componentElemSizeAlign(type_decl, item);
-                    const count = common.arrayElementCount(self.sem, item.dims) catch |err| switch (err) {
-                        error.ArrayDimNotConstant => return error.ArraysUnsupported,
-                        else => return err,
-                    };
+                    const count = if (type_decl.pointer)
+                        @as(usize, 1)
+                    else
+                        common.arrayElementCount(self.sem, item.dims) catch |err| switch (err) {
+                            error.ArrayDimNotConstant => return error.ArraysUnsupported,
+                            else => return err,
+                        };
                     const offset = alignForward(size, elem.alignment);
                     const total_size = elem.size * count;
                     try components.append(.{
                         .name = item.name,
                         .type_spec = elem.type_spec,
                         .dims = item.dims,
+                        .pointer = type_decl.pointer,
                         .offset = offset,
                         .elem_size = elem.size,
                         .size = total_size,
@@ -807,6 +812,13 @@ pub const Context = struct {
 
     fn componentElemSizeAlign(self: *Context, type_decl: input.TypeDecl, item: input.Declarator) !ComponentElemInfo {
         var spec = input.TypeSpec.fromResolvedKind(type_decl.type_kind, type_decl.type_kind, null);
+        if (type_decl.pointer) {
+            if (type_decl.type_kind == .derived) {
+                const derived_name = type_decl.derived_type_name orelse return error.UnknownSymbol;
+                spec = input.TypeSpec.fromDerived(derived_name);
+            }
+            return .{ .type_spec = spec, .size = @sizeOf(usize), .alignment = @alignOf(usize) };
+        }
         if (type_decl.type_kind == .derived) {
             const derived_name = type_decl.derived_type_name orelse return error.UnknownSymbol;
             const layout = self.findDerivedTypeLayout(derived_name) orelse return error.UnknownSymbol;
@@ -874,7 +886,7 @@ fn canonicalNumericLabel(label: []const u8) []const u8 {
 
 fn stmtCanFallthroughInBlock(stmt: ast.Stmt) bool {
     return switch (stmt.node) {
-        .assignment, .assign_label, .use_stmt, .allocate, .deallocate, .data, .format => true,
+        .assignment, .pointer_assignment, .assign_label, .use_stmt, .allocate, .deallocate, .data, .format => true,
         else => false,
     };
 }

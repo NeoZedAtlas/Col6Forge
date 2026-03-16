@@ -315,6 +315,12 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
     try builder.store(coerced, target_ptr);
 }
 
+pub fn emitPointerAssignment(ctx: *Context, builder: anytype, assign: ast.PointerAssignment) EmitError!void {
+    const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
+    const value = try emitPointerValue(ctx, builder, assign.value);
+    try builder.store(value, target_ptr);
+}
+
 pub fn emitAssignLabel(ctx: *Context, builder: anytype, assign: ast.AssignLabelStmt) EmitError!void {
     const target_ptr = try ctx.getPointer(assign.target);
     const sym = ctx.findSymbol(assign.target) orelse return error.UnknownSymbol;
@@ -859,7 +865,7 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
             try builder.retVoid();
             return;
         }
-        const ret_ty = ctx.typeFromKind(sym.loweredKind());
+        const ret_ty = if (sym.is_pointer) llvm_types.IRType.ptr else ctx.typeFromKind(sym.loweredKind());
         const abi_ret_ty = ctx.abiFunctionReturnType(ret_ty);
         const ret_ptr = ctx.locals.get(return_symbol_name) orelse return error.UnknownSymbol;
         if (ctx.abiUsesHiddenResultPtr(ret_ty)) {
@@ -868,12 +874,19 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
             try builder.retVoid();
             return;
         }
-        const ret_val = if (std.mem.eql(u8, ret_ptr.name, "null"))
-            utils.zeroValue(abi_ret_ty)
-        else if (sym.loweredKind() == .logical) blk: {
-            const storage_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
-            break :blk try expr.loadValue(ctx, builder, ret_ptr, storage_ty);
-        } else try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
+        const ret_val: ValueRef = blk: {
+            if (std.mem.eql(u8, ret_ptr.name, "null")) break :blk utils.zeroValue(abi_ret_ty);
+            if (sym.is_pointer) {
+                const tmp = try ctx.nextTemp();
+                try builder.load(tmp, .ptr, ret_ptr);
+                break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+            }
+            if (sym.loweredKind() == .logical) {
+                const storage_ty = common.symbolStorageIRType(sym, ctx.options.target_layout);
+                break :blk try expr.loadValue(ctx, builder, ret_ptr, storage_ty);
+            }
+            break :blk try expr.loadValue(ctx, builder, ret_ptr, ret_ty);
+        };
         if (ret_ty == .complex_f32 and (ctx.abiReturnType(ret_ty) == .i64 or ctx.abiReturnType(ret_ty) == .v2f32)) {
             // ABI boundary returns COMPLEX*8 using a target-specific packed form.
             const complex_abi_ret_ty = ctx.abiReturnType(ret_ty);
@@ -913,6 +926,34 @@ fn targetExprSymbol(ctx: *Context, expr_node: *ast.Expr) ?ast.sema.Symbol {
         .identifier => |name| ctx.findSymbol(name),
         .call_or_subscript => |call| ctx.findSymbol(call.name),
         else => null,
+    };
+}
+
+fn emitPointerValue(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitError!ValueRef {
+    return switch (expr_node.*) {
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
+            if (!sym.is_pointer) return error.AssignmentTypeMismatch;
+            const slot = try ctx.getPointer(name);
+            const tmp = try ctx.nextTemp();
+            try builder.load(tmp, .ptr, slot);
+            break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+        },
+        .component => |comp| blk: {
+            const slot = try expr.emitLValue(ctx, builder, expr_node);
+            const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+            const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
+            if (!component.pointer) return error.AssignmentTypeMismatch;
+            const tmp = try ctx.nextTemp();
+            try builder.load(tmp, .ptr, slot);
+            break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+        },
+        .call_or_subscript => blk: {
+            const value = try expr.emitExpr(ctx, builder, expr_node);
+            if (value.ty != .ptr) return error.AssignmentTypeMismatch;
+            break :blk value;
+        },
+        else => return error.AssignmentTypeMismatch,
     };
 }
 

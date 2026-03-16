@@ -36,6 +36,7 @@ pub const Symbol = struct {
     is_external: bool,
     is_intrinsic: bool,
     is_allocatable: bool = false,
+    is_pointer: bool = false,
     // Internal compiler-generated temporaries (e.g. intrinsic array-conversion buffers).
     // Backends may choose a dedicated storage strategy for these symbols.
     is_generated_temp: bool = false,
@@ -113,6 +114,7 @@ pub const Symbol = struct {
             .is_external = false,
             .is_intrinsic = false,
             .is_allocatable = false,
+            .is_pointer = false,
             .const_value = null,
             .type_explicit = false,
         };

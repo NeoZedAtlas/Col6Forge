@@ -13,6 +13,7 @@ const format_items = @import("../../../format/items.zig");
 const fixed_form = @import("../../../frontend/fixed_form.zig");
 const parser = @import("../../../frontend/parser/mod.zig");
 const split_api = @import("../../../semantic/split/api.zig");
+const function_type = @import("../../../semantic/split/function_type.zig");
 
 const Program = input.Program;
 const FormatInfo = context.FormatInfo;
@@ -216,6 +217,7 @@ pub fn emitModuleToWriterWithDiagnostics(
                     .arg_count = unit.args.len,
                     .alt_return_count = unit.alt_return_dummy_count,
                     .args = try input.sema.inferProcedureArgSigs(scratch, unit),
+                    .is_pointer = function_type.inferProcedureIsPointer(unit),
                 });
             },
         }

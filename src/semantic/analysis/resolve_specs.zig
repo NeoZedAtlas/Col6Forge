@@ -115,7 +115,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         .common => |common| {
             for (common.blocks) |block| {
                 for (block.items) |item| {
-                    try decls.applyDeclarator(self, symbols_mod.implicitTypeSpec(self, item.name), item, .common, false, false);
+                    try decls.applyDeclarator(self, symbols_mod.implicitTypeSpec(self, item.name), item, .common, false, false, false);
                 }
             }
         },

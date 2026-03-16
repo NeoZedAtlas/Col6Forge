@@ -149,6 +149,10 @@ pub fn take() ?ParseDiagnostic {
     };
 }
 
+pub fn releaseTaken(_: ParseDiagnostic) void {
+    storage.clear();
+}
+
 pub fn noteFallbackSource(line: usize, column: usize, line_text: []const u8) void {
     const next = compat.makeFallbackStorage(line, column, line_text) catch return;
     fallback_storage.clear();
@@ -169,6 +173,10 @@ pub fn takeFallbackSource() ?FallbackSource {
     const source = fallbackSource() orelse return null;
     has_fallback = false;
     return source;
+}
+
+pub fn releaseTakenFallbackSource(_: FallbackSource) void {
+    fallback_storage.clear();
 }
 
 pub fn errorInfo(err: anyerror) catalog.ErrorInfo {

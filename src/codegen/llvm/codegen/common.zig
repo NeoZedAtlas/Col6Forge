@@ -158,10 +158,17 @@ pub fn symbolCharacterLenOrOne(sym: input.sema.Symbol) usize {
 }
 
 pub fn symbolElementIRType(sym: input.sema.Symbol, target_layout: input.sema.TargetLayout) ir.IRType {
+    if (sym.is_pointer and !sym.isCharacter()) {
+        return if (sym.loweredKind() == .logical)
+            llvm_types.defaultIntegerType(target_layout)
+        else
+            llvm_types.typeFromKindWithLayout(sym.loweredKind(), target_layout);
+    }
     return symbolStorageIRType(sym, target_layout);
 }
 
 pub fn symbolStorageIRType(sym: input.sema.Symbol, target_layout: input.sema.TargetLayout) ir.IRType {
+    if (sym.is_pointer) return .ptr;
     return if (sym.isCharacter())
         .i8
     else if (sym.loweredKind() == .logical)

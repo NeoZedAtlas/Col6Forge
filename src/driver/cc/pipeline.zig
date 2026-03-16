@@ -47,6 +47,7 @@ pub fn collectFortranKnownSymbols(
                     unit.args.len,
                     unit.alt_return_dummy_count,
                     arg_sigs,
+                    Col6Forge.sema.function_type.inferProcedureIsPointer(unit),
                 );
             }
         }
@@ -135,6 +136,7 @@ fn upsertKnownProcedureSig(
     arg_count: usize,
     alt_return_count: usize,
     args: []const Col6Forge.sema.KnownProcedureSig.ArgSig,
+    is_pointer: bool,
 ) !void {
     if (indexOfKnownProcedureSig(list.items, name)) |idx| {
         if (list.items[idx].args.len != 0) allocator.free(list.items[idx].args);
@@ -142,6 +144,7 @@ fn upsertKnownProcedureSig(
         list.items[idx].arg_count = arg_count;
         list.items[idx].alt_return_count = alt_return_count;
         list.items[idx].args = if (args.len == 0) &.{} else try allocator.dupe(Col6Forge.sema.KnownProcedureSig.ArgSig, args);
+        list.items[idx].is_pointer = is_pointer;
         return;
     }
     try list.append(allocator, .{
@@ -150,6 +153,7 @@ fn upsertKnownProcedureSig(
         .arg_count = arg_count,
         .alt_return_count = alt_return_count,
         .args = if (args.len == 0) &.{} else try allocator.dupe(Col6Forge.sema.KnownProcedureSig.ArgSig, args),
+        .is_pointer = is_pointer,
     });
 }
 

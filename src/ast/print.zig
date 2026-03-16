@@ -39,7 +39,18 @@ fn printDecl(writer: anytype, decl: ast.Decl) !void {
         },
         .interface_block => |interface_block| {
             const mode = if (interface_block.abstract) "abstract" else "plain";
-            try writer.print(";   decl interface-block {s}\n", .{mode});
+            try writer.print(";   decl interface-block {s}", .{mode});
+            if (interface_block.name) |name| {
+                try writer.print(" {s}", .{name});
+            }
+            if (interface_block.module_procedures.len != 0) {
+                try writer.print(" module-procedures=", .{});
+                for (interface_block.module_procedures, 0..) |proc_name, idx| {
+                    if (idx != 0) try writer.print(",", .{});
+                    try writer.print("{s}", .{proc_name});
+                }
+            }
+            try writer.print("\n", .{});
         },
         .dimension => |dim| {
             try writer.print(";   decl dimension items({d})\n", .{dim.items.len});
@@ -73,6 +84,10 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         .assignment => |assign| {
             try writer.print(";   stmt label={s} assignment\n", .{label_text});
             try printAssignmentDetails(writer, assign, 2);
+        },
+        .pointer_assignment => |assign| {
+            try writer.print(";   stmt label={s} pointer-assignment\n", .{label_text});
+            try printPointerAssignmentDetails(writer, assign, 2);
         },
         .assign_label => |assign| {
             try writer.print(";   stmt label={s} assign {s} to {s}\n", .{ label_text, assign.label, assign.target });
@@ -381,6 +396,11 @@ fn printInlineStmtNode(writer: anytype, node: ast.StmtNode, depth: usize) !void 
             try writer.writeAll("stmt assignment\n");
             try printAssignmentDetails(writer, assign, depth + 1);
         },
+        .pointer_assignment => |assign| {
+            try printIndent(writer, depth);
+            try writer.writeAll("stmt pointer-assignment\n");
+            try printPointerAssignmentDetails(writer, assign, depth + 1);
+        },
         .call => |call| {
             try printIndent(writer, depth);
             try writer.print("stmt call {s}({d})\n", .{ call.name, call.args.len });
@@ -411,6 +431,15 @@ fn printInlineStmtNode(writer: anytype, node: ast.StmtNode, depth: usize) !void 
 }
 
 fn printAssignmentDetails(writer: anytype, assign: ast.Assignment, depth: usize) !void {
+    try printIndent(writer, depth);
+    try writer.writeAll("target:\n");
+    try printExpr(writer, assign.target, depth + 1);
+    try printIndent(writer, depth);
+    try writer.writeAll("value:\n");
+    try printExpr(writer, assign.value, depth + 1);
+}
+
+fn printPointerAssignmentDetails(writer: anytype, assign: ast.PointerAssignment, depth: usize) !void {
     try printIndent(writer, depth);
     try writer.writeAll("target:\n");
     try printExpr(writer, assign.target, depth + 1);
@@ -595,6 +624,7 @@ fn printIndent(writer: anytype, depth: usize) !void {
 fn stmtNodeName(node: ast.StmtNode) []const u8 {
     return switch (node) {
         .assignment => "assignment",
+        .pointer_assignment => "pointer-assignment",
         .assign_label => "assign-label",
         .use_stmt => "use",
         .call => "call",
