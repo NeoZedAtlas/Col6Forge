@@ -58,9 +58,11 @@ pub const Context = struct {
 
     pub const ProcedureSig = struct {
         pub const ArgSig = struct {
+            name: []const u8 = "",
             type_spec: symbols.TypeSpec = symbols.TypeSpec.fromResolvedKind(.real, .real, null),
             requires_descriptor: bool = false,
             rank: usize = 0,
+            optional: bool = false,
         };
 
         kind: ast.ProgramUnitKind,

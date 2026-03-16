@@ -93,8 +93,21 @@ pub fn parseActionStmtNode(
                             const alt_label = try arena.dupe(u8, normalized);
                             try args.append(.{ .alt_return = alt_label });
                         } else {
+                            var keyword: ?[]const u8 = null;
+                            if (lp.peek()) |name_tok| {
+                                if (name_tok.kind == .identifier and lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .equals) {
+                                    if (lp.index + 2 >= lp.tokens.len or lp.tokens[lp.index + 2].kind != .greater) {
+                                        _ = lp.next();
+                                        _ = lp.next();
+                                        keyword = try arena.dupe(u8, lp.tokenText(name_tok));
+                                    }
+                                }
+                            }
                             const arg = try expr.parseExpr(lp, arena, 0);
-                            try args.append(.{ .expr = arg });
+                            try args.append(.{ .expr = .{
+                                .keyword = keyword,
+                                .value = arg,
+                            } });
                         }
                         _ = lp.consume(.comma);
                     }
@@ -334,23 +347,9 @@ pub fn parseUseStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!Stm
     if (lp.consume(.comma)) {
         if (lp.consumeKeyword("ONLY")) {
             _ = lp.expect(.colon) orelse return error.UnexpectedToken;
-            while (lp.peek() != null) {
-                const local_name = lp.readName(arena) orelse return error.MissingName;
-                var remote_name = local_name;
-                if (consumeUseRenameArrow(lp)) {
-                    remote_name = lp.readName(arena) orelse return error.MissingName;
-                } else if (lp.peekIs(.equals)) {
-                    // Reject malformed legacy rename-marker spellings.
-                    return error.UnexpectedToken;
-                }
-                try only_items.append(.{
-                    .local_name = local_name,
-                    .remote_name = remote_name,
-                });
-                if (lp.consume(.comma)) continue;
-                if (lp.peek() != null) return error.UnexpectedToken;
-                break;
-            }
+            try parseUseRenameItems(arena, lp, &only_items, false);
+        } else {
+            try parseUseRenameItems(arena, lp, &only_items, true);
         }
     }
 
@@ -360,6 +359,29 @@ pub fn parseUseStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!Stm
             .only_items = try only_items.toOwnedSlice(),
         },
     };
+}
+
+fn parseUseRenameItems(
+    arena: std.mem.Allocator,
+    lp: *LineParser,
+    only_items: *std.array_list.Managed(UseOnlyItem),
+    require_rename: bool,
+) !void {
+    while (lp.peek() != null) {
+        const local_name = lp.readName(arena) orelse return error.MissingName;
+        var remote_name = local_name;
+        if (consumeUseRenameArrow(lp)) {
+            remote_name = lp.readName(arena) orelse return error.MissingName;
+        } else if (lp.peekIs(.equals) or require_rename) {
+            return error.UnexpectedToken;
+        }
+        try only_items.append(.{
+            .local_name = local_name,
+            .remote_name = remote_name,
+        });
+        if (!lp.consume(.comma)) break;
+    }
+    if (lp.peek() != null) return error.UnexpectedToken;
 }
 
 fn shouldTreatDoAsAssignment(lp: LineParser) bool {

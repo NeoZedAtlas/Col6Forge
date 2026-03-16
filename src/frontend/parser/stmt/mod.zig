@@ -63,6 +63,31 @@ test "parseStatement parses pointer assignment" {
     try testing.expectEqualStrings("Y", stmt_node.node.pointer_assignment.value.identifier);
 }
 
+test "parseStatement parses CALL keyword actual argument" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CALL FOO(WORK=AUX)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+
+    try testing.expect(stmt_node.node == .call);
+    try testing.expectEqualStrings("FOO", stmt_node.node.call.name);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.call.args.len);
+    try testing.expect(stmt_node.node.call.args[0] == .expr);
+    try testing.expectEqualStrings("WORK", stmt_node.node.call.args[0].expr.keyword.?);
+    try testing.expectEqualStrings("AUX", stmt_node.node.call.args[0].expr.value.identifier);
+}
+
 test "parseStatement treats split IFX name as assignment target" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -272,6 +297,30 @@ test "parseStatement parses USE ONLY rename arrow token" {
     try testing.expectEqualStrings("NWRITE", stmt_node.node.use_stmt.only_items[0].local_name);
     try testing.expectEqualStrings("OUTPUT_UNIT", stmt_node.node.use_stmt.only_items[0].remote_name);
     try testing.expectEqual(@as(usize, 1), idx);
+}
+
+test "parseStatement parses USE rename list without ONLY" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      USE BAR_PRT, FOO_DPRT => BAR_DPRT\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .use_stmt);
+    try testing.expectEqualStrings("BAR_PRT", stmt_node.node.use_stmt.module_name);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.use_stmt.only_items.len);
+    try testing.expectEqualStrings("FOO_DPRT", stmt_node.node.use_stmt.only_items[0].local_name);
+    try testing.expectEqualStrings("BAR_DPRT", stmt_node.node.use_stmt.only_items[0].remote_name);
 }
 
 test "parseStatement parses USE double-colon form" {

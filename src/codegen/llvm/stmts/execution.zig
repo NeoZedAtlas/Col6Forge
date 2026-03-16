@@ -745,7 +745,7 @@ pub fn collectCallExprArgs(allocator: std.mem.Allocator, call: ast.CallStmt) Emi
     var args = std.array_list.Managed(*ast.Expr).init(allocator);
     for (call.args) |arg| {
         switch (arg) {
-            .expr => |expr_node| try args.append(expr_node),
+            .expr => |actual| try args.append(actual.value),
             .alt_return => {},
         }
     }

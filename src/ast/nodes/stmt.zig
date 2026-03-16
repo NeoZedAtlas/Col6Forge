@@ -80,8 +80,13 @@ pub const CallStmt = struct {
     source: SourceRef = .{},
 };
 
+pub const ActualArgExpr = struct {
+    keyword: ?[]const u8 = null,
+    value: *Expr,
+};
+
 pub const CallArg = union(enum) {
-    expr: *Expr,
+    expr: ActualArgExpr,
     alt_return: []const u8,
 };
 

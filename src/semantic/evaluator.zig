@@ -153,6 +153,19 @@ fn evalConstCall(call: ast.CallOrSubscript, resolver: ?ConstResolver) anyerror!?
         },
         .min => return evalConstMinMax(call.args, resolver, true),
         .max => return evalConstMinMax(call.args, resolver, false),
+        .selected_real_kind => {
+            if (call.args.len == 0 or call.args.len > 2) return null;
+            const precision = (try evalConst(call.args[0], resolver)) orelse return null;
+            const p = switch (precision) {
+                .integer => |v| v,
+                else => return null,
+            };
+            if (call.args.len == 2) {
+                const range = (try evalConst(call.args[1], resolver)) orelse return null;
+                if (range != .integer) return null;
+            }
+            return .{ .integer = selectedRealKindForPrecision(p) };
+        },
     }
 }
 
@@ -169,6 +182,7 @@ const ConstCallKind = enum {
     dpmpar,
     min,
     max,
+    selected_real_kind,
 };
 
 const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
@@ -186,6 +200,7 @@ const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "DPMPAR", .dpmpar },
     .{ "MIN", .min },
     .{ "MAX", .max },
+    .{ "SELECTED_REAL_KIND", .selected_real_kind },
 });
 
 fn constCallKind(name: []const u8) ?ConstCallKind {
@@ -248,6 +263,12 @@ fn evalConstMinMax(args: []const *ast.Expr, resolver: ?ConstResolver, is_min: bo
         .{ .real = .{ .value = best_real, .is_double = best_real_is_double } }
     else
         .{ .integer = best_int };
+}
+
+fn selectedRealKindForPrecision(precision: i64) i64 {
+    if (precision <= 6) return 4;
+    if (precision <= 15) return 8;
+    return -1;
 }
 
 fn parseInt(text: []const u8) !i64 {
@@ -675,6 +696,27 @@ test "const call dispatch handles MIN/MAX" {
     const max_val = (try evalConst(max_call, null)) orelse return error.TestExpectedEqual;
     switch (max_val) {
         .integer => |v| try testing.expectEqual(@as(i64, 3), v),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "const call dispatch handles SELECTED_REAL_KIND" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const precision = try a.create(ast.Expr);
+    precision.* = .{ .literal = .{ .kind = .integer, .text = "12" } };
+    const args = try a.alloc(*ast.Expr, 1);
+    args[0] = precision;
+
+    const call = try a.create(ast.Expr);
+    call.* = .{ .call_or_subscript = .{ .name = "selected_real_kind", .args = args } };
+
+    const value = (try evalConst(call, null)) orelse return error.TestExpectedEqual;
+    switch (value) {
+        .integer => |v| try testing.expectEqual(@as(i64, 8), v),
         else => return error.TestExpectedEqual,
     }
 }

@@ -25,6 +25,7 @@ test "inferProcedureArgSigs captures descriptor-bearing dummy arrays" {
 
     const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[0]);
     try testing.expectEqual(@as(usize, 3), arg_sigs.len);
+    try testing.expectEqualStrings("A", arg_sigs[0].name);
     try testing.expect(arg_sigs[0].requires_descriptor);
     try testing.expectEqual(@as(usize, 1), arg_sigs[0].rank);
     try testing.expect(!arg_sigs[1].requires_descriptor);
@@ -81,4 +82,28 @@ test "inferProcedureArgSigs merges DIMENSION declarations for dummy arrays" {
     try testing.expect(!arg_sigs[0].requires_descriptor);
     try testing.expectEqual(@as(usize, 1), arg_sigs[0].rank);
     try testing.expectEqual(ast.TypeKind.integer, arg_sigs[0].type_spec.lowered_kind);
+}
+
+test "inferProcedureArgSigs captures OPTIONAL dummy metadata" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S(A, B)\n" ++
+        "      INTEGER, OPTIONAL :: A\n" ++
+        "      REAL B\n" ++
+        "      END\n";
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[0]);
+
+    try testing.expectEqual(@as(usize, 2), arg_sigs.len);
+    try testing.expect(arg_sigs[0].optional);
+    try testing.expect(!arg_sigs[1].optional);
 }

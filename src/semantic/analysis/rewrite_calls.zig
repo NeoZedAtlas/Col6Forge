@@ -80,8 +80,8 @@ fn rewriteStmt(
         .call => |*call| {
             for (call.args) |*arg| {
                 switch (arg.*) {
-                    .expr => |expr_node| {
-                        changed = (try rewriteExpr(ctx, state, expr_node, stmt.*, prelude, allow_prelude)) or changed;
+                    .expr => |*actual| {
+                        changed = (try rewriteExpr(ctx, state, actual.value, stmt.*, prelude, allow_prelude)) or changed;
                     },
                     .alt_return => {},
                 }

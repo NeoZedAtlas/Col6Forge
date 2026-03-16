@@ -82,6 +82,7 @@ pub const DerivedComponentLayout = struct {
     type_spec: input.TypeSpec,
     dims: []*input.Expr = &.{},
     pointer: bool = false,
+    allocatable: bool = false,
     offset: usize,
     elem_size: usize,
     size: usize,
@@ -763,45 +764,71 @@ pub const Context = struct {
     }
 
     fn buildDerivedTypeLayouts(self: *Context) !void {
-        for (self.unit.decls) |decl| {
+        const pending = try self.allocator.alloc(bool, self.unit.decls.len);
+        @memset(pending, false);
+
+        var remaining: usize = 0;
+        for (self.unit.decls, 0..) |decl, idx| {
             if (decl != .derived_type_def) continue;
-            var components = std.array_list.Managed(DerivedComponentLayout).init(self.allocator);
-            var size: usize = 0;
-            var alignment: usize = 1;
-            for (decl.derived_type_def.components) |type_decl| {
-                for (type_decl.items) |item| {
-                    const elem = try self.componentElemSizeAlign(type_decl, item);
-                    const count = if (type_decl.pointer)
-                        @as(usize, 1)
-                    else
-                        common.arrayElementCount(self.sem, item.dims) catch |err| switch (err) {
-                            error.ArrayDimNotConstant => return error.ArraysUnsupported,
-                            else => return err,
-                        };
-                    const offset = alignForward(size, elem.alignment);
-                    const total_size = elem.size * count;
-                    try components.append(.{
-                        .name = item.name,
-                        .type_spec = elem.type_spec,
-                        .dims = item.dims,
-                        .pointer = type_decl.pointer,
-                        .offset = offset,
-                        .elem_size = elem.size,
-                        .size = total_size,
-                        .alignment = elem.alignment,
-                    });
-                    size = offset + total_size;
-                    alignment = @max(alignment, elem.alignment);
-                }
-            }
-            size = alignForward(size, alignment);
-            try self.derived_type_layouts.put(decl.derived_type_def.name, .{
-                .name = decl.derived_type_def.name,
-                .components = try components.toOwnedSlice(),
-                .size = size,
-                .alignment = alignment,
-            });
+            pending[idx] = true;
+            remaining += 1;
         }
+
+        while (remaining != 0) {
+            var progressed = false;
+            for (self.unit.decls, 0..) |decl, idx| {
+                if (!pending[idx]) continue;
+                const layout = self.buildSingleDerivedTypeLayout(decl.derived_type_def) catch |err| switch (err) {
+                    error.UnknownSymbol => continue,
+                    else => return err,
+                };
+                try self.derived_type_layouts.put(decl.derived_type_def.name, layout);
+                pending[idx] = false;
+                remaining -= 1;
+                progressed = true;
+            }
+            if (!progressed) return error.UnknownSymbol;
+        }
+    }
+
+    fn buildSingleDerivedTypeLayout(self: *Context, derived: input.DerivedTypeDef) !DerivedTypeLayout {
+        var components = std.array_list.Managed(DerivedComponentLayout).init(self.allocator);
+        var size: usize = 0;
+        var alignment: usize = 1;
+        for (derived.components) |type_decl| {
+            for (type_decl.items) |item| {
+                const elem = try self.componentElemSizeAlign(type_decl, item);
+                const count = if (type_decl.pointer or type_decl.allocatable)
+                    @as(usize, 1)
+                else
+                    common.arrayElementCount(self.sem, item.dims) catch |err| switch (err) {
+                        error.ArrayDimNotConstant => return error.ArraysUnsupported,
+                        else => return err,
+                    };
+                const offset = alignForward(size, elem.alignment);
+                const total_size = elem.size * count;
+                try components.append(.{
+                    .name = item.name,
+                    .type_spec = elem.type_spec,
+                    .dims = item.dims,
+                    .pointer = type_decl.pointer,
+                    .allocatable = type_decl.allocatable,
+                    .offset = offset,
+                    .elem_size = elem.size,
+                    .size = total_size,
+                    .alignment = elem.alignment,
+                });
+                size = offset + total_size;
+                alignment = @max(alignment, elem.alignment);
+            }
+        }
+        size = alignForward(size, alignment);
+        return .{
+            .name = derived.name,
+            .components = try components.toOwnedSlice(),
+            .size = size,
+            .alignment = alignment,
+        };
     }
 
     const ComponentElemInfo = struct {
@@ -812,7 +839,7 @@ pub const Context = struct {
 
     fn componentElemSizeAlign(self: *Context, type_decl: input.TypeDecl, item: input.Declarator) !ComponentElemInfo {
         var spec = input.TypeSpec.fromResolvedKind(type_decl.type_kind, type_decl.type_kind, null);
-        if (type_decl.pointer) {
+        if (type_decl.pointer or type_decl.allocatable) {
             if (type_decl.type_kind == .derived) {
                 const derived_name = type_decl.derived_type_name orelse return error.UnknownSymbol;
                 spec = input.TypeSpec.fromDerived(derived_name);

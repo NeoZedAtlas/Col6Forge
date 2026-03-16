@@ -11,6 +11,7 @@ const stmts = @import("../stmts/function.zig");
 const utils = @import("utils.zig");
 const format_items = @import("../../../format/items.zig");
 const fixed_form = @import("../../../frontend/fixed_form.zig");
+const free_form = @import("../../../frontend/free_form.zig");
 const parser = @import("../../../frontend/parser/mod.zig");
 const split_api = @import("../../../semantic/split/api.zig");
 const function_type = @import("../../../semantic/split/function_type.zig");
@@ -1279,8 +1280,8 @@ test "emitModuleToWriter supports CHARACTER allocate type-spec for deferred-leng
         "      ALLOCATE(CHARACTER(BAR) :: RES)\n" ++
         "      END FUNCTION FOO\n" ++
         "      END MODULE X\n";
-    const lines = try fixed_form.normalizeFixedForm(allocator, source);
-    defer fixed_form.freeLogicalLines(allocator, lines);
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -1294,6 +1295,51 @@ test "emitModuleToWriter supports CHARACTER allocate type-spec for deferred-leng
 
     const output = buffer.items;
     try testing.expect(std.mem.indexOf(u8, output, "call ptr @malloc") != null);
+}
+
+test "emitModuleToWriter resolves derived layout dependencies across imported module preludes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module foo_base_mod\n" ++
+        "  type foo_dmt\n" ++
+        "    integer :: i\n" ++
+        "  end type foo_dmt\n" ++
+        "  type foo_cdt\n" ++
+        "    integer :: j\n" ++
+        "  end type foo_cdt\n" ++
+        "end module foo_base_mod\n" ++
+        "module bar_prt\n" ++
+        "  use foo_base_mod, only : foo_dmt, foo_cdt\n" ++
+        "  type bar_dbprt\n" ++
+        "    type(foo_dmt), allocatable :: av(:)\n" ++
+        "    type(foo_cdt) :: cd\n" ++
+        "  end type bar_dbprt\n" ++
+        "  type bar_dprt\n" ++
+        "    type(bar_dbprt), allocatable :: bpv(:)\n" ++
+        "  end type bar_dprt\n" ++
+        "end module bar_prt\n" ++
+        "module foo_pr_mod\n" ++
+        "  use bar_prt, foo_dbprt => bar_dbprt, foo_dprt => bar_dprt\n" ++
+        "end module foo_pr_mod\n" ++
+        "subroutine foo_sub(pr)\n" ++
+        "  use foo_base_mod\n" ++
+        "  use foo_pr_mod\n" ++
+        "  type(foo_dprt), intent(in) :: pr\n" ++
+        "end subroutine foo_sub\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "derived_prelude_layouts.f90", .{});
 }
 
 test "emitModuleToWriter keeps assumed-size lower-bound dummy arrays on legacy ABI" {
@@ -1372,7 +1418,7 @@ test "emitModuleToWriter declares external subroutine with descriptor-aware ABI"
     const arg_expr = try a.create(input.Expr);
     arg_expr.* = .{ .identifier = "A" };
     const call_args = try a.alloc(input.CallArg, 1);
-    call_args[0] = .{ .expr = arg_expr };
+    call_args[0] = .{ .expr = .{ .value = arg_expr } };
     const stmt_list = try a.alloc(input.Stmt, 1);
     stmt_list[0] = .{
         .label = null,

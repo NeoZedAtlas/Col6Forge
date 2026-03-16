@@ -104,6 +104,16 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
         },
         .call => |call| {
             try writer.print(";   stmt label={s} call {s}({d})\n", .{ label_text, call.name, call.args.len });
+            for (call.args) |arg| {
+                switch (arg) {
+                    .expr => |actual| {
+                        if (actual.keyword) |keyword| {
+                            try writer.print(";     actual keyword {s}\n", .{keyword});
+                        }
+                    },
+                    .alt_return => {},
+                }
+            }
         },
         .write => |write| {
             try writer.print(";   stmt label={s} write args={d}\n", .{ label_text, write.args.len });

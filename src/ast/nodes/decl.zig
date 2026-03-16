@@ -36,6 +36,7 @@ pub const TypeDecl = struct {
     save: bool = false,
     allocatable: bool = false,
     pointer: bool = false,
+    optional: bool = false,
 };
 
 pub const DerivedTypeDef = struct {

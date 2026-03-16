@@ -207,26 +207,37 @@ fn lookupCaseInsensitive(
 pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![]const KnownProcedureSig.ArgSig {
     const out = try arena.alloc(context.Context.ProcedureSig.ArgSig, unit.args.len);
     for (unit.args, 0..) |arg_name, idx| {
-        const declarator = findDeclarator(unit, arg_name);
+        const decl_info = findDummyArgDeclInfo(unit, arg_name);
+        const declarator = decl_info.declarator;
         const type_spec = inferDummyArgTypeSpec(unit, arg_name, declarator);
         const dims = if (declarator) |item| item.dims else &.{};
         out[idx] = .{
+            .name = arg_name,
             .type_spec = type_spec,
             .requires_descriptor = dummyArgRequiresDescriptor(dims),
             .rank = dims.len,
+            .optional = decl_info.optional,
         };
     }
     return out;
 }
 
-fn findDeclarator(unit: ast.ProgramUnit, name: []const u8) ?ast.Declarator {
+const DummyArgDeclInfo = struct {
+    declarator: ?ast.Declarator = null,
+    optional: bool = false,
+};
+
+fn findDummyArgDeclInfo(unit: ast.ProgramUnit, name: []const u8) DummyArgDeclInfo {
     var dims_only: ?ast.Declarator = null;
     for (unit.decls) |decl| {
         switch (decl) {
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
-                    return item;
+                    return .{
+                        .declarator = item,
+                        .optional = type_decl.optional,
+                    };
                 }
             },
             .dimension => |dimension_decl| {
@@ -238,7 +249,7 @@ fn findDeclarator(unit: ast.ProgramUnit, name: []const u8) ?ast.Declarator {
             else => {},
         }
     }
-    return dims_only;
+    return .{ .declarator = dims_only };
 }
 
 fn inferDummyArgTypeSpec(
@@ -416,4 +427,50 @@ test "analyzeProgram installs single-target generic interface aliases with point
         try testing.expect(sym.loweredKind() == .real);
     }
     try testing.expect(found_x);
+}
+
+test "analyzeProgram accepts renamed derived types imported through module preludes without contains" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module bar_prt\n" ++
+        "  type bar_dprt\n" ++
+        "    integer :: i\n" ++
+        "  end type bar_dprt\n" ++
+        "end module bar_prt\n" ++
+        "module bar_pr_mod\n" ++
+        "  interface bar_pwrk\n" ++
+        "    subroutine bar_dppwrk(pr)\n" ++
+        "      use bar_prt\n" ++
+        "      type(bar_dprt), intent(in) :: pr\n" ++
+        "    end subroutine bar_dppwrk\n" ++
+        "  end interface\n" ++
+        "end module bar_pr_mod\n" ++
+        "module foo_pr_mod\n" ++
+        "  use bar_prt, only : foo_dprt => bar_dprt\n" ++
+        "  use bar_pr_mod, only : foo_pwrk => bar_pwrk\n" ++
+        "end module foo_pr_mod\n" ++
+        "subroutine foo_sub(pr)\n" ++
+        "  use foo_pr_mod\n" ++
+        "  type(foo_dprt), intent(in) :: pr\n" ++
+        "end subroutine foo_sub\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    try testing.expectEqual(@as(usize, 1), sem.units.len);
+    const unit = sem.units[0];
+    var found = false;
+    for (unit.symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "PR")) continue;
+        found = true;
+        try testing.expectEqual(ast.TypeKind.derived, sym.loweredKind());
+        try testing.expectEqualStrings("foo_dprt", sym.type_spec.derived_type_name.?);
+    }
+    try testing.expect(found);
 }

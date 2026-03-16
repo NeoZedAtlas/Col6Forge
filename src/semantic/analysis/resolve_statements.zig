@@ -49,7 +49,7 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             self.symbols.items[idx].is_external = true;
             for (call.args) |arg| {
                 switch (arg) {
-                    .expr => |expr_node| try expressions.resolveExpr(self, expr_node),
+                    .expr => |actual| try expressions.resolveExpr(self, actual.value),
                     .alt_return => {},
                 }
             }

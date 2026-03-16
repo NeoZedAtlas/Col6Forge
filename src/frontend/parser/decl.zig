@@ -188,6 +188,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         .save = attrs.save,
         .allocatable = attrs.allocatable,
         .pointer = attrs.pointer,
+        .optional = attrs.optional,
     } };
 }
 
@@ -378,6 +379,7 @@ const DeclAttributes = struct {
     save: bool = false,
     allocatable: bool = false,
     pointer: bool = false,
+    optional: bool = false,
 };
 
 fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAttributes {
@@ -402,6 +404,9 @@ fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAttribu
             }
             if (context.eqNoCase(attr_name, "POINTER")) {
                 attrs.pointer = true;
+            }
+            if (context.eqNoCase(attr_name, "OPTIONAL")) {
+                attrs.optional = true;
             }
             if (context.eqNoCase(attr_name, "DIMENSION")) {
                 if (lp.consume(.l_paren)) {
@@ -1654,6 +1659,31 @@ test "parseDecl preserves deferred CHARACTER length for allocatable declarations
             try testing.expect(td.items[0].char_len == null);
             try testing.expect(td.items[0].char_len_deferred);
             try testing.expectEqual(@as(usize, 1), td.items[0].dims.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl preserves OPTIONAL declaration attribute" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      INTEGER, OPTIONAL :: A\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expect(td.optional);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("A", td.items[0].name);
         },
         else => return error.UnexpectedToken,
     }

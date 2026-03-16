@@ -66,7 +66,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             );
             for (call.args) |arg| {
                 switch (arg) {
-                    .expr => |expr_node| try checkExpr(self, expr_node),
+                    .expr => |actual| try checkExpr(self, actual.value),
                     .alt_return => |label| try checkCallAltReturnLabel(self, label),
                 }
             }
@@ -537,7 +537,8 @@ fn checkKnownProcedureCallArity(
     if (resolve_symbols.lookupKnownProcedureSig(self, name)) |sig| {
         if (is_call_stmt and sig.kind != .subroutine) return error.InvalidArgumentCount;
         if (!is_call_stmt and sig.kind != .function) return error.InvalidArgumentCount;
-        if (got_expr != sig.arg_count) return error.InvalidArgumentCount;
+        const min_expr = minimumRequiredProcedureArgs(sig);
+        if (got_expr < min_expr or got_expr > sig.arg_count) return error.InvalidArgumentCount;
         if (is_call_stmt and got_alt_return != sig.alt_return_count) return error.InvalidArgumentCount;
         if (!is_call_stmt and got_alt_return != 0) return error.InvalidArgumentCount;
         return;
@@ -565,11 +566,20 @@ fn checkExplicitInterfaceRequirementForCallArgs(
     }
     for (args) |arg| {
         if (arg != .expr) continue;
-        if (requiresExplicitInterfaceForActual(self, arg.expr)) {
-            self.setCurrentSource(self.sourceForExpr(arg.expr));
+        if (requiresExplicitInterfaceForActual(self, arg.expr.value)) {
+            self.setCurrentSource(self.sourceForExpr(arg.expr.value));
             return error.ExplicitInterfaceRequired;
         }
     }
+}
+
+fn minimumRequiredProcedureArgs(sig: context.Context.ProcedureSig) usize {
+    if (sig.args.len == 0) return sig.arg_count;
+    var required: usize = 0;
+    for (sig.args) |arg| {
+        if (!arg.optional) required += 1;
+    }
+    return required;
 }
 
 fn checkExplicitInterfaceRequirementForExprArgs(
