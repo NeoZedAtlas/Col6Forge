@@ -10,7 +10,7 @@ const StorageClass = symbols.StorageClass;
 const CharacterLengthKind = symbols.CharacterLengthKind;
 
 pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
-    var resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.derived_type_name, decl.kind_selector);
+    var resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.derived_type_name, decl.kind_selector, decl.polymorphic);
     resolved_type = resolved_type.withPolymorphic(decl.polymorphic);
     for (decl.items) |item| {
         try applyDeclarator(self, resolved_type, item, .local, true, decl.allocatable, decl.pointer);
@@ -57,6 +57,9 @@ pub fn applyDeclarator(
     }
     if (pointer) {
         sym.is_pointer = true;
+    }
+    if (sym.loweredKind() == .derived and sym.type_spec.polymorphic and sym.type_spec.derived_type_name == null and sym.storage != .dummy and !sym.is_allocatable and !sym.is_pointer) {
+        return error.InvalidUnlimitedPolymorphicEntity;
     }
 
     // Use the resolved symbol type after declaration merge. Non-type declarations
@@ -123,9 +126,13 @@ fn resolvedDeclTypeSpec(
     base_type_kind: ast.TypeKind,
     derived_type_name: ?[]const u8,
     kind_selector: ?*ast.Expr,
+    polymorphic: bool,
 ) !symbols.TypeSpec {
     if (base_type_kind == .derived) {
-        const name = derived_type_name orelse return error.UnexpectedTypeDecl;
+        const name = derived_type_name orelse {
+            if (polymorphic) return symbols.TypeSpec.fromKind(.derived).withPolymorphic(true);
+            return error.UnexpectedTypeDecl;
+        };
         if (!symbols_mod.hasDerivedType(self, name)) return error.UnexpectedTypeDecl;
         return symbols.TypeSpec.fromDerived(name);
     }

@@ -27,7 +27,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {
         .implicit => |imp| {
             for (imp.rules) |rule| {
-                const resolved_rule_type = try resolvedDeclTypeSpec(self, rule.type_kind, null, rule.kind_selector);
+                const resolved_rule_type = try resolvedDeclTypeSpec(self, rule.type_kind, null, rule.kind_selector, false);
                 const resolved_rule_kind = resolved_rule_type.lowered_kind;
                 try ensureImplicitRuleNoOverlap(self, rule.start, rule.end);
                 var char_len: ?usize = null;
@@ -248,9 +248,13 @@ fn resolvedDeclTypeSpec(
     base_type_kind: ast.TypeKind,
     derived_type_name: ?[]const u8,
     kind_selector: ?*ast.Expr,
+    polymorphic: bool,
 ) !symbols.TypeSpec {
     if (base_type_kind == .derived) {
-        const name = derived_type_name orelse return error.UnexpectedTypeDecl;
+        const name = derived_type_name orelse {
+            if (polymorphic) return symbols.TypeSpec.fromKind(.derived).withPolymorphic(true);
+            return error.UnexpectedTypeDecl;
+        };
         if (!symbols_mod.hasDerivedType(self, name)) return error.UnexpectedTypeDecl;
         return symbols.TypeSpec.fromDerived(name);
     }

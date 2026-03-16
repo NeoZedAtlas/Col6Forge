@@ -76,6 +76,9 @@ pub const semantic = struct {
     pub const invalid_allocate_type_spec = ErrorInfo{ .code = "CF3131", .message = "Error in type-spec at ALLOCATE" };
     pub const abstract_allocate_type = ErrorInfo{ .code = "CF3132", .message = "allocated type may not be ABSTRACT" };
     pub const allocate_type_incompatible = ErrorInfo{ .code = "CF3133", .message = "allocate-object is type incompatible with typespec" };
+    pub const invalid_unlimited_polymorphic_entity = ErrorInfo{ .code = "CF3134", .message = "CLASS(*) entity must be dummy, allocatable or pointer" };
+    pub const explicit_interface_required = ErrorInfo{ .code = "CF3135", .message = "Explicit interface required for this procedure call" };
+    pub const has_explicit_interface = ErrorInfo{ .code = "CF3136", .message = "procedure has an explicit interface already; Expecting END PROGRAM statement after invalid contained definition" };
     pub const generic = ErrorInfo{ .code = "CF3199", .message = "semantic analysis failed" };
 };
 
@@ -176,6 +179,9 @@ pub fn semanticInfoFor(err: anyerror) ErrorInfo {
         error.InvalidAllocateTypeSpec => semantic.invalid_allocate_type_spec,
         error.AbstractAllocateType => semantic.abstract_allocate_type,
         error.AllocateTypeIncompatible => semantic.allocate_type_incompatible,
+        error.InvalidUnlimitedPolymorphicEntity => semantic.invalid_unlimited_polymorphic_entity,
+        error.ExplicitInterfaceRequired => semantic.explicit_interface_required,
+        error.HasExplicitInterface => semantic.has_explicit_interface,
         else => semantic.generic,
     };
 }

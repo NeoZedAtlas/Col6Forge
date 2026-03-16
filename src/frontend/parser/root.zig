@@ -62,6 +62,8 @@ pub fn parseProgramWithDiagnostics(
         .implicit_program_counter = 0,
         .pending_owner_name = null,
         .pending_owner_kind = null,
+        .pending_owner_decls = null,
+        .pending_owner_decl_sources = null,
         .module_preludes = std.StringHashMap(ModulePrelude).init(arena_allocator),
         .expr_capture = &expr_capture,
         .diag_bag = diag_bag,
@@ -80,6 +82,8 @@ const Parser = struct {
     implicit_program_counter: usize,
     pending_owner_name: ?[]const u8,
     pending_owner_kind: ?LexicalOwnerKind,
+    pending_owner_decls: ?[]const Decl,
+    pending_owner_decl_sources: ?[]const DeclSource,
     module_preludes: std.StringHashMap(ModulePrelude),
     expr_capture: *expr.SourceCapture,
     diag_bag: *parse_diag.Bag,
@@ -149,6 +153,8 @@ const Parser = struct {
             if (self.isProgramUnitEndAt(self.index)) {
                 self.pending_owner_name = null;
                 self.pending_owner_kind = null;
+                self.pending_owner_decls = null;
+                self.pending_owner_decl_sources = null;
                 self.index += 1;
                 continue;
             }
@@ -165,6 +171,8 @@ const Parser = struct {
             if (unitHasContains(unit)) {
                 self.pending_owner_name = unit.name;
                 self.pending_owner_kind = .procedure;
+                self.pending_owner_decls = unit.decls;
+                self.pending_owner_decl_sources = unit.decl_sources;
             }
         }
         return .{ .units = try units.toOwnedSlice() };
@@ -183,6 +191,17 @@ const Parser = struct {
             const line = self.lines[self.index];
             noteFallbackForLine(self.diag_bag, line);
             if (self.isModuleEndAt(self.index)) {
+                var stored_decls: []const Decl = try module_decls.toOwnedSlice();
+                var stored_decl_sources: []const DeclSource = try module_decl_sources.toOwnedSlice();
+                if (module_use_names.items.len != 0) {
+                    const imported = try importPreludeDecls(self.arena, stored_decls, stored_decl_sources, module_use_names.items, &self.module_preludes);
+                    stored_decls = imported.decls;
+                    stored_decl_sources = imported.decl_sources;
+                }
+                try self.module_preludes.put(module_name, .{
+                    .decls = stored_decls,
+                    .decl_sources = stored_decl_sources,
+                });
                 self.index += 1;
                 return;
             }
@@ -231,8 +250,6 @@ const Parser = struct {
             }
             self.index += 1;
         }
-        if (!saw_contains) return;
-
         var stored_decls: []const Decl = try module_decls.toOwnedSlice();
         var stored_decl_sources: []const DeclSource = try module_decl_sources.toOwnedSlice();
         if (module_use_names.items.len != 0) {
@@ -244,6 +261,7 @@ const Parser = struct {
             .decls = stored_decls,
             .decl_sources = stored_decl_sources,
         });
+        if (!saw_contains) return;
 
         while (self.index < self.lines.len) {
             noteFallbackForLine(self.diag_bag, self.lines[self.index]);
@@ -300,6 +318,14 @@ const Parser = struct {
         if (self.pending_owner_name) |owner_name| {
             unit.owner_name = owner_name;
             unit.owner_kind = self.pending_owner_kind;
+            if (self.pending_owner_decls) |owner_decls| {
+                unit = try prependDecls(
+                    self.arena,
+                    unit,
+                    owner_decls,
+                    self.pending_owner_decl_sources orelse &.{},
+                );
+            }
         }
         return unit;
     }
@@ -492,6 +518,7 @@ const Parser = struct {
         const interface_name = lp.readName(self.arena);
         self.index += 1;
         var module_procedures = std.array_list.Managed([]const u8).init(self.arena);
+        var procedures = std.array_list.Managed([]const u8).init(self.arena);
 
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
@@ -503,6 +530,7 @@ const Parser = struct {
                     .abstract = is_abstract,
                     .name = interface_name,
                     .module_procedures = try module_procedures.toOwnedSlice(),
+                    .procedures = try procedures.toOwnedSlice(),
                 } };
             }
             var body_lp = LineParser.init(line, tokens);
@@ -511,6 +539,12 @@ const Parser = struct {
                     const procedure_name = body_lp.readName(self.arena) orelse return error.MissingName;
                     try module_procedures.append(procedure_name);
                     if (!body_lp.consume(.comma)) break;
+                }
+            } else {
+                var block_data_counter: usize = 0;
+                const header = parseProgramUnitHeader(self.arena, &body_lp, &block_data_counter) catch null;
+                if (header != null) {
+                    try procedures.append(header.?.name);
                 }
             }
             self.index += 1;
@@ -797,6 +831,16 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
         if (!lookahead.peekIs(.l_paren)) return null;
         lp.* = lookahead;
         _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        if (lp.consume(.star)) {
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            return .{
+                .type_kind = .derived,
+                .kind_selector = null,
+                .char_len = null,
+                .derived_type_name = null,
+                .polymorphic = true,
+            };
+        }
         const name = lp.readName(arena) orelse return error.MissingName;
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         return .{
@@ -2016,6 +2060,8 @@ test "parseProgram handles interface blocks inside procedure bodies" {
     try testing.expectEqualStrings("s1", unit.name);
     try testing.expectEqual(@as(usize, 1), unit.decls.len);
     try testing.expect(unit.decls[0] == .interface_block);
+    try testing.expectEqual(@as(usize, 1), unit.decls[0].interface_block.procedures.len);
+    try testing.expectEqualStrings("f1", unit.decls[0].interface_block.procedures[0]);
 }
 
 test "parseProgram preserves module interface blocks in contained procedures" {
@@ -2112,6 +2158,35 @@ test "parseProgram captures generic interface module procedures" {
     try testing.expectEqualStrings("x_", interface_block.name.?);
     try testing.expectEqual(@as(usize, 1), interface_block.module_procedures.len);
     try testing.expectEqualStrings("get_x", interface_block.module_procedures[0]);
+}
+
+test "parseProgram imports module prelude from module without contains" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module kinds\n" ++
+        "  type foo\n" ++
+        "    integer :: i\n" ++
+        "  end type foo\n" ++
+        "end module kinds\n" ++
+        "type(foo) function ext_fun()\n" ++
+        "  use kinds\n" ++
+        "end function ext_fun\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqualStrings("ext_fun", unit.name);
+    try testing.expectEqual(@as(usize, 2), unit.decls.len);
+    try testing.expect(unit.decls[0] == .derived_type_def);
+    try testing.expectEqualStrings("foo", unit.decls[0].derived_type_def.name);
+    try testing.expect(unit.decls[1] == .type_decl);
 }
 
 test "parseProgramWithDiagnostics captures parse errors in explicit bag" {

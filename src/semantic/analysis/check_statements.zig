@@ -55,6 +55,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
         .call => |call| {
             const call_idx = resolve_symbols.findSymbolIndex(self, call.name);
             self.setCurrentSource(if (call.source.line != 0) call.source else null);
+            try checkExplicitInterfaceRequirementForCallArgs(self, call.name, call.args, call_idx);
             try checkKnownProcedureCallArity(
                 self,
                 call.name,
@@ -386,6 +387,7 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                         }
                     }
                 }
+                try checkExplicitInterfaceRequirementForExprArgs(self, call.name, call.args, idx);
                 try checkKnownProcedureCallArity(self, call.name, call.args.len, 0, false, idx);
             }
             return try resolve_expr.exprType(self, expr);
@@ -548,6 +550,50 @@ fn checkKnownProcedureCallArity(
             if (got_expr > max) return error.InvalidArgumentCount;
         }
     }
+}
+
+fn checkExplicitInterfaceRequirementForCallArgs(
+    self: *context.Context,
+    name: []const u8,
+    args: []const ast.CallArg,
+    symbol_idx: ?usize,
+) CheckError!void {
+    if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return;
+    if (symbol_idx orelse resolve_symbols.findSymbolIndex(self, name)) |idx| {
+        const sym = self.symbols.items[idx];
+        if (sym.is_intrinsic or sym.is_external) return;
+    }
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        if (requiresExplicitInterfaceForActual(self, arg.expr)) {
+            self.setCurrentSource(self.sourceForExpr(arg.expr));
+            return error.ExplicitInterfaceRequired;
+        }
+    }
+}
+
+fn checkExplicitInterfaceRequirementForExprArgs(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+    symbol_idx: ?usize,
+) CheckError!void {
+    if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return;
+    if (symbol_idx orelse resolve_symbols.findSymbolIndex(self, name)) |idx| {
+        const sym = self.symbols.items[idx];
+        if (sym.is_intrinsic or sym.is_external) return;
+    }
+    for (args) |arg| {
+        if (requiresExplicitInterfaceForActual(self, arg)) {
+            self.setCurrentSource(self.sourceForExpr(arg));
+            return error.ExplicitInterfaceRequired;
+        }
+    }
+}
+
+fn requiresExplicitInterfaceForActual(self: *context.Context, expr: *ast.Expr) bool {
+    const spec = resolve_expr.exprTypeSpec(self, expr) catch return false;
+    return spec.lowered_kind == .derived and spec.polymorphic and spec.derived_type_name == null;
 }
 
 fn checkOpenControl(self: *context.Context, node: ?*ast.Expr, allowed: []const []const u8) CheckError!void {

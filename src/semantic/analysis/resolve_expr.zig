@@ -118,6 +118,9 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     self.symbols.items[idx] = sym;
                 }
             }
+            if (kind == .call and requiresExplicitInterfaceForActuals(self, call.name, call.args, sym)) {
+                return error.ExplicitInterfaceRequired;
+            }
             if (kind == .subscript) {
                 if (sym.dims.len == 0 or call.args.len != sym.dims.len) return error.InvalidSubscript;
                 for (call.args) |arg| {
@@ -244,6 +247,21 @@ fn isStatementFunctionDefinitionTarget(
         if (arg.* != .identifier) return false;
     }
     return true;
+}
+
+fn requiresExplicitInterfaceForActuals(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+    sym: symbols.Symbol,
+) bool {
+    if (sym.is_intrinsic or sym.is_external) return false;
+    if (symbols_mod.lookupKnownProcedureSig(self, name) != null) return false;
+    for (args) |arg| {
+        const spec = exprTypeSpecCached(self, arg) catch continue;
+        if (spec.lowered_kind == .derived and spec.polymorphic and spec.derived_type_name == null) return true;
+    }
+    return false;
 }
 
 pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {

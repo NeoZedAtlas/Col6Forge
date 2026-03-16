@@ -54,11 +54,28 @@ pub const Resolver = struct {
                 ctx.setCurrentDeclSource(null);
             }
             switch (decl) {
-                .type_decl => |type_decl| try decls.applyTypeDecl(ctx, type_decl),
+                .type_decl => |type_decl| decls.applyTypeDecl(ctx, type_decl) catch |err| {
+                    if (!ctx.usesExplicitDiagnosticBag()) return err;
+                    if (first_stmt_error == null) first_stmt_error = err;
+                    ctx.recordSemanticError(err);
+                },
                 .derived_type_def => {},
-                else => try specs.applySpec(ctx, decl),
+                else => specs.applySpec(ctx, decl) catch |err| {
+                    if (!ctx.usesExplicitDiagnosticBag()) return err;
+                    if (first_stmt_error == null) first_stmt_error = err;
+                    ctx.recordSemanticError(err);
+                },
             }
             ctx.setCurrentDeclSource(null);
+        }
+        if (ctx.unit.owner_name != null) {
+            if (findExplicitInterfaceDeclSource(ctx, ctx.unit.name)) |decl_source| {
+                ctx.setCurrentDeclSource(decl_source);
+                if (!ctx.usesExplicitDiagnosticBag()) return error.HasExplicitInterface;
+                if (first_stmt_error == null) first_stmt_error = error.HasExplicitInterface;
+                ctx.recordSemanticError(error.HasExplicitInterface);
+                ctx.setCurrentDeclSource(null);
+            }
         }
         try validateAssumedCharacterLengths(ctx);
         try resolve_data.lowerDataStatements(ctx);
@@ -120,6 +137,18 @@ fn findTypeDeclSource(ctx: *context.Context, target_name: []const u8) ?ast.DeclS
             if (decl_idx < ctx.unit.decl_sources.len) {
                 return ctx.unit.decl_sources[decl_idx];
             }
+            return null;
+        }
+    }
+    return null;
+}
+
+fn findExplicitInterfaceDeclSource(ctx: *context.Context, target_name: []const u8) ?ast.DeclSource {
+    for (ctx.unit.decls, 0..) |decl, decl_idx| {
+        if (decl != .interface_block) continue;
+        for (decl.interface_block.procedures) |procedure_name| {
+            if (!std.ascii.eqlIgnoreCase(procedure_name, target_name)) continue;
+            if (decl_idx < ctx.unit.decl_sources.len) return ctx.unit.decl_sources[decl_idx];
             return null;
         }
     }

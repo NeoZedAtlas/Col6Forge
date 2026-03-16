@@ -60,6 +60,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
     if (lp.isKeywordSplit("DIMENSION")) {
         _ = lp.consumeKeyword("DIMENSION");
+        _ = consumeDoubleColon(lp);
         const items = try parseDeclarators(lp, arena, .{}, null, false);
         return .{ .dimension = .{ .items = items } };
     }
@@ -311,6 +312,10 @@ fn parseTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
     }
     if (lp.consumeKeyword("CLASS")) {
         _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        if (lp.consume(.star)) {
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            return .{ .type_kind = .derived, .derived_type_name = null, .polymorphic = true };
+        }
         const name = lp.readName(arena) orelse return error.MissingName;
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         return .{ .type_kind = .derived, .derived_type_name = name, .polymorphic = true };
@@ -1063,6 +1068,58 @@ test "parseDecl handles PROCEDURE interface declaration" {
         .external => |ext| {
             try testing.expectEqual(@as(usize, 1), ext.names.len);
             try testing.expectEqualStrings("FCN", ext.names[0]);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles CLASS(*) declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CLASS(*) :: X\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.derived, td.type_kind);
+            try testing.expect(td.polymorphic);
+            try testing.expect(td.derived_type_name == null);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("X", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles DIMENSION with double colon" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      DIMENSION :: X(:)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .dimension => |dim| {
+            try testing.expectEqual(@as(usize, 1), dim.items.len);
+            try testing.expectEqualStrings("X", dim.items[0].name);
+            try testing.expectEqual(@as(usize, 1), dim.items[0].dims.len);
         },
         else => return error.UnexpectedToken,
     }
