@@ -1,5 +1,7 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const fixed_form = @import("../../frontend/fixed_form.zig");
+const parser = @import("../../frontend/parser/mod.zig");
 const type_kind_selector = @import("../type_kind_selector.zig");
 const symbols = @import("../symbol/mod.zig");
 
@@ -21,6 +23,14 @@ pub fn inferProcedureIsPointer(unit: ast.ProgramUnit) bool {
                         if (std.ascii.eqlIgnoreCase(item.name, result_name)) return type_decl.pointer;
                     }
                     if (std.ascii.eqlIgnoreCase(item.name, unit.name)) return type_decl.pointer;
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (explicit_result_name) |result_name| {
+                        if (std.ascii.eqlIgnoreCase(item.name, result_name)) return procedure_decl.pointer;
+                    }
+                    if (std.ascii.eqlIgnoreCase(item.name, unit.name)) return procedure_decl.pointer;
                 }
             },
             else => {},
@@ -46,6 +56,19 @@ pub fn inferFunctionTypeSpec(unit: ast.ProgramUnit) symbols.TypeSpec {
                     if (std.ascii.eqlIgnoreCase(item.name, unit.name)) {
                         return applyDeclaratorLen(type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector), item);
                     }
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    const matches = if (explicit_result_name) |result_name|
+                        std.ascii.eqlIgnoreCase(item.name, result_name)
+                    else
+                        std.ascii.eqlIgnoreCase(item.name, unit.name);
+                    if (!matches) continue;
+                    if (procedure_decl.interface != .type_spec) continue;
+                    const proc_type = procedure_decl.interface.type_spec;
+                    return type_kind_selector.resolveSpec(proc_type.type_kind, proc_type.kind_selector)
+                        .withPolymorphic(proc_type.polymorphic);
                 }
             },
             else => {},
@@ -76,4 +99,25 @@ fn inferConstantCharLen(len_expr: ?*ast.Expr) ?usize {
         },
         else => null,
     };
+}
+
+test "inferProcedureIsPointer recognizes PROCEDURE pointer function results" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      FUNCTION F() RESULT(R)\n" ++
+        "      PROCEDURE(INTEGER), POINTER :: R\n" ++
+        "      END\n";
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    try testing.expect(inferProcedureIsPointer(program.units[0]));
+    try testing.expectEqual(ast.TypeKind.integer, inferFunctionTypeSpec(program.units[0]).lowered_kind);
 }

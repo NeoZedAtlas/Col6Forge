@@ -61,6 +61,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 applyImplicitRuleToExistingSymbols(self, implicit_rule);
             }
         },
+        .procedure => return error.UnexpectedTypeDecl,
         .derived_type_def => {},
         .interface_block => {},
         .dimension => |dim| {

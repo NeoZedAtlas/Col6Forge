@@ -34,6 +34,10 @@ fn printDecl(writer: anytype, decl: ast.Decl) !void {
         .type_decl => |td| {
             try writer.print(";   decl type {s} items({d})\n", .{ typeKindName(td.type_kind), td.items.len });
         },
+        .procedure => |proc_decl| {
+            const mode = if (proc_decl.pointer) "pointer" else "plain";
+            try writer.print(";   decl procedure {s} items({d})\n", .{ mode, proc_decl.items.len });
+        },
         .derived_type_def => |derived| {
             try writer.print(";   decl derived-type {s}\n", .{derived.name});
         },

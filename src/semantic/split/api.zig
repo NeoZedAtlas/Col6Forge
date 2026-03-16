@@ -240,6 +240,15 @@ fn findDummyArgDeclInfo(unit: ast.ProgramUnit, name: []const u8) DummyArgDeclInf
                     };
                 }
             },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
+                    return .{
+                        .declarator = item,
+                        .optional = procedure_decl.optional,
+                    };
+                }
+            },
             .dimension => |dimension_decl| {
                 for (dimension_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
@@ -263,6 +272,26 @@ fn inferDummyArgTypeSpec(
                 for (type_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
                     return applyDummyDeclaratorCharLen(type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector), item);
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
+                    switch (procedure_decl.interface) {
+                        .type_spec => |proc_type| {
+                            return applyDummyDeclaratorCharLen(
+                                type_kind_selector.resolveSpec(proc_type.type_kind, proc_type.kind_selector)
+                                    .withPolymorphic(proc_type.polymorphic),
+                                item,
+                            );
+                        },
+                        else => {
+                            return if (declarator) |decl_item|
+                                applyDummyDeclaratorCharLen(implicitTypeSpecForName(unit, name), decl_item)
+                            else
+                                applyDummyCharLen(implicitTypeSpecForName(unit, name), null);
+                        },
+                    }
                 }
             },
             else => {},

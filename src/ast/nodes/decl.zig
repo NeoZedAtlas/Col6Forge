@@ -16,6 +16,7 @@ pub const TypeKind = enum {
 pub const Decl = union(enum) {
     implicit: ImplicitDecl,
     type_decl: TypeDecl,
+    procedure: ProcedureDecl,
     derived_type_def: DerivedTypeDef,
     interface_block: InterfaceBlock,
     dimension: DimensionDecl,
@@ -37,6 +38,27 @@ pub const TypeDecl = struct {
     allocatable: bool = false,
     pointer: bool = false,
     optional: bool = false,
+};
+
+pub const ProcedureTypeSpec = struct {
+    type_kind: TypeKind,
+    kind_selector: ?*Expr = null,
+    derived_type_name: ?[]const u8 = null,
+    polymorphic: bool = false,
+};
+
+pub const ProcedureInterface = union(enum) {
+    none,
+    name: []const u8,
+    type_spec: ProcedureTypeSpec,
+};
+
+pub const ProcedureDecl = struct {
+    interface: ProcedureInterface = .none,
+    items: []Declarator,
+    pointer: bool = false,
+    optional: bool = false,
+    save: bool = false,
 };
 
 pub const DerivedTypeDef = struct {

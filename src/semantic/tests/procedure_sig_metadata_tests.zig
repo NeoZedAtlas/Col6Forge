@@ -107,3 +107,26 @@ test "inferProcedureArgSigs captures OPTIONAL dummy metadata" {
     try testing.expect(arg_sigs[0].optional);
     try testing.expect(!arg_sigs[1].optional);
 }
+
+test "inferProcedureArgSigs captures OPTIONAL procedure dummy metadata" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S(F)\n" ++
+        "      PROCEDURE(INTEGER), OPTIONAL :: F\n" ++
+        "      END\n";
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[0]);
+
+    try testing.expectEqual(@as(usize, 1), arg_sigs.len);
+    try testing.expect(arg_sigs[0].optional);
+    try testing.expectEqual(ast.TypeKind.integer, arg_sigs[0].type_spec.lowered_kind);
+}

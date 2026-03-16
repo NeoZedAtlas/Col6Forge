@@ -17,6 +17,22 @@ pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
     }
 }
 
+pub fn applyProcedureDecl(self: *context.Context, decl: ast.ProcedureDecl) !void {
+    for (decl.items) |item| {
+        const resolved = try resolveProcedureDeclarator(self, decl.interface, item.name);
+        try applyDeclarator(self, resolved.type_spec, item, .local, resolved.explicit_type, false, decl.pointer);
+
+        const idx = symbols_mod.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
+        var sym = &self.symbols.items[idx];
+        if (resolved.kind) |kind| {
+            sym.kind = kind;
+        }
+        if (sym.storage == .dummy or !decl.pointer) {
+            sym.is_external = true;
+        }
+    }
+}
+
 // applyDeclarator mutates the symbol table entry for `item.name` in-place.
 // It may set type, dimensions, storage class, and CHARACTER length depending
 // on declaration context.
@@ -119,6 +135,58 @@ fn allowsDeferredCharacterLength(sym: symbols.Symbol) bool {
     if (sym.is_allocatable) return true;
     if (sym.is_pointer) return true;
     return false;
+}
+
+const ResolvedProcedureDecl = struct {
+    type_spec: symbols.TypeSpec,
+    explicit_type: bool,
+    kind: ?symbols.SymbolKind = null,
+};
+
+fn resolveProcedureDeclarator(
+    self: *context.Context,
+    procedure_interface: ast.ProcedureInterface,
+    item_name: []const u8,
+) !ResolvedProcedureDecl {
+    return switch (procedure_interface) {
+        .none => .{
+            .type_spec = symbols_mod.implicitTypeSpec(self, item_name),
+            .explicit_type = false,
+        },
+        .name => |name| blk: {
+            if (symbols_mod.lookupKnownProcedureSig(self, name)) |sig| {
+                const kind: symbols.SymbolKind = switch (sig.kind) {
+                    .function => .function,
+                    .subroutine => .subroutine,
+                    else => .variable,
+                };
+                const type_spec = if (sig.kind == .function)
+                    symbols_mod.lookupKnownFunctionResolvedSpec(self, name) orelse symbols_mod.implicitTypeSpec(self, item_name)
+                else
+                    symbols_mod.implicitTypeSpec(self, item_name);
+                break :blk .{
+                    .type_spec = type_spec,
+                    .explicit_type = sig.kind == .function,
+                    .kind = kind,
+                };
+            }
+            break :blk .{
+                .type_spec = symbols_mod.implicitTypeSpec(self, item_name),
+                .explicit_type = false,
+            };
+        },
+        .type_spec => |type_spec| .{
+            .type_spec = try resolvedDeclTypeSpec(
+                self,
+                type_spec.type_kind,
+                type_spec.derived_type_name,
+                type_spec.kind_selector,
+                type_spec.polymorphic,
+            ),
+            .explicit_type = true,
+            .kind = .function,
+        },
+    };
 }
 
 fn resolvedDeclTypeSpec(

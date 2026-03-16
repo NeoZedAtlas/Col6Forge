@@ -59,6 +59,11 @@ pub const Resolver = struct {
                     if (first_stmt_error == null) first_stmt_error = err;
                     ctx.recordSemanticError(err);
                 },
+                .procedure => |procedure_decl| decls.applyProcedureDecl(ctx, procedure_decl) catch |err| {
+                    if (!ctx.usesExplicitDiagnosticBag()) return err;
+                    if (first_stmt_error == null) first_stmt_error = err;
+                    ctx.recordSemanticError(err);
+                },
                 .derived_type_def => {},
                 else => specs.applySpec(ctx, decl) catch |err| {
                     if (!ctx.usesExplicitDiagnosticBag()) return err;

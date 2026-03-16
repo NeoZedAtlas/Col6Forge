@@ -162,12 +162,16 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
     if (lp.isKeywordSplit("PROCEDURE")) {
         _ = lp.consumeKeyword("PROCEDURE");
-        if (lp.consume(.l_paren)) {
-            try consumeBalancedParens(lp);
-        }
-        _ = try consumeDeclAttributes(lp, arena);
-        const names = try parseNameList(lp, arena);
-        return .{ .external = .{ .names = names } };
+        const procedure_interface = try parseProcedureInterface(lp, arena);
+        const attrs = try consumeDeclAttributes(lp, arena);
+        const items = try parseDeclarators(lp, arena, .{}, null, attrs.pointer);
+        return .{ .procedure = .{
+            .interface = procedure_interface,
+            .items = items,
+            .pointer = attrs.pointer,
+            .optional = attrs.optional,
+            .save = attrs.save,
+        } };
     }
 
     const type_spec = try parseTypeKind(lp, arena);
@@ -250,6 +254,31 @@ const ParsedCharacterLen = struct {
     expr: ?*ast.Expr = null,
     deferred: bool = false,
 };
+
+fn parseProcedureInterface(lp: *LineParser, arena: std.mem.Allocator) !ast.ProcedureInterface {
+    if (!lp.consume(.l_paren)) return .none;
+    if (lp.consume(.r_paren)) return .none;
+
+    var lookahead = lp.*;
+    const type_spec = parseTypeKind(&lookahead, arena) catch |err| switch (err) {
+        error.UnknownType => null,
+        else => return err,
+    };
+    if (type_spec) |parsed| {
+        _ = lookahead.expect(.r_paren) orelse return error.UnexpectedToken;
+        lp.* = lookahead;
+        return .{ .type_spec = .{
+            .type_kind = parsed.type_kind,
+            .kind_selector = parsed.kind_selector,
+            .derived_type_name = parsed.derived_type_name,
+            .polymorphic = parsed.polymorphic,
+        } };
+    }
+
+    const name = lp.readName(arena) orelse return error.MissingName;
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return .{ .name = name };
+}
 
 pub fn tryParseAllocateTypeSpec(lp: *LineParser, arena: std.mem.Allocator) !?ast.AllocateTypeSpec {
     var lookahead = lp.*;
@@ -1070,9 +1099,40 @@ test "parseDecl handles PROCEDURE interface declaration" {
     const decl_node = try parseDecl(&lp, arena.allocator());
 
     switch (decl_node) {
-        .external => |ext| {
-            try testing.expectEqual(@as(usize, 1), ext.names.len);
-            try testing.expectEqualStrings("FCN", ext.names[0]);
+        .procedure => |proc_decl| {
+            try testing.expect(proc_decl.interface == .name);
+            try testing.expectEqualStrings("FUNC", proc_decl.interface.name);
+            try testing.expectEqual(@as(usize, 1), proc_decl.items.len);
+            try testing.expectEqualStrings("FCN", proc_decl.items[0].name);
+            try testing.expect(!proc_decl.pointer);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles PROCEDURE intrinsic result type and pointer attribute" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      PROCEDURE(INTEGER), POINTER :: FCN => NULL()\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .procedure => |proc_decl| {
+            try testing.expect(proc_decl.interface == .type_spec);
+            try testing.expectEqual(TypeKind.integer, proc_decl.interface.type_spec.type_kind);
+            try testing.expect(proc_decl.pointer);
+            try testing.expectEqual(@as(usize, 1), proc_decl.items.len);
+            try testing.expectEqualStrings("FCN", proc_decl.items[0].name);
+            try testing.expect(proc_decl.items[0].init != null);
         },
         else => return error.UnexpectedToken,
     }
