@@ -466,7 +466,7 @@ fn cloneExprWithSubst(
             for (comp.args, 0..) |arg, idx| {
                 args[idx] = try cloneExprWithSubst(ctx, allocator, arg, name, replacement);
             }
-            cloned.* = .{ .component = .{ .base = base, .name = comp.name, .args = args } };
+            cloned.* = .{ .component = .{ .base = base, .name = comp.name, .args = args, .has_parens = comp.has_parens } };
         },
         .dim_range => |range| {
             const lower = if (range.lower) |l| try cloneExprWithSubst(ctx, allocator, l, name, replacement) else null;

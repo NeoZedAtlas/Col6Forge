@@ -491,6 +491,8 @@ const Parser = struct {
         const header = try parseDerivedTypeHeader(self.arena, &lp);
         self.index += 1;
         var components = std.array_list.Managed(ast.TypeDecl).init(self.arena);
+        var bindings = std.array_list.Managed(ast.TypeBoundProcedureBinding).init(self.arena);
+        var in_contains = false;
 
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
@@ -503,10 +505,16 @@ const Parser = struct {
                     .parent_name = header.parent_name,
                     .abstract = header.abstract,
                     .components = try components.toOwnedSlice(),
+                    .bindings = try bindings.toOwnedSlice(),
                 } };
             }
             var body_lp = LineParser.init(line, tokens);
-            if (decl.isDeclarationStart(body_lp)) {
+            if (body_lp.consumeKeyword("CONTAINS")) {
+                in_contains = true;
+                self.index += 1;
+                continue;
+            }
+            if (!in_contains and decl.isDeclarationStart(body_lp)) {
                 const component_decl = decl.parseDecl(&body_lp, self.arena) catch |err| {
                     setParseDiagnosticFromStream(self.diag_bag, line, body_lp, err);
                     return err;
@@ -514,6 +522,12 @@ const Parser = struct {
                 if (component_decl == .type_decl) {
                     try components.append(component_decl.type_decl);
                 }
+            } else if (in_contains and body_lp.isKeywordSplit("PROCEDURE")) {
+                const type_bound_bindings = parseTypeBoundProcedureBindings(self.arena, &body_lp) catch |err| {
+                    setParseDiagnosticFromStream(self.diag_bag, line, body_lp, err);
+                    return err;
+                };
+                try bindings.appendSlice(type_bound_bindings);
             }
             self.index += 1;
         }
@@ -600,6 +614,7 @@ fn interfaceProcedureFromUnit(unit: ProgramUnit) ast.InterfaceProcedure {
     return .{
         .kind = unit.kind,
         .name = unit.name,
+        .result_name = unit.result_name,
         .args = unit.args,
         .alt_return_dummy_count = unit.alt_return_dummy_count,
         .type_spec = if (unit.decls.len != 0)
@@ -849,11 +864,13 @@ fn renameDerivedTypeDef(
         }
         components[idx] = renamed_component;
     }
+    const bindings = try arena.dupe(ast.TypeBoundProcedureBinding, derived.bindings);
     return .{
         .name = local_name,
         .parent_name = if (derived.parent_name) |parent| renamePreludeTypeName(parent, only_items) else null,
         .abstract = derived.abstract,
         .components = components,
+        .bindings = bindings,
     };
 }
 
@@ -1165,6 +1182,78 @@ fn parseDerivedTypeHeader(arena: std.mem.Allocator, lp: *LineParser) !DerivedTyp
     }
     header.name = lp.readName(arena) orelse return error.MissingName;
     return header;
+}
+
+fn parseTypeBoundProcedureBindings(
+    arena: std.mem.Allocator,
+    lp: *LineParser,
+) ![]const ast.TypeBoundProcedureBinding {
+    if (!lp.consumeKeyword("PROCEDURE")) return error.UnexpectedToken;
+
+    var interface_name: ?[]const u8 = null;
+    if (lp.consume(.l_paren)) {
+        interface_name = lp.readName(arena) orelse return error.MissingName;
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    }
+
+    var deferred = false;
+    var nopass = false;
+    var pass_name: ?[]const u8 = null;
+    var non_overridable = false;
+
+    while (lp.consume(.comma)) {
+        if (consumeDoubleColon(lp)) break;
+        const attr_name = lp.readName(arena) orelse return error.MissingName;
+        if (std.ascii.eqlIgnoreCase(attr_name, "DEFERRED")) {
+            deferred = true;
+        } else if (std.ascii.eqlIgnoreCase(attr_name, "NOPASS")) {
+            nopass = true;
+        } else if (std.ascii.eqlIgnoreCase(attr_name, "NON_OVERRIDABLE")) {
+            non_overridable = true;
+        } else if (std.ascii.eqlIgnoreCase(attr_name, "PASS")) {
+            if (lp.consume(.l_paren)) {
+                pass_name = lp.readName(arena) orelse return error.MissingName;
+                _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            }
+        } else if (lp.consume(.l_paren)) {
+            try consumeBalancedParens(lp);
+        }
+    }
+    _ = consumeDoubleColon(lp);
+
+    var out = std.array_list.Managed(ast.TypeBoundProcedureBinding).init(arena);
+    while (true) {
+        const binding_name = lp.readName(arena) orelse return error.MissingName;
+        var implementation_name: ?[]const u8 = null;
+        if (lp.consume(.equals)) {
+            _ = lp.expect(.greater) orelse return error.UnexpectedToken;
+            implementation_name = lp.readName(arena) orelse return error.MissingName;
+        }
+        try out.append(.{
+            .name = binding_name,
+            .interface_name = interface_name,
+            .implementation_name = implementation_name,
+            .deferred = deferred,
+            .nopass = nopass,
+            .pass_name = pass_name,
+            .non_overridable = non_overridable,
+        });
+        if (!lp.consume(.comma)) break;
+    }
+    return out.toOwnedSlice();
+}
+
+fn consumeBalancedParens(lp: *LineParser) !void {
+    var depth: usize = 1;
+    while (depth > 0) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        _ = lp.next();
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => depth -= 1,
+            else => {},
+        }
+    }
 }
 
 fn consumeProcedurePrefixes(lp: *LineParser) void {

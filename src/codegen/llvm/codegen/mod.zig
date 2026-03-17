@@ -210,6 +210,7 @@ pub fn emitModuleToWriterWithDiagnostics(
         if (unit.kind == .module) continue;
         const mangled = try utils.mangleProcedureUnitName(scratch, unit);
         try defined.put(mangled, {});
+        try installExplicitInterfaceProcedureSigs(&known_procedure_sigs, unit);
         switch (unit.kind) {
             .module => unreachable,
             .program => {
@@ -290,10 +291,11 @@ pub fn emitModuleToWriterWithDiagnostics(
         breakdown.format_maps_ns += elapsedNs(format_start);
 
         const unit_emit_start = nowNs();
+        const codegen_unit = try prepareCodegenUnitWithOwnerDecls(scratch, program, unit);
         var ctx = try context.Context.initWithDiagnostics(
             scratch,
             source_name,
-            unit,
+            codegen_unit,
             sem_unit,
             &decls,
             &defined,
@@ -356,6 +358,58 @@ pub fn emitModuleToWriterWithDiagnostics(
     breakdown.decls_ns = elapsedNs(decls_start);
 
     return;
+}
+
+fn installExplicitInterfaceProcedureSigs(
+    known_procedure_sigs: *context.CaseInsensitiveStringHashMap(input.sema.KnownProcedureSig),
+    unit: input.ProgramUnit,
+) !void {
+    for (unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            try known_procedure_sigs.put(proc_header.name, .{
+                .name = proc_header.name,
+                .kind = proc_header.kind,
+                .arg_count = proc_header.args.len,
+                .alt_return_count = proc_header.alt_return_dummy_count,
+                .args = &.{},
+                .is_pointer = false,
+            });
+        }
+    }
+}
+
+fn prepareCodegenUnitWithOwnerDecls(
+    arena: std.mem.Allocator,
+    program: Program,
+    unit: input.ProgramUnit,
+) !input.ProgramUnit {
+    const owner_name = unit.owner_name orelse return unit;
+    if (unit.owner_kind != .procedure) return unit;
+    const owner_unit = findOwnerUnit(program, owner_name) orelse return unit;
+    if (owner_unit.decls.len == 0) return unit;
+
+    var combined_decls = std.array_list.Managed(input.Decl).init(arena);
+    try combined_decls.appendSlice(owner_unit.decls);
+    try combined_decls.appendSlice(unit.decls);
+
+    var combined_sources = std.array_list.Managed(ast.DeclSource).init(arena);
+    try combined_sources.appendSlice(owner_unit.decl_sources);
+    try combined_sources.appendSlice(unit.decl_sources);
+
+    var prepared = unit;
+    prepared.decls = try combined_decls.toOwnedSlice();
+    prepared.decl_sources = try combined_sources.toOwnedSlice();
+    return prepared;
+}
+
+fn findOwnerUnit(program: Program, owner_name: []const u8) ?input.ProgramUnit {
+    for (program.units) |candidate| {
+        if (std.ascii.eqlIgnoreCase(candidate.name, owner_name) and candidate.kind != .module) {
+            return candidate;
+        }
+    }
+    return null;
 }
 
 fn emitIntrinsicWrappers(builder: anytype, wrappers: *const std.StringHashMap(context.IntrinsicWrapperKind), options: CodegenOptions) !void {

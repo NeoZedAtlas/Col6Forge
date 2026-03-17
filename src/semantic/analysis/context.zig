@@ -16,10 +16,21 @@ pub const Context = struct {
             allocatable: bool = false,
         };
 
+        pub const BindingInfo = struct {
+            name: []const u8,
+            interface_name: ?[]const u8 = null,
+            implementation_name: ?[]const u8 = null,
+            deferred: bool = false,
+            nopass: bool = false,
+            pass_name: ?[]const u8 = null,
+            non_overridable: bool = false,
+        };
+
         name: []const u8,
         parent_name: ?[]const u8 = null,
         abstract: bool = false,
         components: []const ComponentInfo = &.{},
+        bindings: []const BindingInfo = &.{},
     };
 
     pub const IntegerBounds = struct {
@@ -67,6 +78,7 @@ pub const Context = struct {
             intent: ?ast.IntentKind = null,
             is_procedure: bool = false,
             procedure_kind: ?ast.ProgramUnitKind = null,
+            procedure_has_explicit_interface: bool = false,
             procedure_arg_count: usize = 0,
             procedure_alt_return_count: usize = 0,
             procedure_result_type_spec: ?symbols.TypeSpec = null,
@@ -125,6 +137,7 @@ pub const Context = struct {
     known_host_parameters: *const std.StringHashMap(symbols.Symbol),
     known_host_derived_types: *const std.StringHashMap(DerivedTypeInfo),
     known_host_interface_sources: *const std.StringHashMap(ast.DeclSource),
+    known_host_abstract_interfaces: *const std.StringHashMap(void),
     known_host_owner: ?[]const u8,
     target_layout: TargetLayout,
     use_imports_preinstalled: bool,
@@ -142,6 +155,7 @@ pub const Context = struct {
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
         known_host_derived_types: *const std.StringHashMap(DerivedTypeInfo),
         known_host_interface_sources: *const std.StringHashMap(ast.DeclSource),
+        known_host_abstract_interfaces: *const std.StringHashMap(void),
         known_host_owner: ?[]const u8,
         target_layout: TargetLayout,
     ) Context {
@@ -153,6 +167,7 @@ pub const Context = struct {
             known_host_parameters,
             known_host_derived_types,
             known_host_interface_sources,
+            known_host_abstract_interfaces,
             known_host_owner,
             target_layout,
             null,
@@ -167,6 +182,7 @@ pub const Context = struct {
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
         known_host_derived_types: *const std.StringHashMap(DerivedTypeInfo),
         known_host_interface_sources: *const std.StringHashMap(ast.DeclSource),
+        known_host_abstract_interfaces: *const std.StringHashMap(void),
         known_host_owner: ?[]const u8,
         target_layout: TargetLayout,
         diag_bag: ?*diag.Bag,
@@ -211,6 +227,7 @@ pub const Context = struct {
             .known_host_parameters = known_host_parameters,
             .known_host_derived_types = known_host_derived_types,
             .known_host_interface_sources = known_host_interface_sources,
+            .known_host_abstract_interfaces = known_host_abstract_interfaces,
             .known_host_owner = known_host_owner,
             .target_layout = target_layout,
             .use_imports_preinstalled = false,
@@ -229,6 +246,11 @@ pub const Context = struct {
 
     pub fn usesExplicitDiagnosticBag(self: *const Context) bool {
         return self.diag_bag != null;
+    }
+
+    pub fn diagnosticCount(self: *const Context) usize {
+        if (self.diag_bag) |bag| return bag.count();
+        return if (diag.has()) 1 else 0;
     }
 
     pub fn setDiagnostic(self: *Context, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {

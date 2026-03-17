@@ -43,6 +43,10 @@ pub const Bag = struct {
         return self.items.items.len != 0;
     }
 
+    pub fn count(self: *const Bag) usize {
+        return self.items.items.len;
+    }
+
     pub fn set(self: *Bag, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
         const owned = self.makeOwned(line, column, code, message, line_text) catch return;
         self.items.append(owned) catch {};

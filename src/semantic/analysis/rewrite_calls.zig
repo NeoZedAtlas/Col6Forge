@@ -686,7 +686,7 @@ fn cloneExpr(ctx: *context.Context, node: *ast.Expr) !*ast.Expr {
             for (comp.args, 0..) |arg, idx| {
                 args[idx] = try cloneExpr(ctx, arg);
             }
-            cloned.* = .{ .component = .{ .base = base, .name = comp.name, .args = args } };
+            cloned.* = .{ .component = .{ .base = base, .name = comp.name, .args = args, .has_parens = comp.has_parens } };
         },
         .dim_range => |range| {
             const lower = if (range.lower) |l| try cloneExpr(ctx, l) else null;

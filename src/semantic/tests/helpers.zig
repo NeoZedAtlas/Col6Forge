@@ -65,6 +65,7 @@ pub fn expectSemanticErrorNoGeneratedTempLeakInvariant(
     var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
     var known_host_derived_types = std.StringHashMap(analysis_context.Context.DerivedTypeInfo).init(arena.allocator());
     var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
 
     clearDiagnostic();
     var found = false;
@@ -81,6 +82,7 @@ pub fn expectSemanticErrorNoGeneratedTempLeakInvariant(
             &known_host_parameters,
             &known_host_derived_types,
             &known_host_interface_sources,
+            &known_host_abstract_interfaces,
             null,
             .{},
         );
@@ -122,6 +124,7 @@ pub fn expectSemanticErrorNoTempLeakAndFirstCallArgCallExprInvariant(
     var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
     var known_host_derived_types = std.StringHashMap(analysis_context.Context.DerivedTypeInfo).init(arena.allocator());
     var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
 
     clearDiagnostic();
     var found = false;
@@ -138,6 +141,7 @@ pub fn expectSemanticErrorNoTempLeakAndFirstCallArgCallExprInvariant(
             &known_host_parameters,
             &known_host_derived_types,
             &known_host_interface_sources,
+            &known_host_abstract_interfaces,
             null,
             .{},
         );

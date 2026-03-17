@@ -298,7 +298,9 @@ fn parseComponentSuffixes(
     while (lp.consume(.percent)) {
         const name = lp.readName(arena) orelse return error.UnexpectedToken;
         var args = std.array_list.Managed(*Expr).init(arena);
+        var has_parens = false;
         if (lp.consume(.l_paren)) {
+            has_parens = true;
             while (!lp.peekIs(.r_paren)) {
                 const arg_expr = try parseCallArgExpr(lp, arena, depth + 1);
                 try args.append(arg_expr);
@@ -310,6 +312,7 @@ fn parseComponentSuffixes(
             .base = current,
             .name = name,
             .args = try args.toOwnedSlice(),
+            .has_parens = has_parens,
         } }, source);
     }
     return current;

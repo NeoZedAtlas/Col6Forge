@@ -97,6 +97,16 @@ pub const DerivedTypeLayout = struct {
     alignment: usize,
 };
 
+pub const DerivedBindingInfo = struct {
+    name: []const u8,
+    interface_name: ?[]const u8 = null,
+    implementation_name: ?[]const u8 = null,
+    deferred: bool = false,
+    nopass: bool = false,
+    pass_name: ?[]const u8 = null,
+    non_overridable: bool = false,
+};
+
 pub const IntrinsicWrapperKind = enum {
     iabs,
 };
@@ -483,6 +493,28 @@ pub const Context = struct {
         }
     }
 
+    pub fn lookupDerivedBinding(self: *const Context, type_name: []const u8, binding_name: []const u8) ?DerivedBindingInfo {
+        var current_name: ?[]const u8 = type_name;
+        while (current_name) |name| {
+            const derived = self.findDerivedTypeDef(name) orelse return null;
+            for (derived.bindings) |binding| {
+                if (std.ascii.eqlIgnoreCase(binding.name, binding_name)) {
+                    return .{
+                        .name = binding.name,
+                        .interface_name = binding.interface_name,
+                        .implementation_name = binding.implementation_name,
+                        .deferred = binding.deferred,
+                        .nopass = binding.nopass,
+                        .pass_name = binding.pass_name,
+                        .non_overridable = binding.non_overridable,
+                    };
+                }
+            }
+            current_name = derived.parent_name;
+        }
+        return null;
+    }
+
     pub fn derivedTypeNameForExpr(self: *const Context, expr: *const input.Expr) ?[]const u8 {
         return switch (expr.*) {
             .identifier => |name| blk: {
@@ -793,6 +825,14 @@ pub const Context = struct {
             }
             if (!progressed) return error.UnknownSymbol;
         }
+    }
+
+    fn findDerivedTypeDef(self: *const Context, name: []const u8) ?input.DerivedTypeDef {
+        for (self.unit.decls) |decl| {
+            if (decl != .derived_type_def) continue;
+            if (std.ascii.eqlIgnoreCase(decl.derived_type_def.name, name)) return decl.derived_type_def;
+        }
+        return null;
     }
 
     fn buildSingleDerivedTypeLayout(self: *Context, derived: input.DerivedTypeDef) !DerivedTypeLayout {

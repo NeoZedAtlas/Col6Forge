@@ -9,6 +9,7 @@ pub const TypeSpec = sema.TypeSpec;
 
 pub const Decl = ast.Decl;
 pub const TypeDecl = ast.TypeDecl;
+pub const ProcedureTypeSpec = ast.ProcedureTypeSpec;
 pub const DerivedTypeDef = ast.DerivedTypeDef;
 pub const DimensionDecl = ast.DimensionDecl;
 pub const ParameterDecl = ast.ParameterDecl;

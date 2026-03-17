@@ -42,6 +42,7 @@ pub const Resolver = struct {
                     .parent_name = decl.derived_type_def.parent_name,
                     .abstract = decl.derived_type_def.abstract,
                     .components = try buildDerivedComponentInfo(ctx, decl.derived_type_def),
+                    .bindings = try buildDerivedBindingInfo(ctx, decl.derived_type_def),
                 });
             }
         }
@@ -258,4 +259,23 @@ fn buildDerivedComponentInfo(
         }
     }
     return try components.toOwnedSlice();
+}
+
+fn buildDerivedBindingInfo(
+    ctx: *context.Context,
+    derived: ast.DerivedTypeDef,
+) ![]const context.Context.DerivedTypeInfo.BindingInfo {
+    var bindings = std.array_list.Managed(context.Context.DerivedTypeInfo.BindingInfo).init(ctx.arena);
+    for (derived.bindings) |binding| {
+        try bindings.append(.{
+            .name = binding.name,
+            .interface_name = binding.interface_name,
+            .implementation_name = binding.implementation_name,
+            .deferred = binding.deferred,
+            .nopass = binding.nopass,
+            .pass_name = binding.pass_name,
+            .non_overridable = binding.non_overridable,
+        });
+    }
+    return try bindings.toOwnedSlice();
 }

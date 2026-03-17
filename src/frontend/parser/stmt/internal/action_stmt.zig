@@ -340,6 +340,7 @@ fn normalizeAllocateTarget(arena: std.mem.Allocator, raw_target: *Expr) !Normali
                     .base = comp.base,
                     .name = comp.name,
                     .args = &.{},
+                    .has_parens = false,
                 } }),
                 .dims = comp.args,
             };

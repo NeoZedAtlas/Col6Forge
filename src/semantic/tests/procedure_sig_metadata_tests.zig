@@ -160,3 +160,87 @@ test "inferProcedureArgSigs preserves derived dummy type names" {
     try testing.expectEqual(ast.TypeKind.derived, arg_sigs[0].type_spec.lowered_kind);
     try testing.expectEqualStrings("varying_string", arg_sigs[0].type_spec.derived_type_name.?);
 }
+
+test "inferProcedureArgSigs infers subroutine dummy kind from CALL usage" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "contains\n" ++
+        "  subroutine bar(sub)\n" ++
+        "    call sub\n" ++
+        "  end subroutine bar\n" ++
+        "end program p\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[1]);
+
+    try testing.expectEqual(@as(usize, 1), arg_sigs.len);
+    try testing.expect(arg_sigs[0].is_procedure);
+    try testing.expectEqual(ast.ProgramUnitKind.subroutine, arg_sigs[0].procedure_kind.?);
+}
+
+test "inferProcedureArgSigs infers function dummy kind from call syntax usage" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "contains\n" ++
+        "  subroutine foo(f)\n" ++
+        "    integer :: y\n" ++
+        "    y = f(32)\n" ++
+        "  end subroutine foo\n" ++
+        "end program p\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[1]);
+
+    try testing.expectEqual(@as(usize, 1), arg_sigs.len);
+    try testing.expect(arg_sigs[0].is_procedure);
+    try testing.expectEqual(ast.ProgramUnitKind.function, arg_sigs[0].procedure_kind.?);
+}
+
+test "inferProcedureArgSigs captures result type from interface RESULT declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "contains\n" ++
+        "  subroutine t(f)\n" ++
+        "    interface\n" ++
+        "      function f(x) result(y)\n" ++
+        "        integer, intent(in) :: x\n" ++
+        "        integer :: y\n" ++
+        "      end function f\n" ++
+        "    end interface\n" ++
+        "  end subroutine t\n" ++
+        "end program p\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[1]);
+
+    try testing.expectEqual(@as(usize, 1), arg_sigs.len);
+    try testing.expect(arg_sigs[0].procedure_has_explicit_interface);
+    try testing.expectEqual(ast.TypeKind.integer, arg_sigs[0].procedure_result_type_spec.?.lowered_kind);
+}

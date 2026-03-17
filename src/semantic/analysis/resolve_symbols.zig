@@ -61,6 +61,21 @@ pub fn lookupDerivedComponent(
     }
 }
 
+pub fn lookupDerivedBinding(
+    self: *const context.Context,
+    type_name: []const u8,
+    binding_name: []const u8,
+) ?context.Context.DerivedTypeInfo.BindingInfo {
+    var current = lookupDerivedType(self, type_name) orelse return null;
+    while (true) {
+        for (current.bindings) |binding| {
+            if (std.ascii.eqlIgnoreCase(binding.name, binding_name)) return binding;
+        }
+        const parent = current.parent_name orelse return null;
+        current = lookupDerivedType(self, parent) orelse return null;
+    }
+}
+
 pub fn isSameOrExtension(self: *const context.Context, candidate: []const u8, base: []const u8) bool {
     var current = lookupDerivedType(self, candidate) orelse return false;
     while (true) {
@@ -114,6 +129,13 @@ pub fn installUnitSymbol(self: *context.Context) !void {
         implicitInfo(self, self.unit.name);
     const symbol = Symbol.init(self.unit.name, info.type_spec, &.{}, kind, .local);
     _ = try internSymbol(self, symbol);
+    if (self.unit.kind == .function) {
+        const result_name = self.unit.result_name orelse self.unit.name;
+        if (!std.ascii.eqlIgnoreCase(result_name, self.unit.name)) {
+            const result_symbol = Symbol.init(result_name, info.type_spec, &.{}, .variable, .local);
+            _ = try internSymbol(self, result_symbol);
+        }
+    }
 }
 
 pub fn installDummyArgs(self: *context.Context) !void {

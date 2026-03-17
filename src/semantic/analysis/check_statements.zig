@@ -59,6 +59,9 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
         .call => |call| {
             const call_idx = resolve_symbols.findSymbolIndex(self, call.name);
             self.setCurrentSource(if (call.source.line != 0) call.source else null);
+            if (isAbstractInterfaceProcedure(self, call.name)) {
+                return emitNamedProcedureDiagnostic(self, call.name, error.InvalidArgumentCount, "must not be referenced");
+            }
             try checkExplicitInterfaceRequirementForCallArgs(self, call.name, call.args, call_idx);
             try checkKnownProcedureCallArity(
                 self,
@@ -352,48 +355,57 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                 return error.InvalidSubscript;
             }
             const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
-            const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse return error.InvalidSubscript;
-            if (component.dims.len == 0 and comp.args.len != 0) {
-                self.setCurrentSource(self.sourceForExpr(expr));
-                return error.InvalidSubscript;
-            }
-            if (component.dims.len != 0 and comp.args.len != 0 and comp.args.len != component.dims.len) {
-                self.setCurrentSource(self.sourceForExpr(expr));
-                return error.InvalidSubscript;
-            }
-            for (comp.args) |arg| {
-                switch (arg.*) {
-                    .dim_range => |range| {
-                        if (range.lower) |lower| {
-                            const lower_ty = try checkExprType(self, lower);
-                            if (!isIntegerLike(lower_ty)) {
-                                self.setCurrentSource(self.sourceForExpr(lower));
-                                return error.InvalidSubscript;
-                            }
-                        }
-                        if (!(range.upper.* == .literal and range.upper.literal.kind == .assumed_size)) {
-                            const upper_ty = try checkExprType(self, range.upper);
-                            if (!isIntegerLike(upper_ty)) {
-                                self.setCurrentSource(self.sourceForExpr(range.upper));
-                                return error.InvalidSubscript;
-                            }
-                        }
-                        if (range.stride) |stride| {
-                            const stride_ty = try checkExprType(self, stride);
-                            if (!isIntegerLike(stride_ty)) {
-                                self.setCurrentSource(self.sourceForExpr(stride));
-                                return error.InvalidSubscript;
-                            }
-                        }
-                    },
-                    else => {
-                        const arg_ty = try checkExprType(self, arg);
-                        if (!isIntegerLike(arg_ty)) {
-                            self.setCurrentSource(self.sourceForExpr(arg));
-                            return error.InvalidSubscript;
-                        }
-                    },
+            if (resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
+                if (component.dims.len == 0 and comp.args.len != 0) {
+                    self.setCurrentSource(self.sourceForExpr(expr));
+                    return error.InvalidSubscript;
                 }
+                if (component.dims.len != 0 and comp.args.len != 0 and comp.args.len != component.dims.len) {
+                    self.setCurrentSource(self.sourceForExpr(expr));
+                    return error.InvalidSubscript;
+                }
+                for (comp.args) |arg| {
+                    switch (arg.*) {
+                        .dim_range => |range| {
+                            if (range.lower) |lower| {
+                                const lower_ty = try checkExprType(self, lower);
+                                if (!isIntegerLike(lower_ty)) {
+                                    self.setCurrentSource(self.sourceForExpr(lower));
+                                    return error.InvalidSubscript;
+                                }
+                            }
+                            if (!(range.upper.* == .literal and range.upper.literal.kind == .assumed_size)) {
+                                const upper_ty = try checkExprType(self, range.upper);
+                                if (!isIntegerLike(upper_ty)) {
+                                    self.setCurrentSource(self.sourceForExpr(range.upper));
+                                    return error.InvalidSubscript;
+                                }
+                            }
+                            if (range.stride) |stride| {
+                                const stride_ty = try checkExprType(self, stride);
+                                if (!isIntegerLike(stride_ty)) {
+                                    self.setCurrentSource(self.sourceForExpr(stride));
+                                    return error.InvalidSubscript;
+                                }
+                            }
+                        },
+                        else => {
+                            const arg_ty = try checkExprType(self, arg);
+                            if (!isIntegerLike(arg_ty)) {
+                                self.setCurrentSource(self.sourceForExpr(arg));
+                                return error.InvalidSubscript;
+                            }
+                        },
+                    }
+                }
+            } else if (resolve_symbols.lookupDerivedBinding(self, derived_name, comp.name)) |binding| {
+                if (!comp.has_parens) {
+                    self.setCurrentSource(self.sourceForExpr(expr));
+                    return error.InvalidSubscript;
+                }
+                try checkTypeBoundProcedureComponent(self, comp.base, binding, comp.args, false);
+            } else {
+                return error.InvalidSubscript;
             }
             return try resolve_expr.exprType(self, expr);
         },
@@ -421,6 +433,9 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                 }
             } else {
                 const check_homogeneous = sym.is_intrinsic and isHomogeneousMaxMinIntrinsic(call.name);
+                if (isAbstractInterfaceProcedure(self, call.name)) {
+                    return emitNamedProcedureDiagnostic(self, call.name, error.InvalidArgumentCount, "must not be referenced");
+                }
                 var first_ty: ?ast.TypeKind = null;
                 for (call.args) |arg| {
                     const arg_ty = try checkExprType(self, arg);
@@ -485,6 +500,7 @@ fn isPointerTarget(self: *context.Context, expr: *ast.Expr) bool {
             break :blk self.symbols.items[sym].is_pointer;
         },
         .component => |comp| blk: {
+            if (comp.has_parens) break :blk isTypeBoundProcedurePointerResult(self, comp);
             const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch break :blk false;
             if (base_spec.lowered_kind != .derived) break :blk false;
             const derived_name = base_spec.derived_type_name orelse break :blk false;
@@ -689,6 +705,69 @@ fn checkProcedureActualArgsForExprCall(
     }
 }
 
+fn checkTypeBoundProcedureComponent(
+    self: *context.Context,
+    passed_object: *ast.Expr,
+    binding: context.Context.DerivedTypeInfo.BindingInfo,
+    args: []*ast.Expr,
+    is_call_stmt: bool,
+) CheckError!void {
+    const sig = typeBoundProcedureSig(self, binding) orelse return;
+    if (is_call_stmt and sig.kind != .subroutine) return error.InvalidArgumentCount;
+    if (!is_call_stmt and sig.kind != .function) return error.InvalidSubscript;
+
+    const actual_count = args.len + @as(usize, if (binding.nopass) 0 else 1);
+    const min_count = minimumRequiredProcedureArgs(sig);
+    if (actual_count < min_count or actual_count > sig.arg_count) {
+        return error.InvalidArgumentCount;
+    }
+
+    var formal_idx: usize = 0;
+    if (!binding.nopass and formal_idx < sig.args.len) {
+        try checkTypeBoundProcedureActual(self, sig.args[formal_idx], passed_object);
+        formal_idx += 1;
+    }
+    for (args) |arg| {
+        if (formal_idx >= sig.args.len) break;
+        try checkTypeBoundProcedureActual(self, sig.args[formal_idx], arg);
+        formal_idx += 1;
+    }
+}
+
+fn checkTypeBoundProcedureActual(
+    self: *context.Context,
+    formal: context.Context.ProcedureSig.ArgSig,
+    actual_expr: *ast.Expr,
+) CheckError!void {
+    if (formal.is_procedure) {
+        return checkProcedureActualArg(self, formal, actual_expr);
+    }
+    const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
+    if (!dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
+        self.setCurrentSource(self.sourceForExpr(actual_expr));
+        return error.ArgumentTypeMismatch;
+    }
+}
+
+fn typeBoundProcedureSig(
+    self: *context.Context,
+    binding: context.Context.DerivedTypeInfo.BindingInfo,
+) ?context.Context.ProcedureSig {
+    const impl_name = binding.implementation_name orelse binding.name;
+    return resolve_symbols.lookupKnownProcedureSig(self, impl_name) orelse
+        (if (binding.interface_name) |iface_name| resolve_symbols.lookupKnownProcedureSig(self, iface_name) else null) orelse
+        resolve_symbols.lookupKnownProcedureSig(self, binding.name);
+}
+
+fn isTypeBoundProcedurePointerResult(self: *context.Context, comp: ast.ComponentExpr) bool {
+    const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch return false;
+    if (base_spec.lowered_kind != .derived) return false;
+    const derived_name = base_spec.derived_type_name orelse return false;
+    const binding = resolve_symbols.lookupDerivedBinding(self, derived_name, comp.name) orelse return false;
+    const sig = typeBoundProcedureSig(self, binding) orelse return false;
+    return sig.kind == .function and sig.is_pointer;
+}
+
 fn checkProcedureActualArg(
     self: *context.Context,
     formal: context.Context.ProcedureSig.ArgSig,
@@ -701,7 +780,7 @@ fn checkProcedureActualArg(
             if (actual_sig) |sig| {
                 if (formal.procedure_kind) |expected_kind| {
                     if (sig.kind != expected_kind) {
-                        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(expected_kind));
+                        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, passingGlobalProcedureMessage(sig.kind));
                     }
                 }
                 if (formal.procedure_result_type_spec) |expected_result| {
@@ -712,10 +791,14 @@ fn checkProcedureActualArg(
                         }
                     }
                 }
-                if (formal.procedure_arg_count != sig.arg_count or formal.procedure_alt_return_count != sig.alt_return_count) {
+                if (formal.procedure_has_explicit_interface and
+                    (formal.procedure_arg_count != sig.arg_count or formal.procedure_alt_return_count != sig.alt_return_count))
+                {
                     return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
                 }
-                try checkProcedureDummyCompatibility(self, formal, sig, actual_expr);
+                if (formal.procedure_has_explicit_interface) {
+                    try checkProcedureDummyCompatibility(self, formal, sig, actual_expr);
+                }
                 return;
             }
 
@@ -723,6 +806,7 @@ fn checkProcedureActualArg(
                 if (formal.procedure_kind != null and formal.procedure_kind.? != .function) {
                     return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(formal.procedure_kind.?));
                 }
+                if (!formal.procedure_has_explicit_interface) return;
                 if (formal.procedure_arg_count < arity.min) {
                     return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
                 }
@@ -740,7 +824,7 @@ fn checkProcedureActualArg(
                     switch (expected_kind) {
                         .function => {
                             if (sym.kind == .subroutine) {
-                                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+                                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Passing global subroutine");
                             }
                             if (formal.procedure_arg_count != 0 or formal.procedure_alt_return_count != 0) {
                                 return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
@@ -755,7 +839,7 @@ fn checkProcedureActualArg(
                         },
                         .subroutine => {
                             if (sym.kind == .function or sym.type_explicit) {
-                                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a subroutine");
+                                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Passing global function");
                             }
                             if (sym.kind == .variable) sym.kind = .subroutine;
                             return;
@@ -857,6 +941,14 @@ fn procedureKindMismatchMessage(kind: ast.ProgramUnitKind) []const u8 {
     return switch (kind) {
         .subroutine => "actual argument is not a subroutine",
         .function => "actual argument is not a function",
+        else => "wrong procedure kind",
+    };
+}
+
+fn passingGlobalProcedureMessage(kind: ast.ProgramUnitKind) []const u8 {
+    return switch (kind) {
+        .subroutine => "Passing global subroutine",
+        .function => "Passing global function",
         else => "wrong procedure kind",
     };
 }
@@ -1010,6 +1102,21 @@ fn checkExplicitInterfaceRequirementForExprArgs(
 fn requiresExplicitInterfaceForActual(self: *context.Context, expr: *ast.Expr) bool {
     const spec = resolve_expr.exprTypeSpec(self, expr) catch return false;
     return spec.lowered_kind == .derived and spec.polymorphic and spec.derived_type_name == null;
+}
+
+fn isAbstractInterfaceProcedure(self: *context.Context, name: []const u8) bool {
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        if (!decl.interface_block.abstract) continue;
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
+        }
+    }
+    var it = self.known_host_abstract_interfaces.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return true;
+    }
+    return false;
 }
 
 fn checkOpenControl(self: *context.Context, node: ?*ast.Expr, allowed: []const []const u8) CheckError!void {

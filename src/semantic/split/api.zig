@@ -95,6 +95,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
     var known_host_symbols = std.StringHashMap(symbols.Symbol).init(arena);
     var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena);
     var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena);
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena);
     var host_symbols_active = false;
     var active_host_owner: ?[]const u8 = null;
     for (known_fn_types) |known| {
@@ -144,6 +145,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             &known_host_symbols,
             &known_host_derived_types,
             &known_host_interface_sources,
+            &known_host_abstract_interfaces,
             active_host_owner,
             options.target_layout,
             diag_bag,
@@ -161,6 +163,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
                 known_host_symbols.clearRetainingCapacity();
                 known_host_derived_types.clearRetainingCapacity();
                 known_host_interface_sources.clearRetainingCapacity();
+                known_host_abstract_interfaces.clearRetainingCapacity();
                 host_symbols_active = false;
                 active_host_owner = null;
             }
@@ -171,15 +174,18 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             known_host_symbols.clearRetainingCapacity();
             known_host_derived_types.clearRetainingCapacity();
             known_host_interface_sources.clearRetainingCapacity();
+            known_host_abstract_interfaces.clearRetainingCapacity();
             try symbol_lookup.collectHostSymbols(&known_host_symbols, arena, sem_unit.symbols);
             try collectHostDerivedTypes(&known_host_derived_types, arena, &unit_analyzer.ctx.derived_types);
             try collectHostExplicitInterfaceSources(&known_host_interface_sources, arena, unit.*);
+            try collectHostAbstractInterfaceProcedures(&known_host_abstract_interfaces, arena, unit.*);
             host_symbols_active = true;
             active_host_owner = unit.name;
         } else if (host_symbols_active and unit.*.kind == .program) {
             known_host_symbols.clearRetainingCapacity();
             known_host_derived_types.clearRetainingCapacity();
             known_host_interface_sources.clearRetainingCapacity();
+            known_host_abstract_interfaces.clearRetainingCapacity();
             host_symbols_active = false;
             active_host_owner = null;
         }
@@ -216,6 +222,21 @@ fn collectHostExplicitInterfaceSources(
         for (decl.interface_block.procedure_headers) |proc_header| {
             const key = try symbol_lookup.lowerDup(arena, proc_header.name);
             try out.put(key, decl_source);
+        }
+    }
+}
+
+fn collectHostAbstractInterfaceProcedures(
+    out: *std.StringHashMap(void),
+    arena: std.mem.Allocator,
+    unit: ast.ProgramUnit,
+) !void {
+    for (unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        if (!decl.interface_block.abstract) continue;
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            const key = try symbol_lookup.lowerDup(arena, proc_header.name);
+            try out.put(key, {});
         }
     }
 }
@@ -307,6 +328,10 @@ pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![
     const out = try arena.alloc(context.Context.ProcedureSig.ArgSig, unit.args.len);
     for (unit.args, 0..) |arg_name, idx| {
         const decl_info = findDummyArgDeclInfo(unit, arg_name);
+        const inferred_proc_kind = if (decl_info.interface_procedure == null and !decl_info.external)
+            inferDummyArgProcedureKind(unit, arg_name)
+        else
+            null;
         const declarator = decl_info.declarator;
         const type_spec = inferDummyArgTypeSpec(unit.decls, unit, arg_name, declarator);
         const dims = if (declarator) |item| item.dims else &.{};
@@ -317,13 +342,16 @@ pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![
             .rank = dims.len,
             .optional = decl_info.optional,
             .intent = decl_info.intent,
-            .is_procedure = decl_info.interface_procedure != null or decl_info.external,
+            .is_procedure = decl_info.interface_procedure != null or decl_info.external or inferred_proc_kind != null,
             .procedure_kind = if (decl_info.interface_procedure) |proc|
                 proc.kind
+            else if (inferred_proc_kind) |kind|
+                kind
             else if (decl_info.external and decl_info.explicit_type)
                 .function
             else
                 null,
+            .procedure_has_explicit_interface = decl_info.interface_procedure != null,
             .procedure_arg_count = if (decl_info.interface_procedure) |proc| proc.args.len else 0,
             .procedure_alt_return_count = if (decl_info.interface_procedure) |proc| proc.alt_return_dummy_count else 0,
             .procedure_result_type_spec = if (decl_info.interface_procedure) |proc|
@@ -417,6 +445,10 @@ fn inferInterfaceProcedureArgSigs(
     for (proc_header.args, 0..) |arg_name, idx| {
         const active_decls = if (proc_header.decls.len != 0) proc_header.decls else unit.decls;
         const decl_info = findDummyArgDeclInfoInDecls(active_decls, arg_name);
+        const inferred_proc_kind = if (decl_info.interface_procedure == null and !decl_info.external)
+            inferDummyArgProcedureKindInStmts(unit.stmts, arg_name)
+        else
+            null;
         const declarator = decl_info.declarator;
         const type_spec = inferDummyArgTypeSpec(active_decls, unit, arg_name, declarator);
         const dims = if (declarator) |item| item.dims else &.{};
@@ -427,13 +459,16 @@ fn inferInterfaceProcedureArgSigs(
             .rank = dims.len,
             .optional = decl_info.optional,
             .intent = decl_info.intent,
-            .is_procedure = decl_info.interface_procedure != null or decl_info.external,
+            .is_procedure = decl_info.interface_procedure != null or decl_info.external or inferred_proc_kind != null,
             .procedure_kind = if (decl_info.interface_procedure) |proc|
                 proc.kind
+            else if (inferred_proc_kind) |kind|
+                kind
             else if (decl_info.external and decl_info.explicit_type)
                 .function
             else
                 null,
+            .procedure_has_explicit_interface = decl_info.interface_procedure != null,
             .procedure_arg_count = if (decl_info.interface_procedure) |proc| proc.args.len else 0,
             .procedure_alt_return_count = if (decl_info.interface_procedure) |proc| proc.alt_return_dummy_count else 0,
             .procedure_result_type_spec = if (decl_info.interface_procedure) |proc|
@@ -454,7 +489,239 @@ fn inferInterfaceProcedureArgSigs(
 fn interfaceProcedureResultTypeSpec(unit: ast.ProgramUnit, proc_header: ast.InterfaceProcedure) ?symbols.TypeSpec {
     if (proc_header.kind != .function) return null;
     if (proc_header.type_spec) |type_spec| return procedureTypeSpec(type_spec);
+    if (findInterfaceProcedureDeclaredResultTypeSpec(unit, proc_header)) |type_spec| return type_spec;
     return implicitTypeSpecForName(unit, proc_header.name);
+}
+
+fn findInterfaceProcedureDeclaredResultTypeSpec(
+    unit: ast.ProgramUnit,
+    proc_header: ast.InterfaceProcedure,
+) ?symbols.TypeSpec {
+    const result_name = proc_header.result_name orelse proc_header.name;
+    for (proc_header.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    return applyDummyDeclaratorCharLen(typeDeclTypeSpec(type_decl), item);
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    return switch (procedure_decl.interface) {
+                        .type_spec => |proc_type| applyDummyDeclaratorCharLen(procedureTypeSpec(proc_type), item),
+                        else => applyDummyDeclaratorCharLen(implicitTypeSpecForName(unit, result_name), item),
+                    };
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn inferDummyArgProcedureKind(unit: ast.ProgramUnit, name: []const u8) ?ast.ProgramUnitKind {
+    return inferDummyArgProcedureKindInStmts(unit.stmts, name);
+}
+
+fn inferDummyArgProcedureKindInStmts(stmts: []const ast.Stmt, name: []const u8) ?ast.ProgramUnitKind {
+    var inferred: ?ast.ProgramUnitKind = null;
+    for (stmts) |stmt| {
+        const kind = inferDummyArgProcedureKindInStmt(stmt.node, name) orelse continue;
+        if (inferred) |existing| {
+            if (existing != kind) return null;
+        } else {
+            inferred = kind;
+        }
+    }
+    return inferred;
+}
+
+fn inferDummyArgProcedureKindInStmt(node: ast.StmtNode, name: []const u8) ?ast.ProgramUnitKind {
+    switch (node) {
+        .call => |call| {
+            if (std.ascii.eqlIgnoreCase(call.name, name)) return .subroutine;
+            for (call.args) |arg| {
+                if (arg != .expr) continue;
+                if (inferDummyArgProcedureKindInExpr(arg.expr.value, name)) |kind| return kind;
+            }
+            return null;
+        },
+        .assignment => |assign| {
+            return inferDummyArgProcedureKindInExpr(assign.target, name) orelse
+                inferDummyArgProcedureKindInExpr(assign.value, name);
+        },
+        .pointer_assignment => |assign| {
+            return inferDummyArgProcedureKindInExpr(assign.target, name) orelse
+                inferDummyArgProcedureKindInExpr(assign.value, name);
+        },
+        .if_single => |ifs| {
+            return inferDummyArgProcedureKindInExpr(ifs.condition, name) orelse
+                inferDummyArgProcedureKindInStmt(ifs.stmt.*, name);
+        },
+        .if_block => |ifb| {
+            if (inferDummyArgProcedureKindInExpr(ifb.condition, name)) |kind| return kind;
+            for (ifb.then_stmts) |stmt| {
+                if (inferDummyArgProcedureKindInStmt(stmt.node, name)) |kind| return kind;
+            }
+            for (ifb.else_stmts) |stmt| {
+                if (inferDummyArgProcedureKindInStmt(stmt.node, name)) |kind| return kind;
+            }
+            return null;
+        },
+        .where_stmt => |where| {
+            return inferDummyArgProcedureKindInExpr(where.mask, name) orelse
+                inferDummyArgProcedureKindInExpr(where.target, name) orelse
+                inferDummyArgProcedureKindInExpr(where.value, name);
+        },
+        .write => |write| {
+            if (inferDummyArgProcedureKindInExpr(write.unit, name)) |kind| return kind;
+            if (write.rec) |rec| {
+                if (inferDummyArgProcedureKindInExpr(rec, name)) |kind| return kind;
+            }
+            for (write.args) |arg| {
+                if (inferDummyArgProcedureKindInExpr(arg, name)) |kind| return kind;
+            }
+            if (write.iostat) |expr| return inferDummyArgProcedureKindInExpr(expr, name);
+            return null;
+        },
+        .read => |read| {
+            if (inferDummyArgProcedureKindInExpr(read.unit, name)) |kind| return kind;
+            if (read.rec) |rec| {
+                if (inferDummyArgProcedureKindInExpr(rec, name)) |kind| return kind;
+            }
+            for (read.args) |arg| {
+                if (inferDummyArgProcedureKindInExpr(arg, name)) |kind| return kind;
+            }
+            if (read.iostat) |expr| return inferDummyArgProcedureKindInExpr(expr, name);
+            return null;
+        },
+        .open => |open_stmt| {
+            if (inferDummyArgProcedureKindInExpr(open_stmt.unit, name)) |kind| return kind;
+            if (open_stmt.recl) |expr| {
+                if (inferDummyArgProcedureKindInExpr(expr, name)) |kind| return kind;
+            }
+            if (open_stmt.file) |expr| {
+                if (inferDummyArgProcedureKindInExpr(expr, name)) |kind| return kind;
+            }
+            if (open_stmt.access) |expr| {
+                if (inferDummyArgProcedureKindInExpr(expr, name)) |kind| return kind;
+            }
+            if (open_stmt.form) |expr| {
+                if (inferDummyArgProcedureKindInExpr(expr, name)) |kind| return kind;
+            }
+            if (open_stmt.blank) |expr| {
+                if (inferDummyArgProcedureKindInExpr(expr, name)) |kind| return kind;
+            }
+            if (open_stmt.status) |expr| return inferDummyArgProcedureKindInExpr(expr, name);
+            return null;
+        },
+        .close => |close_stmt| {
+            for (close_stmt.controls) |ctrl| {
+                if (inferDummyArgProcedureKindInExpr(ctrl.value, name)) |kind| return kind;
+            }
+            return null;
+        },
+        .inquire => |inq| {
+            for (inq.controls) |ctrl| {
+                if (inferDummyArgProcedureKindInExpr(ctrl.value, name)) |kind| return kind;
+            }
+            return null;
+        },
+        .allocate => |allocate| {
+            if (allocate.type_spec) |type_spec| {
+                if (type_spec.kind_selector) |expr| {
+                    if (inferDummyArgProcedureKindInExpr(expr, name)) |kind| return kind;
+                }
+                if (type_spec.char_len) |expr| {
+                    if (inferDummyArgProcedureKindInExpr(expr, name)) |kind| return kind;
+                }
+            }
+            for (allocate.items) |item| {
+                if (inferDummyArgProcedureKindInExpr(item.target, name)) |kind| return kind;
+                for (item.dims) |dim| {
+                    if (inferDummyArgProcedureKindInExpr(dim, name)) |kind| return kind;
+                }
+            }
+            return null;
+        },
+        .data => |data_stmt| {
+            for (data_stmt.inits) |init| {
+                if (inferDummyArgProcedureKindInExpr(init.target, name)) |kind| return kind;
+                if (inferDummyArgProcedureKindInExpr(init.value, name)) |kind| return kind;
+            }
+            return null;
+        },
+        .arith_if => |arith| return inferDummyArgProcedureKindInExpr(arith.condition, name),
+        .do_loop => |loop| {
+            return inferDummyArgProcedureKindInExpr(loop.start, name) orelse
+                inferDummyArgProcedureKindInExpr(loop.end, name) orelse
+                (if (loop.step) |expr| inferDummyArgProcedureKindInExpr(expr, name) else null);
+        },
+        .do_while => |loop| return inferDummyArgProcedureKindInExpr(loop.condition, name),
+        .computed_goto => |gt| return inferDummyArgProcedureKindInExpr(gt.selector, name),
+        .ret => |ret| return if (ret.value) |expr| inferDummyArgProcedureKindInExpr(expr, name) else null,
+        else => return null,
+    }
+}
+
+fn inferDummyArgProcedureKindInExpr(expr: *ast.Expr, name: []const u8) ?ast.ProgramUnitKind {
+    switch (expr.*) {
+        .call_or_subscript => |call| {
+            if (std.ascii.eqlIgnoreCase(call.name, name)) return .function;
+            for (call.args) |arg| {
+                if (inferDummyArgProcedureKindInExpr(arg, name)) |kind| return kind;
+            }
+            return null;
+        },
+        .substring => |sub| {
+            for (sub.args) |arg| {
+                if (inferDummyArgProcedureKindInExpr(arg, name)) |kind| return kind;
+            }
+            if (sub.start) |start| {
+                if (inferDummyArgProcedureKindInExpr(start, name)) |kind| return kind;
+            }
+            if (sub.end) |end_expr| return inferDummyArgProcedureKindInExpr(end_expr, name);
+            return null;
+        },
+        .component => |comp| {
+            if (inferDummyArgProcedureKindInExpr(comp.base, name)) |kind| return kind;
+            for (comp.args) |arg| {
+                if (inferDummyArgProcedureKindInExpr(arg, name)) |kind| return kind;
+            }
+            return null;
+        },
+        .unary => |un| return inferDummyArgProcedureKindInExpr(un.expr, name),
+        .binary => |bin| {
+            return inferDummyArgProcedureKindInExpr(bin.left, name) orelse
+                inferDummyArgProcedureKindInExpr(bin.right, name);
+        },
+        .complex_literal => |lit| {
+            return inferDummyArgProcedureKindInExpr(lit.real, name) orelse
+                inferDummyArgProcedureKindInExpr(lit.imag, name);
+        },
+        .dim_range => |range| {
+            if (range.lower) |lower| {
+                if (inferDummyArgProcedureKindInExpr(lower, name)) |kind| return kind;
+            }
+            if (inferDummyArgProcedureKindInExpr(range.upper, name)) |kind| return kind;
+            if (range.stride) |stride| return inferDummyArgProcedureKindInExpr(stride, name);
+            return null;
+        },
+        .implied_do => |implied| {
+            if (inferDummyArgProcedureKindInExpr(implied.start, name)) |kind| return kind;
+            if (inferDummyArgProcedureKindInExpr(implied.end, name)) |kind| return kind;
+            if (implied.step) |step| {
+                if (inferDummyArgProcedureKindInExpr(step, name)) |kind| return kind;
+            }
+            for (implied.items) |item| {
+                if (inferDummyArgProcedureKindInExpr(item, name)) |kind| return kind;
+            }
+            return null;
+        },
+        else => return null,
+    }
 }
 
 fn inferDummyArgTypeSpec(

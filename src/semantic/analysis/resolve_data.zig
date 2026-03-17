@@ -443,7 +443,7 @@ fn cloneExprWithSubst(
                 args[idx] = try cloneExprWithSubst(ctx, arg, name, replacement);
             }
             const cloned = try ctx.arena.create(ast.Expr);
-            cloned.* = .{ .component = .{ .base = base, .name = comp.name, .args = args } };
+            cloned.* = .{ .component = .{ .base = base, .name = comp.name, .args = args, .has_parens = comp.has_parens } };
             return cloned;
         },
         .dim_range => |range| {

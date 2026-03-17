@@ -22,6 +22,7 @@ pub const UnitAnalyzer = struct {
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
         known_host_derived_types: *const std.StringHashMap(context.Context.DerivedTypeInfo),
         known_host_interface_sources: *const std.StringHashMap(ast.DeclSource),
+        known_host_abstract_interfaces: *const std.StringHashMap(void),
         known_host_owner: ?[]const u8,
         target_layout: context.Context.TargetLayout,
     ) UnitAnalyzer {
@@ -34,6 +35,7 @@ pub const UnitAnalyzer = struct {
             known_host_parameters,
             known_host_derived_types,
             known_host_interface_sources,
+            known_host_abstract_interfaces,
             known_host_owner,
             target_layout,
             null,
@@ -49,6 +51,7 @@ pub const UnitAnalyzer = struct {
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
         known_host_derived_types: *const std.StringHashMap(context.Context.DerivedTypeInfo),
         known_host_interface_sources: *const std.StringHashMap(ast.DeclSource),
+        known_host_abstract_interfaces: *const std.StringHashMap(void),
         known_host_owner: ?[]const u8,
         target_layout: context.Context.TargetLayout,
         diag_bag: ?*diag.Bag,
@@ -61,6 +64,7 @@ pub const UnitAnalyzer = struct {
             known_host_parameters,
             known_host_derived_types,
             known_host_interface_sources,
+            known_host_abstract_interfaces,
             known_host_owner,
             target_layout,
         );
@@ -73,6 +77,7 @@ pub const UnitAnalyzer = struct {
                 known_host_parameters,
                 known_host_derived_types,
                 known_host_interface_sources,
+                known_host_abstract_interfaces,
                 known_host_owner,
                 target_layout,
                 diag_bag,
@@ -129,6 +134,8 @@ test "semantic UnexpectedTypeDecl maps to the unexpected_type_decl diagnostic wi
     defer known_host_derived_types.deinit();
     var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(testing.allocator);
     defer known_host_interface_sources.deinit();
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(testing.allocator);
+    defer known_host_abstract_interfaces.deinit();
 
     const unit = ast.ProgramUnit{
         .kind = .subroutine,
@@ -146,6 +153,7 @@ test "semantic UnexpectedTypeDecl maps to the unexpected_type_decl diagnostic wi
         &known_host_parameters,
         &known_host_derived_types,
         &known_host_interface_sources,
+        &known_host_abstract_interfaces,
         null,
         .{},
     );
@@ -177,6 +185,8 @@ test "semantic fallback uses last noted statement when active context is cleared
     defer known_host_derived_types.deinit();
     var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(testing.allocator);
     defer known_host_interface_sources.deinit();
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(testing.allocator);
+    defer known_host_abstract_interfaces.deinit();
 
     const stmt = ast.Stmt{
         .label = null,
@@ -201,6 +211,7 @@ test "semantic fallback uses last noted statement when active context is cleared
         &known_host_parameters,
         &known_host_derived_types,
         &known_host_interface_sources,
+        &known_host_abstract_interfaces,
         null,
         .{},
     );
@@ -244,6 +255,7 @@ test "module procedure explicit interface body does not conflict with module con
     var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
     var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
     var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
     diag.clear();
     var unit = program.units[0];
     var analyzer_instance = UnitAnalyzer.init(
@@ -255,6 +267,7 @@ test "module procedure explicit interface body does not conflict with module con
         &known_host_parameters,
         &known_host_derived_types,
         &known_host_interface_sources,
+        &known_host_abstract_interfaces,
         null,
         .{},
     );

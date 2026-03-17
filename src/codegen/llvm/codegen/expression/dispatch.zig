@@ -150,19 +150,24 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             return casting.emitLiteral(ctx, builder, lit);
         },
         .component => |comp| {
-            const ptr = try memory.emitComponentPtr(ctx, builder, comp);
             const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
-            const component = ctx.lookupDerivedComponentLayout(base_type_name, comp.name) orelse return error.UnknownSymbol;
-            const ty = try ctx.componentIRType(comp);
-            if (component.pointer) {
+            if (ctx.lookupDerivedComponentLayout(base_type_name, comp.name)) |component| {
+                const ptr = try memory.emitComponentPtr(ctx, builder, comp);
+                const ty = try ctx.componentIRType(comp);
+                if (component.pointer) {
+                    const tmp = try ctx.nextTemp();
+                    try builder.load(tmp, .ptr, ptr);
+                    return .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+                }
+                if (ty == .ptr) return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
                 const tmp = try ctx.nextTemp();
-                try builder.load(tmp, .ptr, ptr);
-                return .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+                try builder.load(tmp, ty, ptr);
+                return .{ .name = tmp, .ty = ty, .is_ptr = false };
             }
-            if (ty == .ptr) return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
-            const tmp = try ctx.nextTemp();
-            try builder.load(tmp, ty, ptr);
-            return .{ .name = tmp, .ty = ty, .is_ptr = false };
+            if (comp.has_parens) {
+                return emitTypeBoundProcedureCall(ctx, builder, comp);
+            }
+            return error.UnknownSymbol;
         },
         .complex_literal => |lit| {
             var real_val = try emitExprImpl(ctx, builder, lit.real, subst_depth);
@@ -267,6 +272,92 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
         .dim_range => return error.InvalidExpression,
         .implied_do => return error.UnsupportedImpliedDo,
     }
+}
+
+fn emitTypeBoundProcedureCall(ctx: *Context, builder: anytype, comp: ast.ComponentExpr) !ValueRef {
+    const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+    const binding = ctx.lookupDerivedBinding(base_type_name, comp.name) orelse return error.UnknownSymbol;
+    const proc_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
+    const proc_sig = ctx.lookupKnownProcedureSig(proc_name) orelse return error.UnknownSymbol;
+
+    const actuals = try buildTypeBoundProcedureActuals(ctx, comp, binding);
+    defer ctx.allocator.free(actuals);
+
+    if (proc_sig.kind != .function) return error.InvalidExpression;
+
+    const result_spec = boundProcedureResultSpec(ctx, binding);
+    const ret_ty: ir.IRType = if (proc_sig.is_pointer)
+        .ptr
+    else if (result_spec) |spec|
+        (if (spec.lowered_kind == .derived or spec.lowered_kind == .character) .ptr else ctx.typeFromKind(spec.lowered_kind))
+    else
+        return error.UnknownSymbol;
+
+    if (result_spec != null and result_spec.?.lowered_kind == .character) {
+        const result_len = result_spec.?.char_len orelse return error.NonConstantCharacterLength;
+        const fn_name = try ensureExternalDeclForCall(ctx, proc_name, .void, actuals, true);
+        const ptr = try call.emitCharacterCall(ctx, builder, fn_name, result_len, actuals);
+        return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
+    }
+
+    const fn_name = try ensureExternalDeclForCall(ctx, proc_name, ret_ty, actuals, false);
+    return call.emitCall(ctx, builder, fn_name, ret_ty, actuals, false);
+}
+
+fn buildTypeBoundProcedureActuals(
+    ctx: *Context,
+    comp: ast.ComponentExpr,
+    binding: context.DerivedBindingInfo,
+) ![]*Expr {
+    const extra: usize = if (binding.nopass) 0 else 1;
+    const actuals = try ctx.allocator.alloc(*Expr, comp.args.len + extra);
+    var out_idx: usize = 0;
+    if (!binding.nopass) {
+        actuals[out_idx] = comp.base;
+        out_idx += 1;
+    }
+    for (comp.args) |arg| {
+        actuals[out_idx] = arg;
+        out_idx += 1;
+    }
+    return actuals;
+}
+
+fn boundProcedureResultSpec(
+    ctx: *Context,
+    binding: context.DerivedBindingInfo,
+) ?ast.TypeSpec {
+    const proc_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
+    if (ctx.findSymbol(proc_name)) |sym| {
+        return sym.type_spec;
+    }
+    if (binding.interface_name) |iface_name| {
+        if (ctx.findSymbol(iface_name)) |sym| return sym.type_spec;
+    }
+    for (ctx.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            if (!std.ascii.eqlIgnoreCase(proc_header.name, proc_name)) continue;
+            if (proc_header.kind != .function) return null;
+            if (proc_header.type_spec) |type_spec| {
+                return procedureTypeSpec(type_spec);
+            }
+            return ctx.findSymbol(proc_header.name).?.type_spec;
+        }
+    }
+    return null;
+}
+
+fn procedureTypeSpec(proc_type: ast.ProcedureTypeSpec) ast.TypeSpec {
+    if (proc_type.type_kind != .derived) {
+        return ast.TypeSpec.fromResolvedKind(proc_type.type_kind, proc_type.type_kind, null)
+            .withPolymorphic(proc_type.polymorphic);
+    }
+    const base = if (proc_type.derived_type_name) |derived_name|
+        ast.TypeSpec.fromDerived(derived_name)
+    else
+        ast.TypeSpec.fromKind(.derived);
+    return base.withPolymorphic(proc_type.polymorphic);
 }
 
 fn ensureExternalDeclForCall(

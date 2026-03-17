@@ -13,10 +13,13 @@ pub const Checker = struct {
         if (!ctx.enterUnitScope()) return error.MissingUnitScope;
         var first_stmt_error: ?anyerror = null;
         for (ctx.unit.stmts) |stmt| {
+            const diag_count_before = ctx.diagnosticCount();
             check_statements.checkStmt(ctx, stmt) catch |err| {
                 if (!ctx.usesExplicitDiagnosticBag()) return err;
                 if (first_stmt_error == null) first_stmt_error = err;
-                ctx.recordSemanticError(err);
+                if (ctx.diagnosticCount() == diag_count_before) {
+                    ctx.recordSemanticError(err);
+                }
                 continue;
             };
         }

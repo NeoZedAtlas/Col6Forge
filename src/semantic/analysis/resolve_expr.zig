@@ -168,9 +168,15 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             const base_spec = try exprTypeSpecCached(self, comp.base);
             if (base_spec.lowered_kind != .derived) return error.InvalidSubscript;
             const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
-            const component = symbols_mod.lookupDerivedComponent(self, derived_name, comp.name) orelse return error.InvalidSubscript;
-            try validateComponentArgs(self, component.dims, comp.args);
-            try cacheExprType(self, expr, component.type_spec);
+            if (symbols_mod.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
+                try validateComponentArgs(self, component.dims, comp.args);
+                try cacheExprType(self, expr, component.type_spec);
+                return;
+            }
+            const binding = symbols_mod.lookupDerivedBinding(self, derived_name, comp.name) orelse return error.InvalidSubscript;
+            if (!comp.has_parens) return error.InvalidSubscript;
+            try validateTypeBoundProcedureCall(self, comp.base, binding, comp.args);
+            try cacheExprType(self, expr, try typeBoundProcedureResultTypeSpec(self, binding));
         },
         .dim_range => |range| {
             if (range.lower) |lower| try resolveExpr(self, lower);
@@ -322,8 +328,12 @@ fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!sy
             const base_spec = try exprTypeSpecCached(self, comp.base);
             if (base_spec.lowered_kind != .derived) return error.InvalidSubscript;
             const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
-            const component = symbols_mod.lookupDerivedComponent(self, derived_name, comp.name) orelse return error.InvalidSubscript;
-            return component.type_spec;
+            if (symbols_mod.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
+                return component.type_spec;
+            }
+            const binding = symbols_mod.lookupDerivedBinding(self, derived_name, comp.name) orelse return error.InvalidSubscript;
+            if (!comp.has_parens) return error.InvalidSubscript;
+            return typeBoundProcedureResultTypeSpec(self, binding);
         },
         .dim_range => return symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
         .literal => |lit| {
@@ -497,6 +507,95 @@ fn validateComponentArgs(
     }
 }
 
+fn validateTypeBoundProcedureCall(
+    self: *context.Context,
+    passed_object: *ast.Expr,
+    binding: context.Context.DerivedTypeInfo.BindingInfo,
+    args: []*ast.Expr,
+) ResolveError!void {
+    const sig = typeBoundProcedureSig(self, binding) orelse return;
+    const actual_count = args.len + @as(usize, if (binding.nopass) 0 else 1);
+    if (actual_count > sig.arg_count) return error.InvalidArgumentCount;
+    if (actual_count < minimumRequiredProcedureArgs(sig)) return error.InvalidArgumentCount;
+
+    var formal_idx: usize = 0;
+    if (!binding.nopass and formal_idx < sig.args.len) {
+        try validateTypeBoundProcedureActual(self, sig.args[formal_idx], passed_object);
+        formal_idx += 1;
+    }
+    for (args) |arg| {
+        if (formal_idx >= sig.args.len) break;
+        try validateTypeBoundProcedureActual(self, sig.args[formal_idx], arg);
+        formal_idx += 1;
+    }
+}
+
+fn validateTypeBoundProcedureActual(
+    self: *context.Context,
+    formal: context.Context.ProcedureSig.ArgSig,
+    actual: *ast.Expr,
+) ResolveError!void {
+    const actual_spec = try exprTypeSpecCached(self, actual);
+    if (!dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) return error.ArgumentTypeMismatch;
+}
+
+fn dummyArgTypeCompatible(
+    self: *context.Context,
+    expected: symbols.TypeSpec,
+    actual: symbols.TypeSpec,
+) bool {
+    if (expected.lowered_kind != actual.lowered_kind) return false;
+    if (expected.lowered_kind != .derived) return true;
+
+    if (expected.polymorphic and expected.derived_type_name == null) {
+        return actual.lowered_kind == .derived;
+    }
+
+    const expected_name = expected.derived_type_name orelse return false;
+    const actual_name = actual.derived_type_name orelse return false;
+    return if (expected.polymorphic)
+        std.ascii.eqlIgnoreCase(expected_name, actual_name) or symbolsCompatibleExtension(self, actual_name, expected_name)
+    else
+        std.ascii.eqlIgnoreCase(expected_name, actual_name);
+}
+
+fn typeBoundProcedureSig(
+    self: *context.Context,
+    binding: context.Context.DerivedTypeInfo.BindingInfo,
+) ?context.Context.ProcedureSig {
+    const impl_name = binding.implementation_name orelse binding.name;
+    return symbols_mod.lookupKnownProcedureSig(self, impl_name) orelse
+        (if (binding.interface_name) |iface_name| symbols_mod.lookupKnownProcedureSig(self, iface_name) else null) orelse
+        symbols_mod.lookupKnownProcedureSig(self, binding.name);
+}
+
+fn typeBoundProcedureResultTypeSpec(
+    self: *context.Context,
+    binding: context.Context.DerivedTypeInfo.BindingInfo,
+) ResolveError!symbols.TypeSpec {
+    const sig = typeBoundProcedureSig(self, binding) orelse return error.InvalidSubscript;
+    if (sig.kind != .function) return error.InvalidSubscript;
+    const result_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
+    return symbols_mod.lookupKnownFunctionResolvedSpec(self, result_name) orelse return error.InvalidSubscript;
+}
+
+fn minimumRequiredProcedureArgs(sig: context.Context.ProcedureSig) usize {
+    if (sig.args.len == 0) return sig.arg_count;
+    var required: usize = 0;
+    for (sig.args) |arg| {
+        if (!arg.optional) required += 1;
+    }
+    return required;
+}
+
+fn symbolsCompatibleExtension(
+    self: *context.Context,
+    actual_name: []const u8,
+    expected_name: []const u8,
+) bool {
+    return symbols_mod.isSameOrExtension(self, actual_name, expected_name);
+}
+
 fn invalidateExprTypeCache(self: *context.Context, expr: *ast.Expr) void {
     _ = self.expr_type_cache.remove(@intFromPtr(expr));
     _ = self.expr_type_spec_cache.remove(@intFromPtr(expr));
@@ -596,6 +695,8 @@ test "exprType treats D exponent real literal as DOUBLE PRECISION" {
     defer known_host_derived.deinit();
     var known_host_interfaces = std.StringHashMap(ast.DeclSource).init(testing.allocator);
     defer known_host_interfaces.deinit();
+    var known_host_abstract = std.StringHashMap(void).init(testing.allocator);
+    defer known_host_abstract.deinit();
 
     const unit = ast.ProgramUnit{
         .kind = .subroutine,
@@ -605,7 +706,7 @@ test "exprType treats D exponent real literal as DOUBLE PRECISION" {
         .decl_sources = &.{},
         .stmts = &.{},
     };
-    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, &known_host_derived, &known_host_interfaces, null, .{});
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, &known_host_derived, &known_host_interfaces, &known_host_abstract, null, .{});
 
     var lit = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0D0" } };
     try testing.expectEqual(ast.TypeKind.double_precision, try exprType(&ctx, &lit));
@@ -623,6 +724,8 @@ test "exprType treats _8 real kind suffix as DOUBLE PRECISION" {
     defer known_host_derived.deinit();
     var known_host_interfaces = std.StringHashMap(ast.DeclSource).init(testing.allocator);
     defer known_host_interfaces.deinit();
+    var known_host_abstract = std.StringHashMap(void).init(testing.allocator);
+    defer known_host_abstract.deinit();
 
     const unit = ast.ProgramUnit{
         .kind = .subroutine,
@@ -632,7 +735,7 @@ test "exprType treats _8 real kind suffix as DOUBLE PRECISION" {
         .decl_sources = &.{},
         .stmts = &.{},
     };
-    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, &known_host_derived, &known_host_interfaces, null, .{});
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, &known_host_derived, &known_host_interfaces, &known_host_abstract, null, .{});
 
     var lit = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0_8" } };
     try testing.expectEqual(ast.TypeKind.double_precision, try exprType(&ctx, &lit));
@@ -650,6 +753,8 @@ test "exprType promotes complex literal to COMPLEX*16 when component is DOUBLE P
     defer known_host_derived.deinit();
     var known_host_interfaces = std.StringHashMap(ast.DeclSource).init(testing.allocator);
     defer known_host_interfaces.deinit();
+    var known_host_abstract = std.StringHashMap(void).init(testing.allocator);
+    defer known_host_abstract.deinit();
 
     const unit = ast.ProgramUnit{
         .kind = .subroutine,
@@ -659,7 +764,7 @@ test "exprType promotes complex literal to COMPLEX*16 when component is DOUBLE P
         .decl_sources = &.{},
         .stmts = &.{},
     };
-    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, &known_host_derived, &known_host_interfaces, null, .{});
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, &known_host_derived, &known_host_interfaces, &known_host_abstract, null, .{});
 
     var real_part = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0D0" } };
     var imag_part = ast.Expr{ .literal = .{ .kind = .real, .text = "2.0" } };

@@ -1103,6 +1103,11 @@ fn emitPointerValue(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitE
             break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = false };
         },
         .component => |comp| blk: {
+            if (comp.has_parens) {
+                const value = try expr.emitExpr(ctx, builder, expr_node);
+                if (value.ty != .ptr) return error.AssignmentTypeMismatch;
+                break :blk value;
+            }
             const slot = try expr.emitLValue(ctx, builder, expr_node);
             const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
             const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;

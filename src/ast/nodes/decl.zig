@@ -68,6 +68,7 @@ pub const ProcedureDecl = struct {
 pub const InterfaceProcedure = struct {
     kind: @import("program.zig").ProgramUnitKind,
     name: []const u8,
+    result_name: ?[]const u8 = null,
     args: []const []const u8,
     alt_return_dummy_count: usize = 0,
     type_spec: ?ProcedureTypeSpec = null,
@@ -79,6 +80,17 @@ pub const DerivedTypeDef = struct {
     parent_name: ?[]const u8 = null,
     abstract: bool = false,
     components: []const TypeDecl = &.{},
+    bindings: []const TypeBoundProcedureBinding = &.{},
+};
+
+pub const TypeBoundProcedureBinding = struct {
+    name: []const u8,
+    interface_name: ?[]const u8 = null,
+    implementation_name: ?[]const u8 = null,
+    deferred: bool = false,
+    nopass: bool = false,
+    pass_name: ?[]const u8 = null,
+    non_overridable: bool = false,
 };
 
 pub const InterfaceBlock = struct {

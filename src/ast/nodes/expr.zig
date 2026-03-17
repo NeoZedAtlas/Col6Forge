@@ -67,6 +67,7 @@ pub const ComponentExpr = struct {
     base: *Expr,
     name: []const u8,
     args: []*Expr = &.{},
+    has_parens: bool = false,
 };
 
 pub const ComplexLiteral = struct {

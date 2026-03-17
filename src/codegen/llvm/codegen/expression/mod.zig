@@ -269,6 +269,89 @@ test "emitBinary floating ne uses unordered comparison" {
     try testing.expect(std.mem.indexOf(u8, buffer.items, "fcmp une float") != null);
 }
 
+test "emitExpr prefers component subscripting over type-bound call when component exists" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const dim_two = try makeLiteral(a, .integer, "2");
+    const symbols = try a.alloc(sema.Symbol, 1);
+    symbols[0] = makeTestSymbol("F", sema.TypeSpec.fromDerived("fld"), &.{}, .variable, .local);
+
+    const sem_unit = sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(sema.ResolvedRef, 0),
+    };
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(ast.Decl, 0),
+        .stmts = try a.alloc(ast.Stmt, 0),
+    };
+
+    var decls = std.StringHashMap(context.IRDecl).init(a);
+    defer decls.deinit();
+    var defined = std.StringHashMap(void).init(a);
+    defer defined.deinit();
+    var formats = std.StringHashMap(context.FormatInfo).init(a);
+    defer formats.deinit();
+    var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
+    defer inline_formats.deinit();
+    var string_pool = context.StringPool.init(a);
+    defer string_pool.deinit();
+    var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
+    defer intrinsic_wrappers.deinit();
+    var known_procedure_sigs = context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig).initContext(a, .{});
+    defer known_procedure_sigs.deinit();
+
+    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{});
+    defer ctx.deinit();
+
+    try ctx.locals.put("F", .{ .name = "%fslot", .ty = .ptr, .is_ptr = true });
+    try ctx.derived_type_layouts.put("fld", .{
+        .name = "fld",
+        .parent_name = null,
+        .components = &.{.{
+            .name = "size",
+            .type_spec = sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+            .dims = &.{dim_two},
+            .pointer = false,
+            .allocatable = false,
+            .offset = 0,
+            .elem_size = 4,
+            .size = 8,
+            .alignment = 4,
+        }},
+        .size = 8,
+        .alignment = 4,
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const base = try makeIdent(a, "F");
+    const idx = try makeLiteral(a, .integer, "1");
+    const expr_node = try a.create(Expr);
+    expr_node.* = .{ .component = .{
+        .base = base,
+        .name = "size",
+        .args = &.{idx},
+        .has_parens = true,
+    } };
+
+    const value = try emitExpr(&ctx, &builder, expr_node);
+    try testing.expectEqual(IRType.i32, value.ty);
+}
+
 test "emitBinary i64 arithmetic and comparisons use integer ops" {
     const testing = std.testing;
     const allocator = testing.allocator;
