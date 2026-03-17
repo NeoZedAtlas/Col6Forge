@@ -40,6 +40,8 @@ pub const TypeDecl = struct {
     allocatable: bool = false,
     pointer: bool = false,
     optional: bool = false,
+    intent: ?IntentKind = null,
+    external: bool = false,
 };
 
 pub const ProcedureTypeSpec = struct {
@@ -91,6 +93,7 @@ pub const InterfaceBlock = struct {
 pub const DimensionDecl = struct {
     items: []Declarator,
     allocatable: bool = false,
+    pointer: bool = false,
 };
 
 pub const ParameterDecl = struct {

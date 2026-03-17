@@ -47,6 +47,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 self.setCurrentSource(self.sourceForExpr(assign.value) orelse self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
             }
+            try checkProcedurePointerAssignmentCompatibility(self, assign.target, assign.value);
         },
         .assign_label => |assign| {
             _ = std.fmt.parseInt(i64, assign.label, 10) catch return error.InvalidLabelValue;
@@ -700,18 +701,27 @@ fn checkProcedureActualArg(
             if (actual_sig) |sig| {
                 if (formal.procedure_kind) |expected_kind| {
                     if (sig.kind != expected_kind) {
-                        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+                        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(expected_kind));
+                    }
+                }
+                if (formal.procedure_result_type_spec) |expected_result| {
+                    if (sig.kind == .function) {
+                        const actual_result = resolve_symbols.lookupKnownFunctionResolvedSpec(self, name) orelse actualSigResultType(sig);
+                        if (actual_result != null and !dummyArgTypeCompatible(self, expected_result, actual_result.?)) {
+                            return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in function result");
+                        }
                     }
                 }
                 if (formal.procedure_arg_count != sig.arg_count or formal.procedure_alt_return_count != sig.alt_return_count) {
                     return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
                 }
+                try checkProcedureDummyCompatibility(self, formal, sig, actual_expr);
                 return;
             }
 
             if (lookupIntrinsicArity(self, name)) |arity| {
                 if (formal.procedure_kind != null and formal.procedure_kind.? != .function) {
-                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(formal.procedure_kind.?));
                 }
                 if (formal.procedure_arg_count < arity.min) {
                     return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
@@ -724,16 +734,131 @@ fn checkProcedureActualArg(
                 return;
             }
 
+            if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
+                var sym = &self.symbols.items[idx];
+                if (formal.procedure_kind) |expected_kind| {
+                    switch (expected_kind) {
+                        .function => {
+                            if (sym.kind == .subroutine) {
+                                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+                            }
+                            if (formal.procedure_arg_count != 0 or formal.procedure_alt_return_count != 0) {
+                                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+                            }
+                            if (formal.procedure_result_type_spec) |expected_result| {
+                                if (!dummyArgTypeCompatible(self, expected_result, sym.type_spec)) {
+                                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in function result");
+                                }
+                            }
+                            if (sym.kind == .variable) sym.kind = .function;
+                            return;
+                        },
+                        .subroutine => {
+                            if (sym.kind == .function or sym.type_explicit) {
+                                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a subroutine");
+                            }
+                            if (sym.kind == .variable) sym.kind = .subroutine;
+                            return;
+                        },
+                        else => {},
+                    }
+                }
+            }
+
             if (formal.procedure_kind == .function) {
                 return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
             }
         },
         else => {
-            if (formal.procedure_kind == .function) {
-                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+            if (formal.procedure_kind) |expected_kind| {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(expected_kind));
             }
         },
     }
+}
+
+fn checkProcedureDummyCompatibility(
+    self: *context.Context,
+    formal: context.Context.ProcedureSig.ArgSig,
+    actual_sig: context.Context.ProcedureSig,
+    actual_expr: *ast.Expr,
+) CheckError!void {
+    const count = @min(formal.procedure_dummy_sigs.len, actual_sig.args.len);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const formal_arg = formal.procedure_dummy_sigs[idx];
+        const actual_arg = actual_sig.args[idx];
+        if (formal_arg.is_procedure != actual_arg.is_procedure) {
+            return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+        }
+        if (formal_arg.optional != actual_arg.optional) {
+            return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "OPTIONAL mismatch in argument");
+        }
+        if (formal_arg.intent != null and actual_arg.intent != null and formal_arg.intent.? != actual_arg.intent.?) {
+            return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "INTENT mismatch in argument");
+        }
+        if (formal_arg.is_procedure) {
+            if (formal_arg.procedure_kind != null and actual_arg.procedure_kind != null and formal_arg.procedure_kind.? != actual_arg.procedure_kind.?) {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+            }
+            if (formal_arg.procedure_result_type_spec) |expected_result| {
+                if (actual_arg.procedure_result_type_spec) |actual_result| {
+                    if (!dummyArgTypeCompatible(self, expected_result, actual_result)) {
+                        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn actualSigResultType(sig: context.Context.ProcedureSig) ?symbols.TypeSpec {
+    _ = sig;
+    return null;
+}
+
+fn checkProcedurePointerAssignmentCompatibility(
+    self: *context.Context,
+    target_expr: *ast.Expr,
+    value_expr: *ast.Expr,
+) CheckError!void {
+    const target_name = switch (target_expr.*) {
+        .identifier => |name| name,
+        else => return,
+    };
+    const target_sig = resolve_symbols.lookupKnownProcedureSig(self, target_name) orelse return;
+    const value_name = switch (value_expr.*) {
+        .identifier => |name| name,
+        else => return,
+    };
+    const value_sig = resolve_symbols.lookupKnownProcedureSig(self, value_name) orelse return;
+    if (target_sig.kind != value_sig.kind) {
+        return emitProcedureActualDiagnostic(self, value_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(target_sig.kind));
+    }
+    if (target_sig.arg_count != value_sig.arg_count or target_sig.alt_return_count != value_sig.alt_return_count) {
+        return emitProcedureActualDiagnostic(self, value_expr, error.InvalidArgumentCount, "wrong number of arguments");
+    }
+
+    const count = @min(target_sig.args.len, value_sig.args.len);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const expected = target_sig.args[idx];
+        const actual = value_sig.args[idx];
+        if (expected.optional != actual.optional) {
+            return emitProcedureActualDiagnostic(self, value_expr, error.InvalidArgumentCount, "OPTIONAL mismatch in argument");
+        }
+        if (expected.intent != null and actual.intent != null and expected.intent.? != actual.intent.?) {
+            return emitProcedureActualDiagnostic(self, value_expr, error.InvalidArgumentCount, "INTENT mismatch in argument");
+        }
+    }
+}
+
+fn procedureKindMismatchMessage(kind: ast.ProgramUnitKind) []const u8 {
+    return switch (kind) {
+        .subroutine => "actual argument is not a subroutine",
+        .function => "actual argument is not a function",
+        else => "wrong procedure kind",
+    };
 }
 
 fn emitProcedureActualDiagnostic(

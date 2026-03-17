@@ -20,6 +20,8 @@ pub const UnitAnalyzer = struct {
         known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
         known_procedure_sigs: *const std.StringHashMap(context.Context.ProcedureSig),
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
+        known_host_derived_types: *const std.StringHashMap(context.Context.DerivedTypeInfo),
+        known_host_interface_sources: *const std.StringHashMap(ast.DeclSource),
         known_host_owner: ?[]const u8,
         target_layout: context.Context.TargetLayout,
     ) UnitAnalyzer {
@@ -30,6 +32,8 @@ pub const UnitAnalyzer = struct {
             known_function_type_specs,
             known_procedure_sigs,
             known_host_parameters,
+            known_host_derived_types,
+            known_host_interface_sources,
             known_host_owner,
             target_layout,
             null,
@@ -43,6 +47,8 @@ pub const UnitAnalyzer = struct {
         known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
         known_procedure_sigs: *const std.StringHashMap(context.Context.ProcedureSig),
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
+        known_host_derived_types: *const std.StringHashMap(context.Context.DerivedTypeInfo),
+        known_host_interface_sources: *const std.StringHashMap(ast.DeclSource),
         known_host_owner: ?[]const u8,
         target_layout: context.Context.TargetLayout,
         diag_bag: ?*diag.Bag,
@@ -53,6 +59,8 @@ pub const UnitAnalyzer = struct {
             known_function_type_specs,
             known_procedure_sigs,
             known_host_parameters,
+            known_host_derived_types,
+            known_host_interface_sources,
             known_host_owner,
             target_layout,
         );
@@ -63,6 +71,8 @@ pub const UnitAnalyzer = struct {
                 known_function_type_specs,
                 known_procedure_sigs,
                 known_host_parameters,
+                known_host_derived_types,
+                known_host_interface_sources,
                 known_host_owner,
                 target_layout,
                 diag_bag,
@@ -115,6 +125,10 @@ test "semantic UnexpectedTypeDecl maps to the unexpected_type_decl diagnostic wi
     defer known_procedure_sigs.deinit();
     var known_host_parameters = std.StringHashMap(symbols.Symbol).init(testing.allocator);
     defer known_host_parameters.deinit();
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(testing.allocator);
+    defer known_host_derived_types.deinit();
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(testing.allocator);
+    defer known_host_interface_sources.deinit();
 
     const unit = ast.ProgramUnit{
         .kind = .subroutine,
@@ -130,6 +144,8 @@ test "semantic UnexpectedTypeDecl maps to the unexpected_type_decl diagnostic wi
         &known_function_type_specs,
         &known_procedure_sigs,
         &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
         null,
         .{},
     );
@@ -157,6 +173,10 @@ test "semantic fallback uses last noted statement when active context is cleared
     defer known_procedure_sigs.deinit();
     var known_host_parameters = std.StringHashMap(symbols.Symbol).init(testing.allocator);
     defer known_host_parameters.deinit();
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(testing.allocator);
+    defer known_host_derived_types.deinit();
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(testing.allocator);
+    defer known_host_interface_sources.deinit();
 
     const stmt = ast.Stmt{
         .label = null,
@@ -179,6 +199,8 @@ test "semantic fallback uses last noted statement when active context is cleared
         &known_function_type_specs,
         &known_procedure_sigs,
         &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
         null,
         .{},
     );
@@ -220,6 +242,8 @@ test "module procedure explicit interface body does not conflict with module con
     var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
     var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
     var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
     diag.clear();
     var unit = program.units[0];
     var analyzer_instance = UnitAnalyzer.init(
@@ -229,6 +253,8 @@ test "module procedure explicit interface body does not conflict with module con
         &known_function_type_specs,
         &known_procedure_sigs,
         &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
         null,
         .{},
     );

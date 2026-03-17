@@ -93,6 +93,8 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
     var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena);
     var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena);
     var known_host_symbols = std.StringHashMap(symbols.Symbol).init(arena);
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena);
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena);
     var host_symbols_active = false;
     var active_host_owner: ?[]const u8 = null;
     for (known_fn_types) |known| {
@@ -140,6 +142,8 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             &known_function_type_specs,
             &known_procedure_sigs,
             &known_host_symbols,
+            &known_host_derived_types,
+            &known_host_interface_sources,
             active_host_owner,
             options.target_layout,
             diag_bag,
@@ -155,6 +159,8 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             });
             if (host_symbols_active and unit.*.kind == .program) {
                 known_host_symbols.clearRetainingCapacity();
+                known_host_derived_types.clearRetainingCapacity();
+                known_host_interface_sources.clearRetainingCapacity();
                 host_symbols_active = false;
                 active_host_owner = null;
             }
@@ -163,11 +169,17 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
         try units.append(sem_unit);
         if (unitHasContains(unit.*)) {
             known_host_symbols.clearRetainingCapacity();
+            known_host_derived_types.clearRetainingCapacity();
+            known_host_interface_sources.clearRetainingCapacity();
             try symbol_lookup.collectHostSymbols(&known_host_symbols, arena, sem_unit.symbols);
+            try collectHostDerivedTypes(&known_host_derived_types, arena, &unit_analyzer.ctx.derived_types);
+            try collectHostExplicitInterfaceSources(&known_host_interface_sources, arena, unit.*);
             host_symbols_active = true;
             active_host_owner = unit.name;
         } else if (host_symbols_active and unit.*.kind == .program) {
             known_host_symbols.clearRetainingCapacity();
+            known_host_derived_types.clearRetainingCapacity();
+            known_host_interface_sources.clearRetainingCapacity();
             host_symbols_active = false;
             active_host_owner = null;
         }
@@ -175,6 +187,37 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
     if (first_error) |err| return err;
     try common_validation.validateCommonBlocksWithDiagnostics(arena, mutable_program, units.items, diag_bag);
     return .{ .units = try units.toOwnedSlice() };
+}
+
+fn collectHostDerivedTypes(
+    out: *std.StringHashMap(context.Context.DerivedTypeInfo),
+    arena: std.mem.Allocator,
+    source: *const std.StringHashMap(context.Context.DerivedTypeInfo),
+) !void {
+    var it = source.iterator();
+    while (it.next()) |entry| {
+        const key = try symbol_lookup.lowerDup(arena, entry.key_ptr.*);
+        try out.put(key, entry.value_ptr.*);
+    }
+}
+
+fn collectHostExplicitInterfaceSources(
+    out: *std.StringHashMap(ast.DeclSource),
+    arena: std.mem.Allocator,
+    unit: ast.ProgramUnit,
+) !void {
+    for (unit.decls, 0..) |decl, decl_idx| {
+        if (decl != .interface_block) continue;
+        const decl_source = if (decl_idx < unit.decl_sources.len) unit.decl_sources[decl_idx] else continue;
+        for (decl.interface_block.procedures) |procedure_name| {
+            const key = try symbol_lookup.lowerDup(arena, procedure_name);
+            try out.put(key, decl_source);
+        }
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            const key = try symbol_lookup.lowerDup(arena, proc_header.name);
+            try out.put(key, decl_source);
+        }
+    }
 }
 
 fn installSingleTargetGenericInterfaces(
@@ -273,10 +316,26 @@ pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![
             .requires_descriptor = dummyArgRequiresDescriptor(dims),
             .rank = dims.len,
             .optional = decl_info.optional,
-            .is_procedure = decl_info.interface_procedure != null,
-            .procedure_kind = if (decl_info.interface_procedure) |proc| proc.kind else null,
+            .intent = decl_info.intent,
+            .is_procedure = decl_info.interface_procedure != null or decl_info.external,
+            .procedure_kind = if (decl_info.interface_procedure) |proc|
+                proc.kind
+            else if (decl_info.external and decl_info.explicit_type)
+                .function
+            else
+                null,
             .procedure_arg_count = if (decl_info.interface_procedure) |proc| proc.args.len else 0,
             .procedure_alt_return_count = if (decl_info.interface_procedure) |proc| proc.alt_return_dummy_count else 0,
+            .procedure_result_type_spec = if (decl_info.interface_procedure) |proc|
+                interfaceProcedureResultTypeSpec(unit, proc)
+            else if (decl_info.external and decl_info.explicit_type)
+                type_spec
+            else
+                null,
+            .procedure_dummy_sigs = if (decl_info.interface_procedure) |proc|
+                try inferInterfaceProcedureArgSigs(arena, unit, proc)
+            else
+                &.{},
         };
     }
     return out;
@@ -285,6 +344,9 @@ pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![
 const DummyArgDeclInfo = struct {
     declarator: ?ast.Declarator = null,
     optional: bool = false,
+    intent: ?ast.IntentKind = null,
+    external: bool = false,
+    explicit_type: bool = false,
     interface_procedure: ?ast.InterfaceProcedure = null,
 };
 
@@ -294,24 +356,31 @@ fn findDummyArgDeclInfo(unit: ast.ProgramUnit, name: []const u8) DummyArgDeclInf
 
 fn findDummyArgDeclInfoInDecls(decls: []const ast.Decl, name: []const u8) DummyArgDeclInfo {
     var dims_only: ?ast.Declarator = null;
+    var info: DummyArgDeclInfo = .{};
     for (decls) |decl| {
         switch (decl) {
             .type_decl => |type_decl| {
                 for (type_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
-                    return .{
-                        .declarator = item,
-                        .optional = type_decl.optional,
-                    };
+                    info.declarator = item;
+                    info.optional = type_decl.optional;
+                    info.intent = type_decl.intent;
+                    info.external = type_decl.external;
+                    info.explicit_type = true;
                 }
             },
             .procedure => |procedure_decl| {
                 for (procedure_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
-                    return .{
-                        .declarator = item,
-                        .optional = procedure_decl.optional,
-                    };
+                    info.declarator = item;
+                    info.optional = procedure_decl.optional;
+                    info.external = true;
+                }
+            },
+            .intent => |intent_decl| {
+                for (intent_decl.names) |intent_name| {
+                    if (!std.ascii.eqlIgnoreCase(intent_name, name)) continue;
+                    info.intent = intent_decl.kind;
                 }
             },
             .dimension => |dimension_decl| {
@@ -320,19 +389,23 @@ fn findDummyArgDeclInfoInDecls(decls: []const ast.Decl, name: []const u8) DummyA
                     dims_only = item;
                 }
             },
+            .external => |ext_decl| {
+                for (ext_decl.names) |ext_name| {
+                    if (!std.ascii.eqlIgnoreCase(ext_name, name)) continue;
+                    info.external = true;
+                }
+            },
             .interface_block => |interface_block| {
                 for (interface_block.procedure_headers) |proc_header| {
                     if (!std.ascii.eqlIgnoreCase(proc_header.name, name)) continue;
-                    return .{
-                        .declarator = dims_only,
-                        .interface_procedure = proc_header,
-                    };
+                    info.interface_procedure = proc_header;
                 }
             },
             else => {},
         }
     }
-    return .{ .declarator = dims_only };
+    if (info.declarator == null) info.declarator = dims_only;
+    return info;
 }
 
 fn inferInterfaceProcedureArgSigs(
@@ -353,13 +426,35 @@ fn inferInterfaceProcedureArgSigs(
             .requires_descriptor = dummyArgRequiresDescriptor(dims),
             .rank = dims.len,
             .optional = decl_info.optional,
-            .is_procedure = decl_info.interface_procedure != null,
-            .procedure_kind = if (decl_info.interface_procedure) |proc| proc.kind else null,
+            .intent = decl_info.intent,
+            .is_procedure = decl_info.interface_procedure != null or decl_info.external,
+            .procedure_kind = if (decl_info.interface_procedure) |proc|
+                proc.kind
+            else if (decl_info.external and decl_info.explicit_type)
+                .function
+            else
+                null,
             .procedure_arg_count = if (decl_info.interface_procedure) |proc| proc.args.len else 0,
             .procedure_alt_return_count = if (decl_info.interface_procedure) |proc| proc.alt_return_dummy_count else 0,
+            .procedure_result_type_spec = if (decl_info.interface_procedure) |proc|
+                interfaceProcedureResultTypeSpec(unit, proc)
+            else if (decl_info.external and decl_info.explicit_type)
+                type_spec
+            else
+                null,
+            .procedure_dummy_sigs = if (decl_info.interface_procedure) |proc|
+                try inferInterfaceProcedureArgSigs(arena, unit, proc)
+            else
+                &.{},
         };
     }
     return out;
+}
+
+fn interfaceProcedureResultTypeSpec(unit: ast.ProgramUnit, proc_header: ast.InterfaceProcedure) ?symbols.TypeSpec {
+    if (proc_header.kind != .function) return null;
+    if (proc_header.type_spec) |type_spec| return procedureTypeSpec(type_spec);
+    return implicitTypeSpecForName(unit, proc_header.name);
 }
 
 fn inferDummyArgTypeSpec(

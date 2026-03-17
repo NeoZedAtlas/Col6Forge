@@ -336,14 +336,6 @@ const Parser = struct {
         if (self.pending_owner_name) |owner_name| {
             unit.owner_name = owner_name;
             unit.owner_kind = self.pending_owner_kind;
-            if (self.pending_owner_decls) |owner_decls| {
-                unit = try prependDecls(
-                    self.arena,
-                    unit,
-                    owner_decls,
-                    self.pending_owner_decl_sources orelse &.{},
-                );
-            }
         }
         return unit;
     }

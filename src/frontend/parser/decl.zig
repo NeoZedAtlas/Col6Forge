@@ -22,7 +22,7 @@ pub fn isDeclarationStart(lp: LineParser) bool {
     }
     if (isDoublePrecisionTypeStart(lp)) return true;
     if (isDerivedTypeDeclStart(lp)) return true;
-    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("ALLOCATABLE") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE") or lp.isKeywordSplit("PROCEDURE") or lp.isKeywordSplit("IMPORT") or lp.isKeywordSplit("INTENT");
+    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("ALLOCATABLE") or lp.isKeywordSplit("POINTER") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE") or lp.isKeywordSplit("PROCEDURE") or lp.isKeywordSplit("IMPORT") or lp.isKeywordSplit("INTENT");
 }
 
 pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
@@ -89,6 +89,12 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         _ = consumeDoubleColon(lp);
         const items = try parseDeclarators(lp, arena, .{}, null, false);
         return .{ .dimension = .{ .items = items, .allocatable = true } };
+    }
+    if (lp.isKeywordSplit("POINTER")) {
+        _ = lp.consumeKeyword("POINTER");
+        _ = consumeDoubleColon(lp);
+        const items = try parseDeclarators(lp, arena, .{}, null, true);
+        return .{ .dimension = .{ .items = items, .pointer = true } };
     }
     if (lp.isKeywordSplit("PARAMETER")) {
         _ = lp.consumeKeyword("PARAMETER");
@@ -213,6 +219,8 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         .allocatable = attrs.allocatable,
         .pointer = attrs.pointer,
         .optional = attrs.optional,
+        .intent = attrs.intent,
+        .external = attrs.external,
     } };
 }
 
@@ -429,6 +437,8 @@ const DeclAttributes = struct {
     allocatable: bool = false,
     pointer: bool = false,
     optional: bool = false,
+    intent: ?ast.IntentKind = null,
+    external: bool = false,
 };
 
 fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAttributes {
@@ -456,6 +466,21 @@ fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAttribu
             }
             if (context.eqNoCase(attr_name, "OPTIONAL")) {
                 attrs.optional = true;
+            }
+            if (context.eqNoCase(attr_name, "EXTERNAL")) {
+                attrs.external = true;
+            }
+            if (context.eqNoCase(attr_name, "INTENT")) {
+                _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+                attrs.intent = if (lp.consumeKeyword("INOUT"))
+                    .inout
+                else if (lp.consumeKeyword("OUT"))
+                    .out
+                else if (lp.consumeKeyword("IN"))
+                    .in
+                else
+                    return error.UnexpectedToken;
+                _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
             }
             if (context.eqNoCase(attr_name, "DIMENSION")) {
                 if (lp.consume(.l_paren)) {

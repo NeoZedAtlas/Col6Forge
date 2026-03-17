@@ -70,7 +70,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .dimension => |dim| {
             for (dim.items) |item| {
-                if (hasCurrentUnitExplicitInterfaceProcedure(self, item.name)) {
+                if (!dim.pointer and hasCurrentUnitExplicitInterfaceProcedure(self, item.name)) {
                     setAttributeConflictDiagnostic(
                         self,
                         if (dim.allocatable)
@@ -87,6 +87,9 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 self.symbols.items[idx].dims = item.dims;
                 if (dim.allocatable) {
                     self.symbols.items[idx].is_allocatable = true;
+                }
+                if (dim.pointer) {
+                    self.symbols.items[idx].is_pointer = true;
                 }
             }
         },

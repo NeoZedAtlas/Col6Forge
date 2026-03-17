@@ -592,6 +592,10 @@ test "exprType treats D exponent real literal as DOUBLE PRECISION" {
     defer known_sig.deinit();
     var known_host = std.StringHashMap(symbols.Symbol).init(testing.allocator);
     defer known_host.deinit();
+    var known_host_derived = std.StringHashMap(context.Context.DerivedTypeInfo).init(testing.allocator);
+    defer known_host_derived.deinit();
+    var known_host_interfaces = std.StringHashMap(ast.DeclSource).init(testing.allocator);
+    defer known_host_interfaces.deinit();
 
     const unit = ast.ProgramUnit{
         .kind = .subroutine,
@@ -601,7 +605,7 @@ test "exprType treats D exponent real literal as DOUBLE PRECISION" {
         .decl_sources = &.{},
         .stmts = &.{},
     };
-    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, null, .{});
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, &known_host_derived, &known_host_interfaces, null, .{});
 
     var lit = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0D0" } };
     try testing.expectEqual(ast.TypeKind.double_precision, try exprType(&ctx, &lit));
@@ -615,6 +619,10 @@ test "exprType treats _8 real kind suffix as DOUBLE PRECISION" {
     defer known_sig.deinit();
     var known_host = std.StringHashMap(symbols.Symbol).init(testing.allocator);
     defer known_host.deinit();
+    var known_host_derived = std.StringHashMap(context.Context.DerivedTypeInfo).init(testing.allocator);
+    defer known_host_derived.deinit();
+    var known_host_interfaces = std.StringHashMap(ast.DeclSource).init(testing.allocator);
+    defer known_host_interfaces.deinit();
 
     const unit = ast.ProgramUnit{
         .kind = .subroutine,
@@ -624,7 +632,7 @@ test "exprType treats _8 real kind suffix as DOUBLE PRECISION" {
         .decl_sources = &.{},
         .stmts = &.{},
     };
-    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, null, .{});
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, &known_host_derived, &known_host_interfaces, null, .{});
 
     var lit = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0_8" } };
     try testing.expectEqual(ast.TypeKind.double_precision, try exprType(&ctx, &lit));
@@ -638,6 +646,10 @@ test "exprType promotes complex literal to COMPLEX*16 when component is DOUBLE P
     defer known_sig.deinit();
     var known_host = std.StringHashMap(symbols.Symbol).init(testing.allocator);
     defer known_host.deinit();
+    var known_host_derived = std.StringHashMap(context.Context.DerivedTypeInfo).init(testing.allocator);
+    defer known_host_derived.deinit();
+    var known_host_interfaces = std.StringHashMap(ast.DeclSource).init(testing.allocator);
+    defer known_host_interfaces.deinit();
 
     const unit = ast.ProgramUnit{
         .kind = .subroutine,
@@ -647,7 +659,7 @@ test "exprType promotes complex literal to COMPLEX*16 when component is DOUBLE P
         .decl_sources = &.{},
         .stmts = &.{},
     };
-    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, null, .{});
+    var ctx = context.Context.init(testing.allocator, unit, &known_fn_specs, &known_sig, &known_host, &known_host_derived, &known_host_interfaces, null, .{});
 
     var real_part = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0D0" } };
     var imag_part = ast.Expr{ .literal = .{ .kind = .real, .text = "2.0" } };

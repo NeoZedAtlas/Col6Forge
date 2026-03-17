@@ -14,6 +14,10 @@ pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
     resolved_type = resolved_type.withPolymorphic(decl.polymorphic);
     for (decl.items) |item| {
         try applyDeclarator(self, resolved_type, item, .local, true, decl.allocatable, decl.pointer);
+        if (decl.external) {
+            const idx = symbols_mod.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
+            self.symbols.items[idx].is_external = true;
+        }
     }
 }
 

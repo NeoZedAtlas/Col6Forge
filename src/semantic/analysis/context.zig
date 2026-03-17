@@ -64,10 +64,13 @@ pub const Context = struct {
             requires_descriptor: bool = false,
             rank: usize = 0,
             optional: bool = false,
+            intent: ?ast.IntentKind = null,
             is_procedure: bool = false,
             procedure_kind: ?ast.ProgramUnitKind = null,
             procedure_arg_count: usize = 0,
             procedure_alt_return_count: usize = 0,
+            procedure_result_type_spec: ?symbols.TypeSpec = null,
+            procedure_dummy_sigs: []const ArgSig = &.{},
         };
 
         kind: ast.ProgramUnitKind,
@@ -120,6 +123,8 @@ pub const Context = struct {
     known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
     known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
     known_host_parameters: *const std.StringHashMap(symbols.Symbol),
+    known_host_derived_types: *const std.StringHashMap(DerivedTypeInfo),
+    known_host_interface_sources: *const std.StringHashMap(ast.DeclSource),
     known_host_owner: ?[]const u8,
     target_layout: TargetLayout,
     use_imports_preinstalled: bool,
@@ -135,6 +140,8 @@ pub const Context = struct {
         known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
         known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
+        known_host_derived_types: *const std.StringHashMap(DerivedTypeInfo),
+        known_host_interface_sources: *const std.StringHashMap(ast.DeclSource),
         known_host_owner: ?[]const u8,
         target_layout: TargetLayout,
     ) Context {
@@ -144,6 +151,8 @@ pub const Context = struct {
             known_function_type_specs,
             known_procedure_sigs,
             known_host_parameters,
+            known_host_derived_types,
+            known_host_interface_sources,
             known_host_owner,
             target_layout,
             null,
@@ -156,6 +165,8 @@ pub const Context = struct {
         known_function_type_specs: *const std.StringHashMap(symbols.TypeSpec),
         known_procedure_sigs: *const std.StringHashMap(ProcedureSig),
         known_host_parameters: *const std.StringHashMap(symbols.Symbol),
+        known_host_derived_types: *const std.StringHashMap(DerivedTypeInfo),
+        known_host_interface_sources: *const std.StringHashMap(ast.DeclSource),
         known_host_owner: ?[]const u8,
         target_layout: TargetLayout,
         diag_bag: ?*diag.Bag,
@@ -198,6 +209,8 @@ pub const Context = struct {
             .known_function_type_specs = known_function_type_specs,
             .known_procedure_sigs = known_procedure_sigs,
             .known_host_parameters = known_host_parameters,
+            .known_host_derived_types = known_host_derived_types,
+            .known_host_interface_sources = known_host_interface_sources,
             .known_host_owner = known_host_owner,
             .target_layout = target_layout,
             .use_imports_preinstalled = false,
@@ -240,6 +253,7 @@ pub const Context = struct {
     }
 
     pub fn recordSemanticError(self: *Context, err: anyerror) void {
+        if (self.usesExplicitDiagnosticBag() and latestDiagnosticMatchesActiveSource(self)) return;
         if (!self.usesExplicitDiagnosticBag() and self.hasDiagnostic()) return;
 
         const info = catalog.semanticInfoFor(err);
@@ -264,6 +278,24 @@ pub const Context = struct {
         if (self.fallbackSource()) |source| {
             self.setDiagnostic(source.line, source.column, info.code, info.message, source.line_text);
         }
+    }
+
+    fn latestDiagnosticMatchesActiveSource(self: *const Context) bool {
+        const bag = self.diag_bag orelse return false;
+        const latest = bag.latest() orelse return false;
+        if (self.current_source) |source| {
+            return latest.line == (if (source.line == 0) 1 else source.line) and
+                latest.column == (if (source.column == 0) 1 else source.column);
+        }
+        if (self.current_decl_source) |decl_src| {
+            return latest.line == (if (decl_src.line == 0) 1 else decl_src.line) and
+                latest.column == (if (decl_src.column == 0) 1 else decl_src.column);
+        }
+        if (self.current_stmt) |stmt| {
+            return latest.line == (if (stmt.source_line == 0) 1 else stmt.source_line) and
+                latest.column == (if (stmt.source_column == 0) 1 else stmt.source_column);
+        }
+        return false;
     }
 
     pub fn internConstString(self: *Context, text: []const u8) ![]const u8 {

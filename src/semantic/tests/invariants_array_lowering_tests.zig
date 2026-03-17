@@ -194,6 +194,8 @@ test "invariant array lowering 13 failed LOGICAL IF conversion keeps AST and sym
     var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
     var known_procedure_sigs = std.StringHashMap(analysis_context.Context.ProcedureSig).init(arena.allocator());
     var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(analysis_context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
 
     var unit_analyzer = analysis.UnitAnalyzer.init(
         arena.allocator(),
@@ -202,6 +204,8 @@ test "invariant array lowering 13 failed LOGICAL IF conversion keeps AST and sym
         &known_function_type_specs,
         &known_procedure_sigs,
         &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
         null,
         .{},
     );

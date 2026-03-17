@@ -56,9 +56,10 @@ pub const Resolver = struct {
             }
             switch (decl) {
                 .type_decl => |type_decl| decls.applyTypeDecl(ctx, type_decl) catch |err| {
+                    maybeSetFunctionTypeDeclDiagnostic(ctx, type_decl, err);
                     if (!ctx.usesExplicitDiagnosticBag()) return err;
                     if (first_stmt_error == null) first_stmt_error = err;
-                    ctx.recordSemanticError(err);
+                    if (!hasCustomCurrentDiagnostic(ctx)) ctx.recordSemanticError(err);
                 },
                 .procedure => |procedure_decl| decls.applyProcedureDecl(ctx, procedure_decl) catch |err| {
                     if (!ctx.usesExplicitDiagnosticBag()) return err;
@@ -173,6 +174,15 @@ fn findExplicitInterfaceDeclSource(ctx: *context.Context, target_name: []const u
             if (decl_idx < ctx.unit.decl_sources.len) return ctx.unit.decl_sources[decl_idx];
             return null;
         }
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            if (!std.ascii.eqlIgnoreCase(proc_header.name, target_name)) continue;
+            if (decl_idx < ctx.unit.decl_sources.len) return ctx.unit.decl_sources[decl_idx];
+            return null;
+        }
+    }
+    var it = ctx.known_host_interface_sources.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, target_name)) return entry.value_ptr.*;
     }
     return null;
 }
@@ -183,6 +193,38 @@ fn clearStmtResolutionCaches(ctx: *context.Context) void {
     ctx.ref_symbol_index.clearRetainingCapacity();
     ctx.expr_type_cache.clearRetainingCapacity();
     ctx.expr_type_spec_cache.clearRetainingCapacity();
+}
+
+fn maybeSetFunctionTypeDeclDiagnostic(ctx: *context.Context, type_decl: ast.TypeDecl, err: anyerror) void {
+    if (err != error.UnexpectedTypeDecl) return;
+    if (ctx.unit.kind != .function) return;
+    const result_name = ctx.unit.result_name orelse ctx.unit.name;
+    for (type_decl.items) |item| {
+        if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+        const decl_source = ctx.current_decl_source orelse return;
+        const line = if (decl_source.line == 0) 1 else decl_source.line;
+        const column = if (decl_source.column == 0) 1 else decl_source.column;
+        ctx.setDiagnostic(
+            line,
+            column,
+            catalog.semantic.unexpected_type_decl.code,
+            "invalid type for function result",
+            decl_source.text,
+        );
+        return;
+    }
+}
+
+fn hasCustomCurrentDiagnostic(ctx: *context.Context) bool {
+    if (!ctx.usesExplicitDiagnosticBag()) return ctx.hasDiagnostic();
+    if (ctx.current_decl_source) |decl_source| {
+        if (ctx.diag_bag) |bag| {
+            const diag_entry = bag.latest() orelse return false;
+            return diag_entry.line == (if (decl_source.line == 0) 1 else decl_source.line) and
+                diag_entry.column == (if (decl_source.column == 0) 1 else decl_source.column);
+        }
+    }
+    return false;
 }
 
 fn buildDerivedComponentInfo(
