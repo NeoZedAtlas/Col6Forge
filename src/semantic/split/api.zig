@@ -35,6 +35,8 @@ pub const KnownProcedureSig = struct {
     alt_return_count: usize = 0,
     args: []const ArgSig = &.{},
     is_pointer: bool = false,
+    result_rank: usize = 0,
+    actual_requires_explicit_interface: bool = false,
 };
 
 pub const AnalyzeOptions = struct {
@@ -110,6 +112,8 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             .alt_return_count = known.alt_return_count,
             .args = known.args,
             .is_pointer = known.is_pointer,
+            .result_rank = known.result_rank,
+            .actual_requires_explicit_interface = known.actual_requires_explicit_interface,
         });
     }
 
@@ -127,6 +131,8 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
                 .alt_return_count = unit.alt_return_dummy_count,
                 .args = try inferProcedureArgSigs(arena, unit),
                 .is_pointer = function_type.inferProcedureIsPointer(unit),
+                .result_rank = if (unit.kind == .function) function_type.inferFunctionResultRank(unit) else 0,
+                .actual_requires_explicit_interface = unit.owner_name != null,
             });
         }
     }
@@ -276,23 +282,28 @@ fn installExplicitInterfaceProcedures(
     for (program.units) |unit| {
         for (unit.decls) |decl| {
             if (decl != .interface_block) continue;
-            for (decl.interface_block.procedure_headers) |proc_header| {
-                const proc_key = try symbol_lookup.lowerDup(arena, proc_header.name);
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            const proc_key = try symbol_lookup.lowerDup(arena, proc_header.name);
+            if (lookupCaseInsensitive(context.Context.ProcedureSig, known_procedure_sigs, proc_header.name) == null) {
                 try known_procedure_sigs.put(proc_key, .{
                     .kind = proc_header.kind,
                     .arg_count = proc_header.args.len,
                     .alt_return_count = proc_header.alt_return_dummy_count,
                     .args = try inferInterfaceProcedureArgSigs(arena, unit, proc_header),
                     .is_pointer = false,
+                    .result_rank = interfaceProcedureResultRank(proc_header),
                 });
-                if (proc_header.kind != .function) continue;
-                if (proc_header.type_spec) |type_spec| {
-                    const type_key = try symbol_lookup.lowerDup(arena, proc_header.name);
+            }
+            if (proc_header.kind != .function) continue;
+            if (proc_header.type_spec) |type_spec| {
+                const type_key = try symbol_lookup.lowerDup(arena, proc_header.name);
+                if (lookupCaseInsensitive(symbols.TypeSpec, known_function_type_specs, proc_header.name) == null) {
                     try known_function_type_specs.put(type_key, procedureTypeSpec(type_spec));
                 }
             }
         }
     }
+}
 }
 
 fn singleTargetInterfaceProcedureName(interface_block: ast.InterfaceBlock) ?[]const u8 {
@@ -328,7 +339,8 @@ pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![
     const out = try arena.alloc(context.Context.ProcedureSig.ArgSig, unit.args.len);
     for (unit.args, 0..) |arg_name, idx| {
         const decl_info = findDummyArgDeclInfo(unit, arg_name);
-        const inferred_proc_kind = if (decl_info.interface_procedure == null and !decl_info.external)
+        const inferred_proc_kind = if (decl_info.interface_procedure == null and !decl_info.external and
+            decl_info.declarator == null and !decl_info.explicit_type)
             inferDummyArgProcedureKind(unit, arg_name)
         else
             null;
@@ -360,6 +372,7 @@ pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![
                 type_spec
             else
                 null,
+            .procedure_result_rank = if (decl_info.interface_procedure) |proc| interfaceProcedureResultRank(proc) else 0,
             .procedure_dummy_sigs = if (decl_info.interface_procedure) |proc|
                 try inferInterfaceProcedureArgSigs(arena, unit, proc)
             else
@@ -445,7 +458,8 @@ fn inferInterfaceProcedureArgSigs(
     for (proc_header.args, 0..) |arg_name, idx| {
         const active_decls = if (proc_header.decls.len != 0) proc_header.decls else unit.decls;
         const decl_info = findDummyArgDeclInfoInDecls(active_decls, arg_name);
-        const inferred_proc_kind = if (decl_info.interface_procedure == null and !decl_info.external)
+        const inferred_proc_kind = if (decl_info.interface_procedure == null and !decl_info.external and
+            decl_info.declarator == null and !decl_info.explicit_type)
             inferDummyArgProcedureKindInStmts(unit.stmts, arg_name)
         else
             null;
@@ -477,6 +491,7 @@ fn inferInterfaceProcedureArgSigs(
                 type_spec
             else
                 null,
+            .procedure_result_rank = if (decl_info.interface_procedure) |proc| interfaceProcedureResultRank(proc) else 0,
             .procedure_dummy_sigs = if (decl_info.interface_procedure) |proc|
                 try inferInterfaceProcedureArgSigs(arena, unit, proc)
             else
@@ -491,6 +506,26 @@ fn interfaceProcedureResultTypeSpec(unit: ast.ProgramUnit, proc_header: ast.Inte
     if (proc_header.type_spec) |type_spec| return procedureTypeSpec(type_spec);
     if (findInterfaceProcedureDeclaredResultTypeSpec(unit, proc_header)) |type_spec| return type_spec;
     return implicitTypeSpecForName(unit, proc_header.name);
+}
+
+pub fn interfaceProcedureResultRank(proc_header: ast.InterfaceProcedure) usize {
+    const result_name = proc_header.result_name orelse proc_header.name;
+    for (proc_header.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, result_name)) return item.dims.len;
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, result_name)) return item.dims.len;
+                }
+            },
+            else => {},
+        }
+    }
+    return 0;
 }
 
 fn findInterfaceProcedureDeclaredResultTypeSpec(

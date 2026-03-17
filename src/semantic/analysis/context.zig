@@ -82,6 +82,7 @@ pub const Context = struct {
             procedure_arg_count: usize = 0,
             procedure_alt_return_count: usize = 0,
             procedure_result_type_spec: ?symbols.TypeSpec = null,
+            procedure_result_rank: usize = 0,
             procedure_dummy_sigs: []const ArgSig = &.{},
         };
 
@@ -90,6 +91,8 @@ pub const Context = struct {
         alt_return_count: usize = 0,
         args: []const ArgSig = &.{},
         is_pointer: bool = false,
+        result_rank: usize = 0,
+        actual_requires_explicit_interface: bool = false,
     };
 
     pub const BuiltinConstant = struct {
@@ -128,6 +131,7 @@ pub const Context = struct {
     scopes: std.array_list.Managed(scope.Scope),
     current_scope: ?scope.ScopeId,
     current_owner: ?Owner,
+    current_decl_index: ?usize,
     current_decl_source: ?ast.DeclSource,
     current_source: ?ast.SourceRef,
     current_stmt: ?ast.Stmt,
@@ -218,6 +222,7 @@ pub const Context = struct {
             .scopes = std.array_list.Managed(scope.Scope).init(arena),
             .current_scope = null,
             .current_owner = null,
+            .current_decl_index = null,
             .current_decl_source = null,
             .current_source = null,
             .current_stmt = null,
@@ -451,6 +456,10 @@ pub const Context = struct {
                 decl_source.text,
             );
         }
+    }
+
+    pub fn setCurrentDeclIndex(self: *Context, decl_idx: ?usize) void {
+        self.current_decl_index = decl_idx;
     }
 
     pub fn setCurrentSource(self: *Context, source: ?ast.SourceRef) void {

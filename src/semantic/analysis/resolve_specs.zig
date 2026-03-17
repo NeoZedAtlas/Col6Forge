@@ -7,6 +7,7 @@ const symbols_mod = @import("resolve_symbols.zig");
 const constants = @import("resolve_const.zig");
 const expressions = @import("resolve_expr.zig");
 const decls = @import("resolve_decls.zig");
+const split_api = @import("../split/api.zig");
 const check_const = @import("check_const.zig");
 const type_kind_selector = @import("../type_kind_selector.zig");
 
@@ -255,7 +256,9 @@ fn currentDeclLocation(self: *context.Context) struct { line: usize, column: usi
 }
 
 fn hasCurrentUnitExplicitInterfaceProcedure(self: *context.Context, target_name: []const u8) bool {
-    for (self.unit.decls) |decl| {
+    var decl_idx = self.unit.prelude_decl_count;
+    while (decl_idx < self.unit.decls.len) : (decl_idx += 1) {
+        const decl = self.unit.decls[decl_idx];
         if (decl != .interface_block) continue;
         for (decl.interface_block.procedure_headers) |proc_header| {
             if (std.ascii.eqlIgnoreCase(proc_header.name, target_name)) return true;
@@ -269,8 +272,35 @@ fn setAttributeConflictDiagnostic(self: *context.Context, message: []const u8) v
     self.setDiagnostic(loc.line, loc.column, catalog.semantic.duplicate_declaration.code, message, loc.text);
 }
 
+fn setSourceDiagnostic(self: *context.Context, source: ast.DeclSource, message: []const u8) void {
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.duplicate_declaration.code,
+        message,
+        source.text,
+    );
+}
+
 fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: ast.InterfaceBlock) !void {
+    const imported_prelude_decl = if (self.current_decl_index) |decl_idx|
+        decl_idx < self.unit.prelude_decl_count
+    else
+        false;
+    if (interface_block.abstract and interface_block.name != null) {
+        setAttributeConflictDiagnostic(self, "Syntax error in ABSTRACT INTERFACE statement");
+        return error.UnexpectedToken;
+    }
+    if (interface_block.abstract and interface_block.module_procedures.len != 0) {
+        const source = interface_block.module_procedure_sources[0];
+        setSourceDiagnostic(self, source, "must be in a generic module interface");
+        return error.DuplicateDeclaration;
+    }
+    if (validateGenericInterfaceProcedures(self, interface_block)) |err| return err;
     for (interface_block.procedure_headers) |proc_header| {
+        if (!imported_prelude_decl and self.unit.kind != .module) {
+            if (validateKnownProcedureCompatibility(self, proc_header)) |err| return err;
+        }
         if (proc_header.kind != .function) continue;
         if (symbols_mod.findSymbolIndex(self, proc_header.name)) |idx| {
             const sym = self.symbols.items[idx];
@@ -285,6 +315,137 @@ fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: ast.I
             return error.DuplicateDeclaration;
         }
     }
+}
+
+const GenericInterfaceKind = enum { subroutine, function };
+
+fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: ast.InterfaceBlock) ?anyerror {
+    if (interface_block.name == null) return null;
+
+    var generic_kind: ?GenericInterfaceKind = null;
+
+    for (interface_block.procedure_headers) |proc_header| {
+        const kind: GenericInterfaceKind = switch (proc_header.kind) {
+            .subroutine => .subroutine,
+            .function => .function,
+            else => continue,
+        };
+        if (generic_kind == null) {
+            generic_kind = kind;
+            continue;
+        }
+        if (generic_kind.? != kind) {
+            setSourceDiagnostic(self, proc_header.source, "all SUBROUTINEs or all FUNCTIONs");
+            return error.DuplicateDeclaration;
+        }
+    }
+
+    for (interface_block.module_procedures, 0..) |procedure_name, idx| {
+        const sig = symbols_mod.lookupKnownProcedureSig(self, procedure_name) orelse continue;
+        const kind: GenericInterfaceKind = switch (sig.kind) {
+            .subroutine => .subroutine,
+            .function => .function,
+            else => continue,
+        };
+        if (generic_kind == null) {
+            generic_kind = kind;
+            continue;
+        }
+        if (generic_kind.? != kind) {
+            setSourceDiagnostic(self, interface_block.module_procedure_sources[idx], "all SUBROUTINEs or all FUNCTIONs");
+            return error.DuplicateDeclaration;
+        }
+    }
+
+    for (interface_block.procedures, 0..) |procedure_name, idx| {
+        const sig = symbols_mod.lookupKnownProcedureSig(self, procedure_name) orelse {
+            setSourceDiagnostic(self, interface_block.procedure_sources[idx], "neither function nor subroutine");
+            return error.UnknownSymbol;
+        };
+        const kind: GenericInterfaceKind = switch (sig.kind) {
+            .subroutine => .subroutine,
+            .function => .function,
+            else => {
+                setSourceDiagnostic(self, interface_block.procedure_sources[idx], "neither function nor subroutine");
+                return error.UnknownSymbol;
+            },
+        };
+        if (generic_kind == null) {
+            generic_kind = kind;
+            continue;
+        }
+        if (generic_kind.? != kind) {
+            setSourceDiagnostic(self, interface_block.procedure_sources[idx], "all SUBROUTINEs or all FUNCTIONs");
+            return error.DuplicateDeclaration;
+        }
+    }
+
+    return null;
+}
+
+fn validateKnownProcedureCompatibility(self: *context.Context, proc_header: ast.InterfaceProcedure) ?anyerror {
+    const known_sig = symbols_mod.lookupKnownProcedureSig(self, proc_header.name) orelse return null;
+    if (known_sig.kind != proc_header.kind) {
+        setAttributeConflictDiagnostic(self, "Interface mismatch in dummy procedure");
+        return error.InvalidArgumentCount;
+    }
+    if (proc_header.kind != .function) return null;
+
+    const expected_rank = split_api.interfaceProcedureResultRank(proc_header);
+    if (known_sig.result_rank != expected_rank) {
+        setAttributeConflictDiagnostic(self, "Rank mismatch in function result");
+        return error.InvalidArgumentCount;
+    }
+
+    const expected_type = interfaceProcedureResultTypeSpecForValidation(self, proc_header) orelse return null;
+    const actual_type = symbols_mod.lookupKnownFunctionResolvedSpec(self, proc_header.name) orelse return null;
+    if (expected_type.lowered_kind != actual_type.lowered_kind) {
+        setAttributeConflictDiagnostic(self, "Type mismatch in function result");
+        return error.InvalidArgumentCount;
+    }
+    if (expected_type.lowered_kind == .derived) {
+        if (expected_type.derived_type_name != null and actual_type.derived_type_name != null and
+            !std.ascii.eqlIgnoreCase(expected_type.derived_type_name.?, actual_type.derived_type_name.?))
+        {
+            setAttributeConflictDiagnostic(self, "Type mismatch in function result");
+            return error.InvalidArgumentCount;
+        }
+    }
+    return null;
+}
+
+fn interfaceProcedureResultTypeSpecForValidation(
+    self: *context.Context,
+    proc_header: ast.InterfaceProcedure,
+) ?symbols.TypeSpec {
+    if (proc_header.kind != .function) return null;
+    if (proc_header.type_spec) |type_spec| {
+        return if (type_spec.type_kind != .derived)
+            type_kind_selector.resolveSpec(type_spec.type_kind, type_spec.kind_selector).withPolymorphic(type_spec.polymorphic)
+        else if (type_spec.derived_type_name) |derived_name|
+            symbols.TypeSpec.fromDerived(derived_name).withPolymorphic(type_spec.polymorphic)
+        else
+            symbols.TypeSpec.fromKind(.derived).withPolymorphic(type_spec.polymorphic);
+    }
+    const result_name = proc_header.result_name orelse proc_header.name;
+    for (proc_header.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    return decls.resolvedDeclTypeSpec(
+                        self,
+                        type_decl.type_kind,
+                        type_decl.derived_type_name,
+                        type_decl.kind_selector,
+                        type_decl.polymorphic,
+                    ) catch null;
+                }
+            },
+            else => {},
+        }
+    }
+    return symbols_mod.implicitTypeSpec(self, proc_header.name);
 }
 
 const InterfaceProcedureResultAttrs = struct {

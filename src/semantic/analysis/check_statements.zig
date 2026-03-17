@@ -791,6 +791,9 @@ fn checkProcedureActualArg(
                         }
                     }
                 }
+                if (formal.procedure_result_rank != sig.result_rank) {
+                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Rank mismatch in function result");
+                }
                 if (formal.procedure_has_explicit_interface and
                     (formal.procedure_arg_count != sig.arg_count or formal.procedure_alt_return_count != sig.alt_return_count))
                 {
@@ -833,6 +836,9 @@ fn checkProcedureActualArg(
                                 if (!dummyArgTypeCompatible(self, expected_result, sym.type_spec)) {
                                     return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in function result");
                                 }
+                            }
+                            if (formal.procedure_result_rank != sym.dims.len) {
+                                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Rank mismatch in function result");
                             }
                             if (sym.kind == .variable) sym.kind = .function;
                             return;
@@ -1057,15 +1063,19 @@ fn checkExplicitInterfaceRequirementForCallArgs(
     args: []const ast.CallArg,
     symbol_idx: ?usize,
 ) CheckError!void {
-    if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return;
+    if (calleeHasVisibleExplicitInterface(self, name)) return;
+    const has_procedure_actual = hasProcedureActualCallArg(self, args);
     if (symbol_idx orelse resolve_symbols.findSymbolIndex(self, name)) |idx| {
         const sym = self.symbols.items[idx];
-        if (sym.is_intrinsic or sym.is_external) return;
+        if (sym.is_intrinsic or (sym.is_external and !has_procedure_actual)) return;
     }
     for (args) |arg| {
         if (arg != .expr) continue;
         if (requiresExplicitInterfaceForActual(self, arg.expr.value)) {
             self.setCurrentSource(self.sourceForExpr(arg.expr.value));
+            if (isProcedureActualExpr(self, arg.expr.value)) {
+                return emitProcedureActualDiagnostic(self, arg.expr.value, error.InvalidArgumentCount, "Interface mismatch in dummy procedure");
+            }
             return error.ExplicitInterfaceRequired;
         }
     }
@@ -1086,22 +1096,71 @@ fn checkExplicitInterfaceRequirementForExprArgs(
     args: []*ast.Expr,
     symbol_idx: ?usize,
 ) CheckError!void {
-    if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return;
+    if (calleeHasVisibleExplicitInterface(self, name)) return;
+    const has_procedure_actual = hasProcedureActualExprArg(self, args);
     if (symbol_idx orelse resolve_symbols.findSymbolIndex(self, name)) |idx| {
         const sym = self.symbols.items[idx];
-        if (sym.is_intrinsic or sym.is_external) return;
+        if (sym.is_intrinsic or (sym.is_external and !has_procedure_actual)) return;
     }
     for (args) |arg| {
         if (requiresExplicitInterfaceForActual(self, arg)) {
             self.setCurrentSource(self.sourceForExpr(arg));
+            if (isProcedureActualExpr(self, arg)) {
+                return emitProcedureActualDiagnostic(self, arg, error.InvalidArgumentCount, "Interface mismatch in dummy procedure");
+            }
             return error.ExplicitInterfaceRequired;
         }
     }
 }
 
+fn hasProcedureActualCallArg(self: *context.Context, args: []const ast.CallArg) bool {
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        if (isProcedureActualExpr(self, arg.expr.value)) return true;
+    }
+    return false;
+}
+
+fn hasProcedureActualExprArg(self: *context.Context, args: []*ast.Expr) bool {
+    for (args) |arg| {
+        if (isProcedureActualExpr(self, arg)) return true;
+    }
+    return false;
+}
+
+fn calleeHasVisibleExplicitInterface(self: *context.Context, name: []const u8) bool {
+    if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return true;
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_block = decl.interface_block;
+        if (interface_block.name) |interface_name| {
+            if (std.ascii.eqlIgnoreCase(interface_name, name)) return true;
+        }
+        for (interface_block.procedure_headers) |proc_header| {
+            if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
+        }
+    }
+    return false;
+}
+
 fn requiresExplicitInterfaceForActual(self: *context.Context, expr: *ast.Expr) bool {
+    if (isProcedureActualExpr(self, expr)) return true;
     const spec = resolve_expr.exprTypeSpec(self, expr) catch return false;
     return spec.lowered_kind == .derived and spec.polymorphic and spec.derived_type_name == null;
+}
+
+fn isProcedureActualExpr(self: *context.Context, expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            if (resolve_symbols.lookupKnownProcedureSig(self, name)) |sig| {
+                break :blk sig.actual_requires_explicit_interface;
+            }
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse break :blk false;
+            const sym = self.symbols.items[idx];
+            break :blk (sym.kind == .function or sym.kind == .subroutine) and !sym.is_external;
+        },
+        else => false,
+    };
 }
 
 fn isAbstractInterfaceProcedure(self: *context.Context, name: []const u8) bool {

@@ -93,15 +93,19 @@ pub const UnitAnalyzer = struct {
     pub fn analyze(self: *UnitAnalyzer) !symbols.SemanticUnit {
         var ctx = &self.ctx;
         var resolver = resolve_units.Resolver.init(ctx, self.initial_implicit);
+        var first_err: ?anyerror = null;
         resolver.run() catch |err| {
             recordSemanticError(ctx, err);
-            return err;
+            if (!ctx.usesExplicitDiagnosticBag()) return err;
+            first_err = err;
         };
         var checker = check_units.Checker.init(ctx);
         checker.run() catch |err| {
             recordSemanticError(ctx, err);
-            return err;
+            if (!ctx.usesExplicitDiagnosticBag()) return err;
+            if (first_err == null) first_err = err;
         };
+        if (first_err) |err| return err;
         return .{
             .name = ctx.unit.name,
             .kind = ctx.unit.kind,

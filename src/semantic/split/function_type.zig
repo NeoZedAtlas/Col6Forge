@@ -9,6 +9,35 @@ pub fn inferFunctionType(unit: ast.ProgramUnit) ast.TypeKind {
     return inferFunctionTypeSpec(unit).lowered_kind;
 }
 
+pub fn inferFunctionResultRank(unit: ast.ProgramUnit) usize {
+    const explicit_result_name = if (unit.result_name) |name|
+        if (!std.ascii.eqlIgnoreCase(name, unit.name)) name else null
+    else
+        null;
+    for (unit.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (explicit_result_name) |result_name| {
+                        if (std.ascii.eqlIgnoreCase(item.name, result_name)) return item.dims.len;
+                    }
+                    if (std.ascii.eqlIgnoreCase(item.name, unit.name)) return item.dims.len;
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (explicit_result_name) |result_name| {
+                        if (std.ascii.eqlIgnoreCase(item.name, result_name)) return item.dims.len;
+                    }
+                    if (std.ascii.eqlIgnoreCase(item.name, unit.name)) return item.dims.len;
+                }
+            },
+            else => {},
+        }
+    }
+    return 0;
+}
+
 pub fn inferProcedureIsPointer(unit: ast.ProgramUnit) bool {
     if (unit.kind != .function) return false;
     const explicit_result_name = if (unit.result_name) |name|

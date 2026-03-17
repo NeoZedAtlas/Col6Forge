@@ -544,8 +544,11 @@ const Parser = struct {
         const interface_name = try parseInterfaceGenericName(self.arena, &lp);
         self.index += 1;
         var module_procedures = std.array_list.Managed([]const u8).init(self.arena);
+        var module_procedure_sources = std.array_list.Managed(DeclSource).init(self.arena);
         var specific_procedures = std.array_list.Managed([]const u8).init(self.arena);
+        var specific_procedure_sources = std.array_list.Managed(DeclSource).init(self.arena);
         var procedures = std.array_list.Managed([]const u8).init(self.arena);
+        var procedure_sources = std.array_list.Managed(DeclSource).init(self.arena);
         var procedure_headers = std.array_list.Managed(ast.InterfaceProcedure).init(self.arena);
 
         while (self.index < self.lines.len) {
@@ -559,8 +562,11 @@ const Parser = struct {
                         .abstract = is_abstract,
                         .name = interface_name,
                         .module_procedures = try module_procedures.toOwnedSlice(),
+                        .module_procedure_sources = try module_procedure_sources.toOwnedSlice(),
                         .specific_procedures = try specific_procedures.toOwnedSlice(),
+                        .specific_procedure_sources = try specific_procedure_sources.toOwnedSlice(),
                         .procedures = try procedures.toOwnedSlice(),
+                        .procedure_sources = try procedure_sources.toOwnedSlice(),
                         .procedure_headers = try procedure_headers.toOwnedSlice(),
                     } };
                 },
@@ -582,6 +588,11 @@ const Parser = struct {
                 while (true) {
                     const procedure_name = body_lp.readName(self.arena) orelse return error.MissingName;
                     try module_procedures.append(procedure_name);
+                    try module_procedure_sources.append(.{
+                        .line = line.span.start_line,
+                        .column = 1,
+                        .text = line.text,
+                    });
                     if (!body_lp.consume(.comma)) break;
                 }
             } else if (body_lp.consumeKeyword("PROCEDURE")) {
@@ -589,6 +600,11 @@ const Parser = struct {
                 while (true) {
                     const procedure_name = body_lp.readName(self.arena) orelse return error.MissingName;
                     try specific_procedures.append(procedure_name);
+                    try specific_procedure_sources.append(.{
+                        .line = line.span.start_line,
+                        .column = 1,
+                        .text = line.text,
+                    });
                     if (!body_lp.consume(.comma)) break;
                 }
             } else {
@@ -599,7 +615,16 @@ const Parser = struct {
                     self.index += 1;
                     const proc_unit = try self.parseProgramUnitBody(header.?, true, line, expr_mark);
                     try procedures.append(proc_unit.name);
-                    try procedure_headers.append(interfaceProcedureFromUnit(proc_unit));
+                    try procedure_sources.append(.{
+                        .line = line.span.start_line,
+                        .column = 1,
+                        .text = line.text,
+                    });
+                    try procedure_headers.append(interfaceProcedureFromUnit(proc_unit, .{
+                        .line = line.span.start_line,
+                        .column = 1,
+                        .text = line.text,
+                    }));
                     continue;
                 }
             }
@@ -610,10 +635,11 @@ const Parser = struct {
     }
 };
 
-fn interfaceProcedureFromUnit(unit: ProgramUnit) ast.InterfaceProcedure {
+fn interfaceProcedureFromUnit(unit: ProgramUnit, source: DeclSource) ast.InterfaceProcedure {
     return .{
         .kind = unit.kind,
         .name = unit.name,
+        .source = source,
         .result_name = unit.result_name,
         .args = unit.args,
         .alt_return_dummy_count = unit.alt_return_dummy_count,
@@ -1434,6 +1460,7 @@ fn prependDecls(
         .kind = unit.kind,
         .name = unit.name,
         .is_module_procedure = unit.is_module_procedure,
+        .prelude_decl_count = unit.prelude_decl_count + prelude_decls.len,
         .owner_name = unit.owner_name,
         .owner_kind = unit.owner_kind,
         .bind_name = unit.bind_name,

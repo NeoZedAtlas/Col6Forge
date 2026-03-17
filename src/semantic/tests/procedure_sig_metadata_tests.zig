@@ -244,3 +244,57 @@ test "inferProcedureArgSigs captures result type from interface RESULT declarati
     try testing.expect(arg_sigs[0].procedure_has_explicit_interface);
     try testing.expectEqual(ast.TypeKind.integer, arg_sigs[0].procedure_result_type_spec.?.lowered_kind);
 }
+
+test "inferProcedureArgSigs captures result rank from interface RESULT declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "contains\n" ++
+        "  subroutine t(f)\n" ++
+        "    interface\n" ++
+        "      function f(x) result(y)\n" ++
+        "        integer, intent(in) :: x(:)\n" ++
+        "        integer :: y(3)\n" ++
+        "      end function f\n" ++
+        "    end interface\n" ++
+        "  end subroutine t\n" ++
+        "end program p\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[1]);
+
+    try testing.expectEqual(@as(usize, 1), arg_sigs.len);
+    try testing.expectEqual(@as(usize, 1), arg_sigs[0].procedure_result_rank);
+}
+
+test "inferProcedureArgSigs does not treat array dummy as procedure from subscript use" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine t(a)\n" ++
+        "  integer :: a(*)\n" ++
+        "  a(1) = 0\n" ++
+        "end subroutine t\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[0]);
+
+    try testing.expectEqual(@as(usize, 1), arg_sigs.len);
+    try testing.expect(!arg_sigs[0].is_procedure);
+    try testing.expectEqual(@as(usize, 1), arg_sigs[0].rank);
+}

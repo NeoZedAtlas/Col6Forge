@@ -50,6 +50,7 @@ pub const Resolver = struct {
             std.debug.assert(ctx.unit.decl_sources.len == ctx.unit.decls.len);
         }
         for (ctx.unit.decls, 0..) |decl, decl_idx| {
+            ctx.setCurrentDeclIndex(decl_idx);
             if (decl_idx < ctx.unit.decl_sources.len) {
                 ctx.setCurrentDeclSource(ctx.unit.decl_sources[decl_idx]);
             } else {
@@ -75,6 +76,7 @@ pub const Resolver = struct {
                 },
             }
             ctx.setCurrentDeclSource(null);
+            ctx.setCurrentDeclIndex(null);
         }
         if (ctx.unit.owner_name != null) {
             if (findExplicitInterfaceDeclSource(ctx, ctx.unit.name)) |decl_source| {
@@ -112,21 +114,22 @@ pub const Resolver = struct {
                 continue;
             };
         }
-        if (first_stmt_error) |err| return err;
         // Intrinsic array-conversion lowering is mandatory for currently supported
         // backend forms. Unsupported shapes must remain fatal here.
-        try rewrite_calls.lowerIntrinsicArrayConversions(ctx);
+        if (first_stmt_error == null) {
+            try rewrite_calls.lowerIntrinsicArrayConversions(ctx);
 
-        // Re-resolve rewritten statements and refresh reference/type caches against
-        // the final lowered AST.
-        clearStmtResolutionCaches(ctx);
-        for (ctx.unit.stmts) |stmt| {
-            statements.resolveStmt(ctx, stmt) catch |err| {
-                if (!ctx.usesExplicitDiagnosticBag()) return err;
-                if (first_stmt_error == null) first_stmt_error = err;
-                ctx.recordSemanticError(err);
-                continue;
-            };
+            // Re-resolve rewritten statements and refresh reference/type caches against
+            // the final lowered AST.
+            clearStmtResolutionCaches(ctx);
+            for (ctx.unit.stmts) |stmt| {
+                statements.resolveStmt(ctx, stmt) catch |err| {
+                    if (!ctx.usesExplicitDiagnosticBag()) return err;
+                    if (first_stmt_error == null) first_stmt_error = err;
+                    ctx.recordSemanticError(err);
+                    continue;
+                };
+            }
         }
         if (first_stmt_error) |err| return err;
         ctx.popScope();

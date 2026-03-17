@@ -194,7 +194,7 @@ fn resolveProcedureDeclarator(
     };
 }
 
-fn resolvedDeclTypeSpec(
+pub fn resolvedDeclTypeSpec(
     self: *context.Context,
     base_type_kind: ast.TypeKind,
     derived_type_name: ?[]const u8,

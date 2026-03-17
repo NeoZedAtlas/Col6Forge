@@ -232,6 +232,8 @@ pub fn emitModuleToWriterWithDiagnostics(
                     .alt_return_count = unit.alt_return_dummy_count,
                     .args = try input.sema.inferProcedureArgSigs(scratch, unit),
                     .is_pointer = function_type.inferProcedureIsPointer(unit),
+                    .result_rank = if (unit.kind == .function) function_type.inferFunctionResultRank(unit) else 0,
+                    .actual_requires_explicit_interface = unit.owner_name != null,
                 });
             },
         }
@@ -374,6 +376,7 @@ fn installExplicitInterfaceProcedureSigs(
                 .alt_return_count = proc_header.alt_return_dummy_count,
                 .args = &.{},
                 .is_pointer = false,
+                .result_rank = input.sema.interfaceProcedureResultRank(proc_header),
             });
         }
     }

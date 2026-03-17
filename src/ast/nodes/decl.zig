@@ -68,6 +68,7 @@ pub const ProcedureDecl = struct {
 pub const InterfaceProcedure = struct {
     kind: @import("program.zig").ProgramUnitKind,
     name: []const u8,
+    source: @import("program.zig").DeclSource = .{},
     result_name: ?[]const u8 = null,
     args: []const []const u8,
     alt_return_dummy_count: usize = 0,
@@ -97,8 +98,11 @@ pub const InterfaceBlock = struct {
     abstract: bool = false,
     name: ?[]const u8 = null,
     module_procedures: []const []const u8 = &.{},
+    module_procedure_sources: []const @import("program.zig").DeclSource = &.{},
     specific_procedures: []const []const u8 = &.{},
+    specific_procedure_sources: []const @import("program.zig").DeclSource = &.{},
     procedures: []const []const u8 = &.{},
+    procedure_sources: []const @import("program.zig").DeclSource = &.{},
     procedure_headers: []const InterfaceProcedure = &.{},
 };
 
