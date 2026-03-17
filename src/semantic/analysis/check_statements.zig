@@ -170,14 +170,17 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                     try checkAllocateDim(self, dim);
                 }
             }
+            try checkAllocationOptions(self, allocate.items, allocate.options, true);
         },
         .deallocate => |deallocate| {
-            for (deallocate.items) |name| {
-                const idx = resolve_symbols.findSymbolIndex(self, name) orelse return error.UnknownSymbol;
-                const sym = self.symbols.items[idx];
-                if (sym.dims.len == 0 and sym.is_allocatable) continue;
-                if (sym.dims.len == 0) return error.UnsupportedAllocateSyntax;
+            for (deallocate.items) |item| {
+                const target_info = try resolveAllocateTargetInfo(self, item.target);
+                if (!(target_info.allocatable or target_info.pointer)) {
+                    self.setCurrentSource(if (item.source.line != 0) item.source else self.sourceForExpr(item.target));
+                    return error.UnsupportedAllocateSyntax;
+                }
             }
+            try checkDeallocateOptions(self, deallocate.items, deallocate.options);
         },
         .data => |data| {
             for (data.inits) |init| {
@@ -682,6 +685,253 @@ fn allocateTargetTypeSpec(self: *context.Context, expr: *ast.Expr) CheckError!sy
         },
         else => error.UnsupportedAllocateSyntax,
     };
+}
+
+fn checkAllocationOptions(
+    self: *context.Context,
+    items: []const ast.AllocateItem,
+    options: []const ast.AllocationOption,
+    is_allocate: bool,
+) CheckError!void {
+    var saw_stat = false;
+    var saw_errmsg = false;
+    var saw_source = false;
+    var saw_mold = false;
+
+    for (options) |option| {
+        self.setCurrentSource(if (option.source.line != 0) option.source else self.sourceForExpr(option.value));
+        const value_ty = try checkExprType(self, option.value);
+        switch (option.kind) {
+            .stat => {
+                if (saw_stat) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.duplicate_declaration.code,
+                        "Redundant STAT",
+                        option.source.text,
+                    );
+                    return error.DuplicateDeclaration;
+                }
+                saw_stat = true;
+                if (identifierRequiresArgumentList(self, option.value)) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.invalid_argument_count.code,
+                        "requires an argument list",
+                        option.source.text,
+                    );
+                    return error.InvalidArgumentCount;
+                }
+                if (value_ty != .integer or exprRank(self, option.value) != 0) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.assignment_type_mismatch.code,
+                        "must be a scalar INTEGER",
+                        option.source.text,
+                    );
+                    return error.AssignmentTypeMismatch;
+                }
+            },
+            .errmsg => {
+                if (saw_errmsg) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.duplicate_declaration.code,
+                        "Redundant ERRMSG",
+                        option.source.text,
+                    );
+                    return error.DuplicateDeclaration;
+                }
+                saw_errmsg = true;
+                if (identifierRequiresArgumentList(self, option.value)) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.invalid_argument_count.code,
+                        "requires an argument list",
+                        option.source.text,
+                    );
+                    return error.InvalidArgumentCount;
+                }
+                if (value_ty != .character or exprRank(self, option.value) != 0) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.assignment_type_mismatch.code,
+                        "shall be a scalar default CHARACTER",
+                        option.source.text,
+                    );
+                    return error.AssignmentTypeMismatch;
+                }
+            },
+            .source => {
+                if (saw_source) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.duplicate_declaration.code,
+                        "Redundant SOURCE",
+                        option.source.text,
+                    );
+                    return error.DuplicateDeclaration;
+                }
+                saw_source = true;
+            },
+            .mold => {
+                if (saw_mold) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.duplicate_declaration.code,
+                        "Redundant MOLD",
+                        option.source.text,
+                    );
+                    return error.DuplicateDeclaration;
+                }
+                saw_mold = true;
+            },
+        }
+    }
+
+    for (options) |option| {
+        for (items) |item| {
+            if (!allocationOptionReferencesTarget(self, option.value, item.target)) continue;
+            const message = if (is_allocate) "shall not be ALLOCATEd within" else "shall not be DEALLOCATEd within";
+            self.setDiagnostic(
+                if (option.source.line == 0) 1 else option.source.line,
+                if (option.source.column == 0) 1 else option.source.column,
+                catalog.semantic.duplicate_declaration.code,
+                message,
+                option.source.text,
+            );
+            return error.DuplicateDeclaration;
+        }
+    }
+}
+
+fn checkDeallocateOptions(
+    self: *context.Context,
+    items: []const ast.DeallocateItem,
+    options: []const ast.AllocationOption,
+) CheckError!void {
+    var alloc_items = try self.arena.alloc(ast.AllocateItem, items.len);
+    for (items, 0..) |item, idx| {
+        alloc_items[idx] = .{
+            .target = item.target,
+            .dims = &.{},
+            .source = item.source,
+        };
+    }
+    try checkAllocationOptions(self, alloc_items, options, false);
+}
+
+fn exprRank(self: *context.Context, expr: *ast.Expr) usize {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse break :blk 0;
+            break :blk self.symbols.items[idx].dims.len;
+        },
+        .call_or_subscript => |call| blk: {
+            const idx = symbolIndexForResolvedCall(self, expr) orelse
+                (resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk 0);
+            const sym = self.symbols.items[idx];
+            const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
+                (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
+            break :blk if (kind == .subscript) 0 else sym.dims.len;
+        },
+        .component => |comp| blk: {
+            const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch break :blk 0;
+            if (base_spec.lowered_kind != .derived) break :blk 0;
+            const derived_name = base_spec.derived_type_name orelse break :blk 0;
+            const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse break :blk 0;
+            break :blk if (comp.args.len == 0) component.dims.len else 0;
+        },
+        else => 0,
+    };
+}
+
+fn allocationOptionReferencesTarget(self: *context.Context, expr: *ast.Expr, target: *ast.Expr) bool {
+    return switch (expr.*) {
+        .identifier => targetExprMatchesName(target, expr.identifier),
+        .call_or_subscript => |call| blk: {
+            if (targetExprMatchesName(target, call.name)) break :blk true;
+            for (call.args) |arg| {
+                if (allocationOptionReferencesTarget(self, arg, target)) break :blk true;
+            }
+            break :blk false;
+        },
+        .component => |comp| blk: {
+            if (allocationOptionReferencesTarget(self, comp.base, target)) break :blk true;
+            for (comp.args) |arg| {
+                if (allocationOptionReferencesTarget(self, arg, target)) break :blk true;
+            }
+            break :blk false;
+        },
+        .substring => |sub| blk: {
+            if (targetExprMatchesName(target, sub.name)) break :blk true;
+            for (sub.args) |arg| {
+                if (allocationOptionReferencesTarget(self, arg, target)) break :blk true;
+            }
+            if (sub.start) |start| {
+                if (allocationOptionReferencesTarget(self, start, target)) break :blk true;
+            }
+            if (sub.end) |end_expr| {
+                if (allocationOptionReferencesTarget(self, end_expr, target)) break :blk true;
+            }
+            break :blk false;
+        },
+        .unary => |un| allocationOptionReferencesTarget(self, un.expr, target),
+        .binary => |bin| allocationOptionReferencesTarget(self, bin.left, target) or
+            allocationOptionReferencesTarget(self, bin.right, target),
+        .complex_literal => |lit| allocationOptionReferencesTarget(self, lit.real, target) or
+            allocationOptionReferencesTarget(self, lit.imag, target),
+        .dim_range => |range| blk: {
+            if (range.lower) |lower| {
+                if (allocationOptionReferencesTarget(self, lower, target)) break :blk true;
+            }
+            if (allocationOptionReferencesTarget(self, range.upper, target)) break :blk true;
+            if (range.stride) |stride| {
+                if (allocationOptionReferencesTarget(self, stride, target)) break :blk true;
+            }
+            break :blk false;
+        },
+        .implied_do => |implied| blk: {
+            if (allocationOptionReferencesTarget(self, implied.start, target)) break :blk true;
+            if (allocationOptionReferencesTarget(self, implied.end, target)) break :blk true;
+            if (implied.step) |step| {
+                if (allocationOptionReferencesTarget(self, step, target)) break :blk true;
+            }
+            for (implied.items) |item| {
+                if (allocationOptionReferencesTarget(self, item, target)) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
+fn targetExprMatchesName(target: *ast.Expr, name: []const u8) bool {
+    return switch (target.*) {
+        .identifier => std.ascii.eqlIgnoreCase(target.identifier, name),
+        .component => targetExprMatchesName(target.component.base, name),
+        .call_or_subscript => std.ascii.eqlIgnoreCase(target.call_or_subscript.name, name),
+        else => false,
+    };
+}
+
+fn identifierRequiresArgumentList(self: *context.Context, expr: *ast.Expr) bool {
+    if (expr.* != .identifier) return false;
+    const name = expr.identifier;
+    if (resolve_symbols.lookupKnownProcedureSig(self, name)) |sig| {
+        return sig.kind == .function;
+    }
+    const idx = resolve_symbols.findSymbolIndex(self, name) orelse return false;
+    const sym = self.symbols.items[idx];
+    return sym.kind == .function;
 }
 
 fn isNumeric(kind: ast.TypeKind) bool {

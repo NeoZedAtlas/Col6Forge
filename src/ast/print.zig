@@ -243,10 +243,10 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
             try writer.print(";   stmt label={s} close controls({d})\n", .{ label_text, cls.controls.len });
         },
         .allocate => |allocate| {
-            try writer.print(";   stmt label={s} allocate items({d})\n", .{ label_text, allocate.items.len });
+            try writer.print(";   stmt label={s} allocate items({d}) options({d})\n", .{ label_text, allocate.items.len, allocate.options.len });
         },
         .deallocate => |deallocate| {
-            try writer.print(";   stmt label={s} deallocate items({d})\n", .{ label_text, deallocate.items.len });
+            try writer.print(";   stmt label={s} deallocate items({d}) options({d})\n", .{ label_text, deallocate.items.len, deallocate.options.len });
         },
         .data => |data| {
             try writer.print(";   stmt label={s} data inits({d})\n", .{ label_text, data.inits.len });

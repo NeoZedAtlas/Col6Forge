@@ -190,11 +190,19 @@ fn emitAllocateComponentItem(
 
 pub fn emitDeallocate(ctx: *Context, builder: anytype, deallocate: ast.DeallocateStmt) EmitError!void {
     for (deallocate.items) |item| {
-        try emitDeallocateItem(ctx, builder, item);
+        try emitDeallocateItem(ctx, builder, item.target);
     }
 }
 
-fn emitDeallocateItem(ctx: *Context, builder: anytype, name: []const u8) EmitError!void {
+fn emitDeallocateItem(ctx: *Context, builder: anytype, target: *ast.Expr) EmitError!void {
+    switch (target.*) {
+        .identifier => |name| return emitDeallocateNamedItem(ctx, builder, name),
+        .component => |comp| return emitDeallocateComponentItem(ctx, builder, comp),
+        else => return error.UnsupportedAllocateSyntax,
+    }
+}
+
+fn emitDeallocateNamedItem(ctx: *Context, builder: anytype, name: []const u8) EmitError!void {
     if (ctx.runtimeArrayDescriptor(name)) |desc| {
         try freeManagedArrayPointerIfAllocated(ctx, builder, name);
         ctx.clearManagedAllocation(name);
@@ -215,6 +223,27 @@ fn emitDeallocateItem(ctx: *Context, builder: anytype, name: []const u8) EmitErr
         if (sym.isCharacter() and sym.effectiveCharLenKind() == .deferred) {
             try ctx.char_arg_lens.put(name, .{ .name = try ctx.intLiteral(0), .ty = .i32, .is_ptr = false });
         }
+    }
+}
+
+fn emitDeallocateComponentItem(ctx: *Context, builder: anytype, comp: ast.ComponentExpr) EmitError!void {
+    const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+    const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
+    if (!(component.allocatable or component.pointer)) return error.UnsupportedAllocateSyntax;
+
+    const storage_ptr = try expr_memory.emitComponentStoragePtr(ctx, builder, comp);
+    const current_ptr = try expr_memory.emitLoadedComponentDataPtr(ctx, builder, comp);
+    const free_name = try ctx.ensureDeclRaw("free", .void, &[_]llvm_types.IRType{.ptr}, false);
+    try builder.callTyped(null, .void, free_name, &.{current_ptr});
+    try builder.store(.{ .name = "null", .ty = .ptr, .is_ptr = true }, storage_ptr);
+
+    for (0..component.dims.len) |dim_idx| {
+        const lower_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .lower, dim_idx);
+        const extent_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .extent, dim_idx);
+        const multiplier_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .multiplier, dim_idx);
+        try builder.store(constI64(ctx, 1), lower_slot);
+        try builder.store(constI64(ctx, 0), extent_slot);
+        try builder.store(constI64(ctx, if (dim_idx == 0) 1 else 0), multiplier_slot);
     }
 }
 

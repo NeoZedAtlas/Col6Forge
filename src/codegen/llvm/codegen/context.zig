@@ -522,6 +522,11 @@ pub const Context = struct {
                 if (sym.loweredKind() != .derived) break :blk null;
                 break :blk sym.type_spec.derived_type_name;
             },
+            .call_or_subscript => |call| blk: {
+                const sym = self.findSymbol(call.name) orelse break :blk null;
+                if (sym.loweredKind() != .derived) break :blk null;
+                break :blk sym.type_spec.derived_type_name;
+            },
             .component => |comp| blk: {
                 const base_name = self.derivedTypeNameForExpr(comp.base) orelse break :blk null;
                 const component = self.lookupDerivedComponentLayout(base_name, comp.name) orelse break :blk null;

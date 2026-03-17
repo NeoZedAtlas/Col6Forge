@@ -151,9 +151,23 @@ pub const AllocateTypeSpec = struct {
     char_len_deferred: bool = false,
 };
 
+pub const AllocationOptionKind = enum {
+    stat,
+    errmsg,
+    source,
+    mold,
+};
+
+pub const AllocationOption = struct {
+    kind: AllocationOptionKind,
+    value: *Expr,
+    source: SourceRef = .{},
+};
+
 pub const AllocateStmt = struct {
     items: []AllocateItem,
     type_spec: ?AllocateTypeSpec = null,
+    options: []AllocationOption = &.{},
 };
 
 pub const AllocateItem = struct {
@@ -162,8 +176,14 @@ pub const AllocateItem = struct {
     source: SourceRef = .{},
 };
 
+pub const DeallocateItem = struct {
+    target: *Expr,
+    source: SourceRef = .{},
+};
+
 pub const DeallocateStmt = struct {
-    items: []const []const u8,
+    items: []DeallocateItem,
+    options: []AllocationOption = &.{},
 };
 
 pub const ControlItem = struct {

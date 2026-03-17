@@ -689,6 +689,15 @@ fn inferDummyArgProcedureKindInStmt(node: ast.StmtNode, name: []const u8) ?ast.P
                     if (inferDummyArgProcedureKindInExpr(dim, name)) |kind| return kind;
                 }
             }
+            for (allocate.options) |option| {
+                if (inferDummyArgProcedureKindInExpr(option.value, name)) |kind| return kind;
+            }
+            return null;
+        },
+        .deallocate => |deallocate| {
+            for (deallocate.options) |option| {
+                if (inferDummyArgProcedureKindInExpr(option.value, name)) |kind| return kind;
+            }
             return null;
         },
         .data => |data_stmt| {

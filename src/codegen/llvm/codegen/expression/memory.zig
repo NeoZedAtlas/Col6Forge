@@ -203,6 +203,7 @@ fn emitDerivedObjectPtr(ctx: *Context, builder: anytype, expr: *Expr) anyerror!V
             try builder.load(tmp, .ptr, ptr);
             break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = true };
         },
+        .call_or_subscript => |call| emitSubscriptPtr(ctx, builder, call),
         .component => |comp| emitComponentPtr(ctx, builder, comp),
         else => error.UnknownSymbol,
     };

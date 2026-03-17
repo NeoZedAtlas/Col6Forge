@@ -130,10 +130,19 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
                     try expressions.resolveExpr(self, dim);
                 }
             }
+            for (allocate.options) |option| {
+                self.setCurrentSource(if (option.source.line != 0) option.source else self.sourceForExpr(option.value));
+                try expressions.resolveExpr(self, option.value);
+            }
         },
         .deallocate => |deallocate| {
-            for (deallocate.items) |name| {
-                _ = try symbols_mod.ensureSymbol(self, name);
+            for (deallocate.items) |item| {
+                self.setCurrentSource(if (item.source.line != 0) item.source else self.sourceForExpr(item.target));
+                try expressions.resolveExpr(self, item.target);
+            }
+            for (deallocate.options) |option| {
+                self.setCurrentSource(if (option.source.line != 0) option.source else self.sourceForExpr(option.value));
+                try expressions.resolveExpr(self, option.value);
             }
         },
         .data => |data| {

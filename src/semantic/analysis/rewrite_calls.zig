@@ -133,8 +133,15 @@ fn rewriteStmt(
                     changed = (try rewriteExpr(ctx, state, dim, stmt.*, prelude, allow_prelude)) or changed;
                 }
             }
+            for (allocate.options) |*option| {
+                changed = (try rewriteExpr(ctx, state, option.value, stmt.*, prelude, allow_prelude)) or changed;
+            }
         },
-        .deallocate => {},
+        .deallocate => |*deallocate| {
+            for (deallocate.options) |*option| {
+                changed = (try rewriteExpr(ctx, state, option.value, stmt.*, prelude, allow_prelude)) or changed;
+            }
+        },
         .data => |*data| {
             for (data.inits) |*init| {
                 changed = (try rewriteExpr(ctx, state, init.target, stmt.*, prelude, allow_prelude)) or changed;
