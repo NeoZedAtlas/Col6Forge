@@ -179,6 +179,14 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             return complex.buildComplex(ctx, builder, real_val, imag_val, complex_ty);
         },
         .unary => |un| {
+            if (un.op == .not) {
+                if (emitDefinedUnaryOperatorCall(ctx, builder, expr, un)) |value| {
+                    return value;
+                } else |err| switch (err) {
+                    error.NoDefinedOperatorMatch => {},
+                    else => return err,
+                }
+            }
             const inner = try emitExprImpl(ctx, builder, un.expr, subst_depth);
             switch (un.op) {
                 .plus => return inner,
@@ -198,6 +206,12 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             }
         },
         .binary => |bin| {
+            if (emitDefinedBinaryOperatorCall(ctx, builder, bin)) |value| {
+                return value;
+            } else |err| switch (err) {
+                error.NoDefinedOperatorMatch => {},
+                else => return err,
+            }
             if (bin.op == .eq or bin.op == .ne or bin.op == .lt or bin.op == .le or bin.op == .gt or bin.op == .ge) {
                 if (try emitCharacterValuePlanImpl(ctx, builder, bin.left, subst_depth)) |lhs_char| {
                     if (try emitCharacterValuePlanImpl(ctx, builder, bin.right, subst_depth)) |rhs_char| {
@@ -246,6 +260,9 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                 return value;
             }
             if (kind != .call) return error.AmbiguousCallOrSubscript;
+            if (isStructureConstructorCall(ctx, sym, call_or_sub)) {
+                return emitStructureConstructor(ctx, builder, call_or_sub, sym);
+            }
             if (ctx.getStatementFunction(call_or_sub.name)) |def| {
                 return emitStatementFunctionCall(ctx, builder, call_or_sub.name, def, call_or_sub.args);
             }
@@ -302,6 +319,243 @@ fn emitTypeBoundProcedureCall(ctx: *Context, builder: anytype, comp: ast.Compone
 
     const fn_name = try ensureExternalDeclForCall(ctx, proc_name, ret_ty, actuals, false);
     return call.emitCall(ctx, builder, fn_name, ret_ty, actuals, false);
+}
+
+fn emitDefinedUnaryOperatorCall(
+    ctx: *Context,
+    builder: anytype,
+    expr: *Expr,
+    un: ast.UnaryExpr,
+) EmitError!ValueRef {
+    if (roughExprKind(ctx, un.expr) == .logical) return error.NoDefinedOperatorMatch;
+    const generic_name = unaryDefinedOperatorName(un.op) orelse return error.NoDefinedOperatorMatch;
+    const proc_name = resolveSingleTargetGenericProcedureName(ctx, generic_name) orelse return error.NoDefinedOperatorMatch;
+    var actuals = [_]*Expr{un.expr};
+    const ret_ty = definedUnaryOperatorResultType(ctx, expr, proc_name);
+    const fn_name = try ensureExternalDeclForCall(ctx, proc_name, ret_ty, &actuals, false);
+    return call.emitCall(ctx, builder, fn_name, ret_ty, &actuals, false);
+}
+
+fn emitDefinedBinaryOperatorCall(
+    ctx: *Context,
+    builder: anytype,
+    bin: ast.BinaryExpr,
+) EmitError!ValueRef {
+    const generic_name = binaryDefinedOperatorName(bin.op) orelse return error.NoDefinedOperatorMatch;
+    if (binaryUsesIntrinsicCodegen(ctx, bin.op, bin.left, bin.right)) return error.NoDefinedOperatorMatch;
+    const proc_name = resolveSingleTargetGenericProcedureName(ctx, generic_name) orelse return error.NoDefinedOperatorMatch;
+    var actuals = [_]*Expr{ bin.left, bin.right };
+    const fn_name = try ensureExternalDeclForCall(ctx, proc_name, .i1, &actuals, false);
+    return call.emitCall(ctx, builder, fn_name, .i1, &actuals, false);
+}
+
+fn binaryUsesIntrinsicCodegen(
+    ctx: *Context,
+    op: ast.BinaryOp,
+    left: *Expr,
+    right: *Expr,
+) bool {
+    switch (op) {
+        .eq, .ne, .lt, .le, .gt, .ge => {},
+        else => return true,
+    }
+    const left_kind = roughExprKind(ctx, left);
+    const right_kind = roughExprKind(ctx, right);
+    return (isNumericKind(left_kind) and isNumericKind(right_kind)) or
+        (left_kind == .logical and right_kind == .logical);
+}
+
+fn roughExprKind(ctx: *Context, expr: *Expr) ast.TypeKind {
+    if (isCharacterExpr(ctx, expr)) return .character;
+    return switch (expr.*) {
+        .identifier => |name| {
+            const sym = ctx.findSymbol(name) orelse return .integer;
+            return sym.loweredKind();
+        },
+        .literal => |lit| return switch (lit.kind) {
+            .integer => .integer,
+            .real => if (utils.realLiteralType(lit.text) == .f64) .double_precision else .real,
+            .logical => .logical,
+            .string, .hollerith => .character,
+            .assumed_size => .integer,
+        },
+        .complex_literal => |lit| {
+            const real_kind = roughExprKind(ctx, lit.real);
+            const imag_kind = roughExprKind(ctx, lit.imag);
+            return if (real_kind == .double_precision or imag_kind == .double_precision) .complex_double else .complex;
+        },
+        .component => |comp| blk: {
+            const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse break :blk .integer;
+            const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse break :blk .integer;
+            break :blk component.type_spec.lowered_kind;
+        },
+        .call_or_subscript => |call_or_sub| {
+            const sym = ctx.findSymbol(call_or_sub.name) orelse return .integer;
+            return sym.loweredKind();
+        },
+        .unary => |un| {
+            if (un.op == .not and resolveSingleTargetGenericProcedureName(ctx, "operator(.not.)") != null and roughExprKind(ctx, un.expr) != .logical) {
+                return .derived;
+            }
+            return roughExprKind(ctx, un.expr);
+        },
+        .binary => |bin| return switch (bin.op) {
+            .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => .logical,
+            .concat => .character,
+            else => blk: {
+                const left_kind = roughExprKind(ctx, bin.left);
+                const right_kind = roughExprKind(ctx, bin.right);
+                break :blk switch (promoteNumericKind(left_kind, right_kind)) {
+                    .integer => .integer,
+                    .real => .real,
+                    .double_precision => .double_precision,
+                    .complex => .complex,
+                    .complex_double => .complex_double,
+                    else => .integer,
+                };
+            },
+        },
+        .substring => .character,
+        .dim_range => .integer,
+        .implied_do => .integer,
+    };
+}
+
+fn isNumericKind(kind: ast.TypeKind) bool {
+    return switch (kind) {
+        .integer, .real, .double_precision, .complex, .complex_double => true,
+        else => false,
+    };
+}
+
+fn unaryDefinedOperatorName(op: ast.UnaryOp) ?[]const u8 {
+    return switch (op) {
+        .not => "operator(.not.)",
+        else => null,
+    };
+}
+
+fn binaryDefinedOperatorName(op: ast.BinaryOp) ?[]const u8 {
+    return switch (op) {
+        .eq => "operator(==)",
+        .ne => "operator(/=)",
+        .lt => "operator(<)",
+        .le => "operator(<=)",
+        .gt => "operator(>)",
+        .ge => "operator(>=)",
+        else => null,
+    };
+}
+
+fn resolveSingleTargetGenericProcedureName(ctx: *Context, generic_name: []const u8) ?[]const u8 {
+    for (ctx.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_name = decl.interface_block.name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(interface_name, generic_name)) continue;
+        return singleTargetInterfaceProcedureName(decl.interface_block);
+    }
+    return null;
+}
+
+fn singleTargetInterfaceProcedureName(interface_block: anytype) ?[]const u8 {
+    const module_count = interface_block.module_procedures.len;
+    const specific_count = interface_block.specific_procedures.len;
+    const procedure_count = interface_block.procedures.len;
+    const header_count = interface_block.procedure_headers.len;
+    const total = module_count + specific_count + procedure_count + header_count;
+    if (total != 1) return null;
+    if (module_count == 1) return interface_block.module_procedures[0];
+    if (specific_count == 1) return interface_block.specific_procedures[0];
+    if (procedure_count == 1) return interface_block.procedures[0];
+    return interface_block.procedure_headers[0].name;
+}
+
+fn definedUnaryOperatorResultType(ctx: *Context, expr: *Expr, proc_name: []const u8) ir.IRType {
+    _ = expr;
+    if (ctx.findSymbol(proc_name)) |sym| {
+        return ctx.typeFromKind(sym.loweredKind());
+    }
+    return .ptr;
+}
+
+fn isStructureConstructorCall(ctx: *Context, sym: ast.sema.Symbol, ctor_call: ast.CallOrSubscript) bool {
+    if (sym.is_intrinsic or sym.is_external) return false;
+    if (sym.loweredKind() != .derived) return false;
+    const type_name = sym.type_spec.derived_type_name orelse return false;
+    if (!std.ascii.eqlIgnoreCase(type_name, ctor_call.name)) return false;
+    if (ctx.lookupKnownProcedureSig(ctor_call.name) != null) return false;
+    return ctx.findDerivedTypeLayout(type_name) != null;
+}
+
+fn emitStructureConstructor(
+    ctx: *Context,
+    builder: anytype,
+    call_or_sub: ast.CallOrSubscript,
+    sym: ast.sema.Symbol,
+) EmitError!ValueRef {
+    const type_name = sym.type_spec.derived_type_name orelse return error.UnknownSymbol;
+    const layout = ctx.findDerivedTypeLayout(type_name) orelse return error.UnknownSymbol;
+    const object_name = try ctx.nextTemp();
+    if (layout.size <= 1) {
+        try builder.alloca(object_name, .i8);
+    } else {
+        try builder.allocaArray(object_name, .i8, layout.size);
+    }
+    const object_ptr = ValueRef{ .name = object_name, .ty = .ptr, .is_ptr = true };
+    if (call_or_sub.args.len != layout.components.len) return error.InvalidArgumentCount;
+
+    for (layout.components, 0..) |component, idx| {
+        var component_ptr = object_ptr;
+        if (component.offset != 0) {
+            const gep_name = try ctx.nextTemp();
+            try builder.gep(gep_name, .i8, object_ptr, try ctx.constI64(@intCast(component.offset)));
+            component_ptr = .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+        }
+        try emitStructureConstructorComponentStore(ctx, builder, component_ptr, component, call_or_sub.args[idx]);
+    }
+    return .{ .name = object_ptr.name, .ty = .ptr, .is_ptr = false };
+}
+
+fn promoteNumericKind(left: ast.TypeKind, right: ast.TypeKind) ast.TypeKind {
+    if ((left == .complex_double) or (right == .complex_double)) return .complex_double;
+    if ((left == .complex) or (right == .complex)) {
+        if (left == .double_precision or right == .double_precision) return .complex_double;
+        return .complex;
+    }
+    if (left == .double_precision or right == .double_precision) return .double_precision;
+    if (left == .real or right == .real) return .real;
+    return .integer;
+}
+
+fn emitStructureConstructorComponentStore(
+    ctx: *Context,
+    builder: anytype,
+    component_ptr: ValueRef,
+    component: context.DerivedComponentLayout,
+    value_expr: *Expr,
+) EmitError!void {
+    if (component.type_spec.lowered_kind == .character) {
+        const plan = (try emitCharacterValuePlan(ctx, builder, value_expr)) orelse return error.UnsupportedCharacterArgumentLength;
+        const src_len = plan.logical_len_const orelse return error.UnsupportedCharacterArgumentLength;
+        try copyCharacterBytesFromPlan(ctx, builder, component_ptr, plan, 0);
+        var idx: usize = src_len;
+        while (idx < component.elem_size) : (idx += 1) {
+            const offset = try ctx.constI32(@intCast(idx));
+            const gep_name = try ctx.nextTemp();
+            try builder.gep(gep_name, .i8, component_ptr, offset);
+            try builder.store(.{ .name = try ctx.intLiteral(' '), .ty = .i8, .is_ptr = false }, .{ .name = gep_name, .ty = .ptr, .is_ptr = true });
+        }
+        return;
+    }
+
+    const value = try emitExpr(ctx, builder, value_expr);
+    if (component.type_spec.lowered_kind == .derived or component.pointer) {
+        try builder.store(value, component_ptr);
+        return;
+    }
+    const target_ty = llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, ctx.options.target_layout);
+    const coerced = if (value.ty == target_ty) value else try casting.coerce(ctx, builder, value, target_ty);
+    try builder.store(coerced, component_ptr);
 }
 
 fn buildTypeBoundProcedureActuals(
@@ -651,6 +905,9 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
             return try emitCharacterSymbolLenValue(ctx, name, sym);
         },
         .call_or_subscript => |call_or_sub| {
+            if (isTrimIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 1) {
+                return emitCharacterLenValueImpl(ctx, builder, call_or_sub.args[0], subst_depth);
+            }
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
             if (!sym.isCharacter()) return null;
             var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
@@ -752,6 +1009,9 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
             });
         },
         .call_or_subscript => |call_or_sub| {
+            if (isTrimIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 1) {
+                return emitCharacterValuePlanImpl(ctx, builder, call_or_sub.args[0], subst_depth);
+            }
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
             if (!sym.isCharacter()) return null;
             var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
@@ -1118,4 +1378,8 @@ fn literalBytes(allocator: std.mem.Allocator, lit: ast.Literal) ![]const u8 {
         .hollerith => utils.hollerithBytes(lit.text) orelse return error.InvalidHollerith,
         else => return error.UnsupportedLiteral,
     };
+}
+
+fn isTrimIntrinsicName(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "trim");
 }

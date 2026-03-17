@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const catalog = @import("../../common/error_catalog.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
 const symbols_mod = @import("resolve_symbols.zig");
@@ -210,6 +211,21 @@ pub fn resolvedDeclTypeSpec(
         return symbols.TypeSpec.fromDerived(name);
     }
     if (kind_selector == null) return symbols.TypeSpec.fromResolvedKind(base_type_kind, base_type_kind, null);
+    switch (kind_selector.?.*) {
+        .call_or_subscript => |call| {
+            if (!symbols_mod.isIntrinsicName(call.name) and symbols_mod.lookupKnownProcedureSig(self, call.name) != null) {
+                self.setDiagnostic(
+                    if (self.current_decl_source) |src| if (src.line == 0) 1 else src.line else 1,
+                    if (self.current_decl_source) |src| if (src.column == 0) 1 else src.column else 1,
+                    catalog.semantic.unexpected_type_decl.code,
+                    "must be an intrinsic",
+                    if (self.current_decl_source) |src| src.text else "",
+                );
+                return error.UnexpectedTypeDecl;
+            }
+        },
+        else => {},
+    }
     const selector_value = try constants.evalConst(self, kind_selector.?);
     return type_kind_selector.resolveSpecWithConst(base_type_kind, kind_selector, selector_value);
 }

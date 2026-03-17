@@ -278,9 +278,10 @@ const ParsedTypeSpec = struct {
     polymorphic: bool = false,
 };
 
-const ParsedCharacterLen = struct {
+pub const ParsedCharacterLen = struct {
     expr: ?*ast.Expr = null,
     deferred: bool = false,
+    kind_selector: ?*ast.Expr = null,
 };
 
 fn parseProcedureInterface(lp: *LineParser, arena: std.mem.Allocator) !ast.ProcedureInterface {
@@ -357,7 +358,14 @@ fn parseTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
     }
     if (lp.isKeywordSplit("CHARACTER")) {
         _ = lp.consumeKeyword("CHARACTER");
-        return .{ .type_kind = .character };
+        var parsed_len: ParsedCharacterLen = .{};
+        if (lp.consume(.star) or lp.peekIs(.l_paren)) {
+            parsed_len = try parseCharacterLenSpec(lp, arena);
+        }
+        return .{
+            .type_kind = .character,
+            .kind_selector = parsed_len.kind_selector,
+        };
     }
     if (try consumeDoublePrecisionType(lp)) {
         return .{ .type_kind = .double_precision };
@@ -697,7 +705,7 @@ fn parseCommonDeclarators(lp: *LineParser, arena: std.mem.Allocator, default_cha
     return items.toOwnedSlice();
 }
 
-fn parseCharacterLenSpec(lp: *LineParser, arena: std.mem.Allocator) !ParsedCharacterLen {
+pub fn parseCharacterLenSpec(lp: *LineParser, arena: std.mem.Allocator) !ParsedCharacterLen {
     if (lp.consume(.l_paren)) {
         if (lp.consume(.star)) {
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
@@ -722,7 +730,7 @@ fn parseCharacterLenSpec(lp: *LineParser, arena: std.mem.Allocator) !ParsedChara
                 if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "KIND")) {
                     _ = lp.next();
                     _ = lp.expect(.equals) orelse return error.UnexpectedToken;
-                    _ = try expr.parseExpr(lp, arena, 0);
+                    parsed.kind_selector = try expr.parseExpr(lp, arena, 0);
                     _ = lp.consume(.comma);
                     continue;
                 }

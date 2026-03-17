@@ -77,6 +77,7 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "INT", Arity{ .min = 1, .max = 1 } },
     .{ "ISIGN", Arity{ .min = 2, .max = 2 } },
     .{ "LEN", Arity{ .min = 1, .max = 1 } },
+    .{ "TRIM", Arity{ .min = 1, .max = 1 } },
     .{ "LOG", Arity{ .min = 1, .max = 1 } },
     .{ "LOG10", Arity{ .min = 1, .max = 1 } },
     .{ "MAX", Arity{ .min = 2, .max = null } },

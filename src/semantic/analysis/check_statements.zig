@@ -23,6 +23,7 @@ pub fn checkStmt(self: *context.Context, stmt: ast.Stmt) CheckError!void {
 pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void {
     switch (node) {
         .assignment => |assign| {
+            if (isCurrentUnitAmbiguousResultRef(self, assign.target)) return error.DuplicateDeclaration;
             const target_ty = try checkExprType(self, assign.target);
             const value_ty = try checkExprType(self, assign.value);
             if (!isAssignmentTarget(self, assign.target)) {
@@ -55,10 +56,27 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             const sym = self.symbols.items[idx];
             if (sym.loweredKind() != .integer or sym.dims.len != 0) return error.AssignmentTypeMismatch;
         },
-        .use_stmt => {},
+        .use_stmt => |use_stmt| {
+            if (currentUnitConflictsWithPreludeProcedure(self, self.unit.name)) {
+                self.setDiagnostic(
+                    if (use_stmt.source.line == 0) 1 else use_stmt.source.line,
+                    if (use_stmt.source.column == 0) 1 else use_stmt.source.column,
+                    catalog.semantic.duplicate_declaration.code,
+                    "is also the name of the current program unit",
+                    use_stmt.source.text,
+                );
+                return error.DuplicateDeclaration;
+            }
+        },
         .call => |call| {
             const call_idx = resolve_symbols.findSymbolIndex(self, call.name);
             self.setCurrentSource(if (call.source.line != 0) call.source else null);
+            if (!callHasDerivedActuals(self, call.args) and hasAmbiguousVisibleGenericInterface(self, call.name)) {
+                return emitNamedProcedureDiagnostic(self, call.name, error.DuplicateDeclaration, "Ambiguous interfaces");
+            }
+            if (std.ascii.eqlIgnoreCase(call.name, self.unit.name) and currentUnitConflictsWithPreludeProcedure(self, call.name)) {
+                return emitNamedProcedureDiagnostic(self, call.name, error.DuplicateDeclaration, "ambiguous reference");
+            }
             if (isAbstractInterfaceProcedure(self, call.name)) {
                 return emitNamedProcedureDiagnostic(self, call.name, error.InvalidArgumentCount, "must not be referenced");
             }
@@ -410,6 +428,12 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
             return try resolve_expr.exprType(self, expr);
         },
         .call_or_subscript => |call| {
+            if (hasAmbiguousVisibleGenericInterface(self, call.name)) {
+                return emitNamedProcedureDiagnostic(self, call.name, error.DuplicateDeclaration, "Ambiguous interfaces");
+            }
+            if (preludeSpecificInterfaceProcedureCount(self, call.name) > 1) {
+                return emitNamedProcedureDiagnostic(self, call.name, error.DuplicateDeclaration, "ambiguous reference");
+            }
             const idx = symbolIndexForResolvedCall(self, expr) orelse
                 (resolve_symbols.findSymbolIndex(self, call.name) orelse return error.MissingScope);
             const sym = self.symbols.items[idx];
@@ -451,6 +475,12 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                             return error.InvalidArithmeticOperands;
                         }
                     }
+                }
+                if (resolve_symbols.lookupKnownProcedureSig(self, call.name) == null and
+                    resolve_symbols.lookupKnownFunctionResolvedSpec(self, call.name) == null and
+                    hasVisibleGenericInterface(self, call.name))
+                {
+                    return emitNamedProcedureDiagnostic(self, call.name, error.InvalidArgumentCount, "no specific function");
                 }
                 try checkExplicitInterfaceRequirementForExprArgs(self, call.name, call.args, idx);
                 try checkKnownProcedureCallArity(self, call.name, call.args.len, 0, false, idx);
@@ -566,12 +596,11 @@ fn dummyArgTypeCompatible(
     expected: symbols.TypeSpec,
     actual: symbols.TypeSpec,
 ) bool {
+    if (expected.polymorphic and expected.derived_type_name == null) {
+        return true;
+    }
     if (expected.lowered_kind != actual.lowered_kind) return false;
     if (expected.lowered_kind != .derived) return true;
-
-    if (expected.polymorphic and expected.derived_type_name == null) {
-        return actual.lowered_kind == .derived;
-    }
 
     const expected_name = expected.derived_type_name orelse return false;
     const actual_name = actual.derived_type_name orelse return false;
@@ -1126,6 +1155,181 @@ fn hasProcedureActualExprArg(self: *context.Context, args: []*ast.Expr) bool {
         if (isProcedureActualExpr(self, arg)) return true;
     }
     return false;
+}
+
+fn hasVisibleGenericInterface(self: *context.Context, name: []const u8) bool {
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_name = decl.interface_block.name orelse continue;
+        if (std.ascii.eqlIgnoreCase(interface_name, name)) return true;
+    }
+    return false;
+}
+
+fn preludeSpecificInterfaceProcedureCount(self: *context.Context, name: []const u8) usize {
+    var count: usize = 0;
+    var decl_idx: usize = 0;
+    while (decl_idx < self.unit.prelude_decl_count and decl_idx < self.unit.decls.len) : (decl_idx += 1) {
+        const decl = self.unit.decls[decl_idx];
+        if (decl != .interface_block) continue;
+        if (decl.interface_block.name != null) continue;
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            if (std.ascii.eqlIgnoreCase(proc_header.name, name)) count += 1;
+        }
+        for (decl.interface_block.procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, name)) count += 1;
+        }
+        for (decl.interface_block.specific_procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, name)) count += 1;
+        }
+    }
+    return count;
+}
+
+fn currentUnitConflictsWithPreludeProcedure(self: *context.Context, name: []const u8) bool {
+    var decl_idx: usize = 0;
+    while (decl_idx < self.unit.prelude_decl_count and decl_idx < self.unit.decls.len) : (decl_idx += 1) {
+        const decl = self.unit.decls[decl_idx];
+        if (decl != .interface_block) continue;
+        if (decl.interface_block.name != null) continue;
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
+        }
+        for (decl.interface_block.procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, name)) return true;
+        }
+        for (decl.interface_block.specific_procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, name)) return true;
+        }
+    }
+    return false;
+}
+
+fn isCurrentUnitAmbiguousResultRef(self: *context.Context, expr: *ast.Expr) bool {
+    const name = switch (expr.*) {
+        .identifier => |ident| ident,
+        else => return false,
+    };
+    if (!std.ascii.eqlIgnoreCase(name, self.unit.name)) return false;
+    if (!currentUnitConflictsWithPreludeProcedure(self, name)) return false;
+    const stmt = self.current_stmt orelse return false;
+    self.setDiagnostic(
+        if (stmt.source_line == 0) 1 else stmt.source_line,
+        if (stmt.source_column == 0) 1 else stmt.source_column,
+        catalog.semantic.duplicate_declaration.code,
+        "ambiguous reference",
+        stmt.source_text,
+    );
+    return true;
+}
+
+fn hasAmbiguousVisibleGenericInterface(self: *context.Context, name: []const u8) bool {
+    var sigs = std.array_list.Managed(context.Context.ProcedureSig).init(self.arena);
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_name = decl.interface_block.name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
+        appendGenericInterfaceSigs(self, &sigs, decl.interface_block) catch return false;
+    }
+    var i: usize = 0;
+    while (i < sigs.items.len) : (i += 1) {
+        var j: usize = i + 1;
+        while (j < sigs.items.len) : (j += 1) {
+            if (genericProcedureSigAmbiguous(sigs.items[i], sigs.items[j])) return true;
+        }
+    }
+    return false;
+}
+
+fn callHasDerivedActuals(self: *context.Context, args: []const ast.CallArg) bool {
+    for (args) |arg| {
+        switch (arg) {
+            .expr => |actual| {
+                const spec = resolve_expr.exprTypeSpec(self, actual.value) catch continue;
+                if (spec.lowered_kind == .derived) return true;
+            },
+            .alt_return => {},
+        }
+    }
+    return false;
+}
+
+fn appendGenericInterfaceSigs(
+    self: *context.Context,
+    out: *std.array_list.Managed(context.Context.ProcedureSig),
+    interface_block: ast.InterfaceBlock,
+) !void {
+    for (interface_block.procedure_headers) |proc_header| {
+        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_header.name) orelse continue;
+        try out.append(sig);
+    }
+    for (interface_block.specific_procedures) |proc_name| {
+        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_name) orelse continue;
+        try out.append(sig);
+    }
+    for (interface_block.module_procedures) |proc_name| {
+        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_name) orelse continue;
+        try out.append(sig);
+    }
+    for (interface_block.procedures) |proc_name| {
+        if (interfaceBlockHasProcedureHeader(interface_block, proc_name)) continue;
+        const sig = resolve_symbols.lookupKnownProcedureSig(self, proc_name) orelse continue;
+        try out.append(sig);
+    }
+}
+
+fn interfaceBlockHasProcedureHeader(interface_block: ast.InterfaceBlock, name: []const u8) bool {
+    for (interface_block.procedure_headers) |proc_header| {
+        if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
+    }
+    return false;
+}
+
+fn genericProcedureSigAmbiguous(a: context.Context.ProcedureSig, b: context.Context.ProcedureSig) bool {
+    if (a.kind != b.kind) return false;
+    if (genericRequiredArgCount(a) != genericRequiredArgCount(b)) return false;
+    if (genericSigHasDerivedOrProcedureRequiredArg(a) or genericSigHasDerivedOrProcedureRequiredArg(b)) return false;
+
+    var a_idx: usize = 0;
+    var b_idx: usize = 0;
+    while (true) {
+        while (a_idx < a.args.len and a.args[a_idx].optional) : (a_idx += 1) {}
+        while (b_idx < b.args.len and b.args[b_idx].optional) : (b_idx += 1) {}
+        if (a_idx >= a.args.len or b_idx >= b.args.len) return a_idx >= a.args.len and b_idx >= b.args.len;
+        if (!genericArgEquivalent(a.args[a_idx], b.args[b_idx])) return false;
+        a_idx += 1;
+        b_idx += 1;
+    }
+}
+
+fn genericRequiredArgCount(sig: context.Context.ProcedureSig) usize {
+    var count: usize = 0;
+    for (sig.args) |arg| {
+        if (!arg.optional) count += 1;
+    }
+    return count;
+}
+
+fn genericSigHasDerivedOrProcedureRequiredArg(sig: context.Context.ProcedureSig) bool {
+    for (sig.args) |arg| {
+        if (arg.optional) continue;
+        if (arg.is_procedure) return true;
+        if (arg.type_spec.lowered_kind == .derived) return true;
+    }
+    return false;
+}
+
+fn genericArgEquivalent(a: context.Context.ProcedureSig.ArgSig, b: context.Context.ProcedureSig.ArgSig) bool {
+    if (a.is_procedure or b.is_procedure) return a.is_procedure and b.is_procedure;
+    if (a.rank != b.rank) return false;
+    if (a.pointer != b.pointer) return false;
+    if (a.allocatable != b.allocatable) return false;
+    if (a.type_spec.lowered_kind != b.type_spec.lowered_kind) return false;
+    if (a.type_spec.lowered_kind == .derived) {
+        if (a.type_spec.derived_type_name == null or b.type_spec.derived_type_name == null) return false;
+        return std.ascii.eqlIgnoreCase(a.type_spec.derived_type_name.?, b.type_spec.derived_type_name.?);
+    }
+    return true;
 }
 
 fn calleeHasVisibleExplicitInterface(self: *context.Context, name: []const u8) bool {

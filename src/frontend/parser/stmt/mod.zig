@@ -10,6 +10,7 @@ const control_flow = @import("control_flow.zig");
 pub const api = @import("internal/api.zig");
 pub const if_stmt = @import("internal/if_stmt.zig");
 pub const select_case = @import("internal/select_case.zig");
+pub const select_type = @import("internal/select_type.zig");
 pub const action_stmt = @import("internal/action_stmt.zig");
 pub const control_flow_bridge = @import("internal/control_flow_bridge.zig");
 

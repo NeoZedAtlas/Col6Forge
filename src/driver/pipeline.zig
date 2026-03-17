@@ -436,6 +436,10 @@ fn emitLlvmModule(
         return err;
     };
     if (profile) |p| p.parse_ns = elapsedNs(parse_start);
+    const parse_had_diagnostics = appendParserDiagnostics(diag_bag, &parse_diag_bag, input_path, contents);
+    if (parse_had_diagnostics) {
+        if (profile) |p| p.markFailure(.parse);
+    }
 
     var semantic_diag_bag = semantic.diagnostic.Bag.init(arena.allocator());
     defer semantic_diag_bag.deinit();
@@ -456,6 +460,9 @@ fn emitLlvmModule(
         return err;
     };
     if (profile) |p| p.semantic_ns = elapsedNs(semantic_start);
+    if (parse_had_diagnostics) {
+        return error.UnexpectedToken;
+    }
 
     var codegen_diag_bag = codegen.diagnostic.Bag.init(allocator);
     defer codegen_diag_bag.deinit();
@@ -546,6 +553,10 @@ fn emitLlvmModuleToWriter(
         return err;
     };
     if (profile) |p| p.parse_ns = elapsedNs(parse_start);
+    const parse_had_diagnostics = appendParserDiagnostics(diag_bag, &parse_diag_bag, input_path, contents);
+    if (parse_had_diagnostics) {
+        if (profile) |p| p.markFailure(.parse);
+    }
 
     var semantic_diag_bag = semantic.diagnostic.Bag.init(arena.allocator());
     defer semantic_diag_bag.deinit();
@@ -566,6 +577,9 @@ fn emitLlvmModuleToWriter(
         return err;
     };
     if (profile) |p| p.semantic_ns = elapsedNs(semantic_start);
+    if (parse_had_diagnostics) {
+        return error.UnexpectedToken;
+    }
 
     var codegen_diag_bag = codegen.diagnostic.Bag.init(allocator);
     defer codegen_diag_bag.deinit();

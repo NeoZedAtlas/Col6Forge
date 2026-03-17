@@ -541,7 +541,16 @@ const Parser = struct {
         var lp = LineParser.init(header_line, header_tokens);
         const is_abstract = lp.consumeKeyword("ABSTRACT");
         if (!lp.consumeKeyword("INTERFACE")) return error.UnexpectedToken;
-        const interface_name = try parseInterfaceGenericName(self.arena, &lp);
+        var invalid_named_abstract = false;
+        if (is_abstract) {
+            var lookahead = lp;
+            if (stmt.action_stmt.consumeDoubleColon(&lookahead)) {
+                invalid_named_abstract = true;
+                _ = lookahead.readName(self.arena);
+                lp = lookahead;
+            }
+        }
+        const interface_name = if (invalid_named_abstract) null else try parseInterfaceGenericName(self.arena, &lp);
         self.index += 1;
         var module_procedures = std.array_list.Managed([]const u8).init(self.arena);
         var module_procedure_sources = std.array_list.Managed(DeclSource).init(self.arena);
@@ -557,6 +566,22 @@ const Parser = struct {
             const tokens = try self.tokensForIndex(self.index);
             switch (try classifyInterfaceEnd(self.arena, line, tokens, interface_name)) {
                 .valid => {
+                    if (invalid_named_abstract) {
+                        self.diag_bag.set(
+                            header_line.span.start_line,
+                            1,
+                            catalog.parser.unexpected_token.code,
+                            "Syntax error in ABSTRACT INTERFACE statement",
+                            header_line.text,
+                        );
+                        self.diag_bag.set(
+                            line.span.start_line,
+                            1,
+                            catalog.parser.unexpected_token.code,
+                            "Expecting END MODULE statement",
+                            line.text,
+                        );
+                    }
                     self.index += 1;
                     return .{ .interface_block = .{
                         .abstract = is_abstract,
@@ -614,16 +639,18 @@ const Parser = struct {
                     const expr_mark = self.expr_capture.mark();
                     self.index += 1;
                     const proc_unit = try self.parseProgramUnitBody(header.?, true, line, expr_mark);
+                    const proc_source: DeclSource = .{
+                        .line = line.span.start_line,
+                        .column = 1,
+                        .text = line.text,
+                    };
+                    const end_line = self.lines[self.index - 1];
                     try procedures.append(proc_unit.name);
-                    try procedure_sources.append(.{
-                        .line = line.span.start_line,
+                    try procedure_sources.append(proc_source);
+                    try procedure_headers.append(interfaceProcedureFromUnit(proc_unit, proc_source, .{
+                        .line = end_line.span.start_line,
                         .column = 1,
-                        .text = line.text,
-                    });
-                    try procedure_headers.append(interfaceProcedureFromUnit(proc_unit, .{
-                        .line = line.span.start_line,
-                        .column = 1,
-                        .text = line.text,
+                        .text = end_line.text,
                     }));
                     continue;
                 }
@@ -635,11 +662,13 @@ const Parser = struct {
     }
 };
 
-fn interfaceProcedureFromUnit(unit: ProgramUnit, source: DeclSource) ast.InterfaceProcedure {
+fn interfaceProcedureFromUnit(unit: ProgramUnit, source: DeclSource, end_source: DeclSource) ast.InterfaceProcedure {
     return .{
         .kind = unit.kind,
         .name = unit.name,
         .source = source,
+        .end_source = end_source,
+        .bind_name = unit.bind_name,
         .result_name = unit.result_name,
         .args = unit.args,
         .alt_return_dummy_count = unit.alt_return_dummy_count,
@@ -1119,11 +1148,15 @@ fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
     }
     if (lp.isKeywordSplit("CHARACTER")) {
         _ = lp.consumeKeyword("CHARACTER");
-        var char_len: ?*ast.Expr = null;
+        var parsed_len: decl.ParsedCharacterLen = .{};
         if (lp.consume(.star) or lp.peekIs(.l_paren)) {
-            char_len = try parseCharacterLen(lp, arena);
+            parsed_len = try decl.parseCharacterLenSpec(lp, arena);
         }
-        return .{ .type_kind = .character, .kind_selector = null, .char_len = char_len };
+        return .{
+            .type_kind = .character,
+            .kind_selector = parsed_len.kind_selector,
+            .char_len = parsed_len.expr,
+        };
     }
     if (try decl.consumeDoublePrecisionType(lp)) {
         return .{ .type_kind = .double_precision, .kind_selector = null, .char_len = null };

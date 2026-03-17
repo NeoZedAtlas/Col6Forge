@@ -352,6 +352,8 @@ pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![
             .type_spec = type_spec,
             .requires_descriptor = dummyArgRequiresDescriptor(dims),
             .rank = dims.len,
+            .pointer = decl_info.pointer,
+            .allocatable = decl_info.allocatable,
             .optional = decl_info.optional,
             .intent = decl_info.intent,
             .is_procedure = decl_info.interface_procedure != null or decl_info.external or inferred_proc_kind != null,
@@ -384,6 +386,8 @@ pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![
 
 const DummyArgDeclInfo = struct {
     declarator: ?ast.Declarator = null,
+    pointer: bool = false,
+    allocatable: bool = false,
     optional: bool = false,
     intent: ?ast.IntentKind = null,
     external: bool = false,
@@ -404,6 +408,8 @@ fn findDummyArgDeclInfoInDecls(decls: []const ast.Decl, name: []const u8) DummyA
                 for (type_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
                     info.declarator = item;
+                    info.pointer = type_decl.pointer;
+                    info.allocatable = type_decl.allocatable;
                     info.optional = type_decl.optional;
                     info.intent = type_decl.intent;
                     info.external = type_decl.external;
@@ -428,6 +434,8 @@ fn findDummyArgDeclInfoInDecls(decls: []const ast.Decl, name: []const u8) DummyA
                 for (dimension_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
                     dims_only = item;
+                    info.pointer = dimension_decl.pointer;
+                    info.allocatable = dimension_decl.allocatable;
                 }
             },
             .external => |ext_decl| {
@@ -471,6 +479,8 @@ fn inferInterfaceProcedureArgSigs(
             .type_spec = type_spec,
             .requires_descriptor = dummyArgRequiresDescriptor(dims),
             .rank = dims.len,
+            .pointer = decl_info.pointer,
+            .allocatable = decl_info.allocatable,
             .optional = decl_info.optional,
             .intent = decl_info.intent,
             .is_procedure = decl_info.interface_procedure != null or decl_info.external or inferred_proc_kind != null,

@@ -215,6 +215,15 @@ fn maybeSetFunctionTypeDeclDiagnostic(ctx: *context.Context, type_decl: ast.Type
             "invalid type for function result",
             decl_source.text,
         );
+        if (type_decl.type_kind == .derived) {
+            ctx.setDiagnostic(
+                line,
+                column,
+                catalog.semantic.invalid_argument_count.code,
+                "Type mismatch",
+                decl_source.text,
+            );
+        }
         return;
     }
 }

@@ -11,6 +11,7 @@ const control_flow_bridge = @import("control_flow_bridge.zig");
 const if_stmt = @import("if_stmt.zig");
 const helpers = @import("../helpers.zig");
 const select_case = @import("select_case.zig");
+const select_type = @import("select_type.zig");
 
 const LineParser = context.LineParser;
 const Stmt = ast.Stmt;
@@ -202,6 +203,14 @@ pub fn parseStatementWithDiagnostics(
     }
     if (select_case.isSelectCaseStart(lp)) {
         var stmt = select_case.parseSelectCaseStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parseStatementWithDiagnostics) catch |err| {
+            if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
+            return err;
+        };
+        setStmtSourceIfMissing(&stmt, line);
+        return stmt;
+    }
+    if (select_type.isSelectTypeStart(lp)) {
+        var stmt = select_type.parseSelectTypeStatement(arena, lines, index, label, &lp, do_ctx, param_ints, param_strings, array_names, diag_bag, lex_diag_bag, parseStatementWithDiagnostics) catch |err| {
             if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
             return err;
         };

@@ -15,6 +15,10 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 
+fn isTrimIntrinsicName(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "trim");
+}
+
 fn isIntegerType(ty: IRType) bool {
     return ty == .i32 or ty == .i64;
 }
@@ -121,6 +125,13 @@ fn emitIntrinsicLen(ctx: *Context, builder: anytype, args: []*Expr) EmitError!Va
         value
     else
         casting.coerce(ctx, builder, value, ctx.defaultIntegerIRType());
+}
+
+fn emitIntrinsicTrim(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    if (value.ty != .ptr) return error.UnsupportedIntrinsicType;
+    return value;
 }
 
 pub fn llvmIntrinsicName(allocator: std.mem.Allocator, base: []const u8, ty: IRType) EmitError![]const u8 {
@@ -1022,6 +1033,7 @@ const IntrinsicTag = enum {
     epsilon,
     huge,
     len_,
+    trim_,
     tan,
     dtan,
     asin,
@@ -1116,6 +1128,7 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "epsilon", .epsilon },
     .{ "huge", .huge },
     .{ "len", .len_ },
+    .{ "trim", .trim_ },
     .{ "tan", .tan },
     .{ "dtan", .dtan },
     .{ "asin", .asin },
@@ -1241,6 +1254,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .epsilon => return emitIntrinsicEpsilon(ctx, args),
         .huge => return emitIntrinsicHuge(ctx, args),
         .len_ => return emitIntrinsicLen(ctx, builder, args),
+        .trim_ => return emitIntrinsicTrim(ctx, builder, args),
         .tan => return emitTan(ctx, builder, args),
         .dtan => return emitDoubleUnaryLibm(ctx, builder, "tan", args),
         .asin => return emitAsin(ctx, builder, args),

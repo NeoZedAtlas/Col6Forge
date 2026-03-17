@@ -30,7 +30,19 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             var sym = self.symbols.items[idx];
             var kind: ResolvedRefKind = .unknown;
             var resolved_spec = sym.type_spec;
-            if (sym.storage == .dummy) {
+            if (structureConstructorTypeSpec(self, call.name, sym)) |ctor_spec| {
+                try validateStructureConstructorActuals(self, call.name, call.args, ctor_spec);
+                kind = .call;
+                resolved_spec = ctor_spec;
+                if (sym.kind == .variable) {
+                    sym.kind = .function;
+                }
+                sym.applyTypeSpec(ctor_spec);
+                sym.type_explicit = true;
+                sym.is_external = false;
+                sym.is_intrinsic = false;
+                self.symbols.items[idx] = sym;
+            } else if (sym.storage == .dummy) {
                 if (sym.dims.len > 0) {
                     kind = .subscript;
                 } else {
@@ -207,7 +219,16 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         .unary => |un| {
             try resolveExpr(self, un.expr);
             const ty = switch (un.op) {
-                .not => symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
+                .not => blk: {
+                    const inner_spec = try exprTypeSpecCached(self, un.expr);
+                    if (inner_spec.lowered_kind == .logical) {
+                        break :blk symbols.TypeSpec.fromResolvedKind(.logical, .logical, null);
+                    }
+                    if (try resolveDefinedUnaryOperatorResult(self, un.op, un.expr)) |result_spec| {
+                        break :blk result_spec;
+                    }
+                    return error.InvalidArithmeticOperands;
+                },
                 .plus, .minus => try exprTypeSpecCached(self, un.expr),
             };
             try cacheExprType(self, expr, ty);
@@ -215,13 +236,13 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
         .binary => |bin| {
             try resolveExpr(self, bin.left);
             try resolveExpr(self, bin.right);
-            const left_kind = try resolvedExprType(self, bin.left);
-            const right_kind = try resolvedExprType(self, bin.right);
-            try validateBinaryOperands(bin.op, left_kind, right_kind);
-            const ty = switch (bin.op) {
-                .eq, .ne, .lt, .le, .gt, .ge, .and_, .or_, .eqv, .neqv => symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
-                .concat => symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null),
-                else => try promoteNumericTypeSpec(self, bin.left, bin.right),
+            const left_spec = try exprTypeSpecCached(self, bin.left);
+            const right_spec = try exprTypeSpecCached(self, bin.right);
+            const ty = validateBinaryOperandSpecs(self, bin.op, left_spec, right_spec, bin.left, bin.right) catch |err| blk: {
+                if (try resolveDefinedBinaryOperatorResult(self, bin.op, bin.left, bin.right)) |result_spec| {
+                    break :blk result_spec;
+                }
+                return err;
             };
             try cacheExprType(self, expr, ty);
         },
@@ -399,6 +420,129 @@ fn isCharacterType(kind: ast.TypeKind) bool {
     return kind == .character;
 }
 
+fn structureConstructorTypeSpec(
+    self: *context.Context,
+    name: []const u8,
+    sym: symbols.Symbol,
+) ?symbols.TypeSpec {
+    const info = symbols_mod.lookupDerivedType(self, name) orelse return null;
+    if (sym.is_intrinsic or sym.is_external or sym.dims.len != 0) return null;
+    if (symbols_mod.lookupKnownProcedureSig(self, name) != null) return null;
+    if (sym.type_explicit and sym.loweredKind() != .derived) return null;
+    return symbols.TypeSpec.fromDerived(info.name);
+}
+
+fn validateStructureConstructorActuals(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+    ctor_spec: symbols.TypeSpec,
+) ResolveError!void {
+    const type_name = ctor_spec.derived_type_name orelse return error.InvalidArgumentCount;
+    const derived = symbols_mod.lookupDerivedType(self, type_name) orelse return error.InvalidArgumentCount;
+    if (args.len != derived.components.len) return error.InvalidArgumentCount;
+    for (args, 0..) |arg, idx| {
+        const actual_spec = try exprTypeSpecCached(self, arg);
+        if (!dummyArgTypeCompatible(self, derived.components[idx].type_spec, actual_spec)) {
+            _ = name;
+            return error.ArgumentTypeMismatch;
+        }
+    }
+}
+
+fn validateBinaryOperandSpecs(
+    self: *context.Context,
+    op: ast.BinaryOp,
+    left_spec: symbols.TypeSpec,
+    right_spec: symbols.TypeSpec,
+    left_expr: *ast.Expr,
+    right_expr: *ast.Expr,
+) !symbols.TypeSpec {
+    try validateBinaryOperands(op, left_spec.lowered_kind, right_spec.lowered_kind);
+    switch (op) {
+        .eq, .ne, .lt, .le, .gt, .ge => {
+            if (left_spec.lowered_kind == .character and right_spec.lowered_kind == .character and
+                left_spec.kind_value != right_spec.kind_value)
+            {
+                return error.InvalidArithmeticOperands;
+            }
+            return symbols.TypeSpec.fromResolvedKind(.logical, .logical, null);
+        },
+        .and_, .or_, .eqv, .neqv => return symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
+        .concat => return symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null),
+        else => return promoteNumericTypeSpec(self, left_expr, right_expr),
+    }
+}
+
+fn resolveDefinedUnaryOperatorResult(
+    self: *context.Context,
+    op: ast.UnaryOp,
+    actual: *ast.Expr,
+) ResolveError!?symbols.TypeSpec {
+    const op_name = unaryDefinedOperatorName(op) orelse return null;
+    var actuals = [_]*ast.Expr{actual};
+    return lookupDefinedOperatorResult(self, op_name, &actuals);
+}
+
+fn resolveDefinedBinaryOperatorResult(
+    self: *context.Context,
+    op: ast.BinaryOp,
+    left: *ast.Expr,
+    right: *ast.Expr,
+) ResolveError!?symbols.TypeSpec {
+    const op_name = binaryDefinedOperatorName(op) orelse return null;
+    var actuals = [_]*ast.Expr{ left, right };
+    return lookupDefinedOperatorResult(self, op_name, &actuals);
+}
+
+fn lookupDefinedOperatorResult(
+    self: *context.Context,
+    op_name: []const u8,
+    actuals: []const *ast.Expr,
+) ResolveError!?symbols.TypeSpec {
+    const sig = symbols_mod.lookupKnownProcedureSig(self, op_name) orelse return null;
+    if (sig.kind != .function) return null;
+    if (!procedureSigMatchesActuals(self, sig, actuals)) return null;
+    return symbols_mod.lookupKnownFunctionResolvedSpec(self, op_name) orelse null;
+}
+
+fn procedureSigMatchesActuals(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    actuals: []const *ast.Expr,
+) bool {
+    if (sig.args.len == 0) return sig.arg_count == actuals.len;
+    if (actuals.len > sig.arg_count) return false;
+
+    var actual_index: usize = 0;
+    for (sig.args) |arg| {
+        if (actual_index >= actuals.len) return arg.optional;
+        const actual_spec = exprTypeSpecCached(self, actuals[actual_index]) catch return false;
+        if (!dummyArgTypeCompatible(self, arg.type_spec, actual_spec)) return false;
+        actual_index += 1;
+    }
+    return actual_index == actuals.len;
+}
+
+fn unaryDefinedOperatorName(op: ast.UnaryOp) ?[]const u8 {
+    return switch (op) {
+        .not => "operator(.not.)",
+        else => null,
+    };
+}
+
+fn binaryDefinedOperatorName(op: ast.BinaryOp) ?[]const u8 {
+    return switch (op) {
+        .eq => "operator(==)",
+        .ne => "operator(/=)",
+        .lt => "operator(<)",
+        .le => "operator(<=)",
+        .gt => "operator(>)",
+        .ge => "operator(>=)",
+        else => null,
+    };
+}
+
 fn validateBinaryOperands(op: ast.BinaryOp, left_kind: ast.TypeKind, right_kind: ast.TypeKind) !void {
     switch (op) {
         .add, .sub, .mul, .div => {
@@ -544,12 +688,11 @@ fn dummyArgTypeCompatible(
     expected: symbols.TypeSpec,
     actual: symbols.TypeSpec,
 ) bool {
+    if (expected.polymorphic and expected.derived_type_name == null) {
+        return true;
+    }
     if (expected.lowered_kind != actual.lowered_kind) return false;
     if (expected.lowered_kind != .derived) return true;
-
-    if (expected.polymorphic and expected.derived_type_name == null) {
-        return actual.lowered_kind == .derived;
-    }
 
     const expected_name = expected.derived_type_name orelse return false;
     const actual_name = actual.derived_type_name orelse return false;
@@ -644,7 +787,7 @@ fn promoteNumericTypeSpec(
         .double_precision => if (left_spec.lowered_kind == .double_precision) left_spec else right_spec,
         .real => if (left_spec.lowered_kind == .real) left_spec else right_spec,
         .integer => if (left_spec.lowered_kind == .integer) left_spec else right_spec,
-        else => symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
+        else => return error.InvalidArithmeticOperands,
     };
 }
 
