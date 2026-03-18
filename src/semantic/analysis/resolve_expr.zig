@@ -797,6 +797,7 @@ fn typeBoundProcedureResultTypeSpec(
 ) ResolveError!symbols.TypeSpec {
     const sig = typeBoundProcedureSig(self, binding) orelse return error.InvalidSubscript;
     if (sig.kind != .function) return error.InvalidSubscript;
+    if (sig.result_type_spec) |type_spec| return type_spec;
     const result_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
     if (binding.owner_name) |owner_name| {
         const qualified_result = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, result_name }) catch null;

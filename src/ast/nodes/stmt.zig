@@ -166,6 +166,9 @@ pub const AllocateTypeSpec = struct {
     polymorphic: bool = false,
     char_len: ?*Expr = null,
     char_len_deferred: bool = false,
+    source: SourceRef = .{},
+    legacy_star_kind: bool = false,
+    invalid_bare_double: bool = false,
 };
 
 pub const AllocationOptionKind = enum {

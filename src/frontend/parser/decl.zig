@@ -202,7 +202,10 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
     }
 
     const type_spec = try parseDeclTypeKind(lp, arena);
-    var default_char_len: ParsedCharacterLen = .{};
+    var default_char_len: ParsedCharacterLen = .{
+        .expr = type_spec.char_len,
+        .deferred = type_spec.char_len_deferred,
+    };
     if (type_spec.type_kind == .character) {
         if (lp.consume(.star) or lp.peekIs(.l_paren)) {
             default_char_len = try parseCharacterLenSpec(lp, arena);
@@ -266,7 +269,8 @@ fn parseImplicitTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ImplicitTyp
         const selector = try parseStarOnlyKindSelector(lp, arena);
         return .{ .type_kind = .logical, .kind_selector = selector, .char_len = null };
     }
-    if (try consumeDoublePrecisionType(lp)) {
+    if (isDoublePrecisionTypeStart(lp.*)) {
+        _ = try consumeDoublePrecisionType(lp);
         return .{ .type_kind = .double_precision, .kind_selector = null, .char_len = null };
     }
     return error.UnknownType;
@@ -275,8 +279,12 @@ fn parseImplicitTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ImplicitTyp
 const ParsedTypeSpec = struct {
     type_kind: TypeKind,
     kind_selector: ?*ast.Expr = null,
+    char_len: ?*ast.Expr = null,
+    char_len_deferred: bool = false,
     derived_type_name: ?[]const u8 = null,
     polymorphic: bool = false,
+    legacy_star_kind: bool = false,
+    invalid_bare_double: bool = false,
 };
 
 pub const ParsedCharacterLen = struct {
@@ -312,11 +320,19 @@ fn parseProcedureInterface(lp: *LineParser, arena: std.mem.Allocator) !ast.Proce
 
 pub fn tryParseAllocateTypeSpec(lp: *LineParser, arena: std.mem.Allocator) !?ast.AllocateTypeSpec {
     var lookahead = lp.*;
+    const type_source: ast.SourceRef = .{
+        .line = lookahead.line.span.start_line,
+        .column = if (lookahead.index < lookahead.tokens.len) lookahead.tokens[lookahead.index].column else 1,
+        .text = lookahead.line.text,
+    };
     const type_spec = parseAllocateTypeSpecHead(&lookahead, arena) catch |err| switch (err) {
         error.UnknownType => return null,
         else => return err,
     };
-    var char_len: ParsedCharacterLen = .{};
+    var char_len: ParsedCharacterLen = .{
+        .expr = type_spec.char_len,
+        .deferred = type_spec.char_len_deferred,
+    };
     if (type_spec.type_kind == .character) {
         if (lookahead.consume(.star) or lookahead.peekIs(.l_paren)) {
             char_len = try parseCharacterLenSpec(&lookahead, arena);
@@ -331,6 +347,9 @@ pub fn tryParseAllocateTypeSpec(lp: *LineParser, arena: std.mem.Allocator) !?ast
         .polymorphic = type_spec.polymorphic,
         .char_len = char_len.expr,
         .char_len_deferred = char_len.deferred,
+        .source = type_source,
+        .legacy_star_kind = type_spec.legacy_star_kind,
+        .invalid_bare_double = type_spec.invalid_bare_double,
     };
 }
 
@@ -348,7 +367,10 @@ fn parseTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
     }
     if (lp.isKeywordSplit("COMPLEX")) {
         _ = lp.consumeKeyword("COMPLEX");
-        return try parseComplexKindSuffix(lp, arena);
+        const legacy_star_kind = lp.peekIs(.star);
+        var parsed = try parseComplexKindSuffix(lp, arena);
+        parsed.legacy_star_kind = legacy_star_kind;
+        return parsed;
     }
     if (lp.isKeywordSplit("LOGICAL")) {
         _ = lp.consumeKeyword("LOGICAL");
@@ -366,17 +388,28 @@ fn parseTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
         return .{
             .type_kind = .character,
             .kind_selector = parsed_len.kind_selector,
+            .char_len = parsed_len.expr,
+            .char_len_deferred = parsed_len.deferred,
         };
     }
     if (try consumeDoubleComplexType(lp)) {
         return .{ .type_kind = .complex_double };
     }
-    if (try consumeDoublePrecisionType(lp)) {
+    if (isDoublePrecisionTypeStart(lp.*)) {
+        _ = try consumeDoublePrecisionType(lp);
         return .{ .type_kind = .double_precision };
+    }
+    if (lp.isKeywordSplit("DOUBLE")) {
+        _ = lp.consumeKeyword("DOUBLE");
+        return .{
+            .type_kind = .double_precision,
+            .invalid_bare_double = true,
+        };
     }
     if (lp.consumeKeyword("TYPE")) {
         _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
         const name = lp.readName(arena) orelse return error.MissingName;
+        if (lp.consume(.l_paren)) try consumeBalancedParens(lp);
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         return .{ .type_kind = .derived, .derived_type_name = name };
     }
@@ -387,6 +420,7 @@ fn parseTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
             return .{ .type_kind = .derived, .derived_type_name = null, .polymorphic = true };
         }
         const name = lp.readName(arena) orelse return error.MissingName;
+        if (lp.consume(.l_paren)) try consumeBalancedParens(lp);
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         return .{ .type_kind = .derived, .derived_type_name = name, .polymorphic = true };
     }
@@ -463,6 +497,7 @@ pub fn isDerivedTypeDeclStart(lp: LineParser) bool {
 fn tryParseBareDerivedAllocateTypeName(lp: *LineParser, arena: std.mem.Allocator) !?[]const u8 {
     var lookahead = lp.*;
     const name = lookahead.readName(arena) orelse return null;
+    if (lookahead.consume(.l_paren)) try consumeBalancedParens(&lookahead);
     if (lookahead.index + 1 >= lookahead.tokens.len) return null;
     if (lookahead.tokens[lookahead.index].kind != .colon or lookahead.tokens[lookahead.index + 1].kind != .colon) return null;
     lp.* = lookahead;
@@ -596,10 +631,12 @@ fn parseStarOnlyKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.E
 }
 
 fn parseRealKindSuffix(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
+    const legacy_star_kind = lp.peekIs(.star);
     const selector = try parseOptionalKindSelector(lp, arena);
     return .{
         .type_kind = .real,
         .kind_selector = selector,
+        .legacy_star_kind = legacy_star_kind,
     };
 }
 
@@ -1782,6 +1819,51 @@ test "parseDecl handles DOUBLE COMPLEX declaration" {
             try testing.expectEqual(TypeKind.complex_double, td.type_kind);
             try testing.expectEqual(@as(usize, 1), td.items.len);
             try testing.expectEqualStrings("Z", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "tryParseAllocateTypeSpec keeps legacy REAL star selector metadata" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      ALLOCATE(REAL*8 :: X)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const type_spec = (try tryParseAllocateTypeSpec(&lp, arena.allocator())) orelse return error.UnexpectedToken;
+    try testing.expect(type_spec.legacy_star_kind);
+    try testing.expectEqual(TypeKind.real, type_spec.type_kind);
+}
+
+test "parseDecl handles parameterized derived type declarator" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      TYPE(T(:)), ALLOCATABLE :: X\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.derived, td.type_kind);
+            try testing.expectEqualStrings("T", td.derived_type_name.?);
+            try testing.expect(td.allocatable);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("X", td.items[0].name);
         },
         else => return error.UnexpectedToken,
     }
