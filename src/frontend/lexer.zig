@@ -383,6 +383,7 @@ fn scanExponent(text: []const u8, index: usize, allow_leading_space: bool) usize
 fn scanKindSuffix(text: []const u8, index: usize) usize {
     if (index >= text.len or text[index] != '_') return index;
     var i = index + 1;
+    if (i < text.len and (text[i] == '"' or text[i] == '\'')) return i;
     if (i >= text.len or !std.ascii.isAlphanumeric(text[i])) return index;
     while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) : (i += 1) {}
     return i;

@@ -429,7 +429,7 @@ fn cloneExprWithSubst(
             for (ctor.items, 0..) |item, idx| {
                 items[idx] = try cloneExprWithSubst(ctx, allocator, item, name, replacement);
             }
-            cloned.* = .{ .array_constructor = .{ .items = items } };
+            cloned.* = .{ .array_constructor = .{ .type_spec = ctor.type_spec, .items = items } };
         },
         .literal => |lit| {
             cloned.* = .{ .literal = lit };

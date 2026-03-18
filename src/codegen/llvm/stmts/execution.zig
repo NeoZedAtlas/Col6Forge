@@ -399,6 +399,21 @@ fn emitAllocateDimSpecsFromExpr(
             }
             break :blk specs;
         },
+        .call_or_subscript => |call| blk: {
+            const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr_node))) orelse .unknown;
+            if (kind == .subscript) break :blk null;
+            const sig = ctx.lookupKnownProcedureSig(call.name) orelse break :blk null;
+            if (sig.result_rank == 0) break :blk null;
+
+            const specs = try ctx.allocator.alloc(AllocateDimSpec, sig.result_rank);
+            for (0..sig.result_rank) |idx| {
+                specs[idx] = .{
+                    .lower = constI64(ctx, 1),
+                    .extent = constI64(ctx, 1),
+                };
+            }
+            break :blk specs;
+        },
         .unary => |un| emitAllocateDimSpecsFromExpr(ctx, builder, un.expr),
         .binary => |bin| {
             if (try emitAllocateDimSpecsFromExpr(ctx, builder, bin.left)) |specs| return specs;
@@ -581,6 +596,7 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
         return;
     }
     if (try emitWholeArrayCopyAssignment(ctx, builder, assign)) return;
+    if (try emitWholeArrayConstructorAssignment(ctx, builder, assign)) return;
     if (try emitContiguousSectionScalarAssignment(ctx, builder, assign)) return;
     if (try emitContiguousComponentSectionScalarAssignment(ctx, builder, assign)) return;
     if (try emitWholeArrayScalarAssignment(ctx, builder, assign)) return;
@@ -616,6 +632,57 @@ pub fn emitPointerAssignment(ctx: *Context, builder: anytype, assign: ast.Pointe
     const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
     const value = try emitPointerValue(ctx, builder, assign.value);
     try builder.store(value, target_ptr);
+}
+
+pub fn emitNullify(ctx: *Context, builder: anytype, stmt: ast.NullifyStmt) EmitError!void {
+    for (stmt.items) |item| {
+        try emitNullifyItem(ctx, builder, item);
+    }
+}
+
+fn emitNullifyItem(ctx: *Context, builder: anytype, item: *ast.Expr) EmitError!void {
+    switch (item.*) {
+        .identifier => |name| return emitNullifyNamedItem(ctx, builder, name),
+        .component => |comp| return emitNullifyComponentItem(ctx, builder, comp),
+        else => return error.AssignmentTypeMismatch,
+    }
+}
+
+fn emitNullifyNamedItem(ctx: *Context, builder: anytype, name: []const u8) EmitError!void {
+    if (ctx.runtimeArrayDescriptor(name)) |desc| {
+        try ctx.locals.put(name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
+        for (0..desc.rank) |dim_idx| {
+            try builder.store(constI64(ctx, 1), desc.lower_slots[dim_idx]);
+            try builder.store(constI64(ctx, 0), desc.extent_slots[dim_idx]);
+            try builder.store(constI64(ctx, if (dim_idx == 0) 1 else 0), desc.multiplier_slots[dim_idx]);
+        }
+    } else {
+        try ctx.locals.put(name, .{ .name = "null", .ty = .ptr, .is_ptr = true });
+    }
+
+    if (ctx.findSymbol(name)) |sym| {
+        if (sym.isCharacter() and sym.effectiveCharLenKind() == .deferred) {
+            try ctx.char_arg_lens.put(name, .{ .name = try ctx.intLiteral(0), .ty = .i32, .is_ptr = false });
+        }
+    }
+}
+
+fn emitNullifyComponentItem(ctx: *Context, builder: anytype, comp: ast.ComponentExpr) EmitError!void {
+    const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+    const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
+    if (!component.pointer) return error.AssignmentTypeMismatch;
+
+    const storage_ptr = try expr_memory.emitComponentStoragePtr(ctx, builder, comp);
+    try builder.store(.{ .name = "null", .ty = .ptr, .is_ptr = true }, storage_ptr);
+
+    for (0..component.dims.len) |dim_idx| {
+        const lower_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .lower, dim_idx);
+        const extent_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .extent, dim_idx);
+        const multiplier_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .multiplier, dim_idx);
+        try builder.store(constI64(ctx, 1), lower_slot);
+        try builder.store(constI64(ctx, 0), extent_slot);
+        try builder.store(constI64(ctx, if (dim_idx == 0) 1 else 0), multiplier_slot);
+    }
 }
 
 pub fn emitAssignLabel(ctx: *Context, builder: anytype, assign: ast.AssignLabelStmt) EmitError!void {
@@ -728,6 +795,53 @@ fn emitWholeArrayCopyAssignment(ctx: *Context, builder: anytype, assign: ast.Ass
     const dst_ptr = try expr_memory.emitComponentStoragePtr(ctx, builder, target);
     const src_ptr = try expr_memory.emitComponentStoragePtr(ctx, builder, value);
     try emitMemMove(ctx, builder, dst_ptr, src_ptr, constI64(ctx, @intCast(target_component.size)));
+    return true;
+}
+
+fn emitWholeArrayConstructorAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    if (assign.value.* != .array_constructor) return false;
+    const ctor = assign.value.array_constructor;
+
+    if (assign.target.* == .identifier) {
+        const name = assign.target.identifier;
+        const sym = ctx.findSymbol(name) orelse return false;
+        if (sym.dims.len != 1) return false;
+        const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return false;
+        if (ctor.items.len != elem_count) return false;
+
+        for (ctor.items, 0..) |item, idx| {
+            const index_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{idx + 1});
+            var index_expr = ast.Expr{ .literal = .{ .kind = .integer, .text = index_text } };
+            var args = [_]*ast.Expr{&index_expr};
+            var target_expr = ast.Expr{ .call_or_subscript = .{ .name = name, .args = args[0..] } };
+            try emitAssignment(ctx, builder, .{ .target = &target_expr, .value = item });
+        }
+        return true;
+    }
+
+    if (assign.target.* != .component) return false;
+    const comp = assign.target.component;
+    if (comp.args.len != 0) return false;
+
+    const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return false;
+    const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return false;
+    if (component.pointer or component.allocatable) return false;
+    if (component.dims.len != 1) return false;
+    const elem_count = common.arrayElementCount(ctx.sem, component.dims) catch return false;
+    if (ctor.items.len != elem_count) return false;
+
+    for (ctor.items, 0..) |item, idx| {
+        const index_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{idx + 1});
+        var index_expr = ast.Expr{ .literal = .{ .kind = .integer, .text = index_text } };
+        var args = [_]*ast.Expr{&index_expr};
+        var target_expr = ast.Expr{ .component = .{
+            .base = comp.base,
+            .name = comp.name,
+            .args = args[0..],
+            .has_parens = comp.has_parens,
+        } };
+        try emitAssignment(ctx, builder, .{ .target = &target_expr, .value = item });
+    }
     return true;
 }
 
@@ -980,6 +1094,32 @@ pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!v
     const prev_source = ctx.current_source;
     ctx.setCurrentSource(if (call.source.line != 0) call.source else prev_source);
     defer ctx.setCurrentSource(prev_source);
+    if (call.binding_base) |base| {
+        const base_name = ctx.derivedTypeNameForExpr(base) orelse return error.UnknownSymbol;
+        const binding = ctx.lookupDerivedBinding(base_name, call.name) orelse return error.UnknownSymbol;
+        const proc_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
+        const lookup_name = try boundProcedureLookupName(ctx, binding, proc_name);
+        const ir_name = try boundProcedureIRName(ctx, binding, proc_name);
+        const base_actuals = try collectCallExprArgs(ctx.allocator, call);
+        defer ctx.allocator.free(base_actuals);
+
+        const extra: usize = if (binding.nopass) 0 else 1;
+        const actuals = try ctx.allocator.alloc(*ast.Expr, base_actuals.len + extra);
+        defer ctx.allocator.free(actuals);
+        var out_idx: usize = 0;
+        if (!binding.nopass) {
+            actuals[out_idx] = base;
+            out_idx += 1;
+        }
+        for (base_actuals) |arg| {
+            actuals[out_idx] = arg;
+            out_idx += 1;
+        }
+
+        const fn_name = try ensureTypedExternalDeclForResolvedCall(ctx, lookup_name, ir_name, .void, actuals);
+        _ = try expr.emitCall(ctx, builder, fn_name, .void, actuals, true);
+        return;
+    }
     const args = try collectCallExprArgs(ctx.allocator, call);
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
     if (sym.storage == .dummy and sym.is_external) {
@@ -1012,11 +1152,21 @@ fn ensureTypedExternalDeclForCall(
     args: []*ast.Expr,
 ) EmitError![]const u8 {
     const mangled = try ctx.mangleName(name);
+    return ensureTypedExternalDeclForResolvedCall(ctx, name, mangled, ret_ty, args);
+}
+
+fn ensureTypedExternalDeclForResolvedCall(
+    ctx: *Context,
+    lookup_name: []const u8,
+    mangled: []const u8,
+    ret_ty: ir.IRType,
+    args: []*ast.Expr,
+) EmitError![]const u8 {
     if (ctx.defined.contains(mangled)) return mangled;
 
     if (ctx.decls.get(mangled)) |existing| {
         if (!existing.varargs) return mangled;
-        const param_types = try buildSubroutineAbiParamTypes(ctx, name, args);
+        const param_types = try buildSubroutineAbiParamTypes(ctx, lookup_name, args);
         try ctx.decls.put(mangled, .{
             .ret_type = ctx.abiReturnType(ret_ty),
             .sig = try formatParamSig(ctx, param_types),
@@ -1025,13 +1175,45 @@ fn ensureTypedExternalDeclForCall(
         return mangled;
     }
 
-    const param_types = try buildSubroutineAbiParamTypes(ctx, name, args);
+    const param_types = try buildSubroutineAbiParamTypes(ctx, lookup_name, args);
     return ctx.ensureDeclRaw(
         mangled,
         ctx.abiReturnType(ret_ty),
         param_types,
         false,
     );
+}
+
+fn boundProcedureLookupName(
+    ctx: *Context,
+    binding: context.DerivedBindingInfo,
+    proc_name: []const u8,
+) ![]const u8 {
+    if (binding.owner_name) |owner_name| {
+        return std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ owner_name, proc_name });
+    }
+    return proc_name;
+}
+
+fn boundProcedureIRName(
+    ctx: *Context,
+    binding: context.DerivedBindingInfo,
+    proc_name: []const u8,
+) ![]const u8 {
+    if (binding.owner_name) |owner_name| {
+        if (binding.owner_kind) |owner_kind| {
+            return utils.mangleProcedureUnitName(ctx.allocator, .{
+                .kind = .subroutine,
+                .name = proc_name,
+                .owner_name = owner_name,
+                .owner_kind = owner_kind,
+                .args = &.{},
+                .decls = &.{},
+                .stmts = &.{},
+            });
+        }
+    }
+    return ctx.mangleName(proc_name);
 }
 
 fn buildSubroutineAbiParamTypes(
@@ -1307,27 +1489,36 @@ fn emitPointerValue(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitE
     return switch (expr_node.*) {
         .identifier => |name| blk: {
             const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
-            if (!sym.is_pointer) return error.AssignmentTypeMismatch;
-            const slot = try ctx.getPointer(name);
-            const tmp = try ctx.nextTemp();
-            try builder.load(tmp, .ptr, slot);
-            break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+            if (sym.is_pointer) {
+                const slot = try ctx.getPointer(name);
+                const tmp = try ctx.nextTemp();
+                try builder.load(tmp, .ptr, slot);
+                break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+            }
+            break :blk try expr.emitLValue(ctx, builder, expr_node);
         },
         .component => |comp| blk: {
             if (comp.has_parens) {
                 const value = try expr.emitExpr(ctx, builder, expr_node);
-                if (value.ty != .ptr) return error.AssignmentTypeMismatch;
-                break :blk value;
+                if (value.ty == .ptr) break :blk value;
+                break :blk try expr.emitLValue(ctx, builder, expr_node);
             }
-            const slot = try expr.emitLValue(ctx, builder, expr_node);
             const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
             const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
-            if (!component.pointer) return error.AssignmentTypeMismatch;
-            const tmp = try ctx.nextTemp();
-            try builder.load(tmp, .ptr, slot);
-            break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+            const slot = try expr.emitLValue(ctx, builder, expr_node);
+            if (component.pointer) {
+                const tmp = try ctx.nextTemp();
+                try builder.load(tmp, .ptr, slot);
+                break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+            }
+            break :blk slot;
         },
-        .call_or_subscript => blk: {
+        .call_or_subscript => |call| blk: {
+            const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr_node))) orelse .unknown;
+            if (kind == .subscript) {
+                _ = call;
+                break :blk try expr.emitLValue(ctx, builder, expr_node);
+            }
             const value = try expr.emitExpr(ctx, builder, expr_node);
             if (value.ty != .ptr) return error.AssignmentTypeMismatch;
             break :blk value;

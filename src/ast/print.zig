@@ -119,6 +119,12 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
             try writer.print(";   stmt label={s} pointer-assignment\n", .{label_text});
             try printPointerAssignmentDetails(writer, assign, 2);
         },
+        .nullify => |nullify| {
+            try writer.print(";   stmt label={s} nullify items({d})\n", .{ label_text, nullify.items.len });
+        },
+        .associate_block => |associate| {
+            try writer.print(";   stmt label={s} associate bindings({d}) stmts({d})\n", .{ label_text, associate.bindings.len, associate.stmts.len });
+        },
         .assign_label => |assign| {
             try writer.print(";   stmt label={s} assign {s} to {s}\n", .{ label_text, assign.label, assign.target });
         },
@@ -441,6 +447,14 @@ fn printInlineStmtNode(writer: anytype, node: ast.StmtNode, depth: usize) !void 
             try writer.writeAll("stmt pointer-assignment\n");
             try printPointerAssignmentDetails(writer, assign, depth + 1);
         },
+        .nullify => |nullify| {
+            try printIndent(writer, depth);
+            try writer.print("stmt nullify items({d})\n", .{nullify.items.len});
+        },
+        .associate_block => |associate| {
+            try printIndent(writer, depth);
+            try writer.print("stmt associate bindings({d}) stmts({d})\n", .{ associate.bindings.len, associate.stmts.len });
+        },
         .call => |call| {
             try printIndent(writer, depth);
             try writer.print("stmt call {s}({d})\n", .{ call.name, call.args.len });
@@ -549,7 +563,7 @@ fn printExpr(writer: anytype, expr: *ast.Expr, depth: usize) !void {
         },
         .array_constructor => |ctor| {
             try printIndent(writer, depth);
-            try writer.print("expr array-constructor items({d})\n", .{ctor.items.len});
+            try writer.print("expr array-constructor typed={s} items({d})\n", .{ if (ctor.type_spec != null) "yes" else "no", ctor.items.len });
             for (ctor.items, 0..) |item, idx| {
                 try printIndent(writer, depth + 1);
                 try writer.print("item[{d}]:\n", .{idx});
@@ -674,6 +688,8 @@ fn stmtNodeName(node: ast.StmtNode) []const u8 {
     return switch (node) {
         .assignment => "assignment",
         .pointer_assignment => "pointer-assignment",
+        .nullify => "nullify",
+        .associate_block => "associate-block",
         .assign_label => "assign-label",
         .use_stmt => "use",
         .call => "call",

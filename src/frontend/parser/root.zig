@@ -198,6 +198,8 @@ const Parser = struct {
                     stored_decls = imported.decls;
                     stored_decl_sources = imported.decl_sources;
                 }
+                stored_decls = try annotateDeclBindingOwners(self.arena, stored_decls, module_name, .module);
+                stored_decl_sources = try annotateDeclSourcesOwner(self.arena, stored_decl_sources, module_name);
                 try self.module_preludes.put(module_name, .{
                     .decls = stored_decls,
                     .decl_sources = stored_decl_sources,
@@ -266,6 +268,8 @@ const Parser = struct {
             stored_decls = imported.decls;
             stored_decl_sources = imported.decl_sources;
         }
+        stored_decls = try annotateDeclBindingOwners(self.arena, stored_decls, module_name, .module);
+        stored_decl_sources = try annotateDeclSourcesOwner(self.arena, stored_decl_sources, module_name);
         try self.module_preludes.put(module_name, .{
             .decls = stored_decls,
             .decl_sources = stored_decl_sources,
@@ -463,11 +467,16 @@ const Parser = struct {
         for (unit.stmts) |stmt_node| {
             if (stmt_node.node != .use_stmt) continue;
             const use_stmt = stmt_node.node.use_stmt;
-            if (use_stmt.only_items.len != 0) continue;
-            if (seen.contains(use_stmt.module_name)) continue;
             const prelude = self.module_preludes.get(use_stmt.module_name) orelse continue;
-            imported = try prependDecls(self.arena, imported, prelude.decls, prelude.decl_sources);
-            try seen.put(use_stmt.module_name, {});
+            if (use_stmt.only_items.len == 0) {
+                if (seen.contains(use_stmt.module_name)) continue;
+                imported = try prependDecls(self.arena, imported, prelude.decls, prelude.decl_sources);
+                try seen.put(use_stmt.module_name, {});
+                continue;
+            }
+            const selected = try selectPreludeDecls(self.arena, prelude, use_stmt, self.diag_bag);
+            if (selected.decls.len == 0) continue;
+            imported = try prependDecls(self.arena, imported, selected.decls, selected.decl_sources);
         }
         return imported;
     }
@@ -774,14 +783,31 @@ fn importPreludeDecls(
             }
         else
             try selectPreludeDecls(arena, prelude, module_use, diag_bag);
-        const combined_decls = try arena.alloc(Decl, selected.decls.len + imported_decls.len);
-        @memcpy(combined_decls[0..selected.decls.len], selected.decls);
-        @memcpy(combined_decls[selected.decls.len..], imported_decls);
+        var filtered_selected = std.array_list.Managed(Decl).init(arena);
+        defer filtered_selected.deinit();
+        var filtered_sources = std.array_list.Managed(DeclSource).init(arena);
+        defer filtered_sources.deinit();
+        for (selected.decls, 0..) |selected_decl, idx| {
+            const selected_source = if (idx < selected.decl_sources.len) selected.decl_sources[idx] else DeclSource{};
+            if (declSliceHasEquivalentImportedDecl(imported_decls, imported_sources, selected_decl, selected_source)) continue;
+            try filtered_selected.append(selected_decl);
+            try filtered_sources.append(selected_source);
+        }
+        if (filtered_selected.items.len == 0) {
+            if (module_use.only_items.len == 0) {
+                try seen_full_imports.put(module_use.module_name, {});
+            }
+            continue;
+        }
+
+        const combined_decls = try arena.alloc(Decl, filtered_selected.items.len + imported_decls.len);
+        @memcpy(combined_decls[0..filtered_selected.items.len], filtered_selected.items);
+        @memcpy(combined_decls[filtered_selected.items.len..], imported_decls);
         imported_decls = combined_decls;
 
-        const combined_sources = try arena.alloc(DeclSource, selected.decl_sources.len + imported_sources.len);
-        @memcpy(combined_sources[0..selected.decl_sources.len], selected.decl_sources);
-        @memcpy(combined_sources[selected.decl_sources.len..], imported_sources);
+        const combined_sources = try arena.alloc(DeclSource, filtered_sources.items.len + imported_sources.len);
+        @memcpy(combined_sources[0..filtered_sources.items.len], filtered_sources.items);
+        @memcpy(combined_sources[filtered_sources.items.len..], imported_sources);
         imported_sources = combined_sources;
         if (module_use.only_items.len == 0) {
             try seen_full_imports.put(module_use.module_name, {});
@@ -1239,9 +1265,18 @@ fn parseDerivedTypeHeader(arena: std.mem.Allocator, lp: *LineParser) !DerivedTyp
             header.abstract = true;
             continue;
         }
+        if (lp.consumeKeyword("PUBLIC")) {
+            continue;
+        }
         if (lp.consumeKeyword("EXTENDS")) {
             _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
             header.parent_name = lp.readName(arena) orelse return error.MissingName;
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            continue;
+        }
+        if (lp.consumeKeyword("BIND")) {
+            _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+            if (!lp.consumeKeyword("C")) return error.UnexpectedToken;
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
             continue;
         }
@@ -1491,21 +1526,34 @@ fn prependDecls(
 ) !ProgramUnit {
     if (prelude_decls.len == 0) return unit;
 
-    const total_decls = prelude_decls.len + unit.decls.len;
-    const decls = try allocator.alloc(Decl, total_decls);
-    std.mem.copyForwards(Decl, decls[0..prelude_decls.len], prelude_decls);
-    std.mem.copyForwards(Decl, decls[prelude_decls.len..], unit.decls);
+    var filtered_decls = std.array_list.Managed(Decl).init(allocator);
+    defer filtered_decls.deinit();
+    var filtered_sources = std.array_list.Managed(DeclSource).init(allocator);
+    defer filtered_sources.deinit();
 
-    const total_sources = prelude_sources.len + unit.decl_sources.len;
+    for (prelude_decls, 0..) |prelude_decl, idx| {
+        const prelude_source = if (idx < prelude_sources.len) prelude_sources[idx] else DeclSource{};
+        if (hasEquivalentImportedDecl(unit, prelude_decl, prelude_source)) continue;
+        try filtered_decls.append(prelude_decl);
+        try filtered_sources.append(prelude_source);
+    }
+    if (filtered_decls.items.len == 0) return unit;
+
+    const total_decls = filtered_decls.items.len + unit.decls.len;
+    const decls = try allocator.alloc(Decl, total_decls);
+    std.mem.copyForwards(Decl, decls[0..filtered_decls.items.len], filtered_decls.items);
+    std.mem.copyForwards(Decl, decls[filtered_decls.items.len..], unit.decls);
+
+    const total_sources = filtered_sources.items.len + unit.decl_sources.len;
     const decl_sources = try allocator.alloc(DeclSource, total_sources);
-    std.mem.copyForwards(DeclSource, decl_sources[0..prelude_sources.len], prelude_sources);
-    std.mem.copyForwards(DeclSource, decl_sources[prelude_sources.len..], unit.decl_sources);
+    std.mem.copyForwards(DeclSource, decl_sources[0..filtered_sources.items.len], filtered_sources.items);
+    std.mem.copyForwards(DeclSource, decl_sources[filtered_sources.items.len..], unit.decl_sources);
 
     return .{
         .kind = unit.kind,
         .name = unit.name,
         .is_module_procedure = unit.is_module_procedure,
-        .prelude_decl_count = unit.prelude_decl_count + prelude_decls.len,
+        .prelude_decl_count = unit.prelude_decl_count + filtered_decls.items.len,
         .owner_name = unit.owner_name,
         .owner_kind = unit.owner_kind,
         .bind_name = unit.bind_name,
@@ -1516,6 +1564,181 @@ fn prependDecls(
         .decl_sources = decl_sources,
         .stmts = unit.stmts,
         .expr_sources = unit.expr_sources,
+    };
+}
+
+fn hasEquivalentImportedDecl(unit: ProgramUnit, candidate: Decl, candidate_source: DeclSource) bool {
+    return declSliceHasEquivalentImportedDecl(unit.decls, unit.decl_sources, candidate, candidate_source);
+}
+
+fn declSliceHasEquivalentImportedDecl(
+    decls: []const Decl,
+    decl_sources: []const DeclSource,
+    candidate: Decl,
+    candidate_source: DeclSource,
+) bool {
+    const owner_name = candidate_source.owner_name orelse return false;
+    for (decls, 0..) |existing_decl, idx| {
+        const existing_source = if (idx < decl_sources.len) decl_sources[idx] else DeclSource{};
+        const existing_owner = existing_source.owner_name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(owner_name, existing_owner)) continue;
+        if (declsEquivalentForImport(candidate, existing_decl)) return true;
+    }
+    return false;
+}
+
+fn declsEquivalentForImport(a: Decl, b: Decl) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .type_decl => |type_decl| namesEqualDeclarators(type_decl.items, b.type_decl.items),
+        .procedure => |procedure| namesEqualDeclarators(procedure.items, b.procedure.items),
+        .derived_type_def => |derived| std.ascii.eqlIgnoreCase(derived.name, b.derived_type_def.name),
+        .interface_block => |interface_block| blk: {
+            if (interface_block.name == null or b.interface_block.name == null) break :blk false;
+            break :blk std.ascii.eqlIgnoreCase(interface_block.name.?, b.interface_block.name.?);
+        },
+        .parameter => |parameter| namesEqualParamAssigns(parameter.assigns, b.parameter.assigns),
+        .import, .external, .intrinsic => |list| namesEqualStrings(list.names, switch (b) {
+            .import => |other| other.names,
+            .external => |other| other.names,
+            .intrinsic => |other| other.names,
+            else => unreachable,
+        }),
+        .intent => |intent_decl| namesEqualStrings(intent_decl.names, b.intent.names),
+        .dimension => |dimension_decl| namesEqualDeclarators(dimension_decl.items, b.dimension.items),
+        .save => |save_decl| saveItemsEqual(save_decl.items, b.save.items) and save_decl.save_all == b.save.save_all,
+        .implicit, .common, .equivalence => false,
+    };
+}
+
+fn namesEqualDeclarators(a: []const ast.Declarator, b: []const ast.Declarator) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |item, idx| {
+        if (!std.ascii.eqlIgnoreCase(item.name, b[idx].name)) return false;
+    }
+    return true;
+}
+
+fn namesEqualParamAssigns(a: []const ast.ParamAssign, b: []const ast.ParamAssign) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |item, idx| {
+        if (!std.ascii.eqlIgnoreCase(item.name, b[idx].name)) return false;
+    }
+    return true;
+}
+
+fn namesEqualStrings(a: []const []const u8, b: []const []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |name, idx| {
+        if (!std.ascii.eqlIgnoreCase(name, b[idx])) return false;
+    }
+    return true;
+}
+
+fn saveItemsEqual(a: []const ast.SaveItem, b: []const ast.SaveItem) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |item, idx| {
+        switch (item) {
+            .name => |name| switch (b[idx]) {
+                .name => |other| if (!std.ascii.eqlIgnoreCase(name, other)) return false,
+                else => return false,
+            },
+            .common => |name| switch (b[idx]) {
+                .common => |other| {
+                    if (name == null or other == null) {
+                        if ((name == null) != (other == null)) return false;
+                    } else if (!std.ascii.eqlIgnoreCase(name.?, other.?)) return false;
+                },
+                else => return false,
+            },
+        }
+    }
+    return true;
+}
+
+fn annotateDeclSourcesOwner(
+    allocator: std.mem.Allocator,
+    decl_sources: []const DeclSource,
+    owner_name: []const u8,
+) ![]const DeclSource {
+    if (decl_sources.len == 0) return decl_sources;
+
+    var needs_copy = false;
+    for (decl_sources) |source| {
+        if (source.owner_name == null) {
+            needs_copy = true;
+            break;
+        }
+    }
+    if (!needs_copy) return decl_sources;
+
+    const annotated = try allocator.alloc(DeclSource, decl_sources.len);
+    for (decl_sources, 0..) |source, idx| {
+        annotated[idx] = source;
+        if (annotated[idx].owner_name == null) annotated[idx].owner_name = owner_name;
+    }
+    return annotated;
+}
+
+fn annotateDeclBindingOwners(
+    allocator: std.mem.Allocator,
+    decls: []const Decl,
+    owner_name: []const u8,
+    owner_kind: ast.LexicalOwnerKind,
+) ![]const Decl {
+    if (decls.len == 0) return decls;
+
+    var needs_copy = false;
+    for (decls) |decl_node| {
+        if (decl_node != .derived_type_def) continue;
+        for (decl_node.derived_type_def.bindings) |binding| {
+            if (binding.owner_name == null or binding.owner_kind == null) {
+                needs_copy = true;
+                break;
+            }
+        }
+        if (needs_copy) break;
+    }
+    if (!needs_copy) return decls;
+
+    const annotated = try allocator.alloc(Decl, decls.len);
+    for (decls, 0..) |decl_node, idx| {
+        annotated[idx] = switch (decl_node) {
+            .derived_type_def => |derived| .{ .derived_type_def = try annotateDerivedBindingOwners(allocator, derived, owner_name, owner_kind) },
+            else => decl_node,
+        };
+    }
+    return annotated;
+}
+
+fn annotateDerivedBindingOwners(
+    allocator: std.mem.Allocator,
+    derived: ast.DerivedTypeDef,
+    owner_name: []const u8,
+    owner_kind: ast.LexicalOwnerKind,
+) !ast.DerivedTypeDef {
+    var needs_copy = false;
+    for (derived.bindings) |binding| {
+        if (binding.owner_name == null or binding.owner_kind == null) {
+            needs_copy = true;
+            break;
+        }
+    }
+    if (!needs_copy) return derived;
+
+    const bindings = try allocator.alloc(ast.TypeBoundProcedureBinding, derived.bindings.len);
+    for (derived.bindings, 0..) |binding, idx| {
+        bindings[idx] = binding;
+        if (bindings[idx].owner_name == null) bindings[idx].owner_name = owner_name;
+        if (bindings[idx].owner_kind == null) bindings[idx].owner_kind = owner_kind;
+    }
+
+    return .{
+        .name = derived.name,
+        .parent_name = derived.parent_name,
+        .abstract = derived.abstract,
+        .components = derived.components,
+        .bindings = bindings,
     };
 }
 
@@ -2061,6 +2284,53 @@ test "parseProgram handles derived type EXTENDS and ABSTRACT attributes" {
     try testing.expectEqualStrings("T2", unit.decls[1].derived_type_def.name);
     try testing.expectEqualStrings("T1", unit.decls[1].derived_type_def.parent_name.?);
     try testing.expect(unit.decls[2].derived_type_def.abstract);
+}
+
+test "parseProgram handles derived type PUBLIC attribute" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  type, abstract, public :: t\n" ++
+        "  end type t\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqual(@as(usize, 1), unit.decls.len);
+    try testing.expectEqualStrings("t", unit.decls[0].derived_type_def.name);
+    try testing.expect(unit.decls[0].derived_type_def.abstract);
+}
+
+test "parseProgram handles derived type BIND(C) attribute" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  type, bind(c) :: cstruct\n" ++
+        "    integer :: i\n" ++
+        "  end type cstruct\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqual(@as(usize, 1), unit.decls.len);
+    try testing.expect(unit.decls[0] == .derived_type_def);
+    try testing.expectEqualStrings("cstruct", unit.decls[0].derived_type_def.name);
 }
 
 test "parseProgram captures explicit RESULT variable name in function header" {

@@ -167,6 +167,10 @@ fn evalConstCall(call: ast.CallOrSubscript, resolver: ?ConstResolver) anyerror!?
             }
             return .{ .integer = selectedRealKindForPrecision(p) };
         },
+        .kind => {
+            if (call.args.len != 1) return null;
+            return .{ .integer = (try evalConstKind(call.args[0], resolver)) orelse return null };
+        },
         .bit_size => {
             if (call.args.len != 1) return null;
             const bits = (try evalConstBitSize(call.args[0], resolver)) orelse return null;
@@ -217,6 +221,7 @@ const ConstCallKind = enum {
     min,
     max,
     selected_real_kind,
+    kind,
     bit_size,
     real,
     log,
@@ -240,6 +245,7 @@ const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "MIN", .min },
     .{ "MAX", .max },
     .{ "SELECTED_REAL_KIND", .selected_real_kind },
+    .{ "KIND", .kind },
     .{ "BIT_SIZE", .bit_size },
     .{ "REAL", .real },
     .{ "LOG", .log },
@@ -314,6 +320,33 @@ fn selectedRealKindForPrecision(precision: i64) i64 {
     if (precision <= 6) return 4;
     if (precision <= 15) return 8;
     return -1;
+}
+
+fn evalConstKind(expr: *const ast.Expr, resolver: ?ConstResolver) !?i64 {
+    return switch (expr.*) {
+        .literal => |lit| switch (lit.kind) {
+            .integer, .logical => literalKindValueOrDefault(lit.text, resolver, 4),
+            .real => literalKindValueOrDefault(lit.text, resolver, if (realLiteralHasDoublePrecisionHint(lit.text)) 8 else 4),
+            .string, .hollerith => 1,
+            else => null,
+        },
+        .identifier, .unary, .binary, .call_or_subscript, .complex_literal => blk: {
+            const value = (try evalConst(expr, resolver)) orelse break :blk null;
+            break :blk switch (value) {
+                .integer => 4,
+                .logical => 4,
+                .real => |v| if (v.is_double) 8 else 4,
+                .complex => |v| if (v.is_double) 16 else 8,
+                .string => 1,
+            };
+        },
+        else => null,
+    };
+}
+
+fn literalKindValueOrDefault(text: []const u8, resolver: ?ConstResolver, default_kind: i64) !?i64 {
+    const suffix = literalKindSuffix(text) orelse return default_kind;
+    return (try evalKindSelectorValue(suffix, resolver)) orelse default_kind;
 }
 
 fn evalConstBitSize(expr: *const ast.Expr, resolver: ?ConstResolver) !?i64 {

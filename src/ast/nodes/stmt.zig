@@ -17,6 +17,8 @@ pub const Stmt = struct {
 pub const StmtNode = union(enum) {
     assignment: Assignment,
     pointer_assignment: PointerAssignment,
+    nullify: NullifyStmt,
+    associate_block: AssociateBlock,
     assign_label: AssignLabelStmt,
     use_stmt: UseStmt,
     call: CallStmt,
@@ -59,6 +61,20 @@ pub const PointerAssignment = struct {
     value: *Expr,
 };
 
+pub const NullifyStmt = struct {
+    items: []*Expr,
+};
+
+pub const AssociateBinding = struct {
+    name: []const u8,
+    selector: *Expr,
+};
+
+pub const AssociateBlock = struct {
+    bindings: []AssociateBinding,
+    stmts: []Stmt,
+};
+
 pub const AssignLabelStmt = struct {
     label: []const u8,
     target: []const u8,
@@ -80,6 +96,7 @@ pub const UseOnlyItem = struct {
 pub const CallStmt = struct {
     name: []const u8,
     args: []CallArg,
+    binding_base: ?*Expr = null,
     source: SourceRef = .{},
 };
 

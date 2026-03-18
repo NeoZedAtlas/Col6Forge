@@ -494,12 +494,47 @@ fn emitDeclaratorInitializerAssign(
     name: []const u8,
     init_expr: *ast.Expr,
 ) EmitError!void {
+    if (ctx.findSymbol(name)) |sym| {
+        if (sym.dims.len != 0 and init_expr.* == .array_constructor) {
+            return emitArrayConstructorDeclaratorInitializer(ctx, builder, name, sym, init_expr.array_constructor);
+        }
+    }
     var target_expr = ast.Expr{ .identifier = name };
     const assign = ast.Assignment{
         .target = &target_expr,
         .value = init_expr,
     };
     try execution.emitAssignment(ctx, builder, assign);
+}
+
+fn emitArrayConstructorDeclaratorInitializer(
+    ctx: *Context,
+    builder: anytype,
+    name: []const u8,
+    sym: ast.sema.Symbol,
+    ctor: ast.ArrayConstructor,
+) EmitError!void {
+    if (sym.dims.len != 1) return error.UnsupportedArrayConstructor;
+    const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return error.UnsupportedArrayConstructor;
+    if (ctor.items.len != elem_count) return error.UnsupportedArrayConstructor;
+
+    for (ctor.items, 0..) |item, idx| {
+        const index_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{idx + 1});
+        var index_expr = ast.Expr{ .literal = .{
+            .kind = .integer,
+            .text = index_text,
+        } };
+        var args = [_]*ast.Expr{&index_expr};
+        var target_expr = ast.Expr{ .call_or_subscript = .{
+            .name = name,
+            .args = args[0..],
+        } };
+        const assign = ast.Assignment{
+            .target = &target_expr,
+            .value = item,
+        };
+        try execution.emitAssignment(ctx, builder, assign);
+    }
 }
 
 fn savedInitGuardName(ctx: *Context) ![]const u8 {

@@ -9,6 +9,7 @@ const control_flow = @import("control_flow.zig");
 
 pub const api = @import("internal/api.zig");
 pub const if_stmt = @import("internal/if_stmt.zig");
+pub const associate_stmt = @import("internal/associate_stmt.zig");
 pub const select_case = @import("internal/select_case.zig");
 pub const select_type = @import("internal/select_type.zig");
 pub const action_stmt = @import("internal/action_stmt.zig");
@@ -627,6 +628,36 @@ test "parseStatement handles SELECT CASE and lowers to if_block chain" {
     try testing.expect(root.then_stmts[0].node == .assignment);
     try testing.expectEqual(@as(usize, 1), root.else_stmts.len);
     try testing.expect(root.else_stmts[0].node == .assignment);
+}
+
+test "parseStatement skips SELECT TYPE with associate-name selector" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SELECT TYPE (Z => A%X)\n" ++
+        "      TYPE IS (REAL)\n" ++
+        "      A=1\n" ++
+        "      END SELECT\n" ++
+        "      A=2\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt1 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt1.node == .cont);
+    try testing.expectEqual(@as(usize, 4), idx);
+
+    const stmt2 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt2.node == .assignment);
+    try testing.expectEqual(@as(usize, 5), idx);
 }
 
 test "parseStatement preserves labeled END SELECT as pending continue" {
@@ -1323,6 +1354,59 @@ test "parseStatement parses DEALLOCATE options" {
     try testing.expectEqual(@as(usize, 2), stmt_node.node.deallocate.options.len);
     try testing.expectEqual(ast.AllocationOptionKind.stat, stmt_node.node.deallocate.options[0].kind);
     try testing.expectEqual(ast.AllocationOptionKind.errmsg, stmt_node.node.deallocate.options[1].kind);
+}
+
+test "parseStatement parses NULLIFY items" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      NULLIFY(F_P, OBJ%NEXT)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .nullify);
+    try testing.expectEqual(@as(usize, 2), stmt_node.node.nullify.items.len);
+    try testing.expect(stmt_node.node.nullify.items[0].* == .identifier);
+    try testing.expectEqualStrings("F_P", stmt_node.node.nullify.items[0].identifier);
+    try testing.expect(stmt_node.node.nullify.items[1].* == .component);
+}
+
+test "parseStatement parses ASSOCIATE block" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      ASSOCIATE(VF=>THIS%U)\n" ++
+        "        CALL VF(1)%FREE()\n" ++
+        "      END ASSOCIATE\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .associate_block);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.associate_block.bindings.len);
+    try testing.expectEqualStrings("VF", stmt_node.node.associate_block.bindings[0].name);
+    try testing.expect(stmt_node.node.associate_block.bindings[0].selector.* == .component);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.associate_block.stmts.len);
+    try testing.expect(stmt_node.node.associate_block.stmts[0].node == .call);
+    try testing.expectEqual(@as(usize, 3), idx);
 }
 
 test "parseStatement rejects trailing tokens after DEALLOCATE" {

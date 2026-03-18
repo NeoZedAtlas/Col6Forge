@@ -36,6 +36,19 @@ fn currentSource(lp: LineParser) ast.SourceRef {
     };
 }
 
+fn parseNullifyStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!StmtNode {
+    _ = lp.consumeKeyword("NULLIFY");
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+
+    var items = std.array_list.Managed(*Expr).init(arena);
+    while (!lp.peekIs(.r_paren)) {
+        try items.append(try expr.parseExpr(lp, arena, 0));
+        _ = lp.consume(.comma);
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return .{ .nullify = .{ .items = try items.toOwnedSlice() } };
+}
+
 pub const ActionParseMode = enum { top_level, inline_if };
 
 pub const ActionCallbacks = struct {
@@ -56,6 +69,7 @@ pub fn parseActionStmtNode(
     // Shared dispatcher for executable/action statements used by both
     // top-level statement parsing and single-line IF bodies.
     if (tryParseAmbiguousAssignment(arena, line, lp.*, mode)) |stmt_node| {
+        lp.index = lp.tokens.len;
         return stmt_node;
     }
 
@@ -82,6 +96,22 @@ pub fn parseActionStmtNode(
             if (lp.isKeywordSplit("CALL")) {
                 _ = lp.consumeKeyword("CALL");
                 const call_source = currentSource(lp.*);
+                var scan_lp = lp.*;
+                const scan_expr = expr.parseExpr(&scan_lp, arena, 0) catch null;
+                if (scan_expr != null and scan_expr.?.* == .component and scan_expr.?.component.has_parens) {
+                    lp.* = scan_lp;
+                    var comp_args = std.array_list.Managed(CallArg).init(arena);
+                    for (scan_expr.?.component.args) |arg| {
+                        try comp_args.append(.{ .expr = .{ .value = arg } });
+                    }
+                    return .{ .call = .{
+                        .name = scan_expr.?.component.name,
+                        .args = try comp_args.toOwnedSlice(),
+                        .binding_base = scan_expr.?.component.base,
+                        .source = call_source,
+                    } };
+                }
+
                 const name = lp.readName(arena) orelse return error.MissingName;
                 var args = std.array_list.Managed(CallArg).init(arena);
                 if (lp.consume(.l_paren)) {
@@ -117,6 +147,7 @@ pub fn parseActionStmtNode(
                 return .{ .call = .{
                     .name = name,
                     .args = try args.toOwnedSlice(),
+                    .binding_base = null,
                     .source = call_source,
                 } };
             }
@@ -214,6 +245,9 @@ pub fn parseActionStmtNode(
         'I' => {
             if (lp.isKeywordSplit("INQUIRE")) return try io.parseInquireStatement(arena, lp);
         },
+        'N' => {
+            if (lp.isKeywordSplit("NULLIFY")) return try parseNullifyStatement(arena, lp);
+        },
         'O' => {
             if (lp.isKeywordSplit("OPEN")) return try io.parseOpenStatement(arena, lp);
         },
@@ -252,6 +286,7 @@ pub fn parseActionStmtNode(
     }
 
     if (helpers.tryParseBlankInsensitiveAssignment(arena, line, lp.*)) |stmt_node| {
+        lp.index = lp.tokens.len;
         return stmt_node;
     }
     const target = try expr.parseExpr(lp, arena, 0);

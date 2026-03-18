@@ -5,6 +5,8 @@ const evaluator = @import("../evaluator.zig");
 const intrinsic_signature = @import("../intrinsic_signature.zig");
 const context = @import("context.zig");
 const symbols_mod = @import("resolve_symbols.zig");
+const constants = @import("resolve_const.zig");
+const type_kind_selector = @import("../type_kind_selector.zig");
 
 const ResolvedRefKind = symbols.ResolvedRefKind;
 
@@ -22,6 +24,9 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             try cacheExprType(self, expr, self.symbols.items[idx].type_spec);
         },
         .array_constructor => |ctor| {
+            if (ctor.type_spec) |type_spec| {
+                if (type_spec.kind_selector) |selector| try resolveExpr(self, selector);
+            }
             for (ctor.items) |item| {
                 try resolveExpr(self, item);
             }
@@ -327,6 +332,9 @@ fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!sy
             return self.symbols.items[idx].type_spec;
         },
         .array_constructor => |ctor| {
+            if (ctor.type_spec) |type_spec| {
+                return resolveArrayConstructorTypeSpec(self, type_spec);
+            }
             if (ctor.items.len == 0) return error.UnsupportedArrayConstructor;
             var spec = try exprTypeSpecCached(self, ctor.items[0]);
             for (ctor.items[1..]) |item| {
@@ -406,6 +414,25 @@ fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!sy
             return spec;
         },
     }
+}
+
+fn resolveArrayConstructorTypeSpec(
+    self: *context.Context,
+    type_spec: ast.ArrayConstructorTypeSpec,
+) ResolveError!symbols.TypeSpec {
+    if (type_spec.type_kind == .derived) {
+        if (type_spec.derived_type_name) |derived_name| {
+            if (!symbols_mod.hasDerivedType(self, derived_name)) return error.UnexpectedTypeDecl;
+            return symbols.TypeSpec.fromDerived(derived_name).withPolymorphic(type_spec.polymorphic);
+        }
+        return symbols.TypeSpec.fromKind(.derived).withPolymorphic(type_spec.polymorphic);
+    }
+    const selector_value = if (type_spec.kind_selector) |selector|
+        try constants.evalConst(self, selector)
+    else
+        null;
+    return type_kind_selector.resolveSpecWithConst(type_spec.type_kind, type_spec.kind_selector, selector_value)
+        .withPolymorphic(type_spec.polymorphic);
 }
 
 fn mergeArrayConstructorItemTypeSpec(
@@ -747,6 +774,18 @@ fn typeBoundProcedureSig(
     binding: context.Context.DerivedTypeInfo.BindingInfo,
 ) ?context.Context.ProcedureSig {
     const impl_name = binding.implementation_name orelse binding.name;
+    if (binding.owner_name) |owner_name| {
+        const qualified_impl = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, impl_name }) catch null;
+        if (qualified_impl) |name| {
+            if (symbols_mod.lookupKnownProcedureSig(self, name)) |sig| return sig;
+        }
+        if (binding.interface_name) |iface_name| {
+            const qualified_iface = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, iface_name }) catch null;
+            if (qualified_iface) |name| {
+                if (symbols_mod.lookupKnownProcedureSig(self, name)) |sig| return sig;
+            }
+        }
+    }
     return symbols_mod.lookupKnownProcedureSig(self, impl_name) orelse
         (if (binding.interface_name) |iface_name| symbols_mod.lookupKnownProcedureSig(self, iface_name) else null) orelse
         symbols_mod.lookupKnownProcedureSig(self, binding.name);
@@ -759,6 +798,12 @@ fn typeBoundProcedureResultTypeSpec(
     const sig = typeBoundProcedureSig(self, binding) orelse return error.InvalidSubscript;
     if (sig.kind != .function) return error.InvalidSubscript;
     const result_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
+    if (binding.owner_name) |owner_name| {
+        const qualified_result = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, result_name }) catch null;
+        if (qualified_result) |name| {
+            if (symbols_mod.lookupKnownFunctionResolvedSpec(self, name)) |type_spec| return type_spec;
+        }
+    }
     return symbols_mod.lookupKnownFunctionResolvedSpec(self, result_name) orelse return error.InvalidSubscript;
 }
 

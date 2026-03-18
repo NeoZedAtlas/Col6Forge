@@ -18,6 +18,8 @@ pub const Context = struct {
 
         pub const BindingInfo = struct {
             name: []const u8,
+            owner_name: ?[]const u8 = null,
+            owner_kind: ?ast.LexicalOwnerKind = null,
             interface_name: ?[]const u8 = null,
             implementation_name: ?[]const u8 = null,
             deferred: bool = false,
@@ -94,6 +96,7 @@ pub const Context = struct {
         args: []const ArgSig = &.{},
         is_pointer: bool = false,
         result_rank: usize = 0,
+        result_type_spec: ?symbols.TypeSpec = null,
         actual_requires_explicit_interface: bool = false,
     };
 

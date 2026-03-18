@@ -358,7 +358,7 @@ fn validateInterfaceProcedureDerivedTypes(self: *context.Context, proc_header: a
     if (proc_header.type_spec) |type_spec| {
         if (type_spec.type_kind == .derived) {
             const derived_name = type_spec.derived_type_name orelse return error.UnexpectedTypeDecl;
-            if (!interfaceProcedureDefinesDerivedType(proc_header, derived_name)) {
+            if (!interfaceProcedureCanUseDerivedType(self, proc_header, derived_name)) {
                 setSourceDiagnostic(self, proc_header.source, "is being used before it is defined");
                 return error.UnexpectedTypeDecl;
             }
@@ -369,7 +369,7 @@ fn validateInterfaceProcedureDerivedTypes(self: *context.Context, proc_header: a
             .type_decl => |type_decl| {
                 if (type_decl.type_kind != .derived) continue;
                 const derived_name = type_decl.derived_type_name orelse return error.UnexpectedTypeDecl;
-                if (interfaceProcedureDefinesDerivedType(proc_header, derived_name)) continue;
+                if (interfaceProcedureCanUseDerivedType(self, proc_header, derived_name)) continue;
                 setSourceDiagnostic(self, proc_header.source, "is being used before it is defined");
                 return error.UnexpectedTypeDecl;
             },
@@ -378,7 +378,7 @@ fn validateInterfaceProcedureDerivedTypes(self: *context.Context, proc_header: a
                     .type_spec => |proc_type| {
                         if (proc_type.type_kind != .derived) continue;
                         const derived_name = proc_type.derived_type_name orelse return error.UnexpectedTypeDecl;
-                        if (interfaceProcedureDefinesDerivedType(proc_header, derived_name)) continue;
+                        if (interfaceProcedureCanUseDerivedType(self, proc_header, derived_name)) continue;
                         setSourceDiagnostic(self, proc_header.source, "is being used before it is defined");
                         return error.UnexpectedTypeDecl;
                     },
@@ -391,10 +391,30 @@ fn validateInterfaceProcedureDerivedTypes(self: *context.Context, proc_header: a
     return null;
 }
 
+fn interfaceProcedureCanUseDerivedType(
+    self: *context.Context,
+    proc_header: ast.InterfaceProcedure,
+    target_name: []const u8,
+) bool {
+    if (interfaceProcedureDefinesDerivedType(proc_header, target_name)) return true;
+    if (!interfaceProcedureImportsName(proc_header, target_name)) return false;
+    return symbols_mod.hasDerivedType(self, target_name);
+}
+
 fn interfaceProcedureDefinesDerivedType(proc_header: ast.InterfaceProcedure, target_name: []const u8) bool {
     for (proc_header.decls) |decl| {
         if (decl != .derived_type_def) continue;
         if (std.ascii.eqlIgnoreCase(decl.derived_type_def.name, target_name)) return true;
+    }
+    return false;
+}
+
+fn interfaceProcedureImportsName(proc_header: ast.InterfaceProcedure, target_name: []const u8) bool {
+    for (proc_header.decls) |decl| {
+        if (decl != .import) continue;
+        for (decl.import.names) |name| {
+            if (std.ascii.eqlIgnoreCase(name, target_name)) return true;
+        }
     }
     return false;
 }

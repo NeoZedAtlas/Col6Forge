@@ -1,3 +1,5 @@
+const decl_nodes = @import("decl.zig");
+
 pub const ImpliedDo = struct {
     items: []*Expr,
     var_name: []const u8,
@@ -6,7 +8,15 @@ pub const ImpliedDo = struct {
     step: ?*Expr,
 };
 
+pub const ArrayConstructorTypeSpec = struct {
+    type_kind: decl_nodes.TypeKind,
+    kind_selector: ?*Expr = null,
+    derived_type_name: ?[]const u8 = null,
+    polymorphic: bool = false,
+};
+
 pub const ArrayConstructor = struct {
+    type_spec: ?ArrayConstructorTypeSpec = null,
     items: []*Expr,
 };
 

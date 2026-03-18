@@ -136,7 +136,8 @@ fn canonicalNumericLabel(label: []const u8) []const u8 {
 
 fn stmtCanFallthroughInBlock(stmt: Stmt) bool {
     return switch (stmt.node) {
-        .assignment, .assign_label, .use_stmt, .allocate, .deallocate, .data, .format => true,
+        .assignment, .pointer_assignment, .nullify, .assign_label, .use_stmt, .allocate, .deallocate, .data, .format => true,
+        .associate_block => false,
         else => false,
     };
 }

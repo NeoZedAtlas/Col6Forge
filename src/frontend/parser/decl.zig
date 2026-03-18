@@ -17,9 +17,10 @@ const ImplicitRule = ast.ImplicitRule;
 const Declarator = ast.Declarator;
 
 pub fn isDeclarationStart(lp: LineParser) bool {
-    if (lp.isKeywordSplit("INTEGER") or lp.isKeywordSplit("REAL") or lp.isKeywordSplit("COMPLEX") or lp.isKeywordSplit("LOGICAL") or lp.isKeywordSplit("CHARACTER") or lp.isKeywordSplit("CLASS")) {
+    if (lp.isKeywordSplit("INTEGER") or lp.isKeywordSplit("REAL") or lp.isKeywordSplit("COMPLEX") or lp.isKeywordSplit("LOGICAL") or lp.isKeywordSplit("CHARACTER") or lp.isKeywordSplit("CLASS") or lp.isKeywordSplit("BYTE")) {
         return true;
     }
+    if (isDoubleComplexTypeStart(lp)) return true;
     if (isDoublePrecisionTypeStart(lp)) return true;
     if (isDerivedTypeDeclStart(lp)) return true;
     return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("ALLOCATABLE") or lp.isKeywordSplit("POINTER") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE") or lp.isKeywordSplit("PROCEDURE") or lp.isKeywordSplit("IMPORT") or lp.isKeywordSplit("INTENT");
@@ -200,7 +201,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         } };
     }
 
-    const type_spec = try parseTypeKind(lp, arena);
+    const type_spec = try parseDeclTypeKind(lp, arena);
     var default_char_len: ParsedCharacterLen = .{};
     if (type_spec.type_kind == .character) {
         if (lp.consume(.star) or lp.peekIs(.l_paren)) {
@@ -367,6 +368,9 @@ fn parseTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
             .kind_selector = parsed_len.kind_selector,
         };
     }
+    if (try consumeDoubleComplexType(lp)) {
+        return .{ .type_kind = .complex_double };
+    }
     if (try consumeDoublePrecisionType(lp)) {
         return .{ .type_kind = .double_precision };
     }
@@ -387,6 +391,19 @@ fn parseTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
         return .{ .type_kind = .derived, .derived_type_name = name, .polymorphic = true };
     }
     return error.UnknownType;
+}
+
+fn parseDeclTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
+    if (lp.isKeywordSplit("BYTE")) {
+        _ = lp.consumeKeyword("BYTE");
+        const kind_expr = try arena.create(ast.Expr);
+        kind_expr.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+        return .{
+            .type_kind = .integer,
+            .kind_selector = kind_expr,
+        };
+    }
+    return parseTypeKind(lp, arena);
 }
 
 fn parseAllocateTypeSpecHead(lp: *LineParser, arena: std.mem.Allocator) !ParsedTypeSpec {
@@ -411,6 +428,13 @@ pub fn isDoublePrecisionTypeStart(lp: LineParser) bool {
     return next_tok.kind == .identifier and context.eqNoCase(lp.tokenText(next_tok), "PRECISION");
 }
 
+pub fn isDoubleComplexTypeStart(lp: LineParser) bool {
+    if (!lp.isKeywordSplit("DOUBLE")) return false;
+    if (lp.index + 1 >= lp.tokens.len) return false;
+    const next_tok = lp.tokens[lp.index + 1];
+    return next_tok.kind == .identifier and context.eqNoCase(lp.tokenText(next_tok), "COMPLEX");
+}
+
 pub fn consumeDoublePrecisionType(lp: *LineParser) !bool {
     if (lp.isKeywordSplit("DOUBLEPRECISION")) {
         _ = lp.consumeKeyword("DOUBLEPRECISION");
@@ -420,6 +444,13 @@ pub fn consumeDoublePrecisionType(lp: *LineParser) !bool {
     _ = lp.consumeKeyword("DOUBLE");
     if (!lp.isKeywordSplit("PRECISION")) return error.ExpectedPrecision;
     _ = lp.consumeKeyword("PRECISION");
+    return true;
+}
+
+pub fn consumeDoubleComplexType(lp: *LineParser) !bool {
+    if (!isDoubleComplexTypeStart(lp.*)) return false;
+    _ = lp.consumeKeyword("DOUBLE");
+    _ = lp.consumeKeyword("COMPLEX");
     return true;
 }
 
@@ -1697,6 +1728,60 @@ test "parseDecl handles DOUBLEPRECISION declaration" {
             try testing.expectEqual(@as(usize, 1), td.items.len);
             try testing.expectEqualStrings("D2", td.items[0].name);
             try testing.expectEqual(@as(usize, 1), td.items[0].dims.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles BYTE declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      BYTE, ALLOCATABLE :: X, Y(:)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.integer, td.type_kind);
+            try testing.expect(td.allocatable);
+            try testing.expect(td.kind_selector != null);
+            try testing.expectEqual(@as(usize, 2), td.items.len);
+            try testing.expectEqualStrings("X", td.items[0].name);
+            try testing.expectEqualStrings("Y", td.items[1].name);
+            try testing.expectEqual(@as(usize, 1), td.items[1].dims.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles DOUBLE COMPLEX declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      DOUBLE COMPLEX :: Z\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.complex_double, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("Z", td.items[0].name);
         },
         else => return error.UnexpectedToken,
     }

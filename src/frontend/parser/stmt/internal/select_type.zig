@@ -6,6 +6,7 @@ const context = @import("../../token_stream.zig");
 const expr = @import("../../expr.zig");
 const parse_diag = @import("../../diagnostic.zig");
 const array_info = @import("../../array_info.zig");
+const select_case = @import("select_case.zig");
 
 const LineParser = context.LineParser;
 const Stmt = ast.Stmt;
@@ -48,6 +49,10 @@ pub fn isSelectTypeStart(lp: LineParser) bool {
     return scan.isKeywordSplit("TYPE");
 }
 
+fn isSelectStart(lp: LineParser) bool {
+    return isSelectTypeStart(lp) or select_case.isSelectCaseStart(lp);
+}
+
 fn isEndSelectLine(lp: LineParser) bool {
     if (lp.isKeywordSplit("ENDSELECT")) return true;
     const end_span = lp.keywordSpan("END") orelse return false;
@@ -56,6 +61,17 @@ fn isEndSelectLine(lp: LineParser) bool {
     const next_tok = lp.tokens[next_idx];
     if (next_tok.kind != .identifier) return false;
     return context.eqNoCase(lp.tokenText(next_tok), "SELECT");
+}
+
+fn parseSelectTypeSelector(lp: *LineParser, arena: std.mem.Allocator) anyerror!void {
+    if (lp.peek()) |tok| {
+        if (tok.kind == .identifier and lp.index + 2 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .equals and lp.tokens[lp.index + 2].kind == .greater) {
+            _ = lp.readName(arena) orelse return error.MissingName;
+            _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+            _ = lp.expect(.greater) orelse return error.UnexpectedToken;
+        }
+    }
+    _ = try expr.parseExpr(lp, arena, 0);
 }
 
 pub fn parseSelectTypeStatement(
@@ -81,7 +97,7 @@ pub fn parseSelectTypeStatement(
     if (!lp.consumeKeyword("SELECT")) return error.UnexpectedToken;
     if (!lp.consumeKeyword("TYPE")) return error.UnexpectedToken;
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
-    _ = try expr.parseExpr(lp, arena, 0);
+    try parseSelectTypeSelector(lp, arena);
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
 
     index.* += 1;
@@ -91,7 +107,7 @@ pub fn parseSelectTypeStatement(
         const tokens = try lexLine(arena, line, diag_bag, lex_diag_bag);
         defer arena.free(tokens);
         const scan = LineParser.init(line, tokens);
-        if (isSelectTypeStart(scan)) {
+        if (isSelectStart(scan)) {
             depth += 1;
             index.* += 1;
             continue;

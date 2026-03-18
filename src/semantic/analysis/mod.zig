@@ -279,6 +279,57 @@ test "module procedure explicit interface body does not conflict with module con
     try testing.expect(diag.take() == null);
 }
 
+test "explicit interface import can reference host derived type" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  use, intrinsic :: iso_c_binding\n" ++
+        "  type, bind(c) :: cstruct\n" ++
+        "    integer(c_int) :: i\n" ++
+        "  end type cstruct\n" ++
+        "  interface\n" ++
+        "    subroutine psub(that) bind(c)\n" ++
+        "      import :: cstruct\n" ++
+        "      type(cstruct) :: that(:)\n" ++
+        "    end subroutine psub\n" ++
+        "  end interface\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+    );
+    _ = try analyzer_instance.analyze();
+    try testing.expect(diag.take() == null);
+}
+
 test "defined assignment declared with procedure is accepted for incompatible intrinsic types" {
     const testing = std.testing;
     const allocator = testing.allocator;

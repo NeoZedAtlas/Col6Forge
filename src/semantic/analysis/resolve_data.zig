@@ -397,7 +397,7 @@ fn cloneExprWithSubst(
                 items[idx] = try cloneExprWithSubst(ctx, item, name, replacement);
             }
             const cloned = try ctx.arena.create(ast.Expr);
-            cloned.* = .{ .array_constructor = .{ .items = items } };
+            cloned.* = .{ .array_constructor = .{ .type_spec = ctor.type_spec, .items = items } };
             return cloned;
         },
         .literal => |lit| {

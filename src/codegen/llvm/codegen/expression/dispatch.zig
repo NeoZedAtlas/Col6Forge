@@ -297,14 +297,16 @@ fn emitTypeBoundProcedureCall(ctx: *Context, builder: anytype, comp: ast.Compone
     const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
     const binding = ctx.lookupDerivedBinding(base_type_name, comp.name) orelse return error.UnknownSymbol;
     const proc_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
-    const proc_sig = ctx.lookupKnownProcedureSig(proc_name) orelse return error.UnknownSymbol;
+    const lookup_name = try boundProcedureLookupName(ctx, binding, proc_name);
+    const ir_name = try boundProcedureIRName(ctx, binding, proc_name);
+    const proc_sig = ctx.lookupKnownProcedureSig(lookup_name) orelse ctx.lookupKnownProcedureSig(proc_name) orelse return error.UnknownSymbol;
 
     const actuals = try buildTypeBoundProcedureActuals(ctx, comp, binding);
     defer ctx.allocator.free(actuals);
 
     if (proc_sig.kind != .function) return error.InvalidExpression;
 
-    const result_spec = boundProcedureResultSpec(ctx, binding);
+    const result_spec = boundProcedureResultSpec(ctx, binding, proc_sig);
     const ret_ty: ir.IRType = if (proc_sig.is_pointer)
         .ptr
     else if (result_spec) |spec|
@@ -314,12 +316,12 @@ fn emitTypeBoundProcedureCall(ctx: *Context, builder: anytype, comp: ast.Compone
 
     if (result_spec != null and result_spec.?.lowered_kind == .character) {
         const result_len = result_spec.?.char_len orelse return error.NonConstantCharacterLength;
-        const fn_name = try ensureExternalDeclForCall(ctx, proc_name, .void, actuals, true);
+        const fn_name = try ensureExternalDeclForResolvedCall(ctx, lookup_name, ir_name, .void, actuals, true);
         const ptr = try call.emitCharacterCall(ctx, builder, fn_name, result_len, actuals);
         return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
     }
 
-    const fn_name = try ensureExternalDeclForCall(ctx, proc_name, ret_ty, actuals, false);
+    const fn_name = try ensureExternalDeclForResolvedCall(ctx, lookup_name, ir_name, ret_ty, actuals, false);
     return call.emitCall(ctx, builder, fn_name, ret_ty, actuals, false);
 }
 
@@ -375,6 +377,9 @@ fn roughExprKind(ctx: *Context, expr: *Expr) ast.TypeKind {
             return sym.loweredKind();
         },
         .array_constructor => |ctor| {
+            if (ctor.type_spec) |type_spec| {
+                return type_spec.type_kind;
+            }
             if (ctor.items.len == 0) return .integer;
             return roughExprKind(ctx, ctor.items[0]);
         },
@@ -586,7 +591,9 @@ fn buildTypeBoundProcedureActuals(
 fn boundProcedureResultSpec(
     ctx: *Context,
     binding: context.DerivedBindingInfo,
+    proc_sig: ast.sema.KnownProcedureSig,
 ) ?ast.TypeSpec {
+    if (proc_sig.result_type_spec) |type_spec| return type_spec;
     const proc_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
     if (ctx.findSymbol(proc_name)) |sym| {
         return sym.type_spec;
@@ -606,6 +613,38 @@ fn boundProcedureResultSpec(
         }
     }
     return null;
+}
+
+fn boundProcedureLookupName(
+    ctx: *Context,
+    binding: context.DerivedBindingInfo,
+    proc_name: []const u8,
+) ![]const u8 {
+    if (binding.owner_name) |owner_name| {
+        return std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ owner_name, proc_name });
+    }
+    return proc_name;
+}
+
+fn boundProcedureIRName(
+    ctx: *Context,
+    binding: context.DerivedBindingInfo,
+    proc_name: []const u8,
+) ![]const u8 {
+    if (binding.owner_name) |owner_name| {
+        if (binding.owner_kind) |owner_kind| {
+            return utils.mangleProcedureUnitName(ctx.allocator, .{
+                .kind = .subroutine,
+                .name = proc_name,
+                .owner_name = owner_name,
+                .owner_kind = owner_kind,
+                .args = &.{},
+                .decls = &.{},
+                .stmts = &.{},
+            });
+        }
+    }
+    return ctx.mangleName(proc_name);
 }
 
 fn procedureTypeSpec(proc_type: ast.ProcedureTypeSpec) ast.TypeSpec {
@@ -628,11 +667,22 @@ fn ensureExternalDeclForCall(
     has_character_result: bool,
 ) ![]const u8 {
     const mangled = try ctx.mangleName(name);
+    return ensureExternalDeclForResolvedCall(ctx, name, mangled, ret_ty, args, has_character_result);
+}
+
+fn ensureExternalDeclForResolvedCall(
+    ctx: *Context,
+    lookup_name: []const u8,
+    mangled: []const u8,
+    ret_ty: ir.IRType,
+    args: []*Expr,
+    has_character_result: bool,
+) ![]const u8 {
     if (ctx.defined.contains(mangled)) return mangled;
 
     if (ctx.decls.get(mangled)) |existing| {
         if (!existing.varargs) return mangled;
-        const param_types = try buildAbiParamTypes(ctx, name, ret_ty, args, has_character_result);
+        const param_types = try buildAbiParamTypes(ctx, lookup_name, ret_ty, args, has_character_result);
 
         try ctx.decls.put(mangled, .{
             .ret_type = ctx.abiReturnType(ret_ty),
@@ -642,7 +692,7 @@ fn ensureExternalDeclForCall(
         return mangled;
     }
 
-    const param_types = try buildAbiParamTypes(ctx, name, ret_ty, args, has_character_result);
+    const param_types = try buildAbiParamTypes(ctx, lookup_name, ret_ty, args, has_character_result);
     return ctx.ensureDeclRaw(
         mangled,
         ctx.abiReturnType(ret_ty),

@@ -88,6 +88,8 @@ pub const DerivedTypeDef = struct {
 
 pub const TypeBoundProcedureBinding = struct {
     name: []const u8,
+    owner_name: ?[]const u8 = null,
+    owner_kind: ?@import("program.zig").LexicalOwnerKind = null,
     interface_name: ?[]const u8 = null,
     implementation_name: ?[]const u8 = null,
     deferred: bool = false,

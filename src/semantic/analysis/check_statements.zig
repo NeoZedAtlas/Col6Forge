@@ -44,11 +44,26 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 self.setCurrentSource(self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
             }
-            if (!isPointerValuedExpr(self, assign.value)) {
+            if (!isPointerValuedExpr(self, assign.value) and !isAddressableDataTargetExpr(self, assign.value)) {
                 self.setCurrentSource(self.sourceForExpr(assign.value) orelse self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
             }
             try checkProcedurePointerAssignmentCompatibility(self, assign.target, assign.value);
+        },
+        .nullify => |nullify| {
+            for (nullify.items) |item| {
+                _ = try checkExprType(self, item);
+                if (!isPointerTarget(self, item)) {
+                    self.setCurrentSource(self.sourceForExpr(item));
+                    return error.AssignmentTypeMismatch;
+                }
+            }
+        },
+        .associate_block => |associate| {
+            for (associate.bindings) |binding| {
+                _ = try checkExprType(self, binding.selector);
+            }
+            for (associate.stmts) |inner| try checkStmt(self, inner);
         },
         .assign_label => |assign| {
             _ = std.fmt.parseInt(i64, assign.label, 10) catch return error.InvalidLabelValue;
@@ -71,6 +86,20 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
         .call => |call| {
             const call_idx = resolve_symbols.findSymbolIndex(self, call.name);
             self.setCurrentSource(if (call.source.line != 0) call.source else null);
+            if (call.binding_base) |base| {
+                try checkExpr(self, base);
+                for (call.args) |arg| {
+                    switch (arg) {
+                        .expr => |actual| try checkExpr(self, actual.value),
+                        .alt_return => |label| try checkCallAltReturnLabel(self, label),
+                    }
+                }
+                const base_spec = try resolve_expr.exprTypeSpec(self, base);
+                if (base_spec.lowered_kind != .derived) return error.InvalidArgumentCount;
+                const derived_name = base_spec.derived_type_name orelse return error.InvalidArgumentCount;
+                const binding = resolve_symbols.lookupDerivedBinding(self, derived_name, call.name) orelse return error.InvalidArgumentCount;
+                return checkTypeBoundProcedureComponent(self, base, binding, collectCallExprArgsScratch(self, call.args), true);
+            }
             if (!callHasDerivedActuals(self, call.args) and hasAmbiguousVisibleGenericInterface(self, call.name)) {
                 return emitNamedProcedureDiagnostic(self, call.name, error.DuplicateDeclaration, "Ambiguous interfaces");
             }
@@ -575,6 +604,22 @@ fn isPointerValuedExpr(self: *context.Context, expr: *ast.Expr) bool {
     };
 }
 
+fn isAddressableDataTargetExpr(self: *context.Context, expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .identifier => true,
+        .component => |comp| !comp.has_parens or resolvedKindFor(self, expr) == .subscript,
+        .call_or_subscript => |call| blk: {
+            const idx = symbolIndexForResolvedCall(self, expr) orelse
+                (resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false);
+            const sym = self.symbols.items[idx];
+            const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
+                (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
+            break :blk kind == .subscript;
+        },
+        else => false,
+    };
+}
+
 fn isAssignmentCompatible(target: ast.TypeKind, value: ast.TypeKind) bool {
     if (target == .derived or value == .derived) return target == .derived and value == .derived;
     if (target == .character or value == .character) return target == .character and value == .character;
@@ -902,6 +947,7 @@ fn checkAllocateOptionTypeCompatibility(
     option: ast.AllocationOption,
 ) CheckError!void {
     const value_spec = try resolve_expr.exprTypeSpec(self, option.value);
+    const value_rank = exprRank(self, option.value);
     for (items) |item| {
         const target_spec = try allocateTargetTypeSpec(self, item.target);
         if (!dummyArgTypeCompatible(self, target_spec, value_spec)) {
@@ -913,6 +959,19 @@ fn checkAllocateOptionTypeCompatibility(
                 option.source.text,
             );
             return error.AssignmentTypeMismatch;
+        }
+        if (item.dims.len == 0) {
+            const target_info = try resolveAllocateTargetInfo(self, item.target);
+            if (value_rank != 0 and target_info.rank != value_rank) {
+                self.setDiagnostic(
+                    if (option.source.line == 0) 1 else option.source.line,
+                    if (option.source.column == 0) 1 else option.source.column,
+                    catalog.semantic.assignment_type_mismatch.code,
+                    "must be scalar or have the same rank",
+                    option.source.text,
+                );
+                return error.AssignmentTypeMismatch;
+            }
         }
     }
 }
@@ -1138,7 +1197,11 @@ fn exprRank(self: *context.Context, expr: *ast.Expr) usize {
             const sym = self.symbols.items[idx];
             const kind: ResolvedRefKind = resolvedKindFor(self, expr) orelse
                 (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
-            break :blk if (kind == .subscript) 0 else sym.dims.len;
+            if (kind == .subscript) break :blk 0;
+            if (resolve_symbols.lookupKnownProcedureSig(self, call.name)) |sig| {
+                break :blk sig.result_rank;
+            }
+            break :blk sym.dims.len;
         },
         .component => |comp| blk: {
             const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch break :blk 0;
@@ -1264,12 +1327,28 @@ fn isIntegerLike(kind: ast.TypeKind) bool {
     return kind == .integer;
 }
 
-fn countCallExprArgs(args: []ast.CallArg) usize {
+fn countCallExprArgs(args: []const ast.CallArg) usize {
     var count: usize = 0;
     for (args) |arg| {
         if (arg == .expr) count += 1;
     }
     return count;
+}
+
+fn collectCallExprArgsScratch(self: *context.Context, args: []const ast.CallArg) []*ast.Expr {
+    const expr_count = countCallExprArgs(args);
+    const exprs = self.arena.alloc(*ast.Expr, expr_count) catch return &.{};
+    var out_idx: usize = 0;
+    for (args) |arg| {
+        switch (arg) {
+            .expr => |actual| {
+                exprs[out_idx] = actual.value;
+                out_idx += 1;
+            },
+            .alt_return => {},
+        }
+    }
+    return exprs;
 }
 
 fn checkProcedureActualArgsForCall(
@@ -1352,6 +1431,18 @@ fn typeBoundProcedureSig(
     binding: context.Context.DerivedTypeInfo.BindingInfo,
 ) ?context.Context.ProcedureSig {
     const impl_name = binding.implementation_name orelse binding.name;
+    if (binding.owner_name) |owner_name| {
+        const qualified_impl = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, impl_name }) catch null;
+        if (qualified_impl) |name| {
+            if (resolve_symbols.lookupKnownProcedureSig(self, name)) |sig| return sig;
+        }
+        if (binding.interface_name) |iface_name| {
+            const qualified_iface = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, iface_name }) catch null;
+            if (qualified_iface) |name| {
+                if (resolve_symbols.lookupKnownProcedureSig(self, name)) |sig| return sig;
+            }
+        }
+    }
     return resolve_symbols.lookupKnownProcedureSig(self, impl_name) orelse
         (if (binding.interface_name) |iface_name| resolve_symbols.lookupKnownProcedureSig(self, iface_name) else null) orelse
         resolve_symbols.lookupKnownProcedureSig(self, binding.name);

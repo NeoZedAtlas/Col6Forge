@@ -15,6 +15,8 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
     .{ "ANY", .logical },
     .{ "ALLOCATED", .logical },
     .{ "ASSOCIATED", .logical },
+    .{ "PRESENT", .logical },
+    .{ "KIND", .integer },
     .{ "INT", .integer },
     .{ "IFIX", .integer },
     .{ "IDINT", .integer },

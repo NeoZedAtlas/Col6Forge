@@ -35,14 +35,15 @@ pub const Resolver = struct {
         try symbols_mod.installUnitSymbol(ctx);
         try symbols_mod.installDummyArgs(ctx);
         try statements.preinstallUseImports(ctx);
-        for (ctx.unit.decls) |decl| {
+        for (ctx.unit.decls, 0..) |decl, decl_idx| {
             if (decl == .derived_type_def) {
+                const decl_source = if (decl_idx < ctx.unit.decl_sources.len) ctx.unit.decl_sources[decl_idx] else ast.DeclSource{};
                 try symbols_mod.registerDerivedType(ctx, .{
                     .name = decl.derived_type_def.name,
                     .parent_name = decl.derived_type_def.parent_name,
                     .abstract = decl.derived_type_def.abstract,
                     .components = try buildDerivedComponentInfo(ctx, decl.derived_type_def),
-                    .bindings = try buildDerivedBindingInfo(ctx, decl.derived_type_def),
+                    .bindings = try buildDerivedBindingInfo(ctx, decl.derived_type_def, decl_source),
                 });
             }
         }
@@ -104,6 +105,7 @@ pub const Resolver = struct {
         }
         try validateAssumedCharacterLengths(ctx);
         try resolve_data.lowerDataStatements(ctx);
+        try rewrite_calls.lowerAssociateBlocks(ctx);
         // First pass resolves statement-level symbol/shape ambiguity (e.g. statement
         // function disambiguation) before intrinsic-array conversion lowering.
         for (ctx.unit.stmts) |stmt| {
@@ -249,9 +251,15 @@ fn buildDerivedComponentInfo(
         for (type_decl.items) |item| {
             var spec = symbols.TypeSpec.fromResolvedKind(type_decl.type_kind, type_decl.type_kind, null);
             if (type_decl.type_kind == .derived) {
-                const name = type_decl.derived_type_name orelse return error.UnexpectedTypeDecl;
-                spec = symbols.TypeSpec.fromDerived(name);
+                if (type_decl.derived_type_name) |name| {
+                    spec = symbols.TypeSpec.fromDerived(name);
+                } else if (type_decl.polymorphic) {
+                    spec = symbols.TypeSpec.fromKind(.derived).withPolymorphic(true);
+                } else {
+                    return error.UnexpectedTypeDecl;
+                }
             }
+            spec = spec.withPolymorphic(type_decl.polymorphic);
             if (spec.lowered_kind == .character) {
                 if (item.char_len_deferred) {
                     spec = spec.withCharacterLength(.deferred, null);
@@ -276,11 +284,16 @@ fn buildDerivedComponentInfo(
 fn buildDerivedBindingInfo(
     ctx: *context.Context,
     derived: ast.DerivedTypeDef,
+    decl_source: ast.DeclSource,
 ) ![]const context.Context.DerivedTypeInfo.BindingInfo {
     var bindings = std.array_list.Managed(context.Context.DerivedTypeInfo.BindingInfo).init(ctx.arena);
+    const owner_name = decl_source.owner_name orelse if (ctx.unit.kind == .module) ctx.unit.name else ctx.unit.owner_name;
+    const owner_kind = bindingOwnerKind(ctx, decl_source);
     for (derived.bindings) |binding| {
         try bindings.append(.{
             .name = binding.name,
+            .owner_name = binding.owner_name orelse owner_name,
+            .owner_kind = binding.owner_kind orelse owner_kind,
             .interface_name = binding.interface_name,
             .implementation_name = binding.implementation_name,
             .deferred = binding.deferred,
@@ -290,4 +303,11 @@ fn buildDerivedBindingInfo(
         });
     }
     return try bindings.toOwnedSlice();
+}
+
+fn bindingOwnerKind(ctx: *context.Context, decl_source: ast.DeclSource) ?ast.LexicalOwnerKind {
+    if (decl_source.owner_name != null) return .module;
+    if (ctx.unit.kind == .module) return .module;
+    if (ctx.unit.owner_name != null) return .procedure;
+    return null;
 }

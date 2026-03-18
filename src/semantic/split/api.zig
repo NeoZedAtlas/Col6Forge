@@ -36,6 +36,7 @@ pub const KnownProcedureSig = struct {
     args: []const ArgSig = &.{},
     is_pointer: bool = false,
     result_rank: usize = 0,
+    result_type_spec: ?symbols.TypeSpec = null,
     actual_requires_explicit_interface: bool = false,
 };
 
@@ -113,6 +114,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             .args = known.args,
             .is_pointer = known.is_pointer,
             .result_rank = known.result_rank,
+            .result_type_spec = known.result_type_spec,
             .actual_requires_explicit_interface = known.actual_requires_explicit_interface,
         });
     }
@@ -122,18 +124,28 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             const key = try symbol_lookup.lowerDup(arena, unit.name);
             const inferred = function_type.inferFunctionTypeSpec(unit);
             try known_function_type_specs.put(key, inferred);
+            if (unit.owner_name) |owner_name| {
+                const qualified_key = try qualifiedProcedureKey(arena, owner_name, unit.name);
+                try known_function_type_specs.put(qualified_key, inferred);
+            }
         }
         if (unit.kind == .function or unit.kind == .subroutine) {
             const key = try symbol_lookup.lowerDup(arena, unit.name);
-            try known_procedure_sigs.put(key, .{
+            const sig: context.Context.ProcedureSig = .{
                 .kind = unit.kind,
                 .arg_count = unit.args.len,
                 .alt_return_count = unit.alt_return_dummy_count,
                 .args = try inferProcedureArgSigs(arena, unit),
                 .is_pointer = function_type.inferProcedureIsPointer(unit),
                 .result_rank = if (unit.kind == .function) function_type.inferFunctionResultRank(unit) else 0,
+                .result_type_spec = if (unit.kind == .function) function_type.inferFunctionTypeSpec(unit) else null,
                 .actual_requires_explicit_interface = unit.owner_name != null,
-            });
+            };
+            try known_procedure_sigs.put(key, sig);
+            if (unit.owner_name) |owner_name| {
+                const qualified_key = try qualifiedProcedureKey(arena, owner_name, unit.name);
+                try known_procedure_sigs.put(qualified_key, sig);
+            }
         }
     }
     try installExplicitInterfaceProcedures(arena, mutable_program, &known_function_type_specs, &known_procedure_sigs);
@@ -142,6 +154,14 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
     var units = std.array_list.Managed(SemanticUnit).init(arena);
     var first_error: ?anyerror = null;
     for (mutable_program.units) |*unit| {
+        if (host_symbols_active and unit.owner_name == null) {
+            known_host_symbols.clearRetainingCapacity();
+            known_host_derived_types.clearRetainingCapacity();
+            known_host_interface_sources.clearRetainingCapacity();
+            known_host_abstract_interfaces.clearRetainingCapacity();
+            host_symbols_active = false;
+            active_host_owner = null;
+        }
         var unit_analyzer = analyzer.UnitAnalyzer.initWithDiagnostics(
             arena,
             unit,
@@ -179,14 +199,6 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
                 host_symbols_active = true;
                 active_host_owner = unit.name;
             }
-            if (!unitHasContains(unit.*) and host_symbols_active and unit.*.kind == .program) {
-                known_host_symbols.clearRetainingCapacity();
-                known_host_derived_types.clearRetainingCapacity();
-                known_host_interface_sources.clearRetainingCapacity();
-                known_host_abstract_interfaces.clearRetainingCapacity();
-                host_symbols_active = false;
-                active_host_owner = null;
-            }
             continue;
         };
         try units.append(sem_unit);
@@ -203,18 +215,15 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             );
             host_symbols_active = true;
             active_host_owner = unit.name;
-        } else if (host_symbols_active and unit.*.kind == .program) {
-            known_host_symbols.clearRetainingCapacity();
-            known_host_derived_types.clearRetainingCapacity();
-            known_host_interface_sources.clearRetainingCapacity();
-            known_host_abstract_interfaces.clearRetainingCapacity();
-            host_symbols_active = false;
-            active_host_owner = null;
         }
     }
     if (first_error) |err| return err;
     try common_validation.validateCommonBlocksWithDiagnostics(arena, mutable_program, units.items, diag_bag);
     return .{ .units = try units.toOwnedSlice() };
+}
+
+fn qualifiedProcedureKey(arena: std.mem.Allocator, owner_name: []const u8, procedure_name: []const u8) ![]const u8 {
+    return symbol_lookup.lowerDup(arena, try std.fmt.allocPrint(arena, "{s}::{s}", .{ owner_name, procedure_name }));
 }
 
 fn refreshHostContextFromAnalyzer(
@@ -328,6 +337,7 @@ fn installExplicitInterfaceProcedures(
                     .args = try inferInterfaceProcedureArgSigs(arena, unit, proc_header),
                     .is_pointer = false,
                     .result_rank = interfaceProcedureResultRank(proc_header),
+                    .result_type_spec = if (proc_header.kind == .function) interfaceProcedureResultTypeSpec(unit, proc_header) else null,
                 });
             }
             if (proc_header.kind != .function) continue;

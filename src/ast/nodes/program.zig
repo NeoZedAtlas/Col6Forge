@@ -40,4 +40,5 @@ pub const DeclSource = struct {
     line: usize = 0,
     column: usize = 0,
     text: []const u8 = "",
+    owner_name: ?[]const u8 = null,
 };

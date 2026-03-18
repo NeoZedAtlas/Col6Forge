@@ -225,7 +225,7 @@ pub fn emitModuleToWriterWithDiagnostics(
                 try block_data_mangled.append(mangled);
             },
             .function, .subroutine => {
-                try known_procedure_sigs.put(unit.name, .{
+                const sig: input.sema.KnownProcedureSig = .{
                     .name = unit.name,
                     .kind = unit.kind,
                     .arg_count = unit.args.len,
@@ -233,8 +233,14 @@ pub fn emitModuleToWriterWithDiagnostics(
                     .args = try input.sema.inferProcedureArgSigs(scratch, unit),
                     .is_pointer = function_type.inferProcedureIsPointer(unit),
                     .result_rank = if (unit.kind == .function) function_type.inferFunctionResultRank(unit) else 0,
+                    .result_type_spec = if (unit.kind == .function) function_type.inferFunctionTypeSpec(unit) else null,
                     .actual_requires_explicit_interface = unit.owner_name != null,
-                });
+                };
+                try known_procedure_sigs.put(unit.name, sig);
+                if (unit.owner_name) |owner_name| {
+                    const qualified = try std.fmt.allocPrint(scratch, "{s}::{s}", .{ owner_name, unit.name });
+                    try known_procedure_sigs.put(qualified, sig);
+                }
             },
         }
     }
@@ -377,6 +383,7 @@ fn installExplicitInterfaceProcedureSigs(
                 .args = &.{},
                 .is_pointer = false,
                 .result_rank = input.sema.interfaceProcedureResultRank(proc_header),
+                .result_type_spec = null,
             });
         }
     }
@@ -1357,6 +1364,38 @@ test "emitModuleToWriter supports CHARACTER allocate type-spec for deferred-leng
 
     const output = buffer.items;
     try testing.expect(std.mem.indexOf(u8, output, "call ptr @malloc") != null);
+}
+
+test "emitModuleToWriter supports allocatable unlimited polymorphic components" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  type :: any_vector\n" ++
+        "    class(*), allocatable :: x(:)\n" ++
+        "  end type any_vector\n" ++
+        "  type(any_vector) :: a\n" ++
+        "  integer :: values(2) = [1, 2]\n" ++
+        "  allocate(a%x(2), source=values)\n" ++
+        "  deallocate(a%x)\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "poly_alloc_component.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "call ptr @malloc") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call void @free") != null);
 }
 
 test "emitModuleToWriter resolves derived layout dependencies across imported module preludes" {

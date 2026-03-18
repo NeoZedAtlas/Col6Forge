@@ -40,6 +40,9 @@ pub const Stmt = stmt_nodes.Stmt;
 pub const StmtNode = stmt_nodes.StmtNode;
 pub const Assignment = stmt_nodes.Assignment;
 pub const PointerAssignment = stmt_nodes.PointerAssignment;
+pub const NullifyStmt = stmt_nodes.NullifyStmt;
+pub const AssociateBinding = stmt_nodes.AssociateBinding;
+pub const AssociateBlock = stmt_nodes.AssociateBlock;
 pub const AssignLabelStmt = stmt_nodes.AssignLabelStmt;
 pub const UseStmt = stmt_nodes.UseStmt;
 pub const UseOnlyItem = stmt_nodes.UseOnlyItem;
@@ -94,6 +97,7 @@ pub const CharFormat = format_nodes.CharFormat;
 pub const LogicalFormat = format_nodes.LogicalFormat;
 
 pub const ImpliedDo = expr_nodes.ImpliedDo;
+pub const ArrayConstructorTypeSpec = expr_nodes.ArrayConstructorTypeSpec;
 pub const ArrayConstructor = expr_nodes.ArrayConstructor;
 pub const SourceRef = expr_nodes.SourceRef;
 pub const Expr = expr_nodes.Expr;

@@ -35,6 +35,17 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             try expressions.resolveExpr(self, assign.target);
             try expressions.resolveExpr(self, assign.value);
         },
+        .nullify => |nullify| {
+            for (nullify.items) |item| {
+                try expressions.resolveExpr(self, item);
+            }
+        },
+        .associate_block => |associate| {
+            for (associate.bindings) |binding| {
+                try expressions.resolveExpr(self, binding.selector);
+            }
+            for (associate.stmts) |inner| try resolveStmt(self, inner);
+        },
         .assign_label => |assign| {
             _ = try symbols_mod.ensureSymbol(self, assign.target);
         },
@@ -45,6 +56,16 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         },
         .call => |call| {
             self.setCurrentSource(if (call.source.line != 0) call.source else null);
+            if (call.binding_base) |base| {
+                try expressions.resolveExpr(self, base);
+                for (call.args) |arg| {
+                    switch (arg) {
+                        .expr => |actual| try expressions.resolveExpr(self, actual.value),
+                        .alt_return => {},
+                    }
+                }
+                return;
+            }
             const idx = try symbols_mod.ensureSymbol(self, call.name);
             self.symbols.items[idx].is_external = true;
             for (call.args) |arg| {

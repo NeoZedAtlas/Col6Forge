@@ -99,6 +99,8 @@ pub const DerivedTypeLayout = struct {
 
 pub const DerivedBindingInfo = struct {
     name: []const u8,
+    owner_name: ?[]const u8 = null,
+    owner_kind: ?input.LexicalOwnerKind = null,
     interface_name: ?[]const u8 = null,
     implementation_name: ?[]const u8 = null,
     deferred: bool = false,
@@ -501,6 +503,8 @@ pub const Context = struct {
                 if (std.ascii.eqlIgnoreCase(binding.name, binding_name)) {
                     return .{
                         .name = binding.name,
+                        .owner_name = binding.owner_name,
+                        .owner_kind = binding.owner_kind,
                         .interface_name = binding.interface_name,
                         .implementation_name = binding.implementation_name,
                         .deferred = binding.deferred,
@@ -909,15 +913,26 @@ pub const Context = struct {
     fn componentDirectElemSizeAlign(self: *Context, type_decl: input.TypeDecl, item: input.Declarator) !ComponentElemInfo {
         var spec = input.TypeSpec.fromResolvedKind(type_decl.type_kind, type_decl.type_kind, null);
         if (type_decl.type_kind == .derived) {
-            const derived_name = type_decl.derived_type_name orelse return error.UnknownSymbol;
-            const layout = self.findDerivedTypeLayout(derived_name) orelse return error.UnknownSymbol;
-            spec = input.TypeSpec.fromDerived(derived_name);
-            return .{
-                .type_spec = spec,
-                .storage_size = layout.size,
-                .element_size = layout.size,
-                .alignment = layout.alignment,
-            };
+            if (type_decl.derived_type_name) |derived_name| {
+                const layout = self.findDerivedTypeLayout(derived_name) orelse return error.UnknownSymbol;
+                spec = input.TypeSpec.fromDerived(derived_name).withPolymorphic(type_decl.polymorphic);
+                return .{
+                    .type_spec = spec,
+                    .storage_size = layout.size,
+                    .element_size = layout.size,
+                    .alignment = layout.alignment,
+                };
+            }
+            if (type_decl.polymorphic) {
+                spec = input.TypeSpec.fromKind(.derived).withPolymorphic(true);
+                return .{
+                    .type_spec = spec,
+                    .storage_size = @sizeOf(usize),
+                    .element_size = @sizeOf(usize),
+                    .alignment = @alignOf(usize),
+                };
+            }
+            return error.UnknownSymbol;
         }
         if (type_decl.type_kind == .character) {
             const char_len = if (item.char_len_deferred) null else inferConstantCharLen(item.char_len);
@@ -1008,7 +1023,8 @@ fn canonicalNumericLabel(label: []const u8) []const u8 {
 
 fn stmtCanFallthroughInBlock(stmt: ast.Stmt) bool {
     return switch (stmt.node) {
-        .assignment, .pointer_assignment, .assign_label, .use_stmt, .allocate, .deallocate, .data, .format => true,
+        .assignment, .pointer_assignment, .nullify, .assign_label, .use_stmt, .allocate, .deallocate, .data, .format => true,
+        .associate_block => false,
         else => false,
     };
 }

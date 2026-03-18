@@ -4,6 +4,7 @@ pub const sema = @import("../semantic/mod.zig");
 pub const Program = ast.Program;
 pub const ProgramUnit = ast.ProgramUnit;
 pub const ProgramUnitKind = ast.ProgramUnitKind;
+pub const LexicalOwnerKind = ast.LexicalOwnerKind;
 pub const TypeKind = ast.TypeKind;
 pub const TypeSpec = sema.TypeSpec;
 
@@ -29,6 +30,9 @@ pub const Stmt = ast.Stmt;
 pub const StmtNode = ast.StmtNode;
 pub const Assignment = ast.Assignment;
 pub const PointerAssignment = ast.PointerAssignment;
+pub const NullifyStmt = ast.NullifyStmt;
+pub const AssociateBinding = ast.AssociateBinding;
+pub const AssociateBlock = ast.AssociateBlock;
 pub const AssignLabelStmt = ast.AssignLabelStmt;
 pub const UseStmt = ast.UseStmt;
 pub const UseOnlyItem = ast.UseOnlyItem;

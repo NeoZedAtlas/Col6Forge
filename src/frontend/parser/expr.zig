@@ -271,6 +271,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
         },
         .l_bracket => {
             _ = lp.next();
+            const type_spec = try tryParseArrayConstructorTypeSpec(lp, arena, depth + 1);
             var items = std.array_list.Managed(*Expr).init(arena);
             while (!lp.peekIs(.r_bracket)) {
                 const item = try parseExprDepth(lp, arena, 0, depth + 1);
@@ -281,7 +282,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
             if (items.items.len == 0) return error.UnexpectedToken;
             return makeExprNode(
                 arena,
-                .{ .array_constructor = .{ .items = try items.toOwnedSlice() } },
+                .{ .array_constructor = .{ .type_spec = type_spec, .items = try items.toOwnedSlice() } },
                 start_source,
             );
         },
@@ -313,6 +314,126 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
         },
         else => return error.UnexpectedToken,
     }
+}
+
+fn tryParseArrayConstructorTypeSpec(
+    lp: *LineParser,
+    arena: std.mem.Allocator,
+    depth: usize,
+) ParseExprError!?ast.ArrayConstructorTypeSpec {
+    var lookahead = lp.*;
+    const parsed = parseArrayConstructorTypeSpec(&lookahead, arena, depth) catch |err| {
+        return switch (err) {
+            error.UnknownType => null,
+            error.UnexpectedEOF => error.UnexpectedEOF,
+            error.UnexpectedToken => error.UnexpectedToken,
+            error.ExpressionDepthExceeded => error.ExpressionDepthExceeded,
+            error.OutOfMemory => error.OutOfMemory,
+        };
+    };
+    if (!consumeDoubleColon(&lookahead)) return null;
+    lp.* = lookahead;
+    return parsed;
+}
+
+const ParseArrayTypeError = ParseExprError || error{UnknownType};
+
+fn parseArrayConstructorTypeSpec(
+    lp: *LineParser,
+    arena: std.mem.Allocator,
+    depth: usize,
+) ParseArrayTypeError!ast.ArrayConstructorTypeSpec {
+    if (lp.isKeywordSplit("INTEGER")) {
+        _ = lp.consumeKeyword("INTEGER");
+        return .{ .type_kind = .integer, .kind_selector = try parseOptionalKindSelector(lp, arena, depth + 1) };
+    }
+    if (lp.isKeywordSplit("REAL")) {
+        _ = lp.consumeKeyword("REAL");
+        return .{ .type_kind = .real, .kind_selector = try parseOptionalKindSelector(lp, arena, depth + 1) };
+    }
+    if (lp.isKeywordSplit("COMPLEX")) {
+        _ = lp.consumeKeyword("COMPLEX");
+        return .{ .type_kind = .complex, .kind_selector = try parseOptionalKindSelector(lp, arena, depth + 1) };
+    }
+    if (lp.isKeywordSplit("LOGICAL")) {
+        _ = lp.consumeKeyword("LOGICAL");
+        return .{ .type_kind = .logical, .kind_selector = try parseOptionalKindSelector(lp, arena, depth + 1) };
+    }
+    if (lp.isKeywordSplit("CHARACTER")) {
+        _ = lp.consumeKeyword("CHARACTER");
+        return .{ .type_kind = .character, .kind_selector = try parseCharacterArrayKindSelector(lp, arena, depth + 1) };
+    }
+    if (lp.isKeywordSplit("DOUBLEPRECISION")) {
+        _ = lp.consumeKeyword("DOUBLEPRECISION");
+        return .{ .type_kind = .double_precision };
+    }
+    if (lp.isKeywordSplit("DOUBLE")) {
+        _ = lp.consumeKeyword("DOUBLE");
+        if (!lp.consumeKeyword("PRECISION")) return error.UnexpectedToken;
+        return .{ .type_kind = .double_precision };
+    }
+    if (lp.consumeKeyword("TYPE")) {
+        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        const name = lp.readName(arena) orelse return error.UnexpectedToken;
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        return .{ .type_kind = .derived, .derived_type_name = name };
+    }
+    if (lp.consumeKeyword("CLASS")) {
+        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        if (lp.consume(.star)) {
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            return .{ .type_kind = .derived, .polymorphic = true };
+        }
+        const name = lp.readName(arena) orelse return error.UnexpectedToken;
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        return .{ .type_kind = .derived, .derived_type_name = name, .polymorphic = true };
+    }
+    return error.UnknownType;
+}
+
+fn parseOptionalKindSelector(
+    lp: *LineParser,
+    arena: std.mem.Allocator,
+    depth: usize,
+) ParseExprError!?*Expr {
+    if (!lp.consume(.l_paren)) return null;
+    if (lp.consumeKeyword("KIND")) {
+        _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+    }
+    const selector = try parseExprDepth(lp, arena, 0, depth + 1);
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return selector;
+}
+
+fn parseCharacterArrayKindSelector(
+    lp: *LineParser,
+    arena: std.mem.Allocator,
+    depth: usize,
+) ParseExprError!?*Expr {
+    if (!lp.consume(.l_paren)) return null;
+    var kind_selector: ?*Expr = null;
+    while (!lp.peekIs(.r_paren)) {
+        if (lp.consumeKeyword("KIND")) {
+            _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+            kind_selector = try parseExprDepth(lp, arena, 0, depth + 1);
+        } else if (lp.consumeKeyword("LEN")) {
+            _ = lp.expect(.equals) orelse return error.UnexpectedToken;
+            _ = try parseExprDepth(lp, arena, 0, depth + 1);
+        } else {
+            _ = try parseExprDepth(lp, arena, 0, depth + 1);
+        }
+        if (!lp.consume(.comma)) break;
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+    return kind_selector;
+}
+
+fn consumeDoubleColon(lp: *LineParser) bool {
+    if (!lp.peekIs(.colon)) return false;
+    if (lp.index + 1 >= lp.tokens.len or lp.tokens[lp.index + 1].kind != .colon) return false;
+    _ = lp.next();
+    _ = lp.next();
+    return true;
 }
 
 fn tryParseImpliedDo(
@@ -795,6 +916,56 @@ test "parseExpr handles kind-prefixed string literal" {
         .literal => |lit| {
             try testing.expectEqual(ast.LiteralKind.string, lit.kind);
             try testing.expectEqualStrings("\"123\"", lit.text);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles numeric kind-prefixed string literal" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      4_\"ab\"\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .literal => |lit| {
+            try testing.expectEqual(ast.LiteralKind.string, lit.kind);
+            try testing.expectEqualStrings("\"ab\"", lit.text);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles typed array constructor" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      [CHARACTER(KIND=4) :: 4_\"ab\"]\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .array_constructor => |ctor| {
+            try testing.expect(ctor.type_spec != null);
+            try testing.expectEqual(ast.TypeKind.character, ctor.type_spec.?.type_kind);
+            try testing.expect(ctor.type_spec.?.kind_selector != null);
+            try testing.expectEqual(@as(usize, 1), ctor.items.len);
         },
         else => return error.UnexpectedToken,
     }
