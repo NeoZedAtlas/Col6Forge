@@ -6,6 +6,8 @@ const common = @import("../common.zig");
 const context = @import("../context.zig");
 const utils = @import("../utils.zig");
 const evaluator = @import("../../../../semantic/evaluator.zig");
+const type_kind_selector = @import("../../../../semantic/type_kind_selector.zig");
+const ast_nodes = @import("../../../../ast/nodes.zig");
 
 const binary = @import("binary.zig");
 const call = @import("call.zig");
@@ -315,7 +317,7 @@ fn emitTypeBoundProcedureCall(ctx: *Context, builder: anytype, comp: ast.Compone
         return error.UnknownSymbol;
 
     if (result_spec != null and result_spec.?.lowered_kind == .character) {
-        const result_len = result_spec.?.char_len orelse return error.NonConstantCharacterLength;
+        const result_len = result_spec.?.char_len orelse 1;
         const fn_name = try ensureExternalDeclForResolvedCall(ctx, lookup_name, ir_name, .void, actuals, true);
         const ptr = try call.emitCharacterCall(ctx, builder, fn_name, result_len, actuals);
         return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
@@ -605,14 +607,60 @@ fn boundProcedureResultSpec(
         if (decl != .interface_block) continue;
         for (decl.interface_block.procedure_headers) |proc_header| {
             if (!std.ascii.eqlIgnoreCase(proc_header.name, proc_name)) continue;
-            if (proc_header.kind != .function) return null;
-            if (proc_header.type_spec) |type_spec| {
-                return procedureTypeSpec(type_spec);
-            }
-            return ctx.findSymbol(proc_header.name).?.type_spec;
+            return interfaceProcedureResultTypeSpec(ctx.unit, proc_header);
         }
     }
     return null;
+}
+
+fn interfaceProcedureResultTypeSpec(
+    unit: ast.ProgramUnit,
+    proc_header: ast_nodes.InterfaceProcedure,
+) ?ast.TypeSpec {
+    if (proc_header.kind != .function) return null;
+    if (proc_header.type_spec) |type_spec| return procedureTypeSpec(type_spec);
+    if (findInterfaceProcedureDeclaredResultTypeSpec(unit, proc_header)) |type_spec| return type_spec;
+    return implicitTypeSpecForName(unit, proc_header.name);
+}
+
+fn findInterfaceProcedureDeclaredResultTypeSpec(
+    unit: ast.ProgramUnit,
+    proc_header: ast_nodes.InterfaceProcedure,
+) ?ast.TypeSpec {
+    const result_name = proc_header.result_name orelse proc_header.name;
+    for (proc_header.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    return applyDeclaratorCharLen(typeDeclTypeSpec(type_decl), item);
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    return switch (procedure_decl.interface) {
+                        .type_spec => |proc_type| applyDeclaratorCharLen(procedureTypeSpec(proc_type), item),
+                        else => applyDeclaratorCharLen(implicitTypeSpecForName(unit, result_name), item),
+                    };
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn typeDeclTypeSpec(type_decl: ast.TypeDecl) ast.TypeSpec {
+    if (type_decl.type_kind != .derived) {
+        return type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector)
+            .withPolymorphic(type_decl.polymorphic);
+    }
+    const base = if (type_decl.derived_type_name) |derived_name|
+        ast.TypeSpec.fromDerived(derived_name)
+    else
+        ast.TypeSpec.fromKind(.derived);
+    return base.withPolymorphic(type_decl.polymorphic);
 }
 
 fn boundProcedureLookupName(
@@ -649,7 +697,7 @@ fn boundProcedureIRName(
 
 fn procedureTypeSpec(proc_type: ast.ProcedureTypeSpec) ast.TypeSpec {
     if (proc_type.type_kind != .derived) {
-        return ast.TypeSpec.fromResolvedKind(proc_type.type_kind, proc_type.type_kind, null)
+        return type_kind_selector.resolveSpec(proc_type.type_kind, proc_type.kind_selector)
             .withPolymorphic(proc_type.polymorphic);
     }
     const base = if (proc_type.derived_type_name) |derived_name|
@@ -657,6 +705,46 @@ fn procedureTypeSpec(proc_type: ast.ProcedureTypeSpec) ast.TypeSpec {
     else
         ast.TypeSpec.fromKind(.derived);
     return base.withPolymorphic(proc_type.polymorphic);
+}
+
+fn implicitTypeSpecForName(unit: ast.ProgramUnit, name: []const u8) ast.TypeSpec {
+    if (name.len != 0) {
+        const first = std.ascii.toUpper(name[0]);
+        for (unit.decls) |decl| {
+            if (decl != .implicit) continue;
+            for (decl.implicit.rules) |rule| {
+                if (first < rule.start or first > rule.end) continue;
+                return applyCharacterLength(type_kind_selector.resolveSpec(rule.type_kind, rule.kind_selector), rule.char_len);
+            }
+        }
+        if (first >= 'I' and first <= 'N') return ast.TypeSpec.fromResolvedKind(.integer, .integer, null);
+    }
+    return ast.TypeSpec.fromResolvedKind(.real, .real, null);
+}
+
+fn applyDeclaratorCharLen(type_spec: ast.TypeSpec, declarator: ast.Declarator) ast.TypeSpec {
+    if (declarator.char_len_deferred) return type_spec.withCharacterLength(.deferred, null);
+    return applyCharacterLength(type_spec, declarator.char_len);
+}
+
+fn applyCharacterLength(type_spec: ast.TypeSpec, char_len_expr: ?*Expr) ast.TypeSpec {
+    if (type_spec.lowered_kind != .character) return type_spec.withCharacterLength(.none, null);
+    const char_len = inferConstantCharLen(char_len_expr);
+    return type_spec.withCharacterLength(
+        if (char_len != null) .constant else if (char_len_expr != null) .deferred else .constant,
+        char_len orelse if (char_len_expr == null) 1 else null,
+    );
+}
+
+fn inferConstantCharLen(len_expr: ?*Expr) ?usize {
+    const expr_node = len_expr orelse return null;
+    return switch (expr_node.*) {
+        .literal => |lit| switch (lit.kind) {
+            .integer => std.fmt.parseInt(usize, lit.text, 10) catch null,
+            else => null,
+        },
+        else => null,
+    };
 }
 
 fn ensureExternalDeclForCall(
@@ -943,6 +1031,53 @@ test "intLiteralValue returns null on overflowing integer powers" {
     try testing.expect(intLiteralValue(&pow) == null);
 }
 
+test "interfaceProcedureResultTypeSpec preserves deferred character abstract interface results" {
+    const testing = std.testing;
+    const free_form = @import("../../../../frontend/free_form.zig");
+    const parser = @import("../../../../frontend/parser/mod.zig");
+
+    const allocator = testing.allocator;
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type, abstract :: t\n" ++
+        "  contains\n" ++
+        "    procedure(ifc), deferred :: tbf\n" ++
+        "  end type\n" ++
+        "  abstract interface\n" ++
+        "    function ifc(x) result(str)\n" ++
+        "      import :: t\n" ++
+        "      class(t) :: x\n" ++
+        "      character(len=:), allocatable :: str\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module m\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    const unit = program.units[0];
+    var iface_proc: ?ast_nodes.InterfaceProcedure = null;
+    for (unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        try testing.expectEqual(@as(usize, 1), decl.interface_block.procedure_headers.len);
+        iface_proc = decl.interface_block.procedure_headers[0];
+        break;
+    }
+    try testing.expect(iface_proc != null);
+
+    const spec = interfaceProcedureResultTypeSpec(unit, iface_proc.?);
+    try testing.expect(spec != null);
+    try testing.expectEqual(ast.TypeKind.character, spec.?.lowered_kind);
+    try testing.expectEqual(@as(@TypeOf(spec.?.char_len_kind), .deferred), spec.?.char_len_kind);
+}
+
 fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize) EmitError!?ValueRef {
     switch (expr.*) {
         .identifier => |name| {
@@ -1092,7 +1227,7 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
                 },
                 .call => {
                     if (!(sym.kind == .function and sym.isCharacter())) return null;
-                    const result_len = common.constantCharacterLen(sym) orelse return error.NonConstantCharacterLength;
+                    const result_len = common.constantCharacterLen(sym) orelse common.symbolCharacterLenOrOne(sym);
                     const ptr = if (sym.storage == .dummy)
                         try call.emitIndirectCharacterCall(ctx, builder, try ctx.getPointer(call_or_sub.name), result_len, call_or_sub.args)
                     else blk: {
