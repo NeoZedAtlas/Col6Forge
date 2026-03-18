@@ -65,6 +65,7 @@ pub fn emitLValue(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
         .identifier => |name| {
             return ctx.getPointer(name);
         },
+        .array_constructor => return error.InvalidAssignmentTarget,
         .call_or_subscript => |call_or_sub| {
             var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
             if (kind == .unknown) {
@@ -146,6 +147,7 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             }
             return value;
         },
+        .array_constructor => return error.UnsupportedArrayConstructor,
         .literal => |lit| {
             return casting.emitLiteral(ctx, builder, lit);
         },
@@ -371,6 +373,10 @@ fn roughExprKind(ctx: *Context, expr: *Expr) ast.TypeKind {
         .identifier => |name| {
             const sym = ctx.findSymbol(name) orelse return .integer;
             return sym.loweredKind();
+        },
+        .array_constructor => |ctor| {
+            if (ctor.items.len == 0) return .integer;
+            return roughExprKind(ctx, ctor.items[0]);
         },
         .literal => |lit| return switch (lit.kind) {
             .integer => .integer,

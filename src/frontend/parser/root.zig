@@ -416,11 +416,23 @@ const Parser = struct {
                 self.index += 1;
                 continue;
             }
+            const stmt_start_index = self.index;
             var stmt_node = stmt.parseStatementWithDiagnostics(self.arena, self.lines, &self.index, &do_ctx, &param_ints, &param_strings, &array_names, self.diag_bag, self.lex_diag_bag) catch |err| {
                 if (!self.diag_bag.has()) {
                     const err_line = lineAtIndexOrLast(self.lines, self.index, line);
                     const err_col = if (err_line.segments.len > 0) err_line.segments[0].column else 1;
                     setParseDiagnosticForLine(self.diag_bag, err_line, err_line.span.start_line, err_col, err);
+                }
+                if (self.index == stmt_start_index and self.diag_bag.has() and err == error.UnexpectedToken) {
+                    self.index += 1;
+                    try stmts.append(.{
+                        .label = line.label,
+                        .node = .{ .cont = {} },
+                        .source_line = line.span.start_line,
+                        .source_column = if (line.segments.len > 0) line.segments[0].column else 1,
+                        .source_text = line.text,
+                    });
+                    continue;
                 }
                 return err;
             };

@@ -69,14 +69,20 @@ pub fn emitContinuationDirective(ctx: *Context, builder: anytype, stmt: ast.Stmt
 
 pub fn emitAllocate(ctx: *Context, builder: anytype, allocate: ast.AllocateStmt) EmitError!void {
     for (allocate.items) |item| {
-        try emitAllocateItem(ctx, builder, allocate.type_spec, item);
+        try emitAllocateItem(ctx, builder, allocate.type_spec, allocate.options, item);
     }
 }
 
-fn emitAllocateItem(ctx: *Context, builder: anytype, type_spec: ?ast.AllocateTypeSpec, item: ast.AllocateItem) EmitError!void {
+fn emitAllocateItem(
+    ctx: *Context,
+    builder: anytype,
+    type_spec: ?ast.AllocateTypeSpec,
+    options: []const ast.AllocationOption,
+    item: ast.AllocateItem,
+) EmitError!void {
     return switch (item.target.*) {
-        .identifier => |name| emitAllocateNamedItem(ctx, builder, type_spec, name, item.dims),
-        .component => |comp| emitAllocateComponentItem(ctx, builder, type_spec, comp, item.dims),
+        .identifier => |name| emitAllocateNamedItem(ctx, builder, type_spec, options, name, item.dims),
+        .component => |comp| emitAllocateComponentItem(ctx, builder, type_spec, options, comp, item.dims),
         else => error.UnsupportedAllocateSyntax,
     };
 }
@@ -85,28 +91,24 @@ fn emitAllocateNamedItem(
     ctx: *Context,
     builder: anytype,
     type_spec: ?ast.AllocateTypeSpec,
+    options: []const ast.AllocationOption,
     name: []const u8,
     dims: []*ast.Expr,
 ) EmitError!void {
-    var dim_specs = std.array_list.Managed(AllocateDimSpec).init(ctx.allocator);
-    defer dim_specs.deinit();
-
+    const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
+    const dim_specs = try emitAllocateDimSpecsForSymbol(ctx, builder, sym, options, dims);
     var extent_product = constI64(ctx, 1);
-    for (dims) |dim| {
-        const dim_spec = try emitAllocateDimSpec(ctx, builder, dim);
-        try dim_specs.append(dim_spec);
+    for (dim_specs) |dim_spec| {
         extent_product = try expr.emitMul(ctx, builder, extent_product, dim_spec.extent);
     }
-
-    const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
     const elem_size = try emitAllocateElementSize(ctx, builder, sym, type_spec);
-    const total_bytes = if (dim_specs.items.len == 0)
+    const total_bytes = if (dim_specs.len == 0)
         elem_size
     else
         try expr.emitMul(ctx, builder, extent_product, elem_size);
 
     if (ctx.runtimeArrayDescriptor(name)) |desc| {
-        if (desc.rank != dim_specs.items.len) return error.InvalidSubscript;
+        if (desc.rank != dim_specs.len) return error.InvalidSubscript;
 
         try freeManagedArrayPointerIfAllocated(ctx, builder, name);
 
@@ -119,7 +121,7 @@ fn emitAllocateNamedItem(
         try updateAllocatedCharacterLen(ctx, builder, sym, type_spec);
 
         var running_multiplier = constI64(ctx, 1);
-        for (dim_specs.items, 0..) |dim_spec, dim_idx| {
+        for (dim_specs, 0..) |dim_spec, dim_idx| {
             try builder.store(dim_spec.lower, desc.lower_slots[dim_idx]);
             try builder.store(dim_spec.extent, desc.extent_slots[dim_idx]);
             try builder.store(running_multiplier, desc.multiplier_slots[dim_idx]);
@@ -142,6 +144,7 @@ fn emitAllocateComponentItem(
     ctx: *Context,
     builder: anytype,
     type_spec: ?ast.AllocateTypeSpec,
+    options: []const ast.AllocationOption,
     comp: ast.ComponentExpr,
     dims: []*ast.Expr,
 ) EmitError!void {
@@ -149,18 +152,15 @@ fn emitAllocateComponentItem(
     const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
     if (!(component.allocatable or component.pointer)) return error.UnsupportedAllocateSyntax;
 
-    var dim_specs = std.array_list.Managed(AllocateDimSpec).init(ctx.allocator);
-    defer dim_specs.deinit();
+    const dim_specs = try emitAllocateDimSpecsForComponent(ctx, builder, comp, component, options, dims);
     var extent_product = constI64(ctx, 1);
-    for (dims) |dim| {
-        const dim_spec = try emitAllocateDimSpec(ctx, builder, dim);
-        try dim_specs.append(dim_spec);
+    for (dim_specs) |dim_spec| {
         extent_product = try expr.emitMul(ctx, builder, extent_product, dim_spec.extent);
     }
-    if (component.dims.len != dim_specs.items.len) return error.InvalidSubscript;
+    if (component.dims.len != dim_specs.len) return error.InvalidSubscript;
 
     const elem_size = try emitAllocateLayoutElementSize(ctx, builder, component, type_spec);
-    const total_bytes = if (dim_specs.items.len == 0)
+    const total_bytes = if (dim_specs.len == 0)
         elem_size
     else
         try expr.emitMul(ctx, builder, extent_product, elem_size);
@@ -177,7 +177,7 @@ fn emitAllocateComponentItem(
     try builder.store(base_ptr, storage_ptr);
 
     var running_multiplier = constI64(ctx, 1);
-    for (dim_specs.items, 0..) |dim_spec, dim_idx| {
+    for (dim_specs, 0..) |dim_spec, dim_idx| {
         const lower_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .lower, dim_idx);
         const extent_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .extent, dim_idx);
         const multiplier_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .multiplier, dim_idx);
@@ -264,6 +264,188 @@ const AllocateDimSpec = struct {
     lower: ValueRef,
     extent: ValueRef,
 };
+
+fn emitAllocateDimSpecsForSymbol(
+    ctx: *Context,
+    builder: anytype,
+    sym: ast.sema.Symbol,
+    options: []const ast.AllocationOption,
+    dims: []*ast.Expr,
+) EmitError![]AllocateDimSpec {
+    if (dims.len != 0) return emitAllocateDimSpecs(ctx, builder, dims);
+    if (sym.dims.len == 0) return &.{};
+    if (try emitAllocateInferredDimSpecs(ctx, builder, options)) |inferred| return inferred;
+    return emitAllocateDimSpecs(ctx, builder, sym.dims);
+}
+
+fn emitAllocateDimSpecsForComponent(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    component: context.DerivedComponentLayout,
+    options: []const ast.AllocationOption,
+    dims: []*ast.Expr,
+) EmitError![]AllocateDimSpec {
+    if (dims.len != 0) return emitAllocateDimSpecs(ctx, builder, dims);
+    if (component.dims.len == 0) return &.{};
+    if (try emitAllocateInferredDimSpecs(ctx, builder, options)) |inferred| return inferred;
+    const specs = try ctx.allocator.alloc(AllocateDimSpec, component.dims.len);
+    for (component.dims, 0..) |dim, idx| {
+        specs[idx] = try emitAllocateDimSpec(ctx, builder, dim);
+    }
+    if (component.pointer or component.allocatable) {
+        var has_dynamic = false;
+        for (component.dims) |dim| {
+            if (dim.* == .dim_range and dim.dim_range.assumed_shape) {
+                has_dynamic = true;
+                break;
+            }
+        }
+        if (has_dynamic) {
+            for (0..component.dims.len) |idx| {
+                const lower_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .lower, idx);
+                const extent_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .extent, idx);
+                const lower_name = try ctx.nextTemp();
+                try builder.load(lower_name, .i64, lower_slot);
+                const extent_name = try ctx.nextTemp();
+                try builder.load(extent_name, .i64, extent_slot);
+                specs[idx] = .{
+                    .lower = .{ .name = lower_name, .ty = .i64, .is_ptr = false },
+                    .extent = .{ .name = extent_name, .ty = .i64, .is_ptr = false },
+                };
+            }
+        }
+    }
+    return specs;
+}
+
+fn emitAllocateDimSpecs(
+    ctx: *Context,
+    builder: anytype,
+    dims: []*ast.Expr,
+) EmitError![]AllocateDimSpec {
+    const specs = try ctx.allocator.alloc(AllocateDimSpec, dims.len);
+    for (dims, 0..) |dim, idx| {
+        specs[idx] = try emitAllocateDimSpec(ctx, builder, dim);
+    }
+    return specs;
+}
+
+fn emitAllocateInferredDimSpecs(
+    ctx: *Context,
+    builder: anytype,
+    options: []const ast.AllocationOption,
+) EmitError!?[]AllocateDimSpec {
+    for (options) |option| {
+        switch (option.kind) {
+            .source, .mold => {
+                if (try emitAllocateDimSpecsFromExpr(ctx, builder, option.value)) |specs| return specs;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn emitAllocateDimSpecsFromExpr(
+    ctx: *Context,
+    builder: anytype,
+    expr_node: *ast.Expr,
+) EmitError!?[]AllocateDimSpec {
+    return switch (expr_node.*) {
+        .array_constructor => |ctor| blk: {
+            const specs = try ctx.allocator.alloc(AllocateDimSpec, 1);
+            specs[0] = .{
+                .lower = constI64(ctx, 1),
+                .extent = try emitArrayConstructorExtent(ctx, builder, ctor),
+            };
+            break :blk specs;
+        },
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
+            if (sym.dims.len == 0) break :blk null;
+            if (ctx.runtimeArrayDescriptor(name)) |desc| {
+                const specs = try ctx.allocator.alloc(AllocateDimSpec, desc.rank);
+                for (0..desc.rank) |idx| {
+                    const lower_name = try ctx.nextTemp();
+                    try builder.load(lower_name, .i64, desc.lower_slots[idx]);
+                    const extent_name = try ctx.nextTemp();
+                    try builder.load(extent_name, .i64, desc.extent_slots[idx]);
+                    specs[idx] = .{
+                        .lower = .{ .name = lower_name, .ty = .i64, .is_ptr = false },
+                        .extent = .{ .name = extent_name, .ty = .i64, .is_ptr = false },
+                    };
+                }
+                break :blk specs;
+            }
+            break :blk try emitAllocateDimSpecs(ctx, builder, sym.dims);
+        },
+        .component => |comp| blk: {
+            const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+            const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
+            if (component.dims.len == 0) break :blk null;
+            const specs = try ctx.allocator.alloc(AllocateDimSpec, component.dims.len);
+            for (0..component.dims.len) |idx| {
+                const lower_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .lower, idx);
+                const extent_slot = try expr_memory.emitComponentDescriptorSlotPtr(ctx, builder, comp, .extent, idx);
+                const lower_name = try ctx.nextTemp();
+                try builder.load(lower_name, .i64, lower_slot);
+                const extent_name = try ctx.nextTemp();
+                try builder.load(extent_name, .i64, extent_slot);
+                specs[idx] = .{
+                    .lower = .{ .name = lower_name, .ty = .i64, .is_ptr = false },
+                    .extent = .{ .name = extent_name, .ty = .i64, .is_ptr = false },
+                };
+            }
+            break :blk specs;
+        },
+        .unary => |un| emitAllocateDimSpecsFromExpr(ctx, builder, un.expr),
+        .binary => |bin| {
+            if (try emitAllocateDimSpecsFromExpr(ctx, builder, bin.left)) |specs| return specs;
+            return emitAllocateDimSpecsFromExpr(ctx, builder, bin.right);
+        },
+        else => null,
+    };
+}
+
+fn emitArrayConstructorExtent(
+    ctx: *Context,
+    builder: anytype,
+    ctor: ast.ArrayConstructor,
+) EmitError!ValueRef {
+    var total = constI64(ctx, 0);
+    for (ctor.items) |item| {
+        total = try expr.emitAdd(ctx, builder, total, try emitArrayConstructorItemExtent(ctx, builder, item));
+    }
+    return total;
+}
+
+fn emitArrayConstructorItemExtent(
+    ctx: *Context,
+    builder: anytype,
+    item: *ast.Expr,
+) EmitError!ValueRef {
+    return switch (item.*) {
+        .implied_do => |implied| blk: {
+            var start = try emitAllocateExtentExpr(ctx, builder, implied.start);
+            if (start.ty != .i64) start = try expr.coerce(ctx, builder, start, .i64);
+            var end = try emitAllocateExtentExpr(ctx, builder, implied.end);
+            if (end.ty != .i64) end = try expr.coerce(ctx, builder, end, .i64);
+            var diff = try expr.emitSub(ctx, builder, end, start);
+            if (implied.step) |step_expr| {
+                var step = try emitAllocateExtentExpr(ctx, builder, step_expr);
+                if (step.ty != .i64) step = try expr.coerce(ctx, builder, step, .i64);
+                diff = try expr.emitBinary(ctx, builder, .div, diff, step);
+            }
+            var extent = try expr.emitAdd(ctx, builder, diff, constI64(ctx, 1));
+            if (implied.items.len != 1) {
+                extent = try expr.emitMul(ctx, builder, extent, constI64(ctx, @intCast(implied.items.len)));
+            }
+            break :blk extent;
+        },
+        else => constI64(ctx, 1),
+    };
+}
 
 fn emitAllocateDimSpec(ctx: *Context, builder: anytype, dim: *ast.Expr) EmitError!AllocateDimSpec {
     switch (dim.*) {

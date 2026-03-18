@@ -367,6 +367,22 @@ fn normalizeAllocateTarget(arena: std.mem.Allocator, raw_target: *Expr) !Normali
             .target = raw_target,
             .dims = &.{},
         },
+        .substring => |sub| blk: {
+            if (sub.args.len != 0) return error.UnsupportedAllocateSyntax;
+            const upper = sub.end orelse return error.UnsupportedAllocateSyntax;
+            const dim = try cloneAllocateTargetExpr(arena, .{ .dim_range = .{
+                .lower = sub.start,
+                .upper = upper,
+                .stride = null,
+                .assumed_shape = false,
+            } });
+            const dims = try arena.alloc(*Expr, 1);
+            dims[0] = dim;
+            break :blk .{
+                .target = try cloneAllocateTargetExpr(arena, .{ .identifier = sub.name }),
+                .dims = dims,
+            };
+        },
         .call_or_subscript => |call| .{
             .target = try cloneAllocateTargetExpr(arena, .{ .identifier = call.name }),
             .dims = call.args,

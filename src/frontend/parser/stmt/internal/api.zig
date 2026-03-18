@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
+const catalog = @import("../../../../common/error_catalog.zig");
 const logical_line = @import("../../../logical_line.zig");
 const lexer = @import("../../../lexer.zig");
 const context = @import("../../token_stream.zig");
@@ -221,6 +222,16 @@ pub fn parseStatementWithDiagnostics(
         if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
         return err;
     };
+    if (lp.peek() != null) {
+        const tok = lp.peek().?;
+        const message = switch (action_node) {
+            .deallocate => "Syntax error in DEALLOCATE",
+            .allocate => "Syntax error in ALLOCATE",
+            else => catalog.parser.unexpected_token.message,
+        };
+        diag_bag.set(tok.line, tok.column, catalog.parser.unexpected_token.code, message, line.text);
+        return error.UnexpectedToken;
+    }
     index.* += 1;
     return makeStmtWithSource(line, label, action_node);
 }

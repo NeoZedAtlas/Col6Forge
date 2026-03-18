@@ -157,6 +157,11 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
     const start_source = currentSource(lp.*);
     switch (tok.kind) {
         .identifier => {
+            if (adjacentKindPrefixedString(lp.*)) |string_tok| {
+                _ = lp.next();
+                _ = lp.next();
+                return makeExprNode(arena, .{ .literal = .{ .kind = .string, .text = lp.tokenText(string_tok) } }, start_source);
+            }
             const name = lp.readName(arena) orelse return error.UnexpectedToken;
             if (lp.consume(.l_paren)) {
                 if (hasSubstringRange(lp.*)) {
@@ -226,6 +231,11 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
             return parseComponentSuffixes(lp, arena, node, depth + 1, start_source);
         },
         .integer => {
+            if (adjacentKindPrefixedString(lp.*)) |string_tok| {
+                _ = lp.next();
+                _ = lp.next();
+                return makeExprNode(arena, .{ .literal = .{ .kind = .string, .text = lp.tokenText(string_tok) } }, start_source);
+            }
             _ = lp.next();
             return makeExprNode(arena, .{ .literal = .{ .kind = .integer, .text = lp.tokenText(tok) } }, start_source);
         },
@@ -242,6 +252,9 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
             return makeExprNode(arena, .{ .literal = .{ .kind = .hollerith, .text = lp.tokenText(tok) } }, start_source);
         },
         .l_paren => {
+            if (try tryParseImpliedDo(lp, arena, depth + 1, start_source)) |implied_do| {
+                return implied_do;
+            }
             _ = lp.next();
             const real = try parseExprDepth(lp, arena, 0, depth + 1);
             if (lp.consume(.comma)) {
@@ -255,6 +268,22 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
             }
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
             return real;
+        },
+        .l_bracket => {
+            _ = lp.next();
+            var items = std.array_list.Managed(*Expr).init(arena);
+            while (!lp.peekIs(.r_bracket)) {
+                const item = try parseExprDepth(lp, arena, 0, depth + 1);
+                try items.append(item);
+                if (!lp.consume(.comma)) break;
+            }
+            _ = lp.expect(.r_bracket) orelse return error.UnexpectedToken;
+            if (items.items.len == 0) return error.UnexpectedToken;
+            return makeExprNode(
+                arena,
+                .{ .array_constructor = .{ .items = try items.toOwnedSlice() } },
+                start_source,
+            );
         },
         .plus => {
             _ = lp.next();
@@ -284,6 +313,64 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
         },
         else => return error.UnexpectedToken,
     }
+}
+
+fn tryParseImpliedDo(
+    lp: *LineParser,
+    arena: std.mem.Allocator,
+    depth: usize,
+    start_source: SourceRef,
+) ParseExprError!?*Expr {
+    var lookahead = lp.*;
+    if (!lookahead.consume(.l_paren)) return null;
+
+    var items = std.array_list.Managed(*Expr).init(arena);
+    const first_item = parseExprDepth(&lookahead, arena, 0, depth + 1) catch return null;
+    try items.append(first_item);
+    if (!lookahead.consume(.comma)) return null;
+
+    while (true) {
+        if (lookahead.peek()) |tok| {
+            if (tok.kind == .identifier and lookahead.index + 1 < lookahead.tokens.len and lookahead.tokens[lookahead.index + 1].kind == .equals) {
+                const var_name = lookahead.readName(arena) orelse return error.UnexpectedToken;
+                _ = lookahead.expect(.equals) orelse return error.UnexpectedToken;
+                const start_expr = try parseExprDepth(&lookahead, arena, 0, depth + 1);
+                _ = lookahead.expect(.comma) orelse return error.UnexpectedToken;
+                const end_expr = try parseExprDepth(&lookahead, arena, 0, depth + 1);
+                var step_expr: ?*Expr = null;
+                if (lookahead.consume(.comma)) {
+                    step_expr = try parseExprDepth(&lookahead, arena, 0, depth + 1);
+                }
+                _ = lookahead.expect(.r_paren) orelse return error.UnexpectedToken;
+                lp.* = lookahead;
+                return makeExprNode(
+                    arena,
+                    .{ .implied_do = .{
+                        .items = try items.toOwnedSlice(),
+                        .var_name = var_name,
+                        .start = start_expr,
+                        .end = end_expr,
+                        .step = step_expr,
+                    } },
+                    start_source,
+                );
+            }
+        }
+
+        const next_item = parseExprDepth(&lookahead, arena, 0, depth + 1) catch return null;
+        try items.append(next_item);
+        if (!lookahead.consume(.comma)) return null;
+    }
+}
+
+fn adjacentKindPrefixedString(lp: LineParser) ?lexer.Token {
+    const first = lp.peek() orelse return null;
+    if (first.kind != .identifier and first.kind != .integer) return null;
+    if (lp.index + 1 >= lp.tokens.len) return null;
+    const next = lp.tokens[lp.index + 1];
+    if (next.kind != .string) return null;
+    if (next.start != first.end) return null;
+    return next;
 }
 
 fn parseComponentSuffixes(
@@ -659,6 +746,80 @@ test "parseExpr accepts keyword actual arguments in calls" {
             try testing.expectEqual(@as(usize, 2), call.args.len);
             try testing.expect(call.args[1].* == .identifier);
             try testing.expectEqualStrings("BITS_KIND", call.args[1].identifier);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles array constructor" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      W//[STR//W]\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .binary => |bin| {
+            try testing.expectEqual(BinaryOp.concat, bin.op);
+            try testing.expect(bin.right.* == .array_constructor);
+            try testing.expectEqual(@as(usize, 1), bin.right.array_constructor.items.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles kind-prefixed string literal" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CK_\"123\"\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .literal => |lit| {
+            try testing.expectEqual(ast.LiteralKind.string, lit.kind);
+            try testing.expectEqualStrings("\"123\"", lit.text);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles implied-do in array constructor" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      [(I,I=1,DIM)]\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .array_constructor => |ctor| {
+            try testing.expectEqual(@as(usize, 1), ctor.items.len);
+            try testing.expect(ctor.items[0].* == .implied_do);
+            try testing.expectEqualStrings("I", ctor.items[0].implied_do.var_name);
         },
         else => return error.UnexpectedToken,
     }

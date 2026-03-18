@@ -479,7 +479,7 @@ pub const Context = struct {
     }
 
     pub fn findDerivedTypeLayout(self: *const Context, name: []const u8) ?DerivedTypeLayout {
-        return self.derived_type_layouts.get(name);
+        return self.derived_type_layouts.get(name) orelse builtinDerivedTypeLayout(name);
     }
 
     pub fn lookupDerivedComponentLayout(self: *const Context, type_name: []const u8, component_name: []const u8) ?DerivedComponentLayout {
@@ -981,6 +981,19 @@ fn inferConstantCharLen(expr: ?*input.Expr) ?usize {
         },
         else => null,
     };
+}
+
+fn builtinDerivedTypeLayout(name: []const u8) ?DerivedTypeLayout {
+    const empty_components = &[_]DerivedComponentLayout{};
+    if (std.ascii.eqlIgnoreCase(name, "c_ptr") or std.ascii.eqlIgnoreCase(name, "c_funptr")) {
+        return .{
+            .name = name,
+            .components = empty_components,
+            .size = @sizeOf(usize),
+            .alignment = @alignOf(usize),
+        };
+    }
+    return null;
 }
 
 fn canonicalNumericLabel(label: []const u8) []const u8 {

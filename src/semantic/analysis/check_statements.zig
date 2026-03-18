@@ -152,8 +152,10 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             for (allocate.items) |item| {
                 const target_info = try resolveAllocateTargetInfo(self, item.target);
                 if (!target_info.allocatable and !target_info.pointer) {
-                    self.setCurrentSource(if (item.source.line != 0) item.source else self.sourceForExpr(item.target));
-                    return error.UnsupportedAllocateSyntax;
+                    return emitAllocateTargetConstraintDiagnostic(self, item.target, item.source, true);
+                }
+                if (violatesVariableDefinitionContext(self, item.target)) {
+                    return emitVariableDefinitionContextDiagnostic(self, item.source, item.target);
                 }
                 if (target_info.rank == 0 and item.dims.len == 0) {
                     continue;
@@ -161,6 +163,12 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 if (target_info.rank == 0) {
                     self.setCurrentSource(if (item.source.line != 0) item.source else self.sourceForExpr(item.target));
                     return error.UnsupportedAllocateSyntax;
+                }
+                if (item.dims.len == 0) {
+                    const inferred_rank = allocateSourceOrMoldRank(self, allocate.options);
+                    if (inferred_rank == target_info.rank) {
+                        continue;
+                    }
                 }
                 if (target_info.rank != item.dims.len) {
                     self.setCurrentSource(if (item.source.line != 0) item.source else null);
@@ -170,16 +178,20 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                     try checkAllocateDim(self, dim);
                 }
             }
-            try checkAllocationOptions(self, allocate.items, allocate.options, true);
+            try checkDuplicateAllocateItems(self, allocate.items);
+            try checkAllocationOptions(self, allocate.items, allocate.options, true, allocate.type_spec != null);
         },
         .deallocate => |deallocate| {
             for (deallocate.items) |item| {
                 const target_info = try resolveAllocateTargetInfo(self, item.target);
                 if (!(target_info.allocatable or target_info.pointer)) {
-                    self.setCurrentSource(if (item.source.line != 0) item.source else self.sourceForExpr(item.target));
-                    return error.UnsupportedAllocateSyntax;
+                    return emitAllocateTargetConstraintDiagnostic(self, item.target, item.source, false);
+                }
+                if (violatesVariableDefinitionContext(self, item.target)) {
+                    return emitVariableDefinitionContextDiagnostic(self, item.source, item.target);
                 }
             }
+            try checkDuplicateDeallocateItems(self, deallocate.items);
             try checkDeallocateOptions(self, deallocate.items, deallocate.options);
         },
         .data => |data| {
@@ -294,6 +306,10 @@ fn checkLogicalConditionExpr(self: *context.Context, expr: *ast.Expr) CheckError
 fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKind {
     switch (expr.*) {
         .identifier, .literal => return try resolve_expr.exprType(self, expr),
+        .array_constructor => |ctor| {
+            for (ctor.items) |item| _ = try checkExprType(self, item);
+            return try resolve_expr.exprType(self, expr);
+        },
         .unary => |un| {
             _ = try checkExprType(self, un.expr);
             return try resolve_expr.exprType(self, expr);
@@ -496,7 +512,7 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
             _ = try checkExprType(self, implied.end);
             if (implied.step) |step| _ = try checkExprType(self, step);
             for (implied.items) |item| _ = try checkExprType(self, item);
-            return .integer;
+            return try resolve_expr.exprType(self, expr);
         },
     }
 }
@@ -692,6 +708,7 @@ fn checkAllocationOptions(
     items: []const ast.AllocateItem,
     options: []const ast.AllocationOption,
     is_allocate: bool,
+    has_type_spec: bool,
 ) CheckError!void {
     var saw_stat = false;
     var saw_errmsg = false;
@@ -734,6 +751,9 @@ fn checkAllocationOptions(
                     );
                     return error.AssignmentTypeMismatch;
                 }
+                if (violatesVariableDefinitionContext(self, option.value)) {
+                    return emitVariableDefinitionContextDiagnostic(self, option.source, option.value);
+                }
             },
             .errmsg => {
                 if (saw_errmsg) {
@@ -757,7 +777,9 @@ fn checkAllocationOptions(
                     );
                     return error.InvalidArgumentCount;
                 }
-                if (value_ty != .character or exprRank(self, option.value) != 0) {
+                const value_spec = try resolve_expr.exprTypeSpec(self, option.value);
+                const is_default_char = (value_spec.kind_value orelse 1) == 1;
+                if (value_ty != .character or exprRank(self, option.value) != 0 or !is_default_char) {
                     self.setDiagnostic(
                         if (option.source.line == 0) 1 else option.source.line,
                         if (option.source.column == 0) 1 else option.source.column,
@@ -767,8 +789,31 @@ fn checkAllocationOptions(
                     );
                     return error.AssignmentTypeMismatch;
                 }
+                if (violatesVariableDefinitionContext(self, option.value)) {
+                    return emitVariableDefinitionContextDiagnostic(self, option.source, option.value);
+                }
             },
             .source => {
+                if (saw_mold) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.duplicate_declaration.code,
+                        "conflicts with MOLD tag",
+                        option.source.text,
+                    );
+                    return error.DuplicateDeclaration;
+                }
+                if (has_type_spec) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.duplicate_declaration.code,
+                        "conflicts with the typespec",
+                        option.source.text,
+                    );
+                    return error.DuplicateDeclaration;
+                }
                 if (saw_source) {
                     self.setDiagnostic(
                         if (option.source.line == 0) 1 else option.source.line,
@@ -780,8 +825,29 @@ fn checkAllocationOptions(
                     return error.DuplicateDeclaration;
                 }
                 saw_source = true;
+                try checkAllocateOptionTypeCompatibility(self, items, option);
             },
             .mold => {
+                if (saw_source) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.duplicate_declaration.code,
+                        "conflicts with SOURCE tag",
+                        option.source.text,
+                    );
+                    return error.DuplicateDeclaration;
+                }
+                if (has_type_spec) {
+                    self.setDiagnostic(
+                        if (option.source.line == 0) 1 else option.source.line,
+                        if (option.source.column == 0) 1 else option.source.column,
+                        catalog.semantic.duplicate_declaration.code,
+                        "conflicts with the typespec",
+                        option.source.text,
+                    );
+                    return error.DuplicateDeclaration;
+                }
                 if (saw_mold) {
                     self.setDiagnostic(
                         if (option.source.line == 0) 1 else option.source.line,
@@ -793,6 +859,7 @@ fn checkAllocationOptions(
                     return error.DuplicateDeclaration;
                 }
                 saw_mold = true;
+                try checkAllocateOptionTypeCompatibility(self, items, option);
             },
         }
     }
@@ -826,7 +893,236 @@ fn checkDeallocateOptions(
             .source = item.source,
         };
     }
-    try checkAllocationOptions(self, alloc_items, options, false);
+    try checkAllocationOptions(self, alloc_items, options, false, false);
+}
+
+fn checkAllocateOptionTypeCompatibility(
+    self: *context.Context,
+    items: []const ast.AllocateItem,
+    option: ast.AllocationOption,
+) CheckError!void {
+    const value_spec = try resolve_expr.exprTypeSpec(self, option.value);
+    for (items) |item| {
+        const target_spec = try allocateTargetTypeSpec(self, item.target);
+        if (!dummyArgTypeCompatible(self, target_spec, value_spec)) {
+            self.setDiagnostic(
+                if (option.source.line == 0) 1 else option.source.line,
+                if (option.source.column == 0) 1 else option.source.column,
+                catalog.semantic.assignment_type_mismatch.code,
+                "is type incompatible",
+                option.source.text,
+            );
+            return error.AssignmentTypeMismatch;
+        }
+    }
+}
+
+fn checkDuplicateAllocateItems(
+    self: *context.Context,
+    items: []const ast.AllocateItem,
+) CheckError!void {
+    var i: usize = 0;
+    while (i < items.len) : (i += 1) {
+        var j: usize = i + 1;
+        while (j < items.len) : (j += 1) {
+            if (sameAllocateObjectExpr(items[i].target, items[j].target)) {
+                return emitAllocateObjectConflictDiagnostic(self, items[j].source, items[j].target, false);
+            }
+            if (allocateObjectSubobjectConflict(items[i].target, items[j].target)) {
+                return emitAllocateObjectConflictDiagnostic(self, items[j].source, items[j].target, true);
+            }
+        }
+    }
+}
+
+fn checkDuplicateDeallocateItems(
+    self: *context.Context,
+    items: []const ast.DeallocateItem,
+) CheckError!void {
+    var i: usize = 0;
+    while (i < items.len) : (i += 1) {
+        var j: usize = i + 1;
+        while (j < items.len) : (j += 1) {
+            if (sameAllocateObjectExpr(items[i].target, items[j].target)) {
+                return emitAllocateObjectConflictDiagnostic(self, items[j].source, items[j].target, false);
+            }
+            if (allocateObjectSubobjectConflict(items[i].target, items[j].target)) {
+                return emitAllocateObjectConflictDiagnostic(self, items[j].source, items[j].target, true);
+            }
+        }
+    }
+}
+
+fn emitAllocateObjectConflictDiagnostic(
+    self: *context.Context,
+    source: ast.SourceRef,
+    expr_node: *ast.Expr,
+    is_subobject: bool,
+) CheckError {
+    const final_source: ast.SourceRef = if (source.line != 0) source else self.sourceForExpr(expr_node) orelse .{};
+    self.setDiagnostic(
+        if (final_source.line == 0) 1 else final_source.line,
+        if (final_source.column == 0) 1 else final_source.column,
+        catalog.semantic.duplicate_declaration.code,
+        if (is_subobject)
+            "Allocate-object at (1) is subobject of object at (2)"
+        else
+            "Allocate-object at (1) also appears at (2)",
+        final_source.text,
+    );
+    return error.DuplicateDeclaration;
+}
+
+fn emitAllocateTargetConstraintDiagnostic(
+    self: *context.Context,
+    target: *ast.Expr,
+    source: ast.SourceRef,
+    is_allocate: bool,
+) CheckError {
+    const target_spec = allocateTargetTypeSpec(self, target) catch symbols.TypeSpec.fromResolvedKind(.integer, .integer, null);
+    const message = if (is_allocate)
+        if (target_spec.lowered_kind == .integer or target_spec.lowered_kind == .real or target_spec.lowered_kind == .double_precision or target_spec.lowered_kind == .complex or target_spec.lowered_kind == .complex_double or target_spec.lowered_kind == .logical)
+            "must be ALLOCATABLE or a POINTER"
+        else
+            "neither a data pointer nor an allocatable"
+    else if (target_spec.lowered_kind == .integer or target_spec.lowered_kind == .real or target_spec.lowered_kind == .double_precision or target_spec.lowered_kind == .complex or target_spec.lowered_kind == .complex_double or target_spec.lowered_kind == .logical)
+        "must be ALLOCATABLE or a POINTER"
+    else
+        "not a nonprocedure pointer nor an allocatable";
+    const final_source: ast.SourceRef = if (source.line != 0) source else self.sourceForExpr(target) orelse .{};
+    self.setDiagnostic(
+        if (final_source.line == 0) 1 else final_source.line,
+        if (final_source.column == 0) 1 else final_source.column,
+        catalog.semantic.assignment_type_mismatch.code,
+        message,
+        final_source.text,
+    );
+    return error.UnsupportedAllocateSyntax;
+}
+
+fn emitVariableDefinitionContextDiagnostic(
+    self: *context.Context,
+    source: ast.SourceRef,
+    expr_node: *ast.Expr,
+) CheckError {
+    const final_source: ast.SourceRef = if (source.line != 0) source else self.sourceForExpr(expr_node) orelse .{};
+    self.setDiagnostic(
+        if (final_source.line == 0) 1 else final_source.line,
+        if (final_source.column == 0) 1 else final_source.column,
+        catalog.semantic.assignment_type_mismatch.code,
+        "variable definition context",
+        final_source.text,
+    );
+    return error.AssignmentTypeMismatch;
+}
+
+fn violatesVariableDefinitionContext(self: *context.Context, expr_node: *ast.Expr) bool {
+    return dummyIntentForExpr(self, expr_node) == .in;
+}
+
+fn dummyIntentForExpr(self: *context.Context, expr_node: *ast.Expr) ?ast.IntentKind {
+    return switch (expr_node.*) {
+        .identifier => |name| dummyIntentForName(self, name),
+        .component => |comp| dummyIntentForExpr(self, comp.base),
+        else => null,
+    };
+}
+
+fn dummyIntentForName(self: *context.Context, name: []const u8) ?ast.IntentKind {
+    const sig = resolve_symbols.lookupKnownProcedureSig(self, self.unit.name) orelse return null;
+    for (sig.args) |arg| {
+        if (std.ascii.eqlIgnoreCase(arg.name, name)) return arg.intent;
+    }
+    return null;
+}
+
+fn sameAllocateObjectExpr(a: *ast.Expr, b: *ast.Expr) bool {
+    return switch (a.*) {
+        .identifier => switch (b.*) {
+            .identifier => std.ascii.eqlIgnoreCase(a.identifier, b.identifier),
+            else => false,
+        },
+        .call_or_subscript => switch (b.*) {
+            .call_or_subscript => sameObjectSelectorExpr(a, b),
+            else => false,
+        },
+        .component => switch (b.*) {
+            .component => std.ascii.eqlIgnoreCase(a.component.name, b.component.name) and
+                a.component.args.len == 0 and
+                b.component.args.len == 0 and
+                sameAllocateObjectExpr(a.component.base, b.component.base),
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn allocateObjectSubobjectConflict(a: *ast.Expr, b: *ast.Expr) bool {
+    return isAllocateObjectAncestor(a, b) or isAllocateObjectAncestor(b, a);
+}
+
+fn isAllocateObjectAncestor(ancestor: *ast.Expr, expr_node: *ast.Expr) bool {
+    if (sameAllocateObjectExpr(ancestor, expr_node)) return false;
+    return switch (ancestor.*) {
+        .identifier => |name| blk: {
+            const root = allocateObjectRootName(expr_node) orelse break :blk false;
+            break :blk std.ascii.eqlIgnoreCase(name, root);
+        },
+        .call_or_subscript => switch (expr_node.*) {
+            .component => isAllocateObjectAncestor(ancestor, expr_node.component.base),
+            else => false,
+        },
+        .component => switch (expr_node.*) {
+            .component => std.ascii.eqlIgnoreCase(ancestor.component.name, expr_node.component.name) and
+                isAllocateObjectAncestor(ancestor.component.base, expr_node.component.base),
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn allocateObjectRootName(expr_node: *ast.Expr) ?[]const u8 {
+    return switch (expr_node.*) {
+        .identifier => expr_node.identifier,
+        .call_or_subscript => expr_node.call_or_subscript.name,
+        .component => allocateObjectRootName(expr_node.component.base),
+        else => null,
+    };
+}
+
+fn sameObjectSelectorExpr(a: *ast.Expr, b: *ast.Expr) bool {
+    return switch (a.*) {
+        .identifier => switch (b.*) {
+            .identifier => std.ascii.eqlIgnoreCase(a.identifier, b.identifier),
+            else => false,
+        },
+        .literal => switch (b.*) {
+            .literal => a.literal.kind == b.literal.kind and std.mem.eql(u8, a.literal.text, b.literal.text),
+            else => false,
+        },
+        .unary => switch (b.*) {
+            .unary => a.unary.op == b.unary.op and sameObjectSelectorExpr(a.unary.expr, b.unary.expr),
+            else => false,
+        },
+        .binary => switch (b.*) {
+            .binary => a.binary.op == b.binary.op and
+                sameObjectSelectorExpr(a.binary.left, b.binary.left) and
+                sameObjectSelectorExpr(a.binary.right, b.binary.right),
+            else => false,
+        },
+        .call_or_subscript => switch (b.*) {
+            .call_or_subscript => blk: {
+                if (!std.ascii.eqlIgnoreCase(a.call_or_subscript.name, b.call_or_subscript.name)) break :blk false;
+                if (a.call_or_subscript.args.len != b.call_or_subscript.args.len) break :blk false;
+                for (a.call_or_subscript.args, b.call_or_subscript.args) |lhs, rhs| {
+                    if (!sameObjectSelectorExpr(lhs, rhs)) break :blk false;
+                }
+                break :blk true;
+            },
+            else => false,
+        },
+        else => false,
+    };
 }
 
 fn exprRank(self: *context.Context, expr: *ast.Expr) usize {
@@ -835,6 +1131,7 @@ fn exprRank(self: *context.Context, expr: *ast.Expr) usize {
             const idx = resolve_symbols.findSymbolIndex(self, name) orelse break :blk 0;
             break :blk self.symbols.items[idx].dims.len;
         },
+        .array_constructor => 1,
         .call_or_subscript => |call| blk: {
             const idx = symbolIndexForResolvedCall(self, expr) orelse
                 (resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk 0);
@@ -850,8 +1147,24 @@ fn exprRank(self: *context.Context, expr: *ast.Expr) usize {
             const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse break :blk 0;
             break :blk if (comp.args.len == 0) component.dims.len else 0;
         },
+        .unary => |un| exprRank(self, un.expr),
+        .binary => |bin| @max(exprRank(self, bin.left), exprRank(self, bin.right)),
+        .implied_do => 1,
         else => 0,
     };
+}
+
+fn allocateSourceOrMoldRank(
+    self: *context.Context,
+    options: []const ast.AllocationOption,
+) usize {
+    for (options) |option| {
+        switch (option.kind) {
+            .source, .mold => return exprRank(self, option.value),
+            else => {},
+        }
+    }
+    return 0;
 }
 
 fn allocationOptionReferencesTarget(self: *context.Context, expr: *ast.Expr, target: *ast.Expr) bool {
@@ -868,6 +1181,12 @@ fn allocationOptionReferencesTarget(self: *context.Context, expr: *ast.Expr, tar
             if (allocationOptionReferencesTarget(self, comp.base, target)) break :blk true;
             for (comp.args) |arg| {
                 if (allocationOptionReferencesTarget(self, arg, target)) break :blk true;
+            }
+            break :blk false;
+        },
+        .array_constructor => |ctor| blk: {
+            for (ctor.items) |item| {
+                if (allocationOptionReferencesTarget(self, item, target)) break :blk true;
             }
             break :blk false;
         },

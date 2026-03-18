@@ -391,6 +391,15 @@ fn cloneExprWithSubst(
             }
             return node;
         },
+        .array_constructor => |ctor| {
+            const items = try ctx.arena.alloc(*ast.Expr, ctor.items.len);
+            for (ctor.items, 0..) |item, idx| {
+                items[idx] = try cloneExprWithSubst(ctx, item, name, replacement);
+            }
+            const cloned = try ctx.arena.create(ast.Expr);
+            cloned.* = .{ .array_constructor = .{ .items = items } };
+            return cloned;
+        },
         .literal => |lit| {
             const cloned = try ctx.arena.create(ast.Expr);
             cloned.* = .{ .literal = lit };
@@ -525,6 +534,12 @@ fn cloneSimpleCallSubscriptWithSubst(
 fn exprContainsIdentifier(node: *ast.Expr, name: []const u8) bool {
     return switch (node.*) {
         .identifier => |ident| std.ascii.eqlIgnoreCase(ident, name),
+        .array_constructor => |ctor| blk: {
+            for (ctor.items) |item| {
+                if (exprContainsIdentifier(item, name)) break :blk true;
+            }
+            break :blk false;
+        },
         .literal => false,
         .unary => |un| exprContainsIdentifier(un.expr, name),
         .binary => |bin| exprContainsIdentifier(bin.left, name) or exprContainsIdentifier(bin.right, name),

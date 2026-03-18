@@ -21,6 +21,12 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             try self.ref_symbol_index.put(@intFromPtr(expr), idx);
             try cacheExprType(self, expr, self.symbols.items[idx].type_spec);
         },
+        .array_constructor => |ctor| {
+            for (ctor.items) |item| {
+                try resolveExpr(self, item);
+            }
+            try cacheExprType(self, expr, try exprTypeSpecCached(self, expr));
+        },
         .call_or_subscript => |call| {
             for (call.args) |arg| {
                 try resolveExpr(self, arg);
@@ -215,6 +221,7 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             for (implied.items) |item| {
                 try resolveExpr(self, item);
             }
+            try cacheExprType(self, expr, try exprTypeSpecCached(self, expr));
         },
         .unary => |un| {
             try resolveExpr(self, un.expr);
@@ -319,6 +326,14 @@ fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!sy
             const idx = try symbols_mod.ensureSymbol(self, name);
             return self.symbols.items[idx].type_spec;
         },
+        .array_constructor => |ctor| {
+            if (ctor.items.len == 0) return error.UnsupportedArrayConstructor;
+            var spec = try exprTypeSpecCached(self, ctor.items[0]);
+            for (ctor.items[1..]) |item| {
+                spec = mergeArrayConstructorItemTypeSpec(spec, try exprTypeSpecCached(self, item));
+            }
+            return spec;
+        },
         .call_or_subscript => |call| {
             if (self.ref_symbol_index.get(@intFromPtr(expr))) |idx| {
                 const sym = self.symbols.items[idx];
@@ -382,8 +397,33 @@ fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!sy
             }
             return promoteNumericTypeSpec(self, bin.left, bin.right);
         },
-        .implied_do => return error.UnsupportedImpliedDo,
+        .implied_do => |implied| {
+            if (implied.items.len == 0) return error.UnsupportedImpliedDo;
+            var spec = try exprTypeSpecCached(self, implied.items[0]);
+            for (implied.items[1..]) |item| {
+                spec = mergeArrayConstructorItemTypeSpec(spec, try exprTypeSpecCached(self, item));
+            }
+            return spec;
+        },
     }
+}
+
+fn mergeArrayConstructorItemTypeSpec(
+    first: symbols.TypeSpec,
+    next: symbols.TypeSpec,
+) symbols.TypeSpec {
+    if (first.lowered_kind == next.lowered_kind) {
+        if (first.lowered_kind == .character) {
+            if (first.char_len_kind == .deferred) return first;
+            if (next.char_len_kind == .deferred) return next;
+            const first_len = first.char_len orelse return first;
+            const next_len = next.char_len orelse return next;
+            return if (next_len > first_len) next else first;
+        }
+        return first;
+    }
+    const promoted = promoteNumericType(first.lowered_kind, next.lowered_kind);
+    return symbols.TypeSpec.fromResolvedKind(promoted, promoted, null);
 }
 
 pub fn promoteNumericType(left: ast.TypeKind, right: ast.TypeKind) ast.TypeKind {

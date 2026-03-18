@@ -79,7 +79,7 @@ pub fn applyDeclarator(
     if (pointer) {
         sym.is_pointer = true;
     }
-    if (sym.loweredKind() == .derived and sym.type_spec.polymorphic and sym.type_spec.derived_type_name == null and sym.storage != .dummy and !sym.is_allocatable and !sym.is_pointer) {
+    if (sym.loweredKind() == .derived and sym.type_spec.polymorphic and sym.storage != .dummy and !sym.is_allocatable and !sym.is_pointer) {
         return error.InvalidUnlimitedPolymorphicEntity;
     }
 

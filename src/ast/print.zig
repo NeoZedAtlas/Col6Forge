@@ -547,6 +547,15 @@ fn printExpr(writer: anytype, expr: *ast.Expr, depth: usize) !void {
             try printIndent(writer, depth);
             try writer.print("expr literal {s} `{s}`\n", .{ literalKindName(lit.kind), lit.text });
         },
+        .array_constructor => |ctor| {
+            try printIndent(writer, depth);
+            try writer.print("expr array-constructor items({d})\n", .{ctor.items.len});
+            for (ctor.items, 0..) |item, idx| {
+                try printIndent(writer, depth + 1);
+                try writer.print("item[{d}]:\n", .{idx});
+                try printExpr(writer, item, depth + 2);
+            }
+        },
         .call_or_subscript => |call| {
             try printIndent(writer, depth);
             try writer.print("expr call-or-subscript {s} args({d})\n", .{ call.name, call.args.len });

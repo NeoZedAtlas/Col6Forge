@@ -165,7 +165,21 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
                 .implicit_rules = &.{},
                 .resolved_refs = &.{},
             });
-            if (host_symbols_active and unit.*.kind == .program) {
+            if (unitHasContains(unit.*)) {
+                try refreshHostContextFromAnalyzer(
+                    &known_host_symbols,
+                    &known_host_derived_types,
+                    &known_host_interface_sources,
+                    &known_host_abstract_interfaces,
+                    arena,
+                    unit_analyzer.ctx.symbols.items,
+                    &unit_analyzer.ctx.derived_types,
+                    unit.*,
+                );
+                host_symbols_active = true;
+                active_host_owner = unit.name;
+            }
+            if (!unitHasContains(unit.*) and host_symbols_active and unit.*.kind == .program) {
                 known_host_symbols.clearRetainingCapacity();
                 known_host_derived_types.clearRetainingCapacity();
                 known_host_interface_sources.clearRetainingCapacity();
@@ -177,14 +191,16 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
         };
         try units.append(sem_unit);
         if (unitHasContains(unit.*)) {
-            known_host_symbols.clearRetainingCapacity();
-            known_host_derived_types.clearRetainingCapacity();
-            known_host_interface_sources.clearRetainingCapacity();
-            known_host_abstract_interfaces.clearRetainingCapacity();
-            try symbol_lookup.collectHostSymbols(&known_host_symbols, arena, sem_unit.symbols);
-            try collectHostDerivedTypes(&known_host_derived_types, arena, &unit_analyzer.ctx.derived_types);
-            try collectHostExplicitInterfaceSources(&known_host_interface_sources, arena, unit.*);
-            try collectHostAbstractInterfaceProcedures(&known_host_abstract_interfaces, arena, unit.*);
+            try refreshHostContextFromAnalyzer(
+                &known_host_symbols,
+                &known_host_derived_types,
+                &known_host_interface_sources,
+                &known_host_abstract_interfaces,
+                arena,
+                sem_unit.symbols,
+                &unit_analyzer.ctx.derived_types,
+                unit.*,
+            );
             host_symbols_active = true;
             active_host_owner = unit.name;
         } else if (host_symbols_active and unit.*.kind == .program) {
@@ -199,6 +215,26 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
     if (first_error) |err| return err;
     try common_validation.validateCommonBlocksWithDiagnostics(arena, mutable_program, units.items, diag_bag);
     return .{ .units = try units.toOwnedSlice() };
+}
+
+fn refreshHostContextFromAnalyzer(
+    known_host_symbols: *std.StringHashMap(symbols.Symbol),
+    known_host_derived_types: *std.StringHashMap(context.Context.DerivedTypeInfo),
+    known_host_interface_sources: *std.StringHashMap(ast.DeclSource),
+    known_host_abstract_interfaces: *std.StringHashMap(void),
+    arena: std.mem.Allocator,
+    host_symbols: []const symbols.Symbol,
+    derived_types: *const std.StringHashMap(context.Context.DerivedTypeInfo),
+    unit: ast.ProgramUnit,
+) !void {
+    known_host_symbols.clearRetainingCapacity();
+    known_host_derived_types.clearRetainingCapacity();
+    known_host_interface_sources.clearRetainingCapacity();
+    known_host_abstract_interfaces.clearRetainingCapacity();
+    try symbol_lookup.collectHostSymbols(known_host_symbols, arena, host_symbols);
+    try collectHostDerivedTypes(known_host_derived_types, arena, derived_types);
+    try collectHostExplicitInterfaceSources(known_host_interface_sources, arena, unit);
+    try collectHostAbstractInterfaceProcedures(known_host_abstract_interfaces, arena, unit);
 }
 
 fn collectHostDerivedTypes(
@@ -722,6 +758,12 @@ fn inferDummyArgProcedureKindInStmt(node: ast.StmtNode, name: []const u8) ?ast.P
 
 fn inferDummyArgProcedureKindInExpr(expr: *ast.Expr, name: []const u8) ?ast.ProgramUnitKind {
     switch (expr.*) {
+        .array_constructor => |ctor| {
+            for (ctor.items) |item| {
+                if (inferDummyArgProcedureKindInExpr(item, name)) |kind| return kind;
+            }
+            return null;
+        },
         .call_or_subscript => |call| {
             if (std.ascii.eqlIgnoreCase(call.name, name)) return .function;
             for (call.args) |arg| {
@@ -1091,6 +1133,55 @@ test "analyzeProgramWithKnownAndOptionsAndDiagnostics accepts defined assignment
 
     try testing.expectEqual(@as(usize, 4), sem.units.len);
     try testing.expect(diag_bag.take() == null);
+}
+
+test "analyzeProgram preserves host derived types for contained functions after host failure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  type :: t\n" ++
+        "  end type t\n" ++
+        "  integer :: i\n" ++
+        "  allocate(i)\n" ++
+        "contains\n" ++
+        "  function f()\n" ++
+        "    class(t), allocatable :: f\n" ++
+        "  end function\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_bag = diagnostic.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    try testing.expectError(
+        error.UnsupportedAllocateSyntax,
+        analyzeProgramWithKnownAndOptionsAndDiagnostics(
+            arena.allocator(),
+            program,
+            &.{},
+            &.{},
+            .{},
+            &diag_bag,
+        ),
+    );
+
+    var saw_allocate_error = false;
+    while (diag_bag.take()) |diag| {
+        defer diag_bag.release(diag);
+        if (std.mem.eql(u8, diag.message, "invalid type for function result")) {
+            return error.TestUnexpectedResult;
+        }
+        if (std.mem.eql(u8, diag.message, "must be ALLOCATABLE or a POINTER")) {
+            saw_allocate_error = true;
+        }
+    }
+    try testing.expect(saw_allocate_error);
 }
 
 test "analyzeProgram accepts renamed derived types imported through module preludes without contains" {

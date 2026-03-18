@@ -44,6 +44,7 @@ pub const CloseStmt = ast.CloseStmt;
 pub const AllocateTypeSpec = ast.AllocateTypeSpec;
 pub const AllocateStmt = ast.AllocateStmt;
 pub const AllocateItem = ast.AllocateItem;
+pub const AllocationOption = ast.AllocationOption;
 pub const DeallocateStmt = ast.DeallocateStmt;
 pub const ControlItem = ast.ControlItem;
 pub const RewindStmt = ast.RewindStmt;
@@ -74,6 +75,7 @@ pub const AssignedGotoStmt = ast.AssignedGotoStmt;
 pub const DoLoopStmt = ast.DoLoopStmt;
 pub const DoInfiniteStmt = ast.DoInfiniteStmt;
 pub const ImpliedDo = ast.ImpliedDo;
+pub const ArrayConstructor = ast.ArrayConstructor;
 pub const SourceRef = ast.SourceRef;
 pub const ExprSource = ast.ExprSource;
 

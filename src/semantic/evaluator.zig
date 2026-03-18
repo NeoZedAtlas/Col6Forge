@@ -44,6 +44,7 @@ pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
                 .assumed_size => null,
             };
         },
+        .array_constructor => return null,
         .identifier => |name| {
             if (resolver) |res| return res.resolve(name);
             return null;

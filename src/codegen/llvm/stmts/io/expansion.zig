@@ -424,6 +424,13 @@ fn cloneExprWithSubst(
             }
             cloned.* = .{ .identifier = ident };
         },
+        .array_constructor => |ctor| {
+            const items = try allocator.alloc(*ast.Expr, ctor.items.len);
+            for (ctor.items, 0..) |item, idx| {
+                items[idx] = try cloneExprWithSubst(ctx, allocator, item, name, replacement);
+            }
+            cloned.* = .{ .array_constructor = .{ .items = items } };
+        },
         .literal => |lit| {
             cloned.* = .{ .literal = lit };
         },

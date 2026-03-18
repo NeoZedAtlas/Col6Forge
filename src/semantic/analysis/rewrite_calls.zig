@@ -237,6 +237,9 @@ fn rewriteExpr(
     var changed = false;
     switch (expr.*) {
         .identifier, .literal => {},
+        .array_constructor => |*ctor| {
+            for (ctor.items) |item| changed = (try rewriteExpr(ctx, state, item, source_stmt, prelude, allow_prelude)) or changed;
+        },
         .unary => |*un| {
             changed = (try rewriteExpr(ctx, state, un.expr, source_stmt, prelude, allow_prelude)) or changed;
         },
@@ -373,6 +376,7 @@ fn isArrayValuedExpr(ctx: *context.Context, expr: *ast.Expr) bool {
             const idx = resolve_symbols.findSymbolIndex(ctx, name) orelse return false;
             return ctx.symbols.items[idx].dims.len > 0;
         },
+        .array_constructor => return true,
         .literal => return false,
         .unary => |un| return isArrayValuedExpr(ctx, un.expr),
         .binary => |bin| return isArrayValuedExpr(ctx, bin.left) or isArrayValuedExpr(ctx, bin.right),
@@ -649,6 +653,13 @@ fn cloneExpr(ctx: *context.Context, node: *ast.Expr) !*ast.Expr {
     const cloned = try ctx.arena.create(ast.Expr);
     switch (node.*) {
         .identifier => |name| cloned.* = .{ .identifier = name },
+        .array_constructor => |ctor| {
+            const items = try ctx.arena.alloc(*ast.Expr, ctor.items.len);
+            for (ctor.items, 0..) |item, idx| {
+                items[idx] = try cloneExpr(ctx, item);
+            }
+            cloned.* = .{ .array_constructor = .{ .items = items } };
+        },
         .literal => |lit| cloned.* = .{ .literal = lit },
         .unary => |un| {
             const expr_node = try cloneExpr(ctx, un.expr);

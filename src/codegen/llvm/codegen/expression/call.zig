@@ -1219,6 +1219,7 @@ fn isArrayValuedExpr(ctx: *Context, expr: *Expr) bool {
             const sym = ctx.findSymbol(name) orelse return false;
             return sym.dims.len > 0;
         },
+        .array_constructor => return true,
         .literal => return false,
         .unary => |un| return isArrayValuedExpr(ctx, un.expr),
         .binary => |bin| return isArrayValuedExpr(ctx, bin.left) or isArrayValuedExpr(ctx, bin.right),

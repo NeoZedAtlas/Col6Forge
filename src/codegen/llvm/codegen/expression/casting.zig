@@ -215,6 +215,10 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
             const sym = ctx.findSymbol(name) orelse return error.UnknownSymbol;
             return ctx.typeFromKind(sym.loweredKind());
         },
+        .array_constructor => |ctor| {
+            if (ctor.items.len == 0) return error.UnsupportedArrayConstructor;
+            return exprType(ctx, ctor.items[0]);
+        },
         .literal => |lit| return switch (lit.kind) {
             .integer => ctx.defaultIntegerIRType(),
             .real => utils.realLiteralType(lit.text),

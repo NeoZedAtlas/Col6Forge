@@ -94,6 +94,7 @@ pub const CharFormat = format_nodes.CharFormat;
 pub const LogicalFormat = format_nodes.LogicalFormat;
 
 pub const ImpliedDo = expr_nodes.ImpliedDo;
+pub const ArrayConstructor = expr_nodes.ArrayConstructor;
 pub const SourceRef = expr_nodes.SourceRef;
 pub const Expr = expr_nodes.Expr;
 pub const ExprSource = expr_nodes.ExprSource;

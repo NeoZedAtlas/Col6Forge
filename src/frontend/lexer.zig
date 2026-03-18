@@ -15,6 +15,8 @@ pub const TokenKind = enum {
     power,
     l_paren,
     r_paren,
+    l_bracket,
+    r_bracket,
     comma,
     colon,
     percent,
@@ -118,6 +120,8 @@ pub fn tokenKindName(kind: TokenKind) []const u8 {
         .power => "power",
         .l_paren => "l_paren",
         .r_paren => "r_paren",
+        .l_bracket => "l_bracket",
+        .r_bracket => "r_bracket",
         .comma => "comma",
         .colon => "colon",
         .percent => "percent",
@@ -261,9 +265,8 @@ fn lexLogicalLineImpl(
         }
 
         switch (ch) {
-            ';', '[', ']' => {
-                // Free-form statement separators and modern array-constructor
-                // delimiters are tolerated at lex time.
+            ';' => {
+                // Free-form statement separators are tolerated at lex time.
                 i += 1;
             },
             '(' => {
@@ -272,6 +275,14 @@ fn lexLogicalLineImpl(
             },
             ')' => {
                 try tokens.append(makeToken(line, .r_paren, i, i + 1));
+                i += 1;
+            },
+            '[' => {
+                try tokens.append(makeToken(line, .l_bracket, i, i + 1));
+                i += 1;
+            },
+            ']' => {
+                try tokens.append(makeToken(line, .r_bracket, i, i + 1));
                 i += 1;
             },
             ',' => {
@@ -568,7 +579,7 @@ test "lexLogicalLine tolerates semicolon and bracket delimiters" {
     defer allocator.free(tokens);
 
     const expected = [_]TokenKind{
-        .identifier, .l_paren, .integer, .r_paren, .identifier, .equals, .integer, .comma, .integer,
+        .identifier, .l_paren, .integer, .r_paren, .identifier, .equals, .l_bracket, .integer, .comma, .integer, .r_bracket,
     };
     try testing.expectEqual(expected.len, tokens.len);
     for (tokens, 0..) |tok, idx| {

@@ -1135,6 +1135,34 @@ test "parseStatement parses ALLOCATE items" {
     try testing.expectEqual(@as(usize, 1), idx);
 }
 
+test "parseStatement parses ALLOCATE item with section range" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      ALLOCATE(A(1:2), MOLD=B(1,:))\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .allocate);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.allocate.items.len);
+    try testing.expect(stmt_node.node.allocate.items[0].target.* == .identifier);
+    try testing.expectEqualStrings("A", stmt_node.node.allocate.items[0].target.identifier);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.allocate.items[0].dims.len);
+    try testing.expect(stmt_node.node.allocate.items[0].dims[0].* == .dim_range);
+    try testing.expectEqual(@as(usize, 1), stmt_node.node.allocate.options.len);
+    try testing.expect(stmt_node.node.allocate.options[0].value.* == .call_or_subscript);
+    try testing.expectEqual(@as(usize, 1), idx);
+}
+
 test "parseStatement parses ALLOCATE type-spec for scalar character object" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1295,6 +1323,46 @@ test "parseStatement parses DEALLOCATE options" {
     try testing.expectEqual(@as(usize, 2), stmt_node.node.deallocate.options.len);
     try testing.expectEqual(ast.AllocationOptionKind.stat, stmt_node.node.deallocate.options[0].kind);
     try testing.expectEqual(ast.AllocationOptionKind.errmsg, stmt_node.node.deallocate.options[1].kind);
+}
+
+test "parseStatement rejects trailing tokens after DEALLOCATE" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      DEALLOCATE(A))\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    var lex_diag_bag = lexer.Bag.init(arena.allocator());
+    defer lex_diag_bag.deinit();
+
+    try testing.expectError(
+        error.UnexpectedToken,
+        parseStatementWithDiagnostics(
+            arena.allocator(),
+            lines,
+            &idx,
+            &do_ctx,
+            &param_ints,
+            &param_strings,
+            &array_names,
+            &diag_bag,
+            &lex_diag_bag,
+        ),
+    );
+
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
+    try testing.expectEqualStrings("Syntax error in DEALLOCATE", diag.message);
 }
 
 test "parseStatement parses WHERE as where_stmt" {
