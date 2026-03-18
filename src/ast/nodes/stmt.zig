@@ -19,6 +19,7 @@ pub const StmtNode = union(enum) {
     pointer_assignment: PointerAssignment,
     nullify: NullifyStmt,
     associate_block: AssociateBlock,
+    select_type_block: SelectTypeBlock,
     assign_label: AssignLabelStmt,
     use_stmt: UseStmt,
     call: CallStmt,
@@ -73,6 +74,27 @@ pub const AssociateBinding = struct {
 pub const AssociateBlock = struct {
     bindings: []AssociateBinding,
     stmts: []Stmt,
+};
+
+pub const SelectTypeClauseKind = enum {
+    type_is,
+    class_is,
+    class_default,
+};
+
+pub const SelectTypeClause = struct {
+    kind: SelectTypeClauseKind,
+    type_kind: ?@import("decl.zig").TypeKind = null,
+    derived_type_name: ?[]const u8 = null,
+    stmts: []Stmt,
+    source: SourceRef = .{},
+};
+
+pub const SelectTypeBlock = struct {
+    selector: *Expr,
+    associate_name: ?[]const u8 = null,
+    leading_stmts: []Stmt = &.{},
+    clauses: []SelectTypeClause,
 };
 
 pub const AssignLabelStmt = struct {

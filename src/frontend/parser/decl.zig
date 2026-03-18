@@ -17,7 +17,18 @@ const ImplicitRule = ast.ImplicitRule;
 const Declarator = ast.Declarator;
 
 pub fn isDeclarationStart(lp: LineParser) bool {
-    if (lp.isKeywordSplit("INTEGER") or lp.isKeywordSplit("REAL") or lp.isKeywordSplit("COMPLEX") or lp.isKeywordSplit("LOGICAL") or lp.isKeywordSplit("CHARACTER") or lp.isKeywordSplit("CLASS") or lp.isKeywordSplit("BYTE")) {
+    if (lp.isKeywordSplit("TYPE")) {
+        var scan = lp;
+        _ = scan.consumeKeyword("TYPE");
+        if (scan.isKeywordSplit("IS")) return false;
+    }
+    if (lp.isKeywordSplit("CLASS")) {
+        var scan = lp;
+        _ = scan.consumeKeyword("CLASS");
+        if (scan.isKeywordSplit("IS") or scan.isKeywordSplit("DEFAULT")) return false;
+        return true;
+    }
+    if (lp.isKeywordSplit("INTEGER") or lp.isKeywordSplit("REAL") or lp.isKeywordSplit("COMPLEX") or lp.isKeywordSplit("LOGICAL") or lp.isKeywordSplit("CHARACTER") or lp.isKeywordSplit("BYTE")) {
         return true;
     }
     if (isDoubleComplexTypeStart(lp)) return true;

@@ -227,6 +227,20 @@ pub fn parseStatementWithDiagnostics(
         setStmtSourceIfMissing(&stmt, line);
         return stmt;
     }
+    if (select_type.isSelectTypeClauseLine(lp)) {
+        const message = if (lp.isKeywordSplit("TYPE"))
+            "Unexpected TYPE IS statement"
+        else if (lp.isKeywordSplit("CLASSDEFAULT") or (lp.isKeywordSplit("CLASS") and blk: {
+            var scan = lp;
+            _ = scan.consumeKeyword("CLASS");
+            break :blk scan.isKeywordSplit("DEFAULT");
+        }))
+            "Unexpected CLASS DEFAULT statement"
+        else
+            "Syntax error in CLASS IS";
+        diag_bag.set(line.span.start_line, defaultSourceColumn(line), catalog.parser.unexpected_token.code, message, line.text);
+        return error.UnexpectedToken;
+    }
     const action_node = action_stmt.parseActionStmtNode(arena, line, &lp, do_ctx, .top_level, actionCallbacks()) catch |err| {
         if (!diag_bag.has()) setParseDiagnosticFromStream(diag_bag, line, lp, err);
         return err;

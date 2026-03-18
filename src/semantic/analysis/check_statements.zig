@@ -62,10 +62,10 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             }
         },
         .associate_block => |associate| {
-            for (associate.bindings) |binding| {
-                _ = try checkExprType(self, binding.selector);
-            }
-            for (associate.stmts) |inner| try checkStmt(self, inner);
+            try checkAssociateBlock(self, associate);
+        },
+        .select_type_block => |select_type| {
+            try checkSelectTypeBlock(self, select_type);
         },
         .assign_label => |assign| {
             _ = std.fmt.parseInt(i64, assign.label, 10) catch return error.InvalidLabelValue;
@@ -111,6 +111,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             if (isAbstractInterfaceProcedure(self, call.name)) {
                 return emitNamedProcedureDiagnostic(self, call.name, error.InvalidArgumentCount, "must not be referenced");
             }
+            try checkSpecialCallConstraints(self, call.name, collectCallExprArgsScratch(self, call.args));
             try checkExplicitInterfaceRequirementForCallArgs(self, call.name, call.args, call_idx);
             try checkKnownProcedureCallArity(
                 self,
@@ -293,6 +294,265 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
     }
 }
 
+fn checkAssociateBlock(self: *context.Context, associate: ast.AssociateBlock) CheckError!void {
+    for (associate.bindings) |binding| {
+        _ = try checkExprType(self, binding.selector);
+    }
+    _ = try self.pushScope(.block);
+    defer self.popScope();
+    for (associate.bindings) |binding| {
+        const spec = try resolve_expr.exprTypeSpec(self, binding.selector);
+        _ = try resolve_symbols.installAliasSymbol(self, binding.name, spec, resolve_expr.exprRank(self, binding.selector));
+    }
+    for (associate.stmts) |inner| try checkStmt(self, inner);
+}
+
+fn checkSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeBlock) CheckError!void {
+    var first_err: ?anyerror = null;
+    const selector_spec = resolve_expr.exprTypeSpec(self, select_type.selector) catch |err| blk: {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        first_err = err;
+        self.recordSemanticError(err);
+        break :blk symbols.TypeSpec.fromResolvedKind(.integer, .integer, null);
+    };
+    _ = checkExprType(self, select_type.selector) catch |err| blk: {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_err == null) first_err = err;
+        self.recordSemanticError(err);
+        break :blk .integer;
+    };
+    validateSelectTypeSelector(self, select_type.selector, selector_spec) catch |err| {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_err == null) first_err = err;
+    };
+    if (select_type.leading_stmts.len != 0) {
+        const stmt = select_type.leading_stmts[0];
+        self.setDiagnostic(
+            if (stmt.source_line == 0) 1 else stmt.source_line,
+            if (stmt.source_column == 0) 1 else stmt.source_column,
+            catalog.semantic.assignment_type_mismatch.code,
+            "Expected TYPE IS, CLASS IS or END SELECT",
+            stmt.source_text,
+        );
+        if (first_err == null) first_err = error.AssignmentTypeMismatch;
+    }
+    validateSelectTypeClauses(self, selector_spec, select_type.clauses) catch |err| {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_err == null) first_err = err;
+    };
+
+    const alias_name = selectTypeAliasName(select_type);
+    const selector_rank = resolve_expr.exprRank(self, select_type.selector);
+    for (select_type.leading_stmts) |inner| {
+        checkStmt(self, inner) catch |err| {
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_err == null) first_err = err;
+            self.recordSemanticError(err);
+        };
+    }
+    for (select_type.clauses) |clause| {
+        var alias_spec: ?symbols.TypeSpec = null;
+        if (alias_name != null) {
+            alias_spec = selectTypeClauseAliasSpec(self, selector_spec, clause) catch |err| blk: {
+                if (!self.usesExplicitDiagnosticBag()) return err;
+                if (first_err == null) first_err = err;
+                break :blk null;
+            };
+        }
+        {
+            _ = try self.pushScope(.block);
+            defer self.popScope();
+            if (alias_name) |name| {
+                if (alias_spec) |spec| {
+                    _ = try resolve_symbols.installAliasSymbol(self, name, spec, selector_rank);
+                }
+            }
+            for (clause.stmts) |inner| {
+                checkStmt(self, inner) catch |err| {
+                    if (!self.usesExplicitDiagnosticBag()) return err;
+                    if (first_err == null) first_err = err;
+                    self.recordSemanticError(err);
+                };
+            }
+        }
+    }
+    if (first_err) |err| return err;
+}
+
+fn validateSelectTypeSelector(
+    self: *context.Context,
+    selector: *ast.Expr,
+    selector_spec: symbols.TypeSpec,
+) CheckError!void {
+    if (selector.* != .identifier) {
+        const source = self.sourceForExpr(selector) orelse ast.SourceRef{};
+        self.setDiagnostic(
+            if (source.line == 0) 1 else source.line,
+            if (source.column == 0) 1 else source.column,
+            catalog.semantic.assignment_type_mismatch.code,
+            "is not a named variable",
+            source.text,
+        );
+        return error.AssignmentTypeMismatch;
+    }
+    if (selector_spec.lowered_kind != .derived or !selector_spec.polymorphic) {
+        const source = self.sourceForExpr(selector) orelse ast.SourceRef{};
+        self.setDiagnostic(
+            if (source.line == 0) 1 else source.line,
+            if (source.column == 0) 1 else source.column,
+            catalog.semantic.assignment_type_mismatch.code,
+            "Selector shall be polymorphic",
+            source.text,
+        );
+        return error.AssignmentTypeMismatch;
+    }
+}
+
+fn validateSelectTypeClauses(
+    self: *context.Context,
+    selector_spec: symbols.TypeSpec,
+    clauses: []const ast.SelectTypeClause,
+) CheckError!void {
+    var saw_default = false;
+    var seen_type_names = std.StringHashMap(void).init(self.arena);
+    for (clauses) |clause| {
+        switch (clause.kind) {
+            .class_default => {
+                if (saw_default) {
+                    self.setDiagnostic(
+                        if (clause.source.line == 0) 1 else clause.source.line,
+                        if (clause.source.column == 0) 1 else clause.source.column,
+                        catalog.semantic.duplicate_declaration.code,
+                        "cannot be followed by a second DEFAULT CASE",
+                        clause.source.text,
+                    );
+                    return error.DuplicateDeclaration;
+                }
+                saw_default = true;
+            },
+            .type_is, .class_is => {
+                const clause_spec = try selectTypeClauseAliasSpec(self, selector_spec, clause);
+                if (clause.kind == .class_is and clause_spec.lowered_kind != .derived) {
+                    self.setDiagnostic(
+                        if (clause.source.line == 0) 1 else clause.source.line,
+                        if (clause.source.column == 0) 1 else clause.source.column,
+                        catalog.semantic.assignment_type_mismatch.code,
+                        "must be extensible",
+                        clause.source.text,
+                    );
+                    return error.AssignmentTypeMismatch;
+                }
+                if (selector_spec.derived_type_name) |selector_name| {
+                    if (clause_spec.lowered_kind != .derived or clause_spec.derived_type_name == null) {
+                        self.setDiagnostic(
+                            if (clause.source.line == 0) 1 else clause.source.line,
+                            if (clause.source.column == 0) 1 else clause.source.column,
+                            catalog.semantic.assignment_type_mismatch.code,
+                            "must be an extension of",
+                            clause.source.text,
+                        );
+                        return error.AssignmentTypeMismatch;
+                    }
+                    if (!resolve_symbols.isSameOrExtension(self, clause_spec.derived_type_name.?, selector_name)) {
+                        self.setDiagnostic(
+                            if (clause.source.line == 0) 1 else clause.source.line,
+                            if (clause.source.column == 0) 1 else clause.source.column,
+                            catalog.semantic.assignment_type_mismatch.code,
+                            "must be an extension of",
+                            clause.source.text,
+                        );
+                        return error.AssignmentTypeMismatch;
+                    }
+                }
+                if (clause.kind == .type_is and clause_spec.derived_type_name != null) {
+                    const lowered = std.ascii.allocLowerString(self.arena, clause_spec.derived_type_name.?) catch clause_spec.derived_type_name.?;
+                    if (seen_type_names.contains(lowered)) {
+                        self.setDiagnostic(
+                            if (clause.source.line == 0) 1 else clause.source.line,
+                            if (clause.source.column == 0) 1 else clause.source.column,
+                            catalog.semantic.duplicate_declaration.code,
+                            "overlaps with TYPE IS",
+                            clause.source.text,
+                        );
+                        return error.DuplicateDeclaration;
+                    }
+                    try seen_type_names.put(lowered, {});
+                }
+            },
+        }
+    }
+}
+
+fn selectTypeAliasName(select_type: ast.SelectTypeBlock) ?[]const u8 {
+    if (select_type.associate_name) |name| return name;
+    return switch (select_type.selector.*) {
+        .identifier => |name| name,
+        else => null,
+    };
+}
+
+fn selectTypeClauseAliasSpec(
+    self: *context.Context,
+    selector_spec: symbols.TypeSpec,
+    clause: ast.SelectTypeClause,
+) CheckError!symbols.TypeSpec {
+    switch (clause.kind) {
+        .class_default => return selector_spec,
+        .type_is => return try selectTypeClauseResolvedSpec(self, clause, false),
+        .class_is => return (try selectTypeClauseResolvedSpec(self, clause, true)).withPolymorphic(true),
+    }
+}
+
+fn selectTypeClauseResolvedSpec(
+    self: *context.Context,
+    clause: ast.SelectTypeClause,
+    polymorphic: bool,
+) CheckError!symbols.TypeSpec {
+    const kind = clause.type_kind orelse {
+        self.setDiagnostic(
+            if (clause.source.line == 0) 1 else clause.source.line,
+            if (clause.source.column == 0) 1 else clause.source.column,
+            catalog.semantic.assignment_type_mismatch.code,
+            "error in TYPE IS specification",
+            clause.source.text,
+        );
+        return error.AssignmentTypeMismatch;
+    };
+    if (kind == .derived) {
+        const name = clause.derived_type_name orelse {
+            self.setDiagnostic(
+                if (clause.source.line == 0) 1 else clause.source.line,
+                if (clause.source.column == 0) 1 else clause.source.column,
+                catalog.semantic.assignment_type_mismatch.code,
+                "error in TYPE IS specification",
+                clause.source.text,
+            );
+            return error.AssignmentTypeMismatch;
+        };
+        if (!resolve_symbols.hasDerivedType(self, name)) {
+            self.setDiagnostic(
+                if (clause.source.line == 0) 1 else clause.source.line,
+                if (clause.source.column == 0) 1 else clause.source.column,
+                catalog.semantic.assignment_type_mismatch.code,
+                "error in TYPE IS specification",
+                clause.source.text,
+            );
+            return error.AssignmentTypeMismatch;
+        }
+        return symbols.TypeSpec.fromDerived(name).withPolymorphic(polymorphic);
+    }
+    return switch (kind) {
+        .integer => symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
+        .real => symbols.TypeSpec.fromResolvedKind(.real, .real, null),
+        .double_precision => symbols.TypeSpec.fromResolvedKind(.real, .double_precision, null),
+        .complex => symbols.TypeSpec.fromResolvedKind(.complex, .complex, null),
+        .complex_double => symbols.TypeSpec.fromResolvedKind(.complex, .complex_double, null),
+        .logical => symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
+        .character => symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, 1),
+        .derived => unreachable,
+    };
+}
+
 fn checkExpr(self: *context.Context, expr: *ast.Expr) CheckError!void {
     _ = try checkExprType(self, expr);
 }
@@ -333,6 +593,91 @@ fn checkLogicalConditionExpr(self: *context.Context, expr: *ast.Expr) CheckError
         self.setCurrentSource(self.sourceForExpr(expr));
         return error.InvalidConditionType;
     }
+}
+
+fn checkSpecialCallConstraints(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+) CheckError!void {
+    if (!std.ascii.eqlIgnoreCase(name, "move_alloc")) return;
+    if (args.len == 0) return;
+    if (!exprIsAllocatableEntity(self, args[0])) {
+        return emitExprConstraintDiagnostic(self, args[0], "must be ALLOCATABLE");
+    }
+    if (args.len > 1 and !exprIsAllocatableEntity(self, args[1])) {
+        return emitExprConstraintDiagnostic(self, args[1], "must be ALLOCATABLE");
+    }
+}
+
+fn checkSpecialExprCallConstraints(
+    self: *context.Context,
+    name: []const u8,
+    args: []*ast.Expr,
+) CheckError!void {
+    if (std.ascii.eqlIgnoreCase(name, "allocated")) {
+        if (args.len > 0 and !exprIsAllocatableEntity(self, args[0])) {
+            return emitExprConstraintDiagnostic(self, args[0], "must be ALLOCATABLE");
+        }
+        return;
+    }
+    if (std.ascii.eqlIgnoreCase(name, "associated")) {
+        if (args.len > 0 and !exprIsPointerEntity(self, args[0])) {
+            return emitExprConstraintDiagnostic(self, args[0], "must be a POINTER");
+        }
+    }
+}
+
+fn emitExprConstraintDiagnostic(
+    self: *context.Context,
+    expr_node: *ast.Expr,
+    message: []const u8,
+) CheckError {
+    const source = self.sourceForExpr(expr_node) orelse ast.SourceRef{};
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.assignment_type_mismatch.code,
+        message,
+        source.text,
+    );
+    return error.AssignmentTypeMismatch;
+}
+
+fn exprIsAllocatableEntity(self: *context.Context, expr_node: *ast.Expr) bool {
+    return switch (expr_node.*) {
+        .identifier => |name| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse break :blk false;
+            break :blk self.symbols.items[idx].is_allocatable;
+        },
+        .component => |comp| blk: {
+            if (comp.has_parens) break :blk false;
+            const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch break :blk false;
+            if (base_spec.lowered_kind != .derived) break :blk false;
+            const derived_name = base_spec.derived_type_name orelse break :blk false;
+            const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse break :blk false;
+            break :blk component.allocatable;
+        },
+        else => false,
+    };
+}
+
+fn exprIsPointerEntity(self: *context.Context, expr_node: *ast.Expr) bool {
+    return switch (expr_node.*) {
+        .identifier => |name| blk: {
+            const idx = resolve_symbols.findSymbolIndex(self, name) orelse break :blk false;
+            break :blk self.symbols.items[idx].is_pointer;
+        },
+        .component => |comp| blk: {
+            if (comp.has_parens) break :blk false;
+            const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch break :blk false;
+            if (base_spec.lowered_kind != .derived) break :blk false;
+            const derived_name = base_spec.derived_type_name orelse break :blk false;
+            const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse break :blk false;
+            break :blk component.pointer;
+        },
+        else => false,
+    };
 }
 
 fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKind {
@@ -533,6 +878,7 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                 {
                     return emitNamedProcedureDiagnostic(self, call.name, error.InvalidArgumentCount, "no specific function");
                 }
+                try checkSpecialExprCallConstraints(self, call.name, call.args);
                 try checkExplicitInterfaceRequirementForExprArgs(self, call.name, call.args, idx);
                 try checkKnownProcedureCallArity(self, call.name, call.args.len, 0, false, idx);
                 try checkProcedureActualArgsForExprCall(self, call.name, call.args);

@@ -139,7 +139,14 @@ fn emitStmtInner(
             try brIfNeeded(builder, next_block);
             return true;
         },
-        .associate_block => |_| return error.ControlFlowUnsupported,
+        .associate_block => {
+            try brIfNeeded(builder, next_block);
+            return true;
+        },
+        .select_type_block => {
+            try brIfNeeded(builder, next_block);
+            return true;
+        },
         .assign_label => |assign| {
             try execution.emitAssignLabel(ctx, builder, assign);
             try brIfNeeded(builder, next_block);

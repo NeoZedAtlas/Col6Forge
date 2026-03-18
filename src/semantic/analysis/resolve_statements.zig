@@ -41,10 +41,10 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             }
         },
         .associate_block => |associate| {
-            for (associate.bindings) |binding| {
-                try expressions.resolveExpr(self, binding.selector);
-            }
-            for (associate.stmts) |inner| try resolveStmt(self, inner);
+            try resolveAssociateBlock(self, associate);
+        },
+        .select_type_block => |select_type| {
+            try resolveSelectTypeBlock(self, select_type);
         },
         .assign_label => |assign| {
             _ = try symbols_mod.ensureSymbol(self, assign.target);
@@ -229,6 +229,81 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
             }
         },
     }
+}
+
+fn resolveAssociateBlock(self: *context.Context, associate: ast.AssociateBlock) ResolveError!void {
+    for (associate.bindings) |binding| {
+        try expressions.resolveExpr(self, binding.selector);
+    }
+    _ = try self.pushScope(.block);
+    defer self.popScope();
+    for (associate.bindings) |binding| {
+        const spec = try expressions.exprTypeSpec(self, binding.selector);
+        const rank = expressions.exprRank(self, binding.selector);
+        _ = try symbols_mod.installAliasSymbol(self, binding.name, spec, rank);
+    }
+    for (associate.stmts) |inner| try resolveStmt(self, inner);
+}
+
+fn resolveSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeBlock) ResolveError!void {
+    try expressions.resolveExpr(self, select_type.selector);
+    const selector_spec = try expressions.exprTypeSpec(self, select_type.selector);
+    const selector_rank = expressions.exprRank(self, select_type.selector);
+    for (select_type.leading_stmts) |inner| try resolveStmt(self, inner);
+    for (select_type.clauses) |clause| {
+        {
+            _ = try self.pushScope(.block);
+            defer self.popScope();
+            if (selectTypeAliasName(select_type)) |alias_name| {
+                const alias_spec = try selectTypeClauseAliasSpec(self, selector_spec, clause);
+                _ = try symbols_mod.installAliasSymbol(self, alias_name, alias_spec, selector_rank);
+            }
+            for (clause.stmts) |inner| try resolveStmt(self, inner);
+        }
+    }
+}
+
+fn selectTypeAliasName(select_type: ast.SelectTypeBlock) ?[]const u8 {
+    if (select_type.associate_name) |name| return name;
+    return switch (select_type.selector.*) {
+        .identifier => |name| name,
+        else => null,
+    };
+}
+
+fn selectTypeClauseAliasSpec(
+    self: *context.Context,
+    selector_spec: symbols.TypeSpec,
+    clause: ast.SelectTypeClause,
+) ResolveError!symbols.TypeSpec {
+    switch (clause.kind) {
+        .class_default => return selector_spec,
+        .type_is => return try selectTypeClauseResolvedSpec(self, clause, false),
+        .class_is => return (try selectTypeClauseResolvedSpec(self, clause, true)).withPolymorphic(true),
+    }
+}
+
+fn selectTypeClauseResolvedSpec(
+    self: *context.Context,
+    clause: ast.SelectTypeClause,
+    polymorphic: bool,
+) ResolveError!symbols.TypeSpec {
+    const kind = clause.type_kind orelse return error.UnexpectedTypeDecl;
+    if (kind == .derived) {
+        const name = clause.derived_type_name orelse return error.UnexpectedTypeDecl;
+        if (!symbols_mod.hasDerivedType(self, name)) return error.UnexpectedTypeDecl;
+        return symbols.TypeSpec.fromDerived(name).withPolymorphic(polymorphic);
+    }
+    return switch (kind) {
+        .integer => symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
+        .real => symbols.TypeSpec.fromResolvedKind(.real, .real, null),
+        .double_precision => symbols.TypeSpec.fromResolvedKind(.real, .double_precision, null),
+        .complex => symbols.TypeSpec.fromResolvedKind(.complex, .complex, null),
+        .complex_double => symbols.TypeSpec.fromResolvedKind(.complex, .complex_double, null),
+        .logical => symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
+        .character => symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, 1),
+        .derived => unreachable,
+    };
 }
 
 fn installUseImports(self: *context.Context, use_stmt: ast.UseStmt) ResolveError!void {

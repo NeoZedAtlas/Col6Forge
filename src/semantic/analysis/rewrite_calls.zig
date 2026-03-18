@@ -63,6 +63,14 @@ fn lowerAssociateStmtList(
                 changed = true;
                 if (lowered_body.changed) changed = true;
             },
+            .select_type_block => |select_type| {
+                for (select_type.clauses) |clause| {
+                    const lowered_body = try lowerAssociateStmtList(ctx, clause.stmts, aliases);
+                    try out.appendSlice(lowered_body.stmts);
+                    changed = true;
+                    if (lowered_body.changed) changed = true;
+                }
+            },
             else => {
                 var stmt_copy = stmt;
                 const stmt_changed = try substituteStmtAliases(ctx, &stmt_copy, aliases);
@@ -95,6 +103,7 @@ fn substituteStmtAliases(
                 return false;
             },
             .associate_block => unreachable,
+            .select_type_block => unreachable,
             else => return false,
         }
     }
@@ -385,6 +394,7 @@ fn substituteStmtAliases(
             }
         },
         .associate_block => unreachable,
+        .select_type_block => unreachable,
         .assign_label,
         .use_stmt,
         .format,
@@ -812,6 +822,16 @@ fn rewriteStmt(
             if (body_result.changed) {
                 associate.stmts = body_result.stmts;
                 changed = true;
+            }
+        },
+        .select_type_block => |*select_type| {
+            changed = (try rewriteExpr(ctx, state, select_type.selector, stmt.*, prelude, allow_prelude)) or changed;
+            for (select_type.clauses) |*clause| {
+                const body_result = try rewriteStmtList(ctx, state, clause.stmts, allow_prelude);
+                if (body_result.changed) {
+                    clause.stmts = body_result.stmts;
+                    changed = true;
+                }
             }
         },
         .assign_label => {},

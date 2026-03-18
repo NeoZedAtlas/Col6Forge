@@ -302,6 +302,39 @@ pub fn exprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKi
     return (try exprTypeSpecCached(self, expr)).lowered_kind;
 }
 
+pub fn exprRank(self: *context.Context, expr: *ast.Expr) usize {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const idx = symbols_mod.findSymbolIndex(self, name) orelse break :blk 0;
+            break :blk self.symbols.items[idx].dims.len;
+        },
+        .array_constructor => 1,
+        .call_or_subscript => |call| blk: {
+            const idx = self.ref_symbol_index.get(@intFromPtr(expr)) orelse
+                (symbols_mod.findSymbolIndex(self, call.name) orelse break :blk 0);
+            const sym = self.symbols.items[idx];
+            const kind: ResolvedRefKind = refKindIndex(self, @intFromPtr(expr)) orelse
+                (if (sym.dims.len > 0) ResolvedRefKind.subscript else ResolvedRefKind.call);
+            if (kind == .subscript) break :blk 0;
+            if (symbols_mod.lookupKnownProcedureSig(self, call.name)) |sig| {
+                break :blk sig.result_rank;
+            }
+            break :blk sym.dims.len;
+        },
+        .component => |comp| blk: {
+            const base_spec = exprTypeSpec(self, comp.base) catch break :blk 0;
+            if (base_spec.lowered_kind != .derived) break :blk 0;
+            const derived_name = base_spec.derived_type_name orelse break :blk 0;
+            const component = symbols_mod.lookupDerivedComponent(self, derived_name, comp.name) orelse break :blk 0;
+            break :blk if (comp.args.len == 0) component.dims.len else 0;
+        },
+        .unary => |un| exprRank(self, un.expr),
+        .binary => |bin| @max(exprRank(self, bin.left), exprRank(self, bin.right)),
+        .implied_do => 1,
+        else => 0,
+    };
+}
+
 fn exprTypeCached(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
     return (try exprTypeSpecCached(self, expr)).lowered_kind;
 }

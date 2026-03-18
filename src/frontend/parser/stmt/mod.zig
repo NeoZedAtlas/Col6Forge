@@ -630,7 +630,7 @@ test "parseStatement handles SELECT CASE and lowers to if_block chain" {
     try testing.expect(root.else_stmts[0].node == .assignment);
 }
 
-test "parseStatement skips SELECT TYPE with associate-name selector" {
+test "parseStatement parses SELECT TYPE with associate-name selector" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -652,7 +652,13 @@ test "parseStatement skips SELECT TYPE with associate-name selector" {
     var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
 
     const stmt1 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
-    try testing.expect(stmt1.node == .cont);
+    try testing.expect(stmt1.node == .select_type_block);
+    try testing.expectEqualStrings("Z", stmt1.node.select_type_block.associate_name.?);
+    try testing.expectEqual(@as(usize, 1), stmt1.node.select_type_block.clauses.len);
+    try testing.expectEqual(ast.SelectTypeClauseKind.type_is, stmt1.node.select_type_block.clauses[0].kind);
+    try testing.expectEqual(ast.TypeKind.real, stmt1.node.select_type_block.clauses[0].type_kind.?);
+    try testing.expectEqual(@as(usize, 1), stmt1.node.select_type_block.clauses[0].stmts.len);
+    try testing.expect(stmt1.node.select_type_block.clauses[0].stmts[0].node == .assignment);
     try testing.expectEqual(@as(usize, 4), idx);
 
     const stmt2 = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);

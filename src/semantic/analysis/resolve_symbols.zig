@@ -198,6 +198,27 @@ pub fn ensureDeclaredSymbol(self: *context.Context, name: []const u8) !usize {
     return internSymbol(self, symbol);
 }
 
+pub fn installAliasSymbol(
+    self: *context.Context,
+    name: []const u8,
+    spec: TypeSpec,
+    rank: usize,
+) !usize {
+    const dims: []*ast.Expr = if (rank == 0) &.{} else blk: {
+        const out = try self.arena.alloc(*ast.Expr, rank);
+        var idx: usize = 0;
+        while (idx < rank) : (idx += 1) {
+            const dim_expr = try self.arena.create(ast.Expr);
+            dim_expr.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+            out[idx] = dim_expr;
+        }
+        break :blk out;
+    };
+    var symbol = Symbol.init(name, spec, dims, .variable, .local);
+    symbol.type_explicit = true;
+    return internSymbol(self, symbol);
+}
+
 pub fn internSymbol(self: *context.Context, symbol: Symbol) !usize {
     if (self.current_scope == null) return error.MissingScope;
     const scope_id = self.current_scope.?;

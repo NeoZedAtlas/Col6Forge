@@ -105,7 +105,6 @@ pub const Resolver = struct {
         }
         try validateAssumedCharacterLengths(ctx);
         try resolve_data.lowerDataStatements(ctx);
-        try rewrite_calls.lowerAssociateBlocks(ctx);
         // First pass resolves statement-level symbol/shape ambiguity (e.g. statement
         // function disambiguation) before intrinsic-array conversion lowering.
         for (ctx.unit.stmts) |stmt| {
