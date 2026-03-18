@@ -42,6 +42,8 @@ pub const Resolver = struct {
                     .name = decl.derived_type_def.name,
                     .parent_name = decl.derived_type_def.parent_name,
                     .abstract = decl.derived_type_def.abstract,
+                    .sequence = decl.derived_type_def.sequence,
+                    .bind_c = decl.derived_type_def.bind_c,
                     .components = try buildDerivedComponentInfo(ctx, decl.derived_type_def),
                     .bindings = try buildDerivedBindingInfo(ctx, decl.derived_type_def, decl_source),
                 });

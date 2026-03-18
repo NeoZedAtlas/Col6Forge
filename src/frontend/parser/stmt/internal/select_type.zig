@@ -60,14 +60,35 @@ fn lexLine(
 }
 
 pub fn isSelectTypeStart(lp: LineParser) bool {
-    if (!lp.isKeywordSplit("SELECT")) return false;
     var scan = lp;
+    consumeOptionalBlockName(&scan);
+    if (!scan.isKeywordSplit("SELECT")) return false;
     _ = scan.consumeKeyword("SELECT");
     return scan.isKeywordSplit("TYPE");
 }
 
 fn isSelectStart(lp: LineParser) bool {
     return isSelectTypeStart(lp) or select_case.isSelectCaseStart(lp);
+}
+
+fn consumeOptionalBlockName(lp: *LineParser) void {
+    if (lp.peek()) |tok| {
+        if (tok.kind == .identifier and lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .colon) {
+            _ = lp.next();
+            _ = lp.next();
+        }
+    }
+}
+
+fn parseOptionalBlockName(lp: *LineParser, arena: std.mem.Allocator) ?[]const u8 {
+    if (lp.peek()) |tok| {
+        if (tok.kind == .identifier and lp.index + 1 < lp.tokens.len and lp.tokens[lp.index + 1].kind == .colon) {
+            const name = lp.readName(arena) orelse return null;
+            _ = lp.next();
+            return name;
+        }
+    }
+    return null;
 }
 
 fn isEndSelectLine(lp: LineParser) bool {
@@ -167,11 +188,29 @@ fn parseSelectTypeClauseSpec(
         clause.derived_type_name = lp.readName(arena) orelse return error.MissingName;
     }
 
+    if (clause.type_kind != .derived and lp.peekIs(.l_paren)) {
+        try consumeBalancedParens(lp);
+    }
+
     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     return clause;
 }
 
-fn parseSelectTypeClauseHeader(
+fn consumeBalancedParens(lp: *LineParser) anyerror!void {
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+    var depth: usize = 1;
+    while (depth > 0) {
+        const tok = lp.peek() orelse return error.UnexpectedToken;
+        _ = lp.next();
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => depth -= 1,
+            else => {},
+        }
+    }
+}
+
+pub fn parseSelectTypeClauseHeader(
     lp: *LineParser,
     arena: std.mem.Allocator,
 ) anyerror!ast.SelectTypeClause {
@@ -190,7 +229,28 @@ fn parseSelectTypeClauseHeader(
         if (!lp.consumeKeyword("CLASS")) return error.UnexpectedToken;
     }
     if (!lp.consumeKeyword("IS")) return error.UnexpectedToken;
-    return parseSelectTypeClauseSpec(lp, arena, kind);
+    var clause = try parseSelectTypeClauseSpec(lp, arena, kind);
+    if (lp.peek()) |_| {
+        clause.has_trailing_tokens = true;
+        if (lp.peek()) |tok| {
+            if (tok.kind == .identifier) {
+                clause.trailing_name = lp.readName(arena);
+            }
+        }
+    }
+    return clause;
+}
+
+pub fn parseOrphanSelectTypeClauseStatement(
+    arena: std.mem.Allocator,
+    label: ?[]const u8,
+    lp: *LineParser,
+) anyerror!Stmt {
+    const clause = try parseSelectTypeClauseHeader(lp, arena);
+    return .{
+        .label = label,
+        .node = .{ .orphan_select_type_clause = clause },
+    };
 }
 
 fn parseSelectTypeClauseBody(
@@ -234,6 +294,7 @@ pub fn parseSelectTypeStatement(
     lex_diag_bag: *lexer.Bag,
     parse_statement_fn: ParseStatementFn,
 ) anyerror!Stmt {
+    const construct_name = parseOptionalBlockName(lp, arena);
     if (!lp.consumeKeyword("SELECT")) return error.UnexpectedToken;
     if (!lp.consumeKeyword("TYPE")) return error.UnexpectedToken;
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
@@ -256,6 +317,19 @@ pub fn parseSelectTypeStatement(
                 .node = .{ .select_type_block = .{
                     .selector = parsed_selector.selector,
                     .associate_name = parsed_selector.associate_name,
+                    .construct_name = construct_name,
+                    .leading_stmts = try leading_stmts.toOwnedSlice(),
+                    .clauses = try clauses.toOwnedSlice(),
+                } },
+            };
+        }
+        if (clauses.items.len == 0 and isSelectStart(scan)) {
+            return .{
+                .label = label,
+                .node = .{ .select_type_block = .{
+                    .selector = parsed_selector.selector,
+                    .associate_name = parsed_selector.associate_name,
+                    .construct_name = construct_name,
                     .leading_stmts = try leading_stmts.toOwnedSlice(),
                     .clauses = try clauses.toOwnedSlice(),
                 } },
@@ -277,7 +351,6 @@ pub fn parseSelectTypeStatement(
         }
 
         var clause = try parseSelectTypeClauseHeader(&scan, arena);
-        if (scan.peek() != null) return error.UnexpectedToken;
         clause.source = .{
             .line = line.span.start_line,
             .column = defaultSourceColumn(line),
@@ -307,6 +380,7 @@ pub fn parseSelectTypeStatement(
                 .node = .{ .select_type_block = .{
                     .selector = parsed_selector.selector,
                     .associate_name = parsed_selector.associate_name,
+                    .construct_name = construct_name,
                     .leading_stmts = try leading_stmts.toOwnedSlice(),
                     .clauses = try clauses.toOwnedSlice(),
                 } },
@@ -320,6 +394,7 @@ pub fn parseSelectTypeStatement(
         .node = .{ .select_type_block = .{
             .selector = parsed_selector.selector,
             .associate_name = parsed_selector.associate_name,
+            .construct_name = construct_name,
             .leading_stmts = try leading_stmts.toOwnedSlice(),
             .clauses = try clauses.toOwnedSlice(),
         } },

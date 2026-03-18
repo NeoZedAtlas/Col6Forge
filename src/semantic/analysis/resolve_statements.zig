@@ -46,6 +46,7 @@ pub fn resolveStmtNode(self: *context.Context, node: ast.StmtNode) ResolveError!
         .select_type_block => |select_type| {
             try resolveSelectTypeBlock(self, select_type);
         },
+        .orphan_select_type_clause => {},
         .assign_label => |assign| {
             _ = try symbols_mod.ensureSymbol(self, assign.target);
         },
@@ -255,7 +256,10 @@ fn resolveSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeBlo
             _ = try self.pushScope(.block);
             defer self.popScope();
             if (selectTypeAliasName(select_type)) |alias_name| {
-                const alias_spec = try selectTypeClauseAliasSpec(self, selector_spec, clause);
+                const alias_spec = selectTypeClauseAliasSpec(self, selector_spec, clause) catch |err| blk: {
+                    if (!self.usesExplicitDiagnosticBag()) return err;
+                    break :blk selector_spec;
+                };
                 _ = try symbols_mod.installAliasSymbol(self, alias_name, alias_spec, selector_rank);
             }
             for (clause.stmts) |inner| try resolveStmt(self, inner);

@@ -71,6 +71,9 @@ fn lowerAssociateStmtList(
                     if (lowered_body.changed) changed = true;
                 }
             },
+            .orphan_select_type_clause => {
+                try out.append(stmt);
+            },
             else => {
                 var stmt_copy = stmt;
                 const stmt_changed = try substituteStmtAliases(ctx, &stmt_copy, aliases);
@@ -104,6 +107,7 @@ fn substituteStmtAliases(
             },
             .associate_block => unreachable,
             .select_type_block => unreachable,
+            .orphan_select_type_clause => return false,
             else => return false,
         }
     }
@@ -395,6 +399,7 @@ fn substituteStmtAliases(
         },
         .associate_block => unreachable,
         .select_type_block => unreachable,
+        .orphan_select_type_clause,
         .assign_label,
         .use_stmt,
         .format,
@@ -834,6 +839,7 @@ fn rewriteStmt(
                 }
             }
         },
+        .orphan_select_type_clause => {},
         .assign_label => {},
         .use_stmt => {},
         .call => |*call| {

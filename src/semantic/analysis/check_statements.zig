@@ -43,7 +43,14 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             _ = try checkExprType(self, assign.target);
             _ = try checkExprType(self, assign.value);
             if (!isPointerTarget(self, assign.target)) {
-                self.setCurrentSource(self.sourceForExpr(assign.target));
+                const source = self.sourceForExpr(assign.target) orelse ast.SourceRef{};
+                self.setDiagnostic(
+                    if (source.line == 0) 1 else source.line,
+                    if (source.column == 0) 1 else source.column,
+                    catalog.semantic.assignment_type_mismatch.code,
+                    "Non-POINTER in pointer association context",
+                    source.text,
+                );
                 return error.AssignmentTypeMismatch;
             }
             if (!isPointerValuedExpr(self, assign.value) and !isAddressableDataTargetExpr(self, assign.value)) {
@@ -66,6 +73,22 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
         },
         .select_type_block => |select_type| {
             try checkSelectTypeBlock(self, select_type);
+        },
+        .orphan_select_type_clause => |clause| {
+            const message = switch (clause.kind) {
+                .type_is => "Unexpected TYPE IS statement",
+                .class_is => "Syntax error in CLASS IS",
+                .class_default => "Unexpected CLASS DEFAULT statement",
+            };
+            const stmt = self.current_stmt orelse return error.UnexpectedToken;
+            self.setDiagnostic(
+                if (stmt.source_line == 0) 1 else stmt.source_line,
+                if (stmt.source_column == 0) 1 else stmt.source_column,
+                catalog.parser.unexpected_token.code,
+                message,
+                stmt.source_text,
+            );
+            return error.UnexpectedToken;
         },
         .assign_label => |assign| {
             _ = std.fmt.parseInt(i64, assign.label, 10) catch return error.InvalidLabelValue;
@@ -321,7 +344,7 @@ fn checkSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeBlock
         self.recordSemanticError(err);
         break :blk .integer;
     };
-    validateSelectTypeSelector(self, select_type.selector, selector_spec) catch |err| {
+    validateSelectTypeSelector(self, select_type.selector, select_type.associate_name != null, selector_spec) catch |err| {
         if (!self.usesExplicitDiagnosticBag()) return err;
         if (first_err == null) first_err = err;
     };
@@ -336,7 +359,7 @@ fn checkSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeBlock
         );
         if (first_err == null) first_err = error.AssignmentTypeMismatch;
     }
-    validateSelectTypeClauses(self, selector_spec, select_type.clauses) catch |err| {
+    validateSelectTypeClauses(self, selector_spec, select_type.construct_name, select_type.clauses) catch |err| {
         if (!self.usesExplicitDiagnosticBag()) return err;
         if (first_err == null) first_err = err;
     };
@@ -382,9 +405,32 @@ fn checkSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeBlock
 fn validateSelectTypeSelector(
     self: *context.Context,
     selector: *ast.Expr,
+    has_associate_name: bool,
     selector_spec: symbols.TypeSpec,
 ) CheckError!void {
-    if (selector.* != .identifier) {
+    if (has_associate_name and selector.* == .component) {
+        const base_rank = resolve_expr.exprRank(self, selector.component.base);
+        if (base_rank != 0) {
+            const base_spec = resolve_expr.exprTypeSpec(self, selector.component.base) catch selector_spec;
+            if (base_spec.lowered_kind == .derived) {
+                const derived_name = base_spec.derived_type_name orelse "";
+                if (resolve_symbols.lookupDerivedComponent(self, derived_name, selector.component.name)) |component| {
+                    if (component.type_spec.polymorphic) {
+                        const source = self.sourceForExpr(selector) orelse ast.SourceRef{};
+                        self.setDiagnostic(
+                            if (source.line == 0) 1 else source.line,
+                            if (source.column == 0) 1 else source.column,
+                            catalog.semantic.assignment_type_mismatch.code,
+                            "part reference with nonzero rank",
+                            source.text,
+                        );
+                        return error.AssignmentTypeMismatch;
+                    }
+                }
+            }
+        }
+    }
+    if (!has_associate_name and selector.* != .identifier) {
         const source = self.sourceForExpr(selector) orelse ast.SourceRef{};
         self.setDiagnostic(
             if (source.line == 0) 1 else source.line,
@@ -411,14 +457,30 @@ fn validateSelectTypeSelector(
 fn validateSelectTypeClauses(
     self: *context.Context,
     selector_spec: symbols.TypeSpec,
+    construct_name: ?[]const u8,
     clauses: []const ast.SelectTypeClause,
 ) CheckError!void {
-    var saw_default = false;
-    var seen_type_names = std.StringHashMap(void).init(self.arena);
+    var default_clause_count: usize = 0;
+    var type_clause_counts = std.StringHashMap(usize).init(self.arena);
+    var seen_class_names = std.StringHashMap(void).init(self.arena);
+    for (clauses) |clause| {
+        switch (clause.kind) {
+            .class_default => default_clause_count += 1,
+            .type_is => {
+                if (clause.derived_type_name) |type_name| {
+                    const lowered = std.ascii.allocLowerString(self.arena, type_name) catch type_name;
+                    const count = type_clause_counts.get(lowered) orelse 0;
+                    try type_clause_counts.put(lowered, count + 1);
+                }
+            },
+            .class_is => {},
+        }
+    }
+    var first_err: ?CheckError = null;
     for (clauses) |clause| {
         switch (clause.kind) {
             .class_default => {
-                if (saw_default) {
+                if (default_clause_count > 1) {
                     self.setDiagnostic(
                         if (clause.source.line == 0) 1 else clause.source.line,
                         if (clause.source.column == 0) 1 else clause.source.column,
@@ -426,13 +488,33 @@ fn validateSelectTypeClauses(
                         "cannot be followed by a second DEFAULT CASE",
                         clause.source.text,
                     );
-                    return error.DuplicateDeclaration;
+                    if (first_err == null) first_err = error.DuplicateDeclaration;
                 }
-                saw_default = true;
             },
             .type_is, .class_is => {
-                const clause_spec = try selectTypeClauseAliasSpec(self, selector_spec, clause);
-                if (clause.kind == .class_is and clause_spec.lowered_kind != .derived) {
+                if (clauseHeaderRequiresDiagnostic(self, construct_name, clause)) |err| {
+                    if (first_err == null) first_err = err;
+                }
+                const clause_spec = selectTypeClauseAliasSpec(self, selector_spec, clause) catch |err| {
+                    if (first_err == null) first_err = err;
+                    continue;
+                };
+                if (clause.kind == .type_is and
+                    selector_spec.lowered_kind == .derived and
+                    selector_spec.derived_type_name != null and
+                    clause_spec.lowered_kind != .derived)
+                {
+                    self.setDiagnostic(
+                        if (clause.source.line == 0) 1 else clause.source.line,
+                        if (clause.source.column == 0) 1 else clause.source.column,
+                        catalog.semantic.assignment_type_mismatch.code,
+                        try std.fmt.allocPrint(self.arena, "Unexpected intrinsic type '{s}'", .{selectTypeIntrinsicName(clause.type_kind orelse .integer)}),
+                        clause.source.text,
+                    );
+                    if (first_err == null) first_err = error.AssignmentTypeMismatch;
+                    continue;
+                }
+                if (clause.kind == .class_is and !isExtensibleSelectTypeSpec(self, clause_spec)) {
                     self.setDiagnostic(
                         if (clause.source.line == 0) 1 else clause.source.line,
                         if (clause.source.column == 0) 1 else clause.source.column,
@@ -440,7 +522,8 @@ fn validateSelectTypeClauses(
                         "must be extensible",
                         clause.source.text,
                     );
-                    return error.AssignmentTypeMismatch;
+                    if (first_err == null) first_err = error.AssignmentTypeMismatch;
+                    continue;
                 }
                 if (selector_spec.derived_type_name) |selector_name| {
                     if (clause_spec.lowered_kind != .derived or clause_spec.derived_type_name == null) {
@@ -451,7 +534,8 @@ fn validateSelectTypeClauses(
                             "must be an extension of",
                             clause.source.text,
                         );
-                        return error.AssignmentTypeMismatch;
+                        if (first_err == null) first_err = error.AssignmentTypeMismatch;
+                        continue;
                     }
                     if (!resolve_symbols.isSameOrExtension(self, clause_spec.derived_type_name.?, selector_name)) {
                         self.setDiagnostic(
@@ -461,12 +545,28 @@ fn validateSelectTypeClauses(
                             "must be an extension of",
                             clause.source.text,
                         );
-                        return error.AssignmentTypeMismatch;
+                        if (first_err == null) first_err = error.AssignmentTypeMismatch;
+                        continue;
                     }
+                }
+                if (clause.kind == .class_is and clause_spec.derived_type_name != null) {
+                    const lowered = std.ascii.allocLowerString(self.arena, clause_spec.derived_type_name.?) catch clause_spec.derived_type_name.?;
+                    if (seen_class_names.contains(lowered)) {
+                        self.setDiagnostic(
+                            if (clause.source.line == 0) 1 else clause.source.line,
+                            if (clause.source.column == 0) 1 else clause.source.column,
+                            catalog.semantic.duplicate_declaration.code,
+                            "Double CLASS IS block",
+                            clause.source.text,
+                        );
+                        if (first_err == null) first_err = error.DuplicateDeclaration;
+                        continue;
+                    }
+                    try seen_class_names.put(lowered, {});
                 }
                 if (clause.kind == .type_is and clause_spec.derived_type_name != null) {
                     const lowered = std.ascii.allocLowerString(self.arena, clause_spec.derived_type_name.?) catch clause_spec.derived_type_name.?;
-                    if (seen_type_names.contains(lowered)) {
+                    if ((type_clause_counts.get(lowered) orelse 0) > 1) {
                         self.setDiagnostic(
                             if (clause.source.line == 0) 1 else clause.source.line,
                             if (clause.source.column == 0) 1 else clause.source.column,
@@ -474,13 +574,14 @@ fn validateSelectTypeClauses(
                             "overlaps with TYPE IS",
                             clause.source.text,
                         );
-                        return error.DuplicateDeclaration;
+                        if (first_err == null) first_err = error.DuplicateDeclaration;
+                        continue;
                     }
-                    try seen_type_names.put(lowered, {});
                 }
             },
         }
     }
+    if (first_err) |err| return err;
 }
 
 fn selectTypeAliasName(select_type: ast.SelectTypeBlock) ?[]const u8 {
@@ -508,12 +609,13 @@ fn selectTypeClauseResolvedSpec(
     clause: ast.SelectTypeClause,
     polymorphic: bool,
 ) CheckError!symbols.TypeSpec {
+    const invalid_spec_message = selectTypeClauseInvalidSpecMessage(clause.kind);
     const kind = clause.type_kind orelse {
         self.setDiagnostic(
             if (clause.source.line == 0) 1 else clause.source.line,
             if (clause.source.column == 0) 1 else clause.source.column,
             catalog.semantic.assignment_type_mismatch.code,
-            "error in TYPE IS specification",
+            invalid_spec_message,
             clause.source.text,
         );
         return error.AssignmentTypeMismatch;
@@ -524,7 +626,7 @@ fn selectTypeClauseResolvedSpec(
                 if (clause.source.line == 0) 1 else clause.source.line,
                 if (clause.source.column == 0) 1 else clause.source.column,
                 catalog.semantic.assignment_type_mismatch.code,
-                "error in TYPE IS specification",
+                invalid_spec_message,
                 clause.source.text,
             );
             return error.AssignmentTypeMismatch;
@@ -534,7 +636,7 @@ fn selectTypeClauseResolvedSpec(
                 if (clause.source.line == 0) 1 else clause.source.line,
                 if (clause.source.column == 0) 1 else clause.source.column,
                 catalog.semantic.assignment_type_mismatch.code,
-                "error in TYPE IS specification",
+                invalid_spec_message,
                 clause.source.text,
             );
             return error.AssignmentTypeMismatch;
@@ -551,6 +653,63 @@ fn selectTypeClauseResolvedSpec(
         .character => symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, 1),
         .derived => unreachable,
     };
+}
+
+fn clauseHeaderRequiresDiagnostic(
+    self: *context.Context,
+    construct_name: ?[]const u8,
+    clause: ast.SelectTypeClause,
+) ?CheckError {
+    if (!clause.has_trailing_tokens) return null;
+    if (construct_name) |expected_name| {
+        if (clause.trailing_name) |actual_name| {
+            if (std.ascii.eqlIgnoreCase(actual_name, expected_name)) return null;
+        }
+        self.setDiagnostic(
+            if (clause.source.line == 0) 1 else clause.source.line,
+            if (clause.source.column == 0) 1 else clause.source.column,
+            catalog.semantic.assignment_type_mismatch.code,
+            "Expected block name",
+            clause.source.text,
+        );
+        return error.AssignmentTypeMismatch;
+    }
+    self.setDiagnostic(
+        if (clause.source.line == 0) 1 else clause.source.line,
+        if (clause.source.column == 0) 1 else clause.source.column,
+        catalog.parser.unexpected_token.code,
+        "Syntax error",
+        clause.source.text,
+    );
+    return error.UnexpectedToken;
+}
+
+fn selectTypeClauseInvalidSpecMessage(kind: ast.SelectTypeClauseKind) []const u8 {
+    return switch (kind) {
+        .type_is => "error in TYPE IS specification",
+        .class_is => "error in CLASS IS specification",
+        .class_default => "error in TYPE IS specification",
+    };
+}
+
+fn selectTypeIntrinsicName(kind: ast.TypeKind) []const u8 {
+    return switch (kind) {
+        .integer => "INTEGER",
+        .real => "REAL",
+        .double_precision => "DOUBLE PRECISION",
+        .complex => "COMPLEX",
+        .complex_double => "DOUBLE COMPLEX",
+        .logical => "LOGICAL",
+        .character => "CHARACTER",
+        .derived => "DERIVED",
+    };
+}
+
+fn isExtensibleSelectTypeSpec(self: *context.Context, spec: symbols.TypeSpec) bool {
+    if (spec.lowered_kind != .derived) return false;
+    const derived_name = spec.derived_type_name orelse return false;
+    const derived = resolve_symbols.lookupDerivedType(self, derived_name) orelse return false;
+    return !derived.sequence and !derived.bind_c;
 }
 
 fn checkExpr(self: *context.Context, expr: *ast.Expr) CheckError!void {
@@ -942,6 +1101,7 @@ fn isPointerValuedExpr(self: *context.Context, expr: *ast.Expr) bool {
     return switch (expr.*) {
         .identifier, .component => isPointerTarget(self, expr),
         .call_or_subscript => |call| blk: {
+            if (std.ascii.eqlIgnoreCase(call.name, "null")) break :blk true;
             const idx = symbolIndexForResolvedCall(self, expr) orelse
                 (resolve_symbols.findSymbolIndex(self, call.name) orelse break :blk false);
             const sym = self.symbols.items[idx];

@@ -666,6 +666,33 @@ test "parseStatement parses SELECT TYPE with associate-name selector" {
     try testing.expectEqual(@as(usize, 5), idx);
 }
 
+test "parseStatement preserves SELECT TYPE construct name and clause trailing name" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      LABEL: SELECT TYPE (A)\n" ++
+        "      TYPE IS (REAL) LABEL\n" ++
+        "      END SELECT\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt.node == .select_type_block);
+    try testing.expectEqualStrings("LABEL", stmt.node.select_type_block.construct_name.?);
+    try testing.expectEqual(@as(usize, 1), stmt.node.select_type_block.clauses.len);
+    try testing.expect(stmt.node.select_type_block.clauses[0].has_trailing_tokens);
+    try testing.expectEqualStrings("LABEL", stmt.node.select_type_block.clauses[0].trailing_name.?);
+}
+
 test "parseStatement preserves labeled END SELECT as pending continue" {
     const testing = std.testing;
     const allocator = testing.allocator;

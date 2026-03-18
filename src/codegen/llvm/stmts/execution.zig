@@ -1514,9 +1514,11 @@ fn emitPointerValue(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitE
             break :blk slot;
         },
         .call_or_subscript => |call| blk: {
+            if (std.ascii.eqlIgnoreCase(call.name, "null")) {
+                break :blk .{ .name = "null", .ty = .ptr, .is_ptr = false };
+            }
             const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr_node))) orelse .unknown;
             if (kind == .subscript) {
-                _ = call;
                 break :blk try expr.emitLValue(ctx, builder, expr_node);
             }
             const value = try expr.emitExpr(ctx, builder, expr_node);

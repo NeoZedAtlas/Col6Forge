@@ -20,6 +20,7 @@ pub const StmtNode = union(enum) {
     nullify: NullifyStmt,
     associate_block: AssociateBlock,
     select_type_block: SelectTypeBlock,
+    orphan_select_type_clause: SelectTypeClause,
     assign_label: AssignLabelStmt,
     use_stmt: UseStmt,
     call: CallStmt,
@@ -88,11 +89,14 @@ pub const SelectTypeClause = struct {
     derived_type_name: ?[]const u8 = null,
     stmts: []Stmt,
     source: SourceRef = .{},
+    trailing_name: ?[]const u8 = null,
+    has_trailing_tokens: bool = false,
 };
 
 pub const SelectTypeBlock = struct {
     selector: *Expr,
     associate_name: ?[]const u8 = null,
+    construct_name: ?[]const u8 = null,
     leading_stmts: []Stmt = &.{},
     clauses: []SelectTypeClause,
 };

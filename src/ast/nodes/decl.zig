@@ -82,6 +82,8 @@ pub const DerivedTypeDef = struct {
     name: []const u8,
     parent_name: ?[]const u8 = null,
     abstract: bool = false,
+    sequence: bool = false,
+    bind_c: bool = false,
     components: []const TypeDecl = &.{},
     bindings: []const TypeBoundProcedureBinding = &.{},
 };

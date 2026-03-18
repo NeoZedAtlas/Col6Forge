@@ -31,6 +31,8 @@ pub const Context = struct {
         name: []const u8,
         parent_name: ?[]const u8 = null,
         abstract: bool = false,
+        sequence: bool = false,
+        bind_c: bool = false,
         components: []const ComponentInfo = &.{},
         bindings: []const BindingInfo = &.{},
     };

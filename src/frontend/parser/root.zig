@@ -382,6 +382,11 @@ const Parser = struct {
                     self.index += 1;
                     break;
                 }
+                if (isEndSelectTokens(line, tokens)) {
+                    noteUnexpectedProgramUnitEnd(self.diag_bag, line, header.kind);
+                    self.index += 1;
+                    break;
+                }
                 if (stmt_lp.isKeywordSplit("END") and !isEndDoLine(stmt_lp) and !isEndIfLine(stmt_lp) and !isEndBlockLine(stmt_lp)) {
                     self.index += 1;
                     break;
@@ -514,6 +519,7 @@ const Parser = struct {
         var components = std.array_list.Managed(ast.TypeDecl).init(self.arena);
         var bindings = std.array_list.Managed(ast.TypeBoundProcedureBinding).init(self.arena);
         var in_contains = false;
+        var sequence = false;
 
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
@@ -525,6 +531,8 @@ const Parser = struct {
                     .name = header.name,
                     .parent_name = header.parent_name,
                     .abstract = header.abstract,
+                    .sequence = sequence,
+                    .bind_c = header.bind_c,
                     .components = try components.toOwnedSlice(),
                     .bindings = try bindings.toOwnedSlice(),
                 } };
@@ -532,6 +540,11 @@ const Parser = struct {
             var body_lp = LineParser.init(line, tokens);
             if (body_lp.consumeKeyword("CONTAINS")) {
                 in_contains = true;
+                self.index += 1;
+                continue;
+            }
+            if (!in_contains and body_lp.consumeKeyword("SEQUENCE") and body_lp.peek() == null) {
+                sequence = true;
                 self.index += 1;
                 continue;
             }
@@ -746,6 +759,30 @@ fn noteMissingInterfaceEnd(diag_bag: *parse_diag.Bag, line: logical_line.Logical
 
 fn noteUnexpectedInterfaceEof(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine) void {
     diag_bag.set(line.span.start_line, 1, catalog.parser.unexpected_eof.code, "Unexpected end of file", line.text);
+}
+
+fn isEndSelectTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("END")) return false;
+    return lp.consumeKeyword("SELECT");
+}
+
+fn noteUnexpectedProgramUnitEnd(
+    diag_bag: *parse_diag.Bag,
+    line: logical_line.LogicalLine,
+    kind: ProgramUnitKind,
+) void {
+    diag_bag.set(line.span.start_line, 1, catalog.parser.unexpected_token.code, expectedProgramUnitEndMessage(kind), line.text);
+}
+
+fn expectedProgramUnitEndMessage(kind: ProgramUnitKind) []const u8 {
+    return switch (kind) {
+        .subroutine => "Expecting END SUBROUTINE",
+        .function => "Expecting END FUNCTION",
+        .module => "Expecting END MODULE",
+        .program => "Expecting END PROGRAM",
+        .block_data => "Expecting END BLOCK DATA",
+    };
 }
 
 fn invalidInterfaceEndMessage(interface_name: ?[]const u8) []const u8 {
@@ -1242,6 +1279,7 @@ fn isDerivedTypeStartTokens(line: logical_line.LogicalLine, tokens: []lexer.Toke
     var lp = LineParser.init(line, tokens);
     if (!lp.consumeKeyword("TYPE")) return false;
     if (lp.peekIs(.l_paren)) return false;
+    if (lp.isKeywordSplit("IS")) return false;
     return true;
 }
 
@@ -1255,6 +1293,7 @@ const DerivedTypeHeader = struct {
     name: []const u8,
     parent_name: ?[]const u8 = null,
     abstract: bool = false,
+    bind_c: bool = false,
 };
 
 fn parseDerivedTypeHeader(arena: std.mem.Allocator, lp: *LineParser) !DerivedTypeHeader {
@@ -1278,6 +1317,7 @@ fn parseDerivedTypeHeader(arena: std.mem.Allocator, lp: *LineParser) !DerivedTyp
             _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
             if (!lp.consumeKeyword("C")) return error.UnexpectedToken;
             _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            header.bind_c = true;
             continue;
         }
         return error.UnexpectedToken;

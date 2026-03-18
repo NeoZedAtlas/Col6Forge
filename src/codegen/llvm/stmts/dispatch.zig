@@ -147,6 +147,10 @@ fn emitStmtInner(
             try brIfNeeded(builder, next_block);
             return true;
         },
+        .orphan_select_type_clause => {
+            try brIfNeeded(builder, next_block);
+            return true;
+        },
         .assign_label => |assign| {
             try execution.emitAssignLabel(ctx, builder, assign);
             try brIfNeeded(builder, next_block);

@@ -224,11 +224,7 @@ pub fn parseActionStmtNode(
                 };
             }
             if (isErrorStopStart(lp.*)) {
-                if (!lp.consumeKeyword("ERRORSTOP")) {
-                    _ = lp.consumeKeyword("ERROR");
-                    _ = lp.consumeKeyword("STOP");
-                }
-                return .{ .stop = {} };
+                return try parseStopStatement(arena, lp);
             }
         },
         'F' => {
@@ -269,8 +265,7 @@ pub fn parseActionStmtNode(
         },
         'S' => {
             if (lp.isKeywordSplit("STOP")) {
-                _ = lp.consumeKeyword("STOP");
-                return .{ .stop = {} };
+                return try parseStopStatement(arena, lp);
             }
         },
         'U' => {
@@ -323,6 +318,20 @@ pub fn parsePauseStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!S
         payload = try expr.parseExpr(lp, arena, 0);
     }
     return .{ .pause = .{ .value = payload } };
+}
+
+fn parseStopStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!StmtNode {
+    if (!lp.consumeKeyword("ERRORSTOP")) {
+        if (!lp.consumeKeyword("ERROR")) {
+            _ = lp.consumeKeyword("STOP");
+        } else {
+            _ = lp.consumeKeyword("STOP");
+        }
+    }
+    if (lp.peek() != null) {
+        _ = try expr.parseExpr(lp, arena, 0);
+    }
+    return .{ .stop = {} };
 }
 
 pub fn parseAllocateStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!StmtNode {
