@@ -425,6 +425,8 @@ fn shouldMaterializeParameterArrayLocal(sym: sema.Symbol) bool {
 }
 
 fn emitDeclaratorInitializers(ctx: *Context, builder: anytype, save_info: *const SaveInfo) EmitError!void {
+    try emitParameterArrayInitializers(ctx, builder);
+
     var has_saved_init = false;
     var has_local_init = false;
 
@@ -476,6 +478,16 @@ fn emitDeclaratorInitializers(ctx: *Context, builder: anytype, save_info: *const
     }
 }
 
+fn emitParameterArrayInitializers(ctx: *Context, builder: anytype) EmitError!void {
+    for (ctx.unit.decls) |decl| {
+        if (decl != .parameter) continue;
+        for (decl.parameter.assigns) |assign| {
+            if (!ctx.locals.contains(assign.name)) continue;
+            try emitNamedInitializerAssign(ctx, builder, assign.name, assign.value);
+        }
+    }
+}
+
 fn emitDeclaratorInitializersByClass(
     ctx: *Context,
     builder: anytype,
@@ -489,12 +501,21 @@ fn emitDeclaratorInitializersByClass(
             if (!ctx.locals.contains(item.name)) continue;
             const is_saved_item = isSaved(save_info, item.name);
             if (saved_only != is_saved_item) continue;
-            try emitDeclaratorInitializerAssign(ctx, builder, item.name, init_expr);
+            try emitNamedInitializerAssign(ctx, builder, item.name, init_expr);
         }
     }
 }
 
 fn emitDeclaratorInitializerAssign(
+    ctx: *Context,
+    builder: anytype,
+    name: []const u8,
+    init_expr: *ast.Expr,
+) EmitError!void {
+    try emitNamedInitializerAssign(ctx, builder, name, init_expr);
+}
+
+fn emitNamedInitializerAssign(
     ctx: *Context,
     builder: anytype,
     name: []const u8,
@@ -541,6 +562,7 @@ fn emitArrayConstructorDeclaratorInitializer(
         };
         try execution.emitAssignment(ctx, builder, assign);
     }
+    try ctx.static_array_values.put(name, ctor.items);
 }
 
 fn savedInitGuardName(ctx: *Context) ![]const u8 {

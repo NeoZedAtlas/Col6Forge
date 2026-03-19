@@ -180,6 +180,7 @@ pub const Context = struct {
     statement_functions: std.StringHashMap(StatementFunction),
     stmt_func_stack: std.array_list.Managed(StatementFunctionSubst),
     intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
+    static_array_values: CaseInsensitiveStringHashMap([]const *input.Expr),
     char_values: std.StringHashMap([]const u8),
     char_array_values: std.StringHashMap([]const u8),
     char_arg_lens: CaseInsensitiveStringHashMap(ValueRef),
@@ -268,6 +269,7 @@ pub const Context = struct {
             .statement_functions = std.StringHashMap(StatementFunction).init(allocator),
             .stmt_func_stack = std.array_list.Managed(StatementFunctionSubst).init(allocator),
             .intrinsic_wrappers = intrinsic_wrappers,
+            .static_array_values = CaseInsensitiveStringHashMap([]const *input.Expr).initContext(allocator, .{}),
             .char_values = std.StringHashMap([]const u8).init(allocator),
             .char_array_values = std.StringHashMap([]const u8).init(allocator),
             .char_arg_lens = CaseInsensitiveStringHashMap(ValueRef).initContext(allocator, .{}),
@@ -288,6 +290,7 @@ pub const Context = struct {
         errdefer ctx.symbol_index_exact.deinit();
         errdefer ctx.symbol_index.deinit();
         errdefer ctx.array_elem_count_cache.deinit();
+        errdefer ctx.static_array_values.deinit();
 
         for (sem.symbols, 0..) |sym, idx| {
             if (!ctx.symbol_index_exact.contains(sym.name)) {
@@ -371,6 +374,7 @@ pub const Context = struct {
         self.array_elem_count_cache.deinit();
         self.statement_functions.deinit();
         self.stmt_func_stack.deinit();
+        self.static_array_values.deinit();
         var it = self.char_values.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -1123,12 +1127,20 @@ fn arrayValuedExprElemCount(expr_node: *input.Expr) ?usize {
             if (call.args.len != 2) break :blk null;
             break :blk shapeProductForExpr(call.args[1]);
         },
+        .unary => |un| arrayValuedExprElemCount(un.expr),
         .binary => |bin| blk: {
-            if (bin.op != .concat) break :blk null;
-            const left = arrayValuedExprElemCount(bin.left) orelse break :blk null;
-            const right = arrayValuedExprElemCount(bin.right) orelse break :blk null;
-            if (left != right) break :blk null;
-            break :blk left;
+            const left = arrayValuedExprElemCount(bin.left);
+            const right = arrayValuedExprElemCount(bin.right);
+            if (bin.op == .concat) {
+                const left_count = left orelse break :blk null;
+                const right_count = right orelse break :blk null;
+                break :blk std.math.add(usize, left_count, right_count) catch null;
+            }
+            if (left != null and right != null) {
+                if (left.? != right.?) break :blk null;
+                break :blk left.?;
+            }
+            break :blk left orelse right;
         },
         else => null,
     };

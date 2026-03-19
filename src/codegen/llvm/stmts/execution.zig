@@ -11,6 +11,7 @@ const cfg = @import("cfg.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
 const evaluator = @import("../../../semantic/evaluator.zig");
+const io_utils = @import("io/utils.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -597,6 +598,7 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
         return;
     }
     if (try emitWholeArrayCopyAssignment(ctx, builder, assign)) return;
+    if (try emitWholeArrayRuntimeGeneratedAssignment(ctx, builder, assign)) return;
     if (try emitWholeArrayConstructorAssignment(ctx, builder, assign)) return;
     if (try emitContiguousSectionScalarAssignment(ctx, builder, assign)) return;
     if (try emitContiguousComponentSectionScalarAssignment(ctx, builder, assign)) return;
@@ -816,16 +818,16 @@ fn emitWholeArrayConstructorAssignment(ctx: *Context, builder: anytype, assign: 
     if (wholeArrayConstructorTarget(ctx, assign.target)) |target_info| {
         const name = target_info.name;
         const sym = target_info.sym;
-        const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch |err| switch (err) {
+        const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
             error.ArrayDimNotConstant => blk: {
-                if (sym.dims.len == 1 and sym.dims[0].* == .literal and sym.dims[0].literal.kind == .assumed_size) {
-                    break :blk flat_items.len;
-                }
+                if (sym.dims.len == 1) break :blk null;
                 return false;
             },
-            else => return false,
+            else => return err,
         };
-        if (flat_items.len != elem_count) return false;
+        if (elem_count) |count| {
+            if (flat_items.len != count) return false;
+        }
 
         for (flat_items, 0..) |item, idx| {
             const index_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{idx + 1});
@@ -834,6 +836,7 @@ fn emitWholeArrayConstructorAssignment(ctx: *Context, builder: anytype, assign: 
             var target_expr = ast.Expr{ .call_or_subscript = .{ .name = name, .args = linear_args[0..] } };
             try emitAssignment(ctx, builder, .{ .target = &target_expr, .value = item });
         }
+        try ctx.static_array_values.put(name, flat_items);
         return true;
     }
 
@@ -861,6 +864,137 @@ fn emitWholeArrayConstructorAssignment(ctx: *Context, builder: anytype, assign: 
         try emitAssignment(ctx, builder, .{ .target = &target_expr, .value = item });
     }
     return true;
+}
+
+fn emitWholeArrayRuntimeGeneratedAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    const target_info = wholeArrayConstructorTarget(ctx, assign.target) orelse return false;
+    if (target_info.sym.dims.len == 0) return false;
+    if (target_info.sym.isCharacter()) return false;
+    if (target_info.sym.loweredKind() == .derived) return false;
+
+    const generator = try extractRuntimeWholeArrayGenerator(ctx, assign.value) orelse return false;
+    const base_ptr = try ctx.getPointer(target_info.name);
+    const elem_ty = common.symbolElementIRType(target_info.sym, ctx.options.target_layout);
+    const implied = generator.implied;
+    const iter_sym = ctx.findSymbol(implied.var_name) orelse return false;
+    const iter_ptr = try ctx.getPointer(implied.var_name);
+    const iter_ty = ctx.typeFromKind(iter_sym.loweredKind());
+
+    var start_val = try expr.emitExpr(ctx, builder, implied.start);
+    if (start_val.ty != iter_ty) start_val = try expr.coerce(ctx, builder, start_val, iter_ty);
+    var step_val = if (implied.step) |step_expr|
+        try expr.emitExpr(ctx, builder, step_expr)
+    else
+        constI64(ctx, 1);
+    if (step_val.ty != iter_ty) step_val = try expr.coerce(ctx, builder, step_val, iter_ty);
+    var loop_count = try io_utils.emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step);
+    if (loop_count.ty != .i64) loop_count = try expr.coerce(ctx, builder, loop_count, .i64);
+
+    const linear_idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(linear_idx_ptr_name, .i64);
+    const linear_idx_ptr = ValueRef{ .name = linear_idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(constI64(ctx, 0), linear_idx_ptr);
+    try builder.store(start_val, iter_ptr);
+
+    const loop_head = try ctx.nextLabel("arr_runtime_ctor_head");
+    const loop_body = try ctx.nextLabel("arr_runtime_ctor_body");
+    const loop_exit = try ctx.nextLabel("arr_runtime_ctor_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const linear_idx_name = try ctx.nextTemp();
+    try builder.load(linear_idx_name, .i64, linear_idx_ptr);
+    const linear_idx = ValueRef{ .name = linear_idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, linear_idx, loop_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(elem_ptr_name, elem_ty, base_ptr, linear_idx);
+    const value = try expr.emitExpr(ctx, builder, generator.item);
+    const coerced = try expr.coerce(ctx, builder, value, elem_ty);
+    try builder.store(coerced, .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true });
+
+    const cur_iter_name = try ctx.nextTemp();
+    try builder.load(cur_iter_name, iter_ty, iter_ptr);
+    const next_iter_name = try ctx.nextTemp();
+    try builder.binary(next_iter_name, "add", iter_ty, .{ .name = cur_iter_name, .ty = iter_ty, .is_ptr = false }, step_val);
+    try builder.store(.{ .name = next_iter_name, .ty = iter_ty, .is_ptr = false }, iter_ptr);
+
+    const next_idx_name = try ctx.nextTemp();
+    try builder.binary(next_idx_name, "add", .i64, linear_idx, constI64(ctx, 1));
+    try builder.store(.{ .name = next_idx_name, .ty = .i64, .is_ptr = false }, linear_idx_ptr);
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
+    return true;
+}
+
+fn extractRuntimeWholeArrayGenerator(
+    ctx: *Context,
+    expr_node: *ast.Expr,
+) EmitError!?struct { implied: ast.ImpliedDo, item: *ast.Expr } {
+    return switch (expr_node.*) {
+        .array_constructor => |ctor| blk: {
+            if (ctor.items.len != 1) break :blk null;
+            if (ctor.items[0].* != .implied_do) break :blk null;
+            const implied = ctor.items[0].implied_do;
+            if (implied.items.len != 1) break :blk null;
+            if (!isRuntimeWholeArrayImpliedDo(ctx, implied)) break :blk null;
+            break :blk .{ .implied = implied, .item = implied.items[0] };
+        },
+        .unary => |un| blk: {
+            const inner = try extractRuntimeWholeArrayGenerator(ctx, un.expr) orelse break :blk null;
+            const item = try ctx.allocator.create(ast.Expr);
+            item.* = .{ .unary = .{ .op = un.op, .expr = inner.item } };
+            break :blk .{ .implied = inner.implied, .item = item };
+        },
+        .binary => |bin| blk: {
+            if (try extractRuntimeWholeArrayGenerator(ctx, bin.left)) |inner| {
+                if (isScalarExprForWholeArrayGeneration(ctx, bin.right)) {
+                    const item = try ctx.allocator.create(ast.Expr);
+                    item.* = .{ .binary = .{
+                        .op = bin.op,
+                        .left = inner.item,
+                        .right = bin.right,
+                    } };
+                    break :blk .{ .implied = inner.implied, .item = item };
+                }
+            }
+            if (try extractRuntimeWholeArrayGenerator(ctx, bin.right)) |inner| {
+                if (isScalarExprForWholeArrayGeneration(ctx, bin.left)) {
+                    const item = try ctx.allocator.create(ast.Expr);
+                    item.* = .{ .binary = .{
+                        .op = bin.op,
+                        .left = bin.left,
+                        .right = inner.item,
+                    } };
+                    break :blk .{ .implied = inner.implied, .item = item };
+                }
+            }
+            break :blk null;
+        },
+        else => null,
+    };
+}
+
+fn isRuntimeWholeArrayImpliedDo(ctx: *Context, implied: ast.ImpliedDo) bool {
+    return !isStaticImpliedDoBound(ctx, implied.start) or
+        !isStaticImpliedDoBound(ctx, implied.end) or
+        (implied.step != null and !isStaticImpliedDoBound(ctx, implied.step.?));
+}
+
+fn isStaticImpliedDoBound(ctx: *Context, node: *ast.Expr) bool {
+    return (evaluator.evalConst(node, .{
+        .ctx = ctx,
+        .resolveFn = resolveStaticConstValue,
+        .arrayExtentFn = resolveStaticArrayExtent,
+    }) catch null) != null;
+}
+
+fn isScalarExprForWholeArrayGeneration(ctx: *Context, expr_node: *ast.Expr) bool {
+    return flattenArrayValuedExprItems(ctx, expr_node) catch null == null;
 }
 
 fn appendFlattenedConstructorItems(
@@ -958,14 +1092,20 @@ fn flattenIntrinsicArrayValuedCall(ctx: *Context, call: ast.CallOrSubscript) Emi
     }
     if (std.ascii.eqlIgnoreCase(call.name, "unpack")) {
         if (call.args.len != 3) return null;
-        const vector_items = try flattenArrayValuedExprItems(ctx, call.args[0]) orelse return null;
-        const mask_items = try flattenArrayValuedExprItems(ctx, call.args[1]) orelse return null;
+        const vector_items = try flattenArrayValuedExprItems(ctx, call.args[0]) orelse {
+            return null;
+        };
+        const mask_items = try flattenArrayValuedExprItems(ctx, call.args[1]) orelse {
+            return null;
+        };
         var result = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
         errdefer result.deinit();
 
         var vector_idx: usize = 0;
         for (mask_items) |mask_item| {
-            const take_vector = try evalStaticLogicalExpr(ctx, mask_item) orelse return null;
+            const take_vector = try evalStaticLogicalExpr(ctx, mask_item) orelse {
+                return null;
+            };
             if (take_vector) {
                 if (vector_idx >= vector_items.len) return null;
                 try result.append(vector_items[vector_idx]);
@@ -1029,7 +1169,8 @@ fn shapeProductFromArrayConstructor(ctor: ast.ArrayConstructor) ?usize {
 
 fn flattenParameterArrayIdentifier(ctx: *Context, name: []const u8) EmitError!?[]const *ast.Expr {
     const sym = ctx.findSymbol(name) orelse return null;
-    if (sym.dims.len == 0 or !declaresParameterValue(ctx, name)) return null;
+    if (sym.dims.len == 0) return null;
+    if (ctx.static_array_values.get(name)) |items| return items;
     const init_expr = findDeclaratorInitializerExpr(ctx, name) orelse return null;
     return flattenArrayValuedExprItems(ctx, init_expr);
 }
@@ -1350,7 +1491,7 @@ fn parseStaticLogicalLiteral(text: []const u8) ?bool {
 
 fn evalStaticParameterArrayElementInt(ctx: *Context, call: ast.CallOrSubscript) EmitError!?i64 {
     const sym = ctx.findSymbol(call.name) orelse return null;
-    if (sym.dims.len == 0 or call.args.len != sym.dims.len or !declaresParameterValue(ctx, call.name)) return null;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
 
     const items = try flattenParameterArrayIdentifier(ctx, call.name) orelse return null;
     const linear_index = try evalStaticArrayLinearIndex(ctx, sym, call.args) orelse return null;
