@@ -588,7 +588,7 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
             return;
         }
     }
-    if (assign.target.* == .substring) {
+    if (assign.target.* == .substring and !isWholeArraySectionSubstringTarget(ctx, assign.target.substring)) {
         const target_ptr = try expr.emitLValue(ctx, builder, assign.target);
         const target_len = try emitSubstringLenValue(ctx, builder, assign.target.substring);
         try storeCharacterValueDynamic(ctx, builder, target_ptr, target_len, assign.value);
@@ -800,16 +800,16 @@ fn emitWholeArrayCopyAssignment(ctx: *Context, builder: anytype, assign: ast.Ass
 
 fn emitWholeArrayConstructorAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
     if (assign.value.* != .array_constructor) return false;
-    const ctor = assign.value.array_constructor;
+    const flat_items = try flattenWholeArrayConstructorItems(ctx, assign.value) orelse return false;
 
-    if (assign.target.* == .identifier) {
-        const name = assign.target.identifier;
-        const sym = ctx.findSymbol(name) orelse return false;
+    if (wholeArrayConstructorTarget(ctx, assign.target)) |target_info| {
+        const name = target_info.name;
+        const sym = target_info.sym;
         if (sym.dims.len != 1) return false;
         const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return false;
-        if (ctor.items.len != elem_count) return false;
+        if (flat_items.len != elem_count) return false;
 
-        for (ctor.items, 0..) |item, idx| {
+        for (flat_items, 0..) |item, idx| {
             const index_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{idx + 1});
             var index_expr = ast.Expr{ .literal = .{ .kind = .integer, .text = index_text } };
             var args = [_]*ast.Expr{&index_expr};
@@ -828,9 +828,9 @@ fn emitWholeArrayConstructorAssignment(ctx: *Context, builder: anytype, assign: 
     if (component.pointer or component.allocatable) return false;
     if (component.dims.len != 1) return false;
     const elem_count = common.arrayElementCount(ctx.sem, component.dims) catch return false;
-    if (ctor.items.len != elem_count) return false;
+    if (flat_items.len != elem_count) return false;
 
-    for (ctor.items, 0..) |item, idx| {
+    for (flat_items, 0..) |item, idx| {
         const index_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{idx + 1});
         var index_expr = ast.Expr{ .literal = .{ .kind = .integer, .text = index_text } };
         var args = [_]*ast.Expr{&index_expr};
@@ -843,6 +843,86 @@ fn emitWholeArrayConstructorAssignment(ctx: *Context, builder: anytype, assign: 
         try emitAssignment(ctx, builder, .{ .target = &target_expr, .value = item });
     }
     return true;
+}
+
+fn flattenWholeArrayConstructorItems(ctx: *Context, expr_node: *ast.Expr) EmitError!?[]const *ast.Expr {
+    if (expr_node.* != .array_constructor) return null;
+    var items = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
+    try appendFlattenedConstructorItems(ctx, &items, expr_node.array_constructor.items);
+    return try items.toOwnedSlice();
+}
+
+fn appendFlattenedConstructorItems(
+    ctx: *Context,
+    out: *std.array_list.Managed(*ast.Expr),
+    items: []const *ast.Expr,
+) EmitError!void {
+    for (items) |item| {
+        if (try appendFlattenedArrayValuedExpr(ctx, out, item)) continue;
+        try out.append(item);
+    }
+}
+
+fn appendFlattenedArrayValuedExpr(
+    ctx: *Context,
+    out: *std.array_list.Managed(*ast.Expr),
+    expr_node: *ast.Expr,
+) EmitError!bool {
+    switch (expr_node.*) {
+        .array_constructor => |ctor| {
+            try appendFlattenedConstructorItems(ctx, out, ctor.items);
+            return true;
+        },
+        .binary => |bin| {
+            if (bin.op != .concat) return false;
+            const left_items = try flattenArrayValuedExprItems(ctx, bin.left);
+            const right_items = try flattenArrayValuedExprItems(ctx, bin.right);
+            if (left_items == null and right_items == null) return false;
+            const item_count = if (left_items) |items_| items_.len else right_items.?.len;
+            if (left_items != null and right_items != null and left_items.?.len != right_items.?.len) return false;
+
+            var idx: usize = 0;
+            while (idx < item_count) : (idx += 1) {
+                const scalar_expr = try ctx.allocator.create(ast.Expr);
+                scalar_expr.* = .{ .binary = .{
+                    .op = .concat,
+                    .left = if (left_items) |items_| items_[idx] else bin.left,
+                    .right = if (right_items) |items_| items_[idx] else bin.right,
+                } };
+                try out.append(scalar_expr);
+            }
+            return true;
+        },
+        else => return false,
+    }
+}
+
+fn flattenArrayValuedExprItems(ctx: *Context, expr_node: *ast.Expr) EmitError!?[]const *ast.Expr {
+    var items = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
+    if (!(try appendFlattenedArrayValuedExpr(ctx, &items, expr_node))) return null;
+    return try items.toOwnedSlice();
+}
+
+fn wholeArrayConstructorTarget(ctx: *Context, expr_node: *ast.Expr) ?struct { name: []const u8, sym: ast.sema.Symbol } {
+    return switch (expr_node.*) {
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse break :blk null;
+            break :blk .{ .name = name, .sym = sym };
+        },
+        .substring => |sub| blk: {
+            if (!isWholeArraySectionSubstringTarget(ctx, sub)) break :blk null;
+            const sym = ctx.findSymbol(sub.name) orelse break :blk null;
+            break :blk .{ .name = sub.name, .sym = sym };
+        },
+        else => null,
+    };
+}
+
+fn isWholeArraySectionSubstringTarget(ctx: *Context, sub: ast.SubstringExpr) bool {
+    if (sub.args.len != 0) return false;
+    if (sub.start != null or sub.end != null) return false;
+    const sym = ctx.findSymbol(sub.name) orelse return false;
+    return sym.dims.len != 0;
 }
 
 fn emitContiguousComponentSectionScalarAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {

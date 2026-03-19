@@ -21,6 +21,7 @@ pub const Decl = union(enum) {
     interface_block: InterfaceBlock,
     import: NameListDecl,
     intent: IntentDecl,
+    optional: NameListDecl,
     dimension: DimensionDecl,
     parameter: ParameterDecl,
     common: CommonDecl,

@@ -95,7 +95,7 @@ pub fn applyDeclarator(
     else
         1;
     if (item.char_len_deferred) {
-        if (allowsDeferredCharacterLength(sym.*)) {
+        if (allowsDeferredCharacterLength(self, sym.*)) {
             sym.applyTypeSpec(sym.type_spec.withCharacterLength(.deferred, null));
             return;
         }
@@ -120,7 +120,7 @@ pub fn applyDeclarator(
         } else {
             // Keep deferred/assumed length only where the rest of the semantic
             // pipeline already supports unknown CHARACTER size.
-            if (allowsDeferredCharacterLength(sym.*)) {
+            if (allowsDeferredCharacterLength(self, sym.*)) {
                 sym.applyTypeSpec(sym.type_spec.withCharacterLength(.deferred, null));
                 return;
             }
@@ -134,9 +134,13 @@ pub fn applyDeclarator(
     sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, length));
 }
 
-fn allowsDeferredCharacterLength(sym: symbols.Symbol) bool {
+fn allowsDeferredCharacterLength(self: *context.Context, sym: symbols.Symbol) bool {
     if (sym.storage == .dummy) return true;
     if (sym.kind == .function) return true;
+    if (self.unit.kind == .function) {
+        const result_name = self.unit.result_name orelse self.unit.name;
+        if (std.ascii.eqlIgnoreCase(sym.name, result_name)) return true;
+    }
     if (sym.is_allocatable) return true;
     if (sym.is_pointer) return true;
     return false;

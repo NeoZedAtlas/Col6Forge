@@ -131,6 +131,10 @@ pub fn inferResultType(
     for (name, 0..) |ch, i| upper_buf[i] = std.ascii.toUpper(ch);
     const upper = upper_buf[0..name.len];
 
+    if (std.mem.eql(u8, upper, "__COL6FORGE_SUBSTRING")) {
+        return symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null);
+    }
+
     if (IntrinsicReturnTypeMap.get(upper)) |kind| {
         return fixedTypeSpec(kind);
     }

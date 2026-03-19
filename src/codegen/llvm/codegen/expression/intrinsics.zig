@@ -1,9 +1,11 @@
 ﻿const std = @import("std");
 const ast = @import("../../../input.zig");
 const ir = @import("../../../ir.zig");
+const common = @import("../common.zig");
 const context = @import("../context.zig");
 const utils = @import("../utils.zig");
 
+const binary = @import("binary.zig");
 const casting = @import("casting.zig");
 const complex = @import("complex.zig");
 const dispatch = @import("dispatch.zig");
@@ -17,6 +19,10 @@ const EmitError = anyerror;
 
 fn isTrimIntrinsicName(name: []const u8) bool {
     return std.ascii.eqlIgnoreCase(name, "trim");
+}
+
+fn isInternalLiteralSubstringName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "__col6forge_substring");
 }
 
 fn isIntegerType(ty: IRType) bool {
@@ -970,13 +976,203 @@ fn emitLogicalCast(ctx: *Context, builder: anytype, value: ValueRef) EmitError!V
 
 fn emitIntrinsicAny(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
+    if (try emitWholeArrayAnyReduction(ctx, builder, args[0])) |reduced| {
+        return reduced;
+    }
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
     return emitLogicalCast(ctx, builder, value);
+}
+
+const WholeArrayView = struct {
+    base_ptr: ValueRef,
+    elem_ty: IRType,
+    count: usize,
+};
+
+const ConstructorView = struct {
+    items: []*Expr,
+    count: usize,
+};
+
+fn emitWholeArrayAnyReduction(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?ValueRef {
+    if (expr_node.* != .binary) return null;
+    const bin = expr_node.binary;
+    switch (bin.op) {
+        .eq, .ne, .lt, .le, .gt, .ge => {},
+        else => return null,
+    }
+
+    if (supportedWholeArrayView(ctx, bin.left)) |left_view| {
+        if (supportedConstructorView(bin.right)) |right_ctor| {
+            if (left_view.count != right_ctor.count) return null;
+            return try emitWholeArrayConstructorReduction(ctx, builder, bin.op, left_view, right_ctor);
+        }
+    }
+    if (supportedWholeArrayView(ctx, bin.right)) |right_view| {
+        if (supportedConstructorView(bin.left)) |left_ctor| {
+            if (left_ctor.count != right_view.count) return null;
+            return try emitConstructorWholeArrayReduction(ctx, builder, bin.op, left_ctor, right_view);
+        }
+    }
+    return null;
+}
+
+fn supportedWholeArrayView(ctx: *Context, expr_node: *Expr) ?WholeArrayView {
+    return switch (expr_node.*) {
+        .identifier => |name| wholeArraySymbolView(ctx, name),
+        .call_or_subscript => |call| wholeArraySectionView(ctx, call),
+        else => null,
+    };
+}
+
+fn wholeArraySymbolView(ctx: *Context, name: []const u8) ?WholeArrayView {
+    const sym = ctx.findSymbol(name) orelse return null;
+    if (sym.dims.len == 0 or sym.isCharacter()) return null;
+    const count = common.arrayElementCount(ctx.sem, sym.dims) catch return null;
+    const base_ptr = ctx.getPointer(name) catch return null;
+    return .{
+        .base_ptr = base_ptr,
+        .elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout),
+        .count = count,
+    };
+}
+
+fn wholeArraySectionView(ctx: *Context, call: ast.CallOrSubscript) ?WholeArrayView {
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.dims.len == 0 or sym.isCharacter()) return null;
+    if (call.args.len != sym.dims.len) return null;
+    for (call.args) |arg| {
+        if (!isFullDimRange(arg)) return null;
+    }
+    return wholeArraySymbolView(ctx, call.name);
+}
+
+fn isFullDimRange(expr_node: *Expr) bool {
+    if (expr_node.* != .dim_range) return false;
+    const range = expr_node.dim_range;
+    if (range.lower != null or range.stride != null) return false;
+    return range.assumed_shape or (range.upper.* == .literal and range.upper.literal.kind == .assumed_size);
+}
+
+fn supportedConstructorView(expr_node: *Expr) ?ConstructorView {
+    return switch (expr_node.*) {
+        .array_constructor => |ctor| .{ .items = ctor.items, .count = ctor.items.len },
+        .call_or_subscript => |call| reshapeConstructorView(call),
+        else => null,
+    };
+}
+
+fn reshapeConstructorView(call: ast.CallOrSubscript) ?ConstructorView {
+    if (!std.ascii.eqlIgnoreCase(call.name, "reshape")) return null;
+    if (call.args.len < 2 or call.args.len > 4) return null;
+    if (call.args[0].* != .array_constructor) return null;
+    const source_ctor = call.args[0].array_constructor;
+    const shape_count = constantShapeProduct(call.args[1]) orelse return null;
+    if (shape_count != source_ctor.items.len) return null;
+    return .{ .items = source_ctor.items, .count = shape_count };
+}
+
+fn constantShapeProduct(expr_node: *Expr) ?usize {
+    const ctor = switch (expr_node.*) {
+        .array_constructor => expr_node.array_constructor,
+        else => return null,
+    };
+    if (ctor.items.len == 0) return 0;
+    var total: usize = 1;
+    for (ctor.items) |item| {
+        const value = intLiteralValue(item) orelse return null;
+        if (value < 0) return null;
+        const usize_value = std.math.cast(usize, value) orelse return null;
+        total = std.math.mul(usize, total, usize_value) catch return null;
+    }
+    return total;
+}
+
+fn emitWholeArrayConstructorReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: WholeArrayView,
+    right: ConstructorView,
+) EmitError!ValueRef {
+    var acc = utils.zeroValue(.i1);
+    var idx: usize = 0;
+    while (idx < left.count) : (idx += 1) {
+        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
+        const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitConstructorWholeArrayReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: ConstructorView,
+    right: WholeArrayView,
+) EmitError!ValueRef {
+    var acc = utils.zeroValue(.i1);
+    var idx: usize = 0;
+    while (idx < right.count) : (idx += 1) {
+        const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
+        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitWholeArrayElement(
+    ctx: *Context,
+    builder: anytype,
+    view: WholeArrayView,
+    idx: usize,
+) EmitError!ValueRef {
+    const idx_val = try ctx.constI64(@intCast(idx));
+    const elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(elem_ptr_name, view.elem_ty, view.base_ptr, idx_val);
+    const elem_ptr = ValueRef{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true };
+    const elem_tmp = try ctx.nextTemp();
+    try builder.load(elem_tmp, view.elem_ty, elem_ptr);
+    return .{ .name = elem_tmp, .ty = view.elem_ty, .is_ptr = false };
+}
+
+fn intLiteralValue(expr_node: *Expr) ?i64 {
+    return switch (expr_node.*) {
+        .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
+        .unary => |un| {
+            const value = intLiteralValue(un.expr) orelse return null;
+            return switch (un.op) {
+                .plus => value,
+                .minus => -value,
+                else => null,
+            };
+        },
+        .binary => |bin| {
+            const left = intLiteralValue(bin.left) orelse return null;
+            const right = intLiteralValue(bin.right) orelse return null;
+            return switch (bin.op) {
+                .add => left + right,
+                .sub => left - right,
+                .mul => left * right,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                else => null,
+            };
+        },
+        else => null,
+    };
 }
 
 fn emitIntrinsicAllocated(args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     return .{ .name = "1", .ty = .i1, .is_ptr = false };
+}
+
+fn emitIntrinsicInternalLiteralSubstring(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    const plan = (try dispatch.emitInternalLiteralSubstringPlan(ctx, builder, args)) orelse return error.UnsupportedIntrinsicType;
+    return .{ .name = plan.ptr.name, .ty = .ptr, .is_ptr = false };
 }
 
 const IntrinsicTag = enum {
@@ -1062,6 +1258,7 @@ const IntrinsicTag = enum {
     atan2,
     datan2,
     any,
+    internal_literal_substring,
     allocated,
     associated,
     present,
@@ -1159,6 +1356,7 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "atan2", .atan2 },
     .{ "datan2", .datan2 },
     .{ "any", .any },
+    .{ "__col6forge_substring", .internal_literal_substring },
     .{ "allocated", .allocated },
     .{ "associated", .associated },
     .{ "present", .present },
@@ -1287,6 +1485,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .atan2 => return emitAtan2(ctx, builder, args),
         .datan2 => return emitDoubleBinaryLibm(ctx, builder, "atan2", args),
         .any => return emitIntrinsicAny(ctx, builder, args),
+        .internal_literal_substring => return emitIntrinsicInternalLiteralSubstring(ctx, builder, args),
         .allocated => return emitIntrinsicAllocated(args),
         .associated => return emitIntrinsicAllocated(args),
         .present => return emitIntrinsicAllocated(args),

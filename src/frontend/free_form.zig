@@ -994,3 +994,22 @@ test "normalizeFreeForm keeps parameter strings with commas intact" {
     try testing.expectEqualStrings("character(*) str, msg", lines[0].text);
     try testing.expectEqualStrings("PARAMETER (str = \"Hello, World!\", msg = \"A, B\")", lines[1].text);
 }
+
+test "normalizeFreeForm preserves repository array_constructor_14 slash constructors" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = try std.fs.cwd().readFileAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/array_constructor_14.f90",
+        1024 * 1024,
+    );
+    defer allocator.free(source);
+
+    const lines = try normalizeFreeForm(allocator, source);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 8), lines.len);
+    try testing.expectEqualStrings("x(:) = (/ 3, 1, 4, 1 /)", lines[2].text);
+    try testing.expectEqualStrings("x = (/ 3, 1, 4, 1 /)", lines[6].text);
+}

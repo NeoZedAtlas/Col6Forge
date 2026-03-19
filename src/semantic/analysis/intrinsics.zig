@@ -72,6 +72,7 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "IABS", Arity{ .min = 1, .max = 1 } },
     .{ "IACHAR", Arity{ .min = 1, .max = 1 } },
     .{ "ICHAR", Arity{ .min = 1, .max = 1 } },
+    .{ "__COL6FORGE_SUBSTRING", Arity{ .min = 3, .max = 3 } },
     .{ "IDIM", Arity{ .min = 2, .max = 2 } },
     .{ "IDINT", Arity{ .min = 1, .max = 1 } },
     .{ "IDNINT", Arity{ .min = 1, .max = 1 } },

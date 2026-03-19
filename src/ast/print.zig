@@ -82,6 +82,15 @@ fn printDecl(writer: anytype, decl: ast.Decl) !void {
             }
             try writer.print("\n", .{});
         },
+        .import => |import_decl| {
+            try writer.print(";   decl import names({d})\n", .{import_decl.names.len});
+        },
+        .intent => |intent_decl| {
+            try writer.print(";   decl intent {s} names({d})\n", .{ @tagName(intent_decl.kind), intent_decl.names.len });
+        },
+        .optional => |optional_decl| {
+            try writer.print(";   decl optional names({d})\n", .{optional_decl.names.len});
+        },
         .dimension => |dim| {
             try writer.print(";   decl dimension items({d})\n", .{dim.items.len});
         },

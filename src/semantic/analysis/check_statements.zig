@@ -889,17 +889,19 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
                     self.setCurrentSource(self.sourceForExpr(expr));
                     return error.InvalidSubscript;
                 }
-                const start_expr = sub.start orelse return error.InvalidSubscript;
-                const end_expr = sub.end orelse return error.InvalidSubscript;
-                const start_ty = try checkExprType(self, start_expr);
-                if (!isIntegerLike(start_ty)) {
-                    self.setCurrentSource(self.sourceForExpr(start_expr));
-                    return error.InvalidSubscript;
+                if (sub.start) |start_expr| {
+                    const start_ty = try checkExprType(self, start_expr);
+                    if (!isIntegerLike(start_ty)) {
+                        self.setCurrentSource(self.sourceForExpr(start_expr));
+                        return error.InvalidSubscript;
+                    }
                 }
-                const end_ty = try checkExprType(self, end_expr);
-                if (!isIntegerLike(end_ty)) {
-                    self.setCurrentSource(self.sourceForExpr(end_expr));
-                    return error.InvalidSubscript;
+                if (sub.end) |end_expr| {
+                    const end_ty = try checkExprType(self, end_expr);
+                    if (!isIntegerLike(end_ty)) {
+                        self.setCurrentSource(self.sourceForExpr(end_expr));
+                        return error.InvalidSubscript;
+                    }
                 }
                 return resolved_ty;
             }
@@ -2671,6 +2673,7 @@ fn preludeSpecificInterfaceProcedureCount(self: *context.Context, name: []const 
             if (std.ascii.eqlIgnoreCase(proc_header.name, name)) count += 1;
         }
         for (decl.interface_block.procedures) |proc_name| {
+            if (interfaceBlockHasProcedureHeader(decl.interface_block, proc_name)) continue;
             if (std.ascii.eqlIgnoreCase(proc_name, name)) count += 1;
         }
         for (decl.interface_block.specific_procedures) |proc_name| {
@@ -2690,6 +2693,7 @@ fn currentUnitConflictsWithPreludeProcedure(self: *context.Context, name: []cons
             if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
         }
         for (decl.interface_block.procedures) |proc_name| {
+            if (interfaceBlockHasProcedureHeader(decl.interface_block, proc_name)) continue;
             if (std.ascii.eqlIgnoreCase(proc_name, name)) return true;
         }
         for (decl.interface_block.specific_procedures) |proc_name| {

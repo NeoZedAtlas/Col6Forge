@@ -163,13 +163,16 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             // without mutating AST node variants in-place.
             if (isArraySectionSubstring(sym, sub)) {
                 if (sym.dims.len == 0) return error.InvalidSubscript;
-                const start_expr = sub.start orelse return error.InvalidSubscript;
-                const end_expr = sub.end orelse return error.InvalidSubscript;
-                try resolveExpr(self, start_expr);
-                try resolveExpr(self, end_expr);
-                const start_ty = try resolvedExprType(self, start_expr);
-                const end_ty = try resolvedExprType(self, end_expr);
-                if (start_ty != .integer or end_ty != .integer) return error.InvalidSubscript;
+                if (sub.start) |start_expr| {
+                    try resolveExpr(self, start_expr);
+                    const start_ty = try resolvedExprType(self, start_expr);
+                    if (start_ty != .integer) return error.InvalidSubscript;
+                }
+                if (sub.end) |end_expr| {
+                    try resolveExpr(self, end_expr);
+                    const end_ty = try resolvedExprType(self, end_expr);
+                    if (end_ty != .integer) return error.InvalidSubscript;
+                }
 
                 try recordResolvedRef(self, expr, sub.name, .subscript, idx);
                 try cacheExprType(self, expr, sym.type_spec);
@@ -736,7 +739,7 @@ fn intrinsicReturnType(
 }
 
 fn isArraySectionSubstring(sym: symbols.Symbol, sub: ast.SubstringExpr) bool {
-    return !sym.isCharacter() and sub.args.len == 0 and sub.start != null and sub.end != null;
+    return sym.dims.len != 0 and sub.args.len == 0;
 }
 
 fn validateComponentArgs(

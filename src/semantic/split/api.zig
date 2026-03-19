@@ -476,6 +476,12 @@ fn findDummyArgDeclInfoInDecls(decls: []const ast.Decl, name: []const u8) DummyA
                     info.intent = intent_decl.kind;
                 }
             },
+            .optional => |optional_decl| {
+                for (optional_decl.names) |optional_name| {
+                    if (!std.ascii.eqlIgnoreCase(optional_name, name)) continue;
+                    info.optional = true;
+                }
+            },
             .dimension => |dimension_decl| {
                 for (dimension_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;

@@ -197,6 +197,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             std.ascii.eqlIgnoreCase(sym.name, return_symbol_name);
         if (uses_explicit_result_name and is_function_name_symbol) continue;
         if (sym.is_external) continue;
+        if (sym.is_intrinsic) continue;
         if (sym.kind == .parameter or sym.kind == .subroutine) continue;
         if (sym.kind == .function and !is_return_symbol and ctx.unit.kind != .function) continue;
         if (is_return_symbol and (is_character_function or is_complex_sret_function)) continue;

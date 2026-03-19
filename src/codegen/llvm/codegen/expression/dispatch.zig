@@ -867,6 +867,13 @@ pub fn isCharacterExpr(ctx: *Context, expr: *Expr) bool {
             const sym = ctx.findSymbol(name) orelse break :blk false;
             break :blk sym.isCharacter();
         },
+        .array_constructor => |ctor| blk: {
+            if (ctor.type_spec) |type_spec| {
+                if (type_spec.type_kind == .character) break :blk true;
+            }
+            if (ctor.items.len == 0) break :blk false;
+            break :blk isCharacterExpr(ctx, ctor.items[0]);
+        },
         .call_or_subscript => |call_or_sub| blk: {
             const sym = ctx.findSymbol(call_or_sub.name) orelse break :blk false;
             break :blk sym.isCharacter();
@@ -874,6 +881,7 @@ pub fn isCharacterExpr(ctx: *Context, expr: *Expr) bool {
         .substring => true,
         .literal => |lit| lit.kind == .string or lit.kind == .hollerith,
         .binary => |bin| bin.op == .concat,
+        .implied_do => |implied| implied.items.len != 0 and isCharacterExpr(ctx, implied.items[0]),
         else => false,
     };
 }
@@ -885,7 +893,14 @@ pub fn constantCharacterLenForExpr(ctx: *Context, expr: *Expr) ?usize {
             if (!sym.isCharacter()) return null;
             return common.constantCharacterLen(sym);
         },
+        .array_constructor => |ctor| {
+            if (ctor.items.len == 0) return null;
+            return constantCharacterLenForExpr(ctx, ctor.items[0]);
+        },
         .call_or_subscript => |call_or_sub| {
+            if (isInternalLiteralSubstringName(call_or_sub.name)) {
+                return internalLiteralSubstringConstLen(ctx, call_or_sub.args, null);
+            }
             var kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
             if (!sym.isCharacter()) return null;
@@ -916,6 +931,10 @@ pub fn constantCharacterLenForExpr(ctx: *Context, expr: *Expr) ?usize {
             const right_len = constantCharacterLenForExpr(ctx, bin.right) orelse return null;
             return left_len + right_len;
         },
+        .implied_do => |implied| {
+            if (implied.items.len == 0) return null;
+            return constantCharacterLenForExpr(ctx, implied.items[0]);
+        },
         else => return null,
     }
 }
@@ -936,6 +955,38 @@ pub fn emitAbiCharacterLenValue(ctx: *Context, builder: anytype, expr: *Expr) Em
     return coerced;
 }
 
+pub fn emitInternalLiteralSubstringPlan(ctx: *Context, builder: anytype, args: []*Expr) EmitError!?CharacterValuePlan {
+    if (args.len != 3) return error.InvalidIntrinsicCall;
+    const base_plan = (try emitCharacterValuePlanImpl(ctx, builder, args[0], ctx.stmt_func_stack.items.len)) orelse return null;
+
+    var start_val = utils.oneValue();
+    if (!internalLiteralSubstringArgOmitted(args[1])) {
+        start_val = try memory.emitIndex(ctx, builder, args[1]);
+    }
+    var end_val = base_plan.logical_len;
+    if (end_val.ty != .i64) {
+        end_val = try casting.coerce(ctx, builder, end_val, .i64);
+    }
+    if (!internalLiteralSubstringArgOmitted(args[2])) {
+        end_val = try memory.emitIndex(ctx, builder, args[2]);
+    }
+
+    const offset = try binary.emitSub(ctx, builder, start_val, utils.oneValue());
+    const gep = try ctx.nextTemp();
+    try builder.gep(gep, .i8, base_plan.ptr, offset);
+    const diff = try binary.emitSub(ctx, builder, end_val, start_val);
+    const len_val = try binary.emitAdd(ctx, builder, diff, utils.oneValue());
+    const const_len = internalLiteralSubstringConstLen(ctx, args, base_plan.logical_len_const);
+    return try validatedCharacterValuePlan(.{
+        .ptr = .{ .name = gep, .ty = .ptr, .is_ptr = true },
+        .logical_len = len_val,
+        .storage_len = len_val,
+        .logical_len_const = const_len,
+        .storage_len_const = const_len,
+        .kind = .substring_view,
+    });
+}
+
 pub fn emitCharacterValuePlan(ctx: *Context, builder: anytype, expr: *Expr) EmitError!?CharacterValuePlan {
     if (try emitCharacterValuePlanImpl(ctx, builder, expr, ctx.stmt_func_stack.items.len)) |plan| {
         return try validatedCharacterValuePlan(plan);
@@ -950,6 +1001,29 @@ fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     const base_len = std.math.cast(i64, base_len_usize) orelse return null;
     const start_val = if (sub.start) |start_expr| intLiteralValue(start_expr) orelse return null else 1;
     const end_val = if (sub.end) |end_expr| intLiteralValue(end_expr) orelse return null else base_len;
+    const span = checkedSub(end_val, start_val) orelse return null;
+    const length = checkedAdd(span, 1) orelse return null;
+    if (length <= 0) return null;
+    return std.math.cast(usize, length);
+}
+
+fn isInternalLiteralSubstringName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "__col6forge_substring");
+}
+
+fn internalLiteralSubstringArgOmitted(expr_node: *Expr) bool {
+    return intLiteralValue(expr_node) == 0;
+}
+
+fn internalLiteralSubstringConstLen(ctx: *Context, args: []*Expr, base_len_override: ?usize) ?usize {
+    if (args.len != 3) return null;
+    const base_len = if (base_len_override) |len|
+        len
+    else
+        constantCharacterLenForExpr(ctx, args[0]) orelse return null;
+    const base_len_i64 = std.math.cast(i64, base_len) orelse return null;
+    const start_val = if (internalLiteralSubstringArgOmitted(args[1])) 1 else intLiteralValue(args[1]) orelse return null;
+    const end_val = if (internalLiteralSubstringArgOmitted(args[2])) base_len_i64 else intLiteralValue(args[2]) orelse return null;
     const span = checkedSub(end_val, start_val) orelse return null;
     const length = checkedAdd(span, 1) orelse return null;
     if (length <= 0) return null;
@@ -1095,7 +1169,15 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
             if (!sym.isCharacter()) return null;
             return try emitCharacterSymbolLenValue(ctx, name, sym);
         },
+        .array_constructor => |ctor| {
+            if (ctor.items.len == 0) return null;
+            return emitCharacterLenValueImpl(ctx, builder, ctor.items[0], subst_depth);
+        },
         .call_or_subscript => |call_or_sub| {
+            if (isInternalLiteralSubstringName(call_or_sub.name)) {
+                const plan = (try emitInternalLiteralSubstringPlan(ctx, builder, call_or_sub.args)) orelse return null;
+                return plan.logical_len;
+            }
             if (isTrimIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 1) {
                 return emitCharacterLenValueImpl(ctx, builder, call_or_sub.args[0], subst_depth);
             }
@@ -1142,6 +1224,10 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
             const left_len = try emitCharacterLenValueImpl(ctx, builder, bin.left, subst_depth) orelse return null;
             const right_len = try emitCharacterLenValueImpl(ctx, builder, bin.right, subst_depth) orelse return null;
             return try binary.emitAdd(ctx, builder, left_len, right_len);
+        },
+        .implied_do => |implied| {
+            if (implied.items.len == 0) return null;
+            return emitCharacterLenValueImpl(ctx, builder, implied.items[0], subst_depth);
         },
         else => return null,
     }
@@ -1200,6 +1286,9 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
             });
         },
         .call_or_subscript => |call_or_sub| {
+            if (isInternalLiteralSubstringName(call_or_sub.name)) {
+                return emitInternalLiteralSubstringPlan(ctx, builder, call_or_sub.args);
+            }
             if (isTrimIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 1) {
                 return emitCharacterValuePlanImpl(ctx, builder, call_or_sub.args[0], subst_depth);
             }

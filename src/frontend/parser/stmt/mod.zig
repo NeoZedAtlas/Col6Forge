@@ -42,6 +42,29 @@ test "parseStatement parses assignment" {
     try testing.expect(stmt_node.node == .assignment);
 }
 
+test "parseStatement parses slash array constructor assignment" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      X(:) = (/ 3, 1, 4, 1 /)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+
+    try testing.expectEqual(@as(usize, 1), idx);
+    try testing.expect(stmt_node.node == .assignment);
+    try testing.expect(stmt_node.node.assignment.value.* == .array_constructor);
+    try testing.expectEqual(@as(usize, 4), stmt_node.node.assignment.value.array_constructor.items.len);
+}
+
 test "parseStatement parses pointer assignment" {
     const testing = std.testing;
     const allocator = testing.allocator;

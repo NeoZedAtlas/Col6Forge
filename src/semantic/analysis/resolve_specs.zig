@@ -66,6 +66,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         .derived_type_def => {},
         .import => {},
         .intent => {},
+        .optional => {},
         .interface_block => |interface_block| {
             try validateExplicitInterfaceBlock(self, interface_block);
         },

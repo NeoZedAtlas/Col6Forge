@@ -993,6 +993,109 @@ test "runPipelineWithOptionsAndDiagnostics keeps diagnostics in explicit bag" {
     try testing.expect(takeLastDiagnostic() == null);
 }
 
+test "runPipelineWithOptionsAndDiagnostics accepts slash array constructor assignment" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "subroutine foo(x)\n" ++
+        "  integer :: x(4)\n" ++
+        "  x(:) = (/ 3, 1, 4, 1 /)\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "slash_array_constructor_pipeline.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    const result = try runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag);
+    defer allocator.free(result.output);
+    try testing.expect(!diag_bag.has());
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository array_constructor_14 contents" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "! { dg-do compile }\n" ++
+        "! { dg-options \"-O2 -fdump-tree-original\" }\n" ++
+        "\n" ++
+        "subroutine foo(x)\n" ++
+        "  integer :: x(4)\n" ++
+        "  x(:) = (/ 3, 1, 4, 1 /)\n" ++
+        "end subroutine\n" ++
+        "\n" ++
+        "subroutine bar(x)\n" ++
+        "  integer :: x(4)\n" ++
+        "  x = (/ 3, 1, 4, 1 /)\n" ++
+        "end subroutine\n" ++
+        "\n" ++
+        "! { dg-final { scan-tree-dump-times \"data\" 0 \"original\" } }\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "array_constructor_14_like.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    const result = try runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag);
+    defer allocator.free(result.output);
+    try testing.expect(!diag_bag.has());
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository array_constructor_14 file" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    const result = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/array_constructor_14.f90",
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    defer allocator.free(result.output);
+    try testing.expect(!diag_bag.has());
+}
+
+test "runPipelineWithOptions accepts repository array_constructor_14 file" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const result = try runPipelineWithOptions(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/array_constructor_14.f90",
+        .llvm,
+        .{},
+    );
+    defer allocator.free(result.output);
+    try testing.expect(result.output.len != 0);
+}
+
+test "runPipelineWithOptions accepts repository array_constructor_14 file with GPA allocator" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const result = try runPipelineWithOptions(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/array_constructor_14.f90",
+        .llvm,
+        .{},
+    );
+    defer allocator.free(result.output);
+    try std.testing.expect(result.output.len != 0);
+}
+
 test "runPipelineWithOptionsAndDiagnostics accepts defined assignment declared with procedure" {
     const testing = std.testing;
     const allocator = testing.allocator;

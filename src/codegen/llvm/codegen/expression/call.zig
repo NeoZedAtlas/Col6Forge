@@ -193,6 +193,11 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
     if (try emitMaterializedArrayExprActual(ctx, builder, expr)) |materialized| {
         return materialized;
     }
+    if (expr.* == .array_constructor) {
+        if (try resolveArrayActual(ctx, builder, expr)) |actual| {
+            return .{ .ptr = actual.base_ptr, .descriptor_actual = actual };
+        }
+    }
     if (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) |char_value| {
         return .{ .ptr = char_value.ptr };
     }
@@ -583,6 +588,11 @@ fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Expr) a
 
 fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualPlan {
     if (try analyzeAddressableArrayActual(ctx, builder, expr)) |actual| return try validatedArrayActual(actual);
+    if (expr.* == .array_constructor) {
+        if (try analyzeStaticZeroSizedArrayConstructorActual(ctx, builder, expr.array_constructor)) |actual| {
+            return try validatedArrayActual(actual);
+        }
+    }
     if (expr.* == .call_or_subscript and isIntrinsicArrayConversionArg(ctx, expr.call_or_subscript)) {
         if (try analyzeIntrinsicConversionActual(ctx, builder, expr.call_or_subscript)) |actual| {
             return try validatedArrayActual(actual);
@@ -594,6 +604,129 @@ fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?Ar
         return try validatedArrayActual(actual);
     }
     return null;
+}
+
+fn analyzeStaticZeroSizedArrayConstructorActual(
+    ctx: *Context,
+    builder: anytype,
+    ctor: ast.ArrayConstructor,
+) anyerror!?ArrayActualPlan {
+    const elem_count = staticArrayConstructorCount(ctor) orelse return null;
+    if (elem_count != 0) return null;
+
+    const elem_info = arrayConstructorElementInfo(ctx, ctor) orelse return null;
+    const buf_name = try ctx.nextTemp();
+    switch (elem_info.elem_ty) {
+        .i8 => try builder.alloca(buf_name, .i8),
+        else => try builder.alloca(buf_name, elem_info.elem_ty),
+    }
+    const extents = try ctx.allocator.alloc(ValueRef, 1);
+    extents[0] = i64Const(ctx, 0);
+    const multipliers = try ctx.allocator.alloc(ValueRef, 1);
+    multipliers[0] = i64Const(ctx, 1);
+    return .{
+        .base_ptr = .{ .name = buf_name, .ty = .ptr, .is_ptr = true },
+        .elem_ty = elem_info.elem_ty,
+        .extents = extents,
+        .multipliers = multipliers,
+        .address_scale = elem_info.address_scale,
+        .storage = .materialized_temp,
+    };
+}
+
+const ArrayConstructorElementInfo = struct {
+    elem_ty: IRType,
+    address_scale: ValueRef,
+};
+
+fn arrayConstructorElementInfo(ctx: *Context, ctor: ast.ArrayConstructor) ?ArrayConstructorElementInfo {
+    const representative = arrayConstructorRepresentativeExpr(ctor) orelse return null;
+    if (dispatch.isCharacterExpr(ctx, representative)) {
+        const char_len = dispatch.constantCharacterLenForExpr(ctx, representative) orelse return null;
+        return .{
+            .elem_ty = .i8,
+            .address_scale = i64Const(ctx, @intCast(char_len)),
+        };
+    }
+    const elem_ty = casting.exprType(ctx, representative) catch return null;
+    return .{
+        .elem_ty = elem_ty,
+        .address_scale = i64Const(ctx, 1),
+    };
+}
+
+fn arrayConstructorRepresentativeExpr(ctor: ast.ArrayConstructor) ?*Expr {
+    for (ctor.items) |item| {
+        if (item.* == .implied_do) {
+            if (item.implied_do.items.len == 0) continue;
+            return item.implied_do.items[0];
+        }
+        return item;
+    }
+    return null;
+}
+
+fn staticArrayConstructorCount(ctor: ast.ArrayConstructor) ?usize {
+    var total: usize = 0;
+    for (ctor.items) |item| {
+        total = std.math.add(usize, total, staticArrayConstructorItemCount(item) orelse return null) catch return null;
+    }
+    return total;
+}
+
+fn staticArrayConstructorItemCount(expr: *Expr) ?usize {
+    return switch (expr.*) {
+        .implied_do => |implied| blk: {
+            const trip_count = staticImpliedDoTripCount(implied) orelse return null;
+            var per_iter: usize = 0;
+            for (implied.items) |item| {
+                per_iter = std.math.add(usize, per_iter, staticArrayConstructorItemCount(item) orelse return null) catch return null;
+            }
+            break :blk std.math.mul(usize, trip_count, per_iter) catch return null;
+        },
+        else => 1,
+    };
+}
+
+fn staticImpliedDoTripCount(implied: ast.ImpliedDo) ?usize {
+    const start = staticIntExprValue(implied.start) orelse return null;
+    const finish = staticIntExprValue(implied.end) orelse return null;
+    const step = if (implied.step) |step_expr| staticIntExprValue(step_expr) orelse return null else 1;
+    if (step == 0) return null;
+    if (step > 0) {
+        if (start > finish) return 0;
+        const span = finish - start;
+        return std.math.cast(usize, @divTrunc(span, step) + 1);
+    }
+    if (start < finish) return 0;
+    const span = start - finish;
+    return std.math.cast(usize, @divTrunc(span, -step) + 1);
+}
+
+fn staticIntExprValue(expr: *Expr) ?i64 {
+    return switch (expr.*) {
+        .literal => |lit| if (lit.kind == .integer) std.fmt.parseInt(i64, lit.text, 10) catch null else null,
+        .unary => |un| {
+            const value = staticIntExprValue(un.expr) orelse return null;
+            return switch (un.op) {
+                .plus => value,
+                .minus => -value,
+                else => null,
+            };
+        },
+        .binary => |bin| {
+            const left = staticIntExprValue(bin.left) orelse return null;
+            const right = staticIntExprValue(bin.right) orelse return null;
+            return switch (bin.op) {
+                .add => left + right,
+                .sub => left - right,
+                .mul => left * right,
+                .div => if (right == 0) null else @divTrunc(left, right),
+                else => null,
+            };
+        },
+        else => null,
+    };
 }
 
 fn analyzeIntrinsicConversionActual(

@@ -1638,10 +1638,11 @@ fn declsEquivalentForImport(a: Decl, b: Decl) bool {
             break :blk std.ascii.eqlIgnoreCase(interface_block.name.?, b.interface_block.name.?);
         },
         .parameter => |parameter| namesEqualParamAssigns(parameter.assigns, b.parameter.assigns),
-        .import, .external, .intrinsic => |list| namesEqualStrings(list.names, switch (b) {
+        .import, .external, .intrinsic, .optional => |list| namesEqualStrings(list.names, switch (b) {
             .import => |other| other.names,
             .external => |other| other.names,
             .intrinsic => |other| other.names,
+            .optional => |other| other.names,
             else => unreachable,
         }),
         .intent => |intent_decl| namesEqualStrings(intent_decl.names, b.intent.names),
@@ -2704,6 +2705,81 @@ test "parseProgram keeps split PROGRAMX assignment in implicit main" {
     try testing.expectEqual(@as(usize, 1), program.units[0].stmts.len);
     try testing.expect(program.units[0].stmts[0].node == .assignment);
     try testing.expectEqualStrings("PROGRAMX", program.units[0].stmts[0].node.assignment.target.identifier);
+}
+
+test "parseProgram handles free-form slash array constructor assignment in subroutine body" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine foo(x)\n" ++
+        "  integer :: x(4)\n" ++
+        "  x(:) = (/ 3, 1, 4, 1 /)\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    try testing.expectEqual(@as(usize, 1), program.units[0].stmts.len);
+    try testing.expect(program.units[0].stmts[0].node == .assignment);
+    try testing.expect(program.units[0].stmts[0].node.assignment.value.* == .array_constructor);
+}
+
+test "parseProgramWithDiagnostics handles free-form slash array constructor assignment in subroutine body" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine foo(x)\n" ++
+        "  integer :: x(4)\n" ++
+        "  x(:) = (/ 3, 1, 4, 1 /)\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    const program = try parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    try testing.expectEqual(@as(usize, 1), program.units[0].stmts.len);
+    try testing.expect(program.units[0].stmts[0].node == .assignment);
+    try testing.expect(program.units[0].stmts[0].node.assignment.value.* == .array_constructor);
+    try testing.expect(!diag_bag.has());
+}
+
+test "parseProgramWithDiagnostics accepts repository array_constructor_14 file" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = try std.fs.cwd().readFileAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/array_constructor_14.f90",
+        1024 * 1024,
+    );
+    defer allocator.free(source);
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    const program = try parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag);
+
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+    try testing.expect(program.units[0].stmts[0].node == .assignment);
+    try testing.expect(program.units[0].stmts[0].node.assignment.value.* == .array_constructor);
+    try testing.expect(program.units[1].stmts[0].node == .assignment);
+    try testing.expect(program.units[1].stmts[0].node.assignment.value.* == .array_constructor);
+    try testing.expect(!diag_bag.has());
 }
 
 test "parseProgram reports continued declaration parse errors on the real source line" {

@@ -34,7 +34,7 @@ pub fn isDeclarationStart(lp: LineParser) bool {
     if (isDoubleComplexTypeStart(lp)) return true;
     if (isDoublePrecisionTypeStart(lp)) return true;
     if (isDerivedTypeDeclStart(lp)) return true;
-    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("ALLOCATABLE") or lp.isKeywordSplit("POINTER") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE") or lp.isKeywordSplit("PROCEDURE") or lp.isKeywordSplit("IMPORT") or lp.isKeywordSplit("INTENT");
+    return lp.isKeywordSplit("DIMENSION") or lp.isKeywordSplit("ALLOCATABLE") or lp.isKeywordSplit("POINTER") or lp.isKeywordSplit("PARAMETER") or lp.isKeywordSplit("COMMON") or lp.isKeywordSplit("EQUIVALENCE") or lp.isKeywordSplit("IMPLICIT") or lp.isKeywordSplit("EXTERNAL") or lp.isKeywordSplit("INTRINSIC") or lp.isKeywordSplit("SAVE") or lp.isKeywordSplit("PROCEDURE") or lp.isKeywordSplit("IMPORT") or lp.isKeywordSplit("INTENT") or lp.isKeywordSplit("OPTIONAL");
 }
 
 pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
@@ -57,6 +57,11 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         _ = consumeDoubleColon(lp);
         return .{ .intent = .{ .kind = kind, .names = try parseNameList(lp, arena) } };
+    }
+    if (lp.isKeywordSplit("OPTIONAL")) {
+        _ = lp.consumeKeyword("OPTIONAL");
+        _ = consumeDoubleColon(lp);
+        return .{ .optional = .{ .names = try parseNameList(lp, arena) } };
     }
     if (lp.isKeywordSplit("IMPLICIT")) {
         _ = lp.consumeKeyword("IMPLICIT");
@@ -795,13 +800,19 @@ pub fn parseCharacterLenSpec(lp: *LineParser, arena: std.mem.Allocator) !ParsedC
             if (lp.peek()) |tok| {
                 if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "LEN")) {
                     _ = lp.next();
-                    _ = lp.expect(.equals) orelse return error.UnexpectedToken;
-                    if (lp.consume(.colon)) {
-                        parsed.deferred = true;
-                    } else if (lp.consume(.star)) {
-                        parsed.expr = try makeAssumedCharLenExpr(arena);
-                    } else {
+                    if (lp.consume(.equals)) {
+                        if (lp.consume(.colon)) {
+                            parsed.deferred = true;
+                        } else if (lp.consume(.star)) {
+                            parsed.expr = try makeAssumedCharLenExpr(arena);
+                        } else {
+                            parsed.expr = try expr.parseExpr(lp, arena, 0);
+                        }
+                    } else if (lp.consume(.l_paren)) {
                         parsed.expr = try expr.parseExpr(lp, arena, 0);
+                        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+                    } else {
+                        return error.UnexpectedToken;
                     }
                     _ = lp.consume(.comma);
                     continue;
@@ -1161,6 +1172,35 @@ test "parseDecl handles CHARACTER LEN= selector" {
             try testing.expect(td.items[0].char_len != null);
             switch (td.items[0].char_len.?.*) {
                 .literal => |lit| try testing.expectEqualStrings("10", lit.text),
+                else => return error.UnexpectedToken,
+            }
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles CHARACTER LEN() selector" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      CHARACTER(LEN(N)) :: S\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.character, td.type_kind);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expect(td.items[0].char_len != null);
+            switch (td.items[0].char_len.?.*) {
+                .identifier => |name| try testing.expectEqualStrings("N", name),
                 else => return error.UnexpectedToken,
             }
         },
@@ -2012,6 +2052,30 @@ test "parseDecl preserves OPTIONAL declaration attribute" {
             try testing.expect(td.optional);
             try testing.expectEqual(@as(usize, 1), td.items.len);
             try testing.expectEqualStrings("A", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles bare OPTIONAL declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      OPTIONAL :: J1\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .optional => |optional_decl| {
+            try testing.expectEqual(@as(usize, 1), optional_decl.names.len);
+            try testing.expectEqualStrings("J1", optional_decl.names[0]);
         },
         else => return error.UnexpectedToken,
     }
