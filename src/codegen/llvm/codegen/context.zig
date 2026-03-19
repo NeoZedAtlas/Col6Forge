@@ -554,11 +554,17 @@ pub const Context = struct {
         if (sym.dims.len == 0) return 1;
         if (self.symbolIndexForName(sym.name)) |idx| {
             if (self.array_elem_count_cache.get(idx)) |cached| return cached;
-            const count = try common.arrayElementCount(self.sem, sym.dims);
+            const count = common.arrayElementCount(self.sem, sym.dims) catch |err| switch (err) {
+                error.ArrayDimNotConstant => inferredParameterArrayElemCount(self.unit, sym) orelse return err,
+                else => return err,
+            };
             try self.array_elem_count_cache.put(idx, count);
             return count;
         }
-        return common.arrayElementCount(self.sem, sym.dims);
+        return common.arrayElementCount(self.sem, sym.dims) catch |err| switch (err) {
+            error.ArrayDimNotConstant => inferredParameterArrayElemCount(self.unit, sym) orelse return err,
+            else => return err,
+        };
     }
 
     pub fn addStatementFunction(self: *Context, name: []const u8, params: []const []const u8, expr: *input.Expr) !void {
@@ -1085,6 +1091,77 @@ pub fn fortranAbiReturnType(ret_ty: IRType) IRType {
 
 pub fn fortranAbiUsesHiddenResultPtr(ret_ty: IRType) bool {
     return fortranAbiUsesHiddenResultPtrForTarget(null, ret_ty);
+}
+
+fn inferredParameterArrayElemCount(unit: ProgramUnit, sym: input.sema.Symbol) ?usize {
+    for (unit.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, sym.name)) continue;
+                    const init = item.init orelse return null;
+                    return arrayValuedExprElemCount(init);
+                }
+            },
+            .parameter => |param| {
+                for (param.assigns) |assign| {
+                    if (!std.ascii.eqlIgnoreCase(assign.name, sym.name)) continue;
+                    return arrayValuedExprElemCount(assign.value);
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn arrayValuedExprElemCount(expr_node: *input.Expr) ?usize {
+    return switch (expr_node.*) {
+        .array_constructor => |ctor| arrayConstructorElemCount(ctor),
+        .call_or_subscript => |call| blk: {
+            if (!std.ascii.eqlIgnoreCase(call.name, "reshape")) break :blk null;
+            if (call.args.len != 2) break :blk null;
+            break :blk shapeProductForExpr(call.args[1]);
+        },
+        .binary => |bin| blk: {
+            if (bin.op != .concat) break :blk null;
+            const left = arrayValuedExprElemCount(bin.left) orelse break :blk null;
+            const right = arrayValuedExprElemCount(bin.right) orelse break :blk null;
+            if (left != right) break :blk null;
+            break :blk left;
+        },
+        else => null,
+    };
+}
+
+fn arrayConstructorElemCount(ctor: input.ArrayConstructor) ?usize {
+    var total: usize = 0;
+    for (ctor.items) |item| {
+        const item_count = arrayValuedExprElemCount(item) orelse 1;
+        total = std.math.add(usize, total, item_count) catch return null;
+    }
+    return total;
+}
+
+fn shapeProductForExpr(expr_node: *input.Expr) ?usize {
+    const ctor = switch (expr_node.*) {
+        .array_constructor => expr_node.array_constructor,
+        else => return null,
+    };
+    var total: usize = 1;
+    for (ctor.items) |item| {
+        const value = switch (item.*) {
+            .literal => |lit| blk: {
+                if (lit.kind != .integer) break :blk null;
+                break :blk std.fmt.parseInt(i64, lit.text, 10) catch null;
+            },
+            else => null,
+        } orelse return null;
+        if (value < 0) return null;
+        const usize_value = std.math.cast(usize, value) orelse return null;
+        total = std.math.mul(usize, total, usize_value) catch return null;
+    }
+    return total;
 }
 
 test "fortranAbiReturnType uses sret ABI for complex*16" {

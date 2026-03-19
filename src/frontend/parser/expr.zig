@@ -11,7 +11,7 @@ const BinaryOp = ast.BinaryOp;
 const SourceRef = ast.SourceRef;
 const ExprSource = ast.ExprSource;
 
-const ParseExprError = error{ UnexpectedEOF, UnexpectedToken, ExpressionDepthExceeded } || std.mem.Allocator.Error;
+const ParseExprError = error{ UnexpectedEOF, UnexpectedToken, ExpressionDepthExceeded, InvalidArrayConstructorSyntax } || std.mem.Allocator.Error;
 const max_expression_depth: usize = 512;
 const prec_eqv: u8 = 0;
 const prec_or: u8 = 1;
@@ -289,7 +289,10 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
                 if (!lp.consume(.comma)) break;
             }
             _ = lp.expect(.r_bracket) orelse return error.UnexpectedToken;
-            if (items.items.len == 0) return error.UnexpectedToken;
+            if (items.items.len == 0) {
+                if (type_spec != null) return error.InvalidArrayConstructorSyntax;
+                return error.UnexpectedToken;
+            }
             return makeExprNode(
                 arena,
                 .{ .array_constructor = .{ .type_spec = type_spec, .items = try items.toOwnedSlice() } },
@@ -331,6 +334,7 @@ fn tryParseArrayConstructorTypeSpec(
     arena: std.mem.Allocator,
     depth: usize,
 ) ParseExprError!?ast.ArrayConstructorTypeSpec {
+    if (!hasTopLevelDoubleColonBeforeArrayItemEnd(lp.*)) return null;
     var lookahead = lp.*;
     const parsed = parseArrayConstructorTypeSpec(&lookahead, arena, depth) catch |err| {
         return switch (err) {
@@ -338,12 +342,39 @@ fn tryParseArrayConstructorTypeSpec(
             error.UnexpectedEOF => error.UnexpectedEOF,
             error.UnexpectedToken => error.UnexpectedToken,
             error.ExpressionDepthExceeded => error.ExpressionDepthExceeded,
+            error.InvalidArrayConstructorSyntax => error.InvalidArrayConstructorSyntax,
             error.OutOfMemory => error.OutOfMemory,
         };
     };
     if (!consumeDoubleColon(&lookahead)) return null;
     lp.* = lookahead;
     return parsed;
+}
+
+fn hasTopLevelDoubleColonBeforeArrayItemEnd(lp: LineParser) bool {
+    var depth: usize = 0;
+    var i = lp.index;
+    while (i < lp.tokens.len) : (i += 1) {
+        const tok = lp.tokens[i];
+        if (depth == 0) {
+            if (tok.kind == .comma) return false;
+            if (tok.kind == .slash and i + 1 < lp.tokens.len and lp.tokens[i + 1].kind == .r_paren) {
+                return false;
+            }
+            if (tok.kind == .colon and i + 1 < lp.tokens.len and lp.tokens[i + 1].kind == .colon) {
+                return true;
+            }
+        }
+        switch (tok.kind) {
+            .l_paren, .l_bracket => depth += 1,
+            .r_paren, .r_bracket => {
+                if (depth == 0) return false;
+                depth -= 1;
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 const ParseArrayTypeError = ParseExprError || error{UnknownType};
@@ -397,6 +428,10 @@ fn parseArrayConstructorTypeSpec(
         const name = lp.readName(arena) orelse return error.UnexpectedToken;
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
         return .{ .type_kind = .derived, .derived_type_name = name, .polymorphic = true };
+    }
+    if (lp.peekIs(.identifier)) {
+        const name = lp.readName(arena) orelse return error.UnexpectedToken;
+        return .{ .type_kind = .derived, .derived_type_name = name };
     }
     return error.UnknownType;
 }
@@ -669,26 +704,26 @@ fn sourceForExpr(expr_node: *Expr) ?SourceRef {
 
 fn hasSubstringRange(lp: LineParser) bool {
     var depth: usize = 0;
-    var saw_colon = false;
+    var colon_count: usize = 0;
     var idx = lp.index;
     while (idx < lp.tokens.len) : (idx += 1) {
         const tok = lp.tokens[idx];
         switch (tok.kind) {
             .l_paren => depth += 1,
             .r_paren => {
-                if (depth == 0) return saw_colon;
+                if (depth == 0) return colon_count == 1;
                 depth -= 1;
             },
             .comma => {
                 if (depth == 0) return false;
             },
             .colon => {
-                if (depth == 0) saw_colon = true;
+                if (depth == 0) colon_count += 1;
             },
             else => {},
         }
     }
-    return saw_colon;
+    return colon_count == 1;
 }
 
 fn hasArgumentDimRange(lp: LineParser) bool {
@@ -937,6 +972,35 @@ test "parseExpr handles dim-range triplet stride in subscripts" {
     }
 }
 
+test "parseExpr handles omitted-lower triplet stride in subscripts" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      A(::1)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .call_or_subscript => |call| {
+            try testing.expectEqual(@as(usize, 1), call.args.len);
+            try testing.expect(call.args[0].* == .dim_range);
+            const range = call.args[0].dim_range;
+            try testing.expect(range.lower == null);
+            try testing.expect(range.stride != null);
+            try testing.expect(range.stride.?.* == .literal);
+            try testing.expectEqualStrings("1", range.stride.?.literal.text);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
 test "parseExpr accepts keyword actual arguments in calls" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1154,6 +1218,32 @@ test "parseExpr handles typed array constructor" {
             try testing.expect(ctor.type_spec != null);
             try testing.expectEqual(ast.TypeKind.character, ctor.type_spec.?.type_kind);
             try testing.expect(ctor.type_spec.?.kind_selector != null);
+            try testing.expectEqual(@as(usize, 1), ctor.items.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles bare derived-type array constructor type spec" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      [T :: T()]\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .array_constructor => |ctor| {
+            try testing.expect(ctor.type_spec != null);
+            try testing.expectEqual(ast.TypeKind.derived, ctor.type_spec.?.type_kind);
+            try testing.expectEqualStrings("T", ctor.type_spec.?.derived_type_name.?);
             try testing.expectEqual(@as(usize, 1), ctor.items.len);
         },
         else => return error.UnexpectedToken,

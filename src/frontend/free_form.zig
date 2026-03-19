@@ -275,7 +275,7 @@ fn rewriteAndAppend(
             defer allocator.free(mapped);
             const simplified = try simplifyParameterAssigns(allocator, right, kind_state.*);
             defer allocator.free(simplified);
-            if (std.mem.indexOfScalar(u8, simplified, '[') != null) {
+            if (hasRewritableParameterArrayConstructorAssign(simplified)) {
                 var scalar_names = std.array_list.Managed(u8).init(allocator);
                 defer scalar_names.deinit();
                 var scalar_assigns = std.array_list.Managed(u8).init(allocator);
@@ -290,7 +290,7 @@ fn rewriteAndAppend(
                             const name = std.mem.trim(u8, seg[0..eq_idx], " \t");
                             const value = std.mem.trim(u8, seg[eq_idx + 1 ..], " \t");
                             if (isArrayConstructor(value)) {
-                                const elems = std.mem.trim(u8, value[1 .. value.len - 1], " \t");
+                                const elems = arrayConstructorElements(value);
                                 const count = countTopLevelElements(elems);
                                 const lparen_idx = std.mem.indexOfScalar(u8, name, '(');
                                 const base_name = if (lparen_idx) |idx|
@@ -326,6 +326,10 @@ fn rewriteAndAppend(
                     const param_text = try std.fmt.allocPrint(allocator, "PARAMETER ({s})", .{scalar_assigns.items});
                     try appendGeneratedLogicalLine(list, param_text, stmt.segments, start_line, end_line);
                 }
+                return;
+            }
+            if (hasParameterDeclaratorSuffix(simplified)) {
+                try appendMappedLogicalLine(list, try dupMappedText(allocator, stmt), start_line, end_line);
                 return;
             }
             const names = try extractAssignNames(allocator, simplified);
@@ -802,7 +806,56 @@ test "normalizeFreeForm preserves fine-grained continuation segments" {
 
 fn isArrayConstructor(value: []const u8) bool {
     const trimmed = std.mem.trim(u8, value, " \t");
-    return trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']';
+    if (trimmed.len >= 2 and trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') return true;
+    return trimmed.len >= 4 and trimmed[0] == '(' and trimmed[1] == '/' and trimmed[trimmed.len - 2] == '/' and trimmed[trimmed.len - 1] == ')';
+}
+
+fn arrayConstructorElements(value: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, value, " \t");
+    if (trimmed.len >= 4 and trimmed[0] == '(' and trimmed[1] == '/' and trimmed[trimmed.len - 2] == '/' and trimmed[trimmed.len - 1] == ')') {
+        return std.mem.trim(u8, trimmed[2 .. trimmed.len - 2], " \t");
+    }
+    return std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], " \t");
+}
+
+fn hasRewritableParameterArrayConstructorAssign(assigns: []const u8) bool {
+    var rest = assigns;
+    while (true) {
+        const next_idx = indexOfTopLevelScalar(rest, ',') orelse rest.len;
+        const seg = std.mem.trim(u8, rest[0..next_idx], " \t");
+        if (seg.len != 0) {
+            if (std.mem.indexOfScalar(u8, seg, '=')) |eq_idx| {
+                const value = std.mem.trim(u8, seg[eq_idx + 1 ..], " \t");
+                if (isRewritableArrayConstructor(value)) return true;
+            }
+        }
+        if (next_idx == rest.len) break;
+        rest = rest[next_idx + 1 ..];
+    }
+    return false;
+}
+
+fn isRewritableArrayConstructor(value: []const u8) bool {
+    if (!isArrayConstructor(value)) return false;
+    const trimmed = std.mem.trim(u8, value, " \t");
+    return std.mem.indexOf(u8, trimmed, "::") == null;
+}
+
+fn hasParameterDeclaratorSuffix(assigns: []const u8) bool {
+    var rest = assigns;
+    while (true) {
+        const next_idx = indexOfTopLevelScalar(rest, ',') orelse rest.len;
+        const seg = std.mem.trim(u8, rest[0..next_idx], " \t");
+        if (seg.len != 0) {
+            if (std.mem.indexOfScalar(u8, seg, '=')) |eq_idx| {
+                const name = std.mem.trim(u8, seg[0..eq_idx], " \t");
+                if (std.mem.indexOfScalar(u8, name, '(') != null) return true;
+            }
+        }
+        if (next_idx == rest.len) break;
+        rest = rest[next_idx + 1 ..];
+    }
+    return false;
 }
 
 fn countTopLevelElements(text: []const u8) usize {
@@ -993,6 +1046,31 @@ test "normalizeFreeForm keeps parameter strings with commas intact" {
     try testing.expectEqual(@as(usize, 2), lines.len);
     try testing.expectEqualStrings("character(*) str, msg", lines[0].text);
     try testing.expectEqualStrings("PARAMETER (str = \"Hello, World!\", msg = \"A, B\")", lines[1].text);
+}
+
+test "normalizeFreeForm rewrites slash PARAMETER array constructors to DATA init" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "complex(dp), parameter :: ri(2) = (/(1,0),(0,1)/)\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expectEqualStrings("complex(dp) ri(2)", lines[0].text);
+    try testing.expectEqualStrings("DATA ri /(1,0),(0,1)/", lines[1].text);
+}
+
+test "normalizeFreeForm preserves modern PARAMETER declarations with declarator suffix and non-constructor init" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "integer, parameter :: c_index(8) = unpack([1,2],[.true.,.false.],0)\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 1), lines.len);
+    try testing.expectEqualStrings("integer, parameter :: c_index(8) = unpack([1,2],[.true.,.false.],0)", lines[0].text);
 }
 
 test "normalizeFreeForm preserves repository array_constructor_14 slash constructors" {

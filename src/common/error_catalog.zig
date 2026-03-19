@@ -39,6 +39,7 @@ pub const parser = struct {
     pub const data_expansion_too_large = ErrorInfo{ .code = "CF2013", .message = "DATA statement expansion exceeds parser safety limit" };
     pub const format_expansion_too_large = ErrorInfo{ .code = "CF2014", .message = "FORMAT statement expansion exceeds parser safety limit" };
     pub const invalid_equivalence_group = ErrorInfo{ .code = "CF2015", .message = "EQUIVALENCE group must contain at least two designators" };
+    pub const invalid_array_constructor = ErrorInfo{ .code = "CF2016", .message = "Syntax error in array constructor" };
     pub const failed_to_understand = ErrorInfo{ .code = "CF2099", .message = "parser failed to understand source" };
 };
 
@@ -140,6 +141,7 @@ pub fn parserInfoFor(err: anyerror) ErrorInfo {
         error.DataExpansionTooLarge => parser.data_expansion_too_large,
         error.FormatExpansionTooLarge => parser.format_expansion_too_large,
         error.InvalidEquivalenceGroup => parser.invalid_equivalence_group,
+        error.InvalidArrayConstructorSyntax => parser.invalid_array_constructor,
         else => parser.failed_to_understand,
     };
 }

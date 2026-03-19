@@ -186,14 +186,14 @@ pub fn applyComplexFixups(ctx: *Context, builder: anytype, expanded: *ExpandedRe
     }
 }
 pub fn expandIoArgs(ctx: *Context, args: []*ast.Expr) EmitError!ExpandedIoArgs {
-    var has_implied_do = false;
+    var needs_expansion = false;
     for (args) |arg| {
-        if (arg.* == .implied_do) {
-            has_implied_do = true;
+        if (arg.* == .implied_do or arg.* == .array_constructor) {
+            needs_expansion = true;
             break;
         }
     }
-    if (!has_implied_do) {
+    if (!needs_expansion) {
         return .{
             .items = args,
             .clone_arena = null,
@@ -224,6 +224,12 @@ fn appendExpandedIoArg(
     expanded: *std.array_list.Managed(*ast.Expr),
     arg: *ast.Expr,
 ) EmitError!void {
+    if (try flattenIoArrayValuedExpr(ctx, clone_allocator, arg)) |items| {
+        for (items) |item| {
+            try appendExpandedIoArg(ctx, clone_allocator, expanded, item);
+        }
+        return;
+    }
     if (arg.* == .implied_do) {
         const implied_expanded = try expandImpliedDo(ctx, clone_allocator, arg.implied_do);
         defer ctx.allocator.free(implied_expanded);
@@ -232,8 +238,60 @@ fn appendExpandedIoArg(
         }
         return;
     }
+    if (arg.* == .array_constructor) {
+        for (arg.array_constructor.items) |item| {
+            try appendExpandedIoArg(ctx, clone_allocator, expanded, item);
+        }
+        return;
+    }
     try expanded.append(arg);
 }
+
+fn flattenIoArrayValuedExpr(
+    ctx: *Context,
+    allocator: std.mem.Allocator,
+    arg: *ast.Expr,
+) EmitError!?[]*ast.Expr {
+    return switch (arg.*) {
+        .call_or_subscript => |call| flattenVectorSubscriptItems(ctx, allocator, call),
+        else => null,
+    };
+}
+
+fn flattenVectorSubscriptItems(
+    ctx: *Context,
+    allocator: std.mem.Allocator,
+    call: ast.CallOrSubscript,
+) EmitError!?[]*ast.Expr {
+    const sym = ctx.findSymbol(call.name) orelse return null;
+    if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
+
+    var vector_dim: ?usize = null;
+    for (call.args, 0..) |arg, idx| {
+        if (arg.* != .array_constructor) continue;
+        if (vector_dim != null) return null;
+        vector_dim = idx;
+    }
+    const dim_idx = vector_dim orelse return null;
+    const ctor = call.args[dim_idx].array_constructor;
+    if (ctor.type_spec != null or ctor.items.len == 0) return null;
+
+    const items = try allocator.alloc(*ast.Expr, ctor.items.len);
+    for (ctor.items, 0..) |item, idx| {
+        const scalar_args = try allocator.alloc(*ast.Expr, call.args.len);
+        for (call.args, 0..) |arg, arg_idx| {
+            scalar_args[arg_idx] = if (arg_idx == dim_idx) item else arg;
+        }
+        const scalar_ref = try allocator.create(ast.Expr);
+        scalar_ref.* = .{ .call_or_subscript = .{
+            .name = call.name,
+            .args = scalar_args,
+        } };
+        items[idx] = scalar_ref;
+    }
+    return items;
+}
+
 fn expandImpliedDo(ctx: *Context, clone_allocator: std.mem.Allocator, implied: ast.ImpliedDo) EmitError![]*ast.Expr {
     const start_val_opt = try evalImpliedDoBound(ctx, implied.start);
     const end_val_opt = try evalImpliedDoBound(ctx, implied.end);
@@ -598,6 +656,56 @@ fn emitCollapsedRangeSubscriptValue(
     return try expr.emitExpr(ctx, builder, &lowered_expr);
 }
 
+fn emitCollapsedSubstringSectionValue(
+    ctx: *Context,
+    builder: anytype,
+    expr_node: *ast.Expr,
+) EmitError!?ValueRef {
+    if (expr_node.* != .substring) return null;
+    const sub = expr_node.substring;
+    const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr_node))) orelse .unknown;
+    if (kind != .subscript) return null;
+
+    const sym = ctx.findSymbol(sub.name) orelse return null;
+    if (sym.dims.len != 1 or sub.args.len != 0) return null;
+
+    var assumed_size = ast.Expr{ .literal = .{ .kind = .assumed_size, .text = "*" } };
+    const upper_expr = sub.end orelse &assumed_size;
+    var range_expr = ast.Expr{ .dim_range = .{
+        .lower = sub.start,
+        .upper = upper_expr,
+        .stride = null,
+        .assumed_shape = false,
+    } };
+    var args = [_]*ast.Expr{&range_expr};
+    return emitCollapsedRangeSubscriptValue(ctx, builder, .{
+        .name = sub.name,
+        .args = args[0..],
+    });
+}
+
+fn emitCollapsedUnknownCountWholeArrayValue(
+    ctx: *Context,
+    builder: anytype,
+    name: []const u8,
+) EmitError!?ValueRef {
+    const assumed = try ctx.allocator.create(ast.Expr);
+    assumed.* = .{ .literal = .{ .kind = .assumed_size, .text = "*" } };
+    const stride = try makeIntegerLiteralExpr(ctx, 1);
+    const range = try ctx.allocator.create(ast.Expr);
+    range.* = .{ .dim_range = .{
+        .lower = null,
+        .upper = assumed,
+        .stride = stride,
+        .assumed_shape = false,
+    } };
+    var args = [_]*ast.Expr{range};
+    return emitCollapsedRangeSubscriptValue(ctx, builder, .{
+        .name = name,
+        .args = args[0..],
+    });
+}
+
 pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedWriteValues {
     var expanded = ExpandedWriteValues.init(ctx.allocator);
     var flat_args = try expandIoArgs(ctx, args);
@@ -606,7 +714,17 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
-                const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
+                const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
+                    error.ArrayDimNotConstant => {
+                        if (try emitCollapsedUnknownCountWholeArrayValue(ctx, builder, sym.name)) |value| {
+                            const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
+                            try appendWriteValue(&expanded, value, len, null);
+                            continue;
+                        }
+                        return err;
+                    },
+                    else => return err,
+                };
                 if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout);
@@ -656,6 +774,18 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
                 continue;
             }
         }
+        if (try emitCollapsedSubstringSectionValue(ctx, builder, arg)) |value| {
+            if (complex.isComplexType(value.ty)) {
+                const real = try complex.extractComplex(ctx, builder, value, 0);
+                const imag = try complex.extractComplex(ctx, builder, value, 1);
+                try appendWriteValue(&expanded, real, 0, null);
+                try appendWriteValue(&expanded, imag, 0, null);
+            } else {
+                const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
+                try appendWriteValue(&expanded, value, len, null);
+            }
+            continue;
+        }
         const source_ptr = expr.emitLValue(ctx, builder, arg) catch null;
         const value = try expr.emitExpr(ctx, builder, arg);
         if (complex.isComplexType(value.ty)) {
@@ -678,7 +808,17 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
             if (sym.dims.len > 0) {
-                const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
+                const elem_count = ctx.arrayElemCountForSymbol(sym) catch |err| switch (err) {
+                    error.ArrayDimNotConstant => {
+                        if (try emitCollapsedUnknownCountWholeArrayValue(ctx, builder, sym.name)) |value| {
+                            const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
+                            try appendWriteValue(&expanded, value, len, null);
+                            continue;
+                        }
+                        return err;
+                    },
+                    else => return err,
+                };
                 if (elem_count > max_static_array_arg_expansion) return error.ArrayArgTooLargeForPackedIo;
                 const base_ptr = try ctx.getPointer(sym.name);
                 const elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout);
@@ -707,6 +847,11 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
                 try appendWriteValue(&expanded, value, len, null);
                 continue;
             }
+        }
+        if (try emitCollapsedSubstringSectionValue(ctx, builder, arg)) |value| {
+            const len = if (value.ty == .ptr) charLenForExpr(ctx, arg) orelse 1 else 0;
+            try appendWriteValue(&expanded, value, len, null);
+            continue;
         }
         const source_ptr = expr.emitLValue(ctx, builder, arg) catch null;
         const value = try expr.emitExpr(ctx, builder, arg);

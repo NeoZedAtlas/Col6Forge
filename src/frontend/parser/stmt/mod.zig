@@ -1069,6 +1069,42 @@ test "parseStatement handles free-form assignment with slash array constructor k
     try testing.expect(stmt_node.node.assignment.value.* == .array_constructor);
 }
 
+test "parseStatementWithDiagnostics clears speculative parse errors for slash array constructor keyword call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "vec = (/ real(a = 1), 1. /)\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    var lex_diag_bag = lexer.Bag.init(arena.allocator());
+    defer lex_diag_bag.deinit();
+
+    const stmt_node = try parseStatementWithDiagnostics(
+        arena.allocator(),
+        lines,
+        &idx,
+        &do_ctx,
+        &param_ints,
+        &param_strings,
+        &array_names,
+        &diag_bag,
+        &lex_diag_bag,
+    );
+    try testing.expect(stmt_node.node == .assignment);
+    try testing.expect(stmt_node.node.assignment.value.* == .array_constructor);
+    try testing.expect(!diag_bag.has());
+}
+
 test "parseStatement maps EXIT INNER in named DO construct" {
     const testing = std.testing;
     const allocator = testing.allocator;

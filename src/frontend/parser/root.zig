@@ -3335,3 +3335,106 @@ test "parseProgramWithDiagnostics reports malformed operator interface end" {
     defer diag_bag.release(third);
     try testing.expectEqualStrings("Unexpected end of file", third.message);
 }
+
+test "parseProgram handles free-form complex parameter slash array constructor declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "  implicit none\n" ++
+        "  integer, parameter :: dp = 8\n" ++
+        "  complex(dp), parameter :: ri(2) = (/(1,0),(0,1)/)\n" ++
+        "end program test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqual(@as(usize, 3), unit.decls.len);
+    try testing.expect(unit.decls[2] == .type_decl);
+    try testing.expect(unit.decls[2].type_decl.items[0].init != null);
+    try testing.expect(unit.decls[2].type_decl.items[0].init.?.* == .array_constructor);
+}
+
+test "parseProgram handles free-form assignment with slash array constructor keyword call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine s\n" ++
+        "  implicit none\n" ++
+        "  intrinsic :: real\n" ++
+        "  real :: vec(1:2)\n" ++
+        "  vec = (/ real(a = 1), 1. /)\n" ++
+        "end subroutine s\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqual(@as(usize, 1), unit.stmts.len);
+    try testing.expect(unit.stmts[0].node == .assignment);
+    try testing.expect(unit.stmts[0].node.assignment.value.* == .array_constructor);
+}
+
+test "parseProgram handles full reduced array_constructor_42 structure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine s\n" ++
+        "  implicit none\n" ++
+        "  intrinsic :: real\n" ++
+        "  real :: vec(1:2)\n" ++
+        "  vec = (/ real(a = 1), 1. /)\n" ++
+        "end subroutine s\n" ++
+        "\n" ++
+        "program main\n" ++
+        "  implicit none\n" ++
+        "  intrinsic :: real\n" ++
+        "  print *,(/ real(a = 1) /)\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+}
+
+test "parseProgram handles reduced array_constructor_34 nested constructor assignment" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "  implicit none\n" ++
+        "  integer, parameter :: dp = 8\n" ++
+        "  integer, parameter :: n = 8\n" ++
+        "  complex(dp) h1(0:n-1)\n" ++
+        "  complex(dp) h2(0:n-1)\n" ++
+        "  complex(dp), parameter :: ri(2) = (/(1,0),(0,1)/)\n" ++
+        "  integer i, j, k, l\n" ++
+        "  real(dp) pi\n" ++
+        "  h1 = (/(sum((/(exp(-2*pi*(0,1)*mod(k*l,n)/n)*h2(l),l=0,n-1)/)),k=0,n-1)/)\n" ++
+        "end program test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+}

@@ -12,6 +12,7 @@ pub const ConstResolver = struct {
     resolveFn: *const fn (ctx: *anyopaque, name: []const u8) ?ConstValue,
     allocator: ?std.mem.Allocator = null,
     internStringFn: ?*const fn (ctx: *anyopaque, text: []const u8) anyerror![]const u8 = null,
+    arrayExtentFn: ?*const fn (ctx: *anyopaque, name: []const u8, dim: ?usize) ?i64 = null,
 
     pub fn resolve(self: ConstResolver, name: []const u8) ?ConstValue {
         return self.resolveFn(self.ctx, name);
@@ -21,6 +22,11 @@ pub const ConstResolver = struct {
         if (self.internStringFn) |intern| return intern(self.ctx, text);
         if (self.allocator) |alloc| return alloc.dupe(u8, text);
         return text;
+    }
+
+    pub fn arrayExtent(self: ConstResolver, name: []const u8, dim: ?usize) ?i64 {
+        if (self.arrayExtentFn) |extent_fn| return extent_fn(self.ctx, name, dim);
+        return null;
     }
 };
 
@@ -204,6 +210,22 @@ fn evalConstCall(call: ast.CallOrSubscript, resolver: ?ConstResolver) anyerror!?
                 else => null,
             };
         },
+        .size => {
+            if (call.args.len == 0 or call.args.len > 2) return null;
+            const res = resolver orelse return null;
+            const name = switch (call.args[0].*) {
+                .identifier => |ident| ident,
+                else => return null,
+            };
+            const dim = if (call.args.len == 2) blk: {
+                const dim_val = (try evalConst(call.args[1], resolver)) orelse return null;
+                break :blk switch (dim_val) {
+                    .integer => |v| std.math.cast(usize, v) orelse return null,
+                    else => return null,
+                };
+            } else null;
+            return .{ .integer = res.arrayExtent(name, dim) orelse return null };
+        },
     }
 }
 
@@ -227,6 +249,7 @@ const ConstCallKind = enum {
     log,
     ceiling,
     int,
+    size,
 };
 
 const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
@@ -252,6 +275,7 @@ const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "DLOG", .log },
     .{ "CEILING", .ceiling },
     .{ "INT", .int },
+    .{ "SIZE", .size },
 });
 
 fn constCallKind(name: []const u8) ?ConstCallKind {
