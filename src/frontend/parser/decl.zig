@@ -235,6 +235,7 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         .derived_type_name = type_spec.derived_type_name,
         .polymorphic = type_spec.polymorphic,
         .items = items,
+        .parameter = attrs.parameter,
         .save = attrs.save,
         .allocatable = attrs.allocatable,
         .pointer = attrs.pointer,
@@ -2076,6 +2077,60 @@ test "parseDecl handles bare OPTIONAL declaration" {
         .optional => |optional_decl| {
             try testing.expectEqual(@as(usize, 1), optional_decl.names.len);
             try testing.expectEqualStrings("J1", optional_decl.names[0]);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles complex parameter declaration initializer with slash array constructor" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      COMPLEX(KIND=DP), PARAMETER :: RI(2) = (/(1,0),(0,1)/)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.complex, td.type_kind);
+            try testing.expect(td.parameter);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expect(td.items[0].init != null);
+            try testing.expect(td.items[0].init.?.* == .array_constructor);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl handles free-form complex parameter declaration initializer with slash array constructor" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "complex(kind=dp), parameter :: ri(2) = (/(1,0),(0,1)/)\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.complex, td.type_kind);
+            try testing.expect(td.parameter);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expect(td.items[0].init != null);
+            try testing.expect(td.items[0].init.?.* == .array_constructor);
         },
         else => return error.UnexpectedToken,
     }

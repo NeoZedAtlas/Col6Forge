@@ -37,6 +37,7 @@ pub const TypeDecl = struct {
     derived_type_name: ?[]const u8 = null,
     polymorphic: bool = false,
     items: []Declarator,
+    parameter: bool = false,
     save: bool = false,
     allocatable: bool = false,
     pointer: bool = false,

@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const catalog = @import("../../../common/error_catalog.zig");
 const fixed_form = @import("../../fixed_form.zig");
+const free_form = @import("../../free_form.zig");
 const lexer = @import("../../lexer.zig");
 const array_info = @import("../array_info.zig");
 const parse_diag = @import("../diagnostic.zig");
@@ -1045,6 +1046,27 @@ test "parseStatement maps EXIT MAIN to goto end-block label" {
     const end_stmt = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expect(end_stmt.node == .cont);
     try testing.expectEqualStrings("ENDBLOCK0", end_stmt.label.?);
+}
+
+test "parseStatement handles free-form assignment with slash array constructor keyword call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "vec = (/ real(a = 1), 1. /)\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .assignment);
+    try testing.expect(stmt_node.node.assignment.value.* == .array_constructor);
 }
 
 test "parseStatement maps EXIT INNER in named DO construct" {

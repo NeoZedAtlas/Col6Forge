@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const context = @import("token_stream.zig");
 const fixed_form = @import("../fixed_form.zig");
+const free_form = @import("../free_form.zig");
 const lexer = @import("../lexer.zig");
 
 const LineParser = context.LineParser;
@@ -982,6 +983,104 @@ test "parseExpr handles array constructor" {
             try testing.expectEqual(BinaryOp.concat, bin.op);
             try testing.expect(bin.right.* == .array_constructor);
             try testing.expectEqual(@as(usize, 1), bin.right.array_constructor.items.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles slash array constructor with complex literals" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      (/(1,0),(0,1)/)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .array_constructor => |ctor| {
+            try testing.expectEqual(@as(usize, 2), ctor.items.len);
+            try testing.expect(ctor.items[0].* == .complex_literal);
+            try testing.expect(ctor.items[1].* == .complex_literal);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles free-form slash array constructor with complex literals" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "(/(1,0),(0,1)/)\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .array_constructor => |ctor| {
+            try testing.expectEqual(@as(usize, 2), ctor.items.len);
+            try testing.expect(ctor.items[0].* == .complex_literal);
+            try testing.expect(ctor.items[1].* == .complex_literal);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles slash array constructor with keyword actual call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      (/ REAL(A = 1), 1. /)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .array_constructor => |ctor| {
+            try testing.expectEqual(@as(usize, 2), ctor.items.len);
+            try testing.expect(ctor.items[0].* == .call_or_subscript);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles free-form slash array constructor with keyword actual call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "(/ REAL(A = 1), 1. /)\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .array_constructor => |ctor| {
+            try testing.expectEqual(@as(usize, 2), ctor.items.len);
+            try testing.expect(ctor.items[0].* == .call_or_subscript);
         },
         else => return error.UnexpectedToken,
     }
