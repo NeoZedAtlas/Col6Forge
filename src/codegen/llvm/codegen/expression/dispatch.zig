@@ -1877,6 +1877,11 @@ pub fn emitCharacterSymbolLenValue(ctx: *Context, name: []const u8, sym: ast.sem
 pub fn emitCharacterSymbolLenValueI64(ctx: *Context, builder: anytype, name: []const u8, sym: ast.sema.Symbol) !ValueRef {
     const len_val = try emitCharacterSymbolLenValue(ctx, name, sym);
     if (len_val.ty == .i64) return len_val;
+    if (!len_val.is_ptr and len_val.ty == .i32) {
+        if (std.fmt.parseInt(i64, len_val.name, 10) catch null) |const_len| {
+            return .{ .name = try ctx.intLiteral(const_len), .ty = .i64, .is_ptr = false };
+        }
+    }
     return casting.coerce(ctx, builder, len_val, .i64);
 }
 

@@ -66,8 +66,13 @@ pub fn emitBinary(ctx: *Context, builder: anytype, op: BinaryOp, lhs: ValueRef, 
         try builder.compare(tmp, "icmp", pred, .ptr, left, right);
         return .{ .name = tmp, .ty = .i1, .is_ptr = false };
     }
-    left = try casting.coerce(ctx, builder, left, common_ty);
-    right = try casting.coerce(ctx, builder, right, common_ty);
+    if (op == .mul and common_ty == .i64) {
+        left = try coerceMulOperand(ctx, builder, left, common_ty);
+        right = try coerceMulOperand(ctx, builder, right, common_ty);
+    } else {
+        left = try casting.coerce(ctx, builder, left, common_ty);
+        right = try casting.coerce(ctx, builder, right, common_ty);
+    }
     const tmp = try ctx.nextTemp();
     switch (op) {
         .add, .sub, .mul, .div => {
@@ -171,6 +176,16 @@ fn emitIntegerPow(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef,
 
     const exp_i32 = try casting.coerceCheckedI32(ctx, builder, exp_in);
     return emitRuntimeIntegerPow(ctx, builder, base, exp_i32, ty);
+}
+
+fn coerceMulOperand(ctx: *Context, builder: anytype, value: ValueRef, target: IRType) EmitError!ValueRef {
+    if (value.ty == target) return value;
+    if (target == .i64) {
+        if (parseConstInt(value)) |int_value| {
+            return .{ .name = try ctx.intLiteral(int_value), .ty = .i64, .is_ptr = false };
+        }
+    }
+    return casting.coerce(ctx, builder, value, target);
 }
 
 fn emitIntPowConst(ctx: *Context, builder: anytype, base: ValueRef, exp: u64, ty: IRType) EmitError!ValueRef {

@@ -137,7 +137,7 @@ pub fn main() !void {
 fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var output_path: ?[]const u8 = null;
     var iterations: u32 = 3;
-    var warmup: u32 = 1;
+    var warmup: u32 = 2;
     var timeout_ms: u64 = 600_000;
     var case_filter: ?[]const u8 = null;
     var show_help = false;
@@ -218,7 +218,7 @@ fn printUsage(file: std.fs.File) !void {
         \\Options:
         \\  --output <path>       Write JSON benchmark report to this file
         \\  --iterations <n>      Number of measured runs per case (default: 3)
-        \\  --warmup <n>          Number of warmup runs per case (default: 1)
+        \\  --warmup <n>          Number of warmup runs per case (default: 2)
         \\  --timeout <ms>        Timeout passed to suite runners (default: 600000)
         \\  --case-filter <text>  Only run case names containing this text
         \\  -h, --help            Show this help
@@ -243,12 +243,24 @@ fn collectSelectedCases(allocator: std.mem.Allocator, case_filter: ?[]const u8) 
 fn runCaseOnce(allocator: std.mem.Allocator, case_spec: BenchCaseSpec, timeout_ms: u64) !u64 {
     const timeout_arg = try std.fmt.allocPrint(allocator, "{d}", .{timeout_ms});
     defer allocator.free(timeout_arg);
+    const cache_dir = std.process.getEnvVarOwned(allocator, "COL6FORGE_ZIG_CACHE_DIR") catch null;
+    defer if (cache_dir) |value| allocator.free(value);
+    const global_cache_dir = std.process.getEnvVarOwned(allocator, "COL6FORGE_ZIG_GLOBAL_CACHE_DIR") catch null;
+    defer if (global_cache_dir) |value| allocator.free(value);
 
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
     try argv.appendSlice(allocator, &.{
         "zig",
         "build",
+    });
+    if (cache_dir) |value| {
+        try argv.appendSlice(allocator, &.{ "--cache-dir", value });
+    }
+    if (global_cache_dir) |value| {
+        try argv.appendSlice(allocator, &.{ "--global-cache-dir", value });
+    }
+    try argv.appendSlice(allocator, &.{
         case_spec.step,
         "--",
         "--filter",

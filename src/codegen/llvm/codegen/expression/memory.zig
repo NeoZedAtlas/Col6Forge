@@ -1,3 +1,4 @@
+const std = @import("std");
 const ast = @import("../../../input.zig");
 const ir = @import("../../../ir.zig");
 const llvm_types = @import("../../types.zig");
@@ -32,7 +33,9 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
 
     if (sym.isCharacter()) {
         const scale = try dispatch.emitCharacterSymbolLenValueI64(ctx, builder, call.name, sym);
-        offset = try binary.emitMul(ctx, builder, offset, scale);
+        if (!isConstI64(scale, 1)) {
+            offset = try binary.emitMul(ctx, builder, offset, scale);
+        }
     }
 
     const gep = try ctx.nextTemp();
@@ -91,7 +94,9 @@ pub fn emitLinearSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubsc
     var idx1_adj = try binary.emitSub(ctx, builder, idx1, oneIndexValue());
     if (sym.isCharacter()) {
         const scale = try dispatch.emitCharacterSymbolLenValueI64(ctx, builder, call.name, sym);
-        idx1_adj = try binary.emitMul(ctx, builder, idx1_adj, scale);
+        if (!isConstI64(scale, 1)) {
+            idx1_adj = try binary.emitMul(ctx, builder, idx1_adj, scale);
+        }
     }
     const gep = try ctx.nextTemp();
     try builder.gep(gep, elem_ty, base_ptr, idx1_adj);
@@ -247,6 +252,12 @@ fn emitDynamicComponentOffset(
         offset = try binary.emitAdd(ctx, builder, offset, term);
     }
     return offset;
+}
+
+fn isConstI64(value: ValueRef, expected: i64) bool {
+    if (value.is_ptr or value.ty != .i64) return false;
+    const parsed = std.fmt.parseInt(i64, value.name, 10) catch return false;
+    return parsed == expected;
 }
 
 fn lookupComponentLayout(ctx: *Context, comp: ast.ComponentExpr) !context.DerivedComponentLayout {

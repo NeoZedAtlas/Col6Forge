@@ -385,6 +385,7 @@ const Parser = struct {
         var param_ints = std.StringHashMap(i64).init(self.arena);
         var param_strings = std.StringHashMap(ast.Literal).init(self.arena);
         var array_names = std.StringHashMap(array_info.ArrayInfo).init(self.arena);
+        var spec_part_open = true;
         if (header.type_decl) |type_decl| {
             try decls.append(type_decl);
             try decl_sources.append(sourceFromLine(header_line));
@@ -419,7 +420,7 @@ const Parser = struct {
                     break;
                 }
             }
-            if (isDerivedTypeStartTokens(line, tokens)) {
+            if (spec_part_open and isDerivedTypeStartTokens(line, tokens)) {
                 const decl_node = self.parseDerivedTypeDef() catch |err| {
                     setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
                     return err;
@@ -428,7 +429,7 @@ const Parser = struct {
                 try decl_sources.append(sourceFromLine(line));
                 continue;
             }
-            if (isInterfaceStartTokens(line, tokens)) {
+            if (spec_part_open and isInterfaceStartTokens(line, tokens)) {
                 const decl_node = self.parseInterfaceBlock() catch |err| {
                     setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
                     return err;
@@ -437,7 +438,7 @@ const Parser = struct {
                 try decl_sources.append(sourceFromLine(line));
                 continue;
             }
-            if (decl.isDeclarationStart(stmt_lp)) {
+            if (spec_part_open and decl.isDeclarationStart(stmt_lp)) {
                 const decl_node = decl.parseDecl(&stmt_lp, self.arena) catch |err| {
                     setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
                     return err;
@@ -473,6 +474,9 @@ const Parser = struct {
                 return err;
             };
             stampStmtSource(&stmt_node, line);
+            if (spec_part_open and !stmtKeepsSpecificationPartOpen(stmt_node)) {
+                spec_part_open = false;
+            }
             try stmts.append(stmt_node);
         }
 
@@ -1462,6 +1466,13 @@ fn makeContainsStmt(line: logical_line.LogicalLine) Stmt {
         .source_line = line.span.start_line,
         .source_column = first_column,
         .source_text = line.text,
+    };
+}
+
+fn stmtKeepsSpecificationPartOpen(stmt_node: ast.Stmt) bool {
+    return switch (stmt_node.node) {
+        .use_stmt, .data => true,
+        else => false,
     };
 }
 
@@ -2835,6 +2846,55 @@ test "parseProgram keeps split PROGRAMX assignment in implicit main" {
     try testing.expectEqual(@as(usize, 1), program.units[0].stmts.len);
     try testing.expect(program.units[0].stmts[0].node == .assignment);
     try testing.expectEqualStrings("PROGRAMX", program.units[0].stmts[0].node.assignment.target.identifier);
+}
+
+test "parseProgram keeps declarations after USE in specification part" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      USE ISO_FORTRAN_ENV, ONLY: OUTPUT_UNIT\n" ++
+        "      INTEGER X\n" ++
+        "      X = 1\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    try testing.expectEqual(@as(usize, 1), program.units[0].decls.len);
+    try testing.expect(program.units[0].decls[0] == .type_decl);
+    try testing.expectEqual(@as(usize, 2), program.units[0].stmts.len);
+    try testing.expect(program.units[0].stmts[0].node == .use_stmt);
+    try testing.expect(program.units[0].stmts[1].node == .assignment);
+}
+
+test "parseProgram keeps split TYPEI assignment after execution begins" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER X\n" ++
+        "      X = 1\n" ++
+        "      TYPE I = 63.\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    try testing.expectEqual(@as(usize, 1), program.units[0].decls.len);
+    try testing.expectEqual(@as(usize, 2), program.units[0].stmts.len);
+    try testing.expect(program.units[0].stmts[1].node == .assignment);
+    try testing.expectEqualStrings("TYPEI", program.units[0].stmts[1].node.assignment.target.identifier);
 }
 
 test "parseProgram handles free-form slash array constructor assignment in subroutine body" {
