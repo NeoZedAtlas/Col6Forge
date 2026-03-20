@@ -1,4 +1,4 @@
-pub const root = @import("root.zig");
+pub const root = @import("root/mod.zig");
 pub const context = @import("token_stream.zig");
 pub const expr = @import("expr.zig");
 pub const stmt = @import("stmt/mod.zig");

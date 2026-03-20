@@ -10,6 +10,11 @@ const array_info = @import("../array_info.zig");
 const root_header = @import("header.zig");
 const root_prelude = @import("prelude.zig");
 const root_predicates = @import("predicates.zig");
+const root_diagnostics = @import("diagnostics.zig");
+const root_control = @import("control_helpers.zig");
+const root_interface = @import("interface.zig");
+const root_spec_eval = @import("spec_eval.zig");
+const root_binding_owners = @import("binding_owners.zig");
 
 const ProgramUnit = ast.ProgramUnit;
 const Decl = ast.Decl;
@@ -18,7 +23,7 @@ const Stmt = ast.Stmt;
 const LineParser = context.LineParser;
 const ProgramUnitHeader = root_header.ProgramUnitHeader;
 
-pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(ProgramUnit), comptime ops: anytype) !void {
+pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(ProgramUnit)) !void {
     const module_name = try self.moduleHeaderName(self.index);
     self.index += 1;
     var module_decls = std.array_list.Managed(Decl).init(self.arena);
@@ -27,7 +32,7 @@ pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(Progra
     var saw_contains = false;
     while (self.index < self.lines.len) {
         const line = self.lines[self.index];
-        ops.noteFallbackForLine(self.diag_bag, line);
+        root_diagnostics.noteFallbackForLine(self.diag_bag, line);
         if (self.isModuleEndAt(self.index)) {
             var stored_decls: []const Decl = try module_decls.toOwnedSlice();
             var stored_decl_sources: []const DeclSource = try module_decl_sources.toOwnedSlice();
@@ -36,7 +41,7 @@ pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(Progra
                 stored_decls = imported.decls;
                 stored_decl_sources = imported.decl_sources;
             }
-            stored_decls = try ops.annotateDeclBindingOwners(self.arena, stored_decls, module_name, .module);
+            stored_decls = try root_binding_owners.annotateDeclBindingOwners(self.arena, stored_decls, module_name, .module);
             stored_decl_sources = try root_prelude.annotateDeclSourcesOwner(self.arena, stored_decl_sources, module_name);
             try self.module_preludes.put(module_name, .{
                 .decls = stored_decls,
@@ -62,15 +67,15 @@ pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(Progra
         if (self.isInterfaceStartAt(self.index)) {
             const decl_node = self.parseInterfaceBlock() catch |err| {
                 const tokens = self.tokensForIndex(self.index) catch |tok_err| {
-                    ops.setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, line, tok_err);
+                    root_diagnostics.setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, line, tok_err);
                     return tok_err;
                 };
                 const lp = LineParser.init(line, tokens);
-                ops.setParseDiagnosticFromStream(self.diag_bag, line, lp, err);
+                root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, line, lp, err);
                 return err;
             };
             try module_decls.append(decl_node);
-            try module_decl_sources.append(ops.sourceFromLine(line));
+            try module_decl_sources.append(root_diagnostics.sourceFromLine(line));
             continue;
         }
         const tokens = self.tokensForIndex(self.index) catch {
@@ -86,7 +91,7 @@ pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(Progra
         if (root_predicates.isDerivedTypeStartTokens(line, tokens)) {
             const decl_node = try self.parseDerivedTypeDef();
             try module_decls.append(decl_node);
-            try module_decl_sources.append(ops.sourceFromLine(line));
+            try module_decl_sources.append(root_diagnostics.sourceFromLine(line));
             continue;
         }
         if (decl.isDeclarationStart(lp)) {
@@ -95,7 +100,7 @@ pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(Progra
                 continue;
             };
             try module_decls.append(decl_node);
-            try module_decl_sources.append(ops.sourceFromLine(line));
+            try module_decl_sources.append(root_diagnostics.sourceFromLine(line));
         }
         self.index += 1;
     }
@@ -106,7 +111,7 @@ pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(Progra
         stored_decls = imported.decls;
         stored_decl_sources = imported.decl_sources;
     }
-    stored_decls = try ops.annotateDeclBindingOwners(self.arena, stored_decls, module_name, .module);
+    stored_decls = try root_binding_owners.annotateDeclBindingOwners(self.arena, stored_decls, module_name, .module);
     stored_decl_sources = try root_prelude.annotateDeclSourcesOwner(self.arena, stored_decl_sources, module_name);
     try self.module_preludes.put(module_name, .{
         .decls = stored_decls,
@@ -124,7 +129,7 @@ pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(Progra
     if (!saw_contains) return;
 
     while (self.index < self.lines.len) {
-        ops.noteFallbackForLine(self.diag_bag, self.lines[self.index]);
+        root_diagnostics.noteFallbackForLine(self.diag_bag, self.lines[self.index]);
         if (self.isModuleEndAt(self.index)) {
             self.index += 1;
             return;
@@ -143,13 +148,13 @@ pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(Progra
     }
 }
 
-pub fn parseProgramUnit(self: anytype, comptime ops: anytype) !ProgramUnit {
+pub fn parseProgramUnit(self: anytype) !ProgramUnit {
     if (self.index >= self.lines.len) return error.UnexpectedEOF;
     const expr_mark = self.expr_capture.mark();
     const header_line = self.lines[self.index];
-    ops.noteFallbackForLine(self.diag_bag, header_line);
+    root_diagnostics.noteFallbackForLine(self.diag_bag, header_line);
     const header_tokens = self.tokensForIndex(self.index) catch |err| {
-        ops.setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, header_line, err);
+        root_diagnostics.setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, header_line, err);
         return err;
     };
     var lp = LineParser.init(header_line, header_tokens);
@@ -163,7 +168,7 @@ pub fn parseProgramUnit(self: anytype, comptime ops: anytype) !ProgramUnit {
             break :blk try self.syntheticProgramHeader();
         },
         else => {
-            ops.setParseDiagnosticFromStream(self.diag_bag, header_line, lp, err);
+            root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, header_line, lp, err);
             return err;
         },
     };
@@ -194,7 +199,6 @@ pub fn parseProgramUnitBody(
     skip_duplicate_header: bool,
     header_line: logical_line.LogicalLine,
     expr_mark: usize,
-    comptime ops: anytype,
 ) !ProgramUnit {
     var decls = std.array_list.Managed(Decl).init(self.arena);
     var decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
@@ -206,13 +210,13 @@ pub fn parseProgramUnitBody(
     var spec_part_open = true;
     if (header.type_decl) |type_decl| {
         try decls.append(type_decl);
-        try decl_sources.append(ops.sourceFromLine(header_line));
+        try decl_sources.append(root_diagnostics.sourceFromLine(header_line));
     }
     while (self.index < self.lines.len) {
         const line = self.lines[self.index];
-        ops.noteFallbackForLine(self.diag_bag, line);
+        root_diagnostics.noteFallbackForLine(self.diag_bag, line);
         const tokens = self.tokensForIndex(self.index) catch |err| {
-            ops.setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, line, err);
+            root_diagnostics.setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, line, err);
             return err;
         };
         var stmt_lp = LineParser.init(line, tokens);
@@ -224,50 +228,54 @@ pub fn parseProgramUnitBody(
         }
         if (!do_ctx.hasPending()) {
             if (stmt_lp.isKeywordSplit("CONTAINS")) {
-                try stmts.append(ops.makeContainsStmt(line));
+                try stmts.append(root_control.makeContainsStmt(line));
                 self.index += 1;
                 break;
             }
             if (root_predicates.isEndSelectTokens(line, tokens)) {
-                ops.noteUnexpectedProgramUnitEnd(self.diag_bag, line, header.kind);
+                root_control.noteUnexpectedProgramUnitEnd(self.diag_bag, line, header.kind);
                 self.index += 1;
                 break;
             }
-            if (stmt_lp.isKeywordSplit("END") and !ops.isEndDoLine(stmt_lp) and !ops.isEndIfLine(stmt_lp) and !ops.isEndBlockLine(stmt_lp)) {
+            if (stmt_lp.isKeywordSplit("END") and
+                !root_control.isEndDoLine(stmt_lp) and
+                !root_control.isEndIfLine(stmt_lp) and
+                !root_control.isEndBlockLine(stmt_lp))
+            {
                 self.index += 1;
                 break;
             }
         }
         if (spec_part_open and root_predicates.isDerivedTypeStartTokens(line, tokens)) {
             const decl_node = self.parseDerivedTypeDef() catch |err| {
-                ops.setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
+                root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
                 return err;
             };
             try decls.append(decl_node);
-            try decl_sources.append(ops.sourceFromLine(line));
+            try decl_sources.append(root_diagnostics.sourceFromLine(line));
             continue;
         }
         if (spec_part_open and root_predicates.isInterfaceStartTokens(line, tokens)) {
             const decl_node = self.parseInterfaceBlock() catch |err| {
-                ops.setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
+                root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
                 return err;
             };
             try decls.append(decl_node);
-            try decl_sources.append(ops.sourceFromLine(line));
+            try decl_sources.append(root_diagnostics.sourceFromLine(line));
             continue;
         }
         if (spec_part_open and decl.isDeclarationStart(stmt_lp)) {
             const decl_node = decl.parseDecl(&stmt_lp, self.arena) catch |err| {
-                ops.setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
+                root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
                 return err;
             };
             if (decl_node == .parameter) {
-                try ops.recordParamInts(&param_ints, decl_node.parameter.assigns);
-                try ops.recordParamStrings(&param_strings, decl_node.parameter.assigns);
+                try root_spec_eval.recordParamInts(&param_ints, decl_node.parameter.assigns);
+                try root_spec_eval.recordParamStrings(&param_strings, decl_node.parameter.assigns);
             }
-            try ops.recordArrayNames(self.arena, &array_names, decl_node, &param_ints);
+            try root_spec_eval.recordArrayNames(self.arena, &array_names, decl_node, &param_ints);
             try decls.append(decl_node);
-            try decl_sources.append(ops.sourceFromLine(line));
+            try decl_sources.append(root_diagnostics.sourceFromLine(line));
             self.index += 1;
             continue;
         }
@@ -284,9 +292,9 @@ pub fn parseProgramUnitBody(
             self.lex_diag_bag,
         ) catch |err| {
             if (!self.diag_bag.has()) {
-                const err_line = ops.lineAtIndexOrLast(self.lines, self.index, line);
+                const err_line = root_diagnostics.lineAtIndexOrLast(self.lines, self.index, line);
                 const err_col = if (err_line.segments.len > 0) err_line.segments[0].column else 1;
-                ops.setParseDiagnosticForLine(self.diag_bag, err_line, err_line.span.start_line, err_col, err);
+                root_diagnostics.setParseDiagnosticForLine(self.diag_bag, err_line, err_line.span.start_line, err_col, err);
             }
             if (self.index == stmt_start_index and self.diag_bag.has() and err == error.UnexpectedToken) {
                 self.index += 1;
@@ -301,8 +309,8 @@ pub fn parseProgramUnitBody(
             }
             return err;
         };
-        ops.stampStmtSource(&stmt_node, line);
-        if (spec_part_open and !ops.stmtKeepsSpecificationPartOpen(stmt_node)) {
+        root_diagnostics.stampStmtSource(&stmt_node, line);
+        if (spec_part_open and !root_control.stmtKeepsSpecificationPartOpen(stmt_node)) {
             spec_part_open = false;
         }
         try stmts.append(stmt_node);
@@ -353,7 +361,7 @@ pub fn moduleHeaderName(self: anytype, line_index: usize) ![]const u8 {
     return lp.readName(self.arena) orelse error.MissingName;
 }
 
-pub fn parseInterfaceBlock(self: anytype, comptime ops: anytype) anyerror!Decl {
+pub fn parseInterfaceBlock(self: anytype) anyerror!Decl {
     if (self.index >= self.lines.len) return error.UnexpectedEOF;
     const header_line = self.lines[self.index];
     const header_tokens = try self.tokensForIndex(self.index);
@@ -369,7 +377,7 @@ pub fn parseInterfaceBlock(self: anytype, comptime ops: anytype) anyerror!Decl {
             lp = lookahead;
         }
     }
-    const interface_name = if (invalid_named_abstract) null else try ops.parseInterfaceGenericName(self.arena, &lp);
+    const interface_name = if (invalid_named_abstract) null else try root_interface.parseInterfaceGenericName(self.arena, &lp);
     self.index += 1;
     var module_procedures = std.array_list.Managed([]const u8).init(self.arena);
     var module_procedure_sources = std.array_list.Managed(DeclSource).init(self.arena);
@@ -381,9 +389,9 @@ pub fn parseInterfaceBlock(self: anytype, comptime ops: anytype) anyerror!Decl {
 
     while (self.index < self.lines.len) {
         const line = self.lines[self.index];
-        ops.noteFallbackForLine(self.diag_bag, line);
+        root_diagnostics.noteFallbackForLine(self.diag_bag, line);
         const tokens = try self.tokensForIndex(self.index);
-        switch (try ops.classifyInterfaceEnd(self.arena, line, tokens, interface_name)) {
+        switch (try root_interface.classifyInterfaceEnd(self.arena, line, tokens, interface_name)) {
             .valid => {
                 if (invalid_named_abstract) {
                     self.diag_bag.set(
@@ -415,12 +423,12 @@ pub fn parseInterfaceBlock(self: anytype, comptime ops: anytype) anyerror!Decl {
                 } };
             },
             .invalid_end_interface => {
-                ops.noteInvalidInterfaceEnd(self.diag_bag, line, interface_name);
+                root_interface.noteInvalidInterfaceEnd(self.diag_bag, line, interface_name);
                 self.index += 1;
                 continue;
             },
             .other_end_stmt => {
-                ops.noteMissingInterfaceEnd(self.diag_bag, line);
+                root_interface.noteMissingInterfaceEnd(self.diag_bag, line);
                 self.index += 1;
                 continue;
             },
@@ -458,15 +466,11 @@ pub fn parseInterfaceBlock(self: anytype, comptime ops: anytype) anyerror!Decl {
                 const expr_mark = self.expr_capture.mark();
                 self.index += 1;
                 const proc_unit = try self.parseProgramUnitBody(header.?, true, line, expr_mark);
-                const proc_source: DeclSource = .{
-                    .line = line.span.start_line,
-                    .column = 1,
-                    .text = line.text,
-                };
+                const proc_source = root_diagnostics.sourceFromLine(line);
                 const end_line = self.lines[self.index - 1];
                 try procedures.append(proc_unit.name);
                 try procedure_sources.append(proc_source);
-                try procedure_headers.append(ops.interfaceProcedureFromUnit(proc_unit, proc_source, .{
+                try procedure_headers.append(root_interface.interfaceProcedureFromUnit(proc_unit, proc_source, .{
                     .line = end_line.span.start_line,
                     .column = 1,
                     .text = end_line.text,
@@ -476,6 +480,6 @@ pub fn parseInterfaceBlock(self: anytype, comptime ops: anytype) anyerror!Decl {
         }
         self.index += 1;
     }
-    ops.noteUnexpectedInterfaceEof(self.diag_bag, self.lines[self.lines.len - 1]);
+    root_interface.noteUnexpectedInterfaceEof(self.diag_bag, self.lines[self.lines.len - 1]);
     return error.UnexpectedEOF;
 }
