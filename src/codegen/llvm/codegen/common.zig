@@ -249,7 +249,10 @@ fn arrayElementCountWithLookup(
     if (dims.len == 0) return 1;
     var total: usize = 1;
     for (dims) |dim| {
-        const value = try dimSizeValue(sem, dim, lookup) orelse return error.ArrayDimNotConstant;
+        const value = (dimSizeValue(sem, dim, lookup) catch |err| switch (err) {
+            error.NumberTooLong => return error.ArraySizeOverflow,
+            else => return err,
+        }) orelse return error.ArrayDimNotConstant;
         if (value <= 0) return error.InvalidArrayDim;
         const dim_u: usize = @intCast(value);
         const mul = @mulWithOverflow(total, dim_u);
@@ -281,12 +284,22 @@ fn dimSizeValue(sem: *const input.sema.SemanticUnit, dim: *input.Expr, lookup: ?
             if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) {
                 return null;
             }
-            const upper = (try evalConstInt(sem, range.upper, lookup)) orelse return null;
+            const upper = (evalConstInt(sem, range.upper, lookup) catch |err| switch (err) {
+                error.NumberTooLong => return error.ArraySizeOverflow,
+                else => return err,
+            }) orelse return null;
             const lower = if (range.lower) |lower_expr|
-                (try evalConstInt(sem, lower_expr, lookup)) orelse return null
+                (evalConstInt(sem, lower_expr, lookup) catch |err| switch (err) {
+                    error.NumberTooLong => return error.ArraySizeOverflow,
+                    else => return err,
+                }) orelse return null
             else
                 1;
-            return upper - lower + 1;
+            const diff = @subWithOverflow(upper, lower);
+            if (diff[1] != 0) return error.ArraySizeOverflow;
+            const extent = @addWithOverflow(diff[0], @as(i64, 1));
+            if (extent[1] != 0) return error.ArraySizeOverflow;
+            return extent[0];
         },
         else => return evalConstInt(sem, dim, lookup),
     }
@@ -471,4 +484,32 @@ test "commonGlobalName formats blank blocks" {
     const blank = try commonGlobalName(allocator, "");
     defer allocator.free(blank);
     try testing.expectEqualStrings("common_blank_", blank);
+}
+
+test "arrayElementCount reports overflow for constant dimension arithmetic" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const max_val = try a.create(input.Expr);
+    max_val.* = .{ .literal = .{ .kind = .integer, .text = "9223372036854775807" } };
+    const one = try a.create(input.Expr);
+    one.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+    const overflow_dim = try a.create(input.Expr);
+    overflow_dim.* = .{ .binary = .{ .op = .add, .left = max_val, .right = one } };
+    const dims = try a.alloc(*input.Expr, 1);
+    dims[0] = overflow_dim;
+
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = try a.alloc(input.sema.Symbol, 0),
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+
+    try testing.expectError(error.ArraySizeOverflow, arrayElementCount(&sem_unit, dims));
 }

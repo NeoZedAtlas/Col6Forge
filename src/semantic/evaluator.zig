@@ -505,7 +505,7 @@ fn parseLogical(text: []const u8) !bool {
 
 fn negateConst(value: ConstValue) ?ConstValue {
     return switch (value) {
-        .integer => |v| .{ .integer = -v },
+        .integer => |v| .{ .integer = checkedNegI64(v) catch return null },
         .real => |v| .{ .real = .{ .value = -v.value, .is_double = v.is_double } },
         .complex => |v| .{ .complex = .{ .real = -v.real, .imag = -v.imag, .is_double = v.is_double } },
         .logical, .string => null,
@@ -596,9 +596,9 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?
     const l = left.integer;
     const r = right.integer;
     return switch (op) {
-        .add => .{ .integer = l + r },
-        .sub => .{ .integer = l - r },
-        .mul => .{ .integer = l * r },
+        .add => .{ .integer = try checkedAddI64(l, r) },
+        .sub => .{ .integer = try checkedSubI64(l, r) },
+        .mul => .{ .integer = try checkedMulI64(l, r) },
         .div => blk: {
             if (r == 0) return error.DivisionByZero;
             break :blk .{ .integer = @divTrunc(l, r) };
@@ -621,11 +621,35 @@ fn intPow(base: i64, exp: i64) !i64 {
     var factor = base;
     var rem: u64 = @intCast(exp);
     while (rem != 0) {
-        if ((rem & 1) != 0) result *= factor;
+        if ((rem & 1) != 0) result = try checkedMulI64(result, factor);
         rem >>= 1;
-        if (rem != 0) factor *= factor;
+        if (rem != 0) factor = try checkedMulI64(factor, factor);
     }
     return result;
+}
+
+fn checkedNegI64(value: i64) !i64 {
+    const out = @subWithOverflow(@as(i64, 0), value);
+    if (out[1] != 0) return error.NumberTooLong;
+    return out[0];
+}
+
+fn checkedAddI64(left: i64, right: i64) !i64 {
+    const out = @addWithOverflow(left, right);
+    if (out[1] != 0) return error.NumberTooLong;
+    return out[0];
+}
+
+fn checkedSubI64(left: i64, right: i64) !i64 {
+    const out = @subWithOverflow(left, right);
+    if (out[1] != 0) return error.NumberTooLong;
+    return out[0];
+}
+
+fn checkedMulI64(left: i64, right: i64) !i64 {
+    const out = @mulWithOverflow(left, right);
+    if (out[1] != 0) return error.NumberTooLong;
+    return out[0];
 }
 
 fn toReal(value: ConstValue) f64 {
@@ -1007,6 +1031,26 @@ test "integer POWER const eval uses fast exponentiation" {
         .integer => |v| try testing.expectEqual(@as(i64, 1024), v),
         else => return error.TestExpectedEqual,
     }
+}
+
+test "integer const eval reports overflow instead of panicking" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const left = try a.create(ast.Expr);
+    left.* = .{ .literal = .{ .kind = .integer, .text = "9223372036854775807" } };
+    const right = try a.create(ast.Expr);
+    right.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
+    const expr = try a.create(ast.Expr);
+    expr.* = .{ .binary = .{
+        .op = .add,
+        .left = left,
+        .right = right,
+    } };
+
+    try testing.expectError(error.NumberTooLong, evalConst(expr, null));
 }
 
 test "real literal double-precision hint recognizes D exponent and kind suffix" {
