@@ -1,14 +1,16 @@
 const std = @import("std");
-const input = @import("../../input.zig");
-const codegen_diag = @import("../../diagnostic.zig");
-const module = @import("module/mod.zig");
+const input = @import("../../../input.zig");
+const codegen_diag = @import("../../../diagnostic.zig");
+const context = @import("../context.zig");
+const breakdown = @import("breakdown.zig");
+const pipeline = @import("pipeline.zig");
 
-pub const CodegenOptions = module.CodegenOptions;
-pub const CodegenSubStage = module.CodegenSubStage;
-pub const CodegenBreakdownSample = module.CodegenBreakdownSample;
+pub const CodegenOptions = context.CodegenOptions;
+pub const CodegenSubStage = breakdown.CodegenSubStage;
+pub const CodegenBreakdownSample = breakdown.CodegenBreakdownSample;
 
 pub fn takeLastBreakdownSample() ?CodegenBreakdownSample {
-    return module.takeLastBreakdownSample();
+    return breakdown.takeLastBreakdownSample();
 }
 
 pub fn emitModule(
@@ -18,7 +20,7 @@ pub fn emitModule(
     source_name: []const u8,
     options: CodegenOptions,
 ) ![]const u8 {
-    return module.emitModule(allocator, program, sem, source_name, options);
+    return pipeline.emitModule(allocator, program, sem, source_name, options);
 }
 
 pub fn emitModuleWithDiagnostics(
@@ -29,7 +31,7 @@ pub fn emitModuleWithDiagnostics(
     options: CodegenOptions,
     diag_bag: *codegen_diag.Bag,
 ) ![]const u8 {
-    return module.emitModuleWithDiagnostics(allocator, program, sem, source_name, options, diag_bag);
+    return pipeline.emitModuleWithDiagnostics(allocator, program, sem, source_name, options, diag_bag);
 }
 
 pub fn emitModuleToWriter(
@@ -40,7 +42,7 @@ pub fn emitModuleToWriter(
     source_name: []const u8,
     options: CodegenOptions,
 ) !void {
-    return module.emitModuleToWriter(writer, allocator, program, sem, source_name, options);
+    return pipeline.emitModuleToWriter(writer, allocator, program, sem, source_name, options);
 }
 
 pub fn emitModuleToWriterWithDiagnostics(
@@ -52,5 +54,9 @@ pub fn emitModuleToWriterWithDiagnostics(
     options: CodegenOptions,
     diag_bag: *codegen_diag.Bag,
 ) !void {
-    return module.emitModuleToWriterWithDiagnostics(writer, allocator, program, sem, source_name, options, diag_bag);
+    return pipeline.emitModuleToWriterWithDiagnostics(writer, allocator, program, sem, source_name, options, diag_bag);
+}
+
+test {
+    _ = @import("tests.zig");
 }
