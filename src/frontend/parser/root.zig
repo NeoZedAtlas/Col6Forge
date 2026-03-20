@@ -9,6 +9,9 @@ const context = @import("token_stream.zig");
 const parse_diag = @import("diagnostic.zig");
 const decl = @import("decl.zig");
 const expr = @import("expr.zig");
+const root_header = @import("root/header.zig");
+const root_prelude = @import("root/prelude.zig");
+const root_predicates = @import("root/predicates.zig");
 const stmt = @import("stmt/mod.zig");
 const stmt_helpers = @import("stmt/helpers.zig");
 const array_info = @import("array_info.zig");
@@ -22,32 +25,10 @@ const DeclSource = ast.DeclSource;
 const Stmt = ast.Stmt;
 
 const LineParser = context.LineParser;
-
-const ModulePrelude = struct {
-    decls: []const Decl,
-    decl_sources: []const DeclSource,
-};
-
-const CaseInsensitiveStringContext = struct {
-    pub fn hash(_: @This(), key: []const u8) u64 {
-        var h: u64 = 0xcbf29ce484222325;
-        for (key) |ch| {
-            const lowered = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
-            h = (h ^ @as(u64, lowered)) *% 0x100000001b3;
-        }
-        return h;
-    }
-
-    pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
-        return std.ascii.eqlIgnoreCase(a, b);
-    }
-};
-
-fn CaseInsensitiveStringHashMap(comptime V: type) type {
-    return std.HashMap([]const u8, V, CaseInsensitiveStringContext, std.hash_map.default_max_load_percentage);
-}
-
-const ModulePreludeMap = CaseInsensitiveStringHashMap(ModulePrelude);
+const ProgramUnitHeader = root_header.ProgramUnitHeader;
+const DerivedTypeHeader = root_header.DerivedTypeHeader;
+const ModulePrelude = root_prelude.ModulePrelude;
+const ModulePreludeMap = root_prelude.ModulePreludeMap;
 
 pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.LogicalLine) !Program {
     var diag_bag = parse_diag.Bag.init(arena_allocator);
@@ -796,9 +777,7 @@ fn noteUnexpectedInterfaceEof(diag_bag: *parse_diag.Bag, line: logical_line.Logi
 }
 
 fn isEndSelectTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("END")) return false;
-    return lp.consumeKeyword("SELECT");
+    return root_predicates.isEndSelectTokens(line, tokens);
 }
 
 fn noteUnexpectedProgramUnitEnd(
@@ -826,11 +805,6 @@ fn invalidInterfaceEndMessage(interface_name: ?[]const u8) []const u8 {
     return "Expecting END INTERFACE";
 }
 
-const ImportedPreludeDecls = struct {
-    decls: []const Decl,
-    decl_sources: []const DeclSource,
-};
-
 fn importPreludeDecls(
     arena: std.mem.Allocator,
     decls: []const Decl,
@@ -838,59 +812,12 @@ fn importPreludeDecls(
     module_uses: []const ast.UseStmt,
     preludes: *const ModulePreludeMap,
     diag_bag: *parse_diag.Bag,
-) !ImportedPreludeDecls {
-    var imported_decls = decls;
-    var imported_sources = decl_sources;
-    var seen_full_imports = CaseInsensitiveStringHashMap(void).initContext(arena, .{});
-    for (module_uses) |module_use| {
-        const prelude = preludes.get(module_use.module_name) orelse continue;
-        if (module_use.only_items.len == 0) {
-            if (seen_full_imports.contains(module_use.module_name)) continue;
-        }
-        const selected = if (module_use.only_items.len == 0)
-            ImportedPreludeDecls{
-                .decls = prelude.decls,
-                .decl_sources = prelude.decl_sources,
-            }
-        else
-            try selectPreludeDecls(arena, prelude, module_use, diag_bag);
-        var filtered_selected = std.array_list.Managed(Decl).init(arena);
-        defer filtered_selected.deinit();
-        var filtered_sources = std.array_list.Managed(DeclSource).init(arena);
-        defer filtered_sources.deinit();
-        for (selected.decls, 0..) |selected_decl, idx| {
-            const selected_source = if (idx < selected.decl_sources.len) selected.decl_sources[idx] else DeclSource{};
-            if (declSliceHasEquivalentImportedDecl(imported_decls, imported_sources, selected_decl, selected_source)) continue;
-            try filtered_selected.append(selected_decl);
-            try filtered_sources.append(selected_source);
-        }
-        if (filtered_selected.items.len == 0) {
-            if (module_use.only_items.len == 0) {
-                try seen_full_imports.put(module_use.module_name, {});
-            }
-            continue;
-        }
-
-        const combined_decls = try arena.alloc(Decl, filtered_selected.items.len + imported_decls.len);
-        @memcpy(combined_decls[0..filtered_selected.items.len], filtered_selected.items);
-        @memcpy(combined_decls[filtered_selected.items.len..], imported_decls);
-        imported_decls = combined_decls;
-
-        const combined_sources = try arena.alloc(DeclSource, filtered_sources.items.len + imported_sources.len);
-        @memcpy(combined_sources[0..filtered_sources.items.len], filtered_sources.items);
-        @memcpy(combined_sources[filtered_sources.items.len..], imported_sources);
-        imported_sources = combined_sources;
-        if (module_use.only_items.len == 0) {
-            try seen_full_imports.put(module_use.module_name, {});
-        }
-    }
-    return .{ .decls = imported_decls, .decl_sources = imported_sources };
+) !root_prelude.ImportedPreludeDecls {
+    return root_prelude.importPreludeDecls(arena, decls, decl_sources, module_uses, preludes, diag_bag);
 }
 
 fn tryParsePreludeUseImport(lp: *LineParser, arena: std.mem.Allocator) !?ast.UseStmt {
-    if (!lp.isKeywordSplit("USE")) return null;
-    const stmt_node = try stmt.action_stmt.parseUseStatement(arena, lp);
-    return stmt_node.use_stmt;
+    return root_prelude.tryParsePreludeUseImport(lp, arena);
 }
 
 fn selectPreludeDecls(
@@ -898,324 +825,17 @@ fn selectPreludeDecls(
     prelude: ModulePrelude,
     use_stmt: ast.UseStmt,
     diag_bag: *parse_diag.Bag,
-) !ImportedPreludeDecls {
-    var selected_decls = std.array_list.Managed(Decl).init(arena);
-    var selected_sources = std.array_list.Managed(DeclSource).init(arena);
-    var seen = std.StringHashMap(void).init(arena);
-    var missing_generic = false;
-
-    for (use_stmt.only_items) |item| {
-        if (item.generic_spec and !preludeHasDeclExport(prelude, item.remote_name)) {
-            noteMissingGenericUseImport(diag_bag, use_stmt, item);
-            missing_generic = true;
-            continue;
-        }
-        try appendPreludeDeclByName(
-            arena,
-            prelude,
-            item.remote_name,
-            item.local_name,
-            use_stmt.only_items,
-            &selected_decls,
-            &selected_sources,
-            &seen,
-        );
-    }
-
-    if (missing_generic) return error.UnexpectedToken;
-
-    return .{
-        .decls = try selected_decls.toOwnedSlice(),
-        .decl_sources = try selected_sources.toOwnedSlice(),
-    };
+) !root_prelude.ImportedPreludeDecls {
+    return root_prelude.selectPreludeDecls(arena, prelude, use_stmt, diag_bag);
 }
 
-fn preludeHasDeclExport(prelude: ModulePrelude, remote_name: []const u8) bool {
-    for (prelude.decls) |decl_node| {
-        const exported_name = preludeDeclExportedName(decl_node) orelse continue;
-        if (std.ascii.eqlIgnoreCase(exported_name, remote_name)) return true;
-    }
-    return false;
-}
-
-fn noteMissingGenericUseImport(diag_bag: *parse_diag.Bag, use_stmt: ast.UseStmt, item: ast.UseOnlyItem) void {
-    const message = if (std.mem.startsWith(u8, item.remote_name, "operator("))
-        std.fmt.allocPrint(diag_bag.allocator, "operator {s} referenced in USE, ONLY list not found in module '{s}'", .{ item.generic_display_name, use_stmt.module_name }) catch return
-    else
-        std.fmt.allocPrint(diag_bag.allocator, "generic {s} referenced in USE, ONLY list not found in module '{s}'", .{ item.remote_name, use_stmt.module_name }) catch return;
-    defer diag_bag.allocator.free(message);
-    diag_bag.set(
-        if (use_stmt.source.line == 0) 1 else use_stmt.source.line,
-        if (use_stmt.source.column == 0) 1 else use_stmt.source.column,
-        catalog.parser.generic.code,
-        message,
-        use_stmt.source.text,
-    );
-}
-
-fn appendPreludeDeclByName(
-    arena: std.mem.Allocator,
-    prelude: ModulePrelude,
-    remote_name: []const u8,
-    local_name: []const u8,
-    only_items: []const ast.UseOnlyItem,
-    out_decls: *std.array_list.Managed(Decl),
-    out_sources: *std.array_list.Managed(DeclSource),
-    seen: *std.StringHashMap(void),
-) !void {
-    if (seen.contains(remote_name)) return;
-    for (prelude.decls, 0..) |decl_node, decl_idx| {
-        const exported_name = preludeDeclExportedName(decl_node) orelse continue;
-        if (!std.ascii.eqlIgnoreCase(exported_name, remote_name)) continue;
-        try seen.put(remote_name, {});
-        try out_decls.append(try renamePreludeDecl(arena, decl_node, local_name, only_items));
-        if (decl_idx < prelude.decl_sources.len) {
-            try out_sources.append(prelude.decl_sources[decl_idx]);
-        }
-        if (decl_node == .derived_type_def) {
-            const derived = decl_node.derived_type_def;
-            if (derived.parent_name) |parent_name| {
-                const renamed_parent = renamePreludeTypeName(parent_name, only_items);
-                try appendPreludeDeclByName(arena, prelude, parent_name, renamed_parent, only_items, out_decls, out_sources, seen);
-            }
-            for (derived.components) |component| {
-                if (component.derived_type_name) |type_name| {
-                    const renamed_type = renamePreludeTypeName(type_name, only_items);
-                    try appendPreludeDeclByName(arena, prelude, type_name, renamed_type, only_items, out_decls, out_sources, seen);
-                }
-            }
-        }
-        return;
-    }
-}
-
-fn preludeDeclExportedName(decl_node: Decl) ?[]const u8 {
-    return switch (decl_node) {
-        .derived_type_def => |derived| derived.name,
-        .interface_block => |interface_block| interface_block.name,
-        else => null,
-    };
-}
-
-fn renamePreludeDecl(
-    arena: std.mem.Allocator,
-    decl_node: Decl,
-    local_name: []const u8,
-    only_items: []const ast.UseOnlyItem,
-) !Decl {
-    return switch (decl_node) {
-        .derived_type_def => |derived| .{ .derived_type_def = try renameDerivedTypeDef(arena, derived, local_name, only_items) },
-        .interface_block => |interface_block| blk: {
-            var renamed = interface_block;
-            renamed.name = local_name;
-            break :blk .{ .interface_block = renamed };
-        },
-        else => decl_node,
-    };
-}
-
-fn renameDerivedTypeDef(
-    arena: std.mem.Allocator,
-    derived: ast.DerivedTypeDef,
-    local_name: []const u8,
-    only_items: []const ast.UseOnlyItem,
-) !ast.DerivedTypeDef {
-    const components = try arena.alloc(ast.TypeDecl, derived.components.len);
-    for (derived.components, 0..) |component, idx| {
-        var renamed_component = component;
-        if (component.derived_type_name) |type_name| {
-            renamed_component.derived_type_name = renamePreludeTypeName(type_name, only_items);
-        }
-        components[idx] = renamed_component;
-    }
-    const bindings = try arena.dupe(ast.TypeBoundProcedureBinding, derived.bindings);
-    return .{
-        .name = local_name,
-        .parent_name = if (derived.parent_name) |parent| renamePreludeTypeName(parent, only_items) else null,
-        .abstract = derived.abstract,
-        .sequence = derived.sequence,
-        .bind_c = derived.bind_c,
-        .components = components,
-        .component_sources = derived.component_sources,
-        .bindings = bindings,
-    };
-}
-
-fn renamePreludeTypeName(name: []const u8, only_items: []const ast.UseOnlyItem) []const u8 {
-    for (only_items) |item| {
-        if (std.ascii.eqlIgnoreCase(item.remote_name, name)) return item.local_name;
-    }
-    return name;
-}
-
-
-fn consumeDoubleColon(lp: *LineParser) bool {
-    var scan = lp.*;
-    if (!scan.consume(.colon)) return false;
-    if (!scan.consume(.colon)) return false;
-    lp.* = scan;
-    return true;
-}
-
-const TypeInfo = struct {
-    type_kind: ast.TypeKind,
-    kind_selector: ?*ast.Expr = null,
-    char_len: ?*ast.Expr,
-    derived_type_name: ?[]const u8 = null,
-    polymorphic: bool = false,
-};
-
-const ProgramUnitHeader = struct {
-    kind: ProgramUnitKind,
-    name: []const u8,
-    is_module_procedure: bool,
-    bind_name: ?[]const u8,
-    result_name: ?[]const u8,
-    args: []const []const u8,
-    alt_return_dummy_count: usize,
-    type_decl: ?Decl,
-};
 
 fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_counter: *usize) !ProgramUnitHeader {
-    var kind: ProgramUnitKind = undefined;
-    var type_info: ?TypeInfo = null;
-    var allow_missing_name = false;
-    var saw_module_prefix = false;
-
-    consumeProcedurePrefixes(lp);
-    saw_module_prefix = lp.consumeKeyword("MODULE");
-
-    if (lp.isKeywordSplit("PROGRAM")) {
-        _ = lp.consumeKeyword("PROGRAM");
-        kind = .program;
-    } else if (lp.isKeywordSplit("SUBROUTINE")) {
-        _ = lp.consumeKeyword("SUBROUTINE");
-        kind = .subroutine;
-    } else if (lp.isKeywordSplit("FUNCTION")) {
-        _ = lp.consumeKeyword("FUNCTION");
-        kind = .function;
-    } else if (lp.isKeywordSplit("BLOCKDATA")) {
-        _ = lp.consumeKeyword("BLOCKDATA");
-        kind = .block_data;
-        allow_missing_name = true;
-    } else {
-        type_info = try parseTypePrefix(arena, lp) orelse return error.ExpectedProgramUnit;
-        consumeProcedurePrefixes(lp);
-        saw_module_prefix = lp.consumeKeyword("MODULE");
-        if (!lp.isKeywordSplit("FUNCTION")) return error.ExpectedProgramUnit;
-        _ = lp.consumeKeyword("FUNCTION");
-        kind = .function;
-    }
-
-    const name = lp.readName(arena) orelse blk: {
-        if (!allow_missing_name) return error.MissingName;
-        const synthetic = try std.fmt.allocPrint(arena, "BLOCKDATA{d}", .{block_data_counter.*});
-        block_data_counter.* += 1;
-        break :blk synthetic;
-    };
-    var args_list = std.array_list.Managed([]const u8).init(arena);
-    var alt_return_dummy_count: usize = 0;
-    if (lp.consume(.l_paren)) {
-        while (!lp.peekIs(.r_paren)) {
-            if (lp.consume(.star)) {
-                alt_return_dummy_count += 1;
-                _ = lp.consume(.comma);
-                continue;
-            }
-            const arg_name = lp.readName(arena) orelse return error.MissingName;
-            try args_list.append(arg_name);
-            _ = lp.consume(.comma);
-        }
-        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-    }
-    var result_name: ?[]const u8 = null;
-    if (kind == .function and lp.consumeKeyword("RESULT")) {
-        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
-        result_name = lp.readName(arena) orelse return error.MissingName;
-        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-    }
-    const bind_name = try parseBindName(arena, lp);
-
-    var type_decl: ?Decl = null;
-    if (type_info) |info| {
-        const decl_items = try arena.alloc(ast.Declarator, 1);
-        decl_items[0] = .{
-            .name = name,
-            .dims = &.{},
-            .char_len = info.char_len,
-            .char_len_deferred = false,
-        };
-        type_decl = .{ .type_decl = .{
-            .type_kind = info.type_kind,
-            .kind_selector = info.kind_selector,
-            .derived_type_name = info.derived_type_name,
-            .polymorphic = info.polymorphic,
-            .items = decl_items,
-            .allocatable = false,
-        } };
-    }
-
-    return .{
-        .kind = kind,
-        .name = name,
-        .is_module_procedure = saw_module_prefix,
-        .bind_name = bind_name,
-        .result_name = result_name,
-        .args = try args_list.toOwnedSlice(),
-        .alt_return_dummy_count = alt_return_dummy_count,
-        .type_decl = type_decl,
-    };
-}
-
-fn parseBindName(arena: std.mem.Allocator, lp: *LineParser) !?[]const u8 {
-    if (!lp.consumeKeyword("BIND")) return null;
-    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
-
-    var bind_name: ?[]const u8 = null;
-    while (!lp.peekIs(.r_paren)) {
-        if (lp.peek()) |tok| {
-            if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "NAME")) {
-                _ = lp.next();
-                _ = lp.expect(.equals) orelse return error.UnexpectedToken;
-                const string_tok = lp.expect(.string) orelse return error.UnexpectedToken;
-                bind_name = try decodeHeaderStringLiteral(arena, lp.tokenText(string_tok));
-            } else {
-                _ = lp.next();
-            }
-        } else {
-            return error.UnexpectedToken;
-        }
-        _ = lp.consume(.comma);
-    }
-    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-    return bind_name;
-}
-
-fn decodeHeaderStringLiteral(arena: std.mem.Allocator, text: []const u8) ![]const u8 {
-    if (text.len < 2) return error.InvalidStringLiteral;
-    const quote = text[0];
-    if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) return error.InvalidStringLiteral;
-
-    var buffer = std.array_list.Managed(u8).init(arena);
-    errdefer buffer.deinit();
-
-    var i: usize = 1;
-    while (i + 1 < text.len) {
-        if (text[i] == quote and i + 2 < text.len and text[i + 1] == quote) {
-            try buffer.append(quote);
-            i += 2;
-            continue;
-        }
-        try buffer.append(text[i]);
-        i += 1;
-    }
-    return buffer.toOwnedSlice();
+    return root_header.parseProgramUnitHeader(arena, lp, block_data_counter);
 }
 
 fn isDuplicateProgramUnitLine(arena: std.mem.Allocator, line: logical_line.LogicalLine, header: ProgramUnitHeader) bool {
-    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
-    defer arena.free(tokens);
-    return isDuplicateProgramUnitTokens(arena, line, tokens, header);
+    return root_header.isDuplicateProgramUnitLine(arena, line, header);
 }
 
 fn isDuplicateProgramUnitTokens(
@@ -1224,229 +844,26 @@ fn isDuplicateProgramUnitTokens(
     tokens: []lexer.Token,
     header: ProgramUnitHeader,
 ) bool {
-    const probe_tokens = arena.dupe(lexer.Token, tokens) catch return false;
-    var lp = LineParser.init(line, probe_tokens);
-    var block_data_counter: usize = 0;
-    const parsed = parseProgramUnitHeader(arena, &lp, &block_data_counter) catch return false;
-    if (lp.peek() != null) return false;
-    if (parsed.kind != header.kind) return false;
-    return context.eqNoCase(parsed.name, header.name);
-}
-
-fn parseTypePrefix(arena: std.mem.Allocator, lp: *LineParser) !?TypeInfo {
-    if (lp.isKeywordSplit("INTEGER")) {
-        _ = lp.consumeKeyword("INTEGER");
-        return .{
-            .type_kind = .integer,
-            .kind_selector = try parseTypePrefixOptionalKindSelector(lp, arena),
-            .char_len = null,
-        };
-    }
-    if (lp.isKeywordSplit("REAL")) {
-        _ = lp.consumeKeyword("REAL");
-        return try parseRealTypePrefixSpec(lp, arena);
-    }
-    if (lp.isKeywordSplit("COMPLEX")) {
-        _ = lp.consumeKeyword("COMPLEX");
-        return try parseComplexTypePrefixSpec(lp, arena);
-    }
-    if (lp.isKeywordSplit("LOGICAL")) {
-        _ = lp.consumeKeyword("LOGICAL");
-        return .{
-            .type_kind = .logical,
-            .kind_selector = try parseTypePrefixOptionalKindSelector(lp, arena),
-            .char_len = null,
-        };
-    }
-    if (lp.isKeywordSplit("CHARACTER")) {
-        _ = lp.consumeKeyword("CHARACTER");
-        var parsed_len: decl.ParsedCharacterLen = .{};
-        if (lp.consume(.star) or lp.peekIs(.l_paren)) {
-            parsed_len = try decl.parseCharacterLenSpec(lp, arena);
-        }
-        return .{
-            .type_kind = .character,
-            .kind_selector = parsed_len.kind_selector,
-            .char_len = parsed_len.expr,
-        };
-    }
-    if (try decl.consumeDoublePrecisionType(lp)) {
-        return .{ .type_kind = .double_precision, .kind_selector = null, .char_len = null };
-    }
-    if (lp.isKeywordSplit("TYPE")) {
-        var lookahead = lp.*;
-        _ = lookahead.consumeKeyword("TYPE");
-        if (!lookahead.peekIs(.l_paren)) return null;
-        lp.* = lookahead;
-        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
-        const name = lp.readName(arena) orelse return error.MissingName;
-        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-        return .{ .type_kind = .derived, .kind_selector = null, .char_len = null, .derived_type_name = name };
-    }
-    if (lp.isKeywordSplit("CLASS")) {
-        var lookahead = lp.*;
-        _ = lookahead.consumeKeyword("CLASS");
-        if (!lookahead.peekIs(.l_paren)) return null;
-        lp.* = lookahead;
-        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
-        if (lp.consume(.star)) {
-            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-            return .{
-                .type_kind = .derived,
-                .kind_selector = null,
-                .char_len = null,
-                .derived_type_name = null,
-                .polymorphic = true,
-            };
-        }
-        const name = lp.readName(arena) orelse return error.MissingName;
-        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-        return .{
-            .type_kind = .derived,
-            .kind_selector = null,
-            .char_len = null,
-            .derived_type_name = name,
-            .polymorphic = true,
-        };
-    }
-    return null;
+    return root_header.isDuplicateProgramUnitTokens(arena, line, tokens, header);
 }
 
 fn isDerivedTypeStartTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("TYPE")) return false;
-    if (lp.peekIs(.l_paren)) return false;
-    if (lp.isKeywordSplit("IS")) return false;
-    return true;
+    return root_predicates.isDerivedTypeStartTokens(line, tokens);
 }
 
 fn isDerivedTypeEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("END")) return false;
-    return lp.consumeKeyword("TYPE");
+    return root_predicates.isDerivedTypeEndTokens(line, tokens);
 }
 
-const DerivedTypeHeader = struct {
-    name: []const u8,
-    parent_name: ?[]const u8 = null,
-    abstract: bool = false,
-    bind_c: bool = false,
-};
-
 fn parseDerivedTypeHeader(arena: std.mem.Allocator, lp: *LineParser) !DerivedTypeHeader {
-    if (!lp.consumeKeyword("TYPE")) return error.UnexpectedToken;
-    var header: DerivedTypeHeader = .{ .name = "" };
-    while (lp.consume(.comma)) {
-        if (lp.consumeKeyword("ABSTRACT")) {
-            header.abstract = true;
-            continue;
-        }
-        if (lp.consumeKeyword("PUBLIC")) {
-            continue;
-        }
-        if (lp.consumeKeyword("EXTENDS")) {
-            _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
-            header.parent_name = lp.readName(arena) orelse return error.MissingName;
-            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-            continue;
-        }
-        if (lp.consumeKeyword("BIND")) {
-            _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
-            if (!lp.consumeKeyword("C")) return error.UnexpectedToken;
-            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-            header.bind_c = true;
-            continue;
-        }
-        return error.UnexpectedToken;
-    }
-    if (lp.peekIs(.colon)) {
-        _ = lp.expect(.colon) orelse return error.UnexpectedToken;
-        _ = lp.expect(.colon) orelse return error.UnexpectedToken;
-    }
-    header.name = lp.readName(arena) orelse return error.MissingName;
-    return header;
+    return root_header.parseDerivedTypeHeader(arena, lp);
 }
 
 fn parseTypeBoundProcedureBindings(
     arena: std.mem.Allocator,
     lp: *LineParser,
 ) ![]const ast.TypeBoundProcedureBinding {
-    if (!lp.consumeKeyword("PROCEDURE")) return error.UnexpectedToken;
-
-    var interface_name: ?[]const u8 = null;
-    if (lp.consume(.l_paren)) {
-        interface_name = lp.readName(arena) orelse return error.MissingName;
-        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-    }
-
-    var deferred = false;
-    var nopass = false;
-    var pass_name: ?[]const u8 = null;
-    var non_overridable = false;
-
-    while (lp.consume(.comma)) {
-        if (consumeDoubleColon(lp)) break;
-        const attr_name = lp.readName(arena) orelse return error.MissingName;
-        if (std.ascii.eqlIgnoreCase(attr_name, "DEFERRED")) {
-            deferred = true;
-        } else if (std.ascii.eqlIgnoreCase(attr_name, "NOPASS")) {
-            nopass = true;
-        } else if (std.ascii.eqlIgnoreCase(attr_name, "NON_OVERRIDABLE")) {
-            non_overridable = true;
-        } else if (std.ascii.eqlIgnoreCase(attr_name, "PASS")) {
-            if (lp.consume(.l_paren)) {
-                pass_name = lp.readName(arena) orelse return error.MissingName;
-                _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-            }
-        } else if (lp.consume(.l_paren)) {
-            try consumeBalancedParens(lp);
-        }
-    }
-    _ = consumeDoubleColon(lp);
-
-    var out = std.array_list.Managed(ast.TypeBoundProcedureBinding).init(arena);
-    while (true) {
-        const binding_name = lp.readName(arena) orelse return error.MissingName;
-        var implementation_name: ?[]const u8 = null;
-        if (lp.consume(.equals)) {
-            _ = lp.expect(.greater) orelse return error.UnexpectedToken;
-            implementation_name = lp.readName(arena) orelse return error.MissingName;
-        }
-        try out.append(.{
-            .name = binding_name,
-            .interface_name = interface_name,
-            .implementation_name = implementation_name,
-            .deferred = deferred,
-            .nopass = nopass,
-            .pass_name = pass_name,
-            .non_overridable = non_overridable,
-        });
-        if (!lp.consume(.comma)) break;
-    }
-    return out.toOwnedSlice();
-}
-
-fn consumeBalancedParens(lp: *LineParser) !void {
-    var depth: usize = 1;
-    while (depth > 0) {
-        const tok = lp.peek() orelse return error.UnexpectedToken;
-        _ = lp.next();
-        switch (tok.kind) {
-            .l_paren => depth += 1,
-            .r_paren => depth -= 1,
-            else => {},
-        }
-    }
-}
-
-fn consumeProcedurePrefixes(lp: *LineParser) void {
-    while (true) {
-        if (lp.consumeKeyword("PURE")) continue;
-        if (lp.consumeKeyword("ELEMENTAL")) continue;
-        if (lp.consumeKeyword("RECURSIVE")) continue;
-        if (lp.consumeKeyword("IMPURE")) continue;
-        break;
-    }
+    return root_header.parseTypeBoundProcedureBindings(arena, lp);
 }
 
 fn unitHasContains(unit: ProgramUnit) bool {
@@ -1549,57 +966,11 @@ fn stampStmtSource(stmt_node: *ast.Stmt, line: logical_line.LogicalLine) void {
 }
 
 fn isStandaloneEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
-    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
-    defer arena.free(tokens);
-    return isStandaloneEndTokens(line, tokens);
+    return root_predicates.isStandaloneEndLine(arena, line);
 }
 
 fn isStandaloneEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("END")) return false;
-    return lp.peek() == null;
-}
-
-fn parseComplexTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeInfo {
-    if (lp.consume(.star)) {
-        const selector = try decl.parseLegacyStarSelectorExpr(lp, arena);
-        return .{
-            .type_kind = .complex,
-            .kind_selector = selector,
-            .char_len = null,
-        };
-    }
-    if (!lp.peekIs(.l_paren)) return .{ .type_kind = .complex, .kind_selector = null, .char_len = null };
-
-    const selector = try parseTypePrefixKindSelectorExpr(lp, arena);
-    return .{
-        .type_kind = .complex,
-        .kind_selector = selector,
-        .char_len = null,
-    };
-}
-
-fn parseRealTypePrefixSpec(lp: *LineParser, arena: std.mem.Allocator) !TypeInfo {
-    if (lp.consume(.star)) {
-        const selector = try decl.parseLegacyStarSelectorExpr(lp, arena);
-        return .{
-            .type_kind = .real,
-            .kind_selector = selector,
-            .char_len = null,
-        };
-    }
-    if (!lp.peekIs(.l_paren)) return .{ .type_kind = .real, .kind_selector = null, .char_len = null };
-
-    const selector = try parseTypePrefixKindSelectorExpr(lp, arena);
-    return .{
-        .type_kind = .real,
-        .kind_selector = selector,
-        .char_len = null,
-    };
-}
-
-fn parseCharacterLen(lp: *LineParser, arena: std.mem.Allocator) !*ast.Expr {
-    return decl.parseCharacterLen(lp, arena);
+    return root_predicates.isStandaloneEndTokens(line, tokens);
 }
 
 fn prependDecls(
@@ -1608,137 +979,7 @@ fn prependDecls(
     prelude_decls: []const Decl,
     prelude_sources: []const DeclSource,
 ) !ProgramUnit {
-    if (prelude_decls.len == 0) return unit;
-
-    var filtered_decls = std.array_list.Managed(Decl).init(allocator);
-    defer filtered_decls.deinit();
-    var filtered_sources = std.array_list.Managed(DeclSource).init(allocator);
-    defer filtered_sources.deinit();
-
-    for (prelude_decls, 0..) |prelude_decl, idx| {
-        const prelude_source = if (idx < prelude_sources.len) prelude_sources[idx] else DeclSource{};
-        if (hasEquivalentImportedDecl(unit, prelude_decl, prelude_source)) continue;
-        try filtered_decls.append(prelude_decl);
-        try filtered_sources.append(prelude_source);
-    }
-    if (filtered_decls.items.len == 0) return unit;
-
-    const total_decls = filtered_decls.items.len + unit.decls.len;
-    const decls = try allocator.alloc(Decl, total_decls);
-    std.mem.copyForwards(Decl, decls[0..filtered_decls.items.len], filtered_decls.items);
-    std.mem.copyForwards(Decl, decls[filtered_decls.items.len..], unit.decls);
-
-    const total_sources = filtered_sources.items.len + unit.decl_sources.len;
-    const decl_sources = try allocator.alloc(DeclSource, total_sources);
-    std.mem.copyForwards(DeclSource, decl_sources[0..filtered_sources.items.len], filtered_sources.items);
-    std.mem.copyForwards(DeclSource, decl_sources[filtered_sources.items.len..], unit.decl_sources);
-
-    return .{
-        .kind = unit.kind,
-        .name = unit.name,
-        .is_module_procedure = unit.is_module_procedure,
-        .prelude_decl_count = unit.prelude_decl_count + filtered_decls.items.len,
-        .owner_name = unit.owner_name,
-        .owner_kind = unit.owner_kind,
-        .bind_name = unit.bind_name,
-        .result_name = unit.result_name,
-        .alt_return_dummy_count = unit.alt_return_dummy_count,
-        .args = unit.args,
-        .decls = decls,
-        .decl_sources = decl_sources,
-        .stmts = unit.stmts,
-        .expr_sources = unit.expr_sources,
-    };
-}
-
-fn hasEquivalentImportedDecl(unit: ProgramUnit, candidate: Decl, candidate_source: DeclSource) bool {
-    return declSliceHasEquivalentImportedDecl(unit.decls, unit.decl_sources, candidate, candidate_source);
-}
-
-fn declSliceHasEquivalentImportedDecl(
-    decls: []const Decl,
-    decl_sources: []const DeclSource,
-    candidate: Decl,
-    candidate_source: DeclSource,
-) bool {
-    const owner_name = candidate_source.owner_name orelse return false;
-    for (decls, 0..) |existing_decl, idx| {
-        const existing_source = if (idx < decl_sources.len) decl_sources[idx] else DeclSource{};
-        const existing_owner = existing_source.owner_name orelse continue;
-        if (!std.ascii.eqlIgnoreCase(owner_name, existing_owner)) continue;
-        if (declsEquivalentForImport(candidate, existing_decl)) return true;
-    }
-    return false;
-}
-
-fn declsEquivalentForImport(a: Decl, b: Decl) bool {
-    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
-    return switch (a) {
-        .type_decl => |type_decl| namesEqualDeclarators(type_decl.items, b.type_decl.items),
-        .procedure => |procedure| namesEqualDeclarators(procedure.items, b.procedure.items),
-        .derived_type_def => |derived| std.ascii.eqlIgnoreCase(derived.name, b.derived_type_def.name),
-        .interface_block => |interface_block| blk: {
-            if (interface_block.name == null or b.interface_block.name == null) break :blk false;
-            break :blk std.ascii.eqlIgnoreCase(interface_block.name.?, b.interface_block.name.?);
-        },
-        .parameter => |parameter| namesEqualParamAssigns(parameter.assigns, b.parameter.assigns),
-        .import, .external, .intrinsic, .optional => |list| namesEqualStrings(list.names, switch (b) {
-            .import => |other| other.names,
-            .external => |other| other.names,
-            .intrinsic => |other| other.names,
-            .optional => |other| other.names,
-            else => unreachable,
-        }),
-        .intent => |intent_decl| namesEqualStrings(intent_decl.names, b.intent.names),
-        .dimension => |dimension_decl| namesEqualDeclarators(dimension_decl.items, b.dimension.items),
-        .save => |save_decl| saveItemsEqual(save_decl.items, b.save.items) and save_decl.save_all == b.save.save_all,
-        .implicit, .common, .equivalence => false,
-    };
-}
-
-fn namesEqualDeclarators(a: []const ast.Declarator, b: []const ast.Declarator) bool {
-    if (a.len != b.len) return false;
-    for (a, 0..) |item, idx| {
-        if (!std.ascii.eqlIgnoreCase(item.name, b[idx].name)) return false;
-    }
-    return true;
-}
-
-fn namesEqualParamAssigns(a: []const ast.ParamAssign, b: []const ast.ParamAssign) bool {
-    if (a.len != b.len) return false;
-    for (a, 0..) |item, idx| {
-        if (!std.ascii.eqlIgnoreCase(item.name, b[idx].name)) return false;
-    }
-    return true;
-}
-
-fn namesEqualStrings(a: []const []const u8, b: []const []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, 0..) |name, idx| {
-        if (!std.ascii.eqlIgnoreCase(name, b[idx])) return false;
-    }
-    return true;
-}
-
-fn saveItemsEqual(a: []const ast.SaveItem, b: []const ast.SaveItem) bool {
-    if (a.len != b.len) return false;
-    for (a, 0..) |item, idx| {
-        switch (item) {
-            .name => |name| switch (b[idx]) {
-                .name => |other| if (!std.ascii.eqlIgnoreCase(name, other)) return false,
-                else => return false,
-            },
-            .common => |name| switch (b[idx]) {
-                .common => |other| {
-                    if (name == null or other == null) {
-                        if ((name == null) != (other == null)) return false;
-                    } else if (!std.ascii.eqlIgnoreCase(name.?, other.?)) return false;
-                },
-                else => return false,
-            },
-        }
-    }
-    return true;
+    return root_prelude.prependDecls(allocator, unit, prelude_decls, prelude_sources);
 }
 
 fn annotateDeclSourcesOwner(
@@ -1746,23 +987,7 @@ fn annotateDeclSourcesOwner(
     decl_sources: []const DeclSource,
     owner_name: []const u8,
 ) ![]const DeclSource {
-    if (decl_sources.len == 0) return decl_sources;
-
-    var needs_copy = false;
-    for (decl_sources) |source| {
-        if (source.owner_name == null) {
-            needs_copy = true;
-            break;
-        }
-    }
-    if (!needs_copy) return decl_sources;
-
-    const annotated = try allocator.alloc(DeclSource, decl_sources.len);
-    for (decl_sources, 0..) |source, idx| {
-        annotated[idx] = source;
-        if (annotated[idx].owner_name == null) annotated[idx].owner_name = owner_name;
-    }
-    return annotated;
+    return root_prelude.annotateDeclSourcesOwner(allocator, decl_sources, owner_name);
 }
 
 fn annotateDeclBindingOwners(
@@ -2612,126 +1837,44 @@ test "parseProgram supports implicit main program header" {
     try testing.expectEqual(@as(usize, 1), unit.stmts.len);
 }
 
-fn parseTypePrefixOptionalKindSelector(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
-    if (lp.consume(.star)) {
-        return try decl.parseLegacyStarSelectorExpr(lp, arena);
-    }
-    if (!lp.peekIs(.l_paren)) return null;
-    return parseTypePrefixKindSelectorExpr(lp, arena);
-}
-
-fn parseTypePrefixKindSelectorExpr(lp: *LineParser, arena: std.mem.Allocator) !?*ast.Expr {
-    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
-    var selector: ?*ast.Expr = null;
-    while (!lp.peekIs(.r_paren)) {
-        if (lp.peek()) |tok| {
-            if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "KIND")) {
-                _ = lp.next();
-                _ = lp.expect(.equals) orelse return error.UnexpectedToken;
-                selector = try expr.parseExpr(lp, arena, 0);
-                _ = lp.consume(.comma);
-                continue;
-            }
-            if (tok.kind == .identifier and context.eqNoCase(lp.tokenText(tok), "LEN")) {
-                _ = lp.next();
-                _ = lp.expect(.equals) orelse return error.UnexpectedToken;
-                _ = try expr.parseExpr(lp, arena, 0);
-                _ = lp.consume(.comma);
-                continue;
-            }
-        }
-        const parsed = try expr.parseExpr(lp, arena, 0);
-        if (selector == null) selector = parsed;
-        _ = lp.consume(.comma);
-    }
-    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
-    return selector;
-}
-
 fn isModuleHeaderLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
-    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
-    defer arena.free(tokens);
-    return isModuleHeaderTokens(line, tokens);
+    return root_predicates.isModuleHeaderLine(arena, line);
 }
 
 fn isModuleHeaderTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("MODULE")) return false;
-    const next = lp.peek() orelse return false;
-    if (next.kind != .identifier) return false;
-    if (context.eqNoCase(lp.tokenText(next), "PROCEDURE")) return false;
-    _ = lp.next();
-    return lp.peek() == null;
+    return root_predicates.isModuleHeaderTokens(line, tokens);
 }
 
 fn isModuleEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
-    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
-    defer arena.free(tokens);
-    return isModuleEndTokens(line, tokens);
+    return root_predicates.isModuleEndLine(arena, line);
 }
 
 fn isModuleEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("END")) return false;
-    return lp.consumeKeyword("MODULE");
+    return root_predicates.isModuleEndTokens(line, tokens);
 }
 
 fn isContainsLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
-    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
-    defer arena.free(tokens);
-    return isContainsTokens(line, tokens);
+    return root_predicates.isContainsLine(arena, line);
 }
 
 fn isContainsTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("CONTAINS")) return false;
-    return lp.peek() == null;
+    return root_predicates.isContainsTokens(line, tokens);
 }
 
 fn isProgramUnitEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
-    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
-    defer arena.free(tokens);
-    return isProgramUnitEndTokens(line, tokens);
+    return root_predicates.isProgramUnitEndLine(arena, line);
 }
 
 fn isProgramUnitEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("END")) return false;
-    return lp.isKeywordSplit("PROGRAM") or
-        lp.isKeywordSplit("SUBROUTINE") or
-        lp.isKeywordSplit("FUNCTION") or
-        lp.isKeywordSplit("BLOCKDATA");
+    return root_predicates.isProgramUnitEndTokens(line, tokens);
 }
 
 fn isInterfaceStartLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
-    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
-    defer arena.free(tokens);
-    return isInterfaceStartTokens(line, tokens);
+    return root_predicates.isInterfaceStartLine(arena, line);
 }
 
 fn isInterfaceStartTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (lp.consumeKeyword("ABSTRACT")) {
-        return lp.consumeKeyword("INTERFACE");
-    }
-    if (!lp.consumeKeyword("INTERFACE")) return false;
-    if (lp.peek() == null) return true;
-    if (lp.consumeKeyword("ASSIGNMENT")) {
-        if (!lp.consume(.l_paren)) return false;
-        if (!lp.consume(.equals)) return false;
-        if (!lp.consume(.r_paren)) return false;
-        return lp.peek() == null;
-    }
-    if (lp.consumeKeyword("OPERATOR")) {
-        if (!lp.consume(.l_paren)) return false;
-        while (!lp.peekIs(.r_paren)) {
-            if (lp.peek() == null) return false;
-            _ = lp.next();
-        }
-        _ = lp.next();
-        return lp.peek() == null;
-    }
-    return true;
+    return root_predicates.isInterfaceStartTokens(line, tokens);
 }
 
 fn parseInterfaceGenericName(arena: std.mem.Allocator, lp: *LineParser) !?[]const u8 {
@@ -2746,15 +1889,11 @@ fn parseInterfaceGenericName(arena: std.mem.Allocator, lp: *LineParser) !?[]cons
 }
 
 fn isInterfaceEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
-    const tokens = lexer.lexLogicalLine(arena, line) catch return false;
-    defer arena.free(tokens);
-    return isInterfaceEndTokens(line, tokens);
+    return root_predicates.isInterfaceEndLine(arena, line);
 }
 
 fn isInterfaceEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
-    var lp = LineParser.init(line, tokens);
-    if (!lp.consumeKeyword("END")) return false;
-    return lp.consumeKeyword("INTERFACE");
+    return root_predicates.isInterfaceEndTokens(line, tokens);
 }
 
 test "parseProgram handles MODULE container with contained procedure" {
