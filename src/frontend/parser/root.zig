@@ -12,6 +12,8 @@ const expr = @import("expr.zig");
 const root_header = @import("root/header.zig");
 const root_prelude = @import("root/prelude.zig");
 const root_predicates = @import("root/predicates.zig");
+const root_expand = @import("root/expand.zig");
+const root_units = @import("root/units.zig");
 const stmt = @import("stmt/mod.zig");
 const stmt_helpers = @import("stmt/helpers.zig");
 const array_info = @import("array_info.zig");
@@ -29,6 +31,152 @@ const ProgramUnitHeader = root_header.ProgramUnitHeader;
 const DerivedTypeHeader = root_header.DerivedTypeHeader;
 const ModulePrelude = root_prelude.ModulePrelude;
 const ModulePreludeMap = root_prelude.ModulePreludeMap;
+
+const RootUnitHelper = struct {
+    const note_fallback_for_line = noteFallbackForLine;
+    const set_lexer_or_line_diagnostic = setLexerOrLineDiagnostic;
+    const set_parse_diagnostic_from_stream = setParseDiagnosticFromStream;
+    const source_from_line = sourceFromLine;
+    const annotate_decl_binding_owners = annotateDeclBindingOwners;
+    const make_contains_stmt = makeContainsStmt;
+    const note_unexpected_program_unit_end = noteUnexpectedProgramUnitEnd;
+    const is_end_do_line = isEndDoLine;
+    const is_end_if_line = isEndIfLine;
+    const is_end_block_line = isEndBlockLine;
+    const record_param_ints = recordParamInts;
+    const record_param_strings = recordParamStrings;
+    const record_array_names = recordArrayNames;
+    const line_at_index_or_last = lineAtIndexOrLast;
+    const set_parse_diagnostic_for_line = setParseDiagnosticForLine;
+    const stamp_stmt_source = stampStmtSource;
+    const stmt_keeps_specification_part_open = stmtKeepsSpecificationPartOpen;
+    const parse_interface_generic_name = parseInterfaceGenericName;
+    const classify_interface_end = classifyInterfaceEnd;
+    const note_invalid_interface_end = noteInvalidInterfaceEnd;
+    const note_missing_interface_end = noteMissingInterfaceEnd;
+    const interface_procedure_from_unit = interfaceProcedureFromUnit;
+    const note_unexpected_interface_eof = noteUnexpectedInterfaceEof;
+};
+
+const RootUnitOps = struct {
+    pub fn noteFallbackForLine(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine) void {
+        return RootUnitHelper.note_fallback_for_line(diag_bag, line);
+    }
+
+    pub fn setLexerOrLineDiagnostic(
+        diag_bag: *parse_diag.Bag,
+        lex_diag_bag: *lexer.Bag,
+        line: logical_line.LogicalLine,
+        err: anyerror,
+    ) void {
+        return RootUnitHelper.set_lexer_or_line_diagnostic(diag_bag, lex_diag_bag, line, err);
+    }
+
+    pub fn setParseDiagnosticFromStream(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine, lp: LineParser, err: anyerror) void {
+        return RootUnitHelper.set_parse_diagnostic_from_stream(diag_bag, line, lp, err);
+    }
+
+    pub fn sourceFromLine(line: logical_line.LogicalLine) DeclSource {
+        return RootUnitHelper.source_from_line(line);
+    }
+
+    pub fn annotateDeclBindingOwners(
+        allocator: std.mem.Allocator,
+        decls: []const Decl,
+        owner_name: []const u8,
+        owner_kind: ast.LexicalOwnerKind,
+    ) ![]const Decl {
+        return RootUnitHelper.annotate_decl_binding_owners(allocator, decls, owner_name, owner_kind);
+    }
+
+    pub fn makeContainsStmt(line: logical_line.LogicalLine) Stmt {
+        return RootUnitHelper.make_contains_stmt(line);
+    }
+
+    pub fn noteUnexpectedProgramUnitEnd(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine, kind: ProgramUnitKind) void {
+        return RootUnitHelper.note_unexpected_program_unit_end(diag_bag, line, kind);
+    }
+
+    pub fn isEndDoLine(lp: LineParser) bool {
+        return RootUnitHelper.is_end_do_line(lp);
+    }
+
+    pub fn isEndIfLine(lp: LineParser) bool {
+        return RootUnitHelper.is_end_if_line(lp);
+    }
+
+    pub fn isEndBlockLine(lp: LineParser) bool {
+        return RootUnitHelper.is_end_block_line(lp);
+    }
+
+    pub fn recordParamInts(param_ints: *std.StringHashMap(i64), assigns: []ast.ParamAssign) !void {
+        return RootUnitHelper.record_param_ints(param_ints, assigns);
+    }
+
+    pub fn recordParamStrings(param_strings: *std.StringHashMap(ast.Literal), assigns: []ast.ParamAssign) !void {
+        return RootUnitHelper.record_param_strings(param_strings, assigns);
+    }
+
+    pub fn recordArrayNames(
+        allocator: std.mem.Allocator,
+        array_names: *std.StringHashMap(array_info.ArrayInfo),
+        decl_node: Decl,
+        param_ints: *const std.StringHashMap(i64),
+    ) !void {
+        return RootUnitHelper.record_array_names(allocator, array_names, decl_node, param_ints);
+    }
+
+    pub fn lineAtIndexOrLast(lines: []logical_line.LogicalLine, idx: usize, fallback: logical_line.LogicalLine) logical_line.LogicalLine {
+        return RootUnitHelper.line_at_index_or_last(lines, idx, fallback);
+    }
+
+    pub fn setParseDiagnosticForLine(
+        diag_bag: *parse_diag.Bag,
+        line: logical_line.LogicalLine,
+        line_no: usize,
+        column: usize,
+        err: anyerror,
+    ) void {
+        return RootUnitHelper.set_parse_diagnostic_for_line(diag_bag, line, line_no, column, err);
+    }
+
+    pub fn stampStmtSource(stmt_node: *ast.Stmt, line: logical_line.LogicalLine) void {
+        return RootUnitHelper.stamp_stmt_source(stmt_node, line);
+    }
+
+    pub fn stmtKeepsSpecificationPartOpen(stmt_node: ast.Stmt) bool {
+        return RootUnitHelper.stmt_keeps_specification_part_open(stmt_node);
+    }
+
+    pub fn parseInterfaceGenericName(arena: std.mem.Allocator, lp: *LineParser) !?[]const u8 {
+        return RootUnitHelper.parse_interface_generic_name(arena, lp);
+    }
+
+    pub fn classifyInterfaceEnd(
+        arena: std.mem.Allocator,
+        line: logical_line.LogicalLine,
+        tokens: []lexer.Token,
+        expected_name: ?[]const u8,
+    ) !InterfaceEndStatus {
+        return RootUnitHelper.classify_interface_end(arena, line, tokens, expected_name);
+    }
+
+    pub fn noteInvalidInterfaceEnd(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine, interface_name: ?[]const u8) void {
+        return RootUnitHelper.note_invalid_interface_end(diag_bag, line, interface_name);
+    }
+
+    pub fn noteMissingInterfaceEnd(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine) void {
+        return RootUnitHelper.note_missing_interface_end(diag_bag, line);
+    }
+
+    pub fn interfaceProcedureFromUnit(unit: ProgramUnit, source: DeclSource, end_source: DeclSource) ast.InterfaceProcedure {
+        return RootUnitHelper.interface_procedure_from_unit(unit, source, end_source);
+    }
+
+    pub fn noteUnexpectedInterfaceEof(diag_bag: *parse_diag.Bag, line: logical_line.LogicalLine) void {
+        return RootUnitHelper.note_unexpected_interface_eof(diag_bag, line);
+    }
+};
 
 pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.LogicalLine) !Program {
     var diag_bag = parse_diag.Bag.init(arena_allocator);
@@ -91,7 +239,7 @@ const Parser = struct {
     diag_bag: *parse_diag.Bag,
     lex_diag_bag: *lexer.Bag,
 
-    fn tokensForIndex(self: *Parser, line_index: usize) ![]lexer.Token {
+    pub fn tokensForIndex(self: *Parser, line_index: usize) ![]lexer.Token {
         if (self.token_cache[line_index]) |cached| return cached;
         const tokens = try lexer.lexLogicalLineWithDiagnostics(self.arena, self.lines[line_index], self.lex_diag_bag);
         self.token_cache[line_index] = tokens;
@@ -102,7 +250,7 @@ const Parser = struct {
         return self.tokensForIndex(line_index) catch null;
     }
 
-    fn isStandaloneEndAt(self: *Parser, line_index: usize) bool {
+    pub fn isStandaloneEndAt(self: *Parser, line_index: usize) bool {
         const line = self.lines[line_index];
         const tokens = self.maybeTokensForIndex(line_index) orelse return false;
         return isStandaloneEndTokens(line, tokens);
@@ -114,7 +262,7 @@ const Parser = struct {
         return isProgramUnitEndTokens(line, tokens);
     }
 
-    fn isModuleEndAt(self: *Parser, line_index: usize) bool {
+    pub fn isModuleEndAt(self: *Parser, line_index: usize) bool {
         const line = self.lines[line_index];
         const tokens = self.maybeTokensForIndex(line_index) orelse return false;
         return isModuleEndTokens(line, tokens);
@@ -126,13 +274,13 @@ const Parser = struct {
         return isModuleHeaderTokens(line, tokens);
     }
 
-    fn isContainsAt(self: *Parser, line_index: usize) bool {
+    pub fn isContainsAt(self: *Parser, line_index: usize) bool {
         const line = self.lines[line_index];
         const tokens = self.maybeTokensForIndex(line_index) orelse return false;
         return isContainsTokens(line, tokens);
     }
 
-    fn isInterfaceStartAt(self: *Parser, line_index: usize) bool {
+    pub fn isInterfaceStartAt(self: *Parser, line_index: usize) bool {
         const line = self.lines[line_index];
         const tokens = self.maybeTokensForIndex(line_index) orelse return false;
         return isInterfaceStartTokens(line, tokens);
@@ -180,325 +328,29 @@ const Parser = struct {
         return .{ .units = try units.toOwnedSlice() };
     }
 
-    fn parseModuleContainer(self: *Parser, units: *std.array_list.Managed(ProgramUnit)) !void {
-        // Parse the module declaration section conservatively, then parse
-        // contained procedures and prepend supported module declarations.
-        const module_name = try self.moduleHeaderName(self.index);
-        self.index += 1;
-        var module_decls = std.array_list.Managed(Decl).init(self.arena);
-        var module_decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
-        var module_uses = std.array_list.Managed(ast.UseStmt).init(self.arena);
-        var saw_contains = false;
-        while (self.index < self.lines.len) {
-            const line = self.lines[self.index];
-            noteFallbackForLine(self.diag_bag, line);
-            if (self.isModuleEndAt(self.index)) {
-                var stored_decls: []const Decl = try module_decls.toOwnedSlice();
-                var stored_decl_sources: []const DeclSource = try module_decl_sources.toOwnedSlice();
-                if (module_uses.items.len != 0) {
-                    const imported = try importPreludeDecls(self.arena, stored_decls, stored_decl_sources, module_uses.items, &self.module_preludes, self.diag_bag);
-                    stored_decls = imported.decls;
-                    stored_decl_sources = imported.decl_sources;
-                }
-                stored_decls = try annotateDeclBindingOwners(self.arena, stored_decls, module_name, .module);
-                stored_decl_sources = try annotateDeclSourcesOwner(self.arena, stored_decl_sources, module_name);
-                try self.module_preludes.put(module_name, .{
-                    .decls = stored_decls,
-                    .decl_sources = stored_decl_sources,
-                });
-                try units.append(.{
-                    .kind = .module,
-                    .name = module_name,
-                    .args = &.{},
-                    .decls = @constCast(stored_decls),
-                    .decl_sources = @constCast(stored_decl_sources),
-                    .stmts = &.{},
-                    .expr_sources = &.{},
-                });
-                self.index += 1;
-                return;
-            }
-            if (self.isContainsAt(self.index)) {
-                self.index += 1;
-                saw_contains = true;
-                break;
-            }
-            if (self.isInterfaceStartAt(self.index)) {
-                const decl_node = self.parseInterfaceBlock() catch |err| {
-                    const tokens = self.tokensForIndex(self.index) catch |tok_err| {
-                        setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, line, tok_err);
-                        return tok_err;
-                    };
-                    const lp = LineParser.init(line, tokens);
-                    setParseDiagnosticFromStream(self.diag_bag, line, lp, err);
-                    return err;
-                };
-                try module_decls.append(decl_node);
-                try module_decl_sources.append(sourceFromLine(line));
-                continue;
-            }
-            const tokens = self.tokensForIndex(self.index) catch {
-                self.index += 1;
-                continue;
-            };
-            var lp = LineParser.init(line, tokens);
-            if (try tryParsePreludeUseImport(&lp, self.arena)) |use_import| {
-                try module_uses.append(use_import);
-                self.index += 1;
-                continue;
-            }
-            if (isDerivedTypeStartTokens(line, tokens)) {
-                const decl_node = try self.parseDerivedTypeDef();
-                try module_decls.append(decl_node);
-                try module_decl_sources.append(sourceFromLine(line));
-                continue;
-            }
-            if (decl.isDeclarationStart(lp)) {
-                const decl_node = decl.parseDecl(&lp, self.arena) catch {
-                    self.index += 1;
-                    continue;
-                };
-                try module_decls.append(decl_node);
-                try module_decl_sources.append(sourceFromLine(line));
-            }
-            self.index += 1;
-        }
-        var stored_decls: []const Decl = try module_decls.toOwnedSlice();
-        var stored_decl_sources: []const DeclSource = try module_decl_sources.toOwnedSlice();
-        if (module_uses.items.len != 0) {
-            const imported = try importPreludeDecls(self.arena, stored_decls, stored_decl_sources, module_uses.items, &self.module_preludes, self.diag_bag);
-            stored_decls = imported.decls;
-            stored_decl_sources = imported.decl_sources;
-        }
-        stored_decls = try annotateDeclBindingOwners(self.arena, stored_decls, module_name, .module);
-        stored_decl_sources = try annotateDeclSourcesOwner(self.arena, stored_decl_sources, module_name);
-        try self.module_preludes.put(module_name, .{
-            .decls = stored_decls,
-            .decl_sources = stored_decl_sources,
-        });
-        try units.append(.{
-            .kind = .module,
-            .name = module_name,
-            .args = &.{},
-            .decls = @constCast(stored_decls),
-            .decl_sources = @constCast(stored_decl_sources),
-            .stmts = &.{},
-            .expr_sources = &.{},
-        });
-        if (!saw_contains) return;
-
-        while (self.index < self.lines.len) {
-            noteFallbackForLine(self.diag_bag, self.lines[self.index]);
-            if (self.isModuleEndAt(self.index)) {
-                self.index += 1;
-                return;
-            }
-            if (self.isStandaloneEndAt(self.index)) {
-                self.index += 1;
-                continue;
-            }
-            var unit = try self.parseProgramUnit();
-            unit.owner_name = module_name;
-            unit.owner_kind = .module;
-            if (stored_decls.len != 0) {
-                unit = try prependDecls(self.arena, unit, stored_decls, stored_decl_sources);
-            }
-            try units.append(unit);
-        }
+    pub fn parseModuleContainer(self: *Parser, units: *std.array_list.Managed(ProgramUnit)) !void {
+        return root_units.parseModuleContainer(self, units, RootUnitOps);
     }
 
-    fn parseProgramUnit(self: *Parser) !ProgramUnit {
-        if (self.index >= self.lines.len) return error.UnexpectedEOF;
-        const expr_mark = self.expr_capture.mark();
-        const header_line = self.lines[self.index];
-        noteFallbackForLine(self.diag_bag, header_line);
-        const header_tokens = self.tokensForIndex(self.index) catch |err| {
-            setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, header_line, err);
-            return err;
-        };
-        var lp = LineParser.init(header_line, header_tokens);
-        var parsed_implicit_program = false;
-        if (stmt_helpers.looksLikeBlankInsensitiveAssignment(lp)) {
-            parsed_implicit_program = true;
-        }
-        const header = parseProgramUnitHeader(self.arena, &lp, &self.block_data_counter) catch |err| switch (err) {
-            error.ExpectedProgramUnit => blk: {
-                parsed_implicit_program = true;
-                break :blk try self.syntheticProgramHeader();
-            },
-            else => {
-                setParseDiagnosticFromStream(self.diag_bag, header_line, lp, err);
-                return err;
-            },
-        };
-        var unit: ProgramUnit = undefined;
-        if (parsed_implicit_program) {
-            const implicit = try self.syntheticProgramHeader();
-            unit = try self.parseProgramUnitBody(implicit, false, header_line, expr_mark);
-        } else {
-            self.index += 1;
-            unit = try self.parseProgramUnitBody(header, true, header_line, expr_mark);
-        }
-        if (self.pending_owner_name) |owner_name| {
-            if (self.pending_owner_decls) |owner_decls| {
-                if (owner_decls.len != 0) {
-                    const owner_decl_sources = self.pending_owner_decl_sources orelse &.{};
-                    unit = try prependDecls(self.arena, unit, owner_decls, owner_decl_sources);
-                }
-            }
-            unit.owner_name = owner_name;
-            unit.owner_kind = self.pending_owner_kind;
-        }
-        return unit;
+    pub fn parseProgramUnit(self: *Parser) !ProgramUnit {
+        return root_units.parseProgramUnit(self, RootUnitOps);
     }
 
-    fn parseProgramUnitBody(
+    pub fn parseProgramUnitBody(
         self: *Parser,
         header: ProgramUnitHeader,
         skip_duplicate_header: bool,
         header_line: logical_line.LogicalLine,
         expr_mark: usize,
     ) !ProgramUnit {
-        var decls = std.array_list.Managed(Decl).init(self.arena);
-        var decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
-        var stmts = std.array_list.Managed(Stmt).init(self.arena);
-        var do_ctx = stmt.DoContext.init(self.arena);
-        var param_ints = std.StringHashMap(i64).init(self.arena);
-        var param_strings = std.StringHashMap(ast.Literal).init(self.arena);
-        var array_names = std.StringHashMap(array_info.ArrayInfo).init(self.arena);
-        var spec_part_open = true;
-        if (header.type_decl) |type_decl| {
-            try decls.append(type_decl);
-            try decl_sources.append(sourceFromLine(header_line));
-        }
-        while (self.index < self.lines.len) {
-            const line = self.lines[self.index];
-            noteFallbackForLine(self.diag_bag, line);
-            const tokens = self.tokensForIndex(self.index) catch |err| {
-                setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, line, err);
-                return err;
-            };
-            var stmt_lp = LineParser.init(line, tokens);
-            if (skip_duplicate_header and decls.items.len == 0 and stmts.items.len == 0) {
-                if (isDuplicateProgramUnitTokens(self.arena, line, tokens, header)) {
-                    self.index += 1;
-                    continue;
-                }
-            }
-            if (!do_ctx.hasPending()) {
-                if (stmt_lp.isKeywordSplit("CONTAINS")) {
-                    try stmts.append(makeContainsStmt(line));
-                    self.index += 1;
-                    break;
-                }
-                if (isEndSelectTokens(line, tokens)) {
-                    noteUnexpectedProgramUnitEnd(self.diag_bag, line, header.kind);
-                    self.index += 1;
-                    break;
-                }
-                if (stmt_lp.isKeywordSplit("END") and !isEndDoLine(stmt_lp) and !isEndIfLine(stmt_lp) and !isEndBlockLine(stmt_lp)) {
-                    self.index += 1;
-                    break;
-                }
-            }
-            if (spec_part_open and isDerivedTypeStartTokens(line, tokens)) {
-                const decl_node = self.parseDerivedTypeDef() catch |err| {
-                    setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
-                    return err;
-                };
-                try decls.append(decl_node);
-                try decl_sources.append(sourceFromLine(line));
-                continue;
-            }
-            if (spec_part_open and isInterfaceStartTokens(line, tokens)) {
-                const decl_node = self.parseInterfaceBlock() catch |err| {
-                    setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
-                    return err;
-                };
-                try decls.append(decl_node);
-                try decl_sources.append(sourceFromLine(line));
-                continue;
-            }
-            if (spec_part_open and decl.isDeclarationStart(stmt_lp)) {
-                const decl_node = decl.parseDecl(&stmt_lp, self.arena) catch |err| {
-                    setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
-                    return err;
-                };
-                if (decl_node == .parameter) {
-                    try recordParamInts(&param_ints, decl_node.parameter.assigns);
-                    try recordParamStrings(&param_strings, decl_node.parameter.assigns);
-                }
-                try recordArrayNames(self.arena, &array_names, decl_node, &param_ints);
-                try decls.append(decl_node);
-                try decl_sources.append(sourceFromLine(line));
-                self.index += 1;
-                continue;
-            }
-            const stmt_start_index = self.index;
-            var stmt_node = stmt.parseStatementWithDiagnostics(self.arena, self.lines, &self.index, &do_ctx, &param_ints, &param_strings, &array_names, self.diag_bag, self.lex_diag_bag) catch |err| {
-                if (!self.diag_bag.has()) {
-                    const err_line = lineAtIndexOrLast(self.lines, self.index, line);
-                    const err_col = if (err_line.segments.len > 0) err_line.segments[0].column else 1;
-                    setParseDiagnosticForLine(self.diag_bag, err_line, err_line.span.start_line, err_col, err);
-                }
-                if (self.index == stmt_start_index and self.diag_bag.has() and err == error.UnexpectedToken) {
-                    self.index += 1;
-                    try stmts.append(.{
-                        .label = line.label,
-                        .node = .{ .cont = {} },
-                        .source_line = line.span.start_line,
-                        .source_column = if (line.segments.len > 0) line.segments[0].column else 1,
-                        .source_text = line.text,
-                    });
-                    continue;
-                }
-                return err;
-            };
-            stampStmtSource(&stmt_node, line);
-            if (spec_part_open and !stmtKeepsSpecificationPartOpen(stmt_node)) {
-                spec_part_open = false;
-            }
-            try stmts.append(stmt_node);
-        }
-
-        var unit = ProgramUnit{
-            .kind = header.kind,
-            .name = header.name,
-            .is_module_procedure = header.is_module_procedure,
-            .bind_name = header.bind_name,
-            .result_name = header.result_name,
-            .args = header.args,
-            .alt_return_dummy_count = header.alt_return_dummy_count,
-            .decls = try decls.toOwnedSlice(),
-            .decl_sources = try decl_sources.toOwnedSlice(),
-            .stmts = try stmts.toOwnedSlice(),
-            .expr_sources = try self.expr_capture.sliceFrom(expr_mark),
-        };
-        unit = try self.importUsedModulePreludes(unit);
-        return unit;
+        return root_units.parseProgramUnitBody(self, header, skip_duplicate_header, header_line, expr_mark, RootUnitOps);
     }
 
-    fn importUsedModulePreludes(self: *Parser, unit: ProgramUnit) !ProgramUnit {
-        var imported = unit;
-        var seen = std.StringHashMap(void).init(self.arena);
-        for (unit.stmts) |stmt_node| {
-            if (stmt_node.node != .use_stmt) continue;
-            const use_stmt = stmt_node.node.use_stmt;
-            const prelude = self.module_preludes.get(use_stmt.module_name) orelse continue;
-            if (use_stmt.only_items.len == 0) {
-                if (seen.contains(use_stmt.module_name)) continue;
-                imported = try prependDecls(self.arena, imported, prelude.decls, prelude.decl_sources);
-                try seen.put(use_stmt.module_name, {});
-                continue;
-            }
-            const selected = try selectPreludeDecls(self.arena, prelude, use_stmt, self.diag_bag);
-            if (selected.decls.len == 0) continue;
-            imported = try prependDecls(self.arena, imported, selected.decls, selected.decl_sources);
-        }
-        return imported;
+    pub fn importUsedModulePreludes(self: *Parser, unit: ProgramUnit) !ProgramUnit {
+        return root_units.importUsedModulePreludes(self, unit);
     }
 
-    fn syntheticProgramHeader(self: *Parser) !ProgramUnitHeader {
+    pub fn syntheticProgramHeader(self: *Parser) !ProgramUnitHeader {
         const name = try std.fmt.allocPrint(self.arena, "__COL6FORGE_PROGRAM{d}", .{self.implicit_program_counter});
         self.implicit_program_counter += 1;
         return .{
@@ -513,15 +365,11 @@ const Parser = struct {
         };
     }
 
-    fn moduleHeaderName(self: *Parser, line_index: usize) ![]const u8 {
-        const line = self.lines[line_index];
-        const tokens = try self.tokensForIndex(line_index);
-        var lp = LineParser.init(line, tokens);
-        if (!lp.consumeKeyword("MODULE")) return error.ExpectedProgramUnit;
-        return lp.readName(self.arena) orelse error.MissingName;
+    pub fn moduleHeaderName(self: *Parser, line_index: usize) ![]const u8 {
+        return root_units.moduleHeaderName(self, line_index);
     }
 
-    fn parseDerivedTypeDef(self: *Parser) !Decl {
+    pub fn parseDerivedTypeDef(self: *Parser) !Decl {
         if (self.index >= self.lines.len) return error.UnexpectedEOF;
         const header_line = self.lines[self.index];
         const header_tokens = try self.tokensForIndex(self.index);
@@ -583,131 +431,8 @@ const Parser = struct {
         return error.UnexpectedEOF;
     }
 
-    fn parseInterfaceBlock(self: *Parser) anyerror!Decl {
-        if (self.index >= self.lines.len) return error.UnexpectedEOF;
-        const header_line = self.lines[self.index];
-        const header_tokens = try self.tokensForIndex(self.index);
-        var lp = LineParser.init(header_line, header_tokens);
-        const is_abstract = lp.consumeKeyword("ABSTRACT");
-        if (!lp.consumeKeyword("INTERFACE")) return error.UnexpectedToken;
-        var invalid_named_abstract = false;
-        if (is_abstract) {
-            var lookahead = lp;
-            if (stmt.action_stmt.consumeDoubleColon(&lookahead)) {
-                invalid_named_abstract = true;
-                _ = lookahead.readName(self.arena);
-                lp = lookahead;
-            }
-        }
-        const interface_name = if (invalid_named_abstract) null else try parseInterfaceGenericName(self.arena, &lp);
-        self.index += 1;
-        var module_procedures = std.array_list.Managed([]const u8).init(self.arena);
-        var module_procedure_sources = std.array_list.Managed(DeclSource).init(self.arena);
-        var specific_procedures = std.array_list.Managed([]const u8).init(self.arena);
-        var specific_procedure_sources = std.array_list.Managed(DeclSource).init(self.arena);
-        var procedures = std.array_list.Managed([]const u8).init(self.arena);
-        var procedure_sources = std.array_list.Managed(DeclSource).init(self.arena);
-        var procedure_headers = std.array_list.Managed(ast.InterfaceProcedure).init(self.arena);
-
-        while (self.index < self.lines.len) {
-            const line = self.lines[self.index];
-            noteFallbackForLine(self.diag_bag, line);
-            const tokens = try self.tokensForIndex(self.index);
-            switch (try classifyInterfaceEnd(self.arena, line, tokens, interface_name)) {
-                .valid => {
-                    if (invalid_named_abstract) {
-                        self.diag_bag.set(
-                            header_line.span.start_line,
-                            1,
-                            catalog.parser.unexpected_token.code,
-                            "Syntax error in ABSTRACT INTERFACE statement",
-                            header_line.text,
-                        );
-                        self.diag_bag.set(
-                            line.span.start_line,
-                            1,
-                            catalog.parser.unexpected_token.code,
-                            "Expecting END MODULE statement",
-                            line.text,
-                        );
-                    }
-                    self.index += 1;
-                    return .{ .interface_block = .{
-                        .abstract = is_abstract,
-                        .name = interface_name,
-                        .module_procedures = try module_procedures.toOwnedSlice(),
-                        .module_procedure_sources = try module_procedure_sources.toOwnedSlice(),
-                        .specific_procedures = try specific_procedures.toOwnedSlice(),
-                        .specific_procedure_sources = try specific_procedure_sources.toOwnedSlice(),
-                        .procedures = try procedures.toOwnedSlice(),
-                        .procedure_sources = try procedure_sources.toOwnedSlice(),
-                        .procedure_headers = try procedure_headers.toOwnedSlice(),
-                    } };
-                },
-                .invalid_end_interface => {
-                    noteInvalidInterfaceEnd(self.diag_bag, line, interface_name);
-                    self.index += 1;
-                    continue;
-                },
-                .other_end_stmt => {
-                    noteMissingInterfaceEnd(self.diag_bag, line);
-                    self.index += 1;
-                    continue;
-                },
-                .none => {},
-            }
-            var body_lp = LineParser.init(line, tokens);
-            if (body_lp.consumeKeyword("MODULE") and body_lp.consumeKeyword("PROCEDURE")) {
-                _ = stmt.action_stmt.consumeDoubleColon(&body_lp);
-                while (true) {
-                    const procedure_name = body_lp.readName(self.arena) orelse return error.MissingName;
-                    try module_procedures.append(procedure_name);
-                    try module_procedure_sources.append(.{
-                        .line = line.span.start_line,
-                        .column = 1,
-                        .text = line.text,
-                    });
-                    if (!body_lp.consume(.comma)) break;
-                }
-            } else if (body_lp.consumeKeyword("PROCEDURE")) {
-                _ = stmt.action_stmt.consumeDoubleColon(&body_lp);
-                while (true) {
-                    const procedure_name = body_lp.readName(self.arena) orelse return error.MissingName;
-                    try specific_procedures.append(procedure_name);
-                    try specific_procedure_sources.append(.{
-                        .line = line.span.start_line,
-                        .column = 1,
-                        .text = line.text,
-                    });
-                    if (!body_lp.consume(.comma)) break;
-                }
-            } else {
-                var block_data_counter: usize = 0;
-                const header = parseProgramUnitHeader(self.arena, &body_lp, &block_data_counter) catch null;
-                if (header != null) {
-                    const expr_mark = self.expr_capture.mark();
-                    self.index += 1;
-                    const proc_unit = try self.parseProgramUnitBody(header.?, true, line, expr_mark);
-                    const proc_source: DeclSource = .{
-                        .line = line.span.start_line,
-                        .column = 1,
-                        .text = line.text,
-                    };
-                    const end_line = self.lines[self.index - 1];
-                    try procedures.append(proc_unit.name);
-                    try procedure_sources.append(proc_source);
-                    try procedure_headers.append(interfaceProcedureFromUnit(proc_unit, proc_source, .{
-                        .line = end_line.span.start_line,
-                        .column = 1,
-                        .text = end_line.text,
-                    }));
-                    continue;
-                }
-            }
-            self.index += 1;
-        }
-        noteUnexpectedInterfaceEof(self.diag_bag, self.lines[self.lines.len - 1]);
-        return error.UnexpectedEOF;
+    pub fn parseInterfaceBlock(self: *Parser) anyerror!Decl {
+        return root_units.parseInterfaceBlock(self, RootUnitOps);
     }
 };
 
@@ -1231,60 +956,7 @@ fn evalDimLowerValue(expr_node: *ast.Expr, param_ints: *const std.StringHashMap(
 }
 
 fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {
-    var units = std.array_list.Managed(ProgramUnit).init(arena);
-    for (program.units) |unit| {
-        if (unit.kind != .subroutine and unit.kind != .function) {
-            try units.append(unit);
-            continue;
-        }
-
-        var first_entry_idx: ?usize = null;
-        for (unit.stmts, 0..) |stmt_item, idx| {
-            if (stmt_item.node == .entry) {
-                first_entry_idx = idx;
-                break;
-            }
-        }
-
-        if (first_entry_idx) |idx| {
-            try units.append(.{
-                .kind = unit.kind,
-                .name = unit.name,
-                .args = unit.args,
-                .alt_return_dummy_count = unit.alt_return_dummy_count,
-                .decls = unit.decls,
-                .decl_sources = unit.decl_sources,
-                .stmts = unit.stmts[0..idx],
-            });
-        } else {
-            try units.append(unit);
-        }
-
-        for (unit.stmts, 0..) |stmt_item, idx| {
-            if (stmt_item.node != .entry) continue;
-            const entry = stmt_item.node.entry;
-
-            var end_idx = unit.stmts.len;
-            var scan = idx + 1;
-            while (scan < unit.stmts.len) : (scan += 1) {
-                if (unit.stmts[scan].node == .entry) {
-                    end_idx = scan;
-                    break;
-                }
-            }
-
-            try units.append(.{
-                .kind = unit.kind,
-                .name = entry.name,
-                .args = entry.args,
-                .alt_return_dummy_count = entry.alt_return_dummy_count,
-                .decls = unit.decls,
-                .decl_sources = unit.decl_sources,
-                .stmts = unit.stmts[idx..end_idx],
-            });
-        }
-    }
-    return .{ .units = try units.toOwnedSlice() };
+    return root_expand.expandEntries(arena, program);
 }
 
 fn evalParamInt(expr_node: *ast.Expr, param_ints: *const std.StringHashMap(i64)) ?i64 {
