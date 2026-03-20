@@ -788,6 +788,33 @@ test "semantic applies CHARACTER PARAMETER LEN padding and truncation" {
     try testing.expect(found_b);
 }
 
+test "semantic accepts PARAMETER character length in derived component declaration context" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      INTEGER, PARAMETER :: A = 42\n" ++
+        "      TYPE T\n" ++
+        "        CHARACTER(A) :: ARR(1) = ['A']\n" ++
+        "      END TYPE T\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found_arr = false;
+    for (sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "ARR")) continue;
+        found_arr = true;
+        try testing.expectEqual(@as(?usize, 42), sym.effectiveCharLen());
+        try testing.expectEqual(@as(usize, 1), sym.dims.len);
+    }
+    try testing.expect(found_arr);
+}
+
 test "semantic rejects REAL PARAMETER overflow on single precision coercion" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -11,6 +11,7 @@ const rewrite_calls = @import("rewrite_calls.zig");
 const resolve_data = @import("resolve_data.zig");
 const constants = @import("resolve_const.zig");
 const scope = @import("../scope.zig");
+const evaluator = @import("../evaluator.zig");
 
 pub const Resolver = struct {
     ctx: *context.Context,
@@ -305,7 +306,7 @@ fn resolveDerivedCharacterComponentLen(ctx: *context.Context, expr: *ast.Expr) !
     if (expr.* == .literal and expr.literal.kind == .assumed_size) {
         return error.InvalidCharLen;
     }
-    if (try constants.evalConst(ctx, expr)) |value| {
+    if (try evalDerivedComponentConst(ctx, expr)) |value| {
         return switch (value) {
             .integer => |int_val| blk: {
                 if (int_val < 0) break :blk error.InvalidCharLen;
@@ -316,6 +317,95 @@ fn resolveDerivedCharacterComponentLen(ctx: *context.Context, expr: *ast.Expr) !
     }
     emitDerivedComponentSpecExprDiagnostic(ctx);
     return error.InvalidCharLen;
+}
+
+fn evalDerivedComponentConst(ctx: *context.Context, expr: *ast.Expr) !?symbols.ConstValue {
+    if (try constants.evalConst(ctx, expr)) |value| return value;
+    const resolver = evaluator.ConstResolver{
+        .ctx = @ptrCast(ctx),
+        .resolveFn = resolveDerivedComponentConstValue,
+        .allocator = ctx.arena,
+        .internStringFn = internDerivedComponentConstString,
+        .arrayExtentFn = resolveDerivedComponentArrayExtent,
+    };
+    return evaluator.evalConst(expr, resolver);
+}
+
+fn resolveDerivedComponentConstValue(raw_ctx: *anyopaque, name: []const u8) ?symbols.ConstValue {
+    const ctx: *context.Context = @ptrCast(@alignCast(raw_ctx));
+    if (symbols_mod.findSymbolIndex(ctx, name)) |idx| {
+        if (ctx.symbols.items[idx].const_value) |value| return value;
+    }
+    if (lookupUnitParameterInitializer(ctx, name)) |init_expr| {
+        return evalDerivedComponentConst(ctx, init_expr) catch null;
+    }
+    if (symbols_mod.findBuiltinConstant(ctx, name)) |builtin| return builtin.value;
+    return null;
+}
+
+fn internDerivedComponentConstString(raw_ctx: *anyopaque, text: []const u8) anyerror![]const u8 {
+    const ctx: *context.Context = @ptrCast(@alignCast(raw_ctx));
+    return ctx.internConstString(text);
+}
+
+fn resolveDerivedComponentArrayExtent(raw_ctx: *anyopaque, name: []const u8, dim: ?usize) ?i64 {
+    const ctx: *context.Context = @ptrCast(@alignCast(raw_ctx));
+    const idx = symbols_mod.findSymbolIndex(ctx, name) orelse return null;
+    const sym = ctx.symbols.items[idx];
+    if (sym.dims.len == 0) return null;
+    if (dim) |requested_dim| {
+        if (requested_dim == 0 or requested_dim > sym.dims.len) return null;
+        return evalDerivedComponentDimExtent(ctx, sym.dims[requested_dim - 1]);
+    }
+    var total: i64 = 1;
+    for (sym.dims) |dim_expr| {
+        const extent = evalDerivedComponentDimExtent(ctx, dim_expr) orelse return null;
+        total = std.math.mul(i64, total, extent) catch return null;
+    }
+    return total;
+}
+
+fn evalDerivedComponentDimExtent(ctx: *context.Context, expr: *ast.Expr) ?i64 {
+    return switch (expr.*) {
+        .dim_range => |range| blk: {
+            if (range.stride != null) break :blk null;
+            const upper_val = evalDerivedComponentConstInt(ctx, range.upper) orelse break :blk null;
+            const lower_val = if (range.lower) |lower_expr| evalDerivedComponentConstInt(ctx, lower_expr) orelse break :blk null else 1;
+            if (upper_val < lower_val) break :blk 0;
+            const diff = std.math.sub(i64, upper_val, lower_val) catch break :blk null;
+            break :blk std.math.add(i64, diff, 1) catch null;
+        },
+        else => evalDerivedComponentConstInt(ctx, expr),
+    };
+}
+
+fn evalDerivedComponentConstInt(ctx: *context.Context, expr: *ast.Expr) ?i64 {
+    const value = evalDerivedComponentConst(ctx, expr) catch return null;
+    return switch (value orelse return null) {
+        .integer => |v| v,
+        else => null,
+    };
+}
+
+fn lookupUnitParameterInitializer(ctx: *context.Context, target_name: []const u8) ?*ast.Expr {
+    for (ctx.unit.decls) |decl| {
+        switch (decl) {
+            .parameter => |param_decl| {
+                for (param_decl.assigns) |assign| {
+                    if (std.ascii.eqlIgnoreCase(assign.name, target_name)) return assign.value;
+                }
+            },
+            .type_decl => |type_decl| {
+                if (!type_decl.parameter) continue;
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, target_name)) continue;
+                    return item.init;
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
 }
 
 fn emitDerivedComponentSpecExprDiagnostic(ctx: *context.Context) void {

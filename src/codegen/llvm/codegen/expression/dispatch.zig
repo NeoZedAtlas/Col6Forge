@@ -233,6 +233,9 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
         },
         .call_or_subscript => |call_or_sub| {
             const sym = ctx.findSymbol(call_or_sub.name) orelse {
+                if (ctx.lookupKnownProcedureSig(call_or_sub.name) == null and ctx.findDerivedTypeLayout(call_or_sub.name) != null) {
+                    return emitStructureConstructorByTypeName(ctx, builder, call_or_sub, call_or_sub.name);
+                }
                 return intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args) catch |err| switch (err) {
                     error.UnknownIntrinsic => error.UnknownSymbol,
                     else => err,
@@ -512,6 +515,15 @@ fn emitStructureConstructor(
     sym: ast.sema.Symbol,
 ) EmitError!ValueRef {
     const type_name = sym.type_spec.derived_type_name orelse return error.UnknownSymbol;
+    return emitStructureConstructorByTypeName(ctx, builder, call_or_sub, type_name);
+}
+
+fn emitStructureConstructorByTypeName(
+    ctx: *Context,
+    builder: anytype,
+    call_or_sub: ast.CallOrSubscript,
+    type_name: []const u8,
+) EmitError!ValueRef {
     const layout = ctx.findDerivedTypeLayout(type_name) orelse return error.UnknownSymbol;
     const object_name = try ctx.nextTemp();
     if (layout.size <= 1) {

@@ -1443,6 +1443,88 @@ test "emitModuleToWriter resolves derived layout dependencies across imported mo
     try emitModuleToWriter(&writer, allocator, program, sem_prog, "derived_prelude_layouts.f90", .{});
 }
 
+test "emitModuleToWriter supports declarator initializer with implied-do structure constructor array" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "type dd\n" ++
+        "  integer :: i\n" ++
+        "end type dd\n" ++
+        "type(dd) :: x(2) = (/(dd(i), i = 1, 2)/)\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "decl_init_struct_ctor_implied_do.f90", .{});
+}
+
+test "emitModuleToWriter lowers nested implied-do whole-array assignment with loops" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  implicit none\n" ++
+        "  integer, parameter :: n = 4\n" ++
+        "  integer :: i, j\n" ++
+        "  integer :: vect(n * n)\n" ++
+        "  vect(:) = (/ (((i + j + 3), i = 1, n), j = 1, n) /)\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "nested_implied_do_whole_array_assign.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "arr_generated_head") != null);
+}
+
+test "emitModuleToWriter lowers SUM over implied-do array constructor" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  implicit none\n" ++
+        "  integer, parameter :: n = 4\n" ++
+        "  integer :: i\n" ++
+        "  integer :: total\n" ++
+        "  total = sum((/(i + 1, i = 1, n)/))\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "sum_implied_do_array_ctor.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "sum_implied_head") != null);
+}
+
 test "emitModuleToWriter keeps assumed-size lower-bound dummy arrays on legacy ABI" {
     const testing = std.testing;
     const allocator = testing.allocator;

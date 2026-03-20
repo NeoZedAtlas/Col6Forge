@@ -1598,6 +1598,31 @@ test "emitArgPointer materializes CHARACTER parameter as temporary bytes" {
     try testing.expect(std.mem.indexOf(u8, buffer.items, "store i8 80") != null);
 }
 
+test "emitExpr lowers LOGICAL intrinsic call through intrinsic dispatch" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var harness = try TestHarness.init(allocator);
+    defer harness.deinit();
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const value_arg = try makeLiteral(harness.arena.allocator(), .integer, "2");
+    const kind_arg = try makeLiteral(harness.arena.allocator(), .integer, "1");
+    const args = try harness.arena.allocator().alloc(*Expr, 2);
+    args[0] = value_arg;
+    args[1] = kind_arg;
+    const call_expr = try harness.arena.allocator().create(Expr);
+    call_expr.* = .{ .call_or_subscript = .{ .name = "logical", .args = args } };
+
+    const value = try emitExpr(&harness.ctx, &builder, call_expr);
+    try testing.expectEqual(IRType.i1, value.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "icmp ne i32") != null);
+}
+
 test "emitExpr lowers concat with character function result through shared character plan" {
     const testing = std.testing;
     const allocator = testing.allocator;

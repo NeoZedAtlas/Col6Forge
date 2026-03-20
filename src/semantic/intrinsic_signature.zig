@@ -15,6 +15,7 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
     .{ "ANY", .logical },
     .{ "ALLOCATED", .logical },
     .{ "ASSOCIATED", .logical },
+    .{ "LOGICAL", .logical },
     .{ "PRESENT", .logical },
     .{ "KIND", .integer },
     .{ "INT", .integer },
@@ -84,6 +85,7 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
 
 const IntrinsicSameArgMap = std.StaticStringMap(void).initComptime(.{
     .{ "SQRT", {} },
+    .{ "SUM", {} },
     .{ "EXP", {} },
     .{ "ALOG", {} },
     .{ "ALOG10", {} },
@@ -133,6 +135,11 @@ pub fn inferResultType(
 
     if (std.mem.eql(u8, upper, "__COL6FORGE_SUBSTRING")) {
         return symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null);
+    }
+
+    if (std.mem.eql(u8, upper, "RESHAPE")) {
+        if (args.len == 0) return current;
+        return args[0];
     }
 
     if (IntrinsicReturnTypeMap.get(upper)) |kind| {

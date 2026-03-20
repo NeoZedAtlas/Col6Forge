@@ -598,6 +598,7 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
         return;
     }
     if (try emitWholeArrayCopyAssignment(ctx, builder, assign)) return;
+    if (try emitWholeArrayGeneratedAssignment(ctx, builder, assign)) return;
     if (try emitWholeArrayRuntimeGeneratedAssignment(ctx, builder, assign)) return;
     if (try emitWholeArrayConstructorAssignment(ctx, builder, assign)) return;
     if (try emitContiguousSectionScalarAssignment(ctx, builder, assign)) return;
@@ -866,6 +867,27 @@ fn emitWholeArrayConstructorAssignment(ctx: *Context, builder: anytype, assign: 
     return true;
 }
 
+fn emitWholeArrayGeneratedAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    const target_info = wholeArrayConstructorTarget(ctx, assign.target) orelse return false;
+    if (target_info.sym.dims.len == 0) return false;
+    if (target_info.sym.isCharacter()) return false;
+    if (target_info.sym.loweredKind() == .derived) return false;
+    switch (assign.value.*) {
+        .array_constructor, .implied_do => {},
+        else => return false,
+    }
+
+    const base_ptr = try ctx.getPointer(target_info.name);
+    const elem_ty = common.symbolElementIRType(target_info.sym, ctx.options.target_layout);
+    const linear_idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(linear_idx_ptr_name, .i64);
+    const linear_idx_ptr = ValueRef{ .name = linear_idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(constI64(ctx, 0), linear_idx_ptr);
+
+    try emitGeneratedWholeArrayValue(ctx, builder, base_ptr, elem_ty, linear_idx_ptr, assign.value);
+    return true;
+}
+
 fn emitWholeArrayRuntimeGeneratedAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
     const target_info = wholeArrayConstructorTarget(ctx, assign.target) orelse return false;
     if (target_info.sym.dims.len == 0) return false;
@@ -929,6 +951,109 @@ fn emitWholeArrayRuntimeGeneratedAssignment(ctx: *Context, builder: anytype, ass
 
     try builder.label(loop_exit);
     return true;
+}
+
+fn emitGeneratedWholeArrayValue(
+    ctx: *Context,
+    builder: anytype,
+    base_ptr: ValueRef,
+    elem_ty: llvm_types.IRType,
+    linear_idx_ptr: ValueRef,
+    expr_node: *ast.Expr,
+) EmitError!void {
+    switch (expr_node.*) {
+        .array_constructor => |ctor| {
+            for (ctor.items) |item| {
+                try emitGeneratedWholeArrayValue(ctx, builder, base_ptr, elem_ty, linear_idx_ptr, item);
+            }
+        },
+        .implied_do => |implied| try emitGeneratedWholeArrayImpliedDo(ctx, builder, base_ptr, elem_ty, linear_idx_ptr, implied),
+        else => {
+            const linear_idx_name = try ctx.nextTemp();
+            try builder.load(linear_idx_name, .i64, linear_idx_ptr);
+            const linear_idx = ValueRef{ .name = linear_idx_name, .ty = .i64, .is_ptr = false };
+
+            const elem_ptr_name = try ctx.nextTemp();
+            try builder.gep(elem_ptr_name, elem_ty, base_ptr, linear_idx);
+            const value = try expr.emitExpr(ctx, builder, expr_node);
+            const coerced = try expr.coerce(ctx, builder, value, elem_ty);
+            try builder.store(coerced, .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true });
+
+            const next_idx_name = try ctx.nextTemp();
+            try builder.binary(next_idx_name, "add", .i64, linear_idx, constI64(ctx, 1));
+            try builder.store(.{ .name = next_idx_name, .ty = .i64, .is_ptr = false }, linear_idx_ptr);
+        },
+    }
+}
+
+fn emitGeneratedWholeArrayImpliedDo(
+    ctx: *Context,
+    builder: anytype,
+    base_ptr: ValueRef,
+    elem_ty: llvm_types.IRType,
+    linear_idx_ptr: ValueRef,
+    implied: ast.ImpliedDo,
+) EmitError!void {
+    const iter_sym = ctx.findSymbol(implied.var_name) orelse return error.UnknownSymbol;
+    const iter_ptr = try ctx.getPointer(implied.var_name);
+    const iter_ty = ctx.typeFromKind(iter_sym.loweredKind());
+
+    var start_val = try expr.emitExpr(ctx, builder, implied.start);
+    if (start_val.ty != iter_ty) start_val = try expr.coerce(ctx, builder, start_val, iter_ty);
+    var step_val = if (implied.step) |step_expr|
+        try expr.emitExpr(ctx, builder, step_expr)
+    else
+        constI64(ctx, 1);
+    if (step_val.ty != iter_ty) step_val = try expr.coerce(ctx, builder, step_val, iter_ty);
+    var loop_count = try io_utils.emitImpliedFinalCount(ctx, builder, implied.start, implied.end, implied.step);
+    if (loop_count.ty != .i64) loop_count = try expr.coerce(ctx, builder, loop_count, .i64);
+
+    const iter_saved_ptr_name = try ctx.nextTemp();
+    try builder.alloca(iter_saved_ptr_name, iter_ty);
+    const iter_saved_ptr = ValueRef{ .name = iter_saved_ptr_name, .ty = .ptr, .is_ptr = true };
+    const iter_saved_name = try ctx.nextTemp();
+    try builder.load(iter_saved_name, iter_ty, iter_ptr);
+    try builder.store(.{ .name = iter_saved_name, .ty = iter_ty, .is_ptr = false }, iter_saved_ptr);
+
+    const loop_idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(loop_idx_ptr_name, .i64);
+    const loop_idx_ptr = ValueRef{ .name = loop_idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(constI64(ctx, 0), loop_idx_ptr);
+    try builder.store(start_val, iter_ptr);
+
+    const loop_head = try ctx.nextLabel("arr_generated_head");
+    const loop_body = try ctx.nextLabel("arr_generated_body");
+    const loop_exit = try ctx.nextLabel("arr_generated_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const loop_idx_name = try ctx.nextTemp();
+    try builder.load(loop_idx_name, .i64, loop_idx_ptr);
+    const loop_idx = ValueRef{ .name = loop_idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, loop_idx, loop_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    for (implied.items) |item| {
+        try emitGeneratedWholeArrayValue(ctx, builder, base_ptr, elem_ty, linear_idx_ptr, item);
+    }
+
+    const cur_iter_name = try ctx.nextTemp();
+    try builder.load(cur_iter_name, iter_ty, iter_ptr);
+    const next_iter_name = try ctx.nextTemp();
+    try builder.binary(next_iter_name, "add", iter_ty, .{ .name = cur_iter_name, .ty = iter_ty, .is_ptr = false }, step_val);
+    try builder.store(.{ .name = next_iter_name, .ty = iter_ty, .is_ptr = false }, iter_ptr);
+
+    const next_loop_idx_name = try ctx.nextTemp();
+    try builder.binary(next_loop_idx_name, "add", .i64, loop_idx, constI64(ctx, 1));
+    try builder.store(.{ .name = next_loop_idx_name, .ty = .i64, .is_ptr = false }, loop_idx_ptr);
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
+    const iter_restore_name = try ctx.nextTemp();
+    try builder.load(iter_restore_name, iter_ty, iter_saved_ptr);
+    try builder.store(.{ .name = iter_restore_name, .ty = iter_ty, .is_ptr = false }, iter_ptr);
 }
 
 fn extractRuntimeWholeArrayGenerator(
@@ -1075,7 +1200,7 @@ fn appendFlattenedArrayValuedExpr(
     }
 }
 
-fn flattenArrayValuedExprItems(ctx: *Context, expr_node: *ast.Expr) EmitError!?[]const *ast.Expr {
+pub fn flattenArrayValuedExprItems(ctx: *Context, expr_node: *ast.Expr) EmitError!?[]const *ast.Expr {
     var items = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
     if (!(try appendFlattenedArrayValuedExpr(ctx, &items, expr_node))) return null;
     return try items.toOwnedSlice();

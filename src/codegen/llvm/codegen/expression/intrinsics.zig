@@ -246,6 +246,148 @@ pub fn emitIntrinsicMinMax(ctx: *Context, builder: anytype, args: []*Expr, is_ma
     return acc;
 }
 
+fn emitIntrinsicSum(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len != 1) return error.InvalidIntrinsicCall;
+    const acc_ty = try inferSumAccumulatorType(ctx, args[0]);
+    const acc_ptr_name = try ctx.nextTemp();
+    try builder.alloca(acc_ptr_name, acc_ty);
+    const acc_ptr = ValueRef{ .name = acc_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(utils.zeroValue(acc_ty), acc_ptr);
+    try emitSumAccumulator(ctx, builder, acc_ptr, acc_ty, args[0]);
+
+    const acc_name = try ctx.nextTemp();
+    try builder.load(acc_name, acc_ty, acc_ptr);
+    return .{ .name = acc_name, .ty = acc_ty, .is_ptr = false };
+}
+
+fn inferSumAccumulatorType(ctx: *Context, expr_node: *Expr) EmitError!IRType {
+    return switch (expr_node.*) {
+        .array_constructor => |ctor| blk: {
+            for (ctor.items) |item| {
+                break :blk try inferSumAccumulatorType(ctx, item);
+            }
+            return error.UnsupportedArrayConstructor;
+        },
+        .implied_do => |implied| blk: {
+            for (implied.items) |item| {
+                break :blk try inferSumAccumulatorType(ctx, item);
+            }
+            return error.UnsupportedArrayConstructor;
+        },
+        else => casting.exprType(ctx, expr_node),
+    };
+}
+
+fn emitSumAccumulator(
+    ctx: *Context,
+    builder: anytype,
+    acc_ptr: ValueRef,
+    acc_ty: IRType,
+    expr_node: *Expr,
+) EmitError!void {
+    switch (expr_node.*) {
+        .array_constructor => |ctor| {
+            for (ctor.items) |item| {
+                try emitSumAccumulator(ctx, builder, acc_ptr, acc_ty, item);
+            }
+        },
+        .implied_do => |implied| try emitSumImpliedDo(ctx, builder, acc_ptr, acc_ty, implied),
+        else => {
+            const value = try dispatch.emitExpr(ctx, builder, expr_node);
+            const coerced = if (value.ty == acc_ty) value else try casting.coerce(ctx, builder, value, acc_ty);
+            const current_name = try ctx.nextTemp();
+            try builder.load(current_name, acc_ty, acc_ptr);
+            const current = ValueRef{ .name = current_name, .ty = acc_ty, .is_ptr = false };
+            const updated = try binary.emitBinary(ctx, builder, .add, current, coerced);
+            try builder.store(updated, acc_ptr);
+        },
+    }
+}
+
+fn emitSumImpliedDo(
+    ctx: *Context,
+    builder: anytype,
+    acc_ptr: ValueRef,
+    acc_ty: IRType,
+    implied: ast.ImpliedDo,
+) EmitError!void {
+    const iter_sym = ctx.findSymbol(implied.var_name) orelse return error.UnknownSymbol;
+    const iter_ptr = try ctx.getPointer(implied.var_name);
+    const iter_ty = ctx.typeFromKind(iter_sym.loweredKind());
+
+    var start_val = try dispatch.emitExpr(ctx, builder, implied.start);
+    if (start_val.ty != iter_ty) start_val = try casting.coerce(ctx, builder, start_val, iter_ty);
+    var step_val = if (implied.step) |step_expr|
+        try dispatch.emitExpr(ctx, builder, step_expr)
+    else
+        ValueRef{ .name = "1", .ty = .i64, .is_ptr = false };
+    if (step_val.ty != iter_ty) step_val = try casting.coerce(ctx, builder, step_val, iter_ty);
+    var loop_count = try emitSumImpliedCount(ctx, builder, implied);
+    if (loop_count.ty != .i64) loop_count = try casting.coerce(ctx, builder, loop_count, .i64);
+
+    const iter_saved_ptr_name = try ctx.nextTemp();
+    try builder.alloca(iter_saved_ptr_name, iter_ty);
+    const iter_saved_ptr = ValueRef{ .name = iter_saved_ptr_name, .ty = .ptr, .is_ptr = true };
+    const iter_saved_name = try ctx.nextTemp();
+    try builder.load(iter_saved_name, iter_ty, iter_ptr);
+    try builder.store(.{ .name = iter_saved_name, .ty = iter_ty, .is_ptr = false }, iter_saved_ptr);
+
+    const loop_idx_ptr_name = try ctx.nextTemp();
+    try builder.alloca(loop_idx_ptr_name, .i64);
+    const loop_idx_ptr = ValueRef{ .name = loop_idx_ptr_name, .ty = .ptr, .is_ptr = true };
+    try builder.store(.{ .name = "0", .ty = .i64, .is_ptr = false }, loop_idx_ptr);
+    try builder.store(start_val, iter_ptr);
+
+    const loop_head = try ctx.nextLabel("sum_implied_head");
+    const loop_body = try ctx.nextLabel("sum_implied_body");
+    const loop_exit = try ctx.nextLabel("sum_implied_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const loop_idx_name = try ctx.nextTemp();
+    try builder.load(loop_idx_name, .i64, loop_idx_ptr);
+    const loop_idx = ValueRef{ .name = loop_idx_name, .ty = .i64, .is_ptr = false };
+    const cond_name = try ctx.nextTemp();
+    try builder.compare(cond_name, "icmp", "slt", .i64, loop_idx, loop_count);
+    try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    for (implied.items) |item| {
+        try emitSumAccumulator(ctx, builder, acc_ptr, acc_ty, item);
+    }
+
+    const cur_iter_name = try ctx.nextTemp();
+    try builder.load(cur_iter_name, iter_ty, iter_ptr);
+    const next_iter_name = try ctx.nextTemp();
+    try builder.binary(next_iter_name, "add", iter_ty, .{ .name = cur_iter_name, .ty = iter_ty, .is_ptr = false }, step_val);
+    try builder.store(.{ .name = next_iter_name, .ty = iter_ty, .is_ptr = false }, iter_ptr);
+
+    const next_loop_idx_name = try ctx.nextTemp();
+    try builder.binary(next_loop_idx_name, "add", .i64, loop_idx, .{ .name = "1", .ty = .i64, .is_ptr = false });
+    try builder.store(.{ .name = next_loop_idx_name, .ty = .i64, .is_ptr = false }, loop_idx_ptr);
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
+    const iter_restore_name = try ctx.nextTemp();
+    try builder.load(iter_restore_name, iter_ty, iter_saved_ptr);
+    try builder.store(.{ .name = iter_restore_name, .ty = iter_ty, .is_ptr = false }, iter_ptr);
+}
+
+fn emitSumImpliedCount(ctx: *Context, builder: anytype, implied: ast.ImpliedDo) EmitError!ValueRef {
+    var start = try dispatch.emitExpr(ctx, builder, implied.start);
+    if (start.ty != .i64) start = try casting.coerce(ctx, builder, start, .i64);
+    var end_val = try dispatch.emitExpr(ctx, builder, implied.end);
+    if (end_val.ty != .i64) end_val = try casting.coerce(ctx, builder, end_val, .i64);
+    const diff = try binary.emitBinary(ctx, builder, .sub, end_val, start);
+    var step = if (implied.step) |step_expr|
+        try dispatch.emitExpr(ctx, builder, step_expr)
+    else
+        ValueRef{ .name = "1", .ty = .i64, .is_ptr = false };
+    if (step.ty != .i64) step = try casting.coerce(ctx, builder, step, .i64);
+    const quot = try binary.emitBinary(ctx, builder, .div, diff, step);
+    return binary.emitBinary(ctx, builder, .add, quot, .{ .name = "1", .ty = .i64, .is_ptr = false });
+}
+
 pub fn emitIntrinsicConjg(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     const value = try dispatch.emitExpr(ctx, builder, args[0]);
@@ -318,6 +460,49 @@ pub fn emitIntrinsicFloat(ctx: *Context, builder: anytype, args: []*Expr) EmitEr
     }
     // REAL(non-complex) converts to default real kind.
     return casting.coerce(ctx, builder, value, target_ty);
+}
+
+fn emitIntrinsicLogical(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len == 0 or args.len > 2) return error.InvalidIntrinsicCall;
+    const value = try dispatch.emitExpr(ctx, builder, args[0]);
+    if (args.len == 2) {
+        _ = evalConstIntArg(ctx, args[1]);
+    }
+    return emitLogicalTruthValue(ctx, builder, value);
+}
+
+fn emitLogicalTruthValue(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRef {
+    return switch (value.ty) {
+        .i1 => value,
+        .i32, .i64 => blk: {
+            const cmp_name = try ctx.nextTemp();
+            try builder.compare(cmp_name, "icmp", "ne", value.ty, value, utils.zeroValue(value.ty));
+            break :blk .{ .name = cmp_name, .ty = .i1, .is_ptr = false };
+        },
+        .f32, .f64 => blk: {
+            const cmp_name = try ctx.nextTemp();
+            try builder.compare(cmp_name, "fcmp", "une", value.ty, value, utils.zeroValue(value.ty));
+            break :blk .{ .name = cmp_name, .ty = .i1, .is_ptr = false };
+        },
+        .complex_f32, .complex_f64 => blk: {
+            const real = try complex.extractComplex(ctx, builder, value, 0);
+            const imag = try complex.extractComplex(ctx, builder, value, 1);
+            const real_nonzero_name = try ctx.nextTemp();
+            try builder.compare(real_nonzero_name, "fcmp", "une", real.ty, real, utils.zeroValue(real.ty));
+            const imag_nonzero_name = try ctx.nextTemp();
+            try builder.compare(imag_nonzero_name, "fcmp", "une", imag.ty, imag, utils.zeroValue(imag.ty));
+            const out_name = try ctx.nextTemp();
+            try builder.binary(
+                out_name,
+                "or",
+                .i1,
+                .{ .name = real_nonzero_name, .ty = .i1, .is_ptr = false },
+                .{ .name = imag_nonzero_name, .ty = .i1, .is_ptr = false },
+            );
+            break :blk .{ .name = out_name, .ty = .i1, .is_ptr = false };
+        },
+        else => error.UnsupportedIntrinsicType,
+    };
 }
 
 fn emitIntrinsicIchar(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
@@ -1007,12 +1192,28 @@ fn emitWholeArrayAnyReduction(ctx: *Context, builder: anytype, expr_node: *Expr)
             if (left_view.count != right_ctor.count) return null;
             return try emitWholeArrayConstructorReduction(ctx, builder, bin.op, left_view, right_ctor);
         }
+        if (supportedWholeArrayView(ctx, bin.right)) |right_view| {
+            if (left_view.count != right_view.count) return null;
+            return try emitWholeArrayWholeArrayReduction(ctx, builder, bin.op, left_view, right_view);
+        }
+        return try emitWholeArrayScalarReduction(ctx, builder, bin.op, left_view, bin.right);
     }
     if (supportedWholeArrayView(ctx, bin.right)) |right_view| {
         if (supportedConstructorView(bin.left)) |left_ctor| {
             if (left_ctor.count != right_view.count) return null;
             return try emitConstructorWholeArrayReduction(ctx, builder, bin.op, left_ctor, right_view);
         }
+        return try emitScalarWholeArrayReduction(ctx, builder, bin.op, bin.left, right_view);
+    }
+    if (supportedConstructorView(bin.left)) |left_ctor| {
+        if (supportedConstructorView(bin.right)) |right_ctor| {
+            if (left_ctor.count != right_ctor.count) return null;
+            return try emitConstructorConstructorReduction(ctx, builder, bin.op, left_ctor, right_ctor);
+        }
+        return try emitConstructorScalarReduction(ctx, builder, bin.op, left_ctor, bin.right);
+    }
+    if (supportedConstructorView(bin.right)) |right_ctor| {
+        return try emitScalarConstructorReduction(ctx, builder, bin.op, bin.left, right_ctor);
     }
     return null;
 }
@@ -1137,6 +1338,114 @@ fn emitWholeArrayElement(
     const elem_tmp = try ctx.nextTemp();
     try builder.load(elem_tmp, view.elem_ty, elem_ptr);
     return .{ .name = elem_tmp, .ty = view.elem_ty, .is_ptr = false };
+}
+
+fn emitWholeArrayWholeArrayReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: WholeArrayView,
+    right: WholeArrayView,
+) EmitError!ValueRef {
+    var acc = utils.zeroValue(.i1);
+    var idx: usize = 0;
+    while (idx < left.count) : (idx += 1) {
+        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
+        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitWholeArrayScalarReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: WholeArrayView,
+    right: *Expr,
+) EmitError!ValueRef {
+    var acc = utils.zeroValue(.i1);
+    const rhs = try dispatch.emitExpr(ctx, builder, right);
+    var idx: usize = 0;
+    while (idx < left.count) : (idx += 1) {
+        const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitScalarWholeArrayReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: *Expr,
+    right: WholeArrayView,
+) EmitError!ValueRef {
+    var acc = utils.zeroValue(.i1);
+    const lhs = try dispatch.emitExpr(ctx, builder, left);
+    var idx: usize = 0;
+    while (idx < right.count) : (idx += 1) {
+        const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitConstructorConstructorReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: ConstructorView,
+    right: ConstructorView,
+) EmitError!ValueRef {
+    var acc = utils.zeroValue(.i1);
+    var idx: usize = 0;
+    while (idx < left.count) : (idx += 1) {
+        const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
+        const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitConstructorScalarReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: ConstructorView,
+    right: *Expr,
+) EmitError!ValueRef {
+    var acc = utils.zeroValue(.i1);
+    const rhs = try dispatch.emitExpr(ctx, builder, right);
+    var idx: usize = 0;
+    while (idx < left.count) : (idx += 1) {
+        const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
+}
+
+fn emitScalarConstructorReduction(
+    ctx: *Context,
+    builder: anytype,
+    op: ast.BinaryOp,
+    left: *Expr,
+    right: ConstructorView,
+) EmitError!ValueRef {
+    var acc = utils.zeroValue(.i1);
+    const lhs = try dispatch.emitExpr(ctx, builder, left);
+    var idx: usize = 0;
+    while (idx < right.count) : (idx += 1) {
+        const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
+        const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
+        acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
+    }
+    return acc;
 }
 
 fn intLiteralValue(expr_node: *Expr) ?i64 {
@@ -1288,6 +1597,7 @@ const IntrinsicTag = enum {
     cmplx,
     dcmplx,
     float_,
+    logical_,
     dble,
     sngl,
     aimag,
@@ -1332,6 +1642,7 @@ const IntrinsicTag = enum {
     atan2,
     datan2,
     any,
+    sum_,
     internal_literal_substring,
     allocated,
     associated,
@@ -1385,6 +1696,7 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "dcmplx", .dcmplx },
     .{ "float", .float_ },
     .{ "real", .float_ },
+    .{ "logical", .logical_ },
     .{ "dble", .dble },
     .{ "sngl", .sngl },
     .{ "aimag", .aimag },
@@ -1431,6 +1743,7 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "atan2", .atan2 },
     .{ "datan2", .datan2 },
     .{ "any", .any },
+    .{ "sum", .sum_ },
     .{ "__col6forge_substring", .internal_literal_substring },
     .{ "allocated", .allocated },
     .{ "associated", .associated },
@@ -1517,6 +1830,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .cmplx => return emitIntrinsicCmplx(ctx, builder, args),
         .dcmplx => return emitIntrinsicDcmplx(ctx, builder, args),
         .float_ => return emitIntrinsicFloat(ctx, builder, args),
+        .logical_ => return emitIntrinsicLogical(ctx, builder, args),
         .dble => return emitIntrinsicDble(ctx, builder, args),
         .sngl => return emitIntrinsicSngl(ctx, builder, args),
         .aimag => return emitIntrinsicAimag(ctx, builder, args),
@@ -1561,6 +1875,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .atan2 => return emitAtan2(ctx, builder, args),
         .datan2 => return emitDoubleBinaryLibm(ctx, builder, "atan2", args),
         .any => return emitIntrinsicAny(ctx, builder, args),
+        .sum_ => return emitIntrinsicSum(ctx, builder, args),
         .internal_literal_substring => return emitIntrinsicInternalLiteralSubstring(ctx, builder, args),
         .allocated => return emitIntrinsicAllocated(args),
         .associated => return emitIntrinsicAllocated(args),

@@ -557,10 +557,13 @@ fn emitArrayConstructorDeclaratorInitializer(
     ctor: ast.ArrayConstructor,
 ) EmitError!void {
     if (sym.dims.len != 1) return error.UnsupportedArrayConstructor;
-    const elem_count = common.arrayElementCount(ctx.sem, sym.dims) catch return error.UnsupportedArrayConstructor;
-    if (ctor.items.len != elem_count) return error.UnsupportedArrayConstructor;
+    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.UnsupportedArrayConstructor;
+    const ctor_expr = try ctx.allocator.create(ast.Expr);
+    ctor_expr.* = .{ .array_constructor = ctor };
+    const flat_items = try execution.flattenArrayValuedExprItems(ctx, ctor_expr) orelse return error.UnsupportedArrayConstructor;
+    if (flat_items.len != elem_count) return error.UnsupportedArrayConstructor;
 
-    for (ctor.items, 0..) |item, idx| {
+    for (flat_items, 0..) |item, idx| {
         const index_text = try std.fmt.allocPrint(ctx.allocator, "{d}", .{idx + 1});
         var index_expr = ast.Expr{ .literal = .{
             .kind = .integer,
@@ -577,7 +580,7 @@ fn emitArrayConstructorDeclaratorInitializer(
         };
         try execution.emitAssignment(ctx, builder, assign);
     }
-    try ctx.static_array_values.put(name, ctor.items);
+    try ctx.static_array_values.put(name, flat_items);
 }
 
 fn savedInitGuardName(ctx: *Context) ![]const u8 {

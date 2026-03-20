@@ -188,7 +188,7 @@ pub fn applyComplexFixups(ctx: *Context, builder: anytype, expanded: *ExpandedRe
 pub fn expandIoArgs(ctx: *Context, args: []*ast.Expr) EmitError!ExpandedIoArgs {
     var needs_expansion = false;
     for (args) |arg| {
-        if (arg.* == .implied_do or arg.* == .array_constructor) {
+        if (ioArgNeedsExpansion(arg)) {
             needs_expansion = true;
             break;
         }
@@ -253,8 +253,93 @@ fn flattenIoArrayValuedExpr(
     arg: *ast.Expr,
 ) EmitError!?[]*ast.Expr {
     return switch (arg.*) {
+        .array_constructor => |ctor| blk: {
+            if (ctor.type_spec != null or ctor.items.len == 0) break :blk null;
+            const items = try allocator.alloc(*ast.Expr, ctor.items.len);
+            @memcpy(items, ctor.items);
+            break :blk items;
+        },
+        .unary => |un| blk: {
+            const inner_items = try flattenIoArrayValuedExpr(ctx, allocator, un.expr) orelse break :blk null;
+            const items = try allocator.alloc(*ast.Expr, inner_items.len);
+            for (inner_items, 0..) |item, idx| {
+                const scalar_expr = try allocator.create(ast.Expr);
+                scalar_expr.* = .{ .unary = .{
+                    .op = un.op,
+                    .expr = item,
+                } };
+                items[idx] = scalar_expr;
+            }
+            break :blk items;
+        },
+        .binary => |bin| blk: {
+            const left_items = try flattenIoArrayValuedExpr(ctx, allocator, bin.left);
+            const right_items = try flattenIoArrayValuedExpr(ctx, allocator, bin.right);
+            if (left_items == null and right_items == null) break :blk null;
+
+            const item_count = if (left_items) |items_| items_.len else right_items.?.len;
+            if (left_items != null and right_items != null and left_items.?.len != right_items.?.len) break :blk null;
+
+            const items = try allocator.alloc(*ast.Expr, item_count);
+            var idx: usize = 0;
+            while (idx < item_count) : (idx += 1) {
+                const scalar_expr = try allocator.create(ast.Expr);
+                scalar_expr.* = .{ .binary = .{
+                    .op = bin.op,
+                    .left = if (left_items) |items_| items_[idx] else bin.left,
+                    .right = if (right_items) |items_| items_[idx] else bin.right,
+                } };
+                items[idx] = scalar_expr;
+            }
+            break :blk items;
+        },
         .call_or_subscript => |call| flattenVectorSubscriptItems(ctx, allocator, call),
         else => null,
+    };
+}
+
+fn ioArgNeedsExpansion(arg: *ast.Expr) bool {
+    return switch (arg.*) {
+        .implied_do, .array_constructor => true,
+        .unary => |un| ioArgNeedsExpansion(un.expr),
+        .binary => |bin| ioArgNeedsExpansion(bin.left) or ioArgNeedsExpansion(bin.right),
+        .complex_literal => |lit| ioArgNeedsExpansion(lit.real) or ioArgNeedsExpansion(lit.imag),
+        .call_or_subscript => |call| blk: {
+            for (call.args) |sub_arg| {
+                if (ioArgNeedsExpansion(sub_arg)) break :blk true;
+            }
+            break :blk false;
+        },
+        .substring => |sub| blk: {
+            for (sub.args) |sub_arg| {
+                if (ioArgNeedsExpansion(sub_arg)) break :blk true;
+            }
+            if (sub.start) |start_expr| {
+                if (ioArgNeedsExpansion(start_expr)) break :blk true;
+            }
+            if (sub.end) |end_expr| {
+                if (ioArgNeedsExpansion(end_expr)) break :blk true;
+            }
+            break :blk false;
+        },
+        .component => |comp| blk: {
+            if (ioArgNeedsExpansion(comp.base)) break :blk true;
+            for (comp.args) |sub_arg| {
+                if (ioArgNeedsExpansion(sub_arg)) break :blk true;
+            }
+            break :blk false;
+        },
+        .dim_range => |range| blk: {
+            if (range.lower) |lower| {
+                if (ioArgNeedsExpansion(lower)) break :blk true;
+            }
+            if (ioArgNeedsExpansion(range.upper)) break :blk true;
+            if (range.stride) |stride_expr| {
+                if (ioArgNeedsExpansion(stride_expr)) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
     };
 }
 

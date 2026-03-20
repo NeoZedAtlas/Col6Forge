@@ -28,6 +28,27 @@ const ModulePrelude = struct {
     decl_sources: []const DeclSource,
 };
 
+const CaseInsensitiveStringContext = struct {
+    pub fn hash(_: @This(), key: []const u8) u64 {
+        var h: u64 = 0xcbf29ce484222325;
+        for (key) |ch| {
+            const lowered = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
+            h = (h ^ @as(u64, lowered)) *% 0x100000001b3;
+        }
+        return h;
+    }
+
+    pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
+        return std.ascii.eqlIgnoreCase(a, b);
+    }
+};
+
+fn CaseInsensitiveStringHashMap(comptime V: type) type {
+    return std.HashMap([]const u8, V, CaseInsensitiveStringContext, std.hash_map.default_max_load_percentage);
+}
+
+const ModulePreludeMap = CaseInsensitiveStringHashMap(ModulePrelude);
+
 pub fn parseProgram(arena_allocator: std.mem.Allocator, lines: []logical_line.LogicalLine) !Program {
     var diag_bag = parse_diag.Bag.init(arena_allocator);
     defer diag_bag.deinit();
@@ -64,7 +85,7 @@ pub fn parseProgramWithDiagnostics(
         .pending_owner_kind = null,
         .pending_owner_decls = null,
         .pending_owner_decl_sources = null,
-        .module_preludes = std.StringHashMap(ModulePrelude).init(arena_allocator),
+        .module_preludes = ModulePreludeMap.initContext(arena_allocator, .{}),
         .expr_capture = &expr_capture,
         .diag_bag = diag_bag,
         .lex_diag_bag = &lex_diag_bag,
@@ -84,7 +105,7 @@ const Parser = struct {
     pending_owner_kind: ?LexicalOwnerKind,
     pending_owner_decls: ?[]const Decl,
     pending_owner_decl_sources: ?[]const DeclSource,
-    module_preludes: std.StringHashMap(ModulePrelude),
+    module_preludes: ModulePreludeMap,
     expr_capture: *expr.SourceCapture,
     diag_bag: *parse_diag.Bag,
     lex_diag_bag: *lexer.Bag,
@@ -811,12 +832,12 @@ fn importPreludeDecls(
     decls: []const Decl,
     decl_sources: []const DeclSource,
     module_uses: []const ast.UseStmt,
-    preludes: *const std.StringHashMap(ModulePrelude),
+    preludes: *const ModulePreludeMap,
     diag_bag: *parse_diag.Bag,
 ) !ImportedPreludeDecls {
     var imported_decls = decls;
     var imported_sources = decl_sources;
-    var seen_full_imports = std.StringHashMap(void).init(arena);
+    var seen_full_imports = CaseInsensitiveStringHashMap(void).initContext(arena, .{});
     for (module_uses) |module_use| {
         const prelude = preludes.get(module_use.module_name) orelse continue;
         if (module_use.only_items.len == 0) {
