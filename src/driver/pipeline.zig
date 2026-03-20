@@ -1249,7 +1249,7 @@ test "releaseLastDiagnostic clears compat storage after take" {
     const testing = std.testing;
 
     clearLastDiagnostic();
-    setLastDiagnostic("x.f", 2, 3, "CF0000", "msg", "line");
+    setLastDiagnostic("x.f", 2, 3, catalog.pipeline.generic.code, "msg", "line");
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expectEqualStrings("x.f", diag_info.file_path);
     releaseLastDiagnostic(diag_info);

@@ -230,6 +230,7 @@ pub fn parseActionStmtNode(
         'F' => {
             if (mode == .top_level and lp.isKeywordSplit("FORMAT")) {
                 const items = try format.parseFormatItems(arena, line.text);
+                lp.index = lp.tokens.len;
                 return .{ .format = .{ .items = items } };
             }
         },

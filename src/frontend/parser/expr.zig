@@ -489,6 +489,7 @@ fn tryParseImpliedDo(
 ) ParseExprError!?*Expr {
     var lookahead = lp.*;
     if (!lookahead.consume(.l_paren)) return null;
+    if (!hasTopLevelCommaBeforeParenEnd(lookahead)) return null;
 
     var items = std.array_list.Managed(*Expr).init(arena);
     const first_item = parseExprDepth(&lookahead, arena, 0, depth + 1) catch return null;
@@ -527,6 +528,26 @@ fn tryParseImpliedDo(
         try items.append(next_item);
         if (!lookahead.consume(.comma)) return null;
     }
+}
+
+fn hasTopLevelCommaBeforeParenEnd(lp: LineParser) bool {
+    var depth: usize = 0;
+    var idx = lp.index;
+    while (idx < lp.tokens.len) : (idx += 1) {
+        const tok = lp.tokens[idx];
+        switch (tok.kind) {
+            .l_paren, .l_bracket => depth += 1,
+            .r_paren, .r_bracket => {
+                if (depth == 0) return false;
+                depth -= 1;
+            },
+            .comma => {
+                if (depth == 0) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn tryParseSlashArrayConstructor(
@@ -1344,6 +1365,61 @@ test "parseExpr handles implied-do in array constructor" {
             try testing.expectEqual(@as(usize, 1), ctor.items.len);
             try testing.expect(ctor.items[0].* == .implied_do);
             try testing.expectEqualStrings("I", ctor.items[0].implied_do.var_name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseExpr handles deeply nested fixed-form grouping without implied-do blowup" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var source = std.array_list.Managed(u8).init(allocator);
+    defer source.deinit();
+
+    const open_count: usize = 80;
+    const chunk_width: usize = 30;
+    var remaining_open = open_count;
+    var first_line = true;
+
+    while (remaining_open > 0) {
+        try source.appendSlice(if (first_line) "      " else "     1");
+        first_line = false;
+
+        const chunk = @min(chunk_width, remaining_open);
+        try source.appendNTimes('(', chunk);
+        remaining_open -= chunk;
+
+        if (remaining_open == 0) {
+            try source.appendSlice("IVON01 / IVON02");
+        }
+        try source.append('\n');
+    }
+
+    var remaining_close = open_count;
+    while (remaining_close > 0) {
+        try source.appendSlice("     1");
+        const chunk = @min(chunk_width, remaining_close);
+        try source.appendNTimes(')', chunk);
+        remaining_close -= chunk;
+        try source.append('\n');
+    }
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source.items);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .binary => |bin| {
+            try testing.expectEqual(BinaryOp.div, bin.op);
+            try testing.expect(bin.left.* == .identifier);
+            try testing.expect(bin.right.* == .identifier);
         },
         else => return error.UnexpectedToken,
     }

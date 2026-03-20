@@ -256,6 +256,29 @@ test "parseStatement handles PRINT statement" {
     try testing.expectEqual(@as(usize, 1), write_stmt.args.len);
 }
 
+test "parseStatement handles labeled FORMAT statement" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "90007 FORMAT (\" \",20X,\"END OF PROGRAM FM045\" )\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+
+    try testing.expectEqual(@as(usize, 1), idx);
+    try testing.expect(stmt_node.node == .format);
+    try testing.expectEqualStrings("90007", stmt_node.label.?);
+    try testing.expect(stmt_node.node.format.items.len > 0);
+}
+
 test "parseStatement parses USE ONLY statement" {
     const testing = std.testing;
     const allocator = testing.allocator;

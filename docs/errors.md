@@ -273,6 +273,21 @@ Each diagnostic is identified by a stable `CFxxxx` code:
 - Stage: semantic
 - Default message: IF/DO WHILE condition must be LOGICAL expression
 
+## CF3131
+
+- Stage: semantic
+- Default message: Error in type-spec at ALLOCATE
+
+## CF3132
+
+- Stage: semantic
+- Default message: allocated type may not be ABSTRACT
+
+## CF3133
+
+- Stage: semantic
+- Default message: allocate-object is type incompatible with typespec
+
 ## CF3199
 
 - Stage: semantic
@@ -457,6 +472,11 @@ Each diagnostic is identified by a stable `CFxxxx` code:
 
 - Stage: codegen
 - Default message: implied DO expansion exceeds compilation limit
+
+## CF4137
+
+- Stage: codegen
+- Default message: substring bound exceeds the string length
 
 ## CF4199
 
