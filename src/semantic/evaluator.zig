@@ -139,13 +139,27 @@ fn evalConstCall(call: ast.CallOrSubscript, resolver: ?ConstResolver) anyerror!?
         },
         .tiny => {
             if (call.args.len != 1) return null;
-            _ = (try evalConst(call.args[0], resolver)) orelse return null;
-            return .{ .real = .{ .value = std.math.floatMin(f64), .is_double = true } };
+            const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+            return switch (arg) {
+                .integer, .logical => blk: {
+                    const bits = (try evalConstBitSize(call.args[0], resolver)) orelse 32;
+                    if (bits <= 0 or bits > 64) return null;
+                    break :blk .{ .integer = signedIntegerMinForBits(@intCast(bits)) };
+                },
+                else => .{ .real = .{ .value = std.math.floatMin(f64), .is_double = true } },
+            };
         },
         .huge => {
             if (call.args.len != 1) return null;
-            _ = (try evalConst(call.args[0], resolver)) orelse return null;
-            return .{ .real = .{ .value = std.math.floatMax(f64), .is_double = true } };
+            const arg = (try evalConst(call.args[0], resolver)) orelse return null;
+            return switch (arg) {
+                .integer, .logical => blk: {
+                    const bits = (try evalConstBitSize(call.args[0], resolver)) orelse 32;
+                    if (bits <= 0 or bits > 64) return null;
+                    break :blk .{ .integer = signedIntegerMaxForBits(@intCast(bits)) };
+                },
+                else => .{ .real = .{ .value = std.math.floatMax(f64), .is_double = true } },
+            };
         },
         .dpmpar => {
             if (call.args.len != 1) return null;
@@ -392,6 +406,22 @@ fn literalBitSize(text: []const u8, resolver: ?ConstResolver, default_bits: i64)
     const suffix = literalKindSuffix(text) orelse return default_bits;
     const kind_value = (try evalKindSelectorValue(suffix, resolver)) orelse return default_bits;
     return kindValueToBitSize(kind_value);
+}
+
+fn signedIntegerMinForBits(bits: u8) i64 {
+    const normalized: u8 = if (bits == 0) 32 else @min(bits, 64);
+    if (normalized >= 64) return std.math.minInt(i64);
+    const shift_amt: u6 = @intCast(normalized - 1);
+    const limit: i128 = @as(i128, 1) << shift_amt;
+    return @intCast(-limit);
+}
+
+fn signedIntegerMaxForBits(bits: u8) i64 {
+    const normalized: u8 = if (bits == 0) 32 else @min(bits, 64);
+    if (normalized >= 64) return std.math.maxInt(i64);
+    const shift_amt: u6 = @intCast(normalized - 1);
+    const limit: i128 = @as(i128, 1) << shift_amt;
+    return @intCast(limit - 1);
 }
 
 fn evalKindSelectorValue(suffix: []const u8, resolver: ?ConstResolver) !?i64 {

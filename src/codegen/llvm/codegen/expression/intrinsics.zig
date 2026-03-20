@@ -1165,6 +1165,79 @@ fn intLiteralValue(expr_node: *Expr) ?i64 {
     };
 }
 
+fn oneIndexValue(ctx: *Context) EmitError!ValueRef {
+    return try ctx.constI64(1);
+}
+
+fn emitArrayDimExtentExpr(ctx: *Context, builder: anytype, expr: *Expr) EmitError!ValueRef {
+    switch (expr.*) {
+        .literal => |lit| {
+            if (lit.kind == .assumed_size) return oneIndexValue(ctx);
+        },
+        .dim_range => |range| {
+            if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) {
+                return oneIndexValue(ctx);
+            }
+            var upper = try dispatch.emitExpr(ctx, builder, range.upper);
+            upper = try casting.coerce(ctx, builder, upper, .i64);
+            var lower = try oneIndexValue(ctx);
+            if (range.lower) |lower_expr| {
+                lower = try dispatch.emitExpr(ctx, builder, lower_expr);
+                lower = try casting.coerce(ctx, builder, lower, .i64);
+            }
+            const diff = try binary.emitSub(ctx, builder, upper, lower);
+            return binary.emitAdd(ctx, builder, diff, try oneIndexValue(ctx));
+        },
+        else => {},
+    }
+    const value = try dispatch.emitExpr(ctx, builder, expr);
+    return casting.coerce(ctx, builder, value, .i64);
+}
+
+fn emitSymbolDimExtentValue(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, dim_index: usize) EmitError!ValueRef {
+    if (ctx.runtimeArrayDimExtentSlot(sym.name, dim_index)) |slot| {
+        const tmp = try ctx.nextTemp();
+        try builder.load(tmp, .i64, slot);
+        return .{ .name = tmp, .ty = .i64, .is_ptr = false };
+    }
+    return emitArrayDimExtentExpr(ctx, builder, sym.dims[dim_index]);
+}
+
+fn lookupArraySymbolForSize(ctx: *Context, expr: *Expr) ?ast.sema.Symbol {
+    return switch (expr.*) {
+        .identifier => |name| ctx.findSymbol(name),
+        .call_or_subscript => |call| ctx.findSymbol(call.name),
+        else => null,
+    };
+}
+
+fn emitIntrinsicSize(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
+    if (args.len < 1 or args.len > 2) return error.InvalidIntrinsicCall;
+    const sym = lookupArraySymbolForSize(ctx, args[0]) orelse return error.UnsupportedIntrinsicType;
+    if (sym.dims.len == 0) return error.UnsupportedIntrinsicType;
+
+    var value = blk: {
+        if (args.len == 2) {
+            const dim_value = intLiteralValue(args[1]) orelse return error.UnsupportedIntrinsicType;
+            if (dim_value < 1) return error.InvalidIntrinsicCall;
+            const dim_index: usize = @intCast(dim_value - 1);
+            if (dim_index >= sym.dims.len) return error.InvalidIntrinsicCall;
+            break :blk try emitSymbolDimExtentValue(ctx, builder, sym, dim_index);
+        }
+
+        var total = try oneIndexValue(ctx);
+        for (sym.dims, 0..) |_, dim_index| {
+            const extent = try emitSymbolDimExtentValue(ctx, builder, sym, dim_index);
+            total = try binary.emitMul(ctx, builder, total, extent);
+        }
+        break :blk total;
+    };
+    if (value.ty != ctx.defaultIntegerIRType()) {
+        value = try casting.coerce(ctx, builder, value, ctx.defaultIntegerIRType());
+    }
+    return value;
+}
+
 fn emitIntrinsicAllocated(args: []*Expr) EmitError!ValueRef {
     if (args.len != 1) return error.InvalidIntrinsicCall;
     return .{ .name = "1", .ty = .i1, .is_ptr = false };
@@ -1228,6 +1301,7 @@ const IntrinsicTag = enum {
     dpmpar,
     epsilon,
     huge,
+    size,
     len_,
     trim_,
     tan,
@@ -1326,6 +1400,7 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "dpmpar", .dpmpar },
     .{ "epsilon", .epsilon },
     .{ "huge", .huge },
+    .{ "size", .size },
     .{ "len", .len_ },
     .{ "trim", .trim_ },
     .{ "tan", .tan },
@@ -1455,6 +1530,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .dpmpar => return emitIntrinsicDpmpar(ctx, args),
         .epsilon => return emitIntrinsicEpsilon(ctx, args),
         .huge => return emitIntrinsicHuge(ctx, args),
+        .size => return emitIntrinsicSize(ctx, builder, args),
         .len_ => return emitIntrinsicLen(ctx, builder, args),
         .trim_ => return emitIntrinsicTrim(ctx, builder, args),
         .tan => return emitTan(ctx, builder, args),

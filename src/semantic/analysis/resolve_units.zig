@@ -9,6 +9,7 @@ const statements = @import("resolve_statements.zig");
 const symbols_mod = @import("resolve_symbols.zig");
 const rewrite_calls = @import("rewrite_calls.zig");
 const resolve_data = @import("resolve_data.zig");
+const constants = @import("resolve_const.zig");
 const scope = @import("../scope.zig");
 
 pub const Resolver = struct {
@@ -38,6 +39,7 @@ pub const Resolver = struct {
         for (ctx.unit.decls, 0..) |decl, decl_idx| {
             if (decl == .derived_type_def) {
                 const decl_source = if (decl_idx < ctx.unit.decl_sources.len) ctx.unit.decl_sources[decl_idx] else ast.DeclSource{};
+                ctx.setCurrentDeclSource(decl_source);
                 try symbols_mod.registerDerivedType(ctx, .{
                     .name = decl.derived_type_def.name,
                     .parent_name = decl.derived_type_def.parent_name,
@@ -47,6 +49,7 @@ pub const Resolver = struct {
                     .components = try buildDerivedComponentInfo(ctx, decl.derived_type_def),
                     .bindings = try buildDerivedBindingInfo(ctx, decl.derived_type_def, decl_source),
                 });
+                ctx.setCurrentDeclSource(null);
             }
         }
         if (ctx.unit.decl_sources.len != 0) {
@@ -60,11 +63,19 @@ pub const Resolver = struct {
                 ctx.setCurrentDeclSource(null);
             }
             switch (decl) {
-                .type_decl => |type_decl| decls.applyTypeDecl(ctx, type_decl) catch |err| {
-                    maybeSetFunctionTypeDeclDiagnostic(ctx, type_decl, err);
-                    if (!ctx.usesExplicitDiagnosticBag()) return err;
-                    if (first_stmt_error == null) first_stmt_error = err;
-                    if (!hasCustomCurrentDiagnostic(ctx)) ctx.recordSemanticError(err);
+                .type_decl => |type_decl| {
+                    decls.applyTypeDecl(ctx, type_decl) catch |err| {
+                        maybeSetFunctionTypeDeclDiagnostic(ctx, type_decl, err);
+                        if (!ctx.usesExplicitDiagnosticBag()) return err;
+                        if (first_stmt_error == null) first_stmt_error = err;
+                        if (!hasCustomCurrentDiagnostic(ctx)) ctx.recordSemanticError(err);
+                        continue;
+                    };
+                    specs.applyTypeDeclParameter(ctx, type_decl) catch |err| {
+                        if (!ctx.usesExplicitDiagnosticBag()) return err;
+                        if (first_stmt_error == null) first_stmt_error = err;
+                        if (!hasCustomCurrentDiagnostic(ctx)) ctx.recordSemanticError(err);
+                    };
                 },
                 .procedure => |procedure_decl| decls.applyProcedureDecl(ctx, procedure_decl) catch |err| {
                     if (!ctx.usesExplicitDiagnosticBag()) return err;
@@ -248,7 +259,13 @@ fn buildDerivedComponentInfo(
     derived: ast.DerivedTypeDef,
 ) ![]const context.Context.DerivedTypeInfo.ComponentInfo {
     var components = std.array_list.Managed(context.Context.DerivedTypeInfo.ComponentInfo).init(ctx.arena);
-    for (derived.components) |type_decl| {
+    const prior_decl_source = ctx.current_decl_source;
+    for (derived.components, 0..) |type_decl, component_idx| {
+        const component_source = if (derived.component_sources.len > 0 and component_idx < derived.component_sources.len)
+            derived.component_sources[component_idx]
+        else
+            ctx.current_decl_source;
+        ctx.setCurrentDeclSource(component_source);
         for (type_decl.items) |item| {
             var spec = symbols.TypeSpec.fromResolvedKind(type_decl.type_kind, type_decl.type_kind, null);
             if (type_decl.type_kind == .derived) {
@@ -265,7 +282,8 @@ fn buildDerivedComponentInfo(
                 if (item.char_len_deferred) {
                     spec = spec.withCharacterLength(.deferred, null);
                 } else if (item.char_len != null) {
-                    spec = spec.withCharacterLength(.deferred, null);
+                    const length = try resolveDerivedCharacterComponentLen(ctx, item.char_len.?);
+                    spec = spec.withCharacterLength(.constant, length);
                 } else {
                     spec = spec.withCharacterLength(.constant, 1);
                 }
@@ -278,8 +296,37 @@ fn buildDerivedComponentInfo(
                 .allocatable = type_decl.allocatable,
             });
         }
+        ctx.setCurrentDeclSource(prior_decl_source);
     }
     return try components.toOwnedSlice();
+}
+
+fn resolveDerivedCharacterComponentLen(ctx: *context.Context, expr: *ast.Expr) !usize {
+    if (expr.* == .literal and expr.literal.kind == .assumed_size) {
+        return error.InvalidCharLen;
+    }
+    if (try constants.evalConst(ctx, expr)) |value| {
+        return switch (value) {
+            .integer => |int_val| blk: {
+                if (int_val < 0) break :blk error.InvalidCharLen;
+                break :blk @as(usize, @intCast(int_val));
+            },
+            else => error.InvalidCharLen,
+        };
+    }
+    emitDerivedComponentSpecExprDiagnostic(ctx);
+    return error.InvalidCharLen;
+}
+
+fn emitDerivedComponentSpecExprDiagnostic(ctx: *context.Context) void {
+    const decl_source = ctx.current_decl_source orelse return;
+    ctx.setDiagnostic(
+        if (decl_source.line == 0) 1 else decl_source.line,
+        if (decl_source.column == 0) 1 else decl_source.column,
+        catalog.semantic.invalid_char_len.code,
+        "non-constant object in the expression; a specification expression is required",
+        decl_source.text,
+    );
 }
 
 fn buildDerivedBindingInfo(

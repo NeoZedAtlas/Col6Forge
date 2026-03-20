@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const input = @import("../../input.zig");
 const ast = @import("../../../ast/nodes.zig");
+const evaluator = @import("../../../semantic/evaluator.zig");
 const diag = @import("../../diagnostic.zig");
 const ir = @import("../../ir.zig");
 const llvm_types = @import("../types.zig");
@@ -945,7 +946,7 @@ pub const Context = struct {
             return error.UnknownSymbol;
         }
         if (type_decl.type_kind == .character) {
-            const char_len = if (item.char_len_deferred) null else inferConstantCharLen(item.char_len);
+            const char_len = if (item.char_len_deferred) null else inferConstantCharLen(self, item.char_len);
             if (char_len == null) return error.NonConstantCharacterLength;
             spec = spec.withCharacterLength(.constant, char_len.?);
             return .{
@@ -997,15 +998,34 @@ fn alignForward(value: usize, alignment: usize) usize {
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
-fn inferConstantCharLen(expr: ?*input.Expr) ?usize {
+fn inferConstantCharLen(ctx: *const Context, expr: ?*input.Expr) ?usize {
     const node = expr orelse return 1;
-    return switch (node.*) {
-        .literal => |lit| switch (lit.kind) {
-            .integer => std.fmt.parseInt(usize, lit.text, 10) catch null,
-            else => null,
-        },
+    const value = evaluator.evalConst(node, .{
+        .ctx = @constCast(ctx),
+        .resolveFn = resolveCodegenConstValue,
+        .arrayExtentFn = resolveCodegenArrayExtent,
+    }) catch return null;
+    return switch (value orelse return null) {
+        .integer => |int_val| if (int_val < 0) null else std.math.cast(usize, int_val),
         else => null,
     };
+}
+
+fn resolveCodegenConstValue(raw_ctx: *anyopaque, name: []const u8) ?input.sema.ConstValue {
+    const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
+    const idx = ctx.symbolIndexForName(name) orelse return null;
+    const sym = ctx.sem.symbols[idx];
+    if (sym.kind != .parameter) return null;
+    return sym.const_value;
+}
+
+fn resolveCodegenArrayExtent(raw_ctx: *anyopaque, name: []const u8, dim: ?usize) ?i64 {
+    const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
+    const idx = ctx.symbolIndexForName(name) orelse return null;
+    const sym = ctx.sem.symbols[idx];
+    if (sym.dims.len == 0) return null;
+    const extent = common.arrayElementCount(ctx.sem, if (dim) |dim_idx| sym.dims[dim_idx .. dim_idx + 1] else sym.dims) catch return null;
+    return @intCast(extent);
 }
 
 fn builtinDerivedTypeLayout(name: []const u8) ?DerivedTypeLayout {

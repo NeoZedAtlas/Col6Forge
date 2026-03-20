@@ -109,7 +109,7 @@ pub fn applyDeclarator(
         if (try constants.evalConst(self, len_expr)) |value| {
             switch (value) {
                 .integer => |int_val| {
-                    if (int_val <= 0) return error.InvalidCharLen;
+                    if (int_val < 0) return error.InvalidCharLen;
                     length = @intCast(int_val);
                 },
                 .real => return error.InvalidCharLen,

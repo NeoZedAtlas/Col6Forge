@@ -42,6 +42,7 @@ pub const KnownProcedureSig = struct {
 
 pub const AnalyzeOptions = struct {
     target_layout: context.Context.TargetLayout = .{},
+    range_check: bool = false,
 };
 
 pub fn analyzeProgram(arena: std.mem.Allocator, program: ast.Program) !SemanticProgram {
@@ -174,6 +175,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             &known_host_abstract_interfaces,
             active_host_owner,
             options.target_layout,
+            options.range_check,
             diag_bag,
         );
         const sem_unit = unit_analyzer.analyze() catch |err| {
@@ -185,7 +187,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
                 .implicit_rules = &.{},
                 .resolved_refs = &.{},
             });
-            if (unitHasContains(unit.*)) {
+            if (unit.kind == .module or unitHasContains(unit.*)) {
                 try refreshHostContextFromAnalyzer(
                     &known_host_symbols,
                     &known_host_derived_types,
@@ -202,7 +204,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             continue;
         };
         try units.append(sem_unit);
-        if (unitHasContains(unit.*)) {
+        if (unit.kind == .module or unitHasContains(unit.*)) {
             try refreshHostContextFromAnalyzer(
                 &known_host_symbols,
                 &known_host_derived_types,
@@ -1244,4 +1246,81 @@ test "analyzeProgram accepts renamed derived types imported through module prelu
         try testing.expectEqualStrings("foo_dprt", sym.type_spec.derived_type_name.?);
     }
     try testing.expect(found);
+}
+
+test "analyzeProgram preserves used derived types for module and implicit-main contained procedures" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module o_type_defs\n" ++
+        "  implicit none\n" ++
+        "  type seq\n" ++
+        "    sequence\n" ++
+        "    character(len=9) :: ba(2)\n" ++
+        "  end type seq\n" ++
+        "end module o_type_defs\n" ++
+        "module tests\n" ++
+        "  use o_type_defs\n" ++
+        "  implicit none\n" ++
+        "contains\n" ++
+        "  subroutine og0015(uds0l)\n" ++
+        "    type(seq) :: uds0l\n" ++
+        "  end subroutine og0015\n" ++
+        "end module tests\n" ++
+        "use o_type_defs\n" ++
+        "contains\n" ++
+        "  subroutine og0015_main(uds0l)\n" ++
+        "    type(seq) :: uds0l\n" ++
+        "  end subroutine og0015_main\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    try testing.expectEqual(@as(usize, 5), sem.units.len);
+}
+
+test "analyzeProgram accepts fixed-form array constructor derived type sample" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      MODULE o_TYPE_DEFS\n" ++
+        "        implicit none\n" ++
+        "        TYPE SEQ\n" ++
+        "          SEQUENCE\n" ++
+        "          CHARACTER(len = 9) ::  BA(2)\n" ++
+        "        END TYPE SEQ\n" ++
+        "        CHARACTER(len = 9)   ::  BA_T(2)\n" ++
+        "        CHARACTER(LEN = 9)   ::  CA_T(1,2)\n" ++
+        "      END MODULE o_TYPE_DEFS\n" ++
+        "      MODULE TESTS\n" ++
+        "        use o_type_defs\n" ++
+        "        implicit none\n" ++
+        "      CONTAINS\n" ++
+        "        SUBROUTINE OG0015(UDS0L)\n" ++
+        "          TYPE(SEQ)          UDS0L\n" ++
+        "          integer :: j1\n" ++
+        "          UDS0L = SEQ((/ (BA_T(J1),J1=1,2) /))\n" ++
+        "        END SUBROUTINE\n" ++
+        "      END MODULE TESTS\n" ++
+        "      use o_type_defs\n" ++
+        "      CONTAINS\n" ++
+        "        SUBROUTINE OG0015(UDS0L)\n" ++
+        "          TYPE(SEQ)          UDS0L\n" ++
+        "          UDS0L = SEQ(RESHAPE ( (/ ((CA_T(J1,J2), J1 = 1, 1), J2 = 1, 2)/),(/2/)))\n" ++
+        "        END SUBROUTINE\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    _ = try analyzeProgram(arena.allocator(), program);
 }

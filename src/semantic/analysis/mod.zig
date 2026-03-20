@@ -25,6 +25,7 @@ pub const UnitAnalyzer = struct {
         known_host_abstract_interfaces: *const std.StringHashMap(void),
         known_host_owner: ?[]const u8,
         target_layout: context.Context.TargetLayout,
+        range_check: bool,
     ) UnitAnalyzer {
         return initWithDiagnostics(
             arena,
@@ -38,6 +39,7 @@ pub const UnitAnalyzer = struct {
             known_host_abstract_interfaces,
             known_host_owner,
             target_layout,
+            range_check,
             null,
         );
     }
@@ -54,6 +56,7 @@ pub const UnitAnalyzer = struct {
         known_host_abstract_interfaces: *const std.StringHashMap(void),
         known_host_owner: ?[]const u8,
         target_layout: context.Context.TargetLayout,
+        range_check: bool,
         diag_bag: ?*diag.Bag,
     ) UnitAnalyzer {
         var ctx = context.Context.init(
@@ -67,6 +70,7 @@ pub const UnitAnalyzer = struct {
             known_host_abstract_interfaces,
             known_host_owner,
             target_layout,
+            range_check,
         );
         if (diag_bag != null) {
             ctx = context.Context.initWithDiagnostics(
@@ -80,6 +84,7 @@ pub const UnitAnalyzer = struct {
                 known_host_abstract_interfaces,
                 known_host_owner,
                 target_layout,
+                range_check,
                 diag_bag,
             );
         }

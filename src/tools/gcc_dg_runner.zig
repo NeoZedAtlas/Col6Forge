@@ -347,6 +347,7 @@ const TestCase = struct {
     input_path: []const u8,
     rel_path: []const u8,
     work_name: []const u8,
+    range_check: bool,
     expect_compile_error: bool,
     expect_should_fail: bool,
     expected_error_patterns: []ExpectedErrorPattern,
@@ -389,6 +390,7 @@ const PruneOutputPattern = struct {
 };
 
 const CaseExpectations = struct {
+    range_check: bool,
     expect_compile_error: bool,
     expect_should_fail: bool,
     expected_error_patterns: []ExpectedErrorPattern,
@@ -411,6 +413,10 @@ const ParsedDiagDirectives = struct {
     aux_patterns: []ExpectedAuxPattern,
     output_patterns: []ExpectedOutputPattern,
     prune_output_patterns: []PruneOutputPattern,
+};
+
+const SupportedDgOptions = struct {
+    range_check: bool = false,
 };
 
 fn collectRunnableCases(
@@ -452,6 +458,7 @@ fn collectRunnableCases(
             .input_path = input_path,
             .rel_path = rel_path,
             .work_name = work_name,
+            .range_check = expectations.range_check,
             .expect_compile_error = expectations.expect_compile_error,
             .expect_should_fail = expectations.expect_should_fail,
             .expected_error_patterns = expectations.expected_error_patterns,
@@ -497,8 +504,10 @@ fn classifyCase(
     if (hasUnsupportedDejagnu(bytes)) return .{ .skip = .unsupported_dejagnu };
 
     const parsed_diag = try parseDiagDirectives(persist_allocator, bytes);
+    const supported_options = parseSupportedDgOptions(bytes);
 
     return .{ .runnable = .{
+        .range_check = supported_options.range_check,
         .expect_compile_error = parsed_diag.has_error,
         .expect_should_fail = parsed_diag.has_should_fail,
         .expected_error_patterns = parsed_diag.error_patterns,
@@ -633,6 +642,18 @@ fn optionsTextHasUnsupportedFlags(text: []const u8) bool {
         containsNoCase(text, "-ffixed-form") or
         containsNoCase(text, "-ffree-form") or
         containsNoCase(text, "-fdec");
+}
+
+fn parseSupportedDgOptions(text: []const u8) SupportedDgOptions {
+    var result: SupportedDgOptions = .{};
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |raw_line| {
+        const line = trimCr(raw_line);
+        if (!containsNoCase(line, "dg-options") and !containsNoCase(line, "dg-additional-options")) continue;
+        if (containsNoCase(line, "-fno-range-check")) result.range_check = false;
+        if (containsNoCase(line, "-frange-check")) result.range_check = true;
+    }
+    return result;
 }
 
 fn parseDiagDirectives(allocator: std.mem.Allocator, text: []const u8) !ParsedDiagDirectives {
@@ -1119,6 +1140,7 @@ fn emitPipelineToFile(
     input_path: []const u8,
     emit: Col6Forge.EmitKind,
     output_path: []const u8,
+    range_check: bool,
     diag_bag: *Col6Forge.diag.Bag,
 ) !void {
     const result = try Col6Forge.runPipelineWithOptionsAndDiagnostics(
@@ -1128,6 +1150,7 @@ fn emitPipelineToFile(
         .{
             .coarse_source_map = false,
             .capture_profile = false,
+            .range_check = range_check,
         },
         diag_bag,
     );
@@ -1378,7 +1401,7 @@ fn processCase(
     var pipeline_diag_bag = Col6Forge.diag.Bag.init(allocator);
     defer pipeline_diag_bag.deinit();
 
-    emitPipelineToFile(allocator, abs_input_path, options.emit, ll_path, &pipeline_diag_bag) catch |err| {
+    emitPipelineToFile(allocator, abs_input_path, options.emit, ll_path, case.range_check, &pipeline_diag_bag) catch |err| {
         compile_failed = true;
         diag_text = try formatPipelineFailureText(allocator, log_state, abs_input_path, &pipeline_diag_bag, err, !expect_failure);
     };

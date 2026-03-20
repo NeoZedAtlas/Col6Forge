@@ -803,6 +803,73 @@ fn emitExprConstraintDiagnostic(
     return error.AssignmentTypeMismatch;
 }
 
+fn checkTypedArrayConstructorItems(
+    self: *context.Context,
+    expr_node: *ast.Expr,
+    ctor: ast.ArrayConstructor,
+) CheckError!void {
+    if (ctor.type_spec == null) return;
+    const target_spec = try resolve_expr.exprTypeSpec(self, expr_node);
+    for (ctor.items) |item| {
+        const actual_spec = try resolve_expr.exprTypeSpec(self, item);
+        if (target_spec.lowered_kind == .derived or actual_spec.lowered_kind == .derived) {
+            if (!dummyArgTypeCompatible(self, target_spec, actual_spec)) {
+                const source = self.sourceForExpr(item) orelse self.sourceForExpr(expr_node) orelse ast.SourceRef{};
+                self.setDiagnostic(
+                    if (source.line == 0) 1 else source.line,
+                    if (source.column == 0) 1 else source.column,
+                    catalog.semantic.assignment_type_mismatch.code,
+                    "cannot convert TYPE in array constructor",
+                    source.text,
+                );
+                return error.AssignmentTypeMismatch;
+            }
+            continue;
+        }
+        try checkTypedArrayConstructorConstConversion(self, target_spec, item);
+    }
+}
+
+fn checkTypedArrayConstructorConstConversion(
+    self: *context.Context,
+    target_spec: symbols.TypeSpec,
+    item: *ast.Expr,
+) CheckError!void {
+    if (!self.range_check) return;
+    if (target_spec.lowered_kind != .integer) return;
+    const value = (try constants.evalConst(self, item)) orelse return;
+    const int_value = switch (value) {
+        .integer => |v| v,
+        .real => |v| blk: {
+            if (!std.math.isFinite(v.value)) return;
+            break :blk @as(i64, @intFromFloat(@trunc(v.value)));
+        },
+        else => return,
+    };
+    const bounds = integerBoundsForTypeSpec(self, target_spec);
+    if (int_value >= bounds.min and int_value <= bounds.max) return;
+    const source = self.sourceForExpr(item) orelse ast.SourceRef{};
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.assignment_type_mismatch.code,
+        "overflow converting INTEGER in array constructor",
+        source.text,
+    );
+    return error.AssignmentTypeMismatch;
+}
+
+fn integerBoundsForTypeSpec(self: *context.Context, spec: symbols.TypeSpec) context.Context.IntegerBounds {
+    const bits: u16 = blk: {
+        const kind_value = spec.kind_value orelse break :blk self.target_layout.default_integer_bits;
+        if (kind_value <= 0) break :blk self.target_layout.default_integer_bits;
+        if (kind_value <= 16) break :blk @intCast(kind_value * 8);
+        break :blk @intCast(@min(kind_value, 64));
+    };
+    const layout: context.Context.TargetLayout = .{ .default_integer_bits = bits };
+    return layout.integerBounds(.integer);
+}
+
 fn exprIsAllocatableEntity(self: *context.Context, expr_node: *ast.Expr) bool {
     return switch (expr_node.*) {
         .identifier => |name| blk: {
@@ -844,6 +911,7 @@ fn checkExprType(self: *context.Context, expr: *ast.Expr) CheckError!ast.TypeKin
         .identifier, .literal => return try resolve_expr.exprType(self, expr),
         .array_constructor => |ctor| {
             for (ctor.items) |item| _ = try checkExprType(self, item);
+            try checkTypedArrayConstructorItems(self, expr, ctor);
             return try resolve_expr.exprType(self, expr);
         },
         .unary => |un| {

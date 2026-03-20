@@ -403,6 +403,7 @@ fn buildSaveInfo(ctx: *Context) !SaveInfo {
                 }
             },
             .type_decl => |type_decl| {
+                if (type_decl.parameter) continue;
                 for (type_decl.items) |item| {
                     if (type_decl.save or item.init != null) {
                         try names.put(item.name, {});
@@ -432,6 +433,7 @@ fn emitDeclaratorInitializers(ctx: *Context, builder: anytype, save_info: *const
 
     for (ctx.unit.decls) |decl| {
         if (decl != .type_decl) continue;
+        if (decl.type_decl.parameter) continue;
         for (decl.type_decl.items) |item| {
             if (item.init == null) continue;
             if (!ctx.locals.contains(item.name)) continue;
@@ -480,10 +482,22 @@ fn emitDeclaratorInitializers(ctx: *Context, builder: anytype, save_info: *const
 
 fn emitParameterArrayInitializers(ctx: *Context, builder: anytype) EmitError!void {
     for (ctx.unit.decls) |decl| {
-        if (decl != .parameter) continue;
-        for (decl.parameter.assigns) |assign| {
-            if (!ctx.locals.contains(assign.name)) continue;
-            try emitNamedInitializerAssign(ctx, builder, assign.name, assign.value);
+        switch (decl) {
+            .parameter => |param_decl| {
+                for (param_decl.assigns) |assign| {
+                    if (!ctx.locals.contains(assign.name)) continue;
+                    try emitNamedInitializerAssign(ctx, builder, assign.name, assign.value);
+                }
+            },
+            .type_decl => |type_decl| {
+                if (!type_decl.parameter) continue;
+                for (type_decl.items) |item| {
+                    const init_expr = item.init orelse continue;
+                    if (!ctx.locals.contains(item.name)) continue;
+                    try emitNamedInitializerAssign(ctx, builder, item.name, init_expr);
+                }
+            },
+            else => {},
         }
     }
 }
@@ -496,6 +510,7 @@ fn emitDeclaratorInitializersByClass(
 ) EmitError!void {
     for (ctx.unit.decls) |decl| {
         if (decl != .type_decl) continue;
+        if (decl.type_decl.parameter) continue;
         for (decl.type_decl.items) |item| {
             const init_expr = item.init orelse continue;
             if (!ctx.locals.contains(item.name)) continue;

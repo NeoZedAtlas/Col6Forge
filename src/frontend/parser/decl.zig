@@ -2164,6 +2164,32 @@ test "parseDecl handles derived TYPE declaration" {
     }
 }
 
+test "parseDecl handles fixed-form derived TYPE declaration without double colon" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      TYPE(SEQ)          UDS0L\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expectEqual(TypeKind.derived, td.type_kind);
+            try testing.expectEqualStrings("SEQ", td.derived_type_name.?);
+            try testing.expectEqual(@as(usize, 1), td.items.len);
+            try testing.expectEqualStrings("UDS0L", td.items[0].name);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
 test "parseDecl accepts POINTER declarator initialization with null intrinsic" {
     const testing = std.testing;
     const allocator = testing.allocator;

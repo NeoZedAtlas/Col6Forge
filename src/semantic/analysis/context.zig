@@ -151,6 +151,7 @@ pub const Context = struct {
     known_host_abstract_interfaces: *const std.StringHashMap(void),
     known_host_owner: ?[]const u8,
     target_layout: TargetLayout,
+    range_check: bool,
     use_imports_preinstalled: bool,
 
     pub const Owner = struct {
@@ -169,6 +170,7 @@ pub const Context = struct {
         known_host_abstract_interfaces: *const std.StringHashMap(void),
         known_host_owner: ?[]const u8,
         target_layout: TargetLayout,
+        range_check: bool,
     ) Context {
         return initWithDiagnostics(
             arena,
@@ -181,6 +183,7 @@ pub const Context = struct {
             known_host_abstract_interfaces,
             known_host_owner,
             target_layout,
+            range_check,
             null,
         );
     }
@@ -196,6 +199,7 @@ pub const Context = struct {
         known_host_abstract_interfaces: *const std.StringHashMap(void),
         known_host_owner: ?[]const u8,
         target_layout: TargetLayout,
+        range_check: bool,
         diag_bag: ?*diag.Bag,
     ) Context {
         var ctx = Context{
@@ -242,6 +246,7 @@ pub const Context = struct {
             .known_host_abstract_interfaces = known_host_abstract_interfaces,
             .known_host_owner = known_host_owner,
             .target_layout = target_layout,
+            .range_check = range_check,
             .use_imports_preinstalled = false,
         };
         ctx.current_unit = &ctx.unit;

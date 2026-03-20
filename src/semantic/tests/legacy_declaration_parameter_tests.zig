@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const fixed_form = @import("../../frontend/fixed_form.zig");
+const free_form = @import("../../frontend/free_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const symbols = @import("../symbol/mod.zig");
 
@@ -250,6 +251,33 @@ test "semantic accepts ACHAR and IACHAR intrinsic typing" {
     const program = try parser.parseProgram(arena.allocator(), lines);
 
     _ = try analyzeProgram(arena.allocator(), program);
+}
+
+test "semantic rejects non-parameter CHARACTER component length in derived type" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "implicit none\n" ++
+        "integer :: a = 42\n" ++
+        "type t\n" ++
+        "  character(a) :: arr(1) = [\"a\"]\n" ++
+        "end type t\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidCharLen, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 4), diag.line);
+    try testing.expectEqual(@as(usize, 1), diag.column);
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3103"));
+    try testing.expect(std.mem.indexOf(u8, diag.message, "in the expression") != null);
+    try testing.expect(std.mem.indexOf(u8, diag.message, "specification expression") != null);
+    try testing.expect(std.mem.eql(u8, diag.line_text, "character(a) :: arr(1) = [\"a\"]"));
 }
 
 test "semantic IMPLICIT rules are unit-local" {
@@ -1094,4 +1122,69 @@ test "semantic CF3111 diagnostic includes PARAMETER name" {
     try testing.expectError(error.ParameterNotConstant, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.indexOf(u8, diag.message, "PARAMETER 'P' value is not a constant expression") != null);
+}
+
+test "semantic marks type-decl array PARAMETER symbols as parameter kind" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  implicit none\n" ++
+        "  integer, parameter :: sensor_channel(8) = [10,12,17,20,22,30,33,34]\n" ++
+        "  integer, parameter :: nlte_channel(3) = [20,22,34]\n" ++
+        "  integer :: i\n" ++
+        "  integer, parameter :: c_index(8) = unpack(vector=[(i,i=1,size(sensor_channel))], mask=[(sensor_channel(i) == 20, i=1,8)], field=0)\n" ++
+        "end program\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    var found_sensor = false;
+    var found_nlte = false;
+    var found_c_index = false;
+    for (sem.units[0].symbols) |sym| {
+        if (std.ascii.eqlIgnoreCase(sym.name, "sensor_channel")) {
+            found_sensor = true;
+            try testing.expectEqual(symbols.SymbolKind.parameter, sym.kind);
+        } else if (std.ascii.eqlIgnoreCase(sym.name, "nlte_channel")) {
+            found_nlte = true;
+            try testing.expectEqual(symbols.SymbolKind.parameter, sym.kind);
+        } else if (std.ascii.eqlIgnoreCase(sym.name, "c_index")) {
+            found_c_index = true;
+            try testing.expectEqual(symbols.SymbolKind.parameter, sym.kind);
+        }
+    }
+    try testing.expect(found_sensor);
+    try testing.expect(found_nlte);
+    try testing.expect(found_c_index);
+}
+
+test "semantic range_check gates typed array constructor integer overflow" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "  implicit none\n" ++
+        "  integer(kind=4) :: arr(1)\n" ++
+        "  arr = [integer(kind=4) :: huge(0_8)]\n" ++
+        "end program\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgramWithOptions(arena.allocator(), program, .{ .range_check = false });
+    clearDiagnostic();
+
+    try testing.expectError(error.AssignmentTypeMismatch, analyzeProgramWithOptions(arena.allocator(), program, .{ .range_check = true }));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, diag.message, "overflow converting") != null);
 }

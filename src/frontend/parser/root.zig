@@ -338,6 +338,12 @@ const Parser = struct {
             unit = try self.parseProgramUnitBody(header, true, header_line, expr_mark);
         }
         if (self.pending_owner_name) |owner_name| {
+            if (self.pending_owner_decls) |owner_decls| {
+                if (owner_decls.len != 0) {
+                    const owner_decl_sources = self.pending_owner_decl_sources orelse &.{};
+                    unit = try prependDecls(self.arena, unit, owner_decls, owner_decl_sources);
+                }
+            }
             unit.owner_name = owner_name;
             unit.owner_kind = self.pending_owner_kind;
         }
@@ -517,6 +523,7 @@ const Parser = struct {
         const header = try parseDerivedTypeHeader(self.arena, &lp);
         self.index += 1;
         var components = std.array_list.Managed(ast.TypeDecl).init(self.arena);
+        var component_sources = std.array_list.Managed(DeclSource).init(self.arena);
         var bindings = std.array_list.Managed(ast.TypeBoundProcedureBinding).init(self.arena);
         var in_contains = false;
         var sequence = false;
@@ -534,6 +541,7 @@ const Parser = struct {
                     .sequence = sequence,
                     .bind_c = header.bind_c,
                     .components = try components.toOwnedSlice(),
+                    .component_sources = try component_sources.toOwnedSlice(),
                     .bindings = try bindings.toOwnedSlice(),
                 } };
             }
@@ -555,6 +563,7 @@ const Parser = struct {
                 };
                 if (component_decl == .type_decl) {
                     try components.append(component_decl.type_decl);
+                    try component_sources.append(sourceFromLine(line));
                 }
             } else if (in_contains and body_lp.isKeywordSplit("PROCEDURE")) {
                 const type_bound_bindings = parseTypeBoundProcedureBindings(self.arena, &body_lp) catch |err| {
@@ -999,7 +1008,10 @@ fn renameDerivedTypeDef(
         .name = local_name,
         .parent_name = if (derived.parent_name) |parent| renamePreludeTypeName(parent, only_items) else null,
         .abstract = derived.abstract,
+        .sequence = derived.sequence,
+        .bind_c = derived.bind_c,
         .components = components,
+        .component_sources = derived.component_sources,
         .bindings = bindings,
     };
 }
@@ -1778,7 +1790,10 @@ fn annotateDerivedBindingOwners(
         .name = derived.name,
         .parent_name = derived.parent_name,
         .abstract = derived.abstract,
+        .sequence = derived.sequence,
+        .bind_c = derived.bind_c,
         .components = derived.components,
+        .component_sources = derived.component_sources,
         .bindings = bindings,
     };
 }
@@ -2154,6 +2169,100 @@ test "parseProgram skips END PROGRAM after internal procedures" {
     try testing.expectEqual(@as(usize, 2), program.units.len);
     try testing.expectEqual(ProgramUnitKind.program, program.units[0].kind);
     try testing.expectEqual(ProgramUnitKind.subroutine, program.units[1].kind);
+}
+
+test "parseProgram prepends host declarations into implicit main internal procedures" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module defs\n" ++
+        "  type seq\n" ++
+        "    character(len=9) :: ba(2)\n" ++
+        "  end type seq\n" ++
+        "end module defs\n" ++
+        "use defs\n" ++
+        "contains\n" ++
+        "  subroutine inner(x)\n" ++
+        "    type(seq) :: x\n" ++
+        "  end subroutine inner\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 3), program.units.len);
+    const inner = program.units[2];
+    try testing.expectEqualStrings("INNER", inner.name);
+    try testing.expectEqualStrings("__COL6FORGE_PROGRAM0", inner.owner_name.?);
+    try testing.expectEqual(ast.LexicalOwnerKind.procedure, inner.owner_kind.?);
+
+    var saw_use_defs = false;
+    for (inner.stmts) |stmt_node| {
+        if (stmt_node.node != .use_stmt) continue;
+        if (!std.ascii.eqlIgnoreCase(stmt_node.node.use_stmt.module_name, "defs")) continue;
+        saw_use_defs = true;
+        break;
+    }
+    try testing.expect(saw_use_defs);
+
+    var saw_seq_type = false;
+    for (inner.decls) |decl_node| {
+        if (decl_node != .derived_type_def) continue;
+        if (!std.ascii.eqlIgnoreCase(decl_node.derived_type_def.name, "seq")) continue;
+        saw_seq_type = true;
+        break;
+    }
+    try testing.expect(saw_seq_type);
+}
+
+test "parseProgram imports visible derived types into fixed-form contained procedures" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      MODULE o_TYPE_DEFS\n" ++
+        "        implicit none\n" ++
+        "        TYPE SEQ\n" ++
+        "          SEQUENCE\n" ++
+        "          CHARACTER(len = 9) ::  BA(2)\n" ++
+        "        END TYPE SEQ\n" ++
+        "      END MODULE o_TYPE_DEFS\n" ++
+        "      MODULE TESTS\n" ++
+        "        use o_type_defs\n" ++
+        "      CONTAINS\n" ++
+        "        SUBROUTINE OG0015(UDS0L)\n" ++
+        "          TYPE(SEQ)          UDS0L\n" ++
+        "        END SUBROUTINE\n" ++
+        "      END MODULE TESTS\n" ++
+        "      use o_type_defs\n" ++
+        "      CONTAINS\n" ++
+        "        SUBROUTINE OG0015_MAIN(UDS0L)\n" ++
+        "          TYPE(SEQ)          UDS0L\n" ++
+        "        END SUBROUTINE\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 5), program.units.len);
+    for ([_]usize{ 2, 4 }) |unit_idx| {
+        const unit = program.units[unit_idx];
+        var saw_seq_type = false;
+        for (unit.decls) |decl_node| {
+            if (decl_node != .derived_type_def) continue;
+            if (!std.ascii.eqlIgnoreCase(decl_node.derived_type_def.name, "seq")) continue;
+            saw_seq_type = true;
+            break;
+        }
+        try testing.expect(saw_seq_type);
+    }
 }
 
 test "parseProgram handles PURE REAL(kind) function header" {

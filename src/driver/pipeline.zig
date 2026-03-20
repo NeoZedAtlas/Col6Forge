@@ -15,6 +15,7 @@ pub const PauseMode = codegen.CodegenOptions.PauseMode;
 
 pub const PipelineOptions = struct {
     bounds_check: bool = false,
+    range_check: bool = false,
     pause_mode: PauseMode = .auto,
     target: ?[]const u8 = null,
     semantic_target_layout: semantic.TargetLayout = .{},
@@ -449,7 +450,10 @@ fn emitLlvmModule(
         program,
         options.known_function_types,
         options.known_procedure_sigs,
-        .{ .target_layout = options.semantic_target_layout },
+        .{
+            .target_layout = options.semantic_target_layout,
+            .range_check = options.range_check,
+        },
         &semantic_diag_bag,
     ) catch |err| {
         if (profile) |p| {

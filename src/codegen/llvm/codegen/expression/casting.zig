@@ -17,6 +17,11 @@ const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
 
+fn intrinsicCallType(ctx: *Context, name: []const u8) ?IRType {
+    if (std.ascii.eqlIgnoreCase(name, "size")) return ctx.defaultIntegerIRType();
+    return null;
+}
+
 pub fn emitLiteral(ctx: *Context, builder: anytype, lit: Literal) !ValueRef {
     switch (lit.kind) {
         .integer => {
@@ -251,6 +256,8 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
                     } else if (sym.is_external or sym.is_intrinsic or sym.kind == .function) {
                         kind = .call;
                     }
+                } else if (intrinsicCallType(ctx, call.name) != null) {
+                    kind = .call;
                 }
             }
             if (kind == .subscript) {
@@ -258,8 +265,10 @@ pub fn exprType(ctx: *Context, expr: *Expr) !IRType {
                 return ctx.typeFromKind(sym.loweredKind());
             }
             if (kind != .call) return error.AmbiguousCallOrSubscript;
-            const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-            return ctx.typeFromKind(sym.loweredKind());
+            if (ctx.findSymbol(call.name)) |sym| {
+                return ctx.typeFromKind(sym.loweredKind());
+            }
+            return intrinsicCallType(ctx, call.name) orelse error.UnknownSymbol;
         },
         .implied_do => return error.UnsupportedImpliedDo,
     }

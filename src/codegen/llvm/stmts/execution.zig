@@ -1092,20 +1092,14 @@ fn flattenIntrinsicArrayValuedCall(ctx: *Context, call: ast.CallOrSubscript) Emi
     }
     if (std.ascii.eqlIgnoreCase(call.name, "unpack")) {
         if (call.args.len != 3) return null;
-        const vector_items = try flattenArrayValuedExprItems(ctx, call.args[0]) orelse {
-            return null;
-        };
-        const mask_items = try flattenArrayValuedExprItems(ctx, call.args[1]) orelse {
-            return null;
-        };
+        const vector_items = try flattenArrayValuedExprItems(ctx, call.args[0]) orelse return null;
+        const mask_items = try flattenArrayValuedExprItems(ctx, call.args[1]) orelse return null;
         var result = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
         errdefer result.deinit();
 
         var vector_idx: usize = 0;
         for (mask_items) |mask_item| {
-            const take_vector = try evalStaticLogicalExpr(ctx, mask_item) orelse {
-                return null;
-            };
+            const take_vector = try evalStaticLogicalExpr(ctx, mask_item) orelse return null;
             if (take_vector) {
                 if (vector_idx >= vector_items.len) return null;
                 try result.append(vector_items[vector_idx]);
@@ -1114,7 +1108,6 @@ fn flattenIntrinsicArrayValuedCall(ctx: *Context, call: ast.CallOrSubscript) Emi
                 try result.append(call.args[2]);
             }
         }
-        if (vector_idx != vector_items.len) return null;
         return try result.toOwnedSlice();
     }
     return null;
@@ -1464,7 +1457,8 @@ fn evalStaticLogicalExpr(ctx: *Context, expr_node: *ast.Expr) EmitError!?bool {
             if (!std.ascii.eqlIgnoreCase(call.name, "any") or call.args.len != 1) break :blk null;
             const items = try flattenArrayValuedExprItems(ctx, call.args[0]) orelse break :blk null;
             for (items) |item| {
-                if ((try evalStaticLogicalExpr(ctx, item)) orelse break :blk null) {
+                const item_value = (try evalStaticLogicalExpr(ctx, item)) orelse break :blk null;
+                if (item_value) {
                     break :blk true;
                 }
             }

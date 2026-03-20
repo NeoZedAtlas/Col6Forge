@@ -87,6 +87,7 @@ pub const DerivedTypeDef = struct {
     sequence: bool = false,
     bind_c: bool = false,
     components: []const TypeDecl = &.{},
+    component_sources: []const @import("program.zig").DeclSource = &.{},
     bindings: []const TypeBoundProcedureBinding = &.{},
 };
 

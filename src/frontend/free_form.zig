@@ -275,6 +275,10 @@ fn rewriteAndAppend(
             defer allocator.free(mapped);
             const simplified = try simplifyParameterAssigns(allocator, right, kind_state.*);
             defer allocator.free(simplified);
+            if (hasParameterDeclaratorSuffix(simplified)) {
+                try appendMappedLogicalLine(list, try dupMappedText(allocator, stmt), start_line, end_line);
+                return;
+            }
             if (hasRewritableParameterArrayConstructorAssign(simplified)) {
                 var scalar_names = std.array_list.Managed(u8).init(allocator);
                 defer scalar_names.deinit();
@@ -326,10 +330,6 @@ fn rewriteAndAppend(
                     const param_text = try std.fmt.allocPrint(allocator, "PARAMETER ({s})", .{scalar_assigns.items});
                     try appendGeneratedLogicalLine(list, param_text, stmt.segments, start_line, end_line);
                 }
-                return;
-            }
-            if (hasParameterDeclaratorSuffix(simplified)) {
-                try appendMappedLogicalLine(list, try dupMappedText(allocator, stmt), start_line, end_line);
                 return;
             }
             const names = try extractAssignNames(allocator, simplified);
@@ -1071,6 +1071,18 @@ test "normalizeFreeForm preserves modern PARAMETER declarations with declarator 
 
     try testing.expectEqual(@as(usize, 1), lines.len);
     try testing.expectEqualStrings("integer, parameter :: c_index(8) = unpack([1,2],[.true.,.false.],0)", lines[0].text);
+}
+
+test "normalizeFreeForm preserves modern PARAMETER declarations with declarator suffix and array constructor init" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const src_text = "integer, parameter :: nlte_channel(3) = [20,22,34]\n";
+    const lines = try normalizeFreeForm(allocator, src_text);
+    defer freeLogicalLines(allocator, lines);
+
+    try testing.expectEqual(@as(usize, 1), lines.len);
+    try testing.expectEqualStrings("integer, parameter :: nlte_channel(3) = [20,22,34]", lines[0].text);
 }
 
 test "normalizeFreeForm preserves repository array_constructor_14 slash constructors" {

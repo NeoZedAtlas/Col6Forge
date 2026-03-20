@@ -232,7 +232,12 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             return binary.emitBinary(ctx, builder, bin.op, lhs, rhs);
         },
         .call_or_subscript => |call_or_sub| {
-            const sym = ctx.findSymbol(call_or_sub.name) orelse return error.UnknownSymbol;
+            const sym = ctx.findSymbol(call_or_sub.name) orelse {
+                return intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args) catch |err| switch (err) {
+                    error.UnknownIntrinsic => error.UnknownSymbol,
+                    else => err,
+                };
+            };
             if (sym.kind == .parameter) {
                 if (sym.const_value) |cv| {
                     // Scalar PARAMETER values may appear with legacy subscript syntax
@@ -547,6 +552,35 @@ fn emitStructureConstructorComponentStore(
     component: context.DerivedComponentLayout,
     value_expr: *Expr,
 ) EmitError!void {
+    if (component.dims.len != 0 and !component.pointer and !component.allocatable) {
+        const items = try flattenStructureConstructorArrayItems(ctx, value_expr) orelse return error.UnsupportedArrayConstructor;
+        const expected_count = common.arrayElementCount(ctx.sem, component.dims) catch return error.UnsupportedArrayConstructor;
+        if (items.len != expected_count) return error.InvalidArgumentCount;
+
+        const scalar_component = context.DerivedComponentLayout{
+            .name = component.name,
+            .type_spec = component.type_spec,
+            .dims = &.{},
+            .pointer = false,
+            .allocatable = false,
+            .offset = 0,
+            .elem_size = component.elem_size,
+            .size = component.elem_size,
+            .alignment = component.alignment,
+        };
+
+        for (items, 0..) |item, idx| {
+            var elem_ptr = component_ptr;
+            if (idx != 0) {
+                const gep_name = try ctx.nextTemp();
+                try builder.gep(gep_name, .i8, component_ptr, try ctx.constI64(@intCast(idx * component.elem_size)));
+                elem_ptr = .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+            }
+            try emitStructureConstructorComponentStore(ctx, builder, elem_ptr, scalar_component, item);
+        }
+        return;
+    }
+
     if (component.type_spec.lowered_kind == .character) {
         const plan = (try emitCharacterValuePlan(ctx, builder, value_expr)) orelse return error.UnsupportedCharacterArgumentLength;
         const src_len = plan.logical_len_const orelse return error.UnsupportedCharacterArgumentLength;
@@ -569,6 +603,247 @@ fn emitStructureConstructorComponentStore(
     const target_ty = llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, ctx.options.target_layout);
     const coerced = if (value.ty == target_ty) value else try casting.coerce(ctx, builder, value, target_ty);
     try builder.store(coerced, component_ptr);
+}
+
+fn flattenStructureConstructorArrayItems(ctx: *Context, expr_node: *Expr) EmitError!?[]const *Expr {
+    var items = std.array_list.Managed(*Expr).init(ctx.allocator);
+    if (!(try appendFlattenedStructureConstructorArrayExpr(ctx, &items, expr_node))) return null;
+    return try items.toOwnedSlice();
+}
+
+fn appendFlattenedStructureConstructorArrayExpr(
+    ctx: *Context,
+    out: *std.array_list.Managed(*Expr),
+    expr_node: *Expr,
+) EmitError!bool {
+    switch (expr_node.*) {
+        .array_constructor => |ctor| {
+            for (ctor.items) |item| {
+                if (try appendFlattenedStructureConstructorArrayExpr(ctx, out, item)) continue;
+                try out.append(item);
+            }
+            return true;
+        },
+        .implied_do => |implied| {
+            const items = try expandStaticStructureConstructorImpliedDo(ctx, implied) orelse return false;
+            for (items) |item| {
+                if (try appendFlattenedStructureConstructorArrayExpr(ctx, out, item)) continue;
+                try out.append(item);
+            }
+            return true;
+        },
+        .call_or_subscript => |call_expr| {
+            if (!std.ascii.eqlIgnoreCase(call_expr.name, "reshape") or call_expr.args.len != 2) return false;
+            const source_items = try flattenStructureConstructorArrayItems(ctx, call_expr.args[0]) orelse return false;
+            const expected_count = structureConstructorShapeProduct(call_expr.args[1]) orelse return false;
+            if (source_items.len != expected_count) return false;
+            for (source_items) |item| {
+                try out.append(item);
+            }
+            return true;
+        },
+        else => return false,
+    }
+}
+
+fn expandStaticStructureConstructorImpliedDo(ctx: *Context, implied: ast.ImpliedDo) EmitError!?[]const *Expr {
+    const start_val = try evalStaticStructureConstructorInt(ctx, implied.start) orelse return null;
+    const end_val = try evalStaticStructureConstructorInt(ctx, implied.end) orelse return null;
+    const step_val = if (implied.step) |step_expr|
+        (try evalStaticStructureConstructorInt(ctx, step_expr)) orelse return null
+    else
+        1;
+    if (step_val == 0) return null;
+
+    var result = std.array_list.Managed(*Expr).init(ctx.allocator);
+    errdefer result.deinit();
+
+    var idx = start_val;
+    if (step_val > 0) {
+        while (idx <= end_val) : (idx += step_val) {
+            const iter_expr = try makeStructureConstructorIntLiteral(ctx, idx);
+            for (implied.items) |item| {
+                try result.append(try cloneStructureConstructorExprWithSubst(ctx, item, implied.var_name, iter_expr));
+            }
+        }
+    } else {
+        while (idx >= end_val) : (idx += step_val) {
+            const iter_expr = try makeStructureConstructorIntLiteral(ctx, idx);
+            for (implied.items) |item| {
+                try result.append(try cloneStructureConstructorExprWithSubst(ctx, item, implied.var_name, iter_expr));
+            }
+        }
+    }
+    return try result.toOwnedSlice();
+}
+
+fn makeStructureConstructorIntLiteral(ctx: *Context, value: i64) EmitError!*Expr {
+    const node = try ctx.allocator.create(Expr);
+    node.* = .{ .literal = .{
+        .kind = .integer,
+        .text = try ctx.intLiteral(value),
+    } };
+    return node;
+}
+
+fn cloneStructureConstructorExprWithSubst(
+    ctx: *Context,
+    node: *Expr,
+    name: []const u8,
+    replacement: *Expr,
+) EmitError!*Expr {
+    const cloned = try ctx.allocator.create(Expr);
+    switch (node.*) {
+        .identifier => |ident| {
+            if (std.ascii.eqlIgnoreCase(ident, name)) {
+                cloned.* = replacement.*;
+                return cloned;
+            }
+            cloned.* = .{ .identifier = ident };
+        },
+        .array_constructor => |ctor| {
+            const items = try ctx.allocator.alloc(*Expr, ctor.items.len);
+            for (ctor.items, 0..) |item, idx| {
+                items[idx] = try cloneStructureConstructorExprWithSubst(ctx, item, name, replacement);
+            }
+            cloned.* = .{ .array_constructor = .{ .type_spec = ctor.type_spec, .items = items } };
+        },
+        .literal => |lit| cloned.* = .{ .literal = lit },
+        .unary => |un| {
+            cloned.* = .{ .unary = .{
+                .op = un.op,
+                .expr = try cloneStructureConstructorExprWithSubst(ctx, un.expr, name, replacement),
+            } };
+        },
+        .binary => |bin| {
+            cloned.* = .{ .binary = .{
+                .op = bin.op,
+                .left = try cloneStructureConstructorExprWithSubst(ctx, bin.left, name, replacement),
+                .right = try cloneStructureConstructorExprWithSubst(ctx, bin.right, name, replacement),
+            } };
+        },
+        .complex_literal => |lit| {
+            cloned.* = .{ .complex_literal = .{
+                .real = try cloneStructureConstructorExprWithSubst(ctx, lit.real, name, replacement),
+                .imag = try cloneStructureConstructorExprWithSubst(ctx, lit.imag, name, replacement),
+            } };
+        },
+        .call_or_subscript => |call_or_sub| {
+            const args = try ctx.allocator.alloc(*Expr, call_or_sub.args.len);
+            for (call_or_sub.args, 0..) |arg, idx| {
+                args[idx] = try cloneStructureConstructorExprWithSubst(ctx, arg, name, replacement);
+            }
+            cloned.* = .{ .call_or_subscript = .{
+                .name = call_or_sub.name,
+                .args = args,
+            } };
+            if (ctx.ref_kinds.get(@as(usize, @intFromPtr(node)))) |kind| {
+                try ctx.ref_kinds.put(@as(usize, @intFromPtr(cloned)), kind);
+            }
+        },
+        .substring => |sub| {
+            const args = try ctx.allocator.alloc(*Expr, sub.args.len);
+            for (sub.args, 0..) |arg, idx| {
+                args[idx] = try cloneStructureConstructorExprWithSubst(ctx, arg, name, replacement);
+            }
+            cloned.* = .{ .substring = .{
+                .name = sub.name,
+                .args = args,
+                .start = if (sub.start) |start_expr| try cloneStructureConstructorExprWithSubst(ctx, start_expr, name, replacement) else null,
+                .end = if (sub.end) |end_expr| try cloneStructureConstructorExprWithSubst(ctx, end_expr, name, replacement) else null,
+            } };
+        },
+        .component => |comp| {
+            const args = try ctx.allocator.alloc(*Expr, comp.args.len);
+            for (comp.args, 0..) |arg, idx| {
+                args[idx] = try cloneStructureConstructorExprWithSubst(ctx, arg, name, replacement);
+            }
+            cloned.* = .{ .component = .{
+                .base = try cloneStructureConstructorExprWithSubst(ctx, comp.base, name, replacement),
+                .name = comp.name,
+                .args = args,
+                .has_parens = comp.has_parens,
+            } };
+        },
+        .dim_range => |range| {
+            cloned.* = .{ .dim_range = .{
+                .lower = if (range.lower) |lower| try cloneStructureConstructorExprWithSubst(ctx, lower, name, replacement) else null,
+                .upper = try cloneStructureConstructorExprWithSubst(ctx, range.upper, name, replacement),
+                .stride = if (range.stride) |stride_expr| try cloneStructureConstructorExprWithSubst(ctx, stride_expr, name, replacement) else null,
+                .assumed_shape = range.assumed_shape,
+            } };
+        },
+        .implied_do => |implied| {
+            if (std.ascii.eqlIgnoreCase(implied.var_name, name)) {
+                cloned.* = .{ .implied_do = implied };
+            } else {
+                const items = try ctx.allocator.alloc(*Expr, implied.items.len);
+                for (implied.items, 0..) |item, idx| {
+                    items[idx] = try cloneStructureConstructorExprWithSubst(ctx, item, name, replacement);
+                }
+                cloned.* = .{ .implied_do = .{
+                    .items = items,
+                    .var_name = implied.var_name,
+                    .start = try cloneStructureConstructorExprWithSubst(ctx, implied.start, name, replacement),
+                    .end = try cloneStructureConstructorExprWithSubst(ctx, implied.end, name, replacement),
+                    .step = if (implied.step) |step_expr| try cloneStructureConstructorExprWithSubst(ctx, step_expr, name, replacement) else null,
+                } };
+            }
+        },
+    }
+    return cloned;
+}
+
+fn evalStaticStructureConstructorInt(ctx: *Context, expr_node: *Expr) EmitError!?i64 {
+    return switch (expr_node.*) {
+        .literal => |lit| switch (lit.kind) {
+            .integer => std.fmt.parseInt(i64, lit.text, 10) catch null,
+            else => null,
+        },
+        .unary => |un| blk: {
+            const inner = (try evalStaticStructureConstructorInt(ctx, un.expr)) orelse break :blk null;
+            break :blk switch (un.op) {
+                .plus => inner,
+                .minus => -inner,
+                else => null,
+            };
+        },
+        .binary => |bin| blk: {
+            const lhs = (try evalStaticStructureConstructorInt(ctx, bin.left)) orelse break :blk null;
+            const rhs = (try evalStaticStructureConstructorInt(ctx, bin.right)) orelse break :blk null;
+            break :blk switch (bin.op) {
+                .add => lhs + rhs,
+                .sub => lhs - rhs,
+                .mul => lhs * rhs,
+                .div => if (rhs == 0) null else @divTrunc(lhs, rhs),
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
+fn structureConstructorShapeProduct(expr_node: *Expr) ?usize {
+    return switch (expr_node.*) {
+        .array_constructor => |ctor| blk: {
+            if (ctor.items.len == 0) break :blk 0;
+            var total: usize = 1;
+            for (ctor.items) |item| {
+                const value = switch (item.*) {
+                    .literal => |lit| blk_lit: {
+                        if (lit.kind != .integer) break :blk_lit null;
+                        break :blk_lit std.fmt.parseInt(i64, lit.text, 10) catch null;
+                    },
+                    else => null,
+                } orelse return null;
+                if (value < 0) return null;
+                const usize_value = std.math.cast(usize, value) orelse return null;
+                total = std.math.mul(usize, total, usize_value) catch return null;
+            }
+            break :blk total;
+        },
+        else => null,
+    };
 }
 
 fn buildTypeBoundProcedureActuals(
@@ -1315,6 +1590,18 @@ fn emitCharacterValuePlanImpl(ctx: *Context, builder: anytype, expr: *Expr, subs
                     });
                 },
                 .call => {
+                    if (sym.is_intrinsic and sym.isCharacter()) {
+                        const ptr = try intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args);
+                        const len_val = try ctx.constI32(1);
+                        return try validatedCharacterValuePlan(.{
+                            .ptr = .{ .name = ptr.name, .ty = .ptr, .is_ptr = true },
+                            .logical_len = len_val,
+                            .storage_len = len_val,
+                            .logical_len_const = 1,
+                            .storage_len_const = 1,
+                            .kind = .function_result,
+                        });
+                    }
                     if (!(sym.kind == .function and sym.isCharacter())) return null;
                     const result_len = common.constantCharacterLen(sym) orelse common.symbolCharacterLenOrOne(sym);
                     const ptr = if (sym.storage == .dummy)

@@ -218,6 +218,57 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
     }
 }
 
+pub fn applyTypeDeclParameter(self: *context.Context, decl: ast.TypeDecl) !void {
+    if (!decl.parameter) return;
+
+    for (decl.items) |item| {
+        const init_expr = item.init orelse {
+            setParameterNotConstantDiagnostic(self, item.name);
+            return error.ParameterNotConstant;
+        };
+        const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
+        var sym = &self.symbols.items[idx];
+        sym.kind = .parameter;
+        sym.storage = .local;
+
+        if (sym.dims.len != 0) continue;
+
+        const assign = ast.ParamAssign{
+            .name = item.name,
+            .value = init_expr,
+        };
+        const assigned_value = check_const.checkParameterAssign(self, assign) catch |err| {
+            if (err == error.ParameterNotConstant) {
+                setParameterNotConstantDiagnostic(self, item.name);
+            }
+            return err;
+        };
+        const const_val = check_const.coerceParameterValue(
+            self,
+            sym.loweredKind(),
+            sym.effectiveCharLen(),
+            assigned_value,
+        ) catch |err| {
+            if (err == error.ParameterTypeMismatch) {
+                setParameterTypeMismatchDiagnostic(self, item.name, sym.loweredKind(), assigned_value);
+            }
+            return err;
+        };
+        sym.const_value = const_val;
+
+        if (sym.isCharacter() and sym.effectiveCharLenKind() != .constant) {
+            switch (const_val) {
+                .string => |bytes| {
+                    sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, bytes.len));
+                },
+                else => {
+                    sym.applyTypeSpec(sym.type_spec.withCharacterLength(sym.effectiveCharLenKind(), null));
+                },
+            }
+        }
+    }
+}
+
 fn setParameterNotConstantDiagnostic(self: *context.Context, name: []const u8) void {
     var message_buf: [256]u8 = undefined;
     const message = std.fmt.bufPrint(
