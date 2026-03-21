@@ -502,12 +502,12 @@ pub export fn col6forge_read_unformatted_typed(
 
     const src = record.?;
     var pos: usize = 0;
-    var i: usize = 0;
-    while (i < total_args and pos < record_size) : (i += 1) {
-        const kind = shared.runtimeArgKindAt(arg_kinds, i, total_args);
-        const len = shared.runtimeArgLenAt(arg_lens, i, total_args);
+    var read_idx: usize = 0;
+    while (read_idx < total_args and pos < record_size) : (read_idx += 1) {
+        const kind = shared.runtimeArgKindAt(arg_kinds, read_idx, total_args);
+        const len = shared.runtimeArgLenAt(arg_lens, read_idx, total_args);
         const field_size = shared.typedFieldSize(kind, len) orelse return 1;
-        const arg_any = shared.runtimeArgPtrAt(arg_ptrs, i, total_args);
+        const arg_any = shared.runtimeArgPtrAt(arg_ptrs, read_idx, total_args);
         if (arg_any != null and pos + field_size <= record_size) {
             const dst: [*]u8 = @ptrCast(arg_any.?);
             shared.copyRawBytes(dst, src + pos, field_size);
