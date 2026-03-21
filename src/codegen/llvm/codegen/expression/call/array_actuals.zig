@@ -9,6 +9,7 @@ const utils = @import("../../utils.zig");
 const llvm_types = @import("../../../types.zig");
 const casting = @import("../casting.zig");
 const shared = @import("shared.zig");
+
 const Expr = shared.Expr;
 const IRType = shared.IRType;
 const Context = shared.Context;
@@ -499,7 +500,7 @@ pub fn emitCharacterLengthArg(ctx: *Context, builder: anytype, expr: *Expr) !?Va
     return (try dispatch.emitAbiCharacterLenValue(ctx, builder, expr)) orelse null;
 }
 
-fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
+pub fn allocaCharBuffer(ctx: *Context, builder: anytype, len: usize) !ValueRef {
     const ptr_name = try ctx.nextTemp();
     if (len <= 1) {
         try builder.alloca(ptr_name, .i8);
@@ -1035,7 +1036,7 @@ fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
     return a.ty == b.ty and a.is_ptr == b.is_ptr and std.mem.eql(u8, a.name, b.name);
 }
 
-fn isIntrinsicArrayConversionArg(ctx: *Context, call: ast.CallOrSubscript) bool {
+pub fn isIntrinsicArrayConversionArg(ctx: *Context, call: ast.CallOrSubscript) bool {
     if (call.args.len != 1) return false;
     const callee = ctx.findSymbol(call.name) orelse return false;
     if (!callee.is_intrinsic) return false;
@@ -1116,5 +1117,13 @@ fn isArrayValuedExpr(ctx: *Context, expr: *Expr) bool {
     }
 }
 
-fn unpackComplexF32Return(ctx: *Context, builder: anytype, packed_name: []const u8, abi_ret_ty: IRType) !ValueRef {
-
+pub fn unpackComplexF32Return(ctx: *Context, builder: anytype, packed_name: []const u8, abi_ret_ty: IRType) !ValueRef {
+    const slot_tmp = try ctx.nextTemp();
+    try builder.alloca(slot_tmp, abi_ret_ty);
+    const slot_ptr = ValueRef{ .name = slot_tmp, .ty = .ptr, .is_ptr = true };
+    const packed_val = ValueRef{ .name = packed_name, .ty = abi_ret_ty, .is_ptr = false };
+    try builder.store(packed_val, slot_ptr);
+    const value_tmp = try ctx.nextTemp();
+    try builder.load(value_tmp, .complex_f32, slot_ptr);
+    return .{ .name = value_tmp, .ty = .complex_f32, .is_ptr = false };
+}

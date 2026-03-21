@@ -1,7 +1,12 @@
 const std = @import("std");
+const ast = @import("../../../../input.zig");
 const shared = @import("shared.zig");
 const array_actuals = @import("array_actuals.zig");
+const common = @import("../../common.zig");
+const memory = @import("../memory.zig");
+const dispatch = @import("../dispatch/mod.zig");
 const casting = @import("../casting.zig");
+
 const Expr = shared.Expr;
 const IRType = shared.IRType;
 const Context = shared.Context;
@@ -16,6 +21,9 @@ const resolveArrayActual = array_actuals.resolveArrayActual;
 const isIntrinsicArrayConversionArg = array_actuals.isIntrinsicArrayConversionArg;
 const emitIntrinsicArrayConversionArgPointer = array_actuals.emitIntrinsicArrayConversionArgPointer;
 const analyzeAddressableArrayActual = array_actuals.analyzeAddressableArrayActual;
+const allocaCharBuffer = array_actuals.allocaCharBuffer;
+const unpackComplexF32Return = array_actuals.unpackComplexF32Return;
+
 pub fn emitCall(ctx: *Context, builder: anytype, fn_name: []const u8, ret_ty: IRType, args: []*Expr, discard: bool) !ValueRef {
     const abi_ret_ty = ctx.abiFunctionReturnType(ret_ty);
     var complex_result_ptr: ?ValueRef = null;
@@ -268,5 +276,3 @@ fn appendAbiActualArgs(
         }
     }
 }
-
-

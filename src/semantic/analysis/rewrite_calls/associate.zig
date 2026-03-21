@@ -1,9 +1,7 @@
 const std = @import("std");
-const ast = @import("../../ast/nodes.zig");
+const ast = @import("../../../ast/nodes.zig");
 const context = @import("../context.zig");
-const resolve_symbols = @import("../resolve_symbols.zig");
-const symbols = @import("../../symbol/mod.zig");
-const Symbol = symbols.Symbol;const AssociateAlias = struct {
+const AssociateAlias = struct {
     name: []const u8,
     selector: *ast.Expr,
 };
@@ -14,20 +12,6 @@ pub fn lowerAssociateBlocks(ctx: *context.Context) !void {
         ctx.replaceUnitStmts(lowered.stmts);
     }
 }
-
-pub fn lowerIntrinsicArrayConversions(ctx: *context.Context) !void {
-    var state = RewriteState{};
-    const rewritten = try rewriteStmtList(ctx, &state, ctx.unit.stmts, true);
-    if (rewritten.changed) {
-        ctx.replaceUnitStmts(rewritten.stmts);
-    }
-}
-
-const RewriteState = struct {
-    next_temp_idx: usize = 0,
-    next_loop_idx: usize = 0,
-    next_label_idx: usize = 0,
-};
 
 const RewriteResult = struct {
     stmts: []ast.Stmt,
@@ -760,5 +744,3 @@ fn newExpr(ctx: *context.Context, value: ast.Expr) anyerror!*ast.Expr {
     node.* = value;
     return node;
 }
-
-

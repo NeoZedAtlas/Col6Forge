@@ -1,9 +1,11 @@
 const std = @import("std");
-const ast = @import("../../ast/nodes.zig");
+const ast = @import("../../../ast/nodes.zig");
 const context = @import("../context.zig");
 const resolve_symbols = @import("../resolve_symbols.zig");
 const symbols = @import("../../symbol/mod.zig");
-const Symbol = symbols.Symbol;pub fn lowerIntrinsicArrayConversions(ctx: *context.Context) !void {
+
+const Symbol = symbols.Symbol;
+pub fn lowerIntrinsicArrayConversions(ctx: *context.Context) !void {
     var state = RewriteState{};
     const rewritten = try rewriteStmtList(ctx, &state, ctx.unit.stmts, true);
     if (rewritten.changed) {
@@ -699,4 +701,63 @@ fn cloneExpr(ctx: *context.Context, node: *ast.Expr) !*ast.Expr {
         .complex_literal => |lit| {
             const real = try cloneExpr(ctx, lit.real);
             const imag = try cloneExpr(ctx, lit.imag);
-
+            cloned.* = .{ .complex_literal = .{ .real = real, .imag = imag } };
+        },
+        .call_or_subscript => |call| {
+            const args = try ctx.arena.alloc(*ast.Expr, call.args.len);
+            for (call.args, 0..) |arg, idx| {
+                args[idx] = try cloneExpr(ctx, arg);
+            }
+            cloned.* = .{ .call_or_subscript = .{ .name = call.name, .args = args } };
+        },
+        .substring => |sub| {
+            const args = try ctx.arena.alloc(*ast.Expr, sub.args.len);
+            for (sub.args, 0..) |arg, idx| {
+                args[idx] = try cloneExpr(ctx, arg);
+            }
+            const start_expr = if (sub.start) |s| try cloneExpr(ctx, s) else null;
+            const end_expr = if (sub.end) |e| try cloneExpr(ctx, e) else null;
+            cloned.* = .{
+                .substring = .{
+                    .name = sub.name,
+                    .args = args,
+                    .start = start_expr,
+                    .end = end_expr,
+                },
+            };
+        },
+        .component => |comp| {
+            const base = try cloneExpr(ctx, comp.base);
+            const args = try ctx.arena.alloc(*ast.Expr, comp.args.len);
+            for (comp.args, 0..) |arg, idx| {
+                args[idx] = try cloneExpr(ctx, arg);
+            }
+            cloned.* = .{ .component = .{ .base = base, .name = comp.name, .args = args, .has_parens = comp.has_parens } };
+        },
+        .dim_range => |range| {
+            const lower = if (range.lower) |l| try cloneExpr(ctx, l) else null;
+            const upper = try cloneExpr(ctx, range.upper);
+            const stride = if (range.stride) |s| try cloneExpr(ctx, s) else null;
+            cloned.* = .{ .dim_range = .{ .lower = lower, .upper = upper, .stride = stride, .assumed_shape = range.assumed_shape } };
+        },
+        .implied_do => |implied| {
+            const items = try ctx.arena.alloc(*ast.Expr, implied.items.len);
+            for (implied.items, 0..) |item, idx| {
+                items[idx] = try cloneExpr(ctx, item);
+            }
+            const start_expr = try cloneExpr(ctx, implied.start);
+            const end_expr = try cloneExpr(ctx, implied.end);
+            const step_expr = if (implied.step) |step| try cloneExpr(ctx, step) else null;
+            cloned.* = .{
+                .implied_do = .{
+                    .items = items,
+                    .var_name = implied.var_name,
+                    .start = start_expr,
+                    .end = end_expr,
+                    .step = step_expr,
+                },
+            };
+        },
+    }
+    return cloned;
+}
