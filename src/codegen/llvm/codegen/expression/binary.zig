@@ -7,7 +7,7 @@ const llvm_types = @import("../../types.zig");
 
 const casting = @import("casting.zig");
 const complex = @import("complex.zig");
-const dispatch = @import("dispatch.zig");
+const dispatch = @import("dispatch/mod.zig");
 const intrinsics = @import("intrinsics.zig");
 
 const BinaryOp = ast.BinaryOp;

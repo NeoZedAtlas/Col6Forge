@@ -1,4 +1,4 @@
-const dispatch = @import("dispatch.zig");
+const dispatch = @import("dispatch/mod.zig");
 const binary = @import("binary.zig");
 const casting = @import("casting.zig");
 const memory = @import("memory.zig");

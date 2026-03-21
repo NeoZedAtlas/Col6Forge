@@ -6,7 +6,7 @@ const flatten_mod = @import("flatten/mod.zig");
 const character_mod = @import("character.zig");
 const common = @import("../../../codegen/common.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
-const expr_dispatch = @import("../../../codegen/expression/dispatch.zig");
+const expr_dispatch = @import("../../../codegen/expression/dispatch/mod.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;

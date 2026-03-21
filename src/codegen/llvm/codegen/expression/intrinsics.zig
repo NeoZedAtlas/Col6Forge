@@ -8,7 +8,7 @@ const utils = @import("../utils.zig");
 const binary = @import("binary.zig");
 const casting = @import("casting.zig");
 const complex = @import("complex.zig");
-const dispatch = @import("dispatch.zig");
+const dispatch = @import("dispatch/mod.zig");
 
 const Expr = ast.Expr;
 const IRType = ir.IRType;
