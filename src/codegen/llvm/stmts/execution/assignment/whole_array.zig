@@ -9,7 +9,7 @@ const ir = @import("../../../../ir.zig");
 const llvm_types = @import("../../../types.zig");
 const evaluator = @import("../../../../../semantic/evaluator.zig");
 const assignment_mod = @import("mod.zig");
-const flatten_mod = @import("flatten.zig");
+const flatten_mod = @import("flatten/mod.zig");
 const character_mod = @import("character.zig");
 
 const Context = context.Context;

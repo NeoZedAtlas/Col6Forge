@@ -1,25 +1,17 @@
 const std = @import("std");
-const ast = @import("../../../../input.zig");
-const common = @import("../../../codegen/common.zig");
-const context = @import("../../../codegen/context.zig");
-const expr = @import("../../../codegen/expression/mod.zig");
-const evaluator = @import("../../../../../semantic/evaluator.zig");
+const ast = @import("../../../../../input.zig");
+const context = @import("../../../../codegen/context.zig");
+const evaluator = @import("../../../../../../semantic/evaluator.zig");
+const const_eval = @import("const_eval.zig");
+const metadata = @import("metadata.zig");
 
 const Context = context.Context;
 const EmitError = anyerror;
 
 pub fn isRuntimeWholeArrayImpliedDo(ctx: *Context, implied: ast.ImpliedDo) bool {
-    return !isStaticImpliedDoBound(ctx, implied.start) or
-        !isStaticImpliedDoBound(ctx, implied.end) or
-        (implied.step != null and !isStaticImpliedDoBound(ctx, implied.step.?));
-}
-
-fn isStaticImpliedDoBound(ctx: *Context, node: *ast.Expr) bool {
-    return (evaluator.evalConst(node, .{
-        .ctx = ctx,
-        .resolveFn = resolveStaticConstValue,
-        .arrayExtentFn = resolveStaticArrayExtent,
-    }) catch null) != null;
+    return !const_eval.isStaticImpliedDoBound(ctx, implied.start) or
+        !const_eval.isStaticImpliedDoBound(ctx, implied.end) or
+        (implied.step != null and !const_eval.isStaticImpliedDoBound(ctx, implied.step.?));
 }
 
 pub fn isScalarExprForWholeArrayGeneration(ctx: *Context, expr_node: *ast.Expr) bool {
@@ -115,7 +107,7 @@ fn flattenIntrinsicArrayValuedCall(ctx: *Context, call: ast.CallOrSubscript) Emi
         if (call.args.len != 2) return null;
 
         const source_items = try flattenArrayValuedExprItems(ctx, call.args[0]) orelse return null;
-        const expected_count = reshapeShapeProduct(ctx, call.args[1]) orelse return null;
+        const expected_count = metadata.reshapeShapeProduct(ctx, call.args[1]) orelse return null;
         if (source_items.len != expected_count) return null;
         return source_items;
     }
@@ -142,99 +134,12 @@ fn flattenIntrinsicArrayValuedCall(ctx: *Context, call: ast.CallOrSubscript) Emi
     return null;
 }
 
-fn reshapeShapeProduct(ctx: *Context, expr_node: *ast.Expr) ?usize {
-    return switch (expr_node.*) {
-        .array_constructor => shapeProductFromArrayConstructor(expr_node.array_constructor),
-        .call_or_subscript => |call| blk: {
-            if (!std.ascii.eqlIgnoreCase(call.name, "shape")) break :blk null;
-            if (call.args.len != 1) break :blk null;
-            break :blk shapeProductFromExpr(ctx, call.args[0]);
-        },
-        else => null,
-    };
-}
-
-fn shapeProductFromExpr(ctx: *Context, expr_node: *ast.Expr) ?usize {
-    return switch (expr_node.*) {
-        .identifier => |name| blk: {
-            const sym = ctx.findSymbol(name) orelse break :blk null;
-            break :blk common.arrayElementCount(ctx.sem, sym.dims) catch null;
-        },
-        .call_or_subscript => |call| blk: {
-            const sym = ctx.findSymbol(call.name) orelse break :blk null;
-            break :blk if (call.args.len == sym.dims.len)
-                common.arrayElementCount(ctx.sem, sym.dims) catch null
-            else
-                null;
-        },
-        else => null,
-    };
-}
-
-fn shapeProductFromArrayConstructor(ctor: ast.ArrayConstructor) ?usize {
-    if (ctor.items.len == 0) return 0;
-    var total: usize = 1;
-    for (ctor.items) |item| {
-        const value = switch (item.*) {
-            .literal => |lit| blk: {
-                if (lit.kind != .integer) break :blk null;
-                break :blk std.fmt.parseInt(i64, lit.text, 10) catch null;
-            },
-            else => null,
-        } orelse return null;
-        if (value < 0) return null;
-        const usize_value = std.math.cast(usize, value) orelse return null;
-        total = std.math.mul(usize, total, usize_value) catch return null;
-    }
-    return total;
-}
-
 fn flattenParameterArrayIdentifier(ctx: *Context, name: []const u8) EmitError!?[]const *ast.Expr {
     const sym = ctx.findSymbol(name) orelse return null;
     if (sym.dims.len == 0) return null;
     if (ctx.static_array_values.get(name)) |items| return items;
-    const init_expr = findDeclaratorInitializerExpr(ctx, name) orelse return null;
+    const init_expr = metadata.findDeclaratorInitializerExpr(ctx, name) orelse return null;
     return flattenArrayValuedExprItems(ctx, init_expr);
-}
-
-fn findDeclaratorInitializerExpr(ctx: *Context, name: []const u8) ?*ast.Expr {
-    for (ctx.unit.decls) |decl| {
-        switch (decl) {
-            .type_decl => |type_decl| {
-                for (type_decl.items) |item| {
-                    if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
-                    if (item.init) |init_expr| return init_expr;
-                }
-            },
-            .parameter => |param_decl| {
-                for (param_decl.assigns) |assign| {
-                    if (std.ascii.eqlIgnoreCase(assign.name, name)) return assign.value;
-                }
-            },
-            else => {},
-        }
-    }
-    return null;
-}
-
-fn declaresParameterValue(ctx: *Context, name: []const u8) bool {
-    for (ctx.unit.decls) |decl| {
-        switch (decl) {
-            .type_decl => |type_decl| {
-                if (!type_decl.parameter) continue;
-                for (type_decl.items) |item| {
-                    if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
-                }
-            },
-            .parameter => |param_decl| {
-                for (param_decl.assigns) |assign| {
-                    if (std.ascii.eqlIgnoreCase(assign.name, name)) return true;
-                }
-            },
-            else => {},
-        }
-    }
-    return false;
 }
 
 fn expandStaticImpliedDoItems(ctx: *Context, implied: ast.ImpliedDo) EmitError!?[]const *ast.Expr {
@@ -398,7 +303,7 @@ fn evalStaticIntExpr(ctx: *Context, expr_node: *ast.Expr) EmitError!?i64 {
                 } else 0;
                 const sym = ctx.findSymbol(target_name) orelse return null;
                 if (dim_idx >= sym.dims.len) return null;
-                return evalStaticDimLower(ctx, sym.dims[dim_idx]);
+                return const_eval.evalStaticDimLower(ctx, sym.dims[dim_idx], evalStaticIntExpr) orelse return null;
             }
             if (std.ascii.eqlIgnoreCase(call.name, "ubound")) {
                 if (call.args.len == 0 or call.args.len > 2) return null;
@@ -413,8 +318,8 @@ fn evalStaticIntExpr(ctx: *Context, expr_node: *ast.Expr) EmitError!?i64 {
                 } else 0;
                 const sym = ctx.findSymbol(target_name) orelse return null;
                 if (dim_idx >= sym.dims.len) return null;
-                const lower = evalStaticDimLower(ctx, sym.dims[dim_idx]) orelse return null;
-                const extent = evalStaticDimExtent(ctx, sym.dims[dim_idx]) orelse return null;
+                const lower = const_eval.evalStaticDimLower(ctx, sym.dims[dim_idx], evalStaticIntExpr) orelse return null;
+                const extent = const_eval.evalStaticDimExtent(ctx, sym.dims[dim_idx], evalStaticIntExpr) orelse return null;
                 return lower + extent - 1;
             }
             if (try evalStaticParameterArrayElementInt(ctx, call)) |value| return value;
@@ -424,8 +329,8 @@ fn evalStaticIntExpr(ctx: *Context, expr_node: *ast.Expr) EmitError!?i64 {
 
     const resolver = evaluator.ConstResolver{
         .ctx = ctx,
-        .resolveFn = resolveStaticConstValue,
-        .arrayExtentFn = resolveStaticArrayExtent,
+        .resolveFn = const_eval.resolveStaticConstValue,
+        .arrayExtentFn = const_eval.resolveStaticArrayExtent,
     };
     const value = try evaluator.evalConst(expr_node, resolver) orelse return null;
     return switch (value) {
@@ -437,7 +342,7 @@ fn evalStaticIntExpr(ctx: *Context, expr_node: *ast.Expr) EmitError!?i64 {
 fn evalStaticLogicalExpr(ctx: *Context, expr_node: *ast.Expr) EmitError!?bool {
     return switch (expr_node.*) {
         .literal => |lit| switch (lit.kind) {
-            .logical => parseStaticLogicalLiteral(lit.text),
+            .logical => const_eval.parseStaticLogicalLiteral(lit.text),
             .integer => blk: {
                 const value = std.fmt.parseInt(i64, lit.text, 10) catch break :blk null;
                 break :blk value != 0;
@@ -497,90 +402,12 @@ fn evalStaticLogicalExpr(ctx: *Context, expr_node: *ast.Expr) EmitError!?bool {
     };
 }
 
-fn parseStaticLogicalLiteral(text: []const u8) ?bool {
-    var trimmed = std.mem.trim(u8, text, " \t");
-    if (trimmed.len >= 2 and trimmed[0] == '.' and trimmed[trimmed.len - 1] == '.') {
-        trimmed = trimmed[1 .. trimmed.len - 1];
-    }
-    if (trimmed.len == 0) return null;
-    if (std.mem.eql(u8, trimmed, "1")) return true;
-    if (std.mem.eql(u8, trimmed, "0")) return false;
-    if (std.ascii.eqlIgnoreCase(trimmed, "true")) return true;
-    if (std.ascii.eqlIgnoreCase(trimmed, "false")) return false;
-    if (trimmed.len == 1 and (trimmed[0] == 't' or trimmed[0] == 'T')) return true;
-    if (trimmed.len == 1 and (trimmed[0] == 'f' or trimmed[0] == 'F')) return false;
-    return null;
-}
-
 fn evalStaticParameterArrayElementInt(ctx: *Context, call: ast.CallOrSubscript) EmitError!?i64 {
     const sym = ctx.findSymbol(call.name) orelse return null;
     if (sym.dims.len == 0 or call.args.len != sym.dims.len) return null;
 
     const items = try flattenParameterArrayIdentifier(ctx, call.name) orelse return null;
-    const linear_index = try evalStaticArrayLinearIndex(ctx, sym, call.args) orelse return null;
+    const linear_index = try const_eval.evalStaticArrayLinearIndex(ctx, sym, call.args, evalStaticIntExpr) orelse return null;
     if (linear_index >= items.len) return null;
     return evalStaticIntExpr(ctx, items[linear_index]);
 }
-
-fn evalStaticArrayLinearIndex(ctx: *Context, sym: ast.sema.Symbol, args: []*ast.Expr) EmitError!?usize {
-    var linear: i64 = 0;
-    var stride: i64 = 1;
-    for (args, 0..) |arg, dim_idx| {
-        const idx_val = (try evalStaticIntExpr(ctx, arg)) orelse return null;
-        const lower = evalStaticDimLower(ctx, sym.dims[dim_idx]) orelse return null;
-        linear += (idx_val - lower) * stride;
-        const extent = evalStaticDimExtent(ctx, sym.dims[dim_idx]) orelse return null;
-        stride *= extent;
-    }
-    if (linear < 0) return null;
-    return @as(usize, @intCast(linear));
-}
-
-fn evalStaticDimLower(ctx: *Context, dim_expr: *ast.Expr) ?i64 {
-    return switch (dim_expr.*) {
-        .dim_range => |range| if (range.lower) |lower_expr|
-            evalStaticIntExpr(ctx, lower_expr) catch null
-        else
-            1,
-        else => 1,
-    };
-}
-
-fn evalStaticDimExtent(ctx: *Context, dim_expr: *ast.Expr) ?i64 {
-    return switch (dim_expr.*) {
-        .dim_range => |range| blk: {
-            if (range.stride != null) break :blk null;
-            if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) break :blk null;
-            const upper = (evalStaticIntExpr(ctx, range.upper) catch null) orelse break :blk null;
-            const lower = if (range.lower) |lower_expr|
-                (evalStaticIntExpr(ctx, lower_expr) catch null) orelse break :blk null
-            else
-                1;
-            break :blk upper - lower + 1;
-        },
-        else => (evalStaticIntExpr(ctx, dim_expr) catch null),
-    };
-}
-
-fn resolveStaticConstValue(raw_ctx: *anyopaque, name: []const u8) ?ast.sema.ConstValue {
-    const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
-    const sym = ctx.findSymbol(name) orelse return null;
-    return sym.const_value;
-}
-
-fn resolveStaticArrayExtent(raw_ctx: *anyopaque, name: []const u8, dim: ?usize) ?i64 {
-    const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
-    const sym = ctx.findSymbol(name) orelse return null;
-    if (sym.dims.len == 0) return null;
-    if (dim) |dim_index| {
-        if (dim_index == 0 or dim_index > sym.dims.len) return null;
-        return evalStaticDimExtent(ctx, sym.dims[dim_index - 1]);
-    }
-    var total: i64 = 1;
-    for (sym.dims) |dim_expr| {
-        const extent = evalStaticDimExtent(ctx, dim_expr) orelse return null;
-        total *= extent;
-    }
-    return total;
-}
-
