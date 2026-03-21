@@ -8,7 +8,7 @@ const resolve_symbols = @import("../resolve_symbols.zig");
 const leaf_helpers = @import("leaf_helpers.zig");
 const procedure_interfaces = @import("procedure_interfaces.zig");
 const select_type_checks = @import("select_type.zig");
-const allocate_checks = @import("allocate.zig");
+const allocate_checks = @import("allocate/mod.zig");
 const procedure_calls = @import("procedure_calls.zig");
 const expr_semantics = @import("expr_semantics.zig");
 

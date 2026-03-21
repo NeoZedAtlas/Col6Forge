@@ -1,5 +1,5 @@
 const context = @import("context.zig");
-const check_statements = @import("check_statements.zig");
+const check_statements = @import("check_statements/mod.zig");
 
 pub const Checker = struct {
     ctx: *context.Context,
