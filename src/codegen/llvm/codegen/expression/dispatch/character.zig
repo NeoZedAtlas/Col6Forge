@@ -7,7 +7,7 @@ const utils = @import("../../utils.zig");
 const binary = @import("../binary.zig");
 const call = @import("../call.zig");
 const casting = @import("../casting.zig");
-const intrinsics = @import("../intrinsics.zig");
+const intrinsics = @import("../intrinsics/mod.zig");
 const memory = @import("../memory.zig");
 
 const int_eval = @import("int_eval.zig");

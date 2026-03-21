@@ -10,7 +10,7 @@ const binary = @import("../binary.zig");
 const call = @import("../call.zig");
 const casting = @import("../casting.zig");
 const complex = @import("../complex.zig");
-const intrinsics = @import("../intrinsics.zig");
+const intrinsics = @import("../intrinsics/mod.zig");
 const memory = @import("../memory.zig");
 
 const character = @import("character.zig");
