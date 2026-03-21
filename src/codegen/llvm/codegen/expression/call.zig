@@ -1,4 +1,4 @@
-const mod = @import("call_impl.zig");
+const mod = @import("call/mod.zig");
 
 pub const emitCall = mod.emitCall;
 pub const emitIndirectCall = mod.emitIndirectCall;

@@ -1,4 +1,4 @@
-const mod = @import("rewrite_calls_impl.zig");
+const mod = @import("rewrite_calls/mod.zig");
 
 pub const lowerAssociateBlocks = mod.lowerAssociateBlocks;
 pub const lowerIntrinsicArrayConversions = mod.lowerIntrinsicArrayConversions;
