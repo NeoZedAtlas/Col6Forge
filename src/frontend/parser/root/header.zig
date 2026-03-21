@@ -3,7 +3,7 @@ const ast = @import("../../../ast/nodes.zig");
 const logical_line = @import("../../logical_line.zig");
 const lexer = @import("../../lexer.zig");
 const context = @import("../token_stream.zig");
-const decl = @import("../decl.zig");
+const decl = @import("../decl/mod.zig");
 const expr = @import("../expr.zig");
 
 const ProgramUnitKind = ast.ProgramUnitKind;
