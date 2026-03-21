@@ -5,7 +5,7 @@ const context = @import("../../codegen/context.zig");
 const expr = @import("../../codegen/expression/mod.zig");
 const utils = @import("../../codegen/utils.zig");
 const llvm_types = @import("../../types.zig");
-const assignment_mod = @import("assignment.zig");
+const assignment_mod = @import("assignment/mod.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;

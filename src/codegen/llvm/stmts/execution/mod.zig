@@ -3,7 +3,7 @@ const ast = @import("../../../input.zig");
 const context = @import("../../codegen/context.zig");
 const ir = @import("../../../ir.zig");
 const alloc_mod = @import("alloc.zig");
-const assignment_mod = @import("assignment.zig");
+const assignment_mod = @import("assignment/mod.zig");
 const calls_mod = @import("calls.zig");
 const data_return_mod = @import("data_return.zig");
 
