@@ -10,7 +10,9 @@ pub const CheckError = anyerror;
 
 pub fn checkAssociateBlock(self: *context.Context, associate: ast.AssociateBlock, comptime deps: anytype) CheckError!void {
     for (associate.bindings) |binding| {
-        _ = try deps.checkExprType(self, binding.selector);
+        _ = try deps.checkExprType(self, binding.selector, .{
+            .dummyArgTypeCompatible = deps.dummyArgTypeCompatible,
+        });
     }
     _ = try self.pushScope(.block);
     defer self.popScope();
@@ -29,7 +31,9 @@ pub fn checkSelectTypeBlock(self: *context.Context, select_type: ast.SelectTypeB
         self.recordSemanticError(err);
         break :blk symbols.TypeSpec.fromResolvedKind(.integer, .integer, null);
     };
-    _ = deps.checkExprType(self, select_type.selector) catch |err| blk: {
+    _ = deps.checkExprType(self, select_type.selector, .{
+        .dummyArgTypeCompatible = deps.dummyArgTypeCompatible,
+    }) catch |err| blk: {
         if (!self.usesExplicitDiagnosticBag()) return err;
         if (first_err == null) first_err = err;
         self.recordSemanticError(err);

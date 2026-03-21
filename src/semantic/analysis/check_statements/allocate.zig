@@ -58,7 +58,9 @@ pub fn checkDeallocateStmt(self: *context.Context, deallocate: ast.DeallocateStm
 }
 
 fn checkAllocateDim(self: *context.Context, expr: *ast.Expr, comptime deps: anytype) CheckError!void {
-    const ty = try deps.checkExprType(self, expr);
+    const ty = try deps.checkExprType(self, expr, .{
+        .dummyArgTypeCompatible = deps.dummyArgTypeCompatible,
+    });
     if (ty != .integer or exprRank(self, expr, deps) != 0) {
         self.setCurrentSource(self.sourceForExpr(expr));
         return error.InvalidSubscript;
@@ -271,7 +273,9 @@ fn allocateCharacterLenKind(
 ) CheckError!CharacterAllocateLenKind {
     const len_expr = type_spec.char_len orelse return .omitted;
     if (len_expr.* == .literal and len_expr.literal.kind == .assumed_size) return .assumed;
-    const len_ty = try deps.checkExprType(self, len_expr);
+    const len_ty = try deps.checkExprType(self, len_expr, .{
+        .dummyArgTypeCompatible = deps.dummyArgTypeCompatible,
+    });
     if (len_ty != .integer or exprRank(self, len_expr, deps) != 0) {
         self.setDiagnostic(
             if (type_spec.source.line == 0) 1 else type_spec.source.line,
@@ -482,7 +486,9 @@ fn checkAllocationOptions(
 
     for (options) |option| {
         self.setCurrentSource(if (option.source.line != 0) option.source else self.sourceForExpr(option.value));
-        const value_ty = try deps.checkExprType(self, option.value);
+        const value_ty = try deps.checkExprType(self, option.value, .{
+            .dummyArgTypeCompatible = deps.dummyArgTypeCompatible,
+        });
         switch (option.kind) {
             .stat => {
                 if (saw_stat) {
