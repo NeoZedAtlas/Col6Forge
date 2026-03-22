@@ -174,6 +174,134 @@ pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(Progra
     }
 }
 
+pub fn parseSubmoduleContainer(self: anytype, units: *std.array_list.Managed(ProgramUnit)) !void {
+    const header_line = self.lines[self.index];
+    const header_tokens = try self.tokensForIndex(self.index);
+    var header_lp = LineParser.init(header_line, header_tokens);
+    const submodule_header = try root_header.parseSubmoduleHeader(self.arena, &header_lp);
+    self.index += 1;
+
+    var module_decls = std.array_list.Managed(Decl).init(self.arena);
+    var module_decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
+    var module_uses = std.array_list.Managed(ast.UseStmt).init(self.arena);
+    var saw_contains = false;
+
+    while (self.index < self.lines.len) {
+        const line = self.lines[self.index];
+        root_diagnostics.noteFallbackForLine(self.diag_bag, line);
+        if (self.isStandaloneEndAt(self.index) or self.isSubmoduleEndAt(self.index)) break;
+        if (self.isContainsAt(self.index)) {
+            self.index += 1;
+            saw_contains = true;
+            break;
+        }
+        if (self.isInterfaceStartAt(self.index)) {
+            const decl_node = self.parseInterfaceBlock() catch |err| {
+                const tokens = self.tokensForIndex(self.index) catch |tok_err| {
+                    root_diagnostics.setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, line, tok_err);
+                    return tok_err;
+                };
+                const lp = LineParser.init(line, tokens);
+                root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, line, lp, err);
+                return err;
+            };
+            try module_decls.append(decl_node);
+            try module_decl_sources.append(root_diagnostics.sourceFromLine(line));
+            continue;
+        }
+        const tokens = self.tokensForIndex(self.index) catch {
+            self.index += 1;
+            continue;
+        };
+        var lp = LineParser.init(line, tokens);
+        if (try root_prelude.tryParsePreludeUseImport(&lp, self.arena)) |use_import| {
+            try module_uses.append(use_import);
+            self.index += 1;
+            continue;
+        }
+        if (root_predicates.isDerivedTypeStartTokens(line, tokens)) {
+            const decl_node = try self.parseDerivedTypeDef();
+            try module_decls.append(decl_node);
+            try module_decl_sources.append(root_diagnostics.sourceFromLine(line));
+            continue;
+        }
+        if (decl.isDeclarationStart(lp)) {
+            const decl_node = decl.parseDecl(&lp, self.arena) catch {
+                self.index += 1;
+                continue;
+            };
+            try module_decls.append(decl_node);
+            try module_decl_sources.append(root_diagnostics.sourceFromLine(line));
+        }
+        self.index += 1;
+    }
+
+    var stored_decls: []const Decl = try module_decls.toOwnedSlice();
+    var stored_decl_sources: []const DeclSource = try module_decl_sources.toOwnedSlice();
+    if (module_uses.items.len != 0) {
+        const imported = try root_prelude.importPreludeDecls(self.arena, stored_decls, stored_decl_sources, module_uses.items, &self.module_preludes, self.diag_bag);
+        stored_decls = imported.decls;
+        stored_decl_sources = imported.decl_sources;
+    }
+    if (self.module_preludes.get(submodule_header.parent_name)) |parent_prelude| {
+        const merged = try root_prelude.prependDecls(self.arena, .{
+            .kind = .module,
+            .name = submodule_header.name,
+            .owner_name = submodule_header.parent_name,
+            .owner_kind = .module,
+            .args = &.{},
+            .decls = @constCast(stored_decls),
+            .decl_sources = @constCast(stored_decl_sources),
+            .stmts = &.{},
+            .expr_sources = &.{},
+        }, parent_prelude.decls, parent_prelude.decl_sources);
+        stored_decls = merged.decls;
+        stored_decl_sources = merged.decl_sources;
+    }
+    stored_decls = try root_binding_owners.annotateDeclBindingOwners(self.arena, stored_decls, submodule_header.name, .module);
+    stored_decl_sources = try root_prelude.annotateDeclSourcesOwner(self.arena, stored_decl_sources, submodule_header.name);
+    try self.module_preludes.put(submodule_header.name, .{
+        .decls = stored_decls,
+        .decl_sources = stored_decl_sources,
+    });
+    try units.append(.{
+        .kind = .module,
+        .name = submodule_header.name,
+        .owner_name = submodule_header.parent_name,
+        .owner_kind = .module,
+        .args = &.{},
+        .decls = @constCast(stored_decls),
+        .decl_sources = @constCast(stored_decl_sources),
+        .stmts = &.{},
+        .expr_sources = &.{},
+    });
+
+    if (!saw_contains) {
+        if (self.isSubmoduleEndAt(self.index) or self.isStandaloneEndAt(self.index)) self.index += 1;
+        return;
+    }
+
+    while (self.index < self.lines.len) {
+        root_diagnostics.noteFallbackForLine(self.diag_bag, self.lines[self.index]);
+        if (self.isSubmoduleEndAt(self.index) or self.isStandaloneEndAt(self.index)) {
+            self.index += 1;
+            return;
+        }
+
+        var unit = if (try parseInheritedModuleProcedureUnit(self, stored_decls))
+            |parsed| parsed
+        else
+            try self.parseProgramUnit();
+        unit.is_module_procedure = true;
+        unit.owner_name = submodule_header.name;
+        unit.owner_kind = .module;
+        if (stored_decls.len != 0) {
+            unit = try root_prelude.prependDecls(self.arena, unit, stored_decls, stored_decl_sources);
+        }
+        try units.append(unit);
+    }
+}
+
 pub fn parseProgramUnit(self: anytype) !ProgramUnit {
     if (self.index >= self.lines.len) return error.UnexpectedEOF;
     const expr_mark = self.expr_capture.mark();
@@ -217,6 +345,92 @@ pub fn parseProgramUnit(self: anytype) !ProgramUnit {
         unit.owner_kind = self.pending_owner_kind;
     }
     return unit;
+}
+
+fn parseInheritedModuleProcedureUnit(self: anytype, available_decls: []const Decl) !?ProgramUnit {
+    if (self.index >= self.lines.len) return null;
+    const line = self.lines[self.index];
+    const tokens = self.tokensForIndex(self.index) catch return null;
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("MODULE")) return null;
+    if (!lp.consumeKeyword("PROCEDURE")) return null;
+    _ = stmt.action_stmt.consumeDoubleColon(&lp);
+    const procedure_name = lp.readName(self.arena) orelse return error.MissingName;
+
+    const proc_header = findInheritedInterfaceProcedure(available_decls, procedure_name);
+    const header: ProgramUnitHeader = if (proc_header) |proc|
+        try programUnitHeaderFromInterfaceProcedure(self.arena, proc)
+    else blk: {
+        self.diag_bag.set(
+            line.span.start_line,
+            if (line.segments.len > 0) line.segments[0].column else 1,
+            catalog.parser.unexpected_token.code,
+            "must be in a generic module interface",
+            line.text,
+        );
+        break :blk .{
+            .kind = .subroutine,
+            .name = procedure_name,
+            .is_module_procedure = true,
+            .pure = false,
+            .elemental = false,
+            .bind_name = null,
+            .result_name = null,
+            .args = &.{},
+            .alt_return_dummy_count = 0,
+            .type_decl = null,
+        };
+    };
+
+    const expr_mark = self.expr_capture.mark();
+    self.index += 1;
+    return try self.parseProgramUnitBody(header, false, line, expr_mark);
+}
+
+fn findInheritedInterfaceProcedure(available_decls: []const Decl, procedure_name: []const u8) ?ast.InterfaceProcedure {
+    for (available_decls) |decl_node| {
+        if (decl_node != .interface_block) continue;
+        for (decl_node.interface_block.procedure_headers) |proc_header| {
+            if (std.ascii.eqlIgnoreCase(proc_header.name, procedure_name)) return proc_header;
+        }
+    }
+    return null;
+}
+
+fn programUnitHeaderFromInterfaceProcedure(
+    arena: std.mem.Allocator,
+    proc_header: ast.InterfaceProcedure,
+) !ProgramUnitHeader {
+    var type_decl: ?ast.Decl = null;
+    if (proc_header.type_spec) |type_spec| {
+        const decl_items = try arena.alloc(ast.Declarator, 1);
+        decl_items[0] = .{
+            .name = proc_header.name,
+            .dims = &.{},
+            .char_len = null,
+            .char_len_deferred = false,
+        };
+        type_decl = .{ .type_decl = .{
+            .type_kind = type_spec.type_kind,
+            .kind_selector = type_spec.kind_selector,
+            .derived_type_name = type_spec.derived_type_name,
+            .polymorphic = type_spec.polymorphic,
+            .items = decl_items,
+            .allocatable = false,
+        } };
+    }
+    return .{
+        .kind = proc_header.kind,
+        .name = proc_header.name,
+        .is_module_procedure = true,
+        .pure = proc_header.pure,
+        .elemental = proc_header.elemental,
+        .bind_name = proc_header.bind_name,
+        .result_name = proc_header.result_name,
+        .args = proc_header.args,
+        .alt_return_dummy_count = proc_header.alt_return_dummy_count,
+        .type_decl = type_decl,
+    };
 }
 
 pub fn parseProgramUnitBody(

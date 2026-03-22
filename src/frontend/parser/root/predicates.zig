@@ -53,6 +53,28 @@ pub fn isModuleHeaderTokens(line: logical_line.LogicalLine, tokens: []lexer.Toke
     return lp.peek() == null;
 }
 
+pub fn isSubmoduleHeaderTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("SUBMODULE")) return false;
+    if (!lp.consume(.l_paren)) return false;
+    const ancestor = lp.peek() orelse return false;
+    if (ancestor.kind != .identifier) return false;
+    _ = lp.next();
+    const parent = lp.peek() orelse return false;
+    if (parent.kind == .colon) {
+        _ = lp.next();
+        const descendant = lp.peek() orelse return false;
+        if (descendant.kind != .identifier) return false;
+        _ = lp.next();
+        if (lp.peekIs(.colon)) return false;
+    }
+    if (!lp.consume(.r_paren)) return false;
+    const name = lp.peek() orelse return false;
+    if (name.kind != .identifier) return false;
+    _ = lp.next();
+    return lp.peek() == null;
+}
+
 pub fn isModuleEndLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {
     const tokens = lexer.lexLogicalLine(arena, line) catch return false;
     defer arena.free(tokens);
@@ -63,6 +85,12 @@ pub fn isModuleEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) 
     var lp = LineParser.init(line, tokens);
     if (!lp.consumeKeyword("END")) return false;
     return lp.consumeKeyword("MODULE");
+}
+
+pub fn isSubmoduleEndTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("END")) return false;
+    return lp.consumeKeyword("SUBMODULE");
 }
 
 pub fn isContainsLine(arena: std.mem.Allocator, line: logical_line.LogicalLine) bool {

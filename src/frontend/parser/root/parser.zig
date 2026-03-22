@@ -114,10 +114,22 @@ pub const Parser = struct {
         return root_predicates.isModuleEndTokens(line, tokens);
     }
 
+    pub fn isSubmoduleEndAt(self: *Parser, line_index: usize) bool {
+        const line = self.lines[line_index];
+        const tokens = self.maybeTokensForIndex(line_index) orelse return false;
+        return root_predicates.isSubmoduleEndTokens(line, tokens);
+    }
+
     fn isModuleHeaderAt(self: *Parser, line_index: usize) bool {
         const line = self.lines[line_index];
         const tokens = self.maybeTokensForIndex(line_index) orelse return false;
         return root_predicates.isModuleHeaderTokens(line, tokens);
+    }
+
+    fn isSubmoduleHeaderAt(self: *Parser, line_index: usize) bool {
+        const line = self.lines[line_index];
+        const tokens = self.maybeTokensForIndex(line_index) orelse return false;
+        return root_predicates.isSubmoduleHeaderTokens(line, tokens);
     }
 
     pub fn isContainsAt(self: *Parser, line_index: usize) bool {
@@ -152,8 +164,16 @@ pub const Parser = struct {
                 self.index += 1;
                 continue;
             }
+            if (self.isSubmoduleEndAt(self.index)) {
+                self.index += 1;
+                continue;
+            }
             if (self.isModuleHeaderAt(self.index)) {
                 try self.parseModuleContainer(&units);
+                continue;
+            }
+            if (self.isSubmoduleHeaderAt(self.index)) {
+                try self.parseSubmoduleContainer(&units);
                 continue;
             }
             const unit = try self.parseProgramUnit();
@@ -170,6 +190,10 @@ pub const Parser = struct {
 
     pub fn parseModuleContainer(self: *Parser, units: *std.array_list.Managed(ProgramUnit)) !void {
         return root_units.parseModuleContainer(self, units);
+    }
+
+    pub fn parseSubmoduleContainer(self: *Parser, units: *std.array_list.Managed(ProgramUnit)) !void {
+        return root_units.parseSubmoduleContainer(self, units);
     }
 
     pub fn parseProgramUnit(self: *Parser) !ProgramUnit {

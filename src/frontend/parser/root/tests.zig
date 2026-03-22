@@ -1445,3 +1445,43 @@ test "parseProgram handles reduced array_constructor_34 nested constructor assig
 
     try testing.expectEqual(@as(usize, 1), program.units.len);
 }
+
+test "parseProgram parses submodule container and inherited module procedure implementation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module mod\n" ++
+        "  interface myfun\n" ++
+        "    module function fun1(n) result(y)\n" ++
+        "      integer, intent(in) :: n\n" ++
+        "      real, dimension(n) :: y\n" ++
+        "    end function fun1\n" ++
+        "  end interface myfun\n" ++
+        "end module mod\n" ++
+        "\n" ++
+        "submodule (mod) submod\n" ++
+        "contains\n" ++
+        "  module procedure fun1\n" ++
+        "    integer :: i\n" ++
+        "    y = [(float(i), i = 1, n)]\n" ++
+        "  end procedure fun1\n" ++
+        "end submodule\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 3), program.units.len);
+    try testing.expectEqual(ast.ProgramUnitKind.module, program.units[1].kind);
+    try testing.expectEqualStrings("submod", program.units[1].name);
+    try testing.expectEqual(ast.ProgramUnitKind.function, program.units[2].kind);
+    try testing.expect(program.units[2].is_module_procedure);
+    try testing.expectEqualStrings("submod", program.units[2].owner_name.?);
+    try testing.expectEqualStrings("fun1", program.units[2].name);
+    try testing.expectEqualStrings("y", program.units[2].result_name.?);
+    try testing.expectEqual(@as(usize, 1), program.units[2].args.len);
+    try testing.expectEqualStrings("n", program.units[2].args[0]);
+}

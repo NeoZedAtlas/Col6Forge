@@ -38,6 +38,11 @@ pub const ProgramUnitHeader = struct {
     type_decl: ?ast.Decl,
 };
 
+pub const SubmoduleHeader = struct {
+    parent_name: []const u8,
+    name: []const u8,
+};
+
 pub fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_data_counter: *usize) !ProgramUnitHeader {
     var kind: ProgramUnitKind = undefined;
     var type_info: ?TypeInfo = null;
@@ -437,6 +442,23 @@ pub fn parseTypeBoundProcedureBindings(
         if (!lp.consume(.comma)) break;
     }
     return out.toOwnedSlice();
+}
+
+pub fn parseSubmoduleHeader(arena: std.mem.Allocator, lp: *LineParser) !SubmoduleHeader {
+    if (!lp.consumeKeyword("SUBMODULE")) return error.UnexpectedToken;
+    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+
+    var parent_name = lp.readName(arena) orelse return error.MissingName;
+    if (lp.consume(.colon)) {
+        parent_name = lp.readName(arena) orelse return error.MissingName;
+        if (lp.consume(.colon)) return error.UnexpectedToken;
+    }
+    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+
+    return .{
+        .parent_name = parent_name,
+        .name = lp.readName(arena) orelse return error.MissingName,
+    };
 }
 
 fn lineParserHasBindingTarget(lp: *const LineParser) bool {
