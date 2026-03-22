@@ -206,6 +206,35 @@ test "parseProgram imports visible derived types into fixed-form contained proce
     }
 }
 
+test "parseProgram continues after module ended by bare END in free form" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module my_module\n" ++
+        "  implicit none\n" ++
+        "  type, abstract, public :: a\n" ++
+        "  end type\n" ++
+        "end\n" ++
+        "\n" ++
+        "program main\n" ++
+        "  use my_module\n" ++
+        "  implicit none\n" ++
+        "end program\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+    try testing.expectEqual(ast.ProgramUnitKind.module, program.units[0].kind);
+    try testing.expectEqual(ast.ProgramUnitKind.program, program.units[1].kind);
+    try testing.expectEqualStrings("my_module", program.units[0].name);
+    try testing.expectEqualStrings("main", program.units[1].name);
+}
+
 test "parseProgram handles PURE REAL(kind) function header" {
     const testing = std.testing;
     const allocator = testing.allocator;

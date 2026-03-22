@@ -1571,6 +1571,34 @@ test "parseStatement parses ASSOCIATE block" {
     try testing.expectEqual(@as(usize, 3), idx);
 }
 
+test "parseStatement parses CALL with chained type-bound component and no explicit args" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "CALL obj%middle%proc_b\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+    try testing.expect(stmt_node.node == .call);
+    try testing.expectEqualStrings("proc_b", stmt_node.node.call.name);
+    try testing.expectEqual(@as(usize, 0), stmt_node.node.call.args.len);
+    try testing.expect(stmt_node.node.call.binding_base != null);
+    try testing.expect(stmt_node.node.call.binding_base.?.* == .component);
+    try testing.expectEqualStrings("middle", stmt_node.node.call.binding_base.?.component.name);
+    try testing.expect(stmt_node.node.call.binding_base.?.component.base.* == .identifier);
+    try testing.expectEqualStrings("obj", stmt_node.node.call.binding_base.?.component.base.identifier);
+    try testing.expectEqual(@as(usize, 1), idx);
+}
+
 test "parseStatement rejects trailing tokens after DEALLOCATE" {
     const testing = std.testing;
     const allocator = testing.allocator;

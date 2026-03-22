@@ -98,7 +98,7 @@ pub fn parseActionStmtNode(
                 const call_source = currentSource(lp.*);
                 var scan_lp = lp.*;
                 const scan_expr = expr.parseExpr(&scan_lp, arena, 0) catch null;
-                if (scan_expr != null and scan_expr.?.* == .component and scan_expr.?.component.has_parens) {
+                if (scan_expr != null and scan_expr.?.* == .component) {
                     lp.* = scan_lp;
                     var comp_args = std.array_list.Managed(CallArg).init(arena);
                     for (scan_expr.?.component.args) |arg| {

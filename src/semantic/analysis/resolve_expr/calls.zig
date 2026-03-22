@@ -313,7 +313,7 @@ fn requiresExplicitInterfaceForActuals(
     if (symbols_mod.lookupKnownProcedureSig(self, name) != null) return false;
     for (args) |arg| {
         const spec = deps.exprTypeSpecCached(self, arg) catch continue;
-        if (spec.lowered_kind == .derived and spec.polymorphic and spec.derived_type_name == null) return true;
+        if (spec.lowered_kind == .derived and spec.polymorphic) return true;
     }
     return false;
 }

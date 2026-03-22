@@ -82,6 +82,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .procedure => return error.UnexpectedTypeDecl,
         .derived_type_def => |derived| {
+            if (isImportedPreludeDecl(self)) return;
             try validateDerivedTypeDef(self, derived);
         },
         .import => {},
@@ -238,6 +239,13 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
     }
 }
 
+fn isImportedPreludeDecl(self: *context.Context) bool {
+    const decl_idx = self.current_decl_index orelse return false;
+    if (decl_idx >= self.unit.prelude_decl_count) return false;
+    const decl_source = self.current_decl_source orelse return false;
+    return decl_source.owner_name != null;
+}
+
 fn validateDerivedTypeDef(self: *context.Context, derived: ast.DerivedTypeDef) !void {
     var first_error: ?anyerror = null;
 
@@ -301,6 +309,10 @@ fn validateDerivedBinding(
         setBindingDiagnostic(self, binding, "should be declared DEFERRED");
         return error.DuplicateDeclaration;
     }
+    if (!binding.deferred and binding.interface_name == null and !bindingModuleImplementationExists(self, binding)) {
+        setBindingDiagnostic(self, binding, "must be a module procedure");
+        return error.UnexpectedTypeDecl;
+    }
     if (validatePassedObjectDummyConstraints(self, binding)) |err| {
         return err;
     }
@@ -320,6 +332,11 @@ fn bindingImplementationExists(self: *context.Context, binding: ast.TypeBoundPro
     const impl_name = binding.implementation_name orelse binding.name;
     if (lookupQualifiedProcedureSig(self, binding.owner_name, impl_name) != null) return true;
     return symbols_mod.lookupKnownProcedureSig(self, impl_name) != null;
+}
+
+fn bindingModuleImplementationExists(self: *context.Context, binding: ast.TypeBoundProcedureBinding) bool {
+    const impl_name = binding.implementation_name orelse binding.name;
+    return lookupQualifiedProcedureSig(self, binding.owner_name, impl_name) != null;
 }
 
 fn bindingOverridesConcreteParent(

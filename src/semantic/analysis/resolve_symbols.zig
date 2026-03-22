@@ -57,6 +57,12 @@ pub fn lookupDerivedComponent(
             if (std.ascii.eqlIgnoreCase(component.name, component_name)) return component;
         }
         const parent = current.parent_name orelse return null;
+        if (std.ascii.eqlIgnoreCase(parent, component_name)) {
+            return .{
+                .name = parent,
+                .type_spec = TypeSpec.fromDerived(parent),
+            };
+        }
         current = lookupDerivedType(self, parent) orelse return null;
     }
 }

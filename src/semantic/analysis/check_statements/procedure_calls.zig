@@ -5,6 +5,7 @@ const symbols = @import("../../symbol/mod.zig");
 const context = @import("../context.zig");
 const resolve_expr = @import("../resolve_expr.zig");
 const resolve_symbols = @import("../resolve_symbols.zig");
+const abstract_expr_use = @import("abstract_expr_use.zig");
 const leaf_helpers = @import("leaf_helpers.zig");
 const procedure_interfaces = @import("procedure_interfaces.zig");
 
@@ -97,9 +98,26 @@ pub fn checkTypeBoundProcedureComponent(
     is_call_stmt: bool,
     comptime deps: anytype,
 ) CheckError!void {
-    const sig = typeBoundProcedureSig(self, binding) orelse return;
-    if (is_call_stmt and sig.kind != .subroutine) return error.InvalidArgumentCount;
-    if (!is_call_stmt and sig.kind != .function) return error.InvalidSubscript;
+    if (abstractPassedObjectTypeName(self, passed_object)) |derived_name| {
+        return emitAbstractPassedObjectDiagnostic(
+            self,
+            passed_object,
+            derived_name,
+            if (is_call_stmt) error.InvalidArgumentCount else error.InvalidSubscript,
+        );
+    }
+    const sig = typeBoundProcedureSig(self, binding) orelse {
+        return if (is_call_stmt)
+            emitProcedureActualDiagnostic(self, passed_object, error.InvalidArgumentCount, "should be a SUBROUTINE")
+        else
+            emitProcedureActualDiagnostic(self, passed_object, error.InvalidSubscript, "should be a FUNCTION");
+    };
+    if (is_call_stmt and sig.kind != .subroutine) {
+        return emitProcedureActualDiagnostic(self, passed_object, error.InvalidArgumentCount, "should be a SUBROUTINE");
+    }
+    if (!is_call_stmt and sig.kind != .function) {
+        return emitProcedureActualDiagnostic(self, passed_object, error.InvalidSubscript, "should be a FUNCTION");
+    }
     if (binding.nopass and resolve_expr.exprRank(self, passed_object) != 0) {
         return emitProcedureActualDiagnostic(self, passed_object, error.InvalidArgumentCount, "must be scalar");
     }
@@ -257,9 +275,10 @@ pub fn checkExplicitInterfaceRequirementForCallArgs(
 ) CheckError!void {
     if (procedure_interfaces.calleeHasVisibleExplicitInterface(self, name)) return;
     const has_procedure_actual = hasProcedureActualCallArg(self, args);
+    const has_interface_sensitive_actual = hasExplicitInterfaceSensitiveCallArg(self, args);
     if (symbol_idx orelse resolve_symbols.findSymbolIndex(self, name)) |idx| {
         const sym = self.symbols.items[idx];
-        if (sym.is_intrinsic or (sym.is_external and !has_procedure_actual)) return;
+        if (sym.is_intrinsic or (sym.is_external and !has_procedure_actual and !has_interface_sensitive_actual)) return;
     }
     for (args) |arg| {
         if (arg != .expr) continue;
@@ -290,9 +309,10 @@ pub fn checkExplicitInterfaceRequirementForExprArgs(
 ) CheckError!void {
     if (procedure_interfaces.calleeHasVisibleExplicitInterface(self, name)) return;
     const has_procedure_actual = hasProcedureActualExprArg(self, args);
+    const has_interface_sensitive_actual = hasExplicitInterfaceSensitiveExprArg(self, args);
     if (symbol_idx orelse resolve_symbols.findSymbolIndex(self, name)) |idx| {
         const sym = self.symbols.items[idx];
-        if (sym.is_intrinsic or (sym.is_external and !has_procedure_actual)) return;
+        if (sym.is_intrinsic or (sym.is_external and !has_procedure_actual and !has_interface_sensitive_actual)) return;
     }
     for (args) |arg| {
         if (procedure_interfaces.requiresExplicitInterfaceForActual(self, arg)) {
@@ -400,6 +420,7 @@ fn checkTypeBoundProcedureActual(
     if (formal.is_procedure) {
         return checkProcedureActualArg(self, formal, actual_expr, deps);
     }
+    try abstract_expr_use.rejectNonpolymorphicAbstractExprUse(self, actual_expr, error.InvalidArgumentCount);
     const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
     if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
         self.setCurrentSource(self.sourceForExpr(actual_expr));
@@ -435,6 +456,7 @@ fn checkProcedureActualArg(
     actual_expr: *ast.Expr,
     comptime deps: anytype,
 ) CheckError!void {
+    try abstract_expr_use.rejectNonpolymorphicAbstractExprUse(self, actual_expr, error.InvalidArgumentCount);
     if (!formal.is_procedure) return;
     switch (actual_expr.*) {
         .identifier => |name| {
@@ -602,6 +624,34 @@ fn emitProcedureActualDiagnostic(
     return err;
 }
 
+fn abstractPassedObjectTypeName(self: *context.Context, expr: *ast.Expr) ?[]const u8 {
+    const spec = resolve_expr.exprTypeSpec(self, expr) catch return null;
+    if (spec.lowered_kind != .derived or spec.polymorphic) return null;
+    const derived_name = spec.derived_type_name orelse return null;
+    const derived_info = resolve_symbols.lookupDerivedType(self, derived_name) orelse return null;
+    if (!derived_info.abstract) return null;
+    return derived_name;
+}
+
+fn emitAbstractPassedObjectDiagnostic(
+    self: *context.Context,
+    expr: *ast.Expr,
+    derived_name: []const u8,
+    err: anyerror,
+) CheckError {
+    const source = self.sourceForExpr(expr) orelse ast.SourceRef{};
+    const message = std.fmt.allocPrint(self.arena, "is of the ABSTRACT type '{s}'", .{derived_name}) catch "is of the ABSTRACT type";
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.invalid_argument_count.code,
+        message,
+        source.text,
+    );
+    self.setCurrentSource(source);
+    return err;
+}
+
 fn hasProcedureActualCallArg(self: *context.Context, args: []const ast.CallArg) bool {
     for (args) |arg| {
         if (arg != .expr) continue;
@@ -613,6 +663,21 @@ fn hasProcedureActualCallArg(self: *context.Context, args: []const ast.CallArg) 
 fn hasProcedureActualExprArg(self: *context.Context, args: []*ast.Expr) bool {
     for (args) |arg| {
         if (procedure_interfaces.isProcedureActualExpr(self, arg)) return true;
+    }
+    return false;
+}
+
+fn hasExplicitInterfaceSensitiveCallArg(self: *context.Context, args: []const ast.CallArg) bool {
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        if (procedure_interfaces.requiresExplicitInterfaceForActual(self, arg.expr.value)) return true;
+    }
+    return false;
+}
+
+fn hasExplicitInterfaceSensitiveExprArg(self: *context.Context, args: []*ast.Expr) bool {
+    for (args) |arg| {
+        if (procedure_interfaces.requiresExplicitInterfaceForActual(self, arg)) return true;
     }
     return false;
 }

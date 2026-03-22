@@ -390,6 +390,334 @@ test "unnamed explicit interface body in module prelude is callable from contain
     try testing.expect(diag.take() == null);
 }
 
+test "contained procedure does not revalidate imported derived binding prelude" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  type, abstract :: top\n" ++
+        "  contains\n" ++
+        "    procedure(xxx), deferred :: proc_a\n" ++
+        "  end type top\n" ++
+        "contains\n" ++
+        "  subroutine s\n" ++
+        "  end subroutine s\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    var unit = program.units[1];
+    var analyzer_instance = UnitAnalyzer.initWithDiagnostics(
+        arena.allocator(),
+        &unit,
+        &program.units,
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+        &diag_bag,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    try testing.expectEqual(@as(usize, 0), diag_bag.count());
+}
+
+test "type-bound function called by CALL reports should be a SUBROUTINE" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: t\n" ++
+        "  contains\n" ++
+        "    procedure :: f\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "  integer function f(this)\n" ++
+        "    class(t) :: this\n" ++
+        "    f = 1\n" ++
+        "  end function f\n" ++
+        "  subroutine s(obj)\n" ++
+        "    class(t) :: obj\n" ++
+        "    call obj%f\n" ++
+        "  end subroutine s\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 3), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expectEqualStrings("should be a SUBROUTINE", got.message);
+}
+
+test "parent component selector supports type-bound CALL" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: middle\n" ++
+        "  contains\n" ++
+        "    procedure :: p\n" ++
+        "  end type middle\n" ++
+        "  type, extends(middle) :: bottom\n" ++
+        "  end type bottom\n" ++
+        "contains\n" ++
+        "  subroutine p(this)\n" ++
+        "    class(middle) :: this\n" ++
+        "  end subroutine p\n" ++
+        "  subroutine s(obj)\n" ++
+        "    class(bottom) :: obj\n" ++
+        "    call obj%middle%p\n" ++
+        "  end subroutine s\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 3), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = try analyzer_instance.analyze();
+    try testing.expect(diag.take() == null);
+}
+
+test "polymorphic actual requires explicit interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: t\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "  subroutine s(obj)\n" ++
+        "    class(t) :: obj\n" ++
+        "    call missing_proc(obj)\n" ++
+        "  end subroutine s\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expectEqualStrings(catalog.semantic.explicit_interface_required.code, got.code);
+}
+
+test "abstract parent component binding call is rejected" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type, abstract :: abstract_t\n" ++
+        "  contains\n" ++
+        "    procedure, nopass :: proc\n" ++
+        "  end type abstract_t\n" ++
+        "  type, extends(abstract_t) :: concrete_t\n" ++
+        "  end type concrete_t\n" ++
+        "contains\n" ++
+        "  subroutine proc()\n" ++
+        "  end subroutine proc\n" ++
+        "  subroutine test(obj)\n" ++
+        "    type(concrete_t) :: obj\n" ++
+        "    call obj%abstract_t%proc()\n" ++
+        "  end subroutine test\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 3), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expect(std.mem.indexOf(u8, got.message, "is of the ABSTRACT type") != null);
+}
+
+test "nonpolymorphic abstract parent reference is rejected" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "implicit none\n" ++
+        "type, abstract :: parent\n" ++
+        "  integer :: i\n" ++
+        "end type\n" ++
+        "type, extends(parent) :: child\n" ++
+        "  class(parent), pointer :: comp\n" ++
+        "end type\n" ++
+        "type(child), target :: c1\n" ++
+        "class(parent), pointer :: cp\n" ++
+        "cp => c1%parent\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expect(std.mem.indexOf(u8, got.message, "Nonpolymorphic reference to abstract type") != null);
+}
+
 test "defined assignment declared with procedure is accepted for incompatible intrinsic types" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -460,6 +788,32 @@ test "non-abstract type rejects deferred binding" {
     const got = diag.take() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.duplicate_declaration.code));
     try testing.expect(std.mem.indexOf(u8, got.message, "is not ABSTRACT") != null);
+}
+
+test "type-bound binding target must be a module procedure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: t\n" ++
+        "  contains\n" ++
+        "    procedure :: p => missing_p\n" ++
+        "  end type t\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.UnexpectedTypeDecl, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.duplicate_declaration.code));
+    try testing.expect(std.mem.indexOf(u8, got.message, "must be a module procedure") != null);
 }
 
 test "type-bound PASS dummy must not be pointer" {

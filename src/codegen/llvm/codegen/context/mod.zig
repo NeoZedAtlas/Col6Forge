@@ -379,6 +379,17 @@ pub const Context = struct {
                 if (std.ascii.eqlIgnoreCase(component.name, component_name)) return component;
             }
             const parent_name = current.parent_name orelse return null;
+            if (std.ascii.eqlIgnoreCase(parent_name, component_name)) {
+                const parent_layout = self.findDerivedTypeLayout(parent_name) orelse return null;
+                return .{
+                    .name = parent_name,
+                    .type_spec = input.TypeSpec.fromDerived(parent_name),
+                    .offset = 0,
+                    .elem_size = parent_layout.size,
+                    .size = parent_layout.size,
+                    .alignment = parent_layout.alignment,
+                };
+            }
             current = self.findDerivedTypeLayout(parent_name) orelse return null;
         }
     }

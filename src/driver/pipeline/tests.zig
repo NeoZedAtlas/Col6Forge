@@ -244,6 +244,38 @@ test "runPipelineWithOptionsAndDiagnostics rejects abstract type array construct
     try testing.expect(std.mem.indexOf(u8, diag_info.message, "is of the ABSTRACT type") != null);
 }
 
+test "runPipelineWithOptionsAndDiagnostics accepts parent abstract component data access" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type, abstract :: abstract_t\n" ++
+        "    integer :: i\n" ++
+        "  end type abstract_t\n" ++
+        "  type, extends(abstract_t) :: concrete_t\n" ++
+        "  end type concrete_t\n" ++
+        "contains\n" ++
+        "  subroutine test()\n" ++
+        "    type(concrete_t) :: obj\n" ++
+        "    obj%abstract_t%i = 42\n" ++
+        "  end subroutine test\n" ++
+        "end module m\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "abstract_parent_component_pipeline.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    const result = try runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag);
+    defer allocator.free(result.output);
+    try testing.expect(!diag_bag.has());
+}
+
 test "runPipelineWithOptionsAndDiagnostics accepts repository array_constructor_14 contents" {
     const testing = std.testing;
     const allocator = testing.allocator;

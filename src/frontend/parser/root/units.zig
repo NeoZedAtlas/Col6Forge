@@ -33,6 +33,32 @@ pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(Progra
     while (self.index < self.lines.len) {
         const line = self.lines[self.index];
         root_diagnostics.noteFallbackForLine(self.diag_bag, line);
+        if (self.isStandaloneEndAt(self.index)) {
+            var stored_decls: []const Decl = try module_decls.toOwnedSlice();
+            var stored_decl_sources: []const DeclSource = try module_decl_sources.toOwnedSlice();
+            if (module_uses.items.len != 0) {
+                const imported = try root_prelude.importPreludeDecls(self.arena, stored_decls, stored_decl_sources, module_uses.items, &self.module_preludes, self.diag_bag);
+                stored_decls = imported.decls;
+                stored_decl_sources = imported.decl_sources;
+            }
+            stored_decls = try root_binding_owners.annotateDeclBindingOwners(self.arena, stored_decls, module_name, .module);
+            stored_decl_sources = try root_prelude.annotateDeclSourcesOwner(self.arena, stored_decl_sources, module_name);
+            try self.module_preludes.put(module_name, .{
+                .decls = stored_decls,
+                .decl_sources = stored_decl_sources,
+            });
+            try units.append(.{
+                .kind = .module,
+                .name = module_name,
+                .args = &.{},
+                .decls = @constCast(stored_decls),
+                .decl_sources = @constCast(stored_decl_sources),
+                .stmts = &.{},
+                .expr_sources = &.{},
+            });
+            self.index += 1;
+            return;
+        }
         if (self.isModuleEndAt(self.index)) {
             var stored_decls: []const Decl = try module_decls.toOwnedSlice();
             var stored_decl_sources: []const DeclSource = try module_decl_sources.toOwnedSlice();
@@ -136,7 +162,7 @@ pub fn parseModuleContainer(self: anytype, units: *std.array_list.Managed(Progra
         }
         if (self.isStandaloneEndAt(self.index)) {
             self.index += 1;
-            continue;
+            return;
         }
         var unit = try self.parseProgramUnit();
         unit.owner_name = module_name;

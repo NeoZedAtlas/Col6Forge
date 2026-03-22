@@ -11,6 +11,7 @@ const select_type_checks = @import("select_type.zig");
 const allocate_checks = @import("allocate/mod.zig");
 const procedure_calls = @import("procedure_calls.zig");
 const expr_semantics = @import("expr_semantics.zig");
+const abstract_expr_use = @import("abstract_expr_use.zig");
 
 pub const CheckError = anyerror;
 
@@ -33,6 +34,8 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             const value_ty = try expr_semantics.checkExprType(self, assign.value, .{
                 .dummyArgTypeCompatible = dummyArgTypeCompatible,
             });
+            try abstract_expr_use.rejectNonpolymorphicAbstractExprUse(self, assign.target, error.AssignmentTypeMismatch);
+            try abstract_expr_use.rejectNonpolymorphicAbstractExprUse(self, assign.value, error.AssignmentTypeMismatch);
             if (!expr_semantics.isAssignmentTarget(self, assign.target)) {
                 self.setCurrentSource(self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
@@ -53,6 +56,8 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             _ = try expr_semantics.checkExprType(self, assign.value, .{
                 .dummyArgTypeCompatible = dummyArgTypeCompatible,
             });
+            try abstract_expr_use.rejectNonpolymorphicAbstractExprUse(self, assign.target, error.AssignmentTypeMismatch);
+            try abstract_expr_use.rejectNonpolymorphicAbstractExprUse(self, assign.value, error.AssignmentTypeMismatch);
             if (!expr_semantics.isPointerTarget(self, assign.target)) {
                 const source = self.sourceForExpr(assign.target) orelse ast.SourceRef{};
                 self.setDiagnostic(
