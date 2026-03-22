@@ -50,6 +50,7 @@ pub fn applyDeclarator(
     allocatable: bool,
     pointer: bool,
 ) !void {
+    try validateConcreteAbstractTypeUse(self, type_spec);
     const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
     var sym = &self.symbols.items[idx];
     if (explicit_type and sym.type_explicit) {
@@ -132,6 +133,26 @@ pub fn applyDeclarator(
         }
     }
     sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, length));
+}
+
+fn validateConcreteAbstractTypeUse(self: *context.Context, type_spec: symbols.TypeSpec) !void {
+    if (type_spec.lowered_kind != .derived or type_spec.polymorphic) return;
+    const derived_name = type_spec.derived_type_name orelse return;
+    const derived_info = symbols_mod.lookupDerivedType(self, derived_name) orelse return error.UnexpectedTypeDecl;
+    if (!derived_info.abstract) return;
+
+    const decl_source = self.current_decl_source orelse ast.DeclSource{};
+    const line = if (decl_source.line == 0) 1 else decl_source.line;
+    const column = if (decl_source.column == 0) 1 else decl_source.column;
+    const message = std.fmt.allocPrint(self.arena, "is of the ABSTRACT type '{s}'", .{derived_name}) catch "is of the ABSTRACT type";
+    self.setDiagnostic(
+        line,
+        column,
+        catalog.semantic.unexpected_type_decl.code,
+        message,
+        decl_source.text,
+    );
+    return error.UnexpectedTypeDecl;
 }
 
 fn allowsDeferredCharacterLength(self: *context.Context, sym: symbols.Symbol) bool {

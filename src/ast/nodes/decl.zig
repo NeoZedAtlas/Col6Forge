@@ -95,12 +95,14 @@ pub const TypeBoundProcedureBinding = struct {
     name: []const u8,
     owner_name: ?[]const u8 = null,
     owner_kind: ?@import("program.zig").LexicalOwnerKind = null,
+    source: @import("program.zig").DeclSource = .{},
     interface_name: ?[]const u8 = null,
     implementation_name: ?[]const u8 = null,
     deferred: bool = false,
     nopass: bool = false,
     pass_name: ?[]const u8 = null,
     non_overridable: bool = false,
+    syntax_error_message: ?[]const u8 = null,
 };
 
 pub const InterfaceBlock = struct {
@@ -157,6 +159,8 @@ pub const ImplicitRule = struct {
     type_kind: TypeKind,
     kind_selector: ?*Expr = null,
     char_len: ?*Expr,
+    derived_type_name: ?[]const u8 = null,
+    polymorphic: bool = false,
 };
 
 pub const NameListDecl = struct {

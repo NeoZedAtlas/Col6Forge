@@ -36,6 +36,39 @@ pub fn parseImplicitTypeKind(lp: *LineParser, arena: std.mem.Allocator) !Implici
         _ = try consumeDoublePrecisionType(lp);
         return .{ .type_kind = .double_precision, .kind_selector = null, .char_len = null };
     }
+    if (lp.consumeKeyword("TYPE")) {
+        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        const name = lp.readName(arena) orelse return error.MissingName;
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        return .{
+            .type_kind = .derived,
+            .kind_selector = null,
+            .char_len = null,
+            .derived_type_name = name,
+        };
+    }
+    if (lp.consumeKeyword("CLASS")) {
+        _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+        if (lp.consume(.star)) {
+            _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+            return .{
+                .type_kind = .derived,
+                .kind_selector = null,
+                .char_len = null,
+                .derived_type_name = null,
+                .polymorphic = true,
+            };
+        }
+        const name = lp.readName(arena) orelse return error.MissingName;
+        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        return .{
+            .type_kind = .derived,
+            .kind_selector = null,
+            .char_len = null,
+            .derived_type_name = name,
+            .polymorphic = true,
+        };
+    }
     return error.UnknownType;
 }
 

@@ -14,6 +14,8 @@ pub const ImplicitTypeSpec = struct {
     type_kind: TypeKind,
     kind_selector: ?*ast.Expr,
     char_len: ?*ast.Expr,
+    derived_type_name: ?[]const u8 = null,
+    polymorphic: bool = false,
 };
 
 pub const ParsedTypeSpec = struct {

@@ -83,6 +83,8 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
                     .type_kind = type_spec.type_kind,
                     .kind_selector = type_spec.kind_selector,
                     .char_len = type_spec.char_len,
+                    .derived_type_name = type_spec.derived_type_name,
+                    .polymorphic = type_spec.polymorphic,
                 });
                 _ = lp.consume(.comma);
             }

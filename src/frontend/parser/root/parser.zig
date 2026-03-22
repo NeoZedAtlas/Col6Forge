@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const catalog = @import("../../../common/error_catalog.zig");
 const logical_line = @import("../../logical_line.zig");
 const lexer = @import("../../lexer.zig");
 const context = @import("../token_stream.zig");
@@ -213,7 +214,33 @@ pub const Parser = struct {
         const header_line = self.lines[self.index];
         const header_tokens = try self.tokensForIndex(self.index);
         var lp = LineParser.init(header_line, header_tokens);
-        const header = try root_header.parseDerivedTypeHeader(self.arena, &lp);
+        const header = root_header.parseDerivedTypeHeader(self.arena, &lp) catch |err| switch (err) {
+            error.DuplicateAbstractAttribute => {
+                self.diag_bag.set(
+                    header_line.span.start_line,
+                    if (header_line.segments.len > 0) header_line.segments[0].column else 1,
+                    catalog.parser.unexpected_token.code,
+                    "Duplicate ABSTRACT attribute",
+                    header_line.text,
+                );
+                var scan_index = self.index + 1;
+                while (scan_index < self.lines.len) : (scan_index += 1) {
+                    const scan_line = self.lines[scan_index];
+                    const scan_tokens = self.tokensForIndex(scan_index) catch continue;
+                    if (!root_predicates.isDerivedTypeEndTokens(scan_line, scan_tokens)) continue;
+                    self.diag_bag.set(
+                        scan_line.span.start_line,
+                        if (scan_line.segments.len > 0) scan_line.segments[0].column else 1,
+                        catalog.parser.unexpected_token.code,
+                        "Expecting END MODULE statement",
+                        scan_line.text,
+                    );
+                    break;
+                }
+                return err;
+            },
+            else => return err,
+        };
         self.index += 1;
         var components = std.array_list.Managed(ast.TypeDecl).init(self.arena);
         var component_sources = std.array_list.Managed(DeclSource).init(self.arena);
@@ -263,7 +290,11 @@ pub const Parser = struct {
                     root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, line, body_lp, err);
                     return err;
                 };
-                try bindings.appendSlice(type_bound_bindings);
+                for (type_bound_bindings) |binding| {
+                    var stored = binding;
+                    stored.source = root_diagnostics.sourceFromLine(line);
+                    try bindings.append(stored);
+                }
             }
             self.index += 1;
         }

@@ -284,6 +284,7 @@ pub fn parseDerivedTypeHeader(arena: std.mem.Allocator, lp: *LineParser) !Derive
     var header: DerivedTypeHeader = .{ .name = "" };
     while (lp.consume(.comma)) {
         if (lp.consumeKeyword("ABSTRACT")) {
+            if (header.abstract) return error.DuplicateAbstractAttribute;
             header.abstract = true;
             continue;
         }
@@ -320,8 +321,20 @@ pub fn parseTypeBoundProcedureBindings(
     if (!lp.consumeKeyword("PROCEDURE")) return error.UnexpectedToken;
 
     var interface_name: ?[]const u8 = null;
+    var syntax_error_message: ?[]const u8 = null;
     if (lp.consume(.l_paren)) {
-        interface_name = lp.readName(arena) orelse return error.MissingName;
+        if (lp.peekIs(.r_paren)) {
+            syntax_error_message = "Interface-name expected";
+        } else {
+            interface_name = lp.readName(arena) orelse return error.MissingName;
+            if (!lp.peekIs(.r_paren)) {
+                syntax_error_message = "')' expected";
+                while (lp.peek()) |tok| {
+                    if (tok.kind == .r_paren) break;
+                    _ = lp.next();
+                }
+            }
+        }
         _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
     }
 
@@ -334,6 +347,7 @@ pub fn parseTypeBoundProcedureBindings(
         if (consumeDoubleColon(lp)) break;
         const attr_name = lp.readName(arena) orelse return error.MissingName;
         if (std.ascii.eqlIgnoreCase(attr_name, "DEFERRED")) {
+            if (deferred and syntax_error_message == null) syntax_error_message = "Duplicate DEFERRED";
             deferred = true;
         } else if (std.ascii.eqlIgnoreCase(attr_name, "NOPASS")) {
             nopass = true;
@@ -366,6 +380,7 @@ pub fn parseTypeBoundProcedureBindings(
             .nopass = nopass,
             .pass_name = pass_name,
             .non_overridable = non_overridable,
+            .syntax_error_message = syntax_error_message,
         });
         if (!lp.consume(.comma)) break;
     }

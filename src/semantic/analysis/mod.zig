@@ -8,6 +8,7 @@ const check_units = @import("check_units.zig");
 const diag = @import("../diagnostic.zig");
 const free_form = @import("../../frontend/free_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
+const split_api = @import("../split/api/mod.zig");
 
 pub const UnitAnalyzer = struct {
     ctx: context.Context,
@@ -429,4 +430,246 @@ test "defined assignment declared with procedure is accepted for incompatible in
     const program = try parser.parseProgram(arena.allocator(), lines);
     const sem = try @import("../split/api/mod.zig").analyzeProgram(arena.allocator(), program);
     try testing.expectEqual(@as(usize, 4), sem.units.len);
+}
+
+test "non-abstract type rejects deferred binding" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  abstract interface\n" ++
+        "    subroutine intf()\n" ++
+        "    end subroutine intf\n" ++
+        "  end interface\n" ++
+        "  type :: t\n" ++
+        "  contains\n" ++
+        "    procedure(intf), deferred, nopass :: p\n" ++
+        "  end type t\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.DuplicateDeclaration, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.duplicate_declaration.code));
+    try testing.expect(std.mem.indexOf(u8, got.message, "is not ABSTRACT") != null);
+}
+
+test "type-bound PASS dummy must not be pointer" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: t\n" ++
+        "  contains\n" ++
+        "    procedure, pass :: p\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "  subroutine p(me)\n" ++
+        "    class(t), pointer, intent(in) :: me\n" ++
+        "  end subroutine p\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.DuplicateDeclaration, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.duplicate_declaration.code));
+    try testing.expect(std.mem.indexOf(u8, got.message, "must not be POINTER") != null);
+}
+
+test "nopass type-bound call rejects array base object" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: t\n" ++
+        "  contains\n" ++
+        "    procedure, nopass :: p\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "  subroutine p()\n" ++
+        "  end subroutine p\n" ++
+        "  subroutine test()\n" ++
+        "    type(t) :: arr(2)\n" ++
+        "    call arr%p()\n" ++
+        "  end subroutine test\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.InvalidArgumentCount, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.invalid_argument_count.code));
+    try testing.expect(std.mem.indexOf(u8, got.message, "must be scalar") != null);
+}
+
+test "non-polymorphic abstract type declaration is rejected" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type, abstract :: abst_t\n" ++
+        "  end type abst_t\n" ++
+        "  type(abst_t) :: x\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.UnexpectedTypeDecl, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.unexpected_type_decl.code));
+    try testing.expect(std.mem.indexOf(u8, got.message, "is of the ABSTRACT type") != null);
+}
+
+test "structure constructor rejects abstract type" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type, abstract :: abst_t\n" ++
+        "    integer :: x\n" ++
+        "  end type abst_t\n" ++
+        "contains\n" ++
+        "  subroutine s()\n" ++
+        "    class(abst_t), allocatable :: x\n" ++
+        "    x = abst_t(1)\n" ++
+        "  end subroutine s\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.InvalidArgumentCount, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "Cannot construct ABSTRACT type") != null);
+}
+
+test "implicit TYPE of abstract derived type is rejected" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type, abstract :: abst_t\n" ++
+        "  end type abst_t\n" ++
+        "contains\n" ++
+        "  subroutine s()\n" ++
+        "    implicit type(abst_t) (a-z)\n" ++
+        "  end subroutine s\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.UnexpectedTypeDecl, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "ABSTRACT type 'abst_t' used") != null);
+}
+
+test "array constructor rejects abstract type items" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type, abstract :: a\n" ++
+        "  end type a\n" ++
+        "  type, extends(a) :: b\n" ++
+        "  end type b\n" ++
+        "contains\n" ++
+        "  subroutine s()\n" ++
+        "    type(b) :: b_instance\n" ++
+        "    class(a), allocatable :: a_array(:)\n" ++
+        "    a_array = [a_array, b_instance]\n" ++
+        "  end subroutine s\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.AssignmentTypeMismatch, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "is of the ABSTRACT type") != null);
+}
+
+test "array constructor rejects abstract imported module type items" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module my_module\n" ++
+        "  implicit none\n" ++
+        "  private\n" ++
+        "  type, abstract, public :: a\n" ++
+        "  end type\n" ++
+        "  type, extends(a), public :: b\n" ++
+        "  end type\n" ++
+        "end\n" ++
+        "\n" ++
+        "program main\n" ++
+        "  use my_module\n" ++
+        "  implicit none\n" ++
+        "  type(b) :: b_instance\n" ++
+        "  class(a), allocatable :: a_array(:)\n" ++
+        "  class(b), allocatable :: b_array(:)\n" ++
+        "  a_array = [b_instance]\n" ++
+        "  b_array = [b_instance]\n" ++
+        "  a_array = [a_array]\n" ++
+        "end program\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.AssignmentTypeMismatch, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "is of the ABSTRACT type") != null);
 }

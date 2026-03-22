@@ -83,7 +83,11 @@ pub const Resolver = struct {
                     if (first_stmt_error == null) first_stmt_error = err;
                     ctx.recordSemanticError(err);
                 },
-                .derived_type_def => {},
+                .derived_type_def => specs.applySpec(ctx, decl) catch |err| {
+                    if (!ctx.usesExplicitDiagnosticBag()) return err;
+                    if (first_stmt_error == null) first_stmt_error = err;
+                    if (!hasCustomCurrentDiagnostic(ctx)) ctx.recordSemanticError(err);
+                },
                 else => specs.applySpec(ctx, decl) catch |err| {
                     if (!ctx.usesExplicitDiagnosticBag()) return err;
                     if (first_stmt_error == null) first_stmt_error = err;

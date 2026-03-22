@@ -100,6 +100,9 @@ pub fn checkTypeBoundProcedureComponent(
     const sig = typeBoundProcedureSig(self, binding) orelse return;
     if (is_call_stmt and sig.kind != .subroutine) return error.InvalidArgumentCount;
     if (!is_call_stmt and sig.kind != .function) return error.InvalidSubscript;
+    if (binding.nopass and resolve_expr.exprRank(self, passed_object) != 0) {
+        return emitProcedureActualDiagnostic(self, passed_object, error.InvalidArgumentCount, "must be scalar");
+    }
 
     const actual_count = args.len + @as(usize, if (binding.nopass) 0 else 1);
     const min_count = minimumRequiredProcedureArgs(sig);

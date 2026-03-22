@@ -14,6 +14,7 @@ const equivalence = @import("equivalence.zig");
 const resolvedDeclTypeSpec = helpers.resolvedDeclTypeSpec;
 const ensureImplicitRuleNoOverlap = helpers.ensureImplicitRuleNoOverlap;
 const setAttributeConflictDiagnostic = helpers.setAttributeConflictDiagnostic;
+const setSourceDiagnostic = helpers.setSourceDiagnostic;
 const setParameterNotConstantDiagnostic = helpers.setParameterNotConstantDiagnostic;
 const setParameterTypeMismatchDiagnostic = helpers.setParameterTypeMismatchDiagnostic;
 const hasCurrentUnitExplicitInterfaceProcedure = helpers.hasCurrentUnitExplicitInterfaceProcedure;
@@ -29,7 +30,23 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {
         .implicit => |imp| {
             for (imp.rules) |rule| {
-                const resolved_rule_type = try resolvedDeclTypeSpec(self, rule.type_kind, null, rule.kind_selector, false);
+                const resolved_rule_type = try resolvedDeclTypeSpec(
+                    self,
+                    rule.type_kind,
+                    rule.derived_type_name,
+                    rule.kind_selector,
+                    rule.polymorphic,
+                );
+                if (resolved_rule_type.lowered_kind == .derived and !resolved_rule_type.polymorphic) {
+                    if (resolved_rule_type.derived_type_name) |derived_name| {
+                        const derived_info = symbols_mod.lookupDerivedType(self, derived_name) orelse return error.UnexpectedTypeDecl;
+                        if (derived_info.abstract) {
+                            const message = std.fmt.allocPrint(self.arena, "ABSTRACT type '{s}' used", .{derived_name}) catch "ABSTRACT type used";
+                            setAttributeConflictDiagnostic(self, message);
+                            return error.UnexpectedTypeDecl;
+                        }
+                    }
+                }
                 const resolved_rule_kind = resolved_rule_type.lowered_kind;
                 try ensureImplicitRuleNoOverlap(self, rule.start, rule.end);
                 var char_len: ?usize = null;
@@ -64,7 +81,9 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
             }
         },
         .procedure => return error.UnexpectedTypeDecl,
-        .derived_type_def => {},
+        .derived_type_def => |derived| {
+            try validateDerivedTypeDef(self, derived);
+        },
         .import => {},
         .intent => {},
         .optional => {},
@@ -217,6 +236,219 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .type_decl => return error.UnexpectedTypeDecl,
     }
+}
+
+fn validateDerivedTypeDef(self: *context.Context, derived: ast.DerivedTypeDef) !void {
+    var first_error: ?anyerror = null;
+
+    if (derived.abstract and (derived.bind_c or derived.sequence)) {
+        setAttributeConflictDiagnostic(self, "must not be ABSTRACT");
+        first_error = error.DuplicateDeclaration;
+    }
+
+    for (derived.bindings) |binding| {
+        if (validateDerivedBinding(self, derived, binding)) |err| {
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_error == null) first_error = err;
+        }
+    }
+
+    if (!derived.abstract and typeHasDeferredBindingRequirement(self, derived)) {
+        setAttributeConflictDiagnostic(self, "must be ABSTRACT");
+        if (!self.usesExplicitDiagnosticBag()) return error.DuplicateDeclaration;
+        if (first_error == null) first_error = error.DuplicateDeclaration;
+    }
+
+    if (first_error) |err| return err;
+}
+
+fn validateDerivedBinding(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    binding: ast.TypeBoundProcedureBinding,
+) ?anyerror {
+    if (binding.syntax_error_message) |message| {
+        setBindingDiagnostic(self, binding, message);
+        return error.DuplicateDeclaration;
+    }
+    if (binding.deferred and !derived.abstract) {
+        setBindingDiagnostic(self, binding, "is not ABSTRACT");
+        return error.DuplicateDeclaration;
+    }
+    if (binding.deferred and binding.interface_name == null) {
+        setBindingDiagnostic(self, binding, "Interface must be specified");
+        return error.DuplicateDeclaration;
+    }
+    if (binding.deferred and binding.non_overridable) {
+        setBindingDiagnostic(self, binding, "cannot both be DEFERRED and NON_OVERRIDABLE");
+        return error.DuplicateDeclaration;
+    }
+    if (binding.deferred and binding.implementation_name != null) {
+        setBindingDiagnostic(self, binding, "binding is invalid for DEFERRED");
+        return error.DuplicateDeclaration;
+    }
+    if (binding.interface_name) |iface_name| {
+        if (!bindingInterfaceExists(self, binding, iface_name)) {
+            setBindingDiagnostic(self, binding, "must be explicit");
+            return error.UnexpectedTypeDecl;
+        }
+    }
+    if (binding.deferred and bindingOverridesConcreteParent(self, derived, binding.name)) {
+        setBindingDiagnostic(self, binding, "must not be DEFERRED");
+        return error.DuplicateDeclaration;
+    }
+    if (derived.abstract and !binding.deferred and binding.interface_name != null and !bindingImplementationExists(self, binding)) {
+        setBindingDiagnostic(self, binding, "should be declared DEFERRED");
+        return error.DuplicateDeclaration;
+    }
+    if (validatePassedObjectDummyConstraints(self, binding)) |err| {
+        return err;
+    }
+    return null;
+}
+
+fn bindingInterfaceExists(
+    self: *context.Context,
+    binding: ast.TypeBoundProcedureBinding,
+    iface_name: []const u8,
+) bool {
+    if (lookupQualifiedProcedureSig(self, binding.owner_name, iface_name) != null) return true;
+    return symbols_mod.lookupKnownProcedureSig(self, iface_name) != null;
+}
+
+fn bindingImplementationExists(self: *context.Context, binding: ast.TypeBoundProcedureBinding) bool {
+    const impl_name = binding.implementation_name orelse binding.name;
+    if (lookupQualifiedProcedureSig(self, binding.owner_name, impl_name) != null) return true;
+    return symbols_mod.lookupKnownProcedureSig(self, impl_name) != null;
+}
+
+fn bindingOverridesConcreteParent(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    binding_name: []const u8,
+) bool {
+    var parent_name = derived.parent_name;
+    while (parent_name) |name| {
+        const parent = symbols_mod.lookupDerivedType(self, name) orelse return false;
+        if (findResolvedBindingByName(parent.bindings, binding_name)) |binding| {
+            return !binding.deferred;
+        }
+        parent_name = parent.parent_name;
+    }
+    return false;
+}
+
+fn typeHasDeferredBindingRequirement(self: *context.Context, derived: ast.DerivedTypeDef) bool {
+    for (derived.bindings) |binding| {
+        if (binding.deferred) return true;
+    }
+
+    var handled = std.StringHashMap(void).init(self.arena);
+    var parent_name = derived.parent_name;
+    while (parent_name) |name| {
+        const parent = symbols_mod.lookupDerivedType(self, name) orelse break;
+        for (parent.bindings) |binding| {
+            if (handled.contains(binding.name)) continue;
+            handled.put(binding.name, {}) catch return true;
+
+            if (findParsedBindingByName(derived.bindings, binding.name)) |override| {
+                if (override.deferred) return true;
+                continue;
+            }
+            if (binding.deferred) return true;
+        }
+        parent_name = parent.parent_name;
+    }
+    return false;
+}
+
+fn validatePassedObjectDummyConstraints(
+    self: *context.Context,
+    binding: ast.TypeBoundProcedureBinding,
+) ?anyerror {
+    if (binding.nopass) return null;
+
+    const sig = bindingReferenceSig(self, binding) orelse return null;
+    const pass_idx = bindingPassArgIndex(sig, binding.pass_name) orelse return null;
+    if (pass_idx >= sig.args.len) return null;
+
+    const pass_arg = sig.args[pass_idx];
+    if (pass_arg.rank != 0) {
+        setBindingDiagnostic(self, binding, "must be scalar");
+        return error.DuplicateDeclaration;
+    }
+    if (pass_arg.pointer) {
+        setBindingDiagnostic(self, binding, "must not be POINTER");
+        return error.DuplicateDeclaration;
+    }
+    if (pass_arg.allocatable) {
+        setBindingDiagnostic(self, binding, "must not be ALLOCATABLE");
+        return error.DuplicateDeclaration;
+    }
+    return null;
+}
+
+fn setBindingDiagnostic(
+    self: *context.Context,
+    binding: ast.TypeBoundProcedureBinding,
+    message: []const u8,
+) void {
+    setSourceDiagnostic(self, binding.source, message);
+}
+
+fn bindingReferenceSig(
+    self: *context.Context,
+    binding: ast.TypeBoundProcedureBinding,
+) ?context.Context.ProcedureSig {
+    if (binding.interface_name) |iface_name| {
+        if (lookupQualifiedProcedureSig(self, binding.owner_name, iface_name)) |sig| return sig;
+        if (symbols_mod.lookupKnownProcedureSig(self, iface_name)) |sig| return sig;
+    }
+    const impl_name = binding.implementation_name orelse binding.name;
+    if (lookupQualifiedProcedureSig(self, binding.owner_name, impl_name)) |sig| return sig;
+    return symbols_mod.lookupKnownProcedureSig(self, impl_name);
+}
+
+fn lookupQualifiedProcedureSig(
+    self: *context.Context,
+    owner_name: ?[]const u8,
+    proc_name: []const u8,
+) ?context.Context.ProcedureSig {
+    const owner = owner_name orelse return null;
+    const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner, proc_name }) catch return null;
+    return symbols_mod.lookupKnownProcedureSig(self, qualified);
+}
+
+fn bindingPassArgIndex(
+    sig: context.Context.ProcedureSig,
+    pass_name: ?[]const u8,
+) ?usize {
+    if (sig.args.len == 0) return null;
+    const target = pass_name orelse return 0;
+    for (sig.args, 0..) |arg, idx| {
+        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
+    }
+    return null;
+}
+
+fn findResolvedBindingByName(
+    bindings: []const context.Context.DerivedTypeInfo.BindingInfo,
+    name: []const u8,
+) ?context.Context.DerivedTypeInfo.BindingInfo {
+    for (bindings) |binding| {
+        if (std.ascii.eqlIgnoreCase(binding.name, name)) return binding;
+    }
+    return null;
+}
+
+fn findParsedBindingByName(
+    bindings: []const ast.TypeBoundProcedureBinding,
+    name: []const u8,
+) ?ast.TypeBoundProcedureBinding {
+    for (bindings) |binding| {
+        if (std.ascii.eqlIgnoreCase(binding.name, name)) return binding;
+    }
+    return null;
 }
 
 pub fn applyTypeDeclParameter(self: *context.Context, decl: ast.TypeDecl) !void {

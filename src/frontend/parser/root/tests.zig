@@ -377,6 +377,30 @@ test "parseProgram handles derived type EXTENDS and ABSTRACT attributes" {
     try testing.expect(unit.decls[2].derived_type_def.abstract);
 }
 
+test "parseProgramWithDiagnostics reports duplicate ABSTRACT attribute in derived type header" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  type, abstract, extends(t), abstract :: err_t\n" ++
+        "    integer :: x\n" ++
+        "  end type err_t\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    try testing.expectError(error.DuplicateAbstractAttribute, parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag));
+    const first = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(first);
+    try testing.expect(std.mem.indexOf(u8, first.message, "Duplicate ABSTRACT attribute") != null);
+}
+
 test "parseProgram handles derived type PUBLIC attribute" {
     const testing = std.testing;
     const allocator = testing.allocator;

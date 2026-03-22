@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const catalog = @import("../../../common/error_catalog.zig");
 const symbols = @import("../../symbol/mod.zig");
 const intrinsic_signature = @import("../../intrinsic_signature.zig");
 const context = @import("../context.zig");
@@ -23,6 +24,19 @@ pub fn resolveCallOrSubscriptExpr(
     var kind: ResolvedRefKind = .unknown;
     var resolved_spec = sym.type_spec;
     if (structureConstructorTypeSpec(self, call.name, sym)) |ctor_spec| {
+        const type_name = ctor_spec.derived_type_name orelse call.name;
+        if (isAbstractDerivedType(self, type_name)) {
+            const source = self.sourceForExpr(expr_node) orelse ast.SourceRef{};
+            const message = std.fmt.allocPrint(self.arena, "Cannot construct ABSTRACT type '{s}'", .{type_name}) catch "Cannot construct ABSTRACT type";
+            self.setDiagnostic(
+                if (source.line == 0) 1 else source.line,
+                if (source.column == 0) 1 else source.column,
+                catalog.semantic.invalid_argument_count.code,
+                message,
+                source.text,
+            );
+            return error.InvalidArgumentCount;
+        }
         try validateStructureConstructorActuals(self, call.name, call.args, ctor_spec, deps);
         kind = .call;
         resolved_spec = ctor_spec;
@@ -113,6 +127,11 @@ pub fn resolveCallOrSubscriptExpr(
     }
     try deps.recordResolvedRef(self, expr_node, call.name, kind, idx);
     try deps.cacheExprType(self, expr_node, resolved_spec);
+}
+
+fn isAbstractDerivedType(self: *context.Context, type_name: []const u8) bool {
+    const derived = symbols_mod.lookupDerivedType(self, type_name) orelse return false;
+    return derived.abstract;
 }
 
 pub fn resolveSubstringExpr(

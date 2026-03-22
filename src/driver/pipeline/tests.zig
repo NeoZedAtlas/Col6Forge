@@ -201,6 +201,49 @@ test "runPipelineWithOptionsAndDiagnostics accepts slash array constructor assig
     try testing.expect(!diag_bag.has());
 }
 
+test "runPipelineWithOptionsAndDiagnostics rejects abstract type array constructor items across module use" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "module my_module\n" ++
+        "  implicit none\n" ++
+        "  private\n" ++
+        "  type, abstract, public :: a\n" ++
+        "  end type\n" ++
+        "  type, extends(a), public :: b\n" ++
+        "  end type\n" ++
+        "end\n" ++
+        "\n" ++
+        "program main\n" ++
+        "  use my_module\n" ++
+        "  implicit none\n" ++
+        "  type(b) :: b_instance\n" ++
+        "  class(a), allocatable :: a_array(:)\n" ++
+        "  class(b), allocatable :: b_array(:)\n" ++
+        "  a_array = [b_instance]\n" ++
+        "  b_array = [b_instance]\n" ++
+        "  a_array = [a_array]\n" ++
+        "end program\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "abstract_array_ctor_pipeline.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+    clearLastDiagnostic();
+
+    try testing.expectError(
+        error.AssignmentTypeMismatch,
+        runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag),
+    );
+    const diag_info = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag_info);
+    try testing.expect(std.mem.indexOf(u8, diag_info.message, "is of the ABSTRACT type") != null);
+}
+
 test "runPipelineWithOptionsAndDiagnostics accepts repository array_constructor_14 contents" {
     const testing = std.testing;
     const allocator = testing.allocator;

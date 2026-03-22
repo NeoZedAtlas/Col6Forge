@@ -63,6 +63,7 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
         .identifier, .literal => return try resolve_expr.exprType(self, expr),
         .array_constructor => |ctor| {
             for (ctor.items) |item| _ = try checkExprType(self, item, deps);
+            try checkArrayConstructorAbstractItems(self, expr, ctor.items);
             try checkTypedArrayConstructorItems(self, expr, ctor, deps);
             return try resolve_expr.exprType(self, expr);
         },
@@ -403,6 +404,7 @@ fn checkTypedArrayConstructorItems(
     const target_spec = try resolve_expr.exprTypeSpec(self, expr_node);
     for (ctor.items) |item| {
         const actual_spec = try resolve_expr.exprTypeSpec(self, item);
+        try checkAbstractArrayConstructorItem(self, item, actual_spec, expr_node);
         if (target_spec.lowered_kind == .derived or actual_spec.lowered_kind == .derived) {
             if (!deps.dummyArgTypeCompatible(self, target_spec, actual_spec)) {
                 const source = self.sourceForExpr(item) orelse self.sourceForExpr(expr_node) orelse ast.SourceRef{};
@@ -419,6 +421,40 @@ fn checkTypedArrayConstructorItems(
         }
         try checkTypedArrayConstructorConstConversion(self, target_spec, item);
     }
+}
+
+fn checkArrayConstructorAbstractItems(
+    self: *context.Context,
+    expr_node: *ast.Expr,
+    items: []const *ast.Expr,
+) CheckError!void {
+    for (items) |item| {
+        const actual_spec = try resolve_expr.exprTypeSpec(self, item);
+        try checkAbstractArrayConstructorItem(self, item, actual_spec, expr_node);
+    }
+}
+
+fn checkAbstractArrayConstructorItem(
+    self: *context.Context,
+    item: *ast.Expr,
+    actual_spec: symbols.TypeSpec,
+    fallback_expr: *ast.Expr,
+) CheckError!void {
+    if (actual_spec.lowered_kind != .derived) return;
+    const derived_name = actual_spec.derived_type_name orelse return;
+    const derived_info = resolve_symbols.lookupDerivedType(self, derived_name) orelse return;
+    if (!derived_info.abstract) return;
+
+    const source = self.sourceForExpr(item) orelse self.sourceForExpr(fallback_expr) orelse ast.SourceRef{};
+    const message = std.fmt.allocPrint(self.arena, "is of the ABSTRACT type '{s}'", .{derived_name}) catch "is of the ABSTRACT type";
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.assignment_type_mismatch.code,
+        message,
+        source.text,
+    );
+    return error.AssignmentTypeMismatch;
 }
 
 fn checkTypedArrayConstructorConstConversion(

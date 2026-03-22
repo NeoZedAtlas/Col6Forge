@@ -248,6 +248,7 @@ pub fn parseProgramUnitBody(
         }
         if (spec_part_open and root_predicates.isDerivedTypeStartTokens(line, tokens)) {
             const decl_node = self.parseDerivedTypeDef() catch |err| {
+                if (err == error.DuplicateAbstractAttribute) return err;
                 root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, line, stmt_lp, err);
                 return err;
             };
