@@ -60,6 +60,7 @@ pub fn parseProgramWithDiagnostics(
         .pending_owner_kind = null,
         .pending_owner_decls = null,
         .pending_owner_decl_sources = null,
+        .in_submodule_spec_part = false,
         .module_preludes = ModulePreludeMap.initContext(arena_allocator, .{}),
         .expr_capture = &expr_capture,
         .diag_bag = diag_bag,
@@ -80,6 +81,7 @@ pub const Parser = struct {
     pending_owner_kind: ?LexicalOwnerKind,
     pending_owner_decls: ?[]const Decl,
     pending_owner_decl_sources: ?[]const DeclSource,
+    in_submodule_spec_part: bool,
     module_preludes: ModulePreludeMap,
     expr_capture: *expr.SourceCapture,
     diag_bag: *parse_diag.Bag,
@@ -223,6 +225,7 @@ pub const Parser = struct {
             .is_module_procedure = false,
             .pure = false,
             .elemental = false,
+            .recursive = false,
             .bind_name = null,
             .result_name = null,
             .args = &.{},
@@ -297,6 +300,20 @@ pub const Parser = struct {
                 self.index += 1;
                 continue;
             };
+            if (root_predicates.isSubmoduleHeaderTokens(line, tokens)) {
+                self.diag_bag.set(
+                    line.span.start_line,
+                    if (line.segments.len > 0) line.segments[0].column else 1,
+                    catalog.parser.unexpected_token.code,
+                    "SUBMODULE declaration at this position is not allowed in a derived type definition",
+                    line.text,
+                );
+                self.index += 1;
+                continue;
+            }
+            if (self.in_submodule_spec_part) {
+                noteInvalidSubmoduleVisibility(self.diag_bag, line, tokens);
+            }
             if (root_predicates.isDerivedTypeEndTokens(line, tokens)) {
                 self.index += 1;
                 return .{ .derived_type_def = .{
@@ -361,3 +378,48 @@ pub const Parser = struct {
         return root_units.parseInterfaceBlock(self);
     }
 };
+
+fn noteInvalidSubmoduleVisibility(
+    diag_bag: *parse_diag.Bag,
+    line: logical_line.LogicalLine,
+    tokens: []lexer.Token,
+) void {
+    var lp = LineParser.init(line, tokens);
+    if (lp.consumeKeyword("PRIVATE") and lp.peek() == null) {
+        diag_bag.set(
+            line.span.start_line,
+            if (line.segments.len > 0) line.segments[0].column else 1,
+            catalog.parser.unexpected_token.code,
+            "PRIVATE statement",
+            line.text,
+        );
+        return;
+    }
+    lp = LineParser.init(line, tokens);
+    if (lp.consumeKeyword("PUBLIC") and lp.peek() == null) {
+        diag_bag.set(
+            line.span.start_line,
+            if (line.segments.len > 0) line.segments[0].column else 1,
+            catalog.parser.unexpected_token.code,
+            "PUBLIC statement",
+            line.text,
+        );
+        return;
+    }
+
+    var scan = LineParser.init(line, tokens);
+    _ = scan.next();
+    while (scan.peek()) |tok| {
+        _ = scan.next();
+        if (tok.kind != .identifier) continue;
+        const text = scan.tokenText(tok);
+        if (std.ascii.eqlIgnoreCase(text, "PRIVATE")) {
+            diag_bag.set(line.span.start_line, tok.column, catalog.parser.unexpected_token.code, "PRIVATE attribute", line.text);
+            return;
+        }
+        if (std.ascii.eqlIgnoreCase(text, "PUBLIC")) {
+            diag_bag.set(line.span.start_line, tok.column, catalog.parser.unexpected_token.code, "PUBLIC attribute", line.text);
+            return;
+        }
+    }
+}

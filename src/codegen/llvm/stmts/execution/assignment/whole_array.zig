@@ -215,6 +215,24 @@ pub fn emitWholeArrayConstructorAssignment(ctx: *Context, builder: anytype, assi
     return true;
 }
 
+pub fn emitProjectedComponentConstructorAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    if (assign.target.* != .component) return false;
+    const comp = assign.target.component;
+    const view = try expr_memory.emitProjectedComponentArrayView(ctx, builder, comp) orelse return false;
+    const flat_items = try flatten_mod.flattenArrayValuedExprItems(ctx, assign.value) orelse return false;
+    if (view.count) |count| {
+        if (flat_items.len != count) return false;
+    }
+
+    for (flat_items, 0..) |item, idx| {
+        const ptr = try emitProjectedComponentElementPtr(ctx, builder, view, idx);
+        const value = try expr.emitExpr(ctx, builder, item);
+        const coerced = try expr.coerce(ctx, builder, value, view.elem_ty);
+        try builder.store(coerced, ptr);
+    }
+    return true;
+}
+
 pub fn emitWholeArrayGeneratedAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
     const target_info = wholeArrayConstructorTarget(ctx, assign.target) orelse return false;
     if (target_info.sym.dims.len == 0) return false;
@@ -615,6 +633,24 @@ fn emitLinearCopyLoop(
     try builder.br(loop_head);
 
     try builder.label(loop_exit);
+}
+
+fn emitProjectedComponentElementPtr(
+    ctx: *Context,
+    builder: anytype,
+    view: expr_memory.ProjectedComponentArrayView,
+    idx: usize,
+) EmitError!ValueRef {
+    if (view.stride_bytes == 0) {
+        const elem_ptr_name = try ctx.nextTemp();
+        try builder.gep(elem_ptr_name, view.elem_ty, view.base_ptr, character_mod.constI64(ctx, @intCast(idx)));
+        return .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true };
+    }
+
+    const byte_offset = idx * view.stride_bytes;
+    const elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(elem_ptr_name, .i8, view.base_ptr, character_mod.constI64(ctx, @intCast(byte_offset)));
+    return .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true };
 }
 
 fn wholeArrayComponentTransfer(expr_node: *ast.Expr) ?ast.ComponentExpr {

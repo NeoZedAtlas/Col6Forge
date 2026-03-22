@@ -31,6 +31,7 @@ pub const ProgramUnitHeader = struct {
     is_module_procedure: bool,
     pure: bool,
     elemental: bool,
+    recursive: bool,
     bind_name: ?[]const u8,
     result_name: ?[]const u8,
     args: []const []const u8,
@@ -50,8 +51,9 @@ pub fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_d
     var saw_module_prefix = false;
     var pure = false;
     var elemental = false;
+    var recursive = false;
 
-    consumeProcedurePrefixes(lp, &pure, &elemental);
+    consumeProcedurePrefixes(lp, &pure, &elemental, &recursive);
     saw_module_prefix = lp.consumeKeyword("MODULE");
 
     if (lp.isKeywordSplit("PROGRAM")) {
@@ -69,7 +71,7 @@ pub fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_d
         allow_missing_name = true;
     } else {
         type_info = try parseTypePrefix(arena, lp) orelse return error.ExpectedProgramUnit;
-        consumeProcedurePrefixes(lp, &pure, &elemental);
+        consumeProcedurePrefixes(lp, &pure, &elemental, &recursive);
         saw_module_prefix = lp.consumeKeyword("MODULE");
         if (!lp.isKeywordSplit("FUNCTION")) return error.ExpectedProgramUnit;
         _ = lp.consumeKeyword("FUNCTION");
@@ -130,6 +132,7 @@ pub fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_d
         .is_module_procedure = saw_module_prefix,
         .pure = pure,
         .elemental = elemental,
+        .recursive = recursive,
         .bind_name = bind_name,
         .result_name = result_name,
         .args = try args_list.toOwnedSlice(),
@@ -486,7 +489,7 @@ fn consumeBalancedParens(lp: *LineParser) !void {
     }
 }
 
-fn consumeProcedurePrefixes(lp: *LineParser, pure: *bool, elemental: *bool) void {
+fn consumeProcedurePrefixes(lp: *LineParser, pure: *bool, elemental: *bool, recursive: *bool) void {
     while (true) {
         if (lp.consumeKeyword("PURE")) {
             pure.* = true;
@@ -496,7 +499,10 @@ fn consumeProcedurePrefixes(lp: *LineParser, pure: *bool, elemental: *bool) void
             elemental.* = true;
             continue;
         }
-        if (lp.consumeKeyword("RECURSIVE")) continue;
+        if (lp.consumeKeyword("RECURSIVE")) {
+            recursive.* = true;
+            continue;
+        }
         if (lp.consumeKeyword("IMPURE")) continue;
         break;
     }

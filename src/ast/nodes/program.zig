@@ -27,6 +27,7 @@ pub const ProgramUnit = struct {
     is_module_procedure: bool = false,
     pure: bool = false,
     elemental: bool = false,
+    recursive: bool = false,
     prelude_decl_count: usize = 0,
     bind_name: ?[]const u8 = null,
     result_name: ?[]const u8 = null,

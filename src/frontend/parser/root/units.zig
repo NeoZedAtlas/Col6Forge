@@ -2,7 +2,9 @@ const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const catalog = @import("../../../common/error_catalog.zig");
 const logical_line = @import("../../logical_line.zig");
+const lexer = @import("../../lexer.zig");
 const context = @import("../token_stream.zig");
+const parse_diag = @import("../diagnostic.zig");
 const decl = @import("../decl/mod.zig");
 const stmt = @import("../stmt/mod.zig");
 const stmt_helpers = @import("../stmt/helpers.zig");
@@ -179,18 +181,24 @@ pub fn parseSubmoduleContainer(self: anytype, units: *std.array_list.Managed(Pro
     const header_tokens = try self.tokensForIndex(self.index);
     var header_lp = LineParser.init(header_line, header_tokens);
     const submodule_header = try root_header.parseSubmoduleHeader(self.arena, &header_lp);
+    validateSubmoduleNameAvailability(self.diag_bag, header_line, &self.module_preludes, submodule_header.name);
     self.index += 1;
 
     var module_decls = std.array_list.Managed(Decl).init(self.arena);
     var module_decl_sources = std.array_list.Managed(DeclSource).init(self.arena);
     var module_uses = std.array_list.Managed(ast.UseStmt).init(self.arena);
     var saw_contains = false;
+    var module_procedure_count: usize = 0;
+    const prev_in_submodule_spec_part = self.in_submodule_spec_part;
+    self.in_submodule_spec_part = true;
+    defer self.in_submodule_spec_part = prev_in_submodule_spec_part;
 
     while (self.index < self.lines.len) {
         const line = self.lines[self.index];
         root_diagnostics.noteFallbackForLine(self.diag_bag, line);
         if (self.isStandaloneEndAt(self.index) or self.isSubmoduleEndAt(self.index)) break;
         if (self.isContainsAt(self.index)) {
+            self.in_submodule_spec_part = false;
             self.index += 1;
             saw_contains = true;
             break;
@@ -213,6 +221,7 @@ pub fn parseSubmoduleContainer(self: anytype, units: *std.array_list.Managed(Pro
             self.index += 1;
             continue;
         };
+        noteInvalidSubmoduleVisibility(self.diag_bag, line, tokens);
         var lp = LineParser.init(line, tokens);
         if (try root_prelude.tryParsePreludeUseImport(&lp, self.arena)) |use_import| {
             try module_uses.append(use_import);
@@ -277,6 +286,7 @@ pub fn parseSubmoduleContainer(self: anytype, units: *std.array_list.Managed(Pro
     });
 
     if (!saw_contains) {
+        noteMissingSubmoduleProcedure(self.diag_bag, header_line);
         if (self.isSubmoduleEndAt(self.index) or self.isStandaloneEndAt(self.index)) self.index += 1;
         return;
     }
@@ -284,21 +294,50 @@ pub fn parseSubmoduleContainer(self: anytype, units: *std.array_list.Managed(Pro
     while (self.index < self.lines.len) {
         root_diagnostics.noteFallbackForLine(self.diag_bag, self.lines[self.index]);
         if (self.isSubmoduleEndAt(self.index) or self.isStandaloneEndAt(self.index)) {
+            if (module_procedure_count == 0) noteMissingSubmoduleProcedure(self.diag_bag, header_line);
             self.index += 1;
             return;
         }
+        if (self.pending_owner_name != null) {
+            const end_line = self.lines[self.index];
+            const end_tokens = self.tokensForIndex(self.index) catch {
+                self.index += 1;
+                continue;
+            };
+            if (isEndProcedureTokens(end_line, end_tokens)) {
+                self.pending_owner_name = null;
+                self.pending_owner_kind = null;
+                self.pending_owner_decls = null;
+                self.pending_owner_decl_sources = null;
+                self.index += 1;
+                continue;
+            }
+        }
 
+        const unit_header_line = self.lines[self.index];
+        const parsing_internal = self.pending_owner_name != null;
         var unit = if (try parseInheritedModuleProcedureUnit(self, stored_decls))
             |parsed| parsed
         else
             try self.parseProgramUnit();
-        unit.is_module_procedure = true;
-        unit.owner_name = submodule_header.name;
-        unit.owner_kind = .module;
-        if (stored_decls.len != 0) {
-            unit = try root_prelude.prependDecls(self.arena, unit, stored_decls, stored_decl_sources);
+        const requires_interface = unit.is_module_procedure;
+        if (!parsing_internal) {
+            unit.is_module_procedure = true;
+            module_procedure_count += 1;
+            validateSubmoduleProcedureMatch(self.diag_bag, unit_header_line, unit, requires_interface, stored_decls);
+            unit.owner_name = submodule_header.name;
+            unit.owner_kind = .module;
+            if (stored_decls.len != 0) {
+                unit = try root_prelude.prependDecls(self.arena, unit, stored_decls, stored_decl_sources);
+            }
         }
         try units.append(unit);
+        if (!parsing_internal and root_control.unitHasContains(unit)) {
+            self.pending_owner_name = unit.name;
+            self.pending_owner_kind = .procedure;
+            self.pending_owner_decls = unit.decls;
+            self.pending_owner_decl_sources = unit.decl_sources;
+        }
     }
 }
 
@@ -358,6 +397,7 @@ fn parseInheritedModuleProcedureUnit(self: anytype, available_decls: []const Dec
     const procedure_name = lp.readName(self.arena) orelse return error.MissingName;
 
     const proc_header = findInheritedInterfaceProcedure(available_decls, procedure_name);
+    const missing_interface = proc_header == null;
     const header: ProgramUnitHeader = if (proc_header) |proc|
         try programUnitHeaderFromInterfaceProcedure(self.arena, proc)
     else blk: {
@@ -374,6 +414,7 @@ fn parseInheritedModuleProcedureUnit(self: anytype, available_decls: []const Dec
             .is_module_procedure = true,
             .pure = false,
             .elemental = false,
+            .recursive = false,
             .bind_name = null,
             .result_name = null,
             .args = &.{},
@@ -384,7 +425,21 @@ fn parseInheritedModuleProcedureUnit(self: anytype, available_decls: []const Dec
 
     const expr_mark = self.expr_capture.mark();
     self.index += 1;
-    return try self.parseProgramUnitBody(header, false, line, expr_mark);
+    const unit = try self.parseProgramUnitBody(header, false, line, expr_mark);
+    if (missing_interface and self.index > 0) {
+        const end_line = self.lines[self.index - 1];
+        const end_tokens = self.tokensForIndex(self.index - 1) catch return unit;
+        if (isEndProcedureTokens(end_line, end_tokens)) {
+            self.diag_bag.set(
+                end_line.span.start_line,
+                if (end_line.segments.len > 0) end_line.segments[0].column else 1,
+                catalog.parser.unexpected_token.code,
+                "Expecting END SUBMODULE statement",
+                end_line.text,
+            );
+        }
+    }
+    return unit;
 }
 
 fn findInheritedInterfaceProcedure(available_decls: []const Decl, procedure_name: []const u8) ?ast.InterfaceProcedure {
@@ -402,10 +457,13 @@ fn programUnitHeaderFromInterfaceProcedure(
     proc_header: ast.InterfaceProcedure,
 ) !ProgramUnitHeader {
     var type_decl: ?ast.Decl = null;
-    if (proc_header.type_spec) |type_spec| {
+    const result_name = proc_header.result_name orelse proc_header.name;
+    if (try root_interface.cloneProcedureResultDecl(arena, proc_header.decls, result_name)) |result_decl| {
+        type_decl = result_decl;
+    } else if (proc_header.type_spec) |type_spec| {
         const decl_items = try arena.alloc(ast.Declarator, 1);
         decl_items[0] = .{
-            .name = proc_header.name,
+            .name = result_name,
             .dims = &.{},
             .char_len = null,
             .char_len_deferred = false,
@@ -425,6 +483,7 @@ fn programUnitHeaderFromInterfaceProcedure(
         .is_module_procedure = true,
         .pure = proc_header.pure,
         .elemental = proc_header.elemental,
+        .recursive = proc_header.recursive,
         .bind_name = proc_header.bind_name,
         .result_name = proc_header.result_name,
         .args = proc_header.args,
@@ -563,6 +622,7 @@ pub fn parseProgramUnitBody(
         .is_module_procedure = header.is_module_procedure,
         .pure = header.pure,
         .elemental = header.elemental,
+        .recursive = header.recursive,
         .bind_name = header.bind_name,
         .result_name = header.result_name,
         .args = header.args,
@@ -574,6 +634,215 @@ pub fn parseProgramUnitBody(
     };
     unit = try self.importUsedModulePreludes(unit);
     return unit;
+}
+
+fn validateSubmoduleNameAvailability(
+    diag_bag: *parse_diag.Bag,
+    header_line: logical_line.LogicalLine,
+    module_preludes: *const root_prelude.ModulePreludeMap,
+    submodule_name: []const u8,
+) void {
+    if (!module_preludes.contains(submodule_name)) return;
+    diag_bag.set(
+        header_line.span.start_line,
+        if (header_line.segments.len > 0) header_line.segments[0].column else 1,
+        catalog.semantic.duplicate_declaration.code,
+        "already being used as a MODULE",
+        header_line.text,
+    );
+}
+
+fn noteInvalidSubmoduleVisibility(
+    diag_bag: *parse_diag.Bag,
+    line: logical_line.LogicalLine,
+    tokens: []lexer.Token,
+) void {
+    var lp = LineParser.init(line, tokens);
+    if (lp.consumeKeyword("PRIVATE") and lp.peek() == null) {
+        diag_bag.set(
+            line.span.start_line,
+            if (line.segments.len > 0) line.segments[0].column else 1,
+            catalog.parser.unexpected_token.code,
+            "PRIVATE statement",
+            line.text,
+        );
+        return;
+    }
+    lp = LineParser.init(line, tokens);
+    if (lp.consumeKeyword("PUBLIC") and lp.peek() == null) {
+        diag_bag.set(
+            line.span.start_line,
+            if (line.segments.len > 0) line.segments[0].column else 1,
+            catalog.parser.unexpected_token.code,
+            "PUBLIC statement",
+            line.text,
+        );
+        return;
+    }
+
+    var scan = LineParser.init(line, tokens);
+    _ = scan.next();
+    while (scan.peek()) |tok| {
+        _ = scan.next();
+        if (tok.kind != .identifier) continue;
+        const text = scan.tokenText(tok);
+        if (std.ascii.eqlIgnoreCase(text, "PRIVATE")) {
+            diag_bag.set(line.span.start_line, tok.column, catalog.parser.unexpected_token.code, "PRIVATE attribute", line.text);
+            return;
+        }
+        if (std.ascii.eqlIgnoreCase(text, "PUBLIC")) {
+            diag_bag.set(line.span.start_line, tok.column, catalog.parser.unexpected_token.code, "PUBLIC attribute", line.text);
+            return;
+        }
+    }
+}
+
+fn noteMissingSubmoduleProcedure(diag_bag: *parse_diag.Bag, header_line: logical_line.LogicalLine) void {
+    diag_bag.set(
+        header_line.span.start_line,
+        if (header_line.segments.len > 0) header_line.segments[0].column else 1,
+        catalog.parser.unexpected_token.code,
+        "does not contain a MODULE PROCEDURE",
+        header_line.text,
+    );
+}
+
+fn validateSubmoduleProcedureMatch(
+    diag_bag: *parse_diag.Bag,
+    unit_header_line: logical_line.LogicalLine,
+    unit: ProgramUnit,
+    requires_interface: bool,
+    available_decls: []const Decl,
+) void {
+    const inherited = findInheritedInterfaceProcedure(available_decls, unit.name) orelse {
+        if (requires_interface) {
+            diag_bag.set(
+                unit_header_line.span.start_line,
+                if (unit_header_line.segments.len > 0) unit_header_line.segments[0].column else 1,
+                catalog.parser.unexpected_token.code,
+                "must be in a generic module interface",
+                unit_header_line.text,
+            );
+        }
+        return;
+    };
+
+    if (inherited.kind != unit.kind) {
+        const message = if (inherited.kind == .function)
+            "FUNCTION attribute conflicts with SUBROUTINE"
+        else
+            "SUBROUTINE attribute conflicts with FUNCTION";
+        diag_bag.set(
+            unit_header_line.span.start_line,
+            if (unit_header_line.segments.len > 0) unit_header_line.segments[0].column else 1,
+            catalog.parser.unexpected_token.code,
+            message,
+            unit_header_line.text,
+        );
+        if (unit.decl_sources.len != 0) {
+            const first_decl = unit.decl_sources[0];
+            diag_bag.set(
+                first_decl.line,
+                if (first_decl.column == 0) 1 else first_decl.column,
+                catalog.parser.unexpected_token.code,
+                "Unexpected data declaration",
+                first_decl.text,
+            );
+        }
+        return;
+    }
+
+    if (formalCount(inherited) != unit.args.len + unit.alt_return_dummy_count) {
+        diag_bag.set(
+            unit_header_line.span.start_line,
+            if (unit_header_line.segments.len > 0) unit_header_line.segments[0].column else 1,
+            catalog.parser.unexpected_token.code,
+            "Mismatch in number of MODULE PROCEDURE formal",
+            unit_header_line.text,
+        );
+    }
+
+    validateProcedurePrefixMatch(diag_bag, unit_header_line, inherited.elemental, unit.elemental, "ELEMENTAL");
+    validateProcedurePrefixMatch(diag_bag, unit_header_line, inherited.pure, unit.pure, "PURE");
+    validateProcedurePrefixMatch(diag_bag, unit_header_line, inherited.recursive, unit.recursive, "RECURSIVE");
+}
+
+fn validateProcedurePrefixMatch(
+    diag_bag: *parse_diag.Bag,
+    unit_header_line: logical_line.LogicalLine,
+    inherited_attr: bool,
+    unit_attr: bool,
+    attr_name: []const u8,
+) void {
+    if (inherited_attr == unit_attr) return;
+    const message = if (inherited_attr)
+        std.fmt.allocPrint(diag_bag.allocator, "{s} prefix", .{attr_name}) catch return
+    else
+        std.fmt.allocPrint(diag_bag.allocator, "Mismatch in {s} attribute", .{attr_name}) catch return;
+    defer diag_bag.allocator.free(message);
+    diag_bag.set(
+        unit_header_line.span.start_line,
+        if (unit_header_line.segments.len > 0) unit_header_line.segments[0].column else 1,
+        catalog.parser.unexpected_token.code,
+        message,
+        unit_header_line.text,
+    );
+}
+
+fn formalCount(proc_header: ast.InterfaceProcedure) usize {
+    return proc_header.args.len + proc_header.alt_return_dummy_count;
+}
+
+fn noteInvalidModuleProcedureInterfaceBodyLines(self: anytype, is_module_interface_body: bool, start_index: usize, end_index: usize) void {
+    if (!is_module_interface_body) return;
+    var idx = start_index;
+    while (idx < end_index and idx < self.lines.len) : (idx += 1) {
+        const body_line = self.lines[idx];
+        const tokens = self.tokensForIndex(idx) catch continue;
+        var lp = LineParser.init(body_line, tokens);
+        if (!lp.consumeKeyword("IMPORT")) continue;
+        self.diag_bag.set(
+            body_line.span.start_line,
+            if (body_line.segments.len > 0) body_line.segments[0].column else 1,
+            catalog.parser.unexpected_token.code,
+            "not permitted in a module procedure interface body",
+            body_line.text,
+        );
+    }
+}
+
+fn noteInvalidModuleProcedureInterfaceBodyDecls(diag_bag: *parse_diag.Bag, proc_unit: ProgramUnit) void {
+    if (!proc_unit.is_module_procedure) return;
+    for (proc_unit.decls, 0..) |decl_node, idx| {
+        if (decl_node != .import) continue;
+        const source = if (idx < proc_unit.decl_sources.len) proc_unit.decl_sources[idx] else DeclSource{};
+        diag_bag.set(
+            if (source.line == 0) 1 else source.line,
+            if (source.column == 0) 1 else source.column,
+            catalog.parser.unexpected_token.code,
+            "not permitted in a module procedure interface body",
+            source.text,
+        );
+    }
+}
+
+fn lineHasModuleProcedurePrefix(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
+    var lp = LineParser.init(line, tokens);
+    while (true) {
+        if (lp.consumeKeyword("PURE")) continue;
+        if (lp.consumeKeyword("ELEMENTAL")) continue;
+        if (lp.consumeKeyword("RECURSIVE")) continue;
+        if (lp.consumeKeyword("IMPURE")) continue;
+        break;
+    }
+    if (!lp.consumeKeyword("MODULE")) return false;
+    return lp.isKeywordSplit("SUBROUTINE") or lp.isKeywordSplit("FUNCTION");
+}
+
+fn isEndProcedureTokens(line: logical_line.LogicalLine, tokens: []lexer.Token) bool {
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("END")) return false;
+    return lp.consumeKeyword("PROCEDURE");
 }
 
 pub fn importUsedModulePreludes(self: anytype, unit: ProgramUnit) !ProgramUnit {
@@ -704,13 +973,17 @@ pub fn parseInterfaceBlock(self: anytype) anyerror!Decl {
             }
         } else {
             var block_data_counter: usize = 0;
+            const line_has_module_prefix = lineHasModuleProcedurePrefix(line, tokens);
             const header = root_header.parseProgramUnitHeader(self.arena, &body_lp, &block_data_counter) catch null;
             if (header != null) {
+                const body_start_index = self.index + 1;
                 const expr_mark = self.expr_capture.mark();
                 self.index += 1;
                 const proc_unit = try self.parseProgramUnitBody(header.?, true, line, expr_mark);
                 const proc_source = root_diagnostics.sourceFromLine(line);
                 const end_line = self.lines[self.index - 1];
+                noteInvalidModuleProcedureInterfaceBodyLines(self, line_has_module_prefix, body_start_index, self.index - 1);
+                noteInvalidModuleProcedureInterfaceBodyDecls(self.diag_bag, proc_unit);
                 try procedures.append(proc_unit.name);
                 try procedure_sources.append(proc_source);
                 try procedure_headers.append(root_interface.interfaceProcedureFromUnit(proc_unit, proc_source, .{

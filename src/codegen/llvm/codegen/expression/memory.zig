@@ -16,6 +16,13 @@ const Context = context.Context;
 const ValueRef = context.ValueRef;
 const index_ty: ir.IRType = .i64;
 
+pub const ProjectedComponentArrayView = struct {
+    base_ptr: ValueRef,
+    elem_ty: ir.IRType,
+    count: ?usize = null,
+    stride_bytes: usize,
+};
+
 pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) !ValueRef {
     const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
     if (sym.dims.len == 0) return error.ArraysUnsupported;
@@ -134,6 +141,31 @@ pub fn emitComponentPtr(ctx: *Context, builder: anytype, comp: ast.ComponentExpr
     const gep_name = try ctx.nextTemp();
     try builder.gep(gep_name, .i8, base_ptr, offset);
     return .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+}
+
+pub fn emitProjectedComponentArrayView(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+) anyerror!?ProjectedComponentArrayView {
+    if (comp.has_parens or comp.args.len != 0) return null;
+    const component = try lookupComponentLayout(ctx, comp);
+    if (component.dims.len != 0 or component.pointer or component.allocatable) return null;
+    if (component.type_spec.lowered_kind == .derived or component.type_spec.lowered_kind == .character) return null;
+
+    const base_view = try emitDerivedArrayBaseView(ctx, builder, comp.base) orelse return null;
+    var base_ptr = base_view.base_ptr;
+    if (component.offset != 0) {
+        const gep_name = try ctx.nextTemp();
+        try builder.gep(gep_name, .i8, base_ptr, i64Const(ctx, @intCast(component.offset)));
+        base_ptr = .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
+    }
+    return .{
+        .base_ptr = base_ptr,
+        .elem_ty = llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, ctx.options.target_layout),
+        .count = base_view.count,
+        .stride_bytes = base_view.elem_stride_bytes,
+    };
 }
 
 pub fn emitComponentStoragePtr(ctx: *Context, builder: anytype, comp: ast.ComponentExpr) anyerror!ValueRef {
@@ -263,6 +295,57 @@ fn isConstI64(value: ValueRef, expected: i64) bool {
 fn lookupComponentLayout(ctx: *Context, comp: ast.ComponentExpr) !context.DerivedComponentLayout {
     const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
     return ctx.lookupDerivedComponentLayout(base_type_name, comp.name) orelse return error.UnknownSymbol;
+}
+
+const DerivedArrayBaseView = struct {
+    base_ptr: ValueRef,
+    count: ?usize = null,
+    elem_stride_bytes: usize,
+};
+
+fn emitDerivedArrayBaseView(
+    ctx: *Context,
+    builder: anytype,
+    expr: *Expr,
+) anyerror!?DerivedArrayBaseView {
+    return switch (expr.*) {
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse break :blk null;
+            if (sym.loweredKind() != .derived or sym.dims.len == 0) break :blk null;
+            const type_name = sym.type_spec.derived_type_name orelse break :blk null;
+            const layout = ctx.findDerivedTypeLayout(type_name) orelse return error.UnknownSymbol;
+            var base_ptr = try ctx.getPointer(name);
+            if (sym.is_pointer) {
+                const loaded_name = try ctx.nextTemp();
+                try builder.load(loaded_name, .ptr, base_ptr);
+                base_ptr = .{ .name = loaded_name, .ty = .ptr, .is_ptr = true };
+            }
+            break :blk .{
+                .base_ptr = base_ptr,
+                .count = common.arrayElementCount(ctx.sem, sym.dims) catch null,
+                .elem_stride_bytes = layout.size,
+            };
+        },
+        .component => |comp| blk: {
+            if (comp.has_parens or comp.args.len != 0) break :blk null;
+            const component = try lookupComponentLayout(ctx, comp);
+            if (component.type_spec.lowered_kind != .derived) break :blk null;
+            const base_ptr = if (component.pointer or component.allocatable)
+                try emitLoadedComponentDataPtr(ctx, builder, comp)
+            else
+                try emitComponentStoragePtr(ctx, builder, comp);
+            const count = if (component.dims.len != 0 and !(component.pointer or component.allocatable))
+                common.arrayElementCount(ctx.sem, component.dims) catch null
+            else
+                null;
+            break :blk .{
+                .base_ptr = base_ptr,
+                .count = count,
+                .elem_stride_bytes = component.elem_size,
+            };
+        },
+        else => null,
+    };
 }
 
 pub const DescriptorSlotKind = enum {

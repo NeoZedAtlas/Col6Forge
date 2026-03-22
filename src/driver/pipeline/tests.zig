@@ -276,6 +276,58 @@ test "runPipelineWithOptionsAndDiagnostics accepts parent abstract component dat
     try testing.expect(!diag_bag.has());
 }
 
+test "runPipelineWithOptionsAndDiagnostics accepts projected PDT component array assignment and reduction" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "module input_output_pair_m\n" ++
+        "  implicit none\n" ++
+        "  type input_output_pair_t(k)\n" ++
+        "    integer, kind :: k\n" ++
+        "    integer :: a, b\n" ++
+        "  end type\n" ++
+        "  type mini_batch_t(k)\n" ++
+        "    integer, kind :: k = kind(1.)\n" ++
+        "    type(input_output_pair_t(k)), allocatable :: input_output_pairs_(:)\n" ++
+        "  end type\n" ++
+        "  interface\n" ++
+        "    module function default_real_construct()\n" ++
+        "      implicit none\n" ++
+        "      type(mini_batch_t) default_real_construct\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module\n" ++
+        "submodule(input_output_pair_m) input_output_pair_smod\n" ++
+        "contains\n" ++
+        "  function default_real_construct()\n" ++
+        "    type(mini_batch_t) default_real_construct\n" ++
+        "    allocate(default_real_construct%input_output_pairs_(2))\n" ++
+        "    default_real_construct%input_output_pairs_%a = [42,43]\n" ++
+        "    default_real_construct%input_output_pairs_%b = [420,421]\n" ++
+        "  end function\n" ++
+        "end submodule\n" ++
+        "program test\n" ++
+        "  use input_output_pair_m\n" ++
+        "  type(mini_batch_t), allocatable :: res\n" ++
+        "  res = default_real_construct()\n" ++
+        "  if (any(res%input_output_pairs_%a /= [42,43])) stop 1\n" ++
+        "  if (any(res%input_output_pairs_%b /= [420,421])) stop 2\n" ++
+        "end program\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "projected_pdt_component_pipeline.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    const result = try runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag);
+    defer allocator.free(result.output);
+    try testing.expect(!diag_bag.has());
+}
+
 test "runPipelineWithOptionsAndDiagnostics accepts repository array_constructor_14 contents" {
     const testing = std.testing;
     const allocator = testing.allocator;

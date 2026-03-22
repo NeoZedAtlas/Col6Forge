@@ -30,24 +30,78 @@ pub fn interfaceProcedureFromUnit(
         .end_source = end_source,
         .pure = unit.pure,
         .elemental = unit.elemental,
+        .recursive = unit.recursive,
         .bind_name = unit.bind_name,
         .result_name = unit.result_name,
         .args = unit.args,
         .alt_return_dummy_count = unit.alt_return_dummy_count,
-        .type_spec = if (unit.decls.len != 0)
-            switch (unit.decls[0]) {
-                .type_decl => |type_decl| .{
-                    .type_kind = type_decl.type_kind,
-                    .kind_selector = type_decl.kind_selector,
-                    .derived_type_name = type_decl.derived_type_name,
-                    .polymorphic = type_decl.polymorphic,
-                },
-                else => null,
-            }
-        else
-            null,
+        .type_spec = declaredProcedureResultTypeSpec(unit),
         .decls = unit.decls,
     };
+}
+
+pub fn cloneProcedureResultDecl(
+    arena: std.mem.Allocator,
+    decls: []const ast.Decl,
+    result_name: []const u8,
+) !?ast.Decl {
+    for (decls) |decl_node| {
+        switch (decl_node) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    const items = try arena.alloc(ast.Declarator, 1);
+                    items[0] = item;
+                    return .{ .type_decl = .{
+                        .type_kind = type_decl.type_kind,
+                        .kind_selector = type_decl.kind_selector,
+                        .derived_type_name = type_decl.derived_type_name,
+                        .polymorphic = type_decl.polymorphic,
+                        .items = items,
+                        .parameter = type_decl.parameter,
+                        .save = type_decl.save,
+                        .allocatable = type_decl.allocatable,
+                        .pointer = type_decl.pointer,
+                        .optional = type_decl.optional,
+                        .intent = type_decl.intent,
+                        .external = type_decl.external,
+                        .asynchronous = type_decl.asynchronous,
+                        .contiguous = type_decl.contiguous,
+                        .value_attr = type_decl.value_attr,
+                        .volatile_attr = type_decl.volatile_attr,
+                    } };
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    const items = try arena.alloc(ast.Declarator, 1);
+                    items[0] = item;
+                    return .{ .procedure = .{
+                        .interface = procedure_decl.interface,
+                        .items = items,
+                        .pointer = procedure_decl.pointer,
+                        .optional = procedure_decl.optional,
+                        .save = procedure_decl.save,
+                    } };
+                }
+            },
+            .dimension => |dimension_decl| {
+                for (dimension_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    const items = try arena.alloc(ast.Declarator, 1);
+                    items[0] = item;
+                    return .{ .dimension = .{
+                        .items = items,
+                        .allocatable = dimension_decl.allocatable,
+                        .pointer = dimension_decl.pointer,
+                    } };
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
 }
 
 pub fn classifyInterfaceEnd(
@@ -102,4 +156,34 @@ fn invalidInterfaceEndMessage(interface_name: ?[]const u8) []const u8 {
     if (std.mem.startsWith(u8, name, "operator(")) return "Expecting END INTERFACE OPERATOR";
     if (std.mem.startsWith(u8, name, "assignment(")) return "Expecting END INTERFACE ASSIGNMENT";
     return "Expecting END INTERFACE";
+}
+
+fn declaredProcedureResultTypeSpec(unit: ProgramUnit) ?ast.ProcedureTypeSpec {
+    const result_name = unit.result_name orelse unit.name;
+    for (unit.decls) |decl_node| {
+        switch (decl_node) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    return .{
+                        .type_kind = type_decl.type_kind,
+                        .kind_selector = type_decl.kind_selector,
+                        .derived_type_name = type_decl.derived_type_name,
+                        .polymorphic = type_decl.polymorphic,
+                    };
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    return switch (procedure_decl.interface) {
+                        .type_spec => |type_spec| type_spec,
+                        else => null,
+                    };
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
 }

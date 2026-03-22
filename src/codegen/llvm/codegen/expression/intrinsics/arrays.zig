@@ -183,7 +183,8 @@ pub fn emitIntrinsicAny(ctx: *Context, builder: anytype, args: []*Expr) EmitErro
 const WholeArrayView = struct {
     base_ptr: ValueRef,
     elem_ty: IRType,
-    count: usize,
+    count: ?usize = null,
+    stride_bytes: usize = 0,
 };
 
 const ConstructorView = struct {
@@ -199,20 +200,19 @@ fn emitWholeArrayAnyReduction(ctx: *Context, builder: anytype, expr_node: *Expr)
         else => return null,
     }
 
-    if (supportedWholeArrayView(ctx, bin.left)) |left_view| {
+    if (try supportedWholeArrayView(ctx, builder, bin.left)) |left_view| {
         if (supportedConstructorView(bin.right)) |right_ctor| {
-            if (left_view.count != right_ctor.count) return null;
             return try emitWholeArrayConstructorReduction(ctx, builder, bin.op, left_view, right_ctor);
         }
-        if (supportedWholeArrayView(ctx, bin.right)) |right_view| {
-            if (left_view.count != right_view.count) return null;
+        if (try supportedWholeArrayView(ctx, builder, bin.right)) |right_view| {
+            if (left_view.count == null or right_view.count == null) return null;
+            if (left_view.count.? != right_view.count.?) return null;
             return try emitWholeArrayWholeArrayReduction(ctx, builder, bin.op, left_view, right_view);
         }
         return try emitWholeArrayScalarReduction(ctx, builder, bin.op, left_view, bin.right);
     }
-    if (supportedWholeArrayView(ctx, bin.right)) |right_view| {
+    if (try supportedWholeArrayView(ctx, builder, bin.right)) |right_view| {
         if (supportedConstructorView(bin.left)) |left_ctor| {
-            if (left_ctor.count != right_view.count) return null;
             return try emitConstructorWholeArrayReduction(ctx, builder, bin.op, left_ctor, right_view);
         }
         return try emitScalarWholeArrayReduction(ctx, builder, bin.op, bin.left, right_view);
@@ -230,10 +230,11 @@ fn emitWholeArrayAnyReduction(ctx: *Context, builder: anytype, expr_node: *Expr)
     return null;
 }
 
-fn supportedWholeArrayView(ctx: *Context, expr_node: *Expr) ?WholeArrayView {
+fn supportedWholeArrayView(ctx: *Context, builder: anytype, expr_node: *Expr) EmitError!?WholeArrayView {
     return switch (expr_node.*) {
         .identifier => |name| wholeArraySymbolView(ctx, name),
         .call_or_subscript => |call| wholeArraySectionView(ctx, call),
+        .component => |comp| wholeProjectedComponentView(ctx, builder, comp),
         else => null,
     };
 }
@@ -258,6 +259,20 @@ fn wholeArraySectionView(ctx: *Context, call: ast.CallOrSubscript) ?WholeArrayVi
         if (!isFullDimRange(arg)) return null;
     }
     return wholeArraySymbolView(ctx, call.name);
+}
+
+fn wholeProjectedComponentView(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+) EmitError!?WholeArrayView {
+    const view = try memory.emitProjectedComponentArrayView(ctx, builder, comp) orelse return null;
+    return .{
+        .base_ptr = view.base_ptr,
+        .elem_ty = view.elem_ty,
+        .count = view.count,
+        .stride_bytes = view.stride_bytes,
+    };
 }
 
 fn isFullDimRange(expr_node: *Expr) bool {
@@ -308,9 +323,12 @@ fn emitWholeArrayConstructorReduction(
     left: WholeArrayView,
     right: ConstructorView,
 ) EmitError!ValueRef {
+    if (left.count) |count| {
+        if (count != right.count) return error.UnsupportedIntrinsicType;
+    }
     var acc = utils.zeroValue(.i1);
     var idx: usize = 0;
-    while (idx < left.count) : (idx += 1) {
+    while (idx < right.count) : (idx += 1) {
         const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
         const rhs = try dispatch.emitExpr(ctx, builder, right.items[idx]);
         const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
@@ -326,9 +344,12 @@ fn emitConstructorWholeArrayReduction(
     left: ConstructorView,
     right: WholeArrayView,
 ) EmitError!ValueRef {
+    if (right.count) |count| {
+        if (left.count != count) return error.UnsupportedIntrinsicType;
+    }
     var acc = utils.zeroValue(.i1);
     var idx: usize = 0;
-    while (idx < right.count) : (idx += 1) {
+    while (idx < left.count) : (idx += 1) {
         const lhs = try dispatch.emitExpr(ctx, builder, left.items[idx]);
         const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
         const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
@@ -343,10 +364,17 @@ fn emitWholeArrayElement(
     view: WholeArrayView,
     idx: usize,
 ) EmitError!ValueRef {
-    const idx_val = try ctx.constI64(@intCast(idx));
-    const elem_ptr_name = try ctx.nextTemp();
-    try builder.gep(elem_ptr_name, view.elem_ty, view.base_ptr, idx_val);
-    const elem_ptr = ValueRef{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true };
+    const elem_ptr = if (view.stride_bytes == 0) blk: {
+        const idx_val = try ctx.constI64(@intCast(idx));
+        const elem_ptr_name = try ctx.nextTemp();
+        try builder.gep(elem_ptr_name, view.elem_ty, view.base_ptr, idx_val);
+        break :blk ValueRef{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true };
+    } else blk: {
+        const byte_offset = try ctx.constI64(@intCast(idx * view.stride_bytes));
+        const elem_ptr_name = try ctx.nextTemp();
+        try builder.gep(elem_ptr_name, .i8, view.base_ptr, byte_offset);
+        break :blk ValueRef{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true };
+    };
     const elem_tmp = try ctx.nextTemp();
     try builder.load(elem_tmp, view.elem_ty, elem_ptr);
     return .{ .name = elem_tmp, .ty = view.elem_ty, .is_ptr = false };
@@ -359,9 +387,10 @@ fn emitWholeArrayWholeArrayReduction(
     left: WholeArrayView,
     right: WholeArrayView,
 ) EmitError!ValueRef {
+    const count = left.count orelse return error.UnsupportedIntrinsicType;
     var acc = utils.zeroValue(.i1);
     var idx: usize = 0;
-    while (idx < left.count) : (idx += 1) {
+    while (idx < count) : (idx += 1) {
         const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
         const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
         const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
@@ -377,10 +406,11 @@ fn emitWholeArrayScalarReduction(
     left: WholeArrayView,
     right: *Expr,
 ) EmitError!ValueRef {
+    const count = left.count orelse return error.UnsupportedIntrinsicType;
     var acc = utils.zeroValue(.i1);
     const rhs = try dispatch.emitExpr(ctx, builder, right);
     var idx: usize = 0;
-    while (idx < left.count) : (idx += 1) {
+    while (idx < count) : (idx += 1) {
         const lhs = try emitWholeArrayElement(ctx, builder, left, idx);
         const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
         acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
@@ -395,10 +425,11 @@ fn emitScalarWholeArrayReduction(
     left: *Expr,
     right: WholeArrayView,
 ) EmitError!ValueRef {
+    const count = right.count orelse return error.UnsupportedIntrinsicType;
     var acc = utils.zeroValue(.i1);
     const lhs = try dispatch.emitExpr(ctx, builder, left);
     var idx: usize = 0;
-    while (idx < right.count) : (idx += 1) {
+    while (idx < count) : (idx += 1) {
         const rhs = try emitWholeArrayElement(ctx, builder, right, idx);
         const cmp = try binary.emitBinary(ctx, builder, op, lhs, rhs);
         acc = try binary.emitBinary(ctx, builder, .or_, acc, cmp);
@@ -611,5 +642,3 @@ pub fn emitIntrinsicInternalLiteralSubstring(ctx: *Context, builder: anytype, ar
     const plan = (try dispatch.emitInternalLiteralSubstringPlan(ctx, builder, args)) orelse return error.UnsupportedIntrinsicType;
     return .{ .name = plan.ptr.name, .ty = .ptr, .is_ptr = false };
 }
-
-

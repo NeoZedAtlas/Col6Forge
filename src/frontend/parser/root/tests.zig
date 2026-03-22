@@ -1484,4 +1484,185 @@ test "parseProgram parses submodule container and inherited module procedure imp
     try testing.expectEqualStrings("y", program.units[2].result_name.?);
     try testing.expectEqual(@as(usize, 1), program.units[2].args.len);
     try testing.expectEqualStrings("n", program.units[2].args[0]);
+    try testing.expect(program.units[2].decls[0] == .type_decl);
+    try testing.expectEqualStrings("y", program.units[2].decls[0].type_decl.items[0].name);
+    try testing.expectEqual(@as(usize, 1), program.units[2].decls[0].type_decl.items[0].dims.len);
+}
+
+test "parseProgramWithDiagnostics reports orphan submodule module procedure end-procedure recovery" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  interface\n" ++
+        "    module subroutine bar\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "end module m1\n" ++
+        "\n" ++
+        "submodule (m1) m2\n" ++
+        "contains\n" ++
+        "  module procedure foo\n" ++
+        "  end procedure\n" ++
+        "end submodule\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    _ = try parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag);
+
+    var saw_missing_interface = false;
+    var saw_end_submodule = false;
+    while (diag_bag.take()) |diag| {
+        defer diag_bag.release(diag);
+        if (std.mem.indexOf(u8, diag.message, "must be in a generic module interface") != null) saw_missing_interface = true;
+        if (std.mem.indexOf(u8, diag.message, "Expecting END SUBMODULE statement") != null) saw_end_submodule = true;
+    }
+    try testing.expect(saw_missing_interface);
+    try testing.expect(saw_end_submodule);
+}
+
+test "parseProgramWithDiagnostics rejects IMPORT in module procedure interface body" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  interface\n" ++
+        "    module subroutine s(x)\n" ++
+        "      import\n" ++
+        "      integer :: x\n" ++
+        "    end subroutine s\n" ++
+        "  end interface\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    _ = try parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag);
+
+    const diag = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag);
+    try testing.expectEqual(@as(usize, 4), diag.line);
+    try testing.expect(std.mem.indexOf(u8, diag.message, "not permitted in a module procedure interface body") != null);
+}
+
+test "parseProgramWithDiagnostics rejects submodule visibility statements and attributes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  interface\n" ++
+        "    module subroutine p()\n" ++
+        "    end subroutine p\n" ++
+        "  end interface\n" ++
+        "end module m\n" ++
+        "\n" ++
+        "submodule (m) sm\n" ++
+        "  private\n" ++
+        "  integer, public :: i\n" ++
+        "  type :: t\n" ++
+        "    public\n" ++
+        "    integer, private :: j\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "  module procedure p\n" ++
+        "  end procedure\n" ++
+        "end submodule\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    _ = try parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag);
+
+    var saw_private_stmt = false;
+    var saw_public_attr = false;
+    var saw_public_stmt = false;
+    var saw_private_attr = false;
+    while (diag_bag.take()) |diag| {
+        defer diag_bag.release(diag);
+        if (std.mem.indexOf(u8, diag.message, "PRIVATE statement") != null) saw_private_stmt = true;
+        if (std.mem.indexOf(u8, diag.message, "PUBLIC attribute") != null) saw_public_attr = true;
+        if (std.mem.indexOf(u8, diag.message, "PUBLIC statement") != null) saw_public_stmt = true;
+        if (std.mem.indexOf(u8, diag.message, "PRIVATE attribute") != null) saw_private_attr = true;
+    }
+    try testing.expect(saw_private_stmt);
+    try testing.expect(saw_public_attr);
+    try testing.expect(saw_public_stmt);
+    try testing.expect(saw_private_attr);
+}
+
+test "parseProgram parses internal procedures inside submodule module procedure bodies" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module foo_interface\n" ++
+        "  interface\n" ++
+        "    module subroutine foo()\n" ++
+        "    end subroutine foo\n" ++
+        "  end interface\n" ++
+        "end module foo_interface\n" ++
+        "\n" ++
+        "submodule(foo_interface) foo_implementation\n" ++
+        "contains\n" ++
+        "  module procedure foo\n" ++
+        "  contains\n" ++
+        "    module subroutine bar()\n" ++
+        "    end subroutine\n" ++
+        "  end procedure\n" ++
+        "end submodule\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 4), program.units.len);
+    try testing.expectEqualStrings("foo", program.units[2].name);
+    try testing.expect(program.units[2].is_module_procedure);
+    try testing.expectEqualStrings("bar", program.units[3].name);
+    try testing.expectEqualStrings("foo", program.units[3].owner_name.?);
+    try testing.expectEqual(ast.LexicalOwnerKind.procedure, program.units[3].owner_kind.?);
+}
+
+test "parseProgram keeps interface procedure result type after non-result declarations" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module mod\n" ++
+        "  interface\n" ++
+        "    module function build(n) result(y)\n" ++
+        "      implicit none\n" ++
+        "      integer, intent(in) :: n\n" ++
+        "      real :: y\n" ++
+        "    end function build\n" ++
+        "  end interface\n" ++
+        "end module mod\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const interface_block = program.units[0].decls[0].interface_block;
+    try testing.expectEqual(@as(usize, 1), interface_block.procedure_headers.len);
+    const proc_header = interface_block.procedure_headers[0];
+    try testing.expect(proc_header.type_spec != null);
+    try testing.expectEqual(ast.TypeKind.real, proc_header.type_spec.?.type_kind);
 }

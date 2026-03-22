@@ -78,6 +78,7 @@ pub const InterfaceProcedure = struct {
     end_source: @import("program.zig").DeclSource = .{},
     pure: bool = false,
     elemental: bool = false,
+    recursive: bool = false,
     bind_name: ?[]const u8 = null,
     result_name: ?[]const u8 = null,
     args: []const []const u8,
