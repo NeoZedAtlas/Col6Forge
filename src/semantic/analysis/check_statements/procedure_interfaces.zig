@@ -75,7 +75,6 @@ pub fn calleeHasVisibleExplicitInterface(self: *context.Context, name: []const u
 }
 
 pub fn requiresExplicitInterfaceForActual(self: *context.Context, expr: *ast.Expr) bool {
-    if (isProcedureActualExpr(self, expr)) return true;
     const spec = resolve_expr.exprTypeSpec(self, expr) catch return false;
     return spec.lowered_kind == .derived and spec.polymorphic;
 }

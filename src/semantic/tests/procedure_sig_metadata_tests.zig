@@ -298,3 +298,46 @@ test "inferProcedureArgSigs does not treat array dummy as procedure from subscri
     try testing.expect(!arg_sigs[0].is_procedure);
     try testing.expectEqual(@as(usize, 1), arg_sigs[0].rank);
 }
+
+test "analyzeProgram accepts procedure pointer actual with matching declarator interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  abstract interface\n" ++
+        "    pure function i_f(x) result(d)\n" ++
+        "      real, intent(in) :: x(:,:)\n" ++
+        "      real :: d(size(x,1),size(x,2))\n" ++
+        "    end function i_f\n" ++
+        "  end interface\n" ++
+        "  procedure(i_f), pointer :: f => null()\n" ++
+        "end module m1\n" ++
+        "\n" ++
+        "module m2\n" ++
+        "contains\n" ++
+        "  pure subroutine ns_dirdata(fun)\n" ++
+        "    interface\n" ++
+        "      pure function fun(x) result(d)\n" ++
+        "        real, intent(in) :: x(:,:)\n" ++
+        "        real :: d(size(x,1),size(x,2))\n" ++
+        "      end function fun\n" ++
+        "    end interface\n" ++
+        "  end subroutine ns_dirdata\n" ++
+        "end module m2\n" ++
+        "\n" ++
+        "program p\n" ++
+        "  use m1\n" ++
+        "  use m2\n" ++
+        "  call ns_dirdata(f)\n" ++
+        "end program p\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    _ = try api.analyzeProgram(arena.allocator(), program);
+}

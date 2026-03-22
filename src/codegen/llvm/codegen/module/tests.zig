@@ -819,6 +819,35 @@ test "emitModuleToWriter supports SIZE over whole-array class component in speci
     try testing.expect(std.mem.indexOf(u8, output, "alloca [10 x float]") != null);
 }
 
+test "emitModuleToWriter lowers contiguous section assignment from whole array with copy loop" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "  implicit none\n" ++
+        "  integer, parameter :: n = 8\n" ++
+        "  real, pointer :: a(:), temp(:)\n" ++
+        "  allocate(a(n), temp(n))\n" ++
+        "  temp(1:size(a)) = a\n" ++
+        "end program test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "contig_section_whole_array_copy.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "arr_copy_head") != null);
+}
+
 test "emitModuleToWriter lowers SUM over implied-do array constructor" {
     const testing = std.testing;
     const allocator = testing.allocator;

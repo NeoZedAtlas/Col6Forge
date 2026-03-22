@@ -23,7 +23,7 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
             return;
         }
     }
-    if (assign.target.* == .substring and !whole_array.isWholeArraySectionSubstringTarget(ctx, assign.target.substring)) {
+    if (assign.target.* == .substring and !whole_array.isArraySectionSubstringTarget(ctx, assign.target.substring)) {
         const target_ptr = try pointer_misc.emitAssignmentTargetPtr(ctx, builder, assign.target);
         const target_len = try character_mod.emitSubstringLenValue(ctx, builder, assign.target.substring);
         try character_mod.storeCharacterValueDynamic(ctx, builder, target_ptr, target_len, assign.value);
@@ -34,6 +34,8 @@ pub fn emitAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) E
     if (try whole_array.emitWholeArrayGeneratedAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitWholeArrayRuntimeGeneratedAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitWholeArrayConstructorAssignment(ctx, builder, assign)) return;
+    if (try whole_array.emitContiguousSectionWholeArrayCopyAssignment(ctx, builder, assign)) return;
+    if (try whole_array.emitContiguousSectionSubstringWholeArrayCopyAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitContiguousSectionScalarAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitContiguousComponentSectionScalarAssignment(ctx, builder, assign)) return;
     if (try whole_array.emitWholeArrayScalarAssignment(ctx, builder, assign)) return;

@@ -188,3 +188,19 @@ test "invariant call arity 17 intrinsic MAX rejects heterogeneous argument types
         "      END\n";
     try expectSemanticErrorInvariant(source, error.InvalidArithmeticOperands, "CF3119");
 }
+
+test "invariant call arity 18 typed function reference with procedure actual is trusted without explicit interface" {
+    const source =
+        "      MODULE FOO\n" ++
+        "      CONTAINS\n" ++
+        "      SUBROUTINE SBR()\n" ++
+        "      END\n" ++
+        "      END MODULE FOO\n" ++
+        "      INTEGER FUNCTION F()\n" ++
+        "      USE FOO\n" ++
+        "      INTEGER BAR, RES\n" ++
+        "      RES = BAR(SBR)\n" ++
+        "      F = RES\n" ++
+        "      END\n";
+    try expectSemanticSuccessInvariant(source);
+}

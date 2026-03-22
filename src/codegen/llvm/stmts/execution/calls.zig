@@ -44,11 +44,12 @@ pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!v
         return;
     }
     const args = try collectCallExprArgs(ctx.allocator, call);
-    const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-    if (sym.storage == .dummy and sym.is_external) {
-        const fn_ptr = try ctx.getPointer(call.name);
-        _ = try expr.emitIndirectCall(ctx, builder, fn_ptr, .void, args, true);
-        return;
+    if (ctx.findSymbol(call.name)) |sym| {
+        if (sym.storage == .dummy and sym.is_external) {
+            const fn_ptr = try ctx.getPointer(call.name);
+            _ = try expr.emitIndirectCall(ctx, builder, fn_ptr, .void, args, true);
+            return;
+        }
     }
     const fn_name = try ensureTypedExternalDeclForCall(ctx, call.name, .void, args);
     _ = try expr.emitCall(ctx, builder, fn_name, .void, args, true);
@@ -59,10 +60,11 @@ pub fn emitCallValue(ctx: *Context, builder: anytype, call: ast.CallStmt, ret_ty
     ctx.setCurrentSource(if (call.source.line != 0) call.source else prev_source);
     defer ctx.setCurrentSource(prev_source);
     const args = try collectCallExprArgs(ctx.allocator, call);
-    const sym = ctx.findSymbol(call.name) orelse return error.UnknownSymbol;
-    if (sym.storage == .dummy and sym.is_external) {
-        const fn_ptr = try ctx.getPointer(call.name);
-        return expr.emitIndirectCall(ctx, builder, fn_ptr, ret_ty, args, false);
+    if (ctx.findSymbol(call.name)) |sym| {
+        if (sym.storage == .dummy and sym.is_external) {
+            const fn_ptr = try ctx.getPointer(call.name);
+            return expr.emitIndirectCall(ctx, builder, fn_ptr, ret_ty, args, false);
+        }
     }
     const fn_name = try ensureTypedExternalDeclForCall(ctx, call.name, ret_ty, args);
     return expr.emitCall(ctx, builder, fn_name, ret_ty, args, false);

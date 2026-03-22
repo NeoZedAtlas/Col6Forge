@@ -460,7 +460,7 @@ fn checkProcedureActualArg(
     if (!formal.is_procedure) return;
     switch (actual_expr.*) {
         .identifier => |name| {
-            const actual_sig = resolve_symbols.lookupKnownProcedureSig(self, name);
+            const actual_sig = resolve_symbols.lookupKnownProcedureSig(self, name) orelse lookupProcedureDeclaratorSig(self, name);
             if (actual_sig) |sig| {
                 if (formal.procedure_kind) |expected_kind| {
                     if (sig.kind != expected_kind) {
@@ -588,8 +588,7 @@ fn checkProcedureDummyCompatibility(
 }
 
 fn actualSigResultType(sig: context.Context.ProcedureSig) ?symbols.TypeSpec {
-    _ = sig;
-    return null;
+    return sig.result_type_spec;
 }
 
 fn procedureKindMismatchMessage(kind: ast.ProgramUnitKind) []const u8 {
@@ -622,6 +621,21 @@ fn emitProcedureActualDiagnostic(
         self.setCurrentSource(src);
     }
     return err;
+}
+
+fn lookupProcedureDeclaratorSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+    for (self.unit.decls) |decl| {
+        if (decl != .procedure) continue;
+        const procedure_decl = decl.procedure;
+        for (procedure_decl.items) |item| {
+            if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
+            return switch (procedure_decl.interface) {
+                .name => |iface_name| resolve_symbols.lookupKnownProcedureSig(self, iface_name),
+                else => null,
+            };
+        }
+    }
+    return null;
 }
 
 fn abstractPassedObjectTypeName(self: *context.Context, expr: *ast.Expr) ?[]const u8 {

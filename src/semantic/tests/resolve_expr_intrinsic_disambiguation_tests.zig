@@ -201,6 +201,31 @@ test "resolve_expr generic MAX does not poison later integer subscripts" {
     _ = try parseAndAnalyze(arena.allocator(), source);
 }
 
+test "resolve_expr recognizes SIZE as INTEGER intrinsic in array section bounds" {
+    const testing = std.testing;
+    const source =
+        "      PROGRAM TEST\n" ++
+        "      REAL, POINTER :: A(:), TEMP(:)\n" ++
+        "      INTEGER N\n" ++
+        "      PARAMETER (N = 8)\n" ++
+        "      ALLOCATE(A(N), TEMP(N))\n" ++
+        "      TEMP(1:SIZE(A)) = A\n" ++
+        "      END\n";
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try parseAndAnalyze(arena.allocator(), source);
+
+    var found = false;
+    for (result.sem.units[0].symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "SIZE")) continue;
+        found = true;
+        try testing.expect(sym.is_intrinsic);
+        try testing.expectEqual(ast.TypeKind.integer, sym.loweredKind());
+    }
+    try testing.expect(found);
+}
+
 test "resolve_expr accepts generic SIGN with DOUBLE PRECISION and DBLE complex operand" {
     const testing = std.testing;
     const source =

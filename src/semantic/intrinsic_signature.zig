@@ -34,6 +34,7 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
     .{ "ICHAR", .integer },
     .{ "IACHAR", .integer },
     .{ "LEN", .integer },
+    .{ "SIZE", .integer },
     .{ "ACHAR", .character },
     .{ "TRIM", .character },
     .{ "DBLE", .double_precision },

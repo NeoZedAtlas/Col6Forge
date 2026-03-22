@@ -96,6 +96,7 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "RAND", Arity{ .min = 0, .max = 1 } },
     .{ "REAL", Arity{ .min = 1, .max = 2 } },
     .{ "RESHAPE", Arity{ .min = 2, .max = 4 } },
+    .{ "SIZE", Arity{ .min = 1, .max = 2 } },
     .{ "SIGN", Arity{ .min = 2, .max = 2 } },
     .{ "SIN", Arity{ .min = 1, .max = 1 } },
     .{ "SINH", Arity{ .min = 1, .max = 1 } },

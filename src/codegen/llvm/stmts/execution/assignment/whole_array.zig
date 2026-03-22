@@ -52,6 +52,74 @@ pub fn emitContiguousSectionScalarAssignment(ctx: *Context, builder: anytype, as
     return true;
 }
 
+pub fn emitContiguousSectionWholeArrayCopyAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    if (assign.target.* != .call_or_subscript) return false;
+    if (assign.value.* != .identifier) return false;
+
+    const target = assign.target.call_or_subscript;
+    const target_kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(assign.target))) orelse .unknown;
+    if (target_kind == .call) return false;
+
+    const target_sym = ctx.findSymbol(target.name) orelse return false;
+    if (target_sym.dims.len == 0 or target.args.len != target_sym.dims.len) return false;
+    if (target_sym.isCharacter() or target_sym.loweredKind() == .derived) return false;
+
+    const source_name = assign.value.identifier;
+    const source_sym = ctx.findSymbol(source_name) orelse return false;
+    if (source_sym.dims.len == 0) return false;
+    if (source_sym.isCharacter() or source_sym.loweredKind() == .derived) return false;
+    if (source_sym.loweredKind() != target_sym.loweredKind()) return false;
+
+    for (target.args) |arg| {
+        if (arg.* != .dim_range) return false;
+        const range = arg.dim_range;
+        if (!rangeLowerIsOne(range)) return false;
+        if (range.stride != null) return false;
+        if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) return false;
+    }
+
+    const elem_ty = common.symbolElementIRType(target_sym, ctx.options.target_layout);
+    if (elem_ty != common.symbolElementIRType(source_sym, ctx.options.target_layout)) return false;
+
+    const dst_ptr = try wholeArrayBasePtr(ctx, builder, target.name, target_sym);
+    const src_ptr = try wholeArrayBasePtr(ctx, builder, source_name, source_sym);
+    const count = try emitDynamicElemCount(ctx, builder, source_sym);
+    try emitLinearCopyLoop(ctx, builder, dst_ptr, src_ptr, elem_ty, count);
+    return true;
+}
+
+pub fn emitContiguousSectionSubstringWholeArrayCopyAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    if (assign.target.* != .substring) return false;
+    if (assign.value.* != .identifier) return false;
+
+    const target = assign.target.substring;
+    if (!isArraySectionSubstringTarget(ctx, target)) return false;
+
+    const target_sym = ctx.findSymbol(target.name) orelse return false;
+    if (target_sym.dims.len != 1) return false;
+    if (target_sym.isCharacter() or target_sym.loweredKind() == .derived) return false;
+    const lower = target.start orelse return false;
+    const upper = target.end orelse return false;
+    if (!exprIsConstOne(lower)) return false;
+    if (upper.* == .literal and upper.literal.kind == .assumed_size) return false;
+
+    const source_name = assign.value.identifier;
+    const source_sym = ctx.findSymbol(source_name) orelse return false;
+    if (source_sym.dims.len != 1) return false;
+    if (source_sym.isCharacter() or source_sym.loweredKind() == .derived) return false;
+    if (source_sym.loweredKind() != target_sym.loweredKind()) return false;
+
+    const elem_ty = common.symbolElementIRType(target_sym, ctx.options.target_layout);
+    if (elem_ty != common.symbolElementIRType(source_sym, ctx.options.target_layout)) return false;
+
+    const dst_ptr = try wholeArrayBasePtr(ctx, builder, target.name, target_sym);
+    const src_ptr = try wholeArrayBasePtr(ctx, builder, source_name, source_sym);
+    var count = try expr.emitExpr(ctx, builder, upper);
+    if (count.ty != .i64) count = try expr.coerce(ctx, builder, count, .i64);
+    try emitLinearCopyLoop(ctx, builder, dst_ptr, src_ptr, elem_ty, count);
+    return true;
+}
+
 pub fn emitWholeArrayScalarAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
     if (assign.target.* != .identifier) return false;
     const name = assign.target.identifier;
@@ -400,8 +468,13 @@ fn wholeArrayConstructorTarget(ctx: *Context, expr_node: *ast.Expr) ?struct { na
 }
 
 pub fn isWholeArraySectionSubstringTarget(ctx: *Context, sub: ast.SubstringExpr) bool {
-    if (sub.args.len != 0) return false;
+    if (!isArraySectionSubstringTarget(ctx, sub)) return false;
     if (sub.start != null or sub.end != null) return false;
+    return true;
+}
+
+pub fn isArraySectionSubstringTarget(ctx: *Context, sub: ast.SubstringExpr) bool {
+    if (sub.args.len != 0) return false;
     const sym = ctx.findSymbol(sub.name) orelse return false;
     return sym.dims.len != 0;
 }
@@ -498,12 +571,68 @@ pub fn emitLinearFillLoop(
     try builder.label(loop_exit);
 }
 
+fn emitLinearCopyLoop(
+    ctx: *Context,
+    builder: anytype,
+    dst_base_ptr: ValueRef,
+    src_base_ptr: ValueRef,
+    elem_ty: ir.IRType,
+    count: ValueRef,
+) EmitError!void {
+    const idx_ptr = try ctx.nextTemp();
+    try builder.alloca(idx_ptr, .i64);
+    try builder.store(.{ .name = "0", .ty = .i64, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+
+    const loop_head = try ctx.nextLabel("arr_copy_head");
+    const loop_body = try ctx.nextLabel("arr_copy_body");
+    const loop_exit = try ctx.nextLabel("arr_copy_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const idx_tmp = try ctx.nextTemp();
+    try builder.load(idx_tmp, .i64, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    const idx_val = ValueRef{ .name = idx_tmp, .ty = .i64, .is_ptr = false };
+    const cond_tmp = try ctx.nextTemp();
+    try builder.compare(cond_tmp, "icmp", "slt", .i64, idx_val, count);
+    const cond_val = ValueRef{ .name = cond_tmp, .ty = .i1, .is_ptr = false };
+    try builder.brCond(cond_val, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const src_elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(src_elem_ptr_name, elem_ty, src_base_ptr, idx_val);
+    const src_elem_ptr = ValueRef{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true };
+    const src_elem_name = try ctx.nextTemp();
+    try builder.load(src_elem_name, elem_ty, src_elem_ptr);
+    const src_elem = ValueRef{ .name = src_elem_name, .ty = elem_ty, .is_ptr = false };
+
+    const dst_elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(dst_elem_ptr_name, elem_ty, dst_base_ptr, idx_val);
+    try builder.store(src_elem, .{ .name = dst_elem_ptr_name, .ty = .ptr, .is_ptr = true });
+
+    const next_tmp = try ctx.nextTemp();
+    try builder.binary(next_tmp, "add", .i64, idx_val, .{ .name = "1", .ty = .i64, .is_ptr = false });
+    try builder.store(.{ .name = next_tmp, .ty = .i64, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
+}
+
 fn wholeArrayComponentTransfer(expr_node: *ast.Expr) ?ast.ComponentExpr {
     if (expr_node.* != .component) return null;
     const comp = expr_node.component;
     if (comp.has_parens) return null;
     if (comp.args.len != 0) return null;
     return comp;
+}
+
+fn wholeArrayBasePtr(ctx: *Context, builder: anytype, name: []const u8, sym: ast.sema.Symbol) EmitError!ValueRef {
+    var base_ptr = try ctx.getPointer(name);
+    if (sym.is_pointer) {
+        const loaded_name = try ctx.nextTemp();
+        try builder.load(loaded_name, .ptr, base_ptr);
+        base_ptr = .{ .name = loaded_name, .ty = .ptr, .is_ptr = true };
+    }
+    return base_ptr;
 }
 
 fn emitMemMove(
@@ -524,7 +653,11 @@ fn emitMemMove(
 
 fn rangeLowerIsOne(range: ast.DimRange) bool {
     const lower = range.lower orelse return true;
-    return switch (lower.*) {
+    return exprIsConstOne(lower);
+}
+
+fn exprIsConstOne(expr_node: *ast.Expr) bool {
+    return switch (expr_node.*) {
         .literal => |lit| lit.kind == .integer and std.mem.eql(u8, lit.text, "1"),
         else => false,
     };

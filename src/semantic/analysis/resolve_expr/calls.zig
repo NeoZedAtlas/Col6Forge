@@ -107,6 +107,11 @@ pub fn resolveCallOrSubscriptExpr(
                 kind = .call;
                 if (sym.kind == .variable) sym.kind = .function;
                 self.symbols.items[idx] = sym;
+            } else if (hasProcedureActualExprArgs(self, call.args)) {
+                kind = .call;
+                if (sym.kind == .variable) sym.kind = .function;
+                sym.is_external = true;
+                self.symbols.items[idx] = sym;
             } else {
                 return error.InvalidSubscript;
             }
@@ -304,6 +309,21 @@ fn isStatementFunctionDefinitionTarget(
     if (args.len == 0) return false;
     for (args) |arg| if (arg.* != .identifier) return false;
     return true;
+}
+
+fn hasProcedureActualExprArgs(self: *context.Context, args: []*ast.Expr) bool {
+    for (args) |arg| {
+        switch (arg.*) {
+            .identifier => |name| {
+                if (symbols_mod.lookupKnownProcedureSig(self, name) != null) return true;
+                const idx = symbols_mod.findSymbolIndex(self, name) orelse continue;
+                const sym = self.symbols.items[idx];
+                if ((sym.kind == .function or sym.kind == .subroutine) and !sym.is_external) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn requiresExplicitInterfaceForActuals(
