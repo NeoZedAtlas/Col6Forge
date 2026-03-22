@@ -2,7 +2,7 @@ const dispatch = @import("dispatch/mod.zig");
 const binary = @import("binary.zig");
 const casting = @import("casting.zig");
 const memory = @import("memory.zig");
-const call_mod = @import("call.zig");
+const call_mod = @import("call/mod.zig");
 
 pub const emitExpr = dispatch.emitExpr;
 pub const emitLValue = dispatch.emitLValue;

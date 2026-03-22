@@ -1,0 +1,22 @@
+const _std = @import("std");
+const _ast = @import("../../../ast/nodes.zig");
+const _fixed_form = @import("../../../frontend/fixed_form.zig");
+const _free_form = @import("../../../frontend/free_form.zig");
+const _parser = @import("../../../frontend/parser/mod.zig");
+const _symbols = @import("../../symbol/mod.zig");
+const api = @import("../../split/api/mod.zig");
+const function_type = @import("../../split/function_type.zig");
+
+pub const std = _std;
+pub const ast = _ast;
+pub const fixed_form = _fixed_form;
+pub const free_form = _free_form;
+pub const parser = _parser;
+pub const symbols = _symbols;
+pub const analyzeProgram = api.analyzeProgram;
+pub const analyzeProgramWithKnown = api.analyzeProgramWithKnown;
+pub const analyzeProgramWithOptions = api.analyzeProgramWithOptions;
+pub const takeDiagnostic = api.takeDiagnostic;
+pub const clearDiagnostic = api.clearDiagnostic;
+pub const inferFunctionType = function_type.inferFunctionType;
+pub const inferFunctionTypeSpec = function_type.inferFunctionTypeSpec;
