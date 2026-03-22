@@ -1,14 +1,12 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
 const symbols = @import("../../symbol/mod.zig");
-const evaluator = @import("../../evaluator.zig");
-const intrinsic_signature = @import("../../intrinsic_signature.zig");
 const context = @import("../context.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
-const constants = @import("../resolve_const.zig");
 const type_helpers = @import("type_helpers.zig");
 const cache = @import("cache.zig");
 const calls = @import("calls.zig");
+const operators = @import("operators.zig");
 
 const ResolvedRefKind = cache.ResolvedRefKind;
 const resolveArrayConstructorTypeSpec = type_helpers.resolveArrayConstructorTypeSpec;
@@ -111,7 +109,10 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
                     if (inner_spec.lowered_kind == .logical) {
                         break :blk symbols.TypeSpec.fromResolvedKind(.logical, .logical, null);
                     }
-                    if (try resolveDefinedUnaryOperatorResult(self, un.op, un.expr)) |result_spec| {
+                    if (try operators.resolveDefinedUnaryOperatorResult(self, un.op, un.expr, .{
+                        .exprTypeSpecCached = exprTypeSpecCached,
+                        .dummyArgTypeCompatible = dummyArgTypeCompatible,
+                    })) |result_spec| {
                         break :blk result_spec;
                     }
                     return error.InvalidArithmeticOperands;
@@ -125,8 +126,15 @@ pub fn resolveExpr(self: *context.Context, expr: *ast.Expr) ResolveError!void {
             try resolveExpr(self, bin.right);
             const left_spec = try exprTypeSpecCached(self, bin.left);
             const right_spec = try exprTypeSpecCached(self, bin.right);
-            const ty = validateBinaryOperandSpecs(self, bin.op, left_spec, right_spec, bin.left, bin.right) catch |err| blk: {
-                if (try resolveDefinedBinaryOperatorResult(self, bin.op, bin.left, bin.right)) |result_spec| {
+            const ty = operators.validateBinaryOperandSpecs(self, bin.op, left_spec, right_spec, bin.left, bin.right, .{
+                .validateBinaryOperands = validateBinaryOperands,
+                .promoteNumericType = promoteNumericType,
+                .exprTypeSpecCached = exprTypeSpecCached,
+            }) catch |err| blk: {
+                if (try operators.resolveDefinedBinaryOperatorResult(self, bin.op, bin.left, bin.right, .{
+                    .exprTypeSpecCached = exprTypeSpecCached,
+                    .dummyArgTypeCompatible = dummyArgTypeCompatible,
+                })) |result_spec| {
                     break :blk result_spec;
                 }
                 return err;
@@ -243,7 +251,10 @@ fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!sy
                 .concat => return symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null),
                 else => {},
             }
-            return promoteNumericTypeSpec(self, bin.left, bin.right);
+            return operators.promoteNumericTypeSpec(self, bin.left, bin.right, .{
+                .exprTypeSpecCached = exprTypeSpecCached,
+                .promoteNumericType = promoteNumericType,
+            });
         },
         .implied_do => |implied| {
             if (implied.items.len == 0) return error.UnsupportedImpliedDo;
@@ -254,99 +265,6 @@ fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!sy
             return spec;
         },
     }
-}
-
-fn validateBinaryOperandSpecs(
-    self: *context.Context,
-    op: ast.BinaryOp,
-    left_spec: symbols.TypeSpec,
-    right_spec: symbols.TypeSpec,
-    left_expr: *ast.Expr,
-    right_expr: *ast.Expr,
-) !symbols.TypeSpec {
-    try validateBinaryOperands(op, left_spec.lowered_kind, right_spec.lowered_kind);
-    switch (op) {
-        .eq, .ne, .lt, .le, .gt, .ge => {
-            if (left_spec.lowered_kind == .character and right_spec.lowered_kind == .character and
-                left_spec.kind_value != right_spec.kind_value)
-            {
-                return error.InvalidArithmeticOperands;
-            }
-            return symbols.TypeSpec.fromResolvedKind(.logical, .logical, null);
-        },
-        .and_, .or_, .eqv, .neqv => return symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
-        .concat => return symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.deferred, null),
-        else => return promoteNumericTypeSpec(self, left_expr, right_expr),
-    }
-}
-
-fn resolveDefinedUnaryOperatorResult(
-    self: *context.Context,
-    op: ast.UnaryOp,
-    actual: *ast.Expr,
-) ResolveError!?symbols.TypeSpec {
-    const op_name = unaryDefinedOperatorName(op) orelse return null;
-    var actuals = [_]*ast.Expr{actual};
-    return lookupDefinedOperatorResult(self, op_name, &actuals);
-}
-
-fn resolveDefinedBinaryOperatorResult(
-    self: *context.Context,
-    op: ast.BinaryOp,
-    left: *ast.Expr,
-    right: *ast.Expr,
-) ResolveError!?symbols.TypeSpec {
-    const op_name = binaryDefinedOperatorName(op) orelse return null;
-    var actuals = [_]*ast.Expr{ left, right };
-    return lookupDefinedOperatorResult(self, op_name, &actuals);
-}
-
-fn lookupDefinedOperatorResult(
-    self: *context.Context,
-    op_name: []const u8,
-    actuals: []const *ast.Expr,
-) ResolveError!?symbols.TypeSpec {
-    const sig = symbols_mod.lookupKnownProcedureSig(self, op_name) orelse return null;
-    if (sig.kind != .function) return null;
-    if (!procedureSigMatchesActuals(self, sig, actuals)) return null;
-    return symbols_mod.lookupKnownFunctionResolvedSpec(self, op_name) orelse null;
-}
-
-fn procedureSigMatchesActuals(
-    self: *context.Context,
-    sig: context.Context.ProcedureSig,
-    actuals: []const *ast.Expr,
-) bool {
-    if (sig.args.len == 0) return sig.arg_count == actuals.len;
-    if (actuals.len > sig.arg_count) return false;
-
-    var actual_index: usize = 0;
-    for (sig.args) |arg| {
-        if (actual_index >= actuals.len) return arg.optional;
-        const actual_spec = exprTypeSpecCached(self, actuals[actual_index]) catch return false;
-        if (!dummyArgTypeCompatible(self, arg.type_spec, actual_spec)) return false;
-        actual_index += 1;
-    }
-    return actual_index == actuals.len;
-}
-
-fn unaryDefinedOperatorName(op: ast.UnaryOp) ?[]const u8 {
-    return switch (op) {
-        .not => "operator(.not.)",
-        else => null,
-    };
-}
-
-fn binaryDefinedOperatorName(op: ast.BinaryOp) ?[]const u8 {
-    return switch (op) {
-        .eq => "operator(==)",
-        .ne => "operator(/=)",
-        .lt => "operator(<)",
-        .le => "operator(<=)",
-        .gt => "operator(>)",
-        .ge => "operator(>=)",
-        else => null,
-    };
 }
 
 fn dummyArgTypeCompatible(
@@ -371,23 +289,6 @@ fn dummyArgTypeCompatible(
 fn resolvedExprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
     if (self.expr_type_cache.get(@intFromPtr(expr))) |cached| return cached;
     return exprType(self, expr);
-}
-
-fn promoteNumericTypeSpec(
-    self: *context.Context,
-    left: *ast.Expr,
-    right: *ast.Expr,
-) ResolveError!symbols.TypeSpec {
-    const left_spec = try exprTypeSpecCached(self, left);
-    const right_spec = try exprTypeSpecCached(self, right);
-    return switch (promoteNumericType(left_spec.lowered_kind, right_spec.lowered_kind)) {
-        .complex_double => symbols.TypeSpec.fromResolvedKind(.complex, .complex_double, 16),
-        .complex => if (left_spec.lowered_kind == .complex or left_spec.lowered_kind == .complex_double) left_spec else right_spec,
-        .double_precision => if (left_spec.lowered_kind == .double_precision) left_spec else right_spec,
-        .real => if (left_spec.lowered_kind == .real) left_spec else right_spec,
-        .integer => if (left_spec.lowered_kind == .integer) left_spec else right_spec,
-        else => return error.InvalidArithmeticOperands,
-    };
 }
 
 test "exprType treats D exponent real literal as DOUBLE PRECISION" {
