@@ -6,9 +6,24 @@ const intrinsic_signature = @import("../../intrinsic_signature.zig");
 const context = @import("../context.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
 const constants = @import("../resolve_const.zig");
-const type_kind_selector = @import("../../type_kind_selector.zig");
+const type_helpers = @import("type_helpers.zig");
+const cache = @import("cache.zig");
 
-const ResolvedRefKind = symbols.ResolvedRefKind;
+const ResolvedRefKind = cache.ResolvedRefKind;
+const resolveArrayConstructorTypeSpec = type_helpers.resolveArrayConstructorTypeSpec;
+const mergeArrayConstructorItemTypeSpec = type_helpers.mergeArrayConstructorItemTypeSpec;
+const promoteNumericType = type_helpers.promoteNumericType;
+const isPowerOperandSupported = type_helpers.isPowerOperandSupported;
+const validateBinaryOperands = type_helpers.validateBinaryOperands;
+const literalTypeSpec = type_helpers.literalTypeSpec;
+const realLiteralTypeKind = type_helpers.realLiteralTypeKind;
+const realLiteralTypeSpec = type_helpers.realLiteralTypeSpec;
+const realLiteralKindSuffix = type_helpers.realLiteralKindSuffix;
+const integerLiteralKindValue = type_helpers.integerLiteralKindValue;
+const invalidateExprTypeCache = cache.invalidateExprTypeCache;
+const recordResolvedRef = cache.recordResolvedRef;
+const refKindIndex = cache.refKindIndex;
+const cacheExprType = cache.cacheExprType;
 
 pub const ResolveError = anyerror;
 
@@ -452,76 +467,6 @@ fn exprTypeSpecUncached(self: *context.Context, expr: *ast.Expr) ResolveError!sy
     }
 }
 
-fn resolveArrayConstructorTypeSpec(
-    self: *context.Context,
-    type_spec: ast.ArrayConstructorTypeSpec,
-) ResolveError!symbols.TypeSpec {
-    if (type_spec.type_kind == .derived) {
-        if (type_spec.derived_type_name) |derived_name| {
-            if (!symbols_mod.hasDerivedType(self, derived_name)) return error.UnexpectedTypeDecl;
-            return symbols.TypeSpec.fromDerived(derived_name).withPolymorphic(type_spec.polymorphic);
-        }
-        return symbols.TypeSpec.fromKind(.derived).withPolymorphic(type_spec.polymorphic);
-    }
-    const selector_value = if (type_spec.kind_selector) |selector|
-        try constants.evalConst(self, selector)
-    else
-        null;
-    return type_kind_selector.resolveSpecWithConst(type_spec.type_kind, type_spec.kind_selector, selector_value)
-        .withPolymorphic(type_spec.polymorphic);
-}
-
-fn mergeArrayConstructorItemTypeSpec(
-    first: symbols.TypeSpec,
-    next: symbols.TypeSpec,
-) symbols.TypeSpec {
-    if (first.lowered_kind == next.lowered_kind) {
-        if (first.lowered_kind == .character) {
-            if (first.char_len_kind == .deferred) return first;
-            if (next.char_len_kind == .deferred) return next;
-            const first_len = first.char_len orelse return first;
-            const next_len = next.char_len orelse return next;
-            return if (next_len > first_len) next else first;
-        }
-        return first;
-    }
-    const promoted = promoteNumericType(first.lowered_kind, next.lowered_kind);
-    return symbols.TypeSpec.fromResolvedKind(promoted, promoted, null);
-}
-
-pub fn promoteNumericType(left: ast.TypeKind, right: ast.TypeKind) ast.TypeKind {
-    if (!isNumericType(left) or !isNumericType(right)) return .integer;
-    if (left == .complex_double or right == .complex_double) return .complex_double;
-    if (left == .complex or right == .complex) {
-        if (left == .double_precision or right == .double_precision) return .complex_double;
-        return .complex;
-    }
-    if (left == .double_precision or right == .double_precision) return .double_precision;
-    if (left == .real or right == .real) return .real;
-    return .integer;
-}
-
-pub fn isPowerOperandSupported(kind: ast.TypeKind) bool {
-    return switch (kind) {
-        .integer, .real, .double_precision, .complex, .complex_double => true,
-        else => false,
-    };
-}
-
-fn isNumericType(kind: ast.TypeKind) bool {
-    return switch (kind) {
-        .integer, .real, .double_precision, .complex, .complex_double => true,
-        else => false,
-    };
-}
-
-fn isLogicalType(kind: ast.TypeKind) bool {
-    return kind == .logical;
-}
-
-fn isCharacterType(kind: ast.TypeKind) bool {
-    return kind == .character;
-}
 
 fn structureConstructorTypeSpec(
     self: *context.Context,
@@ -667,54 +612,6 @@ fn binaryDefinedOperatorName(op: ast.BinaryOp) ?[]const u8 {
         .ge => "operator(>=)",
         else => null,
     };
-}
-
-fn validateBinaryOperands(op: ast.BinaryOp, left_kind: ast.TypeKind, right_kind: ast.TypeKind) !void {
-    switch (op) {
-        .add, .sub, .mul, .div => {
-            if (!isNumericType(left_kind) or !isNumericType(right_kind)) {
-                return error.InvalidArithmeticOperands;
-            }
-        },
-        .power => {
-            if (!isNumericType(left_kind) or !isNumericType(right_kind)) {
-                return error.InvalidArithmeticOperands;
-            }
-            if ((left_kind == .complex or left_kind == .complex_double) and right_kind == .integer) {
-                return;
-            }
-            if (!isPowerOperandSupported(left_kind) or !isPowerOperandSupported(right_kind)) {
-                return error.PowerUnsupported;
-            }
-        },
-        .and_, .or_, .eqv, .neqv => {
-            if (!isLogicalType(left_kind) or !isLogicalType(right_kind)) {
-                return error.InvalidArithmeticOperands;
-            }
-        },
-        .eq, .ne => {
-            if ((isNumericType(left_kind) and isNumericType(right_kind)) or
-                (isLogicalType(left_kind) and isLogicalType(right_kind)) or
-                (isCharacterType(left_kind) and isCharacterType(right_kind)))
-            {
-                return;
-            }
-            return error.InvalidArithmeticOperands;
-        },
-        .lt, .le, .gt, .ge => {
-            if ((isNumericType(left_kind) and isNumericType(right_kind)) or
-                (isCharacterType(left_kind) and isCharacterType(right_kind)))
-            {
-                return;
-            }
-            return error.InvalidArithmeticOperands;
-        },
-        .concat => {
-            if (!isCharacterType(left_kind) or !isCharacterType(right_kind)) {
-                return error.InvalidArithmeticOperands;
-            }
-        },
-    }
 }
 
 fn intrinsicReturnType(
@@ -884,36 +781,6 @@ fn symbolsCompatibleExtension(
     return symbols_mod.isSameOrExtension(self, actual_name, expected_name);
 }
 
-fn invalidateExprTypeCache(self: *context.Context, expr: *ast.Expr) void {
-    _ = self.expr_type_cache.remove(@intFromPtr(expr));
-    _ = self.expr_type_spec_cache.remove(@intFromPtr(expr));
-}
-
-fn recordResolvedRef(
-    self: *context.Context,
-    expr: *ast.Expr,
-    name: []const u8,
-    kind: ResolvedRefKind,
-    symbol_idx: usize,
-) !void {
-    try self.refs.append(.{ .expr = expr, .name = name, .kind = kind });
-    try self.ref_kind_index.put(@intFromPtr(expr), kind);
-    try self.ref_symbol_index.put(@intFromPtr(expr), symbol_idx);
-}
-
-fn refKindIndex(self: *context.Context, key: usize) ?ResolvedRefKind {
-    return self.ref_kind_index.get(key);
-}
-
-fn cacheExprType(self: *context.Context, expr: *ast.Expr, ty: symbols.TypeSpec) !void {
-    const key = @intFromPtr(expr);
-    if (self.expr_type_spec_cache.get(key)) |current| {
-        if (std.meta.eql(current, ty)) return;
-    }
-    try self.expr_type_spec_cache.put(key, ty);
-    try self.expr_type_cache.put(key, ty.lowered_kind);
-}
-
 fn resolvedExprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {
     if (self.expr_type_cache.get(@intFromPtr(expr))) |cached| return cached;
     return exprType(self, expr);
@@ -934,41 +801,6 @@ fn promoteNumericTypeSpec(
         .integer => if (left_spec.lowered_kind == .integer) left_spec else right_spec,
         else => return error.InvalidArithmeticOperands,
     };
-}
-
-fn literalTypeSpec(lit: ast.Literal) symbols.TypeSpec {
-    return switch (lit.kind) {
-        .integer => symbols.TypeSpec.fromResolvedKind(.integer, .integer, integerLiteralKindValue(lit.text)),
-        .real => realLiteralTypeSpec(lit.text),
-        .logical => symbols.TypeSpec.fromResolvedKind(.logical, .logical, null),
-        .string, .hollerith => symbols.TypeSpec.fromResolvedKind(.character, .character, null).withCharacterLength(.constant, lit.text.len),
-        .assumed_size => symbols.TypeSpec.fromResolvedKind(.integer, .integer, null),
-    };
-}
-
-fn realLiteralTypeKind(text: []const u8) ast.TypeKind {
-    return if (evaluator.realLiteralHasDoublePrecisionHint(text)) .double_precision else .real;
-}
-
-fn realLiteralTypeSpec(text: []const u8) symbols.TypeSpec {
-    const kind = realLiteralTypeKind(text);
-    return symbols.TypeSpec.fromResolvedKind(
-        .real,
-        kind,
-        if (kind == .double_precision) 8 else realLiteralKindSuffix(text),
-    );
-}
-
-fn realLiteralKindSuffix(text: []const u8) ?i64 {
-    const underscore = std.mem.lastIndexOfScalar(u8, text, '_') orelse return null;
-    if (underscore + 1 >= text.len) return null;
-    return std.fmt.parseInt(i64, text[underscore + 1 ..], 10) catch null;
-}
-
-fn integerLiteralKindValue(text: []const u8) ?i64 {
-    const underscore = std.mem.lastIndexOfScalar(u8, text, '_') orelse return null;
-    if (underscore + 1 >= text.len) return null;
-    return std.fmt.parseInt(i64, text[underscore + 1 ..], 10) catch null;
 }
 
 test "exprType treats D exponent real literal as DOUBLE PRECISION" {

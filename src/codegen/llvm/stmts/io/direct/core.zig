@@ -16,19 +16,16 @@ const expansion = @import("../expansion.zig");
 const formatted = @import("../formatted/mod.zig");
 const formatted_write = @import("../formatted/write.zig");
 const formatted_read = @import("../formatted/read.zig");
+const typed = @import("typed.zig");
+const arrays = @import("arrays.zig");
 const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const charLenForExpr = io_utils.charLenForExpr;
 const emitStackValue = io_utils.emitStackValue;
-const emitStackIoScalarValue = io_utils.emitStackIoScalarValue;
-const emitStackPointerArrayFromValues = io_utils.emitStackPointerArrayFromValues;
-const emitStackI32Array = io_utils.emitStackI32Array;
-const emitKindArray = io_utils.emitKindArray;
 const emitImpliedFinalCount = io_utils.emitImpliedFinalCount;
 const emitImpliedBasePtr = io_utils.emitImpliedBasePtr;
 const evalConstIntSem = io_utils.evalConstIntSem;
 const defaultIntegerKind = io_utils.defaultIntegerKind;
-const scalarRuntimeKind = io_utils.scalarRuntimeKind;
 const coerceRuntimeI32 = io_utils.coerceRuntimeI32;
 const scalarByteSize = io_utils.scalarByteSize;
 const ioScalarStorageIRType = io_utils.ioScalarStorageIRType;
@@ -39,7 +36,16 @@ const expandReadTargets = expansion.expandReadTargets;
 const formatFromCharArrayData = formatted.formatFromCharArrayData;
 const emitWriteFormattedLowered = formatted_write.emitWriteFormattedLowered;
 const emitReadFormattedLowered = formatted_read.emitReadFormattedLowered;
-const max_packed_array_elems: usize = 4096;
+const TypedDirectArgs = typed.TypedDirectArgs;
+const buildTypedWriteArgs = typed.buildTypedWriteArgs;
+const buildTypedReadArgs = typed.buildTypedReadArgs;
+const packTypedDirectArgs = typed.packTypedDirectArgs;
+const emitWholeArrayDirectWrite = arrays.emitWholeArrayDirectWrite;
+const emitWholeArrayDirectRead = arrays.emitWholeArrayDirectRead;
+const emitMixedArrayDirectWrite = arrays.emitMixedArrayDirectWrite;
+const emitMixedArrayDirectRead = arrays.emitMixedArrayDirectRead;
+const findSingleImpliedDoArg = arrays.findSingleImpliedDoArg;
+const emitArrayElemCountI32 = arrays.emitArrayElemCountI32;
 
 const PreparedDirectArgs = struct {
     unit_i32: ValueRef,
@@ -164,347 +170,6 @@ fn prepareDirectArgs(ctx: *Context, builder: anytype, stmt: anytype) EmitError!P
         .fmt_ops = fmt_ops,
         .recl = recl,
     };
-}
-
-const TypedDirectArgs = struct {
-    ptrs: std.array_list.Managed(ValueRef),
-    kinds: std.array_list.Managed(u8),
-    lens: std.array_list.Managed(i32),
-
-    fn init(allocator: std.mem.Allocator) TypedDirectArgs {
-        return .{
-            .ptrs = std.array_list.Managed(ValueRef).init(allocator),
-            .kinds = std.array_list.Managed(u8).init(allocator),
-            .lens = std.array_list.Managed(i32).init(allocator),
-        };
-    }
-
-    fn deinit(self: *TypedDirectArgs) void {
-        self.ptrs.deinit();
-        self.kinds.deinit();
-        self.lens.deinit();
-    }
-};
-
-fn kindForScalarType(ctx: *Context, ty: utils.IRType) EmitError!u8 {
-    return scalarRuntimeKind(ctx, ty);
-}
-
-fn appendArg(args: *TypedDirectArgs, ptr: ValueRef, kind: u8, len: i32) EmitError!void {
-    try args.ptrs.append(ptr);
-    try args.kinds.append(kind);
-    try args.lens.append(len);
-}
-
-fn appendArrayArgs(ctx: *Context, builder: anytype, args: *TypedDirectArgs, sym: anytype) EmitError!void {
-    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return error.ArrayDimNotConstant;
-    if (elem_count > max_packed_array_elems) return error.ArrayArgTooLargeForPackedIo;
-    const base_ptr = try ctx.getPointer(sym.name);
-    const elem_ty = common.symbolElementIRType(sym, ctx.options.target_layout);
-    const char_len = common.symbolCharacterLenOrOne(sym);
-
-    var idx: usize = 0;
-    while (idx < elem_count) : (idx += 1) {
-        var offset_val = try ctx.constI32(@intCast(idx));
-        if (sym.isCharacter() and char_len > 1) {
-            const scale = try ctx.constI32(@intCast(char_len));
-            const mul_tmp = try ctx.nextTemp();
-            try builder.binary(mul_tmp, "mul", .i32, offset_val, scale);
-            offset_val = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
-        }
-        const ptr_name = try ctx.nextTemp();
-        try builder.gep(ptr_name, elem_ty, base_ptr, offset_val);
-        const ptr = ValueRef{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
-
-        if (sym.isCharacter()) {
-            if (char_len > std.math.maxInt(i32)) return error.IntegerOverflow;
-            try appendArg(args, ptr, 's', @intCast(char_len));
-        } else {
-            try appendArg(args, ptr, try kindForScalarType(ctx, elem_ty), 0);
-        }
-    }
-}
-
-fn buildTypedWriteArgs(ctx: *Context, builder: anytype, args_nodes: []*ast.Expr) EmitError!TypedDirectArgs {
-    var out = TypedDirectArgs.init(ctx.allocator);
-    errdefer out.deinit();
-
-    for (args_nodes) |arg| {
-        if (arg.* == .identifier) {
-            const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
-            if (sym.dims.len > 0) {
-                try appendArrayArgs(ctx, builder, &out, sym);
-                continue;
-            }
-        }
-
-        const source_ptr = expr.emitLValue(ctx, builder, arg) catch null;
-        const value = try expr.emitExpr(ctx, builder, arg);
-        if (value.ty == .ptr) {
-            const len = charLenForExpr(ctx, arg) orelse 1;
-            if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
-            try appendArg(&out, .{ .name = value.name, .ty = .ptr, .is_ptr = true }, 's', @intCast(len));
-            continue;
-        }
-        if (source_ptr) |ptr| {
-            try appendArg(&out, ptr, try kindForScalarType(ctx, value.ty), 0);
-            continue;
-        }
-
-        const ptr = try emitStackIoScalarValue(ctx, builder, value);
-        try appendArg(&out, ptr, try kindForScalarType(ctx, value.ty), 0);
-    }
-    return out;
-}
-
-fn helperNameForDirectArray(ctx: *Context, sym: anytype, is_write: bool) ?[]const u8 {
-    return switch (sym.loweredKind()) {
-        .integer => if (is_write)
-            if (ctx.defaultIntegerIRType() == .i64) "col6forge_write_direct_i64_n" else "col6forge_write_direct_i32_n"
-        else if (ctx.defaultIntegerIRType() == .i64) "col6forge_read_direct_i64_n" else "col6forge_read_direct_i32_n",
-        .real => if (is_write) "col6forge_write_direct_f32_n" else "col6forge_read_direct_f32_n",
-        .double_precision => if (is_write) "col6forge_write_direct_f64_n" else "col6forge_read_direct_f64_n",
-        .complex => if (is_write) "col6forge_write_direct_c32_n" else "col6forge_read_direct_c32_n",
-        .complex_double => if (is_write) "col6forge_write_direct_c64_n" else "col6forge_read_direct_c64_n",
-        .logical => if (is_write) "col6forge_write_direct_l_n" else "col6forge_read_direct_l_n",
-        else => null,
-    };
-}
-
-fn emitWholeArrayDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!bool {
-    if (write.rec == null) return false;
-    if (write.args.len != 1 or write.args[0].* != .identifier) return false;
-    const sym = ctx.findSymbol(write.args[0].identifier) orelse return false;
-    if (sym.dims.len == 0 or sym.isCharacter()) return false;
-    const helper = helperNameForDirectArray(ctx, sym, true) orelse return false;
-
-    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return false;
-    const unit_value = try expr.emitExpr(ctx, builder, write.unit);
-    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
-    const rec_value = try expr.emitExpr(ctx, builder, write.rec.?);
-    const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
-    const count_i32 = try ctx.constI32(@intCast(elem_count));
-    const one_i32 = try ctx.constI32(1);
-    const base_ptr = try ctx.getPointer(sym.name);
-    const decl = try ctx.ensureDeclRaw(helper, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .i32, .ptr }, false);
-    try builder.callTyped(null, .i32, decl, &.{ unit_i32, rec_i32, count_i32, one_i32, base_ptr });
-    return true;
-}
-
-fn emitWholeArrayDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!bool {
-    if (read.rec == null) return false;
-    if (read.args.len != 1 or read.args[0].* != .identifier) return false;
-    const sym = ctx.findSymbol(read.args[0].identifier) orelse return false;
-    if (sym.dims.len == 0 or sym.isCharacter()) return false;
-    const helper = helperNameForDirectArray(ctx, sym, false) orelse return false;
-
-    const elem_count = ctx.arrayElemCountForSymbol(sym) catch return false;
-    const unit_value = try expr.emitExpr(ctx, builder, read.unit);
-    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
-    const rec_value = try expr.emitExpr(ctx, builder, read.rec.?);
-    const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
-    const count_i32 = try ctx.constI32(@intCast(elem_count));
-    const one_i32 = try ctx.constI32(1);
-    const base_ptr = try ctx.getPointer(sym.name);
-    const decl = try ctx.ensureDeclRaw(helper, .i32, &[_]utils.IRType{ .i32, .i32, .i32, .i32, .ptr }, false);
-    try builder.callTyped(null, .i32, decl, &.{ unit_i32, rec_i32, count_i32, one_i32, base_ptr });
-    return true;
-}
-
-fn findSingleArrayArg(ctx: *Context, args: []*ast.Expr) ?usize {
-    var found: ?usize = null;
-    for (args, 0..) |arg, idx| {
-        if (arg.* != .identifier) continue;
-        const sym = ctx.findSymbol(arg.identifier) orelse continue;
-        if (sym.dims.len == 0) continue;
-        if (found != null) return null;
-        found = idx;
-    }
-    return found;
-}
-
-fn findSingleImpliedDoArg(args: []*ast.Expr) ?usize {
-    var found: ?usize = null;
-    for (args, 0..) |arg, idx| {
-        if (arg.* != .implied_do) continue;
-        if (found != null) return null;
-        found = idx;
-    }
-    return found;
-}
-
-fn emitMixedArrayDirectWrite(ctx: *Context, builder: anytype, write: ast.WriteStmt) EmitError!bool {
-    if (write.rec == null) return false;
-    const arr_idx = findSingleArrayArg(ctx, write.args) orelse return false;
-    const sym = ctx.findSymbol(write.args[arr_idx].identifier) orelse return false;
-    if (sym.isCharacter()) return false;
-
-    var pre_expanded = try expandIoArgs(ctx, write.args[0..arr_idx]);
-    defer pre_expanded.deinit(ctx.allocator);
-    var post_expanded = try expandIoArgs(ctx, write.args[arr_idx + 1 ..]);
-    defer post_expanded.deinit(ctx.allocator);
-    var pre_typed = try buildTypedWriteArgs(ctx, builder, pre_expanded.items);
-    defer pre_typed.deinit();
-    var post_typed = try buildTypedWriteArgs(ctx, builder, post_expanded.items);
-    defer post_typed.deinit();
-    const pre_packed = try packTypedDirectArgs(ctx, builder, &pre_typed);
-    const post_packed = try packTypedDirectArgs(ctx, builder, &post_typed);
-
-    const unit_value = try expr.emitExpr(ctx, builder, write.unit);
-    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
-    const rec_value = try expr.emitExpr(ctx, builder, write.rec.?);
-    const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
-    const mid_kind_val: i64 = switch (sym.loweredKind()) {
-        .integer => defaultIntegerKind(ctx),
-        .real => 'f',
-        .double_precision => 'd',
-        .complex => 'c',
-        .complex_double => 'z',
-        .logical => 'l',
-        else => return false,
-    };
-    const mid_count = try emitArrayElemCountI32(ctx, builder, sym);
-    const one = try ctx.constI32(1);
-    const base_ptr = try ctx.getPointer(sym.name);
-    const mix_decl = try ctx.ensureDeclRaw("col6forge_write_direct_mix_v_n", .i32, &[_]utils.IRType{
-        .i32, .i32,
-        .ptr, .ptr,
-        .ptr, .i32,
-        .i32, .i32,
-        .i32, .ptr,
-        .ptr, .ptr,
-        .ptr, .i32,
-    }, false);
-    try builder.callTyped(null, .i32, mix_decl, &.{
-        unit_i32,                       rec_i32,
-        pre_packed.ptr_array,           pre_packed.kinds_ptr,
-        pre_packed.lens_ptr,            pre_packed.count,
-        try ctx.constI32(mid_kind_val), mid_count,
-        one,                            base_ptr,
-        post_packed.ptr_array,          post_packed.kinds_ptr,
-        post_packed.lens_ptr,           post_packed.count,
-    });
-    return true;
-}
-
-fn emitMixedArrayDirectRead(ctx: *Context, builder: anytype, read: ast.ReadStmt) EmitError!bool {
-    if (read.rec == null) return false;
-    const arr_idx = findSingleArrayArg(ctx, read.args) orelse return false;
-    const sym = ctx.findSymbol(read.args[arr_idx].identifier) orelse return false;
-    if (sym.isCharacter()) return false;
-
-    var pre_expanded = try expandIoArgs(ctx, read.args[0..arr_idx]);
-    defer pre_expanded.deinit(ctx.allocator);
-    var post_expanded = try expandIoArgs(ctx, read.args[arr_idx + 1 ..]);
-    defer post_expanded.deinit(ctx.allocator);
-    var pre_typed = try buildTypedReadArgs(ctx, builder, pre_expanded.items);
-    defer pre_typed.deinit();
-    var post_typed = try buildTypedReadArgs(ctx, builder, post_expanded.items);
-    defer post_typed.deinit();
-    const pre_packed = try packTypedDirectArgs(ctx, builder, &pre_typed);
-    const post_packed = try packTypedDirectArgs(ctx, builder, &post_typed);
-
-    const unit_value = try expr.emitExpr(ctx, builder, read.unit);
-    const unit_i32 = try coerceRuntimeI32(ctx, builder, unit_value);
-    const rec_value = try expr.emitExpr(ctx, builder, read.rec.?);
-    const rec_i32 = try coerceRuntimeI32(ctx, builder, rec_value);
-    const mid_kind_val: i64 = switch (sym.loweredKind()) {
-        .integer => defaultIntegerKind(ctx),
-        .real => 'f',
-        .double_precision => 'd',
-        .complex => 'c',
-        .complex_double => 'z',
-        .logical => 'l',
-        else => return false,
-    };
-    const mid_count = try emitArrayElemCountI32(ctx, builder, sym);
-    const one = try ctx.constI32(1);
-    const base_ptr = try ctx.getPointer(sym.name);
-    const mix_decl = try ctx.ensureDeclRaw("col6forge_read_direct_mix_v_n", .i32, &[_]utils.IRType{
-        .i32, .i32,
-        .ptr, .ptr,
-        .ptr, .i32,
-        .i32, .i32,
-        .i32, .ptr,
-        .ptr, .ptr,
-        .ptr, .i32,
-    }, false);
-    try builder.callTyped(null, .i32, mix_decl, &.{
-        unit_i32,                       rec_i32,
-        pre_packed.ptr_array,           pre_packed.kinds_ptr,
-        pre_packed.lens_ptr,            pre_packed.count,
-        try ctx.constI32(mid_kind_val), mid_count,
-        one,                            base_ptr,
-        post_packed.ptr_array,          post_packed.kinds_ptr,
-        post_packed.lens_ptr,           post_packed.count,
-    });
-    return true;
-}
-
-fn buildTypedReadArgs(ctx: *Context, builder: anytype, args_nodes: []*ast.Expr) EmitError!TypedDirectArgs {
-    var out = TypedDirectArgs.init(ctx.allocator);
-    errdefer out.deinit();
-
-    for (args_nodes) |arg| {
-        if (arg.* == .identifier) {
-            const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
-            if (sym.dims.len > 0) {
-                try appendArrayArgs(ctx, builder, &out, sym);
-                continue;
-            }
-        }
-
-        const ptr = try expr.emitLValue(ctx, builder, arg);
-        const ty = try expr.exprType(ctx, arg);
-        if (ty == .ptr) {
-            const len = charLenForExpr(ctx, arg) orelse 1;
-            if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
-            try appendArg(&out, ptr, 's', @intCast(len));
-            continue;
-        }
-
-        try appendArg(&out, ptr, try kindForScalarType(ctx, ty), 0);
-    }
-    return out;
-}
-
-fn packTypedDirectArgs(
-    ctx: *Context,
-    builder: anytype,
-    typed: *TypedDirectArgs,
-) EmitError!struct {
-    ptr_array: ValueRef,
-    kinds_ptr: ValueRef,
-    lens_ptr: ValueRef,
-    count: ValueRef,
-} {
-    const ptr_array = try emitStackPointerArrayFromValues(ctx, builder, typed.ptrs.items);
-    const kinds_ptr = try emitKindArray(ctx, builder, typed.kinds.items);
-    const lens_ptr = try emitStackI32Array(ctx, builder, typed.lens.items);
-    return .{
-        .ptr_array = ptr_array,
-        .kinds_ptr = kinds_ptr,
-        .lens_ptr = lens_ptr,
-        .count = try ctx.constI32(@intCast(typed.ptrs.items.len)),
-    };
-}
-
-fn emitArrayElemCountI32(ctx: *Context, builder: anytype, sym: anytype) EmitError!ValueRef {
-    if (ctx.arrayElemCountForSymbol(sym) catch null) |count| {
-        return ctx.constI32(@intCast(count));
-    }
-    var total = try ctx.constI32(1);
-    for (sym.dims, 0..) |dim, dim_idx| {
-        var extent = expr.emitSymbolDimExtent(ctx, builder, sym, dim_idx) catch |err| switch (err) {
-            error.UnknownSymbol => try expr.emitDimValue(ctx, builder, dim),
-            else => return err,
-        };
-        if (extent.ty != .i32) extent = try coerceRuntimeI32(ctx, builder, extent);
-        const mul_tmp = try ctx.nextTemp();
-        try builder.binary(mul_tmp, "mul", .i32, total, extent);
-        total = .{ .name = mul_tmp, .ty = .i32, .is_ptr = false };
-    }
-    return total;
 }
 
 const DirectBlockTransfer = struct {
@@ -707,9 +372,9 @@ fn emitDirectWriteTypedSlice(ctx: *Context, builder: anytype, state: ValueRef, a
     if (args.len == 0) return;
     var expanded = try expandIoArgs(ctx, args);
     defer expanded.deinit(ctx.allocator);
-    var typed = try buildTypedWriteArgs(ctx, builder, expanded.items);
-    defer typed.deinit();
-    const packed_args = try packTypedDirectArgs(ctx, builder, &typed);
+    var typed_args = try buildTypedWriteArgs(ctx, builder, expanded.items);
+    defer typed_args.deinit();
+    const packed_args = try packTypedDirectArgs(ctx, builder, &typed_args);
     const decl = try ctx.ensureDeclRaw("col6forge_write_direct_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .i32, decl, &.{ state, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
 }
@@ -718,9 +383,9 @@ fn emitDirectReadTypedSlice(ctx: *Context, builder: anytype, state: ValueRef, ar
     if (args.len == 0) return;
     var expanded = try expandIoArgs(ctx, args);
     defer expanded.deinit(ctx.allocator);
-    var typed = try buildTypedReadArgs(ctx, builder, expanded.items);
-    defer typed.deinit();
-    const packed_args = try packTypedDirectArgs(ctx, builder, &typed);
+    var typed_args = try buildTypedReadArgs(ctx, builder, expanded.items);
+    defer typed_args.deinit();
+    const packed_args = try packTypedDirectArgs(ctx, builder, &typed_args);
     const decl = try ctx.ensureDeclRaw("col6forge_read_direct_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .i32, decl, &.{ state, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_ptr, packed_args.count });
 }
@@ -828,10 +493,10 @@ fn emitDirectWriteCall(
     rec_i32: ValueRef,
     args: []*ast.Expr,
 ) EmitError!void {
-    var typed = try buildTypedWriteArgs(ctx, builder, args);
-    defer typed.deinit();
+    var typed_args = try buildTypedWriteArgs(ctx, builder, args);
+    defer typed_args.deinit();
 
-    const typed_pack = try packTypedDirectArgs(ctx, builder, &typed);
+    const typed_pack = try packTypedDirectArgs(ctx, builder, &typed_args);
     const write_name = try ctx.ensureDeclRaw("col6forge_write_direct_typed", .void, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .void, write_name, &.{ unit_i32, rec_i32, typed_pack.ptr_array, typed_pack.kinds_ptr, typed_pack.lens_ptr, typed_pack.count });
 }
@@ -843,10 +508,10 @@ fn emitDirectReadCall(
     rec_i32: ValueRef,
     args: []*ast.Expr,
 ) EmitError!void {
-    var typed = try buildTypedReadArgs(ctx, builder, args);
-    defer typed.deinit();
+    var typed_args = try buildTypedReadArgs(ctx, builder, args);
+    defer typed_args.deinit();
 
-    const typed_pack = try packTypedDirectArgs(ctx, builder, &typed);
+    const typed_pack = try packTypedDirectArgs(ctx, builder, &typed_args);
     const read_name = try ctx.ensureDeclRaw("col6forge_read_direct_typed", .i32, &[_]utils.IRType{ .i32, .i32, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .i32, read_name, &.{ unit_i32, rec_i32, typed_pack.ptr_array, typed_pack.kinds_ptr, typed_pack.lens_ptr, typed_pack.count });
 }
