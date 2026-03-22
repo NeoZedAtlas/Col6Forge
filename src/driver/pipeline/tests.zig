@@ -1,0 +1,438 @@
+const std = @import("std");
+const diag = @import("../../common/diagnostic.zig");
+const catalog = @import("../../common/error_catalog.zig");
+const pipeline = @import("mod.zig");
+const diagnostics = @import("diagnostics.zig");
+const runPipelineWithOptions = pipeline.runPipelineWithOptions;
+const runPipelineWithOptionsAndDiagnostics = pipeline.runPipelineWithOptionsAndDiagnostics;
+const runPipelineToWriterWithOptionsAndDiagnostics = pipeline.runPipelineToWriterWithOptionsAndDiagnostics;
+const takeLastDiagnostic = pipeline.takeLastDiagnostic;
+const releaseLastDiagnostic = pipeline.releaseLastDiagnostic;
+const clearLastDiagnostic = diagnostics.clearLastDiagnostic;
+const setLastDiagnostic = diagnostics.setLastDiagnostic;
+
+fn writeTempSourceFile(tmp: *std.testing.TmpDir, allocator: std.mem.Allocator, file_name: []const u8, source: []const u8) ![]u8 {
+    var file = try tmp.dir.createFile(file_name, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(source);
+
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+    return std.fs.path.join(allocator, &.{ dir_path, file_name });
+}
+
+test "runPipeline reports parse diagnostics against the original continued source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER A,\n" ++
+        "     1 )\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "continued_parse_error.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqual(@as(usize, 3), diag_info.line);
+    try testing.expectEqual(@as(usize, 8), diag_info.column);
+    try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
+    try testing.expectEqualStrings("     1 )", diag_info.line_text);
+}
+
+test "runPipeline reports semantic declaration diagnostics against the original source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*(*) A\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_decl_error.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.InvalidCharLen, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqual(@as(usize, 2), diag_info.line);
+    try testing.expectEqual(@as(usize, 7), diag_info.column);
+    try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag_info.code);
+    try testing.expectEqualStrings("      CHARACTER*(*) A", diag_info.line_text);
+}
+
+test "runPipeline compat diagnostic preserves long source lines without truncation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const long_ident = try allocator.alloc(u8, 640);
+    defer allocator.free(long_ident);
+    @memset(long_ident, 'A');
+
+    const long_line = try std.fmt.allocPrint(allocator, "      {s} =\n", .{long_ident});
+    defer allocator.free(long_line);
+    const source = try std.fmt.allocPrint(
+        allocator,
+        "      PROGRAM P\n{s}      END\n",
+        .{long_line},
+    );
+    defer allocator.free(source);
+
+    const file_path = try writeTempSourceFile(&tmp, allocator, "long_diag_line.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
+    try testing.expectEqual(@as(usize, 2), diag_info.line);
+    try testing.expectEqualStrings(long_line[0 .. long_line.len - 1], diag_info.line_text);
+}
+
+test "runPipeline reports semantic expression diagnostics against the original source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER I\n" ++
+        "      I='A'+1\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_expr_error.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.InvalidArithmeticOperands, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqual(@as(usize, 3), diag_info.line);
+    try testing.expectEqual(@as(usize, 7), diag_info.column);
+    try testing.expectEqualStrings(catalog.semantic.invalid_arithmetic_operands.code, diag_info.code);
+    try testing.expectEqualStrings("      I='A'+1", diag_info.line_text);
+}
+
+test "runPipeline reports free-form continued parse diagnostics against the original source line" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "program p\n" ++
+        "integer :: a, &\n" ++
+        "  )\n" ++
+        "end\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "continued_parse_error.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.UnexpectedToken, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqual(@as(usize, 3), diag_info.line);
+    try testing.expectEqual(@as(usize, 3), diag_info.column);
+    try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
+    try testing.expectEqualStrings("  )", diag_info.line_text);
+}
+
+test "runPipelineWithOptionsAndDiagnostics keeps diagnostics in explicit bag" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      CHARACTER*(*) A\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "explicit_semantic_diag.f", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+    clearLastDiagnostic();
+
+    try testing.expectError(
+        error.InvalidCharLen,
+        runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag),
+    );
+    const diag_info = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag_info);
+    try testing.expectEqual(@as(usize, 2), diag_info.line);
+    try testing.expectEqual(@as(usize, 7), diag_info.column);
+    try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag_info.code);
+    try testing.expectEqualStrings("      CHARACTER*(*) A", diag_info.line_text);
+    try testing.expect(takeLastDiagnostic() == null);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts slash array constructor assignment" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "subroutine foo(x)\n" ++
+        "  integer :: x(4)\n" ++
+        "  x(:) = (/ 3, 1, 4, 1 /)\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "slash_array_constructor_pipeline.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    const result = try runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag);
+    defer allocator.free(result.output);
+    try testing.expect(!diag_bag.has());
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository array_constructor_14 contents" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "! { dg-do compile }\n" ++
+        "! { dg-options \"-O2 -fdump-tree-original\" }\n" ++
+        "\n" ++
+        "subroutine foo(x)\n" ++
+        "  integer :: x(4)\n" ++
+        "  x(:) = (/ 3, 1, 4, 1 /)\n" ++
+        "end subroutine\n" ++
+        "\n" ++
+        "subroutine bar(x)\n" ++
+        "  integer :: x(4)\n" ++
+        "  x = (/ 3, 1, 4, 1 /)\n" ++
+        "end subroutine\n" ++
+        "\n" ++
+        "! { dg-final { scan-tree-dump-times \"data\" 0 \"original\" } }\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "array_constructor_14_like.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    const result = try runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag);
+    defer allocator.free(result.output);
+    try testing.expect(!diag_bag.has());
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository array_constructor_14 file" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    const result = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/array_constructor_14.f90",
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    defer allocator.free(result.output);
+    try testing.expect(!diag_bag.has());
+}
+
+test "runPipelineWithOptions accepts repository array_constructor_14 file" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const result = try runPipelineWithOptions(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/array_constructor_14.f90",
+        .llvm,
+        .{},
+    );
+    defer allocator.free(result.output);
+    try testing.expect(result.output.len != 0);
+}
+
+test "runPipelineWithOptions accepts repository array_constructor_14 file with GPA allocator" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const result = try runPipelineWithOptions(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/array_constructor_14.f90",
+        .llvm,
+        .{},
+    );
+    defer allocator.free(result.output);
+    try std.testing.expect(result.output.len != 0);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts defined assignment declared with procedure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "! { dg-do compile }\r\n" ++
+        "!\r\n" ++
+        "! PR 40743: [4.5 Regression] ICE when compiling iso_varying_string.f95 at revision 149591\r\n" ++
+        "!\r\n" ++
+        "! Reduced from http://www.fortran.com/iso_varying_string.f95\r\n" ++
+        "! Contributed by Janus Weil <janus@gcc.gnu.org>\r\n" ++
+        "\r\n" ++
+        "  implicit none\r\n" ++
+        "\r\n" ++
+        "  type :: varying_string\r\n" ++
+        "  end type\r\n" ++
+        "\r\n" ++
+        "  interface assignment(=)\r\n" ++
+        "     procedure op_assign_VS_CH\r\n" ++
+        "  end interface\r\n" ++
+        "\r\n" ++
+        "contains\r\n" ++
+        "\r\n" ++
+        "  subroutine op_assign_VS_CH (var, exp)\r\n" ++
+        "    type(varying_string), intent(out) :: var\r\n" ++
+        "    character(LEN=*), intent(in)      :: exp\r\n" ++
+        "  end subroutine\r\n" ++
+        "\r\n" ++
+        "  subroutine split_VS\r\n" ++
+        "    type(varying_string) :: string\r\n" ++
+        "    call split_CH(string)\r\n" ++
+        "  end subroutine\r\n" ++
+        "\r\n" ++
+        "  subroutine split_CH (string)\r\n" ++
+        "    type(varying_string) :: string\r\n" ++
+        "    string = \"\"\r\n" ++
+        "  end subroutine\r\n" ++
+        "\r\n" ++
+        "end\r\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "defined_assignment_pipeline.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag);
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository interface_assignment_4 case" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90",
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository interface_assignment_4 absolute path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const absolute_path = try std.fs.cwd().realpathAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90",
+    );
+    defer allocator.free(absolute_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        absolute_path,
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineToWriterWithOptionsAndDiagnostics accepts repository interface_assignment_4 absolute path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const absolute_path = try std.fs.cwd().realpathAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90",
+    );
+    defer allocator.free(absolute_path);
+
+    var output = std.ArrayList(u8).init(allocator);
+    defer output.deinit();
+    var writer = output.writer();
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try runPipelineToWriterWithOptionsAndDiagnostics(
+        allocator,
+        absolute_path,
+        .llvm,
+        &writer,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+    try testing.expect(output.items.len != 0);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository interface_assignment_4 with GPA allocator" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const absolute_path = try std.fs.cwd().realpathAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90",
+    );
+    defer allocator.free(absolute_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        absolute_path,
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try std.testing.expect(diag_bag.take() == null);
+}
+
+test "releaseLastDiagnostic clears compat storage after take" {
+    const testing = std.testing;
+
+    clearLastDiagnostic();
+    setLastDiagnostic("x.f", 2, 3, catalog.pipeline.generic.code, "msg", "line");
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqualStrings("x.f", diag_info.file_path);
+    releaseLastDiagnostic(diag_info);
+    try testing.expect(takeLastDiagnostic() == null);
+}
