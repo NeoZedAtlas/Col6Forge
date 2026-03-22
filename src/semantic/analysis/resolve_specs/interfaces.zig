@@ -71,7 +71,7 @@ pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: a
             }
         }
         const attrs = interfaceProcedureResultAttrs(proc_header);
-        if (attrs.has_deferred_shape and !attrs.allocatable) {
+        if (attrs.has_deferred_shape and !attrs.allocatable and !attrs.pointer) {
             setAttributeConflictDiagnostic(self, "function result cannot have a deferred shape");
             if (!self.usesExplicitDiagnosticBag()) return error.DuplicateDeclaration;
             if (first_error == null) first_error = error.DuplicateDeclaration;
@@ -381,6 +381,18 @@ fn interfaceProcedureResultTypeSpecForValidation(
     proc_header: ast.InterfaceProcedure,
 ) ?symbols.TypeSpec {
     if (proc_header.kind != .function) return null;
+    const result_name = proc_header.result_name orelse proc_header.name;
+    for (proc_header.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    return applyInterfaceResultDeclaratorCharLen(interfaceResultTypeDeclSpec(type_decl), item);
+                }
+            },
+            else => {},
+        }
+    }
     if (proc_header.type_spec) |type_spec| {
         return if (type_spec.type_kind != .derived)
             type_kind_selector.resolveSpec(type_spec.type_kind, type_spec.kind_selector).withPolymorphic(type_spec.polymorphic)
@@ -389,29 +401,40 @@ fn interfaceProcedureResultTypeSpecForValidation(
         else
             symbols.TypeSpec.fromKind(.derived).withPolymorphic(type_spec.polymorphic);
     }
-    const result_name = proc_header.result_name orelse proc_header.name;
-    for (proc_header.decls) |decl| {
-        switch (decl) {
-            .type_decl => |type_decl| {
-                for (type_decl.items) |item| {
-                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
-                    return decls.resolvedDeclTypeSpec(
-                        self,
-                        type_decl.type_kind,
-                        type_decl.derived_type_name,
-                        type_decl.kind_selector,
-                        type_decl.polymorphic,
-                    ) catch null;
-                }
-            },
-            else => {},
-        }
-    }
     return symbols_mod.implicitTypeSpec(self, proc_header.name);
+}
+
+fn interfaceResultTypeDeclSpec(type_decl: ast.TypeDecl) symbols.TypeSpec {
+    if (type_decl.type_kind != .derived) {
+        return type_kind_selector.resolveSpec(type_decl.type_kind, type_decl.kind_selector)
+            .withPolymorphic(type_decl.polymorphic);
+    }
+    const base = if (type_decl.derived_type_name) |derived_name|
+        symbols.TypeSpec.fromDerived(derived_name)
+    else
+        symbols.TypeSpec.fromKind(.derived);
+    return base.withPolymorphic(type_decl.polymorphic);
+}
+
+fn applyInterfaceResultDeclaratorCharLen(type_spec: symbols.TypeSpec, declarator: ast.Declarator) symbols.TypeSpec {
+    if (declarator.char_len_deferred) return type_spec.withCharacterLength(.deferred, null);
+    if (type_spec.lowered_kind != .character) return type_spec.withCharacterLength(.none, null);
+    const char_len = switch ((declarator.char_len orelse return type_spec.withCharacterLength(.constant, 1)).*) {
+        .literal => |lit| switch (lit.kind) {
+            .integer => std.fmt.parseInt(usize, lit.text, 10) catch null,
+            else => null,
+        },
+        else => null,
+    };
+    return type_spec.withCharacterLength(
+        if (char_len != null) .constant else if (declarator.char_len != null) .deferred else .constant,
+        char_len orelse if (declarator.char_len == null) 1 else null,
+    );
 }
 
 const InterfaceProcedureResultAttrs = struct {
     has_deferred_shape: bool = false,
+    pointer: bool = false,
     allocatable: bool = false,
 };
 
@@ -423,13 +446,22 @@ fn interfaceProcedureResultAttrs(proc_header: ast.InterfaceProcedure) InterfaceP
                 for (type_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, proc_header.name)) continue;
                     if (hasDeferredShape(item.dims)) attrs.has_deferred_shape = true;
+                    if (type_decl.pointer) attrs.pointer = true;
                     if (type_decl.allocatable) attrs.allocatable = true;
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, proc_header.name)) continue;
+                    if (hasDeferredShape(item.dims)) attrs.has_deferred_shape = true;
+                    if (procedure_decl.pointer) attrs.pointer = true;
                 }
             },
             .dimension => |dimension_decl| {
                 for (dimension_decl.items) |item| {
                     if (!std.ascii.eqlIgnoreCase(item.name, proc_header.name)) continue;
                     if (hasDeferredShape(item.dims)) attrs.has_deferred_shape = true;
+                    if (dimension_decl.pointer) attrs.pointer = true;
                     if (dimension_decl.allocatable) attrs.allocatable = true;
                 }
             },

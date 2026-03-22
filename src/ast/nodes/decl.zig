@@ -44,6 +44,10 @@ pub const TypeDecl = struct {
     optional: bool = false,
     intent: ?IntentKind = null,
     external: bool = false,
+    asynchronous: bool = false,
+    contiguous: bool = false,
+    value_attr: bool = false,
+    volatile_attr: bool = false,
 };
 
 pub const ProcedureTypeSpec = struct {

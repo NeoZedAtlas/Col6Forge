@@ -118,6 +118,10 @@ pub fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAtt
             if (context.eqNoCase(attr_name, "POINTER")) attrs.pointer = true;
             if (context.eqNoCase(attr_name, "OPTIONAL")) attrs.optional = true;
             if (context.eqNoCase(attr_name, "EXTERNAL")) attrs.external = true;
+            if (context.eqNoCase(attr_name, "ASYNCHRONOUS")) attrs.asynchronous = true;
+            if (context.eqNoCase(attr_name, "CONTIGUOUS")) attrs.contiguous = true;
+            if (context.eqNoCase(attr_name, "VALUE")) attrs.value_attr = true;
+            if (context.eqNoCase(attr_name, "VOLATILE")) attrs.volatile_attr = true;
             if (context.eqNoCase(attr_name, "INTENT")) {
                 _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
                 attrs.intent = if (lp.consumeKeyword("INOUT"))

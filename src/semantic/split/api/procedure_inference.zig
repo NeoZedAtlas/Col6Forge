@@ -3,12 +3,20 @@ const ast = @import("../../../ast/nodes.zig");
 const context = @import("../../context.zig");
 const symbols = @import("../../symbol/mod.zig");
 const type_kind_selector = @import("../../type_kind_selector.zig");
-const api = @import("mod.zig");
 
 pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![]const context.Context.ProcedureSig.ArgSig {
+    return inferProcedureArgSigsWithKnown(arena, unit, null);
+}
+
+pub fn inferProcedureArgSigsWithKnown(
+    arena: std.mem.Allocator,
+    unit: ast.ProgramUnit,
+    known_procedure_sigs: ?*const std.StringHashMap(context.Context.ProcedureSig),
+) ![]const context.Context.ProcedureSig.ArgSig {
     const out = try arena.alloc(context.Context.ProcedureSig.ArgSig, unit.args.len);
     for (unit.args, 0..) |arg_name, idx| {
         const decl_info = findDummyArgDeclInfo(unit, arg_name);
+        const declarator_sig = resolveProcedureDeclaratorKnownSig(known_procedure_sigs, decl_info.procedure_interface);
         const inferred_proc_kind = if (decl_info.interface_procedure == null and !decl_info.external and
             decl_info.declarator == null and !decl_info.explicit_type)
             inferDummyArgProcedureKind(unit, arg_name)
@@ -22,31 +30,72 @@ pub fn inferProcedureArgSigs(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![
             .type_spec = type_spec,
             .requires_descriptor = dummyArgRequiresDescriptor(dims),
             .rank = dims.len,
+            .shape_signature = try shapeSignatureForDims(arena, dims),
             .pointer = decl_info.pointer,
             .allocatable = decl_info.allocatable,
             .optional = decl_info.optional,
             .intent = decl_info.intent,
-            .is_procedure = decl_info.interface_procedure != null or decl_info.external or inferred_proc_kind != null,
+            .asynchronous = decl_info.asynchronous,
+            .contiguous = decl_info.contiguous,
+            .value_attr = decl_info.value_attr,
+            .volatile_attr = decl_info.volatile_attr,
+            .is_procedure = decl_info.interface_procedure != null or declarator_sig != null or decl_info.external or inferred_proc_kind != null,
             .procedure_kind = if (decl_info.interface_procedure) |proc|
                 proc.kind
+            else if (declarator_sig) |sig|
+                sig.kind
             else if (inferred_proc_kind) |kind|
                 kind
             else if (decl_info.external and decl_info.explicit_type)
                 .function
             else
                 null,
-            .procedure_has_explicit_interface = decl_info.interface_procedure != null,
-            .procedure_arg_count = if (decl_info.interface_procedure) |proc| proc.args.len else 0,
-            .procedure_alt_return_count = if (decl_info.interface_procedure) |proc| proc.alt_return_dummy_count else 0,
+            .procedure_has_explicit_interface = decl_info.interface_procedure != null or declarator_sig != null,
+            .procedure_arg_count = if (decl_info.interface_procedure) |proc| proc.args.len else if (declarator_sig) |sig| sig.arg_count else 0,
+            .procedure_alt_return_count = if (decl_info.interface_procedure) |proc| proc.alt_return_dummy_count else if (declarator_sig) |sig| sig.alt_return_count else 0,
             .procedure_result_type_spec = if (decl_info.interface_procedure) |proc|
                 interfaceProcedureResultTypeSpec(unit, proc)
+            else if (declarator_sig) |sig|
+                sig.result_type_spec
             else if (decl_info.external and decl_info.explicit_type)
                 type_spec
             else
                 null,
-            .procedure_result_rank = if (decl_info.interface_procedure) |proc| interfaceProcedureResultRank(proc) else 0,
+            .procedure_result_rank = if (decl_info.interface_procedure) |proc| interfaceProcedureResultRank(proc) else if (declarator_sig) |sig| sig.result_rank else 0,
+            .procedure_result_shape_signature = if (decl_info.interface_procedure) |proc|
+                try interfaceProcedureResultShapeSignature(arena, proc)
+            else if (declarator_sig) |sig|
+                sig.result_shape_signature
+            else
+                &.{},
+            .procedure_result_pointer = if (decl_info.interface_procedure) |proc|
+                interfaceProcedureResultAttrs(proc).pointer
+            else if (declarator_sig) |sig|
+                sig.is_pointer
+            else
+                false,
+            .procedure_result_allocatable = if (decl_info.interface_procedure) |proc|
+                interfaceProcedureResultAttrs(proc).allocatable
+            else if (declarator_sig) |sig|
+                sig.result_allocatable
+            else
+                false,
+            .procedure_result_contiguous = if (decl_info.interface_procedure) |proc|
+                interfaceProcedureResultAttrs(proc).contiguous
+            else if (declarator_sig) |sig|
+                sig.result_contiguous
+            else
+                false,
+            .procedure_result_procedure_pointer = if (decl_info.interface_procedure) |proc|
+                interfaceProcedureResultAttrs(proc).procedure_pointer
+            else if (declarator_sig) |sig|
+                sig.result_procedure_pointer
+            else
+                false,
             .procedure_dummy_sigs = if (decl_info.interface_procedure) |proc|
                 try inferInterfaceProcedureArgSigs(arena, unit, proc)
+            else if (declarator_sig) |sig|
+                sig.args
             else
                 &.{},
         };
@@ -62,7 +111,12 @@ const DummyArgDeclInfo = struct {
     intent: ?ast.IntentKind = null,
     external: bool = false,
     explicit_type: bool = false,
+    asynchronous: bool = false,
+    contiguous: bool = false,
+    value_attr: bool = false,
+    volatile_attr: bool = false,
     interface_procedure: ?ast.InterfaceProcedure = null,
+    procedure_interface: ast.ProcedureInterface = .none,
 };
 
 fn findDummyArgDeclInfo(unit: ast.ProgramUnit, name: []const u8) DummyArgDeclInfo {
@@ -83,6 +137,10 @@ fn findDummyArgDeclInfoInDecls(decls: []const ast.Decl, name: []const u8) DummyA
                     info.optional = type_decl.optional;
                     info.intent = type_decl.intent;
                     info.external = type_decl.external;
+                    info.asynchronous = type_decl.asynchronous;
+                    info.contiguous = type_decl.contiguous;
+                    info.value_attr = type_decl.value_attr;
+                    info.volatile_attr = type_decl.volatile_attr;
                     info.explicit_type = true;
                 }
             },
@@ -92,6 +150,8 @@ fn findDummyArgDeclInfoInDecls(decls: []const ast.Decl, name: []const u8) DummyA
                     info.declarator = item;
                     info.optional = procedure_decl.optional;
                     info.external = true;
+                    info.procedure_interface = procedure_decl.interface;
+                    info.explicit_type = procedure_decl.interface == .type_spec;
                 }
             },
             .intent => |intent_decl| {
@@ -142,6 +202,7 @@ pub fn inferInterfaceProcedureArgSigs(
     for (proc_header.args, 0..) |arg_name, idx| {
         const active_decls = if (proc_header.decls.len != 0) proc_header.decls else unit.decls;
         const decl_info = findDummyArgDeclInfoInDecls(active_decls, arg_name);
+        const declarator_sig = resolveProcedureDeclaratorKnownSig(null, decl_info.procedure_interface);
         const inferred_proc_kind = if (decl_info.interface_procedure == null and !decl_info.external and
             decl_info.declarator == null and !decl_info.explicit_type)
             inferDummyArgProcedureKindInStmts(unit.stmts, arg_name)
@@ -155,31 +216,72 @@ pub fn inferInterfaceProcedureArgSigs(
             .type_spec = type_spec,
             .requires_descriptor = dummyArgRequiresDescriptor(dims),
             .rank = dims.len,
+            .shape_signature = try shapeSignatureForDims(arena, dims),
             .pointer = decl_info.pointer,
             .allocatable = decl_info.allocatable,
             .optional = decl_info.optional,
             .intent = decl_info.intent,
-            .is_procedure = decl_info.interface_procedure != null or decl_info.external or inferred_proc_kind != null,
+            .asynchronous = decl_info.asynchronous,
+            .contiguous = decl_info.contiguous,
+            .value_attr = decl_info.value_attr,
+            .volatile_attr = decl_info.volatile_attr,
+            .is_procedure = decl_info.interface_procedure != null or declarator_sig != null or decl_info.external or inferred_proc_kind != null,
             .procedure_kind = if (decl_info.interface_procedure) |proc|
                 proc.kind
+            else if (declarator_sig) |sig|
+                sig.kind
             else if (inferred_proc_kind) |kind|
                 kind
             else if (decl_info.external and decl_info.explicit_type)
                 .function
             else
                 null,
-            .procedure_has_explicit_interface = decl_info.interface_procedure != null,
-            .procedure_arg_count = if (decl_info.interface_procedure) |proc| proc.args.len else 0,
-            .procedure_alt_return_count = if (decl_info.interface_procedure) |proc| proc.alt_return_dummy_count else 0,
+            .procedure_has_explicit_interface = decl_info.interface_procedure != null or declarator_sig != null,
+            .procedure_arg_count = if (decl_info.interface_procedure) |proc| proc.args.len else if (declarator_sig) |sig| sig.arg_count else 0,
+            .procedure_alt_return_count = if (decl_info.interface_procedure) |proc| proc.alt_return_dummy_count else if (declarator_sig) |sig| sig.alt_return_count else 0,
             .procedure_result_type_spec = if (decl_info.interface_procedure) |proc|
                 interfaceProcedureResultTypeSpec(unit, proc)
+            else if (declarator_sig) |sig|
+                sig.result_type_spec
             else if (decl_info.external and decl_info.explicit_type)
                 type_spec
             else
                 null,
-            .procedure_result_rank = if (decl_info.interface_procedure) |proc| interfaceProcedureResultRank(proc) else 0,
+            .procedure_result_rank = if (decl_info.interface_procedure) |proc| interfaceProcedureResultRank(proc) else if (declarator_sig) |sig| sig.result_rank else 0,
+            .procedure_result_shape_signature = if (decl_info.interface_procedure) |proc|
+                try interfaceProcedureResultShapeSignature(arena, proc)
+            else if (declarator_sig) |sig|
+                sig.result_shape_signature
+            else
+                &.{},
+            .procedure_result_pointer = if (decl_info.interface_procedure) |proc|
+                interfaceProcedureResultAttrs(proc).pointer
+            else if (declarator_sig) |sig|
+                sig.is_pointer
+            else
+                false,
+            .procedure_result_allocatable = if (decl_info.interface_procedure) |proc|
+                interfaceProcedureResultAttrs(proc).allocatable
+            else if (declarator_sig) |sig|
+                sig.result_allocatable
+            else
+                false,
+            .procedure_result_contiguous = if (decl_info.interface_procedure) |proc|
+                interfaceProcedureResultAttrs(proc).contiguous
+            else if (declarator_sig) |sig|
+                sig.result_contiguous
+            else
+                false,
+            .procedure_result_procedure_pointer = if (decl_info.interface_procedure) |proc|
+                interfaceProcedureResultAttrs(proc).procedure_pointer
+            else if (declarator_sig) |sig|
+                sig.result_procedure_pointer
+            else
+                false,
             .procedure_dummy_sigs = if (decl_info.interface_procedure) |proc|
                 try inferInterfaceProcedureArgSigs(arena, unit, proc)
+            else if (declarator_sig) |sig|
+                sig.args
             else
                 &.{},
         };
@@ -187,10 +289,32 @@ pub fn inferInterfaceProcedureArgSigs(
     return out;
 }
 
+fn resolveProcedureDeclaratorKnownSig(
+    known_procedure_sigs: ?*const std.StringHashMap(context.Context.ProcedureSig),
+    procedure_interface: ast.ProcedureInterface,
+) ?context.Context.ProcedureSig {
+    const known = known_procedure_sigs orelse return null;
+    return switch (procedure_interface) {
+        .name => |name| lookupKnownProcedureSigCaseInsensitive(known, name),
+        else => null,
+    };
+}
+
+fn lookupKnownProcedureSigCaseInsensitive(
+    known_procedure_sigs: *const std.StringHashMap(context.Context.ProcedureSig),
+    name: []const u8,
+) ?context.Context.ProcedureSig {
+    var it = known_procedure_sigs.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+    }
+    return null;
+}
+
 pub fn interfaceProcedureResultTypeSpec(unit: ast.ProgramUnit, proc_header: ast.InterfaceProcedure) ?symbols.TypeSpec {
     if (proc_header.kind != .function) return null;
-    if (proc_header.type_spec) |type_spec| return procedureTypeSpec(type_spec);
     if (findInterfaceProcedureDeclaredResultTypeSpec(unit, proc_header)) |type_spec| return type_spec;
+    if (proc_header.type_spec) |type_spec| return procedureTypeSpec(type_spec);
     return implicitTypeSpecForName(unit, proc_header.name);
 }
 
@@ -212,6 +336,74 @@ pub fn interfaceProcedureResultRank(proc_header: ast.InterfaceProcedure) usize {
         }
     }
     return 0;
+}
+
+pub const InterfaceProcedureResultAttrs = struct {
+    pointer: bool = false,
+    allocatable: bool = false,
+    contiguous: bool = false,
+    procedure_pointer: bool = false,
+};
+
+pub fn interfaceProcedureResultAttrs(proc_header: ast.InterfaceProcedure) InterfaceProcedureResultAttrs {
+    var attrs: InterfaceProcedureResultAttrs = .{};
+    const result_name = proc_header.result_name orelse proc_header.name;
+    for (proc_header.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    attrs.pointer = type_decl.pointer;
+                    attrs.allocatable = type_decl.allocatable;
+                    attrs.contiguous = type_decl.contiguous;
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    attrs.pointer = procedure_decl.pointer;
+                    attrs.procedure_pointer = procedure_decl.pointer;
+                }
+            },
+            .dimension => |dimension_decl| {
+                for (dimension_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    attrs.pointer = attrs.pointer or dimension_decl.pointer;
+                    attrs.allocatable = attrs.allocatable or dimension_decl.allocatable;
+                }
+            },
+            else => {},
+        }
+    }
+    return attrs;
+}
+
+pub fn interfaceProcedureResultShapeSignature(arena: std.mem.Allocator, proc_header: ast.InterfaceProcedure) ![]const []const u8 {
+    const result_name = proc_header.result_name orelse proc_header.name;
+    for (proc_header.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    return shapeSignatureForDims(arena, item.dims);
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    return shapeSignatureForDims(arena, item.dims);
+                }
+            },
+            .dimension => |dimension_decl| {
+                for (dimension_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, result_name)) continue;
+                    return shapeSignatureForDims(arena, item.dims);
+                }
+            },
+            else => {},
+        }
+    }
+    return &.{};
 }
 
 fn findInterfaceProcedureDeclaredResultTypeSpec(
@@ -580,4 +772,205 @@ fn dummyArgRequiresDescriptor(dims: []const *ast.Expr) bool {
         }
     }
     return false;
+}
+
+pub fn shapeSignatureForDims(arena: std.mem.Allocator, dims: []const *ast.Expr) ![]const []const u8 {
+    if (dims.len == 0) return &.{};
+    const out = try arena.alloc([]const u8, dims.len);
+    for (dims, 0..) |dim, idx| {
+        out[idx] = try dimensionExtentSignature(arena, dim);
+    }
+    return out;
+}
+
+fn dimensionExtentSignature(arena: std.mem.Allocator, dim: *ast.Expr) ![]const u8 {
+    return switch (dim.*) {
+        .dim_range => |range| blk: {
+            if (range.assumed_shape and range.lower == null) break :blk ":";
+            const lower = range.lower orelse break :blk try exprCanonicalText(arena, range.upper);
+            if (try linearExprFromAst(arena, range.upper)) |upper_linear| {
+                if (try linearExprFromAst(arena, lower)) |lower_linear| {
+                    const extent = try linearExprAddConst(
+                        arena,
+                        try linearExprSub(arena, upper_linear, lower_linear),
+                        1,
+                    );
+                    break :blk try linearExprCanonicalText(arena, extent);
+                }
+            }
+            break :blk try std.fmt.allocPrint(
+                arena,
+                "({s})-({s})+1",
+                .{ try exprCanonicalText(arena, range.upper), try exprCanonicalText(arena, lower) },
+            );
+        },
+        else => try exprCanonicalText(arena, dim),
+    };
+}
+
+const LinearExpr = struct {
+    terms: std.StringArrayHashMap(i64),
+    constant: i64 = 0,
+
+    fn init(arena: std.mem.Allocator) LinearExpr {
+        return .{ .terms = std.StringArrayHashMap(i64).init(arena) };
+    }
+};
+
+fn linearExprFromAst(arena: std.mem.Allocator, expr_node: *ast.Expr) !?LinearExpr {
+    return switch (expr_node.*) {
+        .identifier => |name| blk: {
+            var expr = LinearExpr.init(arena);
+            try expr.terms.put(name, 1);
+            break :blk expr;
+        },
+        .literal => |lit| switch (lit.kind) {
+            .integer => blk: {
+                var expr = LinearExpr.init(arena);
+                expr.constant = std.fmt.parseInt(i64, lit.text, 10) catch return null;
+                break :blk expr;
+            },
+            else => null,
+        },
+        .unary => |un| blk: {
+            var inner = (try linearExprFromAst(arena, un.expr)) orelse break :blk null;
+            switch (un.op) {
+                .plus => break :blk inner,
+                .minus => {
+                    var it = inner.terms.iterator();
+                    while (it.next()) |entry| entry.value_ptr.* *= -1;
+                    inner.constant *= -1;
+                    break :blk inner;
+                },
+                else => break :blk null,
+            }
+        },
+        .binary => |bin| blk: {
+            const left = (try linearExprFromAst(arena, bin.left)) orelse break :blk null;
+            const right = (try linearExprFromAst(arena, bin.right)) orelse break :blk null;
+            break :blk switch (bin.op) {
+                .add => try linearExprCombine(arena, left, right, 1),
+                .sub => try linearExprCombine(arena, left, right, -1),
+                else => null,
+            };
+        },
+        else => null,
+    };
+}
+
+fn linearExprCombine(
+    arena: std.mem.Allocator,
+    left: LinearExpr,
+    right: LinearExpr,
+    right_sign: i64,
+) !?LinearExpr {
+    var out = LinearExpr.init(arena);
+    out.constant = left.constant + right_sign * right.constant;
+    for (left.terms.keys(), left.terms.values()) |name, coeff| {
+        try out.terms.put(name, coeff);
+    }
+    for (right.terms.keys(), right.terms.values()) |name, coeff| {
+        const entry = try out.terms.getOrPut(name);
+        if (entry.found_existing) {
+            entry.value_ptr.* += right_sign * coeff;
+        } else {
+            entry.value_ptr.* = right_sign * coeff;
+        }
+    }
+    return out;
+}
+
+fn linearExprSub(arena: std.mem.Allocator, left: LinearExpr, right: LinearExpr) !LinearExpr {
+    return (try linearExprCombine(arena, left, right, -1)).?;
+}
+
+fn linearExprAddConst(arena: std.mem.Allocator, expr: LinearExpr, constant: i64) !LinearExpr {
+    var out = LinearExpr.init(arena);
+    out.constant = expr.constant + constant;
+    for (expr.terms.keys(), expr.terms.values()) |name, coeff| {
+        try out.terms.put(name, coeff);
+    }
+    return out;
+}
+
+fn linearExprCanonicalText(arena: std.mem.Allocator, expr: LinearExpr) ![]const u8 {
+    var parts = std.array_list.Managed([]const u8).init(arena);
+    defer parts.deinit();
+
+    for (expr.terms.keys(), expr.terms.values()) |name, coeff| {
+        if (coeff == 0) continue;
+        if (coeff == 1) {
+            try parts.append(try std.fmt.allocPrint(arena, "{s}", .{name}));
+        } else if (coeff == -1) {
+            try parts.append(try std.fmt.allocPrint(arena, "-{s}", .{name}));
+        } else {
+            try parts.append(try std.fmt.allocPrint(arena, "{d}*{s}", .{ coeff, name }));
+        }
+    }
+    if (expr.constant != 0 or parts.items.len == 0) {
+        try parts.append(try std.fmt.allocPrint(arena, "{d}", .{expr.constant}));
+    }
+    return joinSignedTerms(arena, parts.items);
+}
+
+fn joinSignedTerms(arena: std.mem.Allocator, parts: []const []const u8) ![]const u8 {
+    var out = std.array_list.Managed(u8).init(arena);
+    defer out.deinit();
+    for (parts, 0..) |part, idx| {
+        if (idx == 0) {
+            try out.appendSlice(part);
+            continue;
+        }
+        if (part.len != 0 and part[0] == '-') {
+            try out.appendSlice(part);
+        } else {
+            try out.append('+');
+            try out.appendSlice(part);
+        }
+    }
+    return out.toOwnedSlice();
+}
+
+fn exprCanonicalText(arena: std.mem.Allocator, expr_node: *ast.Expr) ![]const u8 {
+    return switch (expr_node.*) {
+        .identifier => |name| std.ascii.allocLowerString(arena, name),
+        .literal => |lit| try arena.dupe(u8, lit.text),
+        .unary => |un| try std.fmt.allocPrint(arena, "{s}{s}", .{
+            switch (un.op) {
+                .plus => "+",
+                .minus => "-",
+                .not => ".not.",
+            },
+            try exprCanonicalText(arena, un.expr),
+        }),
+        .binary => |bin| try std.fmt.allocPrint(arena, "({s}){s}({s})", .{
+            try exprCanonicalText(arena, bin.left),
+            switch (bin.op) {
+                .add => "+",
+                .sub => "-",
+                .mul => "*",
+                .div => "/",
+                .concat => "//",
+                .power => "**",
+                .eq => "==",
+                .ne => "/=",
+                .lt => "<",
+                .le => "<=",
+                .gt => ">",
+                .ge => ">=",
+                .and_ => ".and.",
+                .or_ => ".or.",
+                .eqv => ".eqv.",
+                .neqv => ".neqv.",
+            },
+            try exprCanonicalText(arena, bin.right),
+        }),
+        .call_or_subscript => |call| blk: {
+            var args = std.array_list.Managed([]const u8).init(arena);
+            defer args.deinit();
+            for (call.args) |arg| try args.append(try exprCanonicalText(arena, arg));
+            break :blk try std.fmt.allocPrint(arena, "{s}({s})", .{ call.name, try std.mem.join(arena, ",", args.items) });
+        },
+        else => "<expr>",
+    };
 }

@@ -27,6 +27,10 @@ pub const KnownProcedureSig = struct {
     is_pointer: bool = false,
     result_rank: usize = 0,
     result_type_spec: ?symbols.TypeSpec = null,
+    result_shape_signature: []const []const u8 = &.{},
+    result_allocatable: bool = false,
+    result_contiguous: bool = false,
+    result_procedure_pointer: bool = false,
     actual_requires_explicit_interface: bool = false,
 };
 

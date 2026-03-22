@@ -132,6 +132,96 @@ test "inferProcedureArgSigs captures OPTIONAL procedure dummy metadata" {
     try testing.expectEqual(ast.TypeKind.integer, arg_sigs[0].type_spec.lowered_kind);
 }
 
+test "inferProcedureArgSigs captures dummy data attribute metadata" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "contains\n" ++
+        "  subroutine s(a, b, c, d)\n" ++
+        "    real, asynchronous :: a\n" ++
+        "    real, contiguous :: b(:)\n" ++
+        "    real, value :: c\n" ++
+        "    real, volatile :: d\n" ++
+        "  end subroutine s\n" ++
+        "end program p\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[1]);
+
+    try testing.expectEqual(@as(usize, 4), arg_sigs.len);
+    try testing.expect(arg_sigs[0].asynchronous);
+    try testing.expect(arg_sigs[1].contiguous);
+    try testing.expect(arg_sigs[2].value_attr);
+    try testing.expect(arg_sigs[3].volatile_attr);
+}
+
+test "inferProcedureArgSigs normalizes dummy array shape signature" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "contains\n" ++
+        "  subroutine t(a, b)\n" ++
+        "    integer :: b\n" ++
+        "    integer :: a(2:b+1,1:b)\n" ++
+        "  end subroutine t\n" ++
+        "end module m\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[1]);
+
+    try testing.expectEqual(@as(usize, 2), arg_sigs[0].shape_signature.len);
+    try testing.expectEqualStrings("b", arg_sigs[0].shape_signature[0]);
+    try testing.expectEqualStrings("b", arg_sigs[0].shape_signature[1]);
+}
+
+test "inferProcedureArgSigs captures procedure dummy function result metadata" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "contains\n" ++
+        "  subroutine s(f)\n" ++
+        "    interface\n" ++
+        "      function f() result(r)\n" ++
+        "        integer, dimension(:), pointer, contiguous :: r\n" ++
+        "      end function f\n" ++
+        "    end interface\n" ++
+        "  end subroutine s\n" ++
+        "end program p\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const arg_sigs = try api.inferProcedureArgSigs(arena.allocator(), program.units[1]);
+
+    try testing.expectEqual(@as(usize, 1), arg_sigs.len);
+    try testing.expect(arg_sigs[0].procedure_result_pointer);
+    try testing.expect(arg_sigs[0].procedure_result_contiguous);
+    try testing.expectEqual(@as(usize, 1), arg_sigs[0].procedure_result_shape_signature.len);
+    try testing.expectEqualStrings(":", arg_sigs[0].procedure_result_shape_signature[0]);
+}
+
 test "inferProcedureArgSigs preserves derived dummy type names" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -340,4 +430,70 @@ test "analyzeProgram accepts procedure pointer actual with matching declarator i
 
     const program = try parser.parseProgram(arena.allocator(), lines);
     _ = try api.analyzeProgram(arena.allocator(), program);
+}
+
+test "analyzeProgram rejects procedure actual dummy attribute mismatch" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test_attributes\n" ++
+        "  call tester1(a1)\n" ++
+        "contains\n" ++
+        "  subroutine a1(aa)\n" ++
+        "    real :: aa\n" ++
+        "  end subroutine\n" ++
+        "  subroutine tester1(f1)\n" ++
+        "    interface\n" ++
+        "      subroutine f1(a)\n" ++
+        "        real, asynchronous :: a\n" ++
+        "      end subroutine\n" ++
+        "    end interface\n" ++
+        "  end subroutine\n" ++
+        "end program test_attributes\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    api.clearDiagnostic();
+    try testing.expectError(error.InvalidArgumentCount, api.analyzeProgram(arena.allocator(), program));
+    const got = api.takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqualStrings("ASYNCHRONOUS mismatch in argument", got.message);
+}
+
+test "analyzeProgram rejects function result character length mismatch" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test_lengths\n" ++
+        "  call call_a(a1)\n" ++
+        "contains\n" ++
+        "  character(1) function a1()\n" ++
+        "  end function\n" ++
+        "  subroutine call_a(a3)\n" ++
+        "    interface\n" ++
+        "      character(2) function a3()\n" ++
+        "      end function\n" ++
+        "    end interface\n" ++
+        "  end subroutine\n" ++
+        "end program test_lengths\n";
+
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    api.clearDiagnostic();
+    try testing.expectError(error.InvalidArgumentCount, api.analyzeProgram(arena.allocator(), program));
+    const got = api.takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqualStrings("Character length mismatch in function result", got.message);
 }

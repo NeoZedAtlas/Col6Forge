@@ -79,10 +79,15 @@ pub const Context = struct {
             type_spec: symbols.TypeSpec = symbols.TypeSpec.fromResolvedKind(.real, .real, null),
             requires_descriptor: bool = false,
             rank: usize = 0,
+            shape_signature: []const []const u8 = &.{},
             pointer: bool = false,
             allocatable: bool = false,
             optional: bool = false,
             intent: ?ast.IntentKind = null,
+            asynchronous: bool = false,
+            contiguous: bool = false,
+            value_attr: bool = false,
+            volatile_attr: bool = false,
             is_procedure: bool = false,
             procedure_kind: ?ast.ProgramUnitKind = null,
             procedure_has_explicit_interface: bool = false,
@@ -90,6 +95,11 @@ pub const Context = struct {
             procedure_alt_return_count: usize = 0,
             procedure_result_type_spec: ?symbols.TypeSpec = null,
             procedure_result_rank: usize = 0,
+            procedure_result_shape_signature: []const []const u8 = &.{},
+            procedure_result_pointer: bool = false,
+            procedure_result_allocatable: bool = false,
+            procedure_result_contiguous: bool = false,
+            procedure_result_procedure_pointer: bool = false,
             procedure_dummy_sigs: []const ArgSig = &.{},
         };
 
@@ -102,6 +112,10 @@ pub const Context = struct {
         is_pointer: bool = false,
         result_rank: usize = 0,
         result_type_spec: ?symbols.TypeSpec = null,
+        result_shape_signature: []const []const u8 = &.{},
+        result_allocatable: bool = false,
+        result_contiguous: bool = false,
+        result_procedure_pointer: bool = false,
         actual_requires_explicit_interface: bool = false,
     };
 

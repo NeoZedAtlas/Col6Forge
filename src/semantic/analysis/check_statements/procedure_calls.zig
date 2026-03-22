@@ -282,11 +282,12 @@ pub fn checkExplicitInterfaceRequirementForCallArgs(
     }
     for (args) |arg| {
         if (arg != .expr) continue;
+        if (procedure_interfaces.isProcedureActualExpr(self, arg.expr.value)) {
+            self.setCurrentSource(self.sourceForExpr(arg.expr.value));
+            return emitProcedureActualDiagnostic(self, arg.expr.value, error.InvalidArgumentCount, "Interface mismatch in dummy procedure");
+        }
         if (procedure_interfaces.requiresExplicitInterfaceForActual(self, arg.expr.value)) {
             self.setCurrentSource(self.sourceForExpr(arg.expr.value));
-            if (procedure_interfaces.isProcedureActualExpr(self, arg.expr.value)) {
-                return emitProcedureActualDiagnostic(self, arg.expr.value, error.InvalidArgumentCount, "Interface mismatch in dummy procedure");
-            }
             return error.ExplicitInterfaceRequired;
         }
     }
@@ -470,13 +471,30 @@ fn checkProcedureActualArg(
                 if (formal.procedure_result_type_spec) |expected_result| {
                     if (sig.kind == .function) {
                         const actual_result = resolve_symbols.lookupKnownFunctionResolvedSpec(self, name) orelse actualSigResultType(sig);
-                        if (actual_result != null and !deps.dummyArgTypeCompatible(self, expected_result, actual_result.?)) {
-                            return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in function result");
+                        if (actual_result) |actual_result_spec| {
+                            if (functionResultTypeMismatchMessage(self, expected_result, actual_result_spec, deps)) |message| {
+                                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, message);
+                            }
                         }
                     }
                 }
                 if (formal.procedure_result_rank != sig.result_rank) {
                     return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Rank mismatch in function result");
+                }
+                if (shapeSignatureMismatch(formal.procedure_result_shape_signature, sig.result_shape_signature)) {
+                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Shape mismatch in function result");
+                }
+                if (formal.procedure_result_procedure_pointer != sig.result_procedure_pointer) {
+                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "PROCEDURE POINTER mismatch in function result");
+                }
+                if (formal.procedure_result_pointer != sig.is_pointer) {
+                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "POINTER attribute mismatch in function result");
+                }
+                if (formal.procedure_result_allocatable != sig.result_allocatable) {
+                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "ALLOCATABLE attribute mismatch in function result");
+                }
+                if (formal.procedure_result_contiguous != sig.result_contiguous) {
+                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "CONTIGUOUS attribute mismatch in function result");
                 }
                 if (formal.procedure_has_explicit_interface and
                     (formal.procedure_arg_count != sig.arg_count or formal.procedure_alt_return_count != sig.alt_return_count))
@@ -517,8 +535,8 @@ fn checkProcedureActualArg(
                                 return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
                             }
                             if (formal.procedure_result_type_spec) |expected_result| {
-                                if (!deps.dummyArgTypeCompatible(self, expected_result, sym.type_spec)) {
-                                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in function result");
+                                if (functionResultTypeMismatchMessage(self, expected_result, sym.type_spec, deps)) |message| {
+                                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, message);
                                 }
                             }
                             if (formal.procedure_result_rank != sym.dims.len) {
@@ -578,17 +596,116 @@ fn checkProcedureDummyCompatibility(
             }
             if (formal_arg.procedure_result_type_spec) |expected_result| {
                 if (actual_arg.procedure_result_type_spec) |actual_result| {
-                    if (!deps.dummyArgTypeCompatible(self, expected_result, actual_result)) {
-                        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+                    if (functionResultTypeMismatchMessage(self, expected_result, actual_result, deps)) |message| {
+                        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, message);
                     }
                 }
+            }
+            if (formal_arg.procedure_result_rank != actual_arg.procedure_result_rank) {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Rank mismatch in function result");
+            }
+            if (shapeSignatureMismatch(formal_arg.procedure_result_shape_signature, actual_arg.procedure_result_shape_signature)) {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Shape mismatch in function result");
+            }
+            if (formal_arg.procedure_result_procedure_pointer != actual_arg.procedure_result_procedure_pointer) {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "PROCEDURE POINTER mismatch in function result");
+            }
+            if (formal_arg.procedure_result_pointer != actual_arg.procedure_result_pointer) {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "POINTER attribute mismatch in function result");
+            }
+            if (formal_arg.procedure_result_allocatable != actual_arg.procedure_result_allocatable) {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "ALLOCATABLE attribute mismatch in function result");
+            }
+            if (formal_arg.procedure_result_contiguous != actual_arg.procedure_result_contiguous) {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "CONTIGUOUS attribute mismatch in function result");
+            }
+            if (formal_arg.procedure_has_explicit_interface and actual_arg.procedure_has_explicit_interface) {
+                if (formal_arg.procedure_arg_count != actual_arg.procedure_arg_count or
+                    formal_arg.procedure_alt_return_count != actual_arg.procedure_alt_return_count)
+                {
+                    return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
+                }
+                try checkNestedProcedureDummyCompatibility(self, formal_arg, actual_arg, actual_expr, deps);
+            }
+        } else {
+            if (procedureDummyDataArgMismatchMessage(self, formal_arg, actual_arg, deps)) |message| {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, message);
             }
         }
     }
 }
 
+fn checkNestedProcedureDummyCompatibility(
+    self: *context.Context,
+    formal: context.Context.ProcedureSig.ArgSig,
+    actual: context.Context.ProcedureSig.ArgSig,
+    actual_expr: *ast.Expr,
+    comptime deps: anytype,
+) CheckError!void {
+    const nested_count = @min(formal.procedure_dummy_sigs.len, actual.procedure_dummy_sigs.len);
+    var nested_idx: usize = 0;
+    while (nested_idx < nested_count) : (nested_idx += 1) {
+        const formal_nested = formal.procedure_dummy_sigs[nested_idx];
+        const actual_nested = actual.procedure_dummy_sigs[nested_idx];
+        if (formal_nested.is_procedure != actual_nested.is_procedure) {
+            return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+        }
+        if (formal_nested.is_procedure) {
+            if (formal_nested.procedure_kind != null and actual_nested.procedure_kind != null and formal_nested.procedure_kind.? != actual_nested.procedure_kind.?) {
+                return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+            }
+        } else if (procedureDummyDataArgMismatchMessage(self, formal_nested, actual_nested, deps)) |message| {
+            return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, message);
+        }
+    }
+}
+
+fn procedureDummyDataArgMismatchMessage(
+    self: *context.Context,
+    formal: context.Context.ProcedureSig.ArgSig,
+    actual: context.Context.ProcedureSig.ArgSig,
+    comptime deps: anytype,
+) ?[]const u8 {
+    if (formal.asynchronous != actual.asynchronous) return "ASYNCHRONOUS mismatch in argument";
+    if (formal.contiguous != actual.contiguous) return "CONTIGUOUS mismatch in argument";
+    if (formal.value_attr != actual.value_attr) return "VALUE mismatch in argument";
+    if (formal.volatile_attr != actual.volatile_attr) return "VOLATILE mismatch in argument";
+    if (shapeSignatureMismatch(formal.shape_signature, actual.shape_signature)) return "Shape mismatch in dimension";
+    if (formal.rank != actual.rank) return "Type mismatch in argument";
+    if (formal.requires_descriptor != actual.requires_descriptor) return "Type mismatch in argument";
+    if (formal.pointer != actual.pointer) return "Type mismatch in argument";
+    if (formal.allocatable != actual.allocatable) return "Type mismatch in argument";
+    if (formal.type_spec.polymorphic != actual.type_spec.polymorphic) return "Type mismatch in argument";
+    if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual.type_spec)) return "Type mismatch in argument";
+    return null;
+}
+
+fn shapeSignatureMismatch(formal: []const []const u8, actual: []const []const u8) bool {
+    if (formal.len == 0 or actual.len == 0) return false;
+    if (formal.len != actual.len) return true;
+    for (formal, actual) |expected, got| {
+        if (!std.mem.eql(u8, expected, got)) return true;
+    }
+    return false;
+}
+
 fn actualSigResultType(sig: context.Context.ProcedureSig) ?symbols.TypeSpec {
     return sig.result_type_spec;
+}
+
+fn functionResultTypeMismatchMessage(
+    self: *context.Context,
+    expected: symbols.TypeSpec,
+    actual: symbols.TypeSpec,
+    comptime deps: anytype,
+) ?[]const u8 {
+    if (expected.lowered_kind == .character and actual.lowered_kind == .character) {
+        if (expected.char_len_kind != actual.char_len_kind or expected.char_len != actual.char_len) {
+            return "Character length mismatch in function result";
+        }
+    }
+    if (!deps.dummyArgTypeCompatible(self, expected, actual)) return "Type mismatch in function result";
+    return null;
 }
 
 fn procedureKindMismatchMessage(kind: ast.ProgramUnitKind) []const u8 {

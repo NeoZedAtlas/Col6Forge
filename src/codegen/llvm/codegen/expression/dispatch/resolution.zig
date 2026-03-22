@@ -165,8 +165,8 @@ pub fn interfaceProcedureResultTypeSpec(
     proc_header: ast_nodes.InterfaceProcedure,
 ) ?ast.TypeSpec {
     if (proc_header.kind != .function) return null;
-    if (proc_header.type_spec) |type_spec| return procedureTypeSpec(type_spec);
     if (findInterfaceProcedureDeclaredResultTypeSpec(unit, proc_header)) |type_spec| return type_spec;
+    if (proc_header.type_spec) |type_spec| return procedureTypeSpec(type_spec);
     return implicitTypeSpecForName(unit, proc_header.name);
 }
 

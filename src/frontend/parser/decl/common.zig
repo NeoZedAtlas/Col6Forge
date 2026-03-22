@@ -44,6 +44,10 @@ pub const DeclAttributes = struct {
     optional: bool = false,
     intent: ?ast.IntentKind = null,
     external: bool = false,
+    asynchronous: bool = false,
+    contiguous: bool = false,
+    value_attr: bool = false,
+    volatile_attr: bool = false,
 };
 
 pub const LegacyStarSplit = struct {

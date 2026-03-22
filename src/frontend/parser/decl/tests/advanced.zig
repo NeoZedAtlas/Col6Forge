@@ -193,6 +193,57 @@ test "parseDecl preserves OPTIONAL declaration attribute" {
     }
 }
 
+test "parseDecl preserves asynchronous and volatile attributes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      REAL, ASYNCHRONOUS, VOLATILE :: A\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expect(td.asynchronous);
+            try testing.expect(td.volatile_attr);
+            try testing.expect(!td.contiguous);
+            try testing.expect(!td.value_attr);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
+test "parseDecl preserves contiguous and value attributes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "real, contiguous, value :: a(:)\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const decl_node = try parseDecl(&lp, arena.allocator());
+
+    switch (decl_node) {
+        .type_decl => |td| {
+            try testing.expect(td.contiguous);
+            try testing.expect(td.value_attr);
+            try testing.expectEqual(@as(usize, 1), td.items[0].dims.len);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
 test "parseDecl handles bare OPTIONAL declaration" {
     const testing = std.testing;
     const allocator = testing.allocator;

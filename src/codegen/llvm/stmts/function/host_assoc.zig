@@ -76,7 +76,7 @@ fn shouldUseHostAssocGlobal(
     sym: sema.Symbol,
     return_symbol_name: []const u8,
 ) bool {
-    if (sym.is_external) return false;
+    if (sym.is_external and !sym.is_pointer) return false;
     if (sym.kind == .parameter or sym.kind == .subroutine) return false;
 
     const is_function_name_symbol = ctx.unit.kind == .function and

@@ -54,14 +54,17 @@ pub fn installExplicitInterfaceProcedures(
                         .is_pointer = false,
                         .result_rank = infer.interfaceProcedureResultRank(proc_header),
                         .result_type_spec = if (proc_header.kind == .function) infer.interfaceProcedureResultTypeSpec(unit, proc_header) else null,
+                        .result_shape_signature = if (proc_header.kind == .function) try infer.interfaceProcedureResultShapeSignature(arena, proc_header) else &.{},
+                        .result_allocatable = if (proc_header.kind == .function) infer.interfaceProcedureResultAttrs(proc_header).allocatable else false,
+                        .result_contiguous = if (proc_header.kind == .function) infer.interfaceProcedureResultAttrs(proc_header).contiguous else false,
+                        .result_procedure_pointer = if (proc_header.kind == .function) infer.interfaceProcedureResultAttrs(proc_header).procedure_pointer else false,
                     });
                 }
                 if (proc_header.kind != .function) continue;
-                if (proc_header.type_spec) |type_spec| {
-                    const type_key = try symbol_lookup.lowerDup(arena, proc_header.name);
-                    if (lookupCaseInsensitive(symbols.TypeSpec, known_function_type_specs, proc_header.name) == null) {
-                        try known_function_type_specs.put(type_key, infer.procedureTypeSpec(type_spec));
-                    }
+                const result_type = infer.interfaceProcedureResultTypeSpec(unit, proc_header) orelse continue;
+                const type_key = try symbol_lookup.lowerDup(arena, proc_header.name);
+                if (lookupCaseInsensitive(symbols.TypeSpec, known_function_type_specs, proc_header.name) == null) {
+                    try known_function_type_specs.put(type_key, result_type);
                 }
             }
         }

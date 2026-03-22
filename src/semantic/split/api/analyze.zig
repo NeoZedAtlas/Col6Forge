@@ -168,6 +168,10 @@ fn seedKnownProcedures(
             .is_pointer = known.is_pointer,
             .result_rank = known.result_rank,
             .result_type_spec = known.result_type_spec,
+            .result_shape_signature = known.result_shape_signature,
+            .result_allocatable = known.result_allocatable,
+            .result_contiguous = known.result_contiguous,
+            .result_procedure_pointer = known.result_procedure_pointer,
             .actual_requires_explicit_interface = known.actual_requires_explicit_interface,
         });
     }
@@ -195,12 +199,16 @@ fn inferProgramProcedures(
                 .kind = unit.kind,
                 .arg_count = unit.args.len,
                 .alt_return_count = unit.alt_return_dummy_count,
-                .args = try procedure_inference.inferProcedureArgSigs(arena, unit),
+                .args = try procedure_inference.inferProcedureArgSigsWithKnown(arena, unit, known_procedure_sigs),
                 .pure = unit.pure,
                 .elemental = unit.elemental,
                 .is_pointer = function_type.inferProcedureIsPointer(unit),
                 .result_rank = if (unit.kind == .function) function_type.inferFunctionResultRank(unit) else 0,
                 .result_type_spec = if (unit.kind == .function) function_type.inferFunctionTypeSpec(unit) else null,
+                .result_shape_signature = if (unit.kind == .function) try function_type.inferFunctionResultShapeSignature(arena, unit) else &.{},
+                .result_allocatable = if (unit.kind == .function) function_type.inferFunctionResultAllocatable(unit) else false,
+                .result_contiguous = if (unit.kind == .function) function_type.inferFunctionResultContiguous(unit) else false,
+                .result_procedure_pointer = if (unit.kind == .function) function_type.inferFunctionResultIsProcedurePointer(unit) else false,
                 .actual_requires_explicit_interface = unit.owner_name != null,
             };
             try known_procedure_sigs.put(key, sig);

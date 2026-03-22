@@ -4,6 +4,7 @@ const fixed_form = @import("../../frontend/fixed_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const type_kind_selector = @import("../type_kind_selector.zig");
 const symbols = @import("../symbol/mod.zig");
+const procedure_inference = @import("./api/procedure_inference.zig");
 
 pub fn inferFunctionType(unit: ast.ProgramUnit) ast.TypeKind {
     return inferFunctionTypeSpec(unit).lowered_kind;
@@ -40,10 +41,7 @@ pub fn inferFunctionResultRank(unit: ast.ProgramUnit) usize {
 
 pub fn inferProcedureIsPointer(unit: ast.ProgramUnit) bool {
     if (unit.kind != .function) return false;
-    const explicit_result_name = if (unit.result_name) |name|
-        if (!std.ascii.eqlIgnoreCase(name, unit.name)) name else null
-    else
-        null;
+    const explicit_result_name = explicitResultName(unit);
     for (unit.decls) |decl| {
         switch (decl) {
             .type_decl => |type_decl| {
@@ -68,11 +66,93 @@ pub fn inferProcedureIsPointer(unit: ast.ProgramUnit) bool {
     return false;
 }
 
+pub fn inferFunctionResultAllocatable(unit: ast.ProgramUnit) bool {
+    if (unit.kind != .function) return false;
+    const explicit_result_name = explicitResultName(unit);
+    for (unit.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (matchesResultName(explicit_result_name, unit.name, item.name)) return type_decl.allocatable;
+                }
+            },
+            .dimension => |dimension_decl| {
+                for (dimension_decl.items) |item| {
+                    if (matchesResultName(explicit_result_name, unit.name, item.name)) return dimension_decl.allocatable;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+pub fn inferFunctionResultContiguous(unit: ast.ProgramUnit) bool {
+    if (unit.kind != .function) return false;
+    const explicit_result_name = explicitResultName(unit);
+    for (unit.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (matchesResultName(explicit_result_name, unit.name, item.name)) return type_decl.contiguous;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+pub fn inferFunctionResultIsProcedurePointer(unit: ast.ProgramUnit) bool {
+    if (unit.kind != .function) return false;
+    const explicit_result_name = explicitResultName(unit);
+    for (unit.decls) |decl| {
+        switch (decl) {
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (matchesResultName(explicit_result_name, unit.name, item.name)) return procedure_decl.pointer;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+pub fn inferFunctionResultShapeSignature(arena: std.mem.Allocator, unit: ast.ProgramUnit) ![]const []const u8 {
+    if (unit.kind != .function) return &.{};
+    const explicit_result_name = explicitResultName(unit);
+    for (unit.decls) |decl| {
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (matchesResultName(explicit_result_name, unit.name, item.name)) {
+                        return procedure_inference.shapeSignatureForDims(arena, item.dims);
+                    }
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (matchesResultName(explicit_result_name, unit.name, item.name)) {
+                        return procedure_inference.shapeSignatureForDims(arena, item.dims);
+                    }
+                }
+            },
+            .dimension => |dimension_decl| {
+                for (dimension_decl.items) |item| {
+                    if (matchesResultName(explicit_result_name, unit.name, item.name)) {
+                        return procedure_inference.shapeSignatureForDims(arena, item.dims);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    return &.{};
+}
+
 pub fn inferFunctionTypeSpec(unit: ast.ProgramUnit) symbols.TypeSpec {
-    const explicit_result_name = if (unit.result_name) |name|
-        if (!std.ascii.eqlIgnoreCase(name, unit.name)) name else null
-    else
-        null;
+    const explicit_result_name = explicitResultName(unit);
     for (unit.decls) |decl| {
         switch (decl) {
             .type_decl => |type_decl| {
@@ -106,6 +186,20 @@ pub fn inferFunctionTypeSpec(unit: ast.ProgramUnit) symbols.TypeSpec {
     const first = std.ascii.toUpper(unit.name[0]);
     if (first >= 'I' and first <= 'N') return symbols.TypeSpec.fromResolvedKind(.integer, .integer, null);
     return symbols.TypeSpec.fromResolvedKind(.real, .real, null);
+}
+
+fn explicitResultName(unit: ast.ProgramUnit) ?[]const u8 {
+    return if (unit.result_name) |name|
+        if (!std.ascii.eqlIgnoreCase(name, unit.name)) name else null
+    else
+        null;
+}
+
+fn matchesResultName(explicit_result_name: ?[]const u8, unit_name: []const u8, candidate_name: []const u8) bool {
+    return if (explicit_result_name) |result_name|
+        std.ascii.eqlIgnoreCase(candidate_name, result_name)
+    else
+        std.ascii.eqlIgnoreCase(candidate_name, unit_name);
 }
 
 fn typeDeclTypeSpec(type_decl: ast.TypeDecl) symbols.TypeSpec {

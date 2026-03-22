@@ -48,6 +48,12 @@ pub fn collectFortranKnownSymbols(
                     unit.alt_return_dummy_count,
                     arg_sigs,
                     Col6Forge.sema.function_type.inferProcedureIsPointer(unit),
+                    if (unit.kind == .function) Col6Forge.sema.function_type.inferFunctionResultRank(unit) else 0,
+                    if (unit.kind == .function) Col6Forge.sema.inferFunctionTypeSpec(unit) else null,
+                    if (unit.kind == .function) try Col6Forge.sema.function_type.inferFunctionResultShapeSignature(allocator, unit) else &.{},
+                    if (unit.kind == .function) Col6Forge.sema.function_type.inferFunctionResultAllocatable(unit) else false,
+                    if (unit.kind == .function) Col6Forge.sema.function_type.inferFunctionResultContiguous(unit) else false,
+                    if (unit.kind == .function) Col6Forge.sema.function_type.inferFunctionResultIsProcedurePointer(unit) else false,
                 );
             }
         }
@@ -137,6 +143,12 @@ fn upsertKnownProcedureSig(
     alt_return_count: usize,
     args: []const Col6Forge.sema.KnownProcedureSig.ArgSig,
     is_pointer: bool,
+    result_rank: usize,
+    result_type_spec: ?Col6Forge.sema.TypeSpec,
+    result_shape_signature: []const []const u8,
+    result_allocatable: bool,
+    result_contiguous: bool,
+    result_procedure_pointer: bool,
 ) !void {
     if (indexOfKnownProcedureSig(list.items, name)) |idx| {
         if (list.items[idx].args.len != 0) allocator.free(list.items[idx].args);
@@ -145,6 +157,12 @@ fn upsertKnownProcedureSig(
         list.items[idx].alt_return_count = alt_return_count;
         list.items[idx].args = if (args.len == 0) &.{} else try allocator.dupe(Col6Forge.sema.KnownProcedureSig.ArgSig, args);
         list.items[idx].is_pointer = is_pointer;
+        list.items[idx].result_rank = result_rank;
+        list.items[idx].result_type_spec = result_type_spec;
+        list.items[idx].result_shape_signature = result_shape_signature;
+        list.items[idx].result_allocatable = result_allocatable;
+        list.items[idx].result_contiguous = result_contiguous;
+        list.items[idx].result_procedure_pointer = result_procedure_pointer;
         return;
     }
     try list.append(allocator, .{
@@ -154,6 +172,12 @@ fn upsertKnownProcedureSig(
         .alt_return_count = alt_return_count,
         .args = if (args.len == 0) &.{} else try allocator.dupe(Col6Forge.sema.KnownProcedureSig.ArgSig, args),
         .is_pointer = is_pointer,
+        .result_rank = result_rank,
+        .result_type_spec = result_type_spec,
+        .result_shape_signature = result_shape_signature,
+        .result_allocatable = result_allocatable,
+        .result_contiguous = result_contiguous,
+        .result_procedure_pointer = result_procedure_pointer,
     });
 }
 

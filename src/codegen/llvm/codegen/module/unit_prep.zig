@@ -57,6 +57,10 @@ pub fn collectPreludeState(
                     .is_pointer = function_type.inferProcedureIsPointer(unit),
                     .result_rank = if (unit.kind == .function) function_type.inferFunctionResultRank(unit) else 0,
                     .result_type_spec = if (unit.kind == .function) function_type.inferFunctionTypeSpec(unit) else null,
+                    .result_shape_signature = if (unit.kind == .function) try function_type.inferFunctionResultShapeSignature(scratch, unit) else &.{},
+                    .result_allocatable = if (unit.kind == .function) function_type.inferFunctionResultAllocatable(unit) else false,
+                    .result_contiguous = if (unit.kind == .function) function_type.inferFunctionResultContiguous(unit) else false,
+                    .result_procedure_pointer = if (unit.kind == .function) function_type.inferFunctionResultIsProcedurePointer(unit) else false,
                     .actual_requires_explicit_interface = unit.owner_name != null,
                 };
                 try known_procedure_sigs.put(unit.name, sig);
@@ -111,6 +115,10 @@ fn installExplicitInterfaceProcedureSigs(
                 .is_pointer = false,
                 .result_rank = input.sema.interfaceProcedureResultRank(proc_header),
                 .result_type_spec = null,
+                .result_shape_signature = &.{},
+                .result_allocatable = false,
+                .result_contiguous = false,
+                .result_procedure_pointer = false,
             });
         }
     }

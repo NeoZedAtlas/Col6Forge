@@ -218,6 +218,10 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
         .optional = attrs.optional,
         .intent = attrs.intent,
         .external = attrs.external,
+        .asynchronous = attrs.asynchronous,
+        .contiguous = attrs.contiguous,
+        .value_attr = attrs.value_attr,
+        .volatile_attr = attrs.volatile_attr,
     } };
 }
 
