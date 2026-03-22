@@ -49,6 +49,8 @@ pub fn resolveCallOrSubscriptExpr(
     } else if (sym.storage == .dummy) {
         if (sym.dims.len > 0) {
             kind = .subscript;
+        } else if (sym.type_explicit and !sym.is_external and sym.kind == .variable) {
+            return error.InvalidSubscript;
         } else {
             kind = .call;
             if (sym.kind == .variable) sym.kind = .function;

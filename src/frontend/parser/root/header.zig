@@ -29,6 +29,8 @@ pub const ProgramUnitHeader = struct {
     kind: ProgramUnitKind,
     name: []const u8,
     is_module_procedure: bool,
+    pure: bool,
+    elemental: bool,
     bind_name: ?[]const u8,
     result_name: ?[]const u8,
     args: []const []const u8,
@@ -41,8 +43,10 @@ pub fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_d
     var type_info: ?TypeInfo = null;
     var allow_missing_name = false;
     var saw_module_prefix = false;
+    var pure = false;
+    var elemental = false;
 
-    consumeProcedurePrefixes(lp);
+    consumeProcedurePrefixes(lp, &pure, &elemental);
     saw_module_prefix = lp.consumeKeyword("MODULE");
 
     if (lp.isKeywordSplit("PROGRAM")) {
@@ -60,7 +64,7 @@ pub fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_d
         allow_missing_name = true;
     } else {
         type_info = try parseTypePrefix(arena, lp) orelse return error.ExpectedProgramUnit;
-        consumeProcedurePrefixes(lp);
+        consumeProcedurePrefixes(lp, &pure, &elemental);
         saw_module_prefix = lp.consumeKeyword("MODULE");
         if (!lp.isKeywordSplit("FUNCTION")) return error.ExpectedProgramUnit;
         _ = lp.consumeKeyword("FUNCTION");
@@ -119,6 +123,8 @@ pub fn parseProgramUnitHeader(arena: std.mem.Allocator, lp: *LineParser, block_d
         .kind = kind,
         .name = name,
         .is_module_procedure = saw_module_prefix,
+        .pure = pure,
+        .elemental = elemental,
         .bind_name = bind_name,
         .result_name = result_name,
         .args = try args_list.toOwnedSlice(),
@@ -322,55 +328,100 @@ pub fn parseTypeBoundProcedureBindings(
 
     var interface_name: ?[]const u8 = null;
     var syntax_error_message: ?[]const u8 = null;
+    var saw_binding_attr = false;
     if (lp.consume(.l_paren)) {
         if (lp.peekIs(.r_paren)) {
             syntax_error_message = "Interface-name expected";
         } else {
-            interface_name = lp.readName(arena) orelse return error.MissingName;
+            interface_name = lp.readName(arena) orelse blk: {
+                if (syntax_error_message == null) syntax_error_message = "Interface-name expected";
+                break :blk null;
+            };
             if (!lp.peekIs(.r_paren)) {
-                syntax_error_message = "')' expected";
+                if (syntax_error_message == null) syntax_error_message = "')' expected";
                 while (lp.peek()) |tok| {
                     if (tok.kind == .r_paren) break;
                     _ = lp.next();
                 }
             }
         }
-        _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+        _ = lp.consume(.r_paren);
     }
 
     var deferred = false;
     var nopass = false;
     var pass_name: ?[]const u8 = null;
+    var private = false;
     var non_overridable = false;
 
     while (lp.consume(.comma)) {
         if (consumeDoubleColon(lp)) break;
-        const attr_name = lp.readName(arena) orelse return error.MissingName;
+        const attr_name = lp.readName(arena) orelse {
+            if (syntax_error_message == null) syntax_error_message = "Expected binding attribute";
+            break;
+        };
         if (std.ascii.eqlIgnoreCase(attr_name, "DEFERRED")) {
             if (deferred and syntax_error_message == null) syntax_error_message = "Duplicate DEFERRED";
             deferred = true;
+            saw_binding_attr = true;
         } else if (std.ascii.eqlIgnoreCase(attr_name, "NOPASS")) {
             nopass = true;
+            saw_binding_attr = true;
         } else if (std.ascii.eqlIgnoreCase(attr_name, "NON_OVERRIDABLE")) {
             non_overridable = true;
+            saw_binding_attr = true;
         } else if (std.ascii.eqlIgnoreCase(attr_name, "PASS")) {
+            saw_binding_attr = true;
             if (lp.consume(.l_paren)) {
-                pass_name = lp.readName(arena) orelse return error.MissingName;
-                _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+                pass_name = lp.readName(arena) orelse blk: {
+                    if (syntax_error_message == null) syntax_error_message = "Expected PASS argument";
+                    break :blk null;
+                };
+                if (!lp.peekIs(.r_paren) and syntax_error_message == null) syntax_error_message = "Expected ')'";
+                _ = lp.consume(.r_paren);
             }
+        } else if (std.ascii.eqlIgnoreCase(attr_name, "PRIVATE")) {
+            private = true;
+            saw_binding_attr = true;
+        } else if (std.ascii.eqlIgnoreCase(attr_name, "PUBLIC")) {
+            private = false;
+            saw_binding_attr = true;
         } else if (lp.consume(.l_paren)) {
             try consumeBalancedParens(lp);
         }
     }
-    _ = consumeDoubleColon(lp);
+    const saw_double_colon = consumeDoubleColon(lp);
+    if (!saw_double_colon and syntax_error_message == null and (saw_binding_attr or lineParserHasBindingTarget(lp))) {
+        syntax_error_message = "Expected '::'";
+    }
 
     var out = std.array_list.Managed(ast.TypeBoundProcedureBinding).init(arena);
     while (true) {
-        const binding_name = lp.readName(arena) orelse return error.MissingName;
+        const binding_name = lp.readName(arena) orelse {
+            try out.append(.{
+                .name = "__invalid_binding__",
+                .interface_name = interface_name,
+                .implementation_name = null,
+                .deferred = deferred,
+                .nopass = nopass,
+                .pass_name = pass_name,
+                .private = private,
+                .non_overridable = non_overridable,
+                .syntax_error_message = syntax_error_message orelse "Expected binding name",
+            });
+            break;
+        };
         var implementation_name: ?[]const u8 = null;
+        var binding_error_message = syntax_error_message;
         if (lp.consume(.equals)) {
-            _ = lp.expect(.greater) orelse return error.UnexpectedToken;
-            implementation_name = lp.readName(arena) orelse return error.MissingName;
+            if (!lp.consume(.greater)) {
+                if (binding_error_message == null) binding_error_message = "Expected binding target";
+            } else {
+                implementation_name = lp.readName(arena) orelse blk: {
+                    if (binding_error_message == null) binding_error_message = "Expected binding target";
+                    break :blk null;
+                };
+            }
         }
         try out.append(.{
             .name = binding_name,
@@ -379,12 +430,25 @@ pub fn parseTypeBoundProcedureBindings(
             .deferred = deferred,
             .nopass = nopass,
             .pass_name = pass_name,
+            .private = private,
             .non_overridable = non_overridable,
-            .syntax_error_message = syntax_error_message,
+            .syntax_error_message = binding_error_message,
         });
         if (!lp.consume(.comma)) break;
     }
     return out.toOwnedSlice();
+}
+
+fn lineParserHasBindingTarget(lp: *const LineParser) bool {
+    var scan = lp.*;
+    while (scan.peek()) |tok| {
+        _ = scan.next();
+        if (tok.kind != .equals) continue;
+        if (scan.peek()) |next| {
+            if (next.kind == .greater) return true;
+        }
+    }
+    return false;
 }
 
 fn consumeBalancedParens(lp: *LineParser) !void {
@@ -400,10 +464,16 @@ fn consumeBalancedParens(lp: *LineParser) !void {
     }
 }
 
-fn consumeProcedurePrefixes(lp: *LineParser) void {
+fn consumeProcedurePrefixes(lp: *LineParser, pure: *bool, elemental: *bool) void {
     while (true) {
-        if (lp.consumeKeyword("PURE")) continue;
-        if (lp.consumeKeyword("ELEMENTAL")) continue;
+        if (lp.consumeKeyword("PURE")) {
+            pure.* = true;
+            continue;
+        }
+        if (lp.consumeKeyword("ELEMENTAL")) {
+            elemental.* = true;
+            continue;
+        }
         if (lp.consumeKeyword("RECURSIVE")) continue;
         if (lp.consumeKeyword("IMPURE")) continue;
         break;

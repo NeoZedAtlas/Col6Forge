@@ -254,6 +254,14 @@ fn validateDerivedTypeDef(self: *context.Context, derived: ast.DerivedTypeDef) !
         setAttributeConflictDiagnostic(self, "must not be ABSTRACT");
         first_error = error.DuplicateDeclaration;
     }
+    if (derived.sequence and derived.bindings.len != 0) {
+        setAttributeConflictDiagnostic(self, "SEQUENCE");
+        if (first_error == null) first_error = error.DuplicateDeclaration;
+    }
+    if (derived.bind_c and derived.bindings.len != 0) {
+        setAttributeConflictDiagnostic(self, "BIND");
+        if (first_error == null) first_error = error.DuplicateDeclaration;
+    }
 
     for (derived.components, 0..) |type_decl, component_idx| {
         if (type_decl.type_kind != .derived) continue;
@@ -265,6 +273,11 @@ fn validateDerivedTypeDef(self: *context.Context, derived: ast.DerivedTypeDef) !
             self.current_decl_source orelse ast.DeclSource{};
         setSourceDiagnostic(self, component_source, "has not been declared");
         if (first_error == null) first_error = error.UnexpectedTypeDecl;
+    }
+
+    if (validateDerivedMemberNameCollisions(self, derived)) |err| {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_error == null) first_error = err;
     }
 
     for (derived.bindings) |binding| {
@@ -281,6 +294,71 @@ fn validateDerivedTypeDef(self: *context.Context, derived: ast.DerivedTypeDef) !
     }
 
     if (first_error) |err| return err;
+}
+
+fn validateDerivedMemberNameCollisions(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+) ?anyerror {
+    for (derived.components, 0..) |type_decl, component_idx| {
+        const component_source = if (component_idx < derived.component_sources.len)
+            derived.component_sources[component_idx]
+        else
+            self.current_decl_source orelse ast.DeclSource{};
+        for (type_decl.items) |item| {
+            if (findParsedBindingByName(derived.bindings, item.name) != null) {
+                setSourceDiagnostic(self, component_source, "same name as a component");
+                return error.DuplicateDeclaration;
+            }
+            if (derivedAncestorHasMemberName(self, derived.parent_name, item.name)) {
+                setSourceDiagnostic(self, component_source, "same name");
+                return error.DuplicateDeclaration;
+            }
+        }
+    }
+
+    for (derived.bindings) |binding| {
+        if (derivedAncestorHasComponentName(self, derived.parent_name, binding.name)) {
+            setBindingDiagnostic(self, binding, "same name as an inherited component");
+            return error.DuplicateDeclaration;
+        }
+    }
+    return null;
+}
+
+fn derivedAncestorHasMemberName(
+    self: *context.Context,
+    parent_name: ?[]const u8,
+    target_name: []const u8,
+) bool {
+    var current_name = parent_name;
+    while (current_name) |name| {
+        const parent = symbols_mod.lookupDerivedType(self, name) orelse return false;
+        for (parent.components) |component| {
+            if (std.ascii.eqlIgnoreCase(component.name, target_name)) return true;
+        }
+        for (parent.bindings) |binding| {
+            if (std.ascii.eqlIgnoreCase(binding.name, target_name)) return true;
+        }
+        current_name = parent.parent_name;
+    }
+    return false;
+}
+
+fn derivedAncestorHasComponentName(
+    self: *context.Context,
+    parent_name: ?[]const u8,
+    target_name: []const u8,
+) bool {
+    var current_name = parent_name;
+    while (current_name) |name| {
+        const parent = symbols_mod.lookupDerivedType(self, name) orelse return false;
+        for (parent.components) |component| {
+            if (std.ascii.eqlIgnoreCase(component.name, target_name)) return true;
+        }
+        current_name = parent.parent_name;
+    }
+    return false;
 }
 
 fn validateDerivedBinding(
@@ -339,6 +417,9 @@ fn validateDerivedBinding(
     if (derived.abstract and !binding.deferred and binding.interface_name != null and !bindingImplementationExists(self, binding)) {
         setBindingDiagnostic(self, binding, "should be declared DEFERRED");
         return error.DuplicateDeclaration;
+    }
+    if (validateBindingOverrideCompatibility(self, derived, binding)) |err| {
+        return err;
     }
     if (validateBindingImplementationReference(self, binding)) |err| {
         return err;
@@ -508,6 +589,152 @@ fn bindingOverridesNonOverridableParent(
         parent_name = parent.parent_name;
     }
     return false;
+}
+
+fn validateBindingOverrideCompatibility(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    binding: ast.TypeBoundProcedureBinding,
+) ?anyerror {
+    const parent_binding = findOverriddenParentBinding(self, derived, binding.name) orelse return null;
+    const child_sig = bindingReferenceSig(self, binding) orelse return null;
+    const parent_sig = bindingInfoReferenceSig(self, parent_binding) orelse return null;
+
+    if (parent_sig.pure and !child_sig.pure) {
+        setBindingDiagnostic(self, binding, "must also be PURE");
+        return error.DuplicateDeclaration;
+    }
+    if (parent_sig.elemental and !child_sig.elemental) {
+        setBindingDiagnostic(self, binding, "must also be ELEMENTAL");
+        return error.DuplicateDeclaration;
+    }
+    if (!parent_sig.elemental and child_sig.elemental) {
+        setBindingDiagnostic(self, binding, "must not be ELEMENTAL");
+        return error.DuplicateDeclaration;
+    }
+    if (parent_sig.arg_count != child_sig.arg_count) {
+        setBindingDiagnostic(self, binding, "same number of formal arguments");
+        return error.DuplicateDeclaration;
+    }
+    if (parent_sig.kind == .subroutine and child_sig.kind != .subroutine) {
+        setBindingDiagnostic(self, binding, "must also be a SUBROUTINE");
+        return error.DuplicateDeclaration;
+    }
+    if (parent_sig.kind == .function and child_sig.kind != .function) {
+        setBindingDiagnostic(self, binding, "must also be a FUNCTION");
+        return error.DuplicateDeclaration;
+    }
+    if (parent_sig.kind == .function and child_sig.kind == .function and !bindingFunctionResultsMatch(parent_sig, child_sig)) {
+        setBindingDiagnostic(self, binding, "Type mismatch in function result");
+        return error.DuplicateDeclaration;
+    }
+    if (!parent_binding.private and binding.private) {
+        setBindingDiagnostic(self, binding, "must not be PRIVATE");
+        return error.DuplicateDeclaration;
+    }
+    if (parent_binding.nopass and !binding.nopass) {
+        setBindingDiagnostic(self, binding, "must also be NOPASS");
+        return error.DuplicateDeclaration;
+    }
+    if (!parent_binding.nopass and binding.nopass) {
+        setBindingDiagnostic(self, binding, "must also be PASS");
+        return error.DuplicateDeclaration;
+    }
+
+    if (!parent_binding.nopass and !binding.nopass) {
+        const parent_pass_idx = bindingPassArgIndex(parent_sig, parent_binding.pass_name) orelse return null;
+        const child_pass_idx = bindingPassArgIndex(child_sig, binding.pass_name) orelse return null;
+        if (parent_pass_idx != child_pass_idx) {
+            setBindingDiagnostic(self, binding, "same position");
+            return error.DuplicateDeclaration;
+        }
+        if (validateOverridingDummyArguments(self, binding, parent_sig, child_sig, child_pass_idx)) |err| {
+            return err;
+        }
+        return null;
+    }
+
+    if (validateOverridingDummyArguments(self, binding, parent_sig, child_sig, null)) |err| {
+        return err;
+    }
+    return null;
+}
+
+fn findOverriddenParentBinding(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    binding_name: []const u8,
+) ?context.Context.DerivedTypeInfo.BindingInfo {
+    var parent_name = derived.parent_name;
+    while (parent_name) |name| {
+        const parent = symbols_mod.lookupDerivedType(self, name) orelse return null;
+        if (findResolvedBindingByName(parent.bindings, binding_name)) |binding| return binding;
+        parent_name = parent.parent_name;
+    }
+    return null;
+}
+
+fn bindingInfoReferenceSig(
+    self: *context.Context,
+    binding: context.Context.DerivedTypeInfo.BindingInfo,
+) ?context.Context.ProcedureSig {
+    if (binding.interface_name) |iface_name| {
+        if (lookupQualifiedProcedureSig(self, binding.owner_name, iface_name)) |sig| return sig;
+        if (symbols_mod.lookupKnownProcedureSig(self, iface_name)) |sig| return sig;
+    }
+    const impl_name = binding.implementation_name orelse binding.name;
+    if (lookupQualifiedProcedureSig(self, binding.owner_name, impl_name)) |sig| return sig;
+    return symbols_mod.lookupKnownProcedureSig(self, impl_name);
+}
+
+fn bindingFunctionResultsMatch(
+    parent_sig: context.Context.ProcedureSig,
+    child_sig: context.Context.ProcedureSig,
+) bool {
+    const parent_result = parent_sig.result_type_spec orelse return child_sig.result_type_spec == null;
+    const child_result = child_sig.result_type_spec orelse return false;
+    if (parent_sig.result_rank != child_sig.result_rank) return false;
+    return typeSpecsMatchForOverride(parent_result, child_result);
+}
+
+fn validateOverridingDummyArguments(
+    self: *context.Context,
+    binding: ast.TypeBoundProcedureBinding,
+    parent_sig: context.Context.ProcedureSig,
+    child_sig: context.Context.ProcedureSig,
+    pass_idx: ?usize,
+) ?anyerror {
+    for (parent_sig.args, child_sig.args, 0..) |parent_arg, child_arg, idx| {
+        if (pass_idx != null and idx == pass_idx.?) continue;
+        if (!std.ascii.eqlIgnoreCase(parent_arg.name, child_arg.name)) {
+            const message = std.fmt.allocPrint(self.arena, "should be named '{s}'", .{parent_arg.name}) catch "dummy argument name mismatch";
+            setBindingDiagnostic(self, binding, message);
+            return error.DuplicateDeclaration;
+        }
+        if (!typeSpecsMatchForOverride(parent_arg.type_spec, child_arg.type_spec) or parent_arg.rank != child_arg.rank) {
+            const message = std.fmt.allocPrint(self.arena, "Type mismatch in argument '{s}'", .{parent_arg.name}) catch "dummy argument type mismatch";
+            setBindingDiagnostic(self, binding, message);
+            return error.DuplicateDeclaration;
+        }
+    }
+    return null;
+}
+
+fn typeSpecsMatchForOverride(a: symbols.TypeSpec, b: symbols.TypeSpec) bool {
+    if (a.lowered_kind != b.lowered_kind) return false;
+    if (a.kind_value != null and b.kind_value != null and a.kind_value.? != b.kind_value.?) return false;
+    if (a.lowered_kind == .character) {
+        if (a.char_len_kind != b.char_len_kind) return false;
+        if (a.char_len != b.char_len) return false;
+    }
+    if (a.lowered_kind == .derived) {
+        if (a.polymorphic != b.polymorphic) return false;
+        if (a.derived_type_name == null or b.derived_type_name == null) {
+            return a.derived_type_name == null and b.derived_type_name == null;
+        }
+        if (!std.ascii.eqlIgnoreCase(a.derived_type_name.?, b.derived_type_name.?)) return false;
+    }
+    return true;
 }
 
 fn validatePassedObjectDummyConstraints(

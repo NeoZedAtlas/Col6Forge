@@ -24,6 +24,8 @@ pub fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {
             try units.append(.{
                 .kind = unit.kind,
                 .name = unit.name,
+                .pure = unit.pure,
+                .elemental = unit.elemental,
                 .args = unit.args,
                 .alt_return_dummy_count = unit.alt_return_dummy_count,
                 .decls = unit.decls,
@@ -50,6 +52,8 @@ pub fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {
             try units.append(.{
                 .kind = unit.kind,
                 .name = entry.name,
+                .pure = unit.pure,
+                .elemental = unit.elemental,
                 .args = entry.args,
                 .alt_return_dummy_count = entry.alt_return_dummy_count,
                 .decls = unit.decls,

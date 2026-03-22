@@ -25,6 +25,7 @@ pub const Context = struct {
             deferred: bool = false,
             nopass: bool = false,
             pass_name: ?[]const u8 = null,
+            private: bool = false,
             non_overridable: bool = false,
         };
 
@@ -96,6 +97,8 @@ pub const Context = struct {
         arg_count: usize,
         alt_return_count: usize = 0,
         args: []const ArgSig = &.{},
+        pure: bool = false,
+        elemental: bool = false,
         is_pointer: bool = false,
         result_rank: usize = 0,
         result_type_spec: ?symbols.TypeSpec = null,

@@ -72,6 +72,8 @@ pub const InterfaceProcedure = struct {
     name: []const u8,
     source: @import("program.zig").DeclSource = .{},
     end_source: @import("program.zig").DeclSource = .{},
+    pure: bool = false,
+    elemental: bool = false,
     bind_name: ?[]const u8 = null,
     result_name: ?[]const u8 = null,
     args: []const []const u8,
@@ -101,6 +103,7 @@ pub const TypeBoundProcedureBinding = struct {
     deferred: bool = false,
     nopass: bool = false,
     pass_name: ?[]const u8 = null,
+    private: bool = false,
     non_overridable: bool = false,
     syntax_error_message: ?[]const u8 = null,
 };

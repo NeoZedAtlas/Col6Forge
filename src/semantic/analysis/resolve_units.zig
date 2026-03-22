@@ -441,6 +441,7 @@ fn buildDerivedBindingInfo(
             .deferred = binding.deferred,
             .nopass = binding.nopass,
             .pass_name = binding.pass_name,
+            .private = binding.private,
             .non_overridable = binding.non_overridable,
         });
     }

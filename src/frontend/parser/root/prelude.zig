@@ -293,6 +293,8 @@ pub fn prependDecls(
         .kind = unit.kind,
         .name = unit.name,
         .is_module_procedure = unit.is_module_procedure,
+        .pure = unit.pure,
+        .elemental = unit.elemental,
         .prelude_decl_count = unit.prelude_decl_count + filtered_decls.items.len,
         .owner_name = unit.owner_name,
         .owner_kind = unit.owner_kind,

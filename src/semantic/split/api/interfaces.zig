@@ -49,6 +49,8 @@ pub fn installExplicitInterfaceProcedures(
                         .arg_count = proc_header.args.len,
                         .alt_return_count = proc_header.alt_return_dummy_count,
                         .args = try infer.inferInterfaceProcedureArgSigs(arena, unit, proc_header),
+                        .pure = proc_header.pure,
+                        .elemental = proc_header.elemental,
                         .is_pointer = false,
                         .result_rank = infer.interfaceProcedureResultRank(proc_header),
                         .result_type_spec = if (proc_header.kind == .function) infer.interfaceProcedureResultTypeSpec(unit, proc_header) else null,

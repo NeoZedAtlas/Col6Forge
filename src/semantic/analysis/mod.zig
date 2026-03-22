@@ -816,6 +816,141 @@ test "type-bound binding target must be a module procedure" {
     try testing.expect(std.mem.indexOf(u8, got.message, "must be a module procedure") != null);
 }
 
+test "type-bound override must also be PURE" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: supert\n" ++
+        "  contains\n" ++
+        "    procedure, nopass :: p => pure_impl\n" ++
+        "  end type supert\n" ++
+        "  type, extends(supert) :: t\n" ++
+        "  contains\n" ++
+        "    procedure, nopass :: p => impure_impl\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "  pure subroutine pure_impl()\n" ++
+        "  end subroutine pure_impl\n" ++
+        "  subroutine impure_impl()\n" ++
+        "  end subroutine impure_impl\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.DuplicateDeclaration, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "must also be PURE") != null);
+}
+
+test "type-bound override must not reduce visibility" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: supert\n" ++
+        "  contains\n" ++
+        "    procedure, nopass, public :: p => impl\n" ++
+        "  end type supert\n" ++
+        "  type, extends(supert) :: t\n" ++
+        "  contains\n" ++
+        "    procedure, nopass, private :: p => impl\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "  subroutine impl()\n" ++
+        "  end subroutine impl\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.DuplicateDeclaration, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "must not be PRIVATE") != null);
+}
+
+test "type-bound override preserves corresponding dummy names" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: supert\n" ++
+        "  contains\n" ++
+        "    procedure, pass :: p => super_impl\n" ++
+        "  end type supert\n" ++
+        "  type, extends(supert) :: t\n" ++
+        "  contains\n" ++
+        "    procedure, pass :: p => sub_impl\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "  subroutine super_impl(me, a)\n" ++
+        "    class(supert) :: me\n" ++
+        "    integer :: a\n" ++
+        "  end subroutine super_impl\n" ++
+        "  subroutine sub_impl(me, x)\n" ++
+        "    class(t) :: me\n" ++
+        "    integer :: x\n" ++
+        "  end subroutine sub_impl\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.DuplicateDeclaration, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "should be named 'a'") != null);
+}
+
+test "explicit scalar dummy with arguments is not treated as a function call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module t\n" ++
+        "  type nc\n" ++
+        "  contains\n" ++
+        "    procedure :: encm => em\n" ++
+        "  end type nc\n" ++
+        "contains\n" ++
+        "  double precision function em(self)\n" ++
+        "    type(nc) :: self\n" ++
+        "    em = 0.\n" ++
+        "  end function em\n" ++
+        "  double precision function cem(c)\n" ++
+        "    type(nc) :: c\n" ++
+        "    cem = c(i)%encm()\n" ++
+        "  end function cem\n" ++
+        "end module t\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.InvalidSubscript, split_api.analyzeProgram(arena.allocator(), program));
+}
+
 test "derived component type must be declared before use" {
     const testing = std.testing;
     const allocator = testing.allocator;

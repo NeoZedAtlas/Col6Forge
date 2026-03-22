@@ -347,6 +347,8 @@ pub fn parseProgramUnitBody(
         .kind = header.kind,
         .name = header.name,
         .is_module_procedure = header.is_module_procedure,
+        .pure = header.pure,
+        .elemental = header.elemental,
         .bind_name = header.bind_name,
         .result_name = header.result_name,
         .args = header.args,

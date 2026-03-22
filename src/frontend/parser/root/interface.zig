@@ -28,6 +28,8 @@ pub fn interfaceProcedureFromUnit(
         .name = unit.name,
         .source = source,
         .end_source = end_source,
+        .pure = unit.pure,
+        .elemental = unit.elemental,
         .bind_name = unit.bind_name,
         .result_name = unit.result_name,
         .args = unit.args,

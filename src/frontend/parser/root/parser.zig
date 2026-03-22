@@ -197,6 +197,8 @@ pub const Parser = struct {
             .kind = .program,
             .name = name,
             .is_module_procedure = false,
+            .pure = false,
+            .elemental = false,
             .bind_name = null,
             .result_name = null,
             .args = &.{},
@@ -247,11 +249,30 @@ pub const Parser = struct {
         var bindings = std.array_list.Managed(ast.TypeBoundProcedureBinding).init(self.arena);
         var in_contains = false;
         var sequence = false;
+        var saw_binding_stmt = false;
 
         while (self.index < self.lines.len) {
             const line = self.lines[self.index];
             root_diagnostics.noteFallbackForLine(self.diag_bag, line);
-            const tokens = try self.tokensForIndex(self.index);
+            const tokens = self.tokensForIndex(self.index) catch |err| {
+                if (in_contains) {
+                    const trimmed = std.mem.trim(u8, line.text, " \t");
+                    if (std.mem.startsWith(u8, trimmed, "PROCEDURE")) {
+                        self.diag_bag.set(
+                            line.span.start_line,
+                            if (line.segments.len > 0) line.segments[0].column else 1,
+                            catalog.semantic.duplicate_declaration.code,
+                            "Expected binding name",
+                            line.text,
+                        );
+                        self.index += 1;
+                        continue;
+                    }
+                }
+                root_diagnostics.setLexerOrLineDiagnostic(self.diag_bag, self.lex_diag_bag, line, err);
+                self.index += 1;
+                continue;
+            };
             if (root_predicates.isDerivedTypeEndTokens(line, tokens)) {
                 self.index += 1;
                 return .{ .derived_type_def = .{
@@ -285,6 +306,16 @@ pub const Parser = struct {
                     try components.append(component_decl.type_decl);
                     try component_sources.append(root_diagnostics.sourceFromLine(line));
                 }
+            } else if (in_contains and body_lp.consumeKeyword("PRIVATE") and body_lp.peek() == null) {
+                if (saw_binding_stmt) {
+                    self.diag_bag.set(
+                        line.span.start_line,
+                        if (line.segments.len > 0) line.segments[0].column else 1,
+                        catalog.semantic.duplicate_declaration.code,
+                        "must precede",
+                        line.text,
+                    );
+                }
             } else if (in_contains and body_lp.isKeywordSplit("PROCEDURE")) {
                 const type_bound_bindings = root_header.parseTypeBoundProcedureBindings(self.arena, &body_lp) catch |err| {
                     root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, line, body_lp, err);
@@ -295,6 +326,7 @@ pub const Parser = struct {
                     stored.source = root_diagnostics.sourceFromLine(line);
                     try bindings.append(stored);
                 }
+                saw_binding_stmt = true;
             }
             self.index += 1;
         }
