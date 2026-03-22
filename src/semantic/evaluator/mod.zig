@@ -1,11 +1,10 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
-const type_kind_selector = @import("../type_kind_selector.zig");
+const literals = @import("literals.zig");
 
 const ConstValue = symbols.ConstValue;
 const ComplexConst = symbols.ComplexConst;
-const RealConst = symbols.RealConst;
 
 pub const ConstResolver = struct {
     ctx: *anyopaque,
@@ -30,18 +29,20 @@ pub const ConstResolver = struct {
     }
 };
 
+pub const realLiteralHasDoublePrecisionHint = literals.realLiteralHasDoublePrecisionHint;
+
 pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
     switch (expr.*) {
         .literal => |lit| {
             return switch (lit.kind) {
-                .integer => .{ .integer = try parseInt(lit.text) },
-                .real => .{ .real = try parseReal(lit.text) },
-                .logical => .{ .logical = try parseLogical(lit.text) },
+                .integer => .{ .integer = try literals.parseInt(lit.text) },
+                .real => .{ .real = try literals.parseReal(lit.text) },
+                .logical => .{ .logical = try literals.parseLogical(lit.text) },
                 .string, .hollerith => blk: {
                     // String constants are decoded from source text directly when possible.
                     // Allocator is only required for escaped-quote normalization and concat.
                     const maybe_allocator = if (resolver) |res| res.allocator else null;
-                    const bytes = (try decodeLiteralBytes(lit, maybe_allocator)) orelse break :blk null;
+                    const bytes = (try literals.decodeLiteralBytes(lit, maybe_allocator)) orelse break :blk null;
                     if (resolver) |res| {
                         break :blk .{ .string = try res.internString(bytes) };
                     }
@@ -99,7 +100,7 @@ fn evalConstCall(call: ast.CallOrSubscript, resolver: ?ConstResolver) anyerror!?
     switch (kind) {
         .len => {
             if (call.args.len != 1) return null;
-            const len = (try evalConstCharLen(call.args[0], resolver)) orelse return null;
+            const len = (try literals.evalConstCharLen(call.args[0], resolver, evalConst)) orelse return null;
             return .{ .integer = std.math.cast(i64, len) orelse return error.NumberTooLong };
         },
         .sqrt => {
@@ -364,7 +365,7 @@ fn evalConstKind(expr: *const ast.Expr, resolver: ?ConstResolver) !?i64 {
     return switch (expr.*) {
         .literal => |lit| switch (lit.kind) {
             .integer, .logical => literalKindValueOrDefault(lit.text, resolver, 4),
-            .real => literalKindValueOrDefault(lit.text, resolver, if (realLiteralHasDoublePrecisionHint(lit.text)) 8 else 4),
+            .real => literalKindValueOrDefault(lit.text, resolver, if (literals.realLiteralHasDoublePrecisionHint(lit.text)) 8 else 4),
             .string, .hollerith => 1,
             else => null,
         },
@@ -383,7 +384,7 @@ fn evalConstKind(expr: *const ast.Expr, resolver: ?ConstResolver) !?i64 {
 }
 
 fn literalKindValueOrDefault(text: []const u8, resolver: ?ConstResolver, default_kind: i64) !?i64 {
-    const suffix = literalKindSuffix(text) orelse return default_kind;
+    const suffix = literals.literalKindSuffix(text) orelse return default_kind;
     return (try evalKindSelectorValue(suffix, resolver)) orelse default_kind;
 }
 
@@ -391,7 +392,7 @@ fn evalConstBitSize(expr: *const ast.Expr, resolver: ?ConstResolver) !?i64 {
     return switch (expr.*) {
         .literal => |lit| switch (lit.kind) {
             .integer, .logical => try literalBitSize(lit.text, resolver, 32),
-            .real => try literalBitSize(lit.text, resolver, if (realLiteralHasDoublePrecisionHint(lit.text)) 64 else 32),
+            .real => try literalBitSize(lit.text, resolver, if (literals.realLiteralHasDoublePrecisionHint(lit.text)) 64 else 32),
             else => null,
         },
         .identifier, .unary, .binary, .call_or_subscript => blk: {
@@ -403,7 +404,7 @@ fn evalConstBitSize(expr: *const ast.Expr, resolver: ?ConstResolver) !?i64 {
 }
 
 fn literalBitSize(text: []const u8, resolver: ?ConstResolver, default_bits: i64) !?i64 {
-    const suffix = literalKindSuffix(text) orelse return default_bits;
+    const suffix = literals.literalKindSuffix(text) orelse return default_bits;
     const kind_value = (try evalKindSelectorValue(suffix, resolver)) orelse return default_bits;
     return kindValueToBitSize(kind_value);
 }
@@ -426,7 +427,7 @@ fn signedIntegerMaxForBits(bits: u8) i64 {
 
 fn evalKindSelectorValue(suffix: []const u8, resolver: ?ConstResolver) !?i64 {
     if (suffix.len == 0) return null;
-    if (std.ascii.isDigit(suffix[0])) return try parseInt(suffix);
+    if (std.ascii.isDigit(suffix[0])) return try literals.parseInt(suffix);
     if (resolver) |res| {
         if (res.resolve(suffix)) |value| {
             return switch (value) {
@@ -448,61 +449,6 @@ fn kindValueToBitSize(kind_value: i64) i64 {
     return if (kind_value > 0 and kind_value <= 16) kind_value * 8 else kind_value;
 }
 
-fn parseInt(text: []const u8) !i64 {
-    var buffer: [64]u8 = undefined;
-    if (text.len > buffer.len) return error.NumberTooLong;
-    var i: usize = 0;
-    var out: usize = 0;
-    while (i < text.len) : (i += 1) {
-        const ch = text[i];
-        if (ch == '_') break;
-        if (ch == ' ' or ch == '\t') continue;
-        buffer[out] = ch;
-        out += 1;
-    }
-    return std.fmt.parseInt(i64, buffer[0..out], 10) catch |err| {
-        switch (err) {
-            error.Overflow => return error.NumberTooLong,
-            else => return err,
-        }
-    };
-}
-
-fn parseReal(text: []const u8) !RealConst {
-    const is_double = realLiteralHasDoublePrecisionHint(text);
-    const value = if (is_double)
-        try parseRealFloat(f64, text)
-    else
-        @as(f64, @floatCast(try parseRealFloat(f32, text)));
-    return .{
-        .value = value,
-        .is_double = is_double,
-    };
-}
-
-fn parseRealFloat(comptime T: type, text: []const u8) !T {
-    var buffer: [64]u8 = undefined;
-    if (text.len > buffer.len) return error.NumberTooLong;
-    var i: usize = 0;
-    var out: usize = 0;
-    while (i < text.len) : (i += 1) {
-        const ch = text[i];
-        if (ch == '_') break;
-        if (ch == ' ' or ch == '\t') continue;
-        buffer[out] = if (ch == 'D' or ch == 'd') 'e' else ch;
-        out += 1;
-    }
-    return std.fmt.parseFloat(T, buffer[0..out]);
-}
-
-pub fn realLiteralHasDoublePrecisionHint(text: []const u8) bool {
-    return hasDExponent(text) or literalKindSuggestsF64(text);
-}
-
-fn parseLogical(text: []const u8) !bool {
-    return (try parseInt(text)) != 0;
-}
-
 fn negateConst(value: ConstValue) ?ConstValue {
     return switch (value) {
         .integer => |v| .{ .integer = checkedNegI64(v) catch return null },
@@ -518,7 +464,7 @@ fn evalBinary(op: ast.BinaryOp, left: ConstValue, right: ConstValue, resolver: ?
         if (left.string.len == 0) return right;
         if (right.string.len == 0) return left;
         const allocator = if (resolver) |res| res.allocator orelse return null else return null;
-        const joined = try concatStringLiterals(allocator, left.string, right.string);
+        const joined = try literals.concatStringLiterals(allocator, left.string, right.string);
         if (resolver) |res| return .{ .string = try res.internString(joined) };
         return .{ .string = joined };
     }
@@ -682,164 +628,6 @@ fn constValueIsDoubleReal(value: ConstValue) bool {
     };
 }
 
-fn evalConstCharLen(expr: *const ast.Expr, resolver: ?ConstResolver) !?usize {
-    return switch (expr.*) {
-        .literal => |lit| literalByteLen(lit),
-        .binary => |bin| blk: {
-            if (bin.op != .concat) break :blk null;
-            const left_len = (try evalConstCharLen(bin.left, resolver)) orelse return null;
-            const right_len = (try evalConstCharLen(bin.right, resolver)) orelse return null;
-            break :blk std.math.add(usize, left_len, right_len) catch return error.NumberTooLong;
-        },
-        .identifier => |name| blk: {
-            if (resolver) |res| {
-                const value = res.resolve(name) orelse break :blk null;
-                break :blk constStringByteLen(value);
-            }
-            break :blk null;
-        },
-        else => blk: {
-            const value = (try evalConst(expr, resolver)) orelse break :blk null;
-            break :blk constStringByteLen(value);
-        },
-    };
-}
-
-fn constStringByteLen(value: ConstValue) ?usize {
-    return switch (value) {
-        .string => |bytes| bytes.len,
-        else => null,
-    };
-}
-
-fn literalByteLen(lit: ast.Literal) ?usize {
-    return switch (lit.kind) {
-        .string => decodedQuotedStringLen(lit.text),
-        .hollerith => hollerithByteLen(lit.text),
-        else => null,
-    };
-}
-
-fn decodedQuotedStringLen(text: []const u8) usize {
-    if (text.len < 2) return text.len;
-    const quote = text[0];
-    if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) return text.len;
-    var len: usize = 0;
-    var i: usize = 1;
-    const end = text.len - 1;
-    while (i < end) {
-        if (text[i] == quote and i + 1 < end and text[i + 1] == quote) {
-            len += 1;
-            i += 2;
-            continue;
-        }
-        len += 1;
-        i += 1;
-    }
-    return len;
-}
-
-fn hollerithByteLen(text: []const u8) ?usize {
-    const idx = std.mem.indexOfScalar(u8, text, 'H') orelse std.mem.indexOfScalar(u8, text, 'h') orelse return null;
-    if (idx + 1 > text.len) return null;
-    return text.len - (idx + 1);
-}
-
-fn concatStringLiterals(allocator: std.mem.Allocator, left: []const u8, right: []const u8) ![]const u8 {
-    return std.mem.concat(allocator, u8, &.{ left, right });
-}
-
-fn decodeLiteralBytes(lit: ast.Literal, allocator: ?std.mem.Allocator) !?[]const u8 {
-    return switch (lit.kind) {
-        .string => try decodeQuotedString(lit.text, allocator),
-        .hollerith => decodeHollerith(lit.text),
-        else => null,
-    };
-}
-
-fn decodeQuotedString(text: []const u8, allocator: ?std.mem.Allocator) !?[]const u8 {
-    if (text.len < 2) return text;
-    const quote = text[0];
-    if ((quote != '\'' and quote != '"') or text[text.len - 1] != quote) {
-        return text;
-    }
-
-    // Fast-path: quoted literal without escaped quotes can be borrowed as-is.
-    const end = text.len - 1;
-    var has_escaped = false;
-    var j: usize = 1;
-    while (j < end) : (j += 1) {
-        if (text[j] == quote and j + 1 < end and text[j + 1] == quote) {
-            has_escaped = true;
-            break;
-        }
-    }
-    if (!has_escaped) return text[1..end];
-
-    const alloc = allocator orelse return null;
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(alloc);
-    var i: usize = 1;
-    while (i < end) {
-        if (text[i] == quote and i + 1 < end and text[i + 1] == quote) {
-            try out.append(alloc, quote);
-            i += 2;
-            continue;
-        }
-        try out.append(alloc, text[i]);
-        i += 1;
-    }
-    const owned = try out.toOwnedSlice(alloc);
-    return owned;
-}
-
-fn decodeHollerith(text: []const u8) ?[]const u8 {
-    const idx = std.mem.indexOfScalar(u8, text, 'H') orelse std.mem.indexOfScalar(u8, text, 'h') orelse return null;
-    if (idx + 1 > text.len) return null;
-    return text[idx + 1 ..];
-}
-
-fn kindUnderscoreIndex(text: []const u8) ?usize {
-    var i: usize = 0;
-    while (i + 1 < text.len) : (i += 1) {
-        if (text[i] != '_') continue;
-        if (!std.ascii.isAlphanumeric(text[i + 1])) continue;
-        return i;
-    }
-    return null;
-}
-
-fn hasDExponent(text: []const u8) bool {
-    const end = kindUnderscoreIndex(text) orelse text.len;
-    return std.mem.indexOfAny(u8, text[0..end], "Dd") != null;
-}
-
-fn literalKindSuffix(text: []const u8) ?[]const u8 {
-    const kind_start = kindUnderscoreIndex(text) orelse return null;
-    var i = kind_start + 1;
-    while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) : (i += 1) {}
-    return text[kind_start + 1 .. i];
-}
-
-fn literalKindSuggestsF64(text: []const u8) bool {
-    const suffix = literalKindSuffix(text) orelse return false;
-    if (suffix.len == 0) return false;
-
-    var all_digits = true;
-    for (suffix) |ch| {
-        if (!std.ascii.isDigit(ch)) {
-            all_digits = false;
-            break;
-        }
-    }
-    if (all_digits) {
-        const kind_val = std.fmt.parseInt(i64, suffix, 10) catch return false;
-        return type_kind_selector.realKindValueIsDouble(kind_val);
-    }
-
-    return type_kind_selector.realKindNameIsDouble(suffix);
-}
-
 fn nullResolveConst(_: *anyopaque, _: []const u8) ?ConstValue {
     return null;
 }
@@ -850,256 +638,6 @@ fn testResolveConst(_: *anyopaque, name: []const u8) ?ConstValue {
     if (std.ascii.eqlIgnoreCase(name, "block_size")) return .{ .integer = 64 };
     return null;
 }
-
-test "const call dispatch recognizes DATAN alias" {
-    const testing = std.testing;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const arg = try a.create(ast.Expr);
-    arg.* = .{ .literal = .{ .kind = .real, .text = "1.0" } };
-    const args = try a.alloc(*ast.Expr, 1);
-    args[0] = arg;
-
-    const call = try a.create(ast.Expr);
-    call.* = .{ .call_or_subscript = .{ .name = "datan", .args = args } };
-
-    const value = (try evalConst(call, null)) orelse return error.TestExpectedEqual;
-    switch (value) {
-        .real => |v| try testing.expectApproxEqAbs(@as(f64, std.math.pi / 4.0), v.value, 1e-12),
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "const call dispatch handles MIN/MAX" {
-    const testing = std.testing;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const expr_three = try a.create(ast.Expr);
-    expr_three.* = .{ .literal = .{ .kind = .integer, .text = "3" } };
-    const expr_one = try a.create(ast.Expr);
-    expr_one.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
-    const expr_two = try a.create(ast.Expr);
-    expr_two.* = .{ .literal = .{ .kind = .integer, .text = "2" } };
-
-    const min_args = try a.alloc(*ast.Expr, 3);
-    min_args[0] = expr_three;
-    min_args[1] = expr_one;
-    min_args[2] = expr_two;
-
-    const min_call = try a.create(ast.Expr);
-    min_call.* = .{ .call_or_subscript = .{ .name = "min", .args = min_args } };
-
-    const min_val = (try evalConst(min_call, null)) orelse return error.TestExpectedEqual;
-    switch (min_val) {
-        .integer => |v| try testing.expectEqual(@as(i64, 1), v),
-        else => return error.TestExpectedEqual,
-    }
-
-    const max_call = try a.create(ast.Expr);
-    max_call.* = .{ .call_or_subscript = .{ .name = "MAX", .args = min_args } };
-    const max_val = (try evalConst(max_call, null)) orelse return error.TestExpectedEqual;
-    switch (max_val) {
-        .integer => |v| try testing.expectEqual(@as(i64, 3), v),
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "const call dispatch handles SELECTED_REAL_KIND" {
-    const testing = std.testing;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const precision = try a.create(ast.Expr);
-    precision.* = .{ .literal = .{ .kind = .integer, .text = "12" } };
-    const args = try a.alloc(*ast.Expr, 1);
-    args[0] = precision;
-
-    const call = try a.create(ast.Expr);
-    call.* = .{ .call_or_subscript = .{ .name = "selected_real_kind", .args = args } };
-
-    const value = (try evalConst(call, null)) orelse return error.TestExpectedEqual;
-    switch (value) {
-        .integer => |v| try testing.expectEqual(@as(i64, 8), v),
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "const call dispatch handles BIT_SIZE with named kind suffix" {
-    const testing = std.testing;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const arg = try a.create(ast.Expr);
-    arg.* = .{ .literal = .{ .kind = .integer, .text = "0_block_kind" } };
-    const args = try a.alloc(*ast.Expr, 1);
-    args[0] = arg;
-
-    const call = try a.create(ast.Expr);
-    call.* = .{ .call_or_subscript = .{ .name = "bit_size", .args = args } };
-
-    var sentinel: u8 = 0;
-    const resolver = ConstResolver{
-        .ctx = &sentinel,
-        .resolveFn = testResolveConst,
-    };
-    const value = (try evalConst(call, resolver)) orelse return error.TestExpectedEqual;
-    switch (value) {
-        .integer => |v| try testing.expectEqual(@as(i64, 64), v),
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "const call dispatch handles INT CEILING LOG REAL chain" {
-    const testing = std.testing;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const block_size = try a.create(ast.Expr);
-    block_size.* = .{ .identifier = "block_size" };
-    const dp = try a.create(ast.Expr);
-    dp.* = .{ .identifier = "dp" };
-    const two_dp = try a.create(ast.Expr);
-    two_dp.* = .{ .literal = .{ .kind = .real, .text = "2._dp" } };
-
-    const real_args = try a.alloc(*ast.Expr, 2);
-    real_args[0] = block_size;
-    real_args[1] = dp;
-    const real_call = try a.create(ast.Expr);
-    real_call.* = .{ .call_or_subscript = .{ .name = "real", .args = real_args } };
-
-    const log_lhs_args = try a.alloc(*ast.Expr, 1);
-    log_lhs_args[0] = real_call;
-    const log_lhs = try a.create(ast.Expr);
-    log_lhs.* = .{ .call_or_subscript = .{ .name = "log", .args = log_lhs_args } };
-
-    const log_rhs_args = try a.alloc(*ast.Expr, 1);
-    log_rhs_args[0] = two_dp;
-    const log_rhs = try a.create(ast.Expr);
-    log_rhs.* = .{ .call_or_subscript = .{ .name = "log", .args = log_rhs_args } };
-
-    const ratio = try a.create(ast.Expr);
-    ratio.* = .{ .binary = .{ .op = .div, .left = log_lhs, .right = log_rhs } };
-
-    const ceiling_args = try a.alloc(*ast.Expr, 1);
-    ceiling_args[0] = ratio;
-    const ceiling_call = try a.create(ast.Expr);
-    ceiling_call.* = .{ .call_or_subscript = .{ .name = "ceiling", .args = ceiling_args } };
-
-    const int_args = try a.alloc(*ast.Expr, 1);
-    int_args[0] = ceiling_call;
-    const int_call = try a.create(ast.Expr);
-    int_call.* = .{ .call_or_subscript = .{ .name = "int", .args = int_args } };
-
-    var sentinel: u8 = 0;
-    const resolver = ConstResolver{
-        .ctx = &sentinel,
-        .resolveFn = testResolveConst,
-    };
-    const value = (try evalConst(int_call, resolver)) orelse return error.TestExpectedEqual;
-    switch (value) {
-        .integer => |v| try testing.expectEqual(@as(i64, 6), v),
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "integer POWER const eval uses fast exponentiation" {
-    const testing = std.testing;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const left = try a.create(ast.Expr);
-    left.* = .{ .literal = .{ .kind = .integer, .text = "2" } };
-    const right = try a.create(ast.Expr);
-    right.* = .{ .literal = .{ .kind = .integer, .text = "10" } };
-    const expr = try a.create(ast.Expr);
-    expr.* = .{ .binary = .{
-        .op = .power,
-        .left = left,
-        .right = right,
-    } };
-
-    const value = (try evalConst(expr, null)) orelse return error.TestExpectedEqual;
-    switch (value) {
-        .integer => |v| try testing.expectEqual(@as(i64, 1024), v),
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "integer const eval reports overflow instead of panicking" {
-    const testing = std.testing;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const left = try a.create(ast.Expr);
-    left.* = .{ .literal = .{ .kind = .integer, .text = "9223372036854775807" } };
-    const right = try a.create(ast.Expr);
-    right.* = .{ .literal = .{ .kind = .integer, .text = "1" } };
-    const expr = try a.create(ast.Expr);
-    expr.* = .{ .binary = .{
-        .op = .add,
-        .left = left,
-        .right = right,
-    } };
-
-    try testing.expectError(error.NumberTooLong, evalConst(expr, null));
-}
-
-test "real literal double-precision hint recognizes D exponent and kind suffix" {
-    const testing = std.testing;
-    try testing.expect(realLiteralHasDoublePrecisionHint("1.0D0"));
-    try testing.expect(realLiteralHasDoublePrecisionHint("1.0_8"));
-    try testing.expect(realLiteralHasDoublePrecisionHint("1.0_wp"));
-    try testing.expect(!realLiteralHasDoublePrecisionHint("1.0"));
-}
-
-test "evalConst marks REAL literal precision metadata" {
-    const testing = std.testing;
-    var single_expr = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0E0" } };
-    var double_expr = ast.Expr{ .literal = .{ .kind = .real, .text = "1.0D0" } };
-
-    const single = (try evalConst(&single_expr, null)) orelse return error.TestExpectedEqual;
-    const double = (try evalConst(&double_expr, null)) orelse return error.TestExpectedEqual;
-    switch (single) {
-        .real => |v| try testing.expect(!v.is_double),
-        else => return error.TestExpectedEqual,
-    }
-    switch (double) {
-        .real => |v| try testing.expect(v.is_double),
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "evalConst decodes simple quoted string without allocator" {
-    const testing = std.testing;
-    var expr = ast.Expr{ .literal = .{ .kind = .string, .text = "'ABC'" } };
-    const value = (try evalConst(&expr, null)) orelse return error.TestExpectedEqual;
-    switch (value) {
-        .string => |bytes| try testing.expectEqualStrings("ABC", bytes),
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "evalConst decodes doubled-quote string when allocator is provided" {
-    const testing = std.testing;
-    var sentinel: u8 = 0;
-    const resolver = ConstResolver{
-        .ctx = &sentinel,
-        .resolveFn = nullResolveConst,
-        .allocator = testing.allocator,
-    };
-    var expr = ast.Expr{ .literal = .{ .kind = .string, .text = "'A''B'" } };
-    const value = (try evalConst(&expr, resolver)) orelse return error.TestExpectedEqual;
-    switch (value) {
-        .string => |bytes| try testing.expectEqualStrings("A'B", bytes),
-        else => return error.TestExpectedEqual,
-    }
+test {
+    _ = @import("tests.zig");
 }
