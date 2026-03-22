@@ -177,6 +177,7 @@ pub fn resolveComponentExpr(
     const base_spec = try deps.exprTypeSpecCached(self, comp.base);
     if (base_spec.lowered_kind != .derived) return error.InvalidSubscript;
     const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
+    try ensureResolvedDerivedTypeForComponentBase(self, derived_name, expr_node);
     if (symbols_mod.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
         try validateComponentArgs(self, component.dims, comp.args, deps);
         try deps.cacheExprType(self, expr_node, component.type_spec);
@@ -259,6 +260,7 @@ pub fn exprTypeSpecForComponent(
     const base_spec = try deps.exprTypeSpecCached(self, comp.base);
     if (base_spec.lowered_kind != .derived) return error.InvalidSubscript;
     const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
+    try ensureResolvedDerivedTypeForComponentBase(self, derived_name, comp.base);
     if (symbols_mod.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
         return component.type_spec;
     }
@@ -316,6 +318,24 @@ fn requiresExplicitInterfaceForActuals(
         if (spec.lowered_kind == .derived and spec.polymorphic) return true;
     }
     return false;
+}
+
+fn ensureResolvedDerivedTypeForComponentBase(
+    self: *context.Context,
+    derived_name: []const u8,
+    expr_node: *ast.Expr,
+) ResolveError!void {
+    if (symbols_mod.hasDerivedType(self, derived_name)) return;
+    const source = self.sourceForExpr(expr_node) orelse ast.SourceRef{};
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.unexpected_type_decl.code,
+        "is being used before it is defined",
+        source.text,
+    );
+    self.setCurrentSource(source);
+    return error.UnexpectedTypeDecl;
 }
 
 fn structureConstructorTypeSpec(

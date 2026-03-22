@@ -816,6 +816,80 @@ test "type-bound binding target must be a module procedure" {
     try testing.expect(std.mem.indexOf(u8, got.message, "must be a module procedure") != null);
 }
 
+test "derived component type must be declared before use" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "type a\n" ++
+        "  type(b), pointer :: c\n" ++
+        "end type\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.UnexpectedTypeDecl, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expect(std.mem.indexOf(u8, got.message, "has not been declared") != null);
+}
+
+test "deferred binding interface name may not be generic or statement function or intrinsic" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "interface gen\n" ++
+        "  procedure gen\n" ++
+        "end interface\n" ++
+        "type, abstract :: t1\n" ++
+        "contains\n" ++
+        "  procedure(gen), deferred, nopass :: p1\n" ++
+        "  procedure(gen2), deferred, nopass :: p2\n" ++
+        "end type\n" ++
+        "type, abstract :: t2\n" ++
+        "contains\n" ++
+        "  procedure(sf), deferred, nopass :: p3\n" ++
+        "end type\n" ++
+        "type, abstract :: t3\n" ++
+        "contains\n" ++
+        "  procedure(char), deferred, nopass :: p4\n" ++
+        "end type\n" ++
+        "interface gen2\n" ++
+        "  procedure gen\n" ++
+        "end interface\n" ++
+        "sf(x) = x**2\n" ++
+        "contains\n" ++
+        "  subroutine gen\n" ++
+        "  end subroutine gen\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = split_api.analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_bag) catch {};
+    const first = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(first);
+    const second = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(second);
+    const third = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(third);
+
+    try testing.expect(std.mem.indexOf(u8, first.message, "may not be generic") != null);
+    try testing.expect(std.mem.indexOf(u8, second.message, "may not be a statement function") != null);
+    try testing.expect(std.mem.indexOf(u8, third.message, "Intrinsic procedure") != null);
+}
+
 test "type-bound PASS dummy must not be pointer" {
     const testing = std.testing;
     const allocator = testing.allocator;

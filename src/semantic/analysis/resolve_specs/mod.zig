@@ -10,6 +10,7 @@ const check_const = @import("../check_const.zig");
 const helpers = @import("helpers.zig");
 const interfaces = @import("interfaces.zig");
 const equivalence = @import("equivalence.zig");
+const procedure_interfaces = @import("../check_statements/procedure_interfaces.zig");
 
 const resolvedDeclTypeSpec = helpers.resolvedDeclTypeSpec;
 const ensureImplicitRuleNoOverlap = helpers.ensureImplicitRuleNoOverlap;
@@ -254,6 +255,18 @@ fn validateDerivedTypeDef(self: *context.Context, derived: ast.DerivedTypeDef) !
         first_error = error.DuplicateDeclaration;
     }
 
+    for (derived.components, 0..) |type_decl, component_idx| {
+        if (type_decl.type_kind != .derived) continue;
+        const derived_name = type_decl.derived_type_name orelse continue;
+        if (symbols_mod.hasDerivedType(self, derived_name)) continue;
+        const component_source = if (component_idx < derived.component_sources.len)
+            derived.component_sources[component_idx]
+        else
+            self.current_decl_source orelse ast.DeclSource{};
+        setSourceDiagnostic(self, component_source, "has not been declared");
+        if (first_error == null) first_error = error.UnexpectedTypeDecl;
+    }
+
     for (derived.bindings) |binding| {
         if (validateDerivedBinding(self, derived, binding)) |err| {
             if (!self.usesExplicitDiagnosticBag()) return err;
@@ -296,6 +309,20 @@ fn validateDerivedBinding(
         return error.DuplicateDeclaration;
     }
     if (binding.interface_name) |iface_name| {
+        if (bindingInterfaceIsGeneric(self, iface_name)) {
+            setBindingDiagnostic(self, binding, "may not be generic");
+            return error.UnexpectedTypeDecl;
+        }
+        if (bindingInterfaceIsStatementFunction(self, iface_name)) {
+            setBindingDiagnostic(self, binding, "may not be a statement function");
+            return error.UnexpectedTypeDecl;
+        }
+        if (symbols_mod.isIntrinsicName(iface_name)) {
+            setBindingDiagnostic(self, binding, "Intrinsic procedure");
+            return error.UnexpectedTypeDecl;
+        }
+    }
+    if (binding.interface_name) |iface_name| {
         if (!bindingInterfaceExists(self, binding, iface_name)) {
             setBindingDiagnostic(self, binding, "must be explicit");
             return error.UnexpectedTypeDecl;
@@ -305,13 +332,16 @@ fn validateDerivedBinding(
         setBindingDiagnostic(self, binding, "must not be DEFERRED");
         return error.DuplicateDeclaration;
     }
+    if (bindingOverridesNonOverridableParent(self, derived, binding.name)) {
+        setBindingDiagnostic(self, binding, "NON_OVERRIDABLE");
+        return error.DuplicateDeclaration;
+    }
     if (derived.abstract and !binding.deferred and binding.interface_name != null and !bindingImplementationExists(self, binding)) {
         setBindingDiagnostic(self, binding, "should be declared DEFERRED");
         return error.DuplicateDeclaration;
     }
-    if (!binding.deferred and binding.interface_name == null and !bindingModuleImplementationExists(self, binding)) {
-        setBindingDiagnostic(self, binding, "must be a module procedure");
-        return error.UnexpectedTypeDecl;
+    if (validateBindingImplementationReference(self, binding)) |err| {
+        return err;
     }
     if (validatePassedObjectDummyConstraints(self, binding)) |err| {
         return err;
@@ -337,6 +367,91 @@ fn bindingImplementationExists(self: *context.Context, binding: ast.TypeBoundPro
 fn bindingModuleImplementationExists(self: *context.Context, binding: ast.TypeBoundProcedureBinding) bool {
     const impl_name = binding.implementation_name orelse binding.name;
     return lookupQualifiedProcedureSig(self, binding.owner_name, impl_name) != null;
+}
+
+fn validateBindingImplementationReference(
+    self: *context.Context,
+    binding: ast.TypeBoundProcedureBinding,
+) ?anyerror {
+    if (binding.deferred or binding.interface_name != null) return null;
+    if (binding.owner_kind != .module) {
+        setBindingDiagnostic(self, binding, "must be a module procedure");
+        return error.UnexpectedTypeDecl;
+    }
+
+    const impl_name = binding.implementation_name orelse binding.name;
+    if (procedure_interfaces.isAbstractInterfaceProcedure(self, impl_name)) {
+        setBindingDiagnostic(self, binding, "explicit interface required");
+        return error.UnexpectedTypeDecl;
+    }
+    if (bindingImplementationExists(self, binding)) return null;
+    if (bindingHasVisibleSpecificInterface(self, impl_name) and !procedure_interfaces.isAbstractInterfaceProcedure(self, impl_name)) return null;
+    if (bindingHasProcedureDeclWithoutExplicitInterface(self, impl_name)) {
+        setBindingDiagnostic(self, binding, "explicit interface required");
+        return error.UnexpectedTypeDecl;
+    }
+
+    setBindingDiagnostic(self, binding, "must be a module procedure");
+    return error.UnexpectedTypeDecl;
+}
+
+fn bindingHasVisibleSpecificInterface(self: *context.Context, name: []const u8) bool {
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        if (decl.interface_block.name != null) continue;
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
+        }
+        for (decl.interface_block.specific_procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, name)) return true;
+        }
+        for (decl.interface_block.procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, name)) return true;
+        }
+        for (decl.interface_block.module_procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, name)) return true;
+        }
+    }
+    return false;
+}
+
+fn bindingHasProcedureDeclWithoutExplicitInterface(self: *context.Context, name: []const u8) bool {
+    for (self.unit.decls) |decl| {
+        if (decl != .procedure) continue;
+        for (decl.procedure.items) |item| {
+            if (!std.ascii.eqlIgnoreCase(item.name, name)) continue;
+            return decl.procedure.interface == .none;
+        }
+    }
+    if (symbols_mod.findSymbolIndex(self, name)) |idx| {
+        const sym = self.symbols.items[idx];
+        if (sym.is_external and !sym.type_explicit) return true;
+    }
+    return false;
+}
+
+fn bindingInterfaceIsGeneric(self: *context.Context, iface_name: []const u8) bool {
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const generic_name = decl.interface_block.name orelse continue;
+        if (std.ascii.eqlIgnoreCase(generic_name, iface_name)) return true;
+    }
+    return false;
+}
+
+fn bindingInterfaceIsStatementFunction(self: *context.Context, iface_name: []const u8) bool {
+    for (self.unit.stmts) |stmt| {
+        if (stmt.node != .assignment) continue;
+        const target = stmt.node.assignment.target;
+        if (target.* != .call_or_subscript) continue;
+        if (!std.ascii.eqlIgnoreCase(target.call_or_subscript.name, iface_name)) continue;
+        if (target.call_or_subscript.args.len == 0) continue;
+        for (target.call_or_subscript.args) |arg| {
+            if (arg.* != .identifier) return false;
+        }
+        return true;
+    }
+    return false;
 }
 
 fn bindingOverridesConcreteParent(
@@ -379,6 +494,22 @@ fn typeHasDeferredBindingRequirement(self: *context.Context, derived: ast.Derive
     return false;
 }
 
+fn bindingOverridesNonOverridableParent(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    binding_name: []const u8,
+) bool {
+    var parent_name = derived.parent_name;
+    while (parent_name) |name| {
+        const parent = symbols_mod.lookupDerivedType(self, name) orelse return false;
+        if (findResolvedBindingByName(parent.bindings, binding_name)) |binding| {
+            return binding.non_overridable;
+        }
+        parent_name = parent.parent_name;
+    }
+    return false;
+}
+
 fn validatePassedObjectDummyConstraints(
     self: *context.Context,
     binding: ast.TypeBoundProcedureBinding,
@@ -386,10 +517,26 @@ fn validatePassedObjectDummyConstraints(
     if (binding.nopass) return null;
 
     const sig = bindingReferenceSig(self, binding) orelse return null;
-    const pass_idx = bindingPassArgIndex(sig, binding.pass_name) orelse return null;
+    if (sig.args.len == 0) {
+        setBindingDiagnostic(self, binding, "at least one argument");
+        return error.DuplicateDeclaration;
+    }
+    const pass_idx = bindingPassArgIndex(sig, binding.pass_name) orelse {
+        if (binding.pass_name) |pass_name| {
+            const message = std.fmt.allocPrint(self.arena, "no argument '{s}'", .{pass_name}) catch "no PASS argument";
+            setBindingDiagnostic(self, binding, message);
+            return error.DuplicateDeclaration;
+        }
+        setBindingDiagnostic(self, binding, "at least one argument");
+        return error.DuplicateDeclaration;
+    };
     if (pass_idx >= sig.args.len) return null;
 
     const pass_arg = sig.args[pass_idx];
+    if (pass_arg.type_spec.lowered_kind != .derived or !pass_arg.type_spec.polymorphic) {
+        setBindingDiagnostic(self, binding, "Non-polymorphic passed-object dummy argument");
+        return error.DuplicateDeclaration;
+    }
     if (pass_arg.rank != 0) {
         setBindingDiagnostic(self, binding, "must be scalar");
         return error.DuplicateDeclaration;
