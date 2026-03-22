@@ -6,14 +6,14 @@ const semantic = @import("../../semantic/mod.zig");
 const codegen = @import("../../codegen/mod.zig");
 const profile_mod = @import("profile.zig");
 const diagnostics = @import("diagnostics.zig");
-const pipeline = @import("mod.zig");
+const types = @import("types.zig");
 
 pub fn emitLlvmModule(
     allocator: std.mem.Allocator,
     input_path: []const u8,
     contents: []const u8,
     logical_lines: []logical_line.LogicalLine,
-    options: pipeline.PipelineOptions,
+    options: types.PipelineOptions,
     diag_bag: *diag.Bag,
     profile: ?*profile_mod.PipelineProfile,
 ) ![]const u8 {
@@ -132,7 +132,7 @@ pub fn emitLlvmModuleToWriter(
     contents: []const u8,
     logical_lines: []logical_line.LogicalLine,
     writer: anytype,
-    options: pipeline.PipelineOptions,
+    options: types.PipelineOptions,
     diag_bag: *diag.Bag,
     profile: ?*profile_mod.PipelineProfile,
 ) !void {
