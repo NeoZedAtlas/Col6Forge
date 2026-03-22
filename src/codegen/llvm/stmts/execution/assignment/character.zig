@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../../input.zig");
-const context = @import("../../../codegen/context.zig");
+const context = @import("../../../codegen/context/mod.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
 const expr_dispatch = @import("../../../codegen/expression/dispatch/mod.zig");
 const utils = @import("../../../codegen/utils.zig");
@@ -131,7 +131,6 @@ fn updateCharMap(map: *std.StringHashMap([]const u8), ctx: *Context, key: []cons
         };
     }
 }
-
 
 pub fn storeCharacterValue(ctx: *Context, builder: anytype, target_ptr: ValueRef, char_len: usize, value_expr: *ast.Expr) EmitError!void {
     const target_len = constI32(ctx, @intCast(char_len));
@@ -295,4 +294,3 @@ fn powInt(base: i64, exp: i64) i64 {
     }
     return result;
 }
-

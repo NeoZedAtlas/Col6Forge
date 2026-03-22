@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../../input.zig");
-const context = @import("../../../codegen/context.zig");
+const context = @import("../../../codegen/context/mod.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
 const llvm_types = @import("../../../types.zig");
 const format_ir = @import("../../../../../format/stream_ir.zig");

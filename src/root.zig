@@ -5,7 +5,7 @@ pub const ast = @import("ast/mod.zig");
 pub const frontend = @import("frontend/mod.zig");
 pub const sema = @import("semantic/mod.zig");
 pub const codegen = @import("codegen/mod.zig");
-pub const pipeline = @import("driver/pipeline.zig");
+pub const pipeline = @import("driver/pipeline/mod.zig");
 
 pub const Diagnostic = diag.Diagnostic;
 pub const EmitKind = pipeline.EmitKind;

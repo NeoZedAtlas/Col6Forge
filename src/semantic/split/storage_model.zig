@@ -564,7 +564,7 @@ test "buildUnitStorageModel computes chained equivalence symbol bases" {
     const testing = std.testing;
     const fixed_form = @import("../../frontend/fixed_form.zig");
     const parser = @import("../../frontend/parser/mod.zig");
-    const split_api = @import("api.zig");
+    const split_api = @import("api/mod.zig");
 
     const source =
         "      SUBROUTINE S\n" ++
@@ -595,7 +595,7 @@ test "buildUnitStorageModel keeps character substring overlays in byte units" {
     const testing = std.testing;
     const fixed_form = @import("../../frontend/fixed_form.zig");
     const parser = @import("../../frontend/parser/mod.zig");
-    const split_api = @import("api.zig");
+    const split_api = @import("api/mod.zig");
 
     const source =
         "      SUBROUTINE S\n" ++

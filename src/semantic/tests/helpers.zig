@@ -6,7 +6,7 @@ const analysis = @import("../analysis/mod.zig");
 const analysis_context = @import("../analysis/context.zig");
 const symbols = @import("../symbol/mod.zig");
 
-const api = @import("../split/api.zig");
+const api = @import("../split/api/mod.zig");
 const analyzeProgram = api.analyzeProgram;
 const takeDiagnostic = api.takeDiagnostic;
 const clearDiagnostic = api.clearDiagnostic;

@@ -1,7 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
 const common = @import("../../codegen/common.zig");
-const context = @import("../../codegen/context.zig");
+const context = @import("../../codegen/context/mod.zig");
 const expr = @import("../../codegen/expression/mod.zig");
 const expr_dispatch = @import("../../codegen/expression/dispatch/mod.zig");
 const expr_memory = @import("../../codegen/expression/memory.zig");
@@ -575,11 +575,9 @@ fn updateAllocatedCharacterLen(
     try ctx.char_arg_lens.put(sym.name, len_i64);
 }
 
-
 fn constI64(ctx: *Context, value: i64) ValueRef {
     return .{ .name = ctx.intLiteral(value) catch unreachable, .ty = .i64, .is_ptr = false };
 }
-
 
 fn intLiteralValue(expr_node: *ast.Expr) ?i64 {
     return switch (expr_node.*) {
@@ -625,4 +623,3 @@ fn literalBytes(allocator: std.mem.Allocator, lit: ast.Literal) ![]const u8 {
         else => return error.UnsupportedLiteral,
     };
 }
-

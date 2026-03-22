@@ -6,17 +6,20 @@ const symbols_mod = @import("../resolve_symbols.zig");
 const constants = @import("../resolve_const.zig");
 const helpers = @import("helpers.zig");
 
-const lowerDup = helpers.lowerDup;
-
 const ResolvedRefKind = symbols.ResolvedRefKind;
-const EquivalenceDesignator = struct {
+pub const EquivalenceDesignator = struct {
     name: []const u8,
     symbol_idx: usize,
     type_spec: symbols.TypeSpec,
     byte_offset: i64,
 };
 
-fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !EquivalenceDesignator {
+pub const EquivalenceDesignatorKey = struct {
+    symbol_idx: usize,
+    byte_offset: i64,
+};
+
+pub fn equivalenceDesignator(self: *context.Context, expr_node: *ast.Expr) !EquivalenceDesignator {
     switch (expr_node.*) {
         .identifier => |name| {
             const idx = symbolIndexForResolvedExpr(self, expr_node) orelse
@@ -71,7 +74,7 @@ fn symbolIndexForResolvedExpr(self: *const context.Context, expr_node: *ast.Expr
     return self.ref_symbol_index.get(@intFromPtr(expr_node));
 }
 
-fn equivalenceTypeCompatible(a: symbols.TypeSpec, b: symbols.TypeSpec) bool {
+pub fn equivalenceTypeCompatible(a: symbols.TypeSpec, b: symbols.TypeSpec) bool {
     if (a.lowered_kind == b.lowered_kind) return true;
     if (isNumeric(a.lowered_kind) and isNumeric(b.lowered_kind)) return true;
     return false;
@@ -84,7 +87,7 @@ fn isNumeric(kind: ast.TypeKind) bool {
     };
 }
 
-fn unionEquivalence(self: *context.Context, a_name: []const u8, b_name: []const u8, b_minus_a: i64) !bool {
+pub fn unionEquivalence(self: *context.Context, a_name: []const u8, b_name: []const u8, b_minus_a: i64) !bool {
     const a_idx = try ensureEquivalenceNode(self, a_name);
     const b_idx = try ensureEquivalenceNode(self, b_name);
     const a_root = try findEquivalenceRoot(self, a_idx);
@@ -303,7 +306,7 @@ fn addNoOverflow(a: i64, b: i64) ?i64 {
     return result[0];
 }
 
-fn subNoOverflow(a: i64, b: i64) ?i64 {
+pub fn subNoOverflow(a: i64, b: i64) ?i64 {
     const result = @subWithOverflow(a, b);
     if (result[1] != 0) return null;
     return result[0];

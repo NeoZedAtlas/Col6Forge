@@ -1,5 +1,5 @@
 const std = @import("std");
-const context = @import("../../codegen/context.zig");
+const context = @import("../../codegen/context/mod.zig");
 const llvm_types = @import("../../types.zig");
 
 const Context = context.Context;

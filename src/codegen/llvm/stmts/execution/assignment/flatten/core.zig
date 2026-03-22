@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../../../input.zig");
-const context = @import("../../../../codegen/context.zig");
+const context = @import("../../../../codegen/context/mod.zig");
 const evaluator = @import("../../../../../../semantic/evaluator.zig");
 const const_eval = @import("const_eval.zig");
 const metadata = @import("metadata.zig");

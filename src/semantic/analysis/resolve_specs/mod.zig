@@ -19,6 +19,11 @@ const setParameterTypeMismatchDiagnostic = helpers.setParameterTypeMismatchDiagn
 const hasCurrentUnitExplicitInterfaceProcedure = helpers.hasCurrentUnitExplicitInterfaceProcedure;
 const hasCommonBlock = helpers.hasCommonBlock;
 const applyImplicitRuleToExistingSymbols = helpers.applyImplicitRuleToExistingSymbols;
+const EquivalenceDesignator = equivalence.EquivalenceDesignator;
+const EquivalenceDesignatorKey = equivalence.EquivalenceDesignatorKey;
+const equivalenceTypeCompatible = equivalence.equivalenceTypeCompatible;
+const unionEquivalence = equivalence.unionEquivalence;
+const subNoOverflow = equivalence.subNoOverflow;
 
 pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {

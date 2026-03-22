@@ -1,6 +1,6 @@
 const std = @import("std");
 const input = @import("../../../input.zig");
-const context = @import("../context.zig");
+const context = @import("../context/mod.zig");
 const utils = @import("../utils.zig");
 const format_items = @import("../../../../format/items.zig");
 const codegen_diag = @import("../../../diagnostic.zig");

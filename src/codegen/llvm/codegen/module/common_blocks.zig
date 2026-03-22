@@ -1,6 +1,6 @@
 const std = @import("std");
 const input = @import("../../../input.zig");
-const context = @import("../context.zig");
+const context = @import("../context/mod.zig");
 const common = @import("../common.zig");
 
 pub fn commonLayoutsCompatible(a: []const common.CommonItem, b: []const common.CommonItem) bool {

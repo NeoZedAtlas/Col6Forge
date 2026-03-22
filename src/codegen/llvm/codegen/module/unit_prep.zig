@@ -1,7 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../../ast/nodes.zig");
 const input = @import("../../../input.zig");
-const context = @import("../context.zig");
+const context = @import("../context/mod.zig");
 const utils = @import("../utils.zig");
 const function_type = @import("../../../../semantic/split/function_type.zig");
 

@@ -1,7 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../../input.zig");
 const common = @import("../../../codegen/common.zig");
-const context = @import("../../../codegen/context.zig");
+const context = @import("../../../codegen/context/mod.zig");
 const utils = @import("../../../codegen/utils.zig");
 const format_parser = @import("../../../../../frontend/parser/stmt/format.zig");
 

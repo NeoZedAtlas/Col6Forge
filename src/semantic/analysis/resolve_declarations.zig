@@ -1,7 +1,7 @@
 const ast = @import("../../ast/nodes.zig");
 const context = @import("context.zig");
 const decls = @import("resolve_decls.zig");
-const specs = @import("resolve_specs.zig");
+const specs = @import("resolve_specs/mod.zig");
 
 pub fn applyDecl(self: *context.Context, decl: ast.Decl) !void {
     switch (decl) {

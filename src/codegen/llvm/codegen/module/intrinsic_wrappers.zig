@@ -1,5 +1,5 @@
 const std = @import("std");
-const context = @import("../context.zig");
+const context = @import("../context/mod.zig");
 const llvm_types = @import("../../types.zig");
 
 pub fn emitIntrinsicWrappers(

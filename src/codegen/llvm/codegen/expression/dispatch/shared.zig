@@ -1,6 +1,6 @@
 const ast = @import("../../../../input.zig");
 const ir = @import("../../../../ir.zig");
-const context = @import("../../context.zig");
+const context = @import("../../context/mod.zig");
 
 pub const Expr = ast.Expr;
 pub const Context = context.Context;

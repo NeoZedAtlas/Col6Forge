@@ -1,4 +1,4 @@
-const context = @import("../../../codegen/context.zig");
+const context = @import("../../../codegen/context/mod.zig");
 const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const Context = context.Context;

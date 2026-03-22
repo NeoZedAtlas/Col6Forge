@@ -3,7 +3,7 @@ const ast = @import("../../../input.zig");
 const sema = @import("../../../../semantic/mod.zig");
 const ir = @import("../../../ir.zig");
 const llvm_types = @import("../../types.zig");
-const context = @import("../context.zig");
+const context = @import("../context/mod.zig");
 const utils = @import("../utils.zig");
 
 const complex = @import("complex.zig");

@@ -1,7 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
 const llvm_types = @import("../../types.zig");
-const context = @import("../context.zig");
+const context = @import("../context/mod.zig");
 const expr = @import("../expression/mod.zig");
 const logic = @import("logic.zig");
 

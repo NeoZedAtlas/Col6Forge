@@ -1,5 +1,5 @@
 const ast = @import("../../../../../input.zig");
-const context = @import("../../../../codegen/context.zig");
+const context = @import("../../../../codegen/context/mod.zig");
 const core = @import("core.zig");
 
 const Context = context.Context;

@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../../input.zig");
-const context = @import("../../../codegen/context.zig");
+const context = @import("../../../codegen/context/mod.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
 const expr_memory = @import("../../../codegen/expression/memory.zig");
 const character_mod = @import("character.zig");
@@ -115,7 +115,6 @@ fn canonicalNumericLabel(label: []const u8) []const u8 {
     return label[start..];
 }
 
-
 pub fn targetExprSymbol(ctx: *Context, expr_node: *ast.Expr) ?ast.sema.Symbol {
     return switch (expr_node.*) {
         .identifier => |name| ctx.findSymbol(name),
@@ -167,7 +166,6 @@ fn emitPointerValue(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitE
         else => return error.AssignmentTypeMismatch,
     };
 }
-
 
 pub fn extractStatementFunctionParams(ctx: *Context, args: []*ast.Expr) ![]const []const u8 {
     const params = try ctx.allocator.alloc([]const u8, args.len);

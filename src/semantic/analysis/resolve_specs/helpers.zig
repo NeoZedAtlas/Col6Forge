@@ -8,7 +8,7 @@ const constants = @import("../resolve_const.zig");
 const decls = @import("../resolve_decls.zig");
 const type_kind_selector = @import("../../type_kind_selector.zig");
 
-fn setParameterNotConstantDiagnostic(self: *context.Context, name: []const u8) void {
+pub fn setParameterNotConstantDiagnostic(self: *context.Context, name: []const u8) void {
     var message_buf: [256]u8 = undefined;
     const message = std.fmt.bufPrint(
         &message_buf,
@@ -19,7 +19,7 @@ fn setParameterNotConstantDiagnostic(self: *context.Context, name: []const u8) v
     self.setDiagnostic(loc.line, loc.column, catalog.semantic.parameter_not_constant.code, message, loc.text);
 }
 
-fn setParameterTypeMismatchDiagnostic(
+pub fn setParameterTypeMismatchDiagnostic(
     self: *context.Context,
     name: []const u8,
     expected: ast.TypeKind,
@@ -46,7 +46,7 @@ fn currentDeclLocation(self: *context.Context) struct { line: usize, column: usi
     return .{ .line = 1, .column = 1, .text = "" };
 }
 
-fn hasCurrentUnitExplicitInterfaceProcedure(self: *context.Context, target_name: []const u8) bool {
+pub fn hasCurrentUnitExplicitInterfaceProcedure(self: *context.Context, target_name: []const u8) bool {
     var decl_idx = self.unit.prelude_decl_count;
     while (decl_idx < self.unit.decls.len) : (decl_idx += 1) {
         const decl = self.unit.decls[decl_idx];
@@ -58,12 +58,12 @@ fn hasCurrentUnitExplicitInterfaceProcedure(self: *context.Context, target_name:
     return false;
 }
 
-fn setAttributeConflictDiagnostic(self: *context.Context, message: []const u8) void {
+pub fn setAttributeConflictDiagnostic(self: *context.Context, message: []const u8) void {
     const loc = currentDeclLocation(self);
     self.setDiagnostic(loc.line, loc.column, catalog.semantic.duplicate_declaration.code, message, loc.text);
 }
 
-fn setSourceDiagnostic(self: *context.Context, source: ast.DeclSource, message: []const u8) void {
+pub fn setSourceDiagnostic(self: *context.Context, source: ast.DeclSource, message: []const u8) void {
     self.setCurrentDeclSource(source);
     self.setDiagnostic(
         if (source.line == 0) 1 else source.line,
@@ -74,7 +74,7 @@ fn setSourceDiagnostic(self: *context.Context, source: ast.DeclSource, message: 
     );
 }
 
-fn typeKindName(kind: ast.TypeKind) []const u8 {
+pub fn typeKindName(kind: ast.TypeKind) []const u8 {
     return switch (kind) {
         .integer => "INTEGER",
         .real => "REAL",
@@ -87,7 +87,7 @@ fn typeKindName(kind: ast.TypeKind) []const u8 {
     };
 }
 
-fn constValueKindName(value: symbols.ConstValue) []const u8 {
+pub fn constValueKindName(value: symbols.ConstValue) []const u8 {
     return switch (value) {
         .integer => "INTEGER",
         .real => |v| if (v.is_double) "DOUBLE PRECISION" else "REAL",
@@ -97,7 +97,7 @@ fn constValueKindName(value: symbols.ConstValue) []const u8 {
     };
 }
 
-fn resolvedDeclTypeSpec(
+pub fn resolvedDeclTypeSpec(
     self: *context.Context,
     base_type_kind: ast.TypeKind,
     derived_type_name: ?[]const u8,
@@ -118,7 +118,21 @@ fn resolvedDeclTypeSpec(
     return type_kind_selector.resolveSpecWithConst(base_type_kind, kind_selector, selector_value);
 }
 
-fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.ImplicitRule) void {
+fn kindSelectorMustBeIntrinsic(self: *context.Context, kind_selector: ?*ast.Expr) !void {
+    const selector = kind_selector orelse return;
+    switch (selector.*) {
+        .call_or_subscript => |call| {
+            if (symbols_mod.isIntrinsicName(call.name)) return;
+            if (symbols_mod.lookupKnownProcedureSig(self, call.name) != null) {
+                setAttributeConflictDiagnostic(self, "must be an intrinsic");
+                return error.UnexpectedTypeDecl;
+            }
+        },
+        else => {},
+    }
+}
+
+pub fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.ImplicitRule) void {
     for (self.symbols.items) |*sym| {
         if (sym.type_explicit) continue;
         if (sym.name.len == 0) continue;
@@ -128,7 +142,7 @@ fn applyImplicitRuleToExistingSymbols(self: *context.Context, rule: symbols.Impl
     }
 }
 
-fn hasCommonBlock(self: *context.Context, target: ?[]const u8) !bool {
+pub fn hasCommonBlock(self: *context.Context, target: ?[]const u8) !bool {
     try ensureCommonBlockIndex(self);
     if (target == null) return self.common_block_names.contains(blankCommonKey());
     var key_buf: [512]u8 = undefined;
@@ -162,7 +176,13 @@ fn blankCommonKey() []const u8 {
     return "\x00";
 }
 
-fn ensureImplicitRuleNoOverlap(self: *context.Context, start: u8, end: u8) !void {
+pub fn lowerDup(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    const out = try allocator.alloc(u8, text.len);
+    for (text, 0..) |ch, i| out[i] = std.ascii.toLower(ch);
+    return out;
+}
+
+pub fn ensureImplicitRuleNoOverlap(self: *context.Context, start: u8, end: u8) !void {
     for (self.implicit.items) |existing| {
         if (isDefaultImplicitRule(existing)) continue;
         if (!rangesOverlap(start, end, existing.start, existing.end)) continue;

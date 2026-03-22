@@ -1,5 +1,5 @@
 const ast = @import("../../../../input.zig");
-const context = @import("../../../codegen/context.zig");
+const context = @import("../../../codegen/context/mod.zig");
 const pointer_misc = @import("pointer_misc.zig");
 const whole_array = @import("whole_array.zig");
 const flatten_mod = @import("flatten/mod.zig");

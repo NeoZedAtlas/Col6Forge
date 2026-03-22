@@ -1,5 +1,5 @@
 const llvm_types = @import("../../../types.zig");
-const context = @import("../../../codegen/context.zig");
+const context = @import("../../../codegen/context/mod.zig");
 const formatted_context = @import("context.zig");
 
 const Context = context.Context;

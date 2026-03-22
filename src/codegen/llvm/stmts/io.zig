@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../input.zig");
-const context = @import("../codegen/context.zig");
+const context = @import("../codegen/context/mod.zig");
 const Context = context.Context;
 const ValueRef = context.ValueRef;
 

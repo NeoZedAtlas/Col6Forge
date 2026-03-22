@@ -4,7 +4,7 @@ const fixed_form = @import("../../frontend/fixed_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const symbols = @import("../symbol/mod.zig");
 
-const api = @import("../split/api.zig");
+const api = @import("../split/api/mod.zig");
 const analyzeProgram = api.analyzeProgram;
 
 fn parseAndAnalyze(allocator: std.mem.Allocator, source: []const u8) !struct { program: ast.Program, sem: symbols.SemanticProgram } {

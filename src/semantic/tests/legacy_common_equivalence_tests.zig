@@ -4,7 +4,7 @@ const fixed_form = @import("../../frontend/fixed_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const symbols = @import("../symbol/mod.zig");
 
-const api = @import("../split/api.zig");
+const api = @import("../split/api/mod.zig");
 const function_type = @import("../split/function_type.zig");
 const analyzeProgram = api.analyzeProgram;
 const analyzeProgramWithKnown = api.analyzeProgramWithKnown;

@@ -1,7 +1,7 @@
 const std = @import("std");
 const input = @import("../../../input.zig");
 const codegen_diag = @import("../../../diagnostic.zig");
-const context = @import("../context.zig");
+const context = @import("../context/mod.zig");
 const breakdown = @import("breakdown.zig");
 const pipeline = @import("pipeline.zig");
 

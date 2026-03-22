@@ -3,7 +3,7 @@ const ast = @import("../../ast/nodes.zig");
 const fixed_form = @import("../../frontend/fixed_form.zig");
 const free_form = @import("../../frontend/free_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
-const api = @import("../split/api.zig");
+const api = @import("../split/api/mod.zig");
 
 test "inferProcedureArgSigs captures descriptor-bearing dummy arrays" {
     const testing = std.testing;

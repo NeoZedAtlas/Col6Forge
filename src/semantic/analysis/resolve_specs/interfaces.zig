@@ -4,7 +4,7 @@ const context = @import("../context.zig");
 const symbols = @import("../../symbol/mod.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
 const decls = @import("../resolve_decls.zig");
-const split_api = @import("../../split/api.zig");
+const split_api = @import("../../split/api/mod.zig");
 const type_kind_selector = @import("../../type_kind_selector.zig");
 const helpers = @import("helpers.zig");
 
@@ -14,7 +14,7 @@ const resolvedDeclTypeSpec = helpers.resolvedDeclTypeSpec;
 const typeKindName = helpers.typeKindName;
 const constValueKindName = helpers.constValueKindName;
 
-fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: ast.InterfaceBlock) !void {
+pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: ast.InterfaceBlock) !void {
     const imported_prelude_decl = if (self.current_decl_index) |decl_idx|
         decl_idx < self.unit.prelude_decl_count
     else

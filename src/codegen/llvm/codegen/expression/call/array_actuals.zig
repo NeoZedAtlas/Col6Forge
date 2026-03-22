@@ -1,6 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../../input.zig");
-const context = @import("../../context.zig");
+const context = @import("../../context/mod.zig");
 const common = @import("../../common.zig");
 const memory = @import("../memory.zig");
 const dispatch = @import("../dispatch/mod.zig");

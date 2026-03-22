@@ -427,6 +427,6 @@ test "defined assignment declared with procedure is accepted for incompatible in
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
-    const sem = try @import("../split/api.zig").analyzeProgram(arena.allocator(), program);
+    const sem = try @import("../split/api/mod.zig").analyzeProgram(arena.allocator(), program);
     try testing.expectEqual(@as(usize, 4), sem.units.len);
 }

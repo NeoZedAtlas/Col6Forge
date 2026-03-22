@@ -1,7 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../../input.zig");
 const common = @import("../../../codegen/common.zig");
-const context = @import("../../../codegen/context.zig");
+const context = @import("../../../codegen/context/mod.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
 const expr_memory = @import("../../../codegen/expression/memory.zig");
 const io_utils = @import("../../io/utils.zig");
@@ -383,7 +383,6 @@ fn extractRuntimeWholeArrayGenerator(
         else => null,
     };
 }
-
 
 fn wholeArrayConstructorTarget(ctx: *Context, expr_node: *ast.Expr) ?struct { name: []const u8, sym: ast.sema.Symbol } {
     return switch (expr_node.*) {

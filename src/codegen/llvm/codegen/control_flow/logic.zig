@@ -103,7 +103,7 @@ fn appendAssignedTargetFromEntry(
     });
 }
 
-pub fn analyzeLoopConfig(ctx: *const @import("../context.zig").Context, loop: ast.DoLoopStmt, var_kind: ast.TypeKind) LoopConfig {
+pub fn analyzeLoopConfig(ctx: *const @import("../context/mod.zig").Context, loop: ast.DoLoopStmt, var_kind: ast.TypeKind) LoopConfig {
     return .{
         .var_type = ctx.typeFromKind(var_kind),
         .step_sign = determineStepSign(loop.step),

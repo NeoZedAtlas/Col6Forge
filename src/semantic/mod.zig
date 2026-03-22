@@ -11,7 +11,7 @@ pub const scope = @import("scope.zig");
 pub const context = @import("context.zig");
 pub const diagnostic = @import("diagnostic.zig");
 
-pub const api = @import("split/api.zig");
+pub const api = @import("split/api/mod.zig");
 pub const function_type = @import("split/function_type.zig");
 pub const common_validation = @import("split/common_validation.zig");
 pub const storage_model = @import("split/storage_model.zig");
