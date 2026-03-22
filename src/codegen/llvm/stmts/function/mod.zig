@@ -1,7 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../input.zig");
 const context = @import("../../codegen/context/mod.zig");
-const common = @import("../../codegen/common.zig");
 const sema = @import("../../../../semantic/mod.zig");
 const builder_mod = @import("../../codegen/builder.zig");
 const signature = @import("signature.zig");
@@ -9,7 +8,7 @@ const saved_state = @import("saved_state.zig");
 const locals_mod = @import("locals.zig");
 const host_assoc = @import("host_assoc.zig");
 const body = @import("body.zig");
-const storage_model = sema.storage_model;
+const storage_overlays = @import("storage_overlays.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
@@ -53,11 +52,12 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
         .is_complex_sret_function = sig_info.is_complex_sret_function,
     });
 
-    if (unitHasCommonDecls(ctx.unit.decls) or unitHasEquivalenceDecls(ctx.unit.decls)) {
-        if (unitHasCommonDecls(ctx.unit.decls)) {
-            try installCommonLocals(ctx, builder);
+    if (storage_overlays.hasCommonDecls(ctx.unit.decls) or storage_overlays.hasEquivalenceDecls(ctx.unit.decls)) {
+        if (storage_overlays.hasCommonDecls(ctx.unit.decls)) {
+            try storage_overlays.installCommonLocals(ctx, builder);
         }
-        if (unitHasEquivalenceDecls(ctx.unit.decls)) {
+        if (storage_overlays.hasEquivalenceDecls(ctx.unit.decls)) {
+            const storage_model = sema.storage_model;
             const equivalence_groups = try storage_model.buildUnitEquivalenceGroups(ctx.allocator, ctx.unit, ctx.sem);
             defer storage_model.deinitEquivalenceGroups(ctx.allocator, equivalence_groups);
             var orig_locals = std.StringHashMap(ValueRef).init(ctx.allocator);
@@ -66,124 +66,12 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
             while (it.next()) |entry| {
                 try orig_locals.put(entry.key_ptr.*, entry.value_ptr.*);
             }
-            try applyEquivalences(ctx, builder, equivalence_groups, &orig_locals);
+            try storage_overlays.applyEquivalences(ctx, builder, equivalence_groups, &orig_locals);
         }
     }
     try saved_state.emitDeclaratorInitializers(ctx, builder, &save_info);
     try locals_mod.installAssignedGotoSlots(ctx, builder);
     try body.emit(ctx, builder);
-}
-
-fn unitHasCommonDecls(decls: []const ast.Decl) bool {
-    for (decls) |decl| {
-        if (decl == .common) return true;
-    }
-    return false;
-}
-
-fn unitHasEquivalenceDecls(decls: []const ast.Decl) bool {
-    for (decls) |decl| {
-        if (decl == .equivalence) return true;
-    }
-    return false;
-}
-
-fn installCommonLocals(ctx: *Context, builder: anytype) EmitError!void {
-    const layouts = try common.buildUnitCommonLayouts(ctx.allocator, ctx.unit, ctx.sem);
-    for (layouts) |layout| {
-        const base_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{layout.global_name});
-        const base_ref = ValueRef{ .name = base_name, .ty = .ptr, .is_ptr = true };
-        for (layout.items) |item| {
-            const offset_text = try ctx.intLiteral(@intCast(item.offset));
-            const offset_val = ValueRef{ .name = offset_text, .ty = .i32, .is_ptr = false };
-            const ptr_name = try ctx.nextTemp();
-            try builder.gep(ptr_name, .i8, base_ref, offset_val);
-            try ctx.locals.put(item.name, .{ .name = ptr_name, .ty = .ptr, .is_ptr = true });
-        }
-    }
-}
-
-fn applyEquivalences(
-    ctx: *Context,
-    builder: anytype,
-    equivalence_groups: []const storage_model.EquivalenceGroup,
-    orig_locals: *const std.StringHashMap(ValueRef),
-) EmitError!void {
-    for (equivalence_groups) |group| {
-        if (group.members.len < 2) continue;
-        const anchor = chooseEquivalenceAnchor(group, orig_locals) orelse continue;
-        const anchor_ptr = orig_locals.get(anchor.symbol_name) orelse continue;
-        for (group.members) |member| {
-            const relative = member.symbol_base_byte_offset - anchor.symbol_base_byte_offset;
-            const ptr = if (relative == 0)
-                anchor_ptr
-            else
-                try byteOffsetPtr(ctx, builder, anchor_ptr, relative);
-            try ctx.locals.put(member.symbol_name, ptr);
-        }
-    }
-}
-
-fn chooseEquivalenceAnchor(
-    group: storage_model.EquivalenceGroup,
-    orig_locals: *const std.StringHashMap(ValueRef),
-) ?storage_model.EquivalenceMember {
-    var best: ?storage_model.EquivalenceMember = null;
-    for (group.members) |member| {
-        if (!orig_locals.contains(member.symbol_name)) continue;
-        if (best == null) {
-            best = member;
-            continue;
-        }
-        const current = best.?;
-        const member_is_common = member.storage == .common;
-        const current_is_common = current.storage == .common;
-        if (member_is_common != current_is_common) {
-            if (member_is_common) best = member;
-            continue;
-        }
-        if (member.symbol_byte_size > current.symbol_byte_size) {
-            best = member;
-        }
-    }
-    return best;
-}
-
-fn byteOffsetPtr(ctx: *Context, builder: anytype, base_ptr: ValueRef, byte_offset: i64) EmitError!ValueRef {
-    const offset_text = try ctx.intLiteral(byte_offset);
-    const offset_val = ValueRef{ .name = offset_text, .ty = .i32, .is_ptr = false };
-    const ptr_name = try ctx.nextTemp();
-    try builder.gep(ptr_name, .i8, base_ptr, offset_val);
-    return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
-}
-
-fn constIndexValue(expr: *ast.Expr) ?i64 {
-    switch (expr.*) {
-        .literal => |lit| {
-            if (lit.kind != .integer) return null;
-            return std.fmt.parseInt(i64, lit.text, 10) catch return null;
-        },
-        .unary => |un| {
-            const value = constIndexValue(un.expr) orelse return null;
-            return switch (un.op) {
-                .plus => value,
-                .minus => -value,
-                else => null,
-            };
-        },
-        .binary => |bin| {
-            const left = constIndexValue(bin.left) orelse return null;
-            const right = constIndexValue(bin.right) orelse return null;
-            return switch (bin.op) {
-                .add => left + right,
-                .sub => left - right,
-                .mul => left * right,
-                .div => if (right == 0) null else @divTrunc(left, right),
-                else => null,
-            };
-        },
-        else => return null,
-    }
 }
 
 test "emitFunction emits a simple assignment" {
