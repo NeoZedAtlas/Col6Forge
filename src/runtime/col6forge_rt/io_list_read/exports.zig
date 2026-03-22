@@ -57,12 +57,12 @@ pub export fn col6forge_read_list_stream_n(
 pub export fn col6forge_list_read_stream_finish(state_any: ?*anyopaque) callconv(.c) c_int {
     const state = listReadStreamStateFromOpaque(state_any);
     defer destroyListReadStreamState(state);
-    const stream = state orelse return 1;
-    if (stream.status == 0 and stream.input_opened) {
-        col6forgeDiscardToRecordEnd(stream.input.?.file);
-        stream.commit_pos = true;
+    const list_stream = state orelse return 1;
+    if (list_stream.status == 0 and list_stream.input_opened) {
+        col6forgeDiscardToRecordEnd(list_stream.input.?.file);
+        list_stream.commit_pos = true;
     }
-    return stream.status;
+    return list_stream.status;
 }
 
 pub export fn col6forge_read_list_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
