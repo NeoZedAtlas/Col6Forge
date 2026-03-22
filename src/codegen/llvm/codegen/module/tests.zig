@@ -710,6 +710,115 @@ test "emitModuleToWriter lowers nested implied-do whole-array assignment with lo
     try testing.expect(std.mem.indexOf(u8, output, "arr_generated_head") != null);
 }
 
+test "emitModuleToWriter does not treat type-bound function calls as whole-array component copies" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module class_t\n" ++
+        "  type :: tx\n" ++
+        "    integer, allocatable :: i(:)\n" ++
+        "  end type tx\n" ++
+        "  type :: t\n" ++
+        "    type(tx), pointer :: x\n" ++
+        "  contains\n" ++
+        "    procedure :: calc\n" ++
+        "    procedure :: find_x\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "  subroutine calc(this)\n" ++
+        "    class(t), target :: this\n" ++
+        "    this%x = this%find_x()\n" ++
+        "  end subroutine calc\n" ++
+        "  function find_x(this)\n" ++
+        "    class(t), intent(in) :: this\n" ++
+        "    type(tx), pointer :: find_x\n" ++
+        "    find_x => null()\n" ++
+        "  end function find_x\n" ++
+        "end module class_t\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "typebound_whole_array_call_assign.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "call ptr @class_t__find_x") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "llvm.memmove") == null);
+}
+
+test "emitModuleToWriter preserves pointer declarator initializer semantics for null()" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module factory_pattern\n" ++
+        "  type, abstract :: connection\n" ++
+        "  end type connection\n" ++
+        "end module factory_pattern\n" ++
+        "program main\n" ++
+        "  use factory_pattern\n" ++
+        "  implicit none\n" ++
+        "  class(connection), pointer :: db_connect => null()\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "pointer_decl_null_init.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "store ptr null") != null);
+}
+
+test "emitModuleToWriter supports SIZE over whole-array class component in specification expressions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module array\n" ++
+        "  type :: t_array\n" ++
+        "    real, dimension(10) :: coeff\n" ++
+        "  contains\n" ++
+        "    procedure :: get_coeff\n" ++
+        "  end type t_array\n" ++
+        "contains\n" ++
+        "  function get_coeff(self) result(coeff)\n" ++
+        "    class(t_array), intent(in) :: self\n" ++
+        "    real, dimension(size(self%coeff)) :: coeff\n" ++
+        "  end function get_coeff\n" ++
+        "end module array\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "size_component_spec_expr.f03", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "alloca [10 x float]") != null);
+}
+
 test "emitModuleToWriter lowers SUM over implied-do array constructor" {
     const testing = std.testing;
     const allocator = testing.allocator;

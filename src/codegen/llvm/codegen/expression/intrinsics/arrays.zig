@@ -5,6 +5,7 @@ const utils = @import("../../utils.zig");
 const binary = @import("../binary.zig");
 const casting = @import("../casting.zig");
 const dispatch = @import("../dispatch/mod.zig");
+const memory = @import("../memory.zig");
 const shared = @import("shared.zig");
 const Expr = shared.Expr;
 const IRType = shared.IRType;
@@ -523,31 +524,74 @@ fn emitSymbolDimExtentValue(ctx: *Context, builder: anytype, sym: ast.sema.Symbo
     return emitArrayDimExtentExpr(ctx, builder, sym.dims[dim_index]);
 }
 
-fn lookupArraySymbolForSize(ctx: *Context, expr: *Expr) ?ast.sema.Symbol {
+fn emitComponentDimExtentValue(ctx: *Context, builder: anytype, comp: ast.ComponentExpr, dim_index: usize) EmitError!ValueRef {
+    const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+    const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
+    if (component.pointer or component.allocatable) {
+        return memory.emitComponentDimExtent(ctx, builder, comp, dim_index);
+    }
+    return emitArrayDimExtentExpr(ctx, builder, component.dims[dim_index]);
+}
+
+const SizeArraySubject = union(enum) {
+    symbol: ast.sema.Symbol,
+    component: ast.ComponentExpr,
+};
+
+fn lookupArraySubjectForSize(ctx: *Context, expr: *Expr) ?SizeArraySubject {
     return switch (expr.*) {
-        .identifier => |name| ctx.findSymbol(name),
-        .call_or_subscript => |call| ctx.findSymbol(call.name),
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse break :blk null;
+            if (sym.dims.len == 0) break :blk null;
+            break :blk .{ .symbol = sym };
+        },
+        .call_or_subscript => |call| blk: {
+            const sym = ctx.findSymbol(call.name) orelse break :blk null;
+            if (sym.dims.len == 0) break :blk null;
+            break :blk .{ .symbol = sym };
+        },
+        .component => |comp| blk: {
+            if (comp.has_parens or comp.args.len != 0) break :blk null;
+            const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse break :blk null;
+            const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse break :blk null;
+            if (component.dims.len == 0) break :blk null;
+            break :blk .{ .component = comp };
+        },
         else => null,
     };
 }
 
 pub fn emitIntrinsicSize(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
     if (args.len < 1 or args.len > 2) return error.InvalidIntrinsicCall;
-    const sym = lookupArraySymbolForSize(ctx, args[0]) orelse return error.UnsupportedIntrinsicType;
-    if (sym.dims.len == 0) return error.UnsupportedIntrinsicType;
+    const subject = lookupArraySubjectForSize(ctx, args[0]) orelse return error.UnsupportedIntrinsicType;
+    const rank: usize = switch (subject) {
+        .symbol => |sym| sym.dims.len,
+        .component => |comp| blk: {
+            const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
+            const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
+            break :blk component.dims.len;
+        },
+    };
 
     var value = blk: {
         if (args.len == 2) {
             const dim_value = intLiteralValue(args[1]) orelse return error.UnsupportedIntrinsicType;
             if (dim_value < 1) return error.InvalidIntrinsicCall;
             const dim_index: usize = @intCast(dim_value - 1);
-            if (dim_index >= sym.dims.len) return error.InvalidIntrinsicCall;
-            break :blk try emitSymbolDimExtentValue(ctx, builder, sym, dim_index);
+            if (dim_index >= rank) return error.InvalidIntrinsicCall;
+            break :blk switch (subject) {
+                .symbol => |sym| try emitSymbolDimExtentValue(ctx, builder, sym, dim_index),
+                .component => |comp| try emitComponentDimExtentValue(ctx, builder, comp, dim_index),
+            };
         }
 
         var total = try oneIndexValue(ctx);
-        for (sym.dims, 0..) |_, dim_index| {
-            const extent = try emitSymbolDimExtentValue(ctx, builder, sym, dim_index);
+        var dim_index: usize = 0;
+        while (dim_index < rank) : (dim_index += 1) {
+            const extent = switch (subject) {
+                .symbol => |sym| try emitSymbolDimExtentValue(ctx, builder, sym, dim_index),
+                .component => |comp| try emitComponentDimExtentValue(ctx, builder, comp, dim_index),
+            };
             total = try binary.emitMul(ctx, builder, total, extent);
         }
         break :blk total;

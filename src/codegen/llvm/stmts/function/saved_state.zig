@@ -212,6 +212,14 @@ fn emitNamedInitializerAssign(
     init_expr: *ast.Expr,
 ) EmitError!void {
     if (ctx.findSymbol(name)) |sym| {
+        if (sym.is_pointer) {
+            var target_expr = ast.Expr{ .identifier = name };
+            const assign = ast.PointerAssignment{
+                .target = &target_expr,
+                .value = init_expr,
+            };
+            return execution.emitPointerAssignment(ctx, builder, assign);
+        }
         if (sym.dims.len != 0 and init_expr.* == .array_constructor) {
             return emitArrayConstructorDeclaratorInitializer(ctx, builder, name, sym, init_expr.array_constructor);
         }

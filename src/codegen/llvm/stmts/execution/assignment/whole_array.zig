@@ -501,6 +501,7 @@ pub fn emitLinearFillLoop(
 fn wholeArrayComponentTransfer(expr_node: *ast.Expr) ?ast.ComponentExpr {
     if (expr_node.* != .component) return null;
     const comp = expr_node.component;
+    if (comp.has_parens) return null;
     if (comp.args.len != 0) return null;
     return comp;
 }
