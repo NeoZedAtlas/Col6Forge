@@ -96,6 +96,9 @@ pub fn writeDiagnostic(writer: *std.Io.Writer, diag: Diagnostic) !void {
         diag.code,
         diag.message,
     });
+    if (diag.code.len != 0) {
+        try writer.print("help: see docs/errors.md#{s}\n", .{diag.code});
+    }
     if (diag.line_text.len == 0) return;
     try writer.print("{s}\n", .{diag.line_text});
     const caret_col = if (diag.column == 0) 1 else diag.column;
@@ -105,4 +108,28 @@ pub fn writeDiagnostic(writer: *std.Io.Writer, diag: Diagnostic) !void {
     }
     try writer.writeByte('^');
     try writer.writeByte('\n');
+}
+
+test "writeDiagnostic keeps docs help line ahead of source context" {
+    const testing = std.testing;
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+
+    try writeDiagnostic(&out.writer, .{
+        .file_path = "demo.f",
+        .line = 2,
+        .column = 7,
+        .code = "CF3103",
+        .message = "invalid CHARACTER length specification",
+        .line_text = "      CHARACTER*(*) A",
+    });
+    try out.writer.flush();
+
+    try testing.expectEqualStrings(
+        "demo.f:2:7: error[CF3103]: invalid CHARACTER length specification\n" ++
+            "help: see docs/errors.md#CF3103\n" ++
+            "      CHARACTER*(*) A\n" ++
+            "      ^\n",
+        out.writer.buffered(),
+    );
 }

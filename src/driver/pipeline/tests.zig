@@ -563,3 +563,31 @@ test "releaseLastDiagnostic clears compat storage after take" {
     releaseLastDiagnostic(diag_info);
     try testing.expect(takeLastDiagnostic() == null);
 }
+
+test "runPipelineWithOptionsAndDiagnostics compiles ENTRY function alternate result body without leaking into primary unit" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      FUNCTION RF513(RVD001)\n" ++
+        "      RF513 = RVD001**2\n" ++
+        "      RETURN\n" ++
+        "      ENTRY EF852(RVD002)\n" ++
+        "      EF852 = 3*RVD002\n" ++
+        "      RETURN\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "entry_function_pipeline.f", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    const result = try runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag);
+    defer allocator.free(result.output);
+    try testing.expect(!diag_bag.has());
+    try testing.expect(std.mem.indexOf(u8, result.output, "@rf513_") != null);
+    try testing.expect(std.mem.indexOf(u8, result.output, "@ef852_") != null);
+}

@@ -2860,8 +2860,6 @@ define i32 @en721_(ptr %arg0) {
 entry:
   br label %bb0
 bb0:
-  br label %bb1
-bb1:
   %t0 = load i32, ptr %arg0
   %t1 = mul i32 2, %t0
   store i32 %t1, ptr %arg0
@@ -2873,8 +2871,6 @@ define i32 @en722_(ptr %arg0) {
 entry:
   br label %bb0
 bb0:
-  br label %bb1
-bb1:
   %t0 = load i32, ptr %arg0
   ret i32 %t0
 exit:

@@ -78,10 +78,19 @@ fn nonEntryStatementsFrom(
     start_idx: usize,
 ) ![]ast.Stmt {
     var out = std.array_list.Managed(ast.Stmt).init(arena);
+    var skipping_entry_private_prefix = false;
     var idx = start_idx;
     while (idx < stmts.len) : (idx += 1) {
-        if (stmts[idx].node == .entry) continue;
-        try out.append(stmts[idx]);
+        const stmt = stmts[idx];
+        if (stmt.node == .entry) {
+            skipping_entry_private_prefix = true;
+            continue;
+        }
+        if (skipping_entry_private_prefix) {
+            if (stmt.label == null) continue;
+            skipping_entry_private_prefix = false;
+        }
+        try out.append(stmt);
     }
     return out.toOwnedSlice();
 }

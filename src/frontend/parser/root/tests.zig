@@ -87,6 +87,17 @@ test "parseProgram expands fixed-form ENTRY RESULT into sibling function units" 
     try testing.expectEqual(@as(usize, 2), program.units[1].args.len);
     try testing.expectEqualStrings("I", program.units[1].args[0]);
     try testing.expectEqualStrings("J", program.units[1].args[1]);
+    try testing.expectEqual(@as(usize, 4), program.units[0].stmts.len);
+    try testing.expect(program.units[0].stmts[0].node == .assignment);
+    try testing.expect(program.units[0].stmts[1].node == .goto);
+    try testing.expect(program.units[0].stmts[2].node == .cont);
+    try testing.expectEqualStrings("100", program.units[0].stmts[2].label.?);
+    try testing.expect(program.units[0].stmts[3].node == .assignment);
+    try testing.expectEqual(@as(usize, 3), program.units[1].stmts.len);
+    try testing.expect(program.units[1].stmts[0].node == .assignment);
+    try testing.expect(program.units[1].stmts[1].node == .cont);
+    try testing.expectEqualStrings("100", program.units[1].stmts[1].label.?);
+    try testing.expect(program.units[1].stmts[2].node == .assignment);
 }
 
 test "parseProgram handles CONTAINS internal function blocks" {

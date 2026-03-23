@@ -1520,8 +1520,6 @@ define i32 @en872_(ptr %arg0) {
 entry:
   br label %bb0
 bb0:
-  br label %bb1
-bb1:
   %t0 = load i32, ptr %arg0
   %t1 = sub i32 %t0, 3
   ret i32 %t1
