@@ -948,6 +948,28 @@ test "type-bound PASS(name) call uses the declared passed-object position" {
     try testing.expect(diag.take() == null);
 }
 
+test "typed dummy procedure reference resolves as function call in expression context" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine test_d(fn, val, res)\n" ++
+        "  double precision fn\n" ++
+        "  double precision val, res\n" ++
+        "  print *, fn(val), res\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expect(diag.take() == null);
+}
+
 test "type-bound override must also be PURE" {
     const testing = std.testing;
     const allocator = testing.allocator;

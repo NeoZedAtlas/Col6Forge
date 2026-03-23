@@ -58,6 +58,37 @@ test "parseProgram accepts alternate return dummies in subroutine header" {
     try testing.expectEqual(@as(usize, 2), unit.alt_return_dummy_count);
 }
 
+test "parseProgram expands fixed-form ENTRY RESULT into sibling function units" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      RECURSIVE FUNCTION FAC(I) RESULT (RES)\n" ++
+        "      INTEGER :: I, J, K, RES\n" ++
+        "      K = 1\n" ++
+        "      GOTO 100\n" ++
+        "      ENTRY BIFAC(I,J) RESULT (RES)\n" ++
+        "      K = J\n" ++
+        " 100  CONTINUE\n" ++
+        "      RES = 1\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+    try testing.expectEqualStrings("FAC", program.units[0].name);
+    try testing.expectEqualStrings("RES", program.units[0].result_name.?);
+    try testing.expectEqualStrings("BIFAC", program.units[1].name);
+    try testing.expectEqualStrings("RES", program.units[1].result_name.?);
+    try testing.expectEqual(@as(usize, 2), program.units[1].args.len);
+    try testing.expectEqualStrings("I", program.units[1].args[0]);
+    try testing.expectEqualStrings("J", program.units[1].args[1]);
+}
+
 test "parseProgram handles CONTAINS internal function blocks" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1532,6 +1563,33 @@ test "parseProgram handles free-form assignment with slash array constructor key
     try testing.expectEqual(@as(usize, 1), unit.stmts.len);
     try testing.expect(unit.stmts[0].node == .assignment);
     try testing.expect(unit.stmts[0].node.assignment.value.* == .array_constructor);
+}
+
+test "parseProgram preserves free-form statement labels" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "recursive function fac(i) result (res)\n" ++
+        "  integer :: i, j, k, res\n" ++
+        "  k = 1\n" ++
+        "  goto 100\n" ++
+        "entry bifac(i,j) result (res)\n" ++
+        "  k = j\n" ++
+        "100 continue\n" ++
+        "  res = 1\n" ++
+        "end function\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+    try testing.expect(program.units[1].stmts[1].label != null);
+    try testing.expectEqualStrings("100", program.units[1].stmts[1].label.?);
+    try testing.expect(program.units[1].stmts[1].node == .cont);
 }
 
 test "parseProgram handles full reduced array_constructor_42 structure" {

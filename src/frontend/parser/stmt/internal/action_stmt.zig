@@ -215,11 +215,18 @@ pub fn parseActionStmtNode(
                     }
                     _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
                 }
+                var result_name: ?[]const u8 = null;
+                if (lp.consumeKeyword("RESULT")) {
+                    _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
+                    result_name = lp.readName(arena) orelse return error.MissingName;
+                    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+                }
                 return .{
                     .entry = .{
                         .name = name,
                         .args = try args.toOwnedSlice(),
                         .alt_return_dummy_count = alt_return_dummy_count,
+                        .result_name = result_name,
                     },
                 };
             }

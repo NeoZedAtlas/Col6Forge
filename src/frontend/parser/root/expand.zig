@@ -20,18 +20,25 @@ pub fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {
             }
         }
 
-        if (first_entry_idx) |idx| {
+        if (first_entry_idx != null) {
             try units.append(.{
                 .kind = unit.kind,
                 .name = unit.name,
+                .owner_name = unit.owner_name,
+                .owner_kind = unit.owner_kind,
+                .is_module_procedure = unit.is_module_procedure,
                 .pure = unit.pure,
                 .elemental = unit.elemental,
                 .recursive = unit.recursive,
+                .prelude_decl_count = unit.prelude_decl_count,
+                .bind_name = unit.bind_name,
+                .result_name = unit.result_name,
                 .args = unit.args,
                 .alt_return_dummy_count = unit.alt_return_dummy_count,
                 .decls = unit.decls,
                 .decl_sources = unit.decl_sources,
-                .stmts = unit.stmts[0..idx],
+                .stmts = try nonEntryStatementsFrom(arena, unit.stmts, 0),
+                .expr_sources = unit.expr_sources,
             });
         } else {
             try units.append(unit);
@@ -41,28 +48,40 @@ pub fn expandEntries(arena: std.mem.Allocator, program: Program) !Program {
             if (stmt_item.node != .entry) continue;
             const entry = stmt_item.node.entry;
 
-            var end_idx = unit.stmts.len;
-            var scan = idx + 1;
-            while (scan < unit.stmts.len) : (scan += 1) {
-                if (unit.stmts[scan].node == .entry) {
-                    end_idx = scan;
-                    break;
-                }
-            }
-
             try units.append(.{
                 .kind = unit.kind,
                 .name = entry.name,
+                .owner_name = unit.owner_name,
+                .owner_kind = unit.owner_kind,
+                .is_module_procedure = unit.is_module_procedure,
                 .pure = unit.pure,
                 .elemental = unit.elemental,
                 .recursive = unit.recursive,
+                .prelude_decl_count = unit.prelude_decl_count,
+                .bind_name = unit.bind_name,
+                .result_name = entry.result_name,
                 .args = entry.args,
                 .alt_return_dummy_count = entry.alt_return_dummy_count,
                 .decls = unit.decls,
                 .decl_sources = unit.decl_sources,
-                .stmts = unit.stmts[idx..end_idx],
+                .stmts = try nonEntryStatementsFrom(arena, unit.stmts, idx + 1),
+                .expr_sources = unit.expr_sources,
             });
         }
     }
     return .{ .units = try units.toOwnedSlice() };
+}
+
+fn nonEntryStatementsFrom(
+    arena: std.mem.Allocator,
+    stmts: []const ast.Stmt,
+    start_idx: usize,
+) ![]ast.Stmt {
+    var out = std.array_list.Managed(ast.Stmt).init(arena);
+    var idx = start_idx;
+    while (idx < stmts.len) : (idx += 1) {
+        if (stmts[idx].node == .entry) continue;
+        try out.append(stmts[idx]);
+    }
+    return out.toOwnedSlice();
 }

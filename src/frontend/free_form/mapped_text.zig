@@ -56,6 +56,18 @@ pub fn appendMappedLogicalLine(
     start_line: usize,
     end_line: usize,
 ) !void {
+    if (leadingStatementLabel(mapped.text)) |label_end| {
+        const label = try list.allocator.dupe(u8, mapped.text[0..label_end]);
+        const body = try trimMappedTextRange(list.allocator, mapped, label_end, mapped.text.len);
+        mapped.deinit(list.allocator);
+        try list.append(.{
+            .label = label,
+            .text = body.text,
+            .span = .{ .start_line = start_line, .end_line = end_line },
+            .segments = body.segments,
+        });
+        return;
+    }
     try list.append(.{
         .label = null,
         .text = mapped.text,
@@ -83,6 +95,17 @@ pub fn appendGeneratedLogicalLine(
         .span = .{ .start_line = start_line, .end_line = end_line },
         .segments = segs,
     });
+}
+
+fn leadingStatementLabel(text: []const u8) ?usize {
+    var idx: usize = 0;
+    while (idx < text.len and std.ascii.isDigit(text[idx])) : (idx += 1) {}
+    if (idx == 0 or idx > 5 or idx >= text.len) return null;
+    if (text[idx] != ' ' and text[idx] != '\t') return null;
+    var body_idx = idx;
+    while (body_idx < text.len and (text[body_idx] == ' ' or text[body_idx] == '\t')) : (body_idx += 1) {}
+    if (body_idx >= text.len) return null;
+    return idx;
 }
 
 pub fn normalizeStmtTextWithMap(allocator: std.mem.Allocator, raw: MappedText) !MappedText {

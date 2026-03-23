@@ -114,6 +114,31 @@ test "parseStatement parses CALL keyword actual argument" {
     try testing.expectEqualStrings("AUX", stmt_node.node.call.args[0].expr.value.identifier);
 }
 
+test "parseStatement parses ENTRY RESULT clause" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      ENTRY BIFAC(I,J) RESULT (RES)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var idx: usize = 0;
+    var do_ctx = DoContext.init(arena.allocator());
+    var param_ints = std.StringHashMap(i64).init(arena.allocator());
+    var param_strings = std.StringHashMap(ast.Literal).init(arena.allocator());
+    var array_names = std.StringHashMap(array_info.ArrayInfo).init(arena.allocator());
+    const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
+
+    try testing.expect(stmt_node.node == .entry);
+    try testing.expectEqualStrings("BIFAC", stmt_node.node.entry.name);
+    try testing.expectEqual(@as(usize, 2), stmt_node.node.entry.args.len);
+    try testing.expectEqualStrings("I", stmt_node.node.entry.args[0]);
+    try testing.expectEqualStrings("J", stmt_node.node.entry.args[1]);
+    try testing.expectEqualStrings("RES", stmt_node.node.entry.result_name.?);
+}
+
 test "parseStatement treats split IFX name as assignment target" {
     const testing = std.testing;
     const allocator = testing.allocator;

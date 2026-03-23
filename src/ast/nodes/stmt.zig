@@ -145,6 +145,7 @@ pub const EntryStmt = struct {
     name: []const u8,
     args: []const []const u8,
     alt_return_dummy_count: usize = 0,
+    result_name: ?[]const u8 = null,
 };
 
 pub const WriteStmt = struct {
