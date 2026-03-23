@@ -1666,3 +1666,126 @@ test "parseProgram keeps interface procedure result type after non-result declar
     try testing.expect(proc_header.type_spec != null);
     try testing.expectEqual(ast.TypeKind.real, proc_header.type_spec.?.type_kind);
 }
+
+test "parseProgramWithDiagnostics recovers malformed submodule header and rejects orphan module procedure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module mtop\n" ++
+        "  interface\n" ++
+        "    module subroutine sub3()\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "end module mtop\n" ++
+        "\n" ++
+        "submodule (mtop:submod:subsubmod) broken\n" ++
+        "contains\n" ++
+        "  module subroutine sub3\n" ++
+        "    x = 1\n" ++
+        "  end subroutine sub3\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    _ = try parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag);
+
+    var saw_submodule_syntax = false;
+    var saw_outside_module = false;
+    var saw_unexpected_assignment = false;
+    var saw_end_program = false;
+    while (diag_bag.take()) |diag| {
+        defer diag_bag.release(diag);
+        if (std.mem.indexOf(u8, diag.message, "Syntax error in SUBMODULE statement") != null) saw_submodule_syntax = true;
+        if (std.mem.indexOf(u8, diag.message, "found outside of a module") != null) saw_outside_module = true;
+        if (std.mem.indexOf(u8, diag.message, "Unexpected assignment") != null) saw_unexpected_assignment = true;
+        if (std.mem.indexOf(u8, diag.message, "Expecting END PROGRAM statement") != null) saw_end_program = true;
+    }
+    try testing.expect(saw_submodule_syntax);
+    try testing.expect(saw_outside_module);
+    try testing.expect(saw_unexpected_assignment);
+    try testing.expect(saw_end_program);
+}
+
+test "parseProgramWithDiagnostics rejects visible generic specific reuse in submodule interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module foo_interface\n" ++
+        "  interface\n" ++
+        "    integer module function add(lhs, rhs)\n" ++
+        "      integer, intent(in) :: lhs, rhs\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module\n" ++
+        "\n" ++
+        "submodule(foo_interface) foo_impl\n" ++
+        "  interface operator(+)\n" ++
+        "    integer module function add(lhs, rhs)\n" ++
+        "      integer, intent(in) :: lhs, rhs\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  module procedure add\n" ++
+        "  end procedure\n" ++
+        "end submodule\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    _ = try parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag);
+
+    var saw_duplicate = false;
+    while (diag_bag.take()) |diag| {
+        defer diag_bag.release(diag);
+        if (std.mem.indexOf(u8, diag.message, "is already present in the interface") != null) saw_duplicate = true;
+    }
+    try testing.expect(saw_duplicate);
+}
+
+test "parseProgramWithDiagnostics compares inherited submodule procedure characteristics" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module one_module\n" ++
+        "  interface\n" ++
+        "    module function one(arg)\n" ++
+        "      real, intent(in) :: arg\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module\n" ++
+        "\n" ++
+        "submodule(one_module) one_submodule\n" ++
+        "contains\n" ++
+        "  integer module function one(arg)\n" ++
+        "    integer, intent(in) :: arg\n" ++
+        "  end function\n" ++
+        "end submodule\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    _ = try parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag);
+
+    var saw_arg_type_mismatch = false;
+    var saw_result_type_mismatch = false;
+    while (diag_bag.take()) |diag| {
+        defer diag_bag.release(diag);
+        if (std.mem.indexOf(u8, diag.message, "Type mismatch in argument") != null) saw_arg_type_mismatch = true;
+        if (std.mem.indexOf(u8, diag.message, "Type mismatch in function result") != null) saw_result_type_mismatch = true;
+    }
+    try testing.expect(saw_arg_type_mismatch);
+    try testing.expect(saw_result_type_mismatch);
+}

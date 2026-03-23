@@ -357,6 +357,7 @@ pub fn preludeSpecificInterfaceProcedureCount(self: *context.Context, name: []co
 }
 
 pub fn currentUnitConflictsWithPreludeProcedure(self: *context.Context, name: []const u8) bool {
+    if (self.unit.is_module_procedure and std.ascii.eqlIgnoreCase(name, self.unit.name)) return false;
     var decl_idx: usize = 0;
     while (decl_idx < self.unit.prelude_decl_count and decl_idx < self.unit.decls.len) : (decl_idx += 1) {
         const decl = self.unit.decls[decl_idx];

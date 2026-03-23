@@ -81,7 +81,63 @@ pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: a
         if (!self.usesExplicitDiagnosticBag()) return err;
         if (first_error == null) first_error = err;
     }
+    if (validateVisiblePreludeGenericSpecificReuse(self, interface_block)) |err| {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_error == null) first_error = err;
+    }
     if (first_error) |err| return err;
+}
+
+fn validateVisiblePreludeGenericSpecificReuse(self: *context.Context, interface_block: ast.InterfaceBlock) ?anyerror {
+    const imported_prelude_decl = if (self.current_decl_index) |decl_idx|
+        decl_idx < self.unit.prelude_decl_count
+    else
+        false;
+    if (imported_prelude_decl) return null;
+    if (interface_block.name == null) return null;
+
+    for (interface_block.procedure_headers) |proc_header| {
+        if (!preludeHasInterfaceProcedure(self, proc_header.name)) continue;
+        setSourceDiagnostic(self, proc_header.source, "is already present in the interface");
+        return error.DuplicateDeclaration;
+    }
+    for (interface_block.specific_procedures, 0..) |procedure_name, idx| {
+        if (!preludeHasInterfaceProcedure(self, procedure_name)) continue;
+        setSourceDiagnostic(self, interface_block.specific_procedure_sources[idx], "is already present in the interface");
+        return error.DuplicateDeclaration;
+    }
+    for (interface_block.module_procedures, 0..) |procedure_name, idx| {
+        if (!preludeHasInterfaceProcedure(self, procedure_name)) continue;
+        setSourceDiagnostic(self, interface_block.module_procedure_sources[idx], "is already present in the interface");
+        return error.DuplicateDeclaration;
+    }
+    for (interface_block.procedures, 0..) |procedure_name, idx| {
+        if (!preludeHasInterfaceProcedure(self, procedure_name)) continue;
+        setSourceDiagnostic(self, interface_block.procedure_sources[idx], "is already present in the interface");
+        return error.DuplicateDeclaration;
+    }
+    return null;
+}
+
+fn preludeHasInterfaceProcedure(self: *context.Context, procedure_name: []const u8) bool {
+    var decl_idx: usize = 0;
+    while (decl_idx < self.unit.prelude_decl_count and decl_idx < self.unit.decls.len) : (decl_idx += 1) {
+        const decl = self.unit.decls[decl_idx];
+        if (decl != .interface_block) continue;
+        for (decl.interface_block.procedure_headers) |proc_header| {
+            if (std.ascii.eqlIgnoreCase(proc_header.name, procedure_name)) return true;
+        }
+        for (decl.interface_block.specific_procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, procedure_name)) return true;
+        }
+        for (decl.interface_block.module_procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, procedure_name)) return true;
+        }
+        for (decl.interface_block.procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, procedure_name)) return true;
+        }
+    }
+    return false;
 }
 
 fn validateInterfaceProcedureDerivedTypes(self: *context.Context, proc_header: ast.InterfaceProcedure) ?anyerror {

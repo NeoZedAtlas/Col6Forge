@@ -134,6 +134,13 @@ pub const Parser = struct {
         return root_predicates.isSubmoduleHeaderTokens(line, tokens);
     }
 
+    fn lineStartsWithKeyword(self: *Parser, line_index: usize, keyword: []const u8) bool {
+        const line = self.lines[line_index];
+        const tokens = self.maybeTokensForIndex(line_index) orelse return false;
+        var lp = LineParser.init(line, tokens);
+        return lp.consumeKeyword(keyword);
+    }
+
     pub fn isContainsAt(self: *Parser, line_index: usize) bool {
         const line = self.lines[line_index];
         const tokens = self.maybeTokensForIndex(line_index) orelse return false;
@@ -178,7 +185,56 @@ pub const Parser = struct {
                 try self.parseSubmoduleContainer(&units);
                 continue;
             }
+            if (self.lineStartsWithKeyword(self.index, "SUBMODULE")) {
+                const line = self.lines[self.index];
+                self.diag_bag.set(
+                    line.span.start_line,
+                    if (line.segments.len > 0) line.segments[0].column else 1,
+                    catalog.parser.unexpected_token.code,
+                    "Syntax error in SUBMODULE statement",
+                    line.text,
+                );
+                self.index += 1;
+                continue;
+            }
+            if (self.isContainsAt(self.index)) {
+                self.index += 1;
+                continue;
+            }
+            const unit_start_index = self.index;
             const unit = try self.parseProgramUnit();
+            if (unit.is_module_procedure and self.pending_owner_name == null) {
+                const header_line = self.lines[unit_start_index];
+                self.diag_bag.set(
+                    header_line.span.start_line,
+                    if (header_line.segments.len > 0) header_line.segments[0].column else 1,
+                    catalog.parser.unexpected_token.code,
+                    "found outside of a module",
+                    header_line.text,
+                );
+                for (unit.stmts) |stmt_node| {
+                    switch (stmt_node.node) {
+                        .assignment => self.diag_bag.set(
+                            if (stmt_node.source_line == 0) 1 else stmt_node.source_line,
+                            if (stmt_node.source_column == 0) 1 else stmt_node.source_column,
+                            catalog.parser.unexpected_token.code,
+                            "Unexpected assignment",
+                            stmt_node.source_text,
+                        ),
+                        else => {},
+                    }
+                }
+                if (self.index > 0) {
+                    const end_line = self.lines[self.index - 1];
+                    self.diag_bag.set(
+                        end_line.span.start_line,
+                        if (end_line.segments.len > 0) end_line.segments[0].column else 1,
+                        catalog.parser.unexpected_token.code,
+                        "Expecting END PROGRAM statement",
+                        end_line.text,
+                    );
+                }
+            }
             try units.append(unit);
             if (root_control.unitHasContains(unit)) {
                 self.pending_owner_name = unit.name;

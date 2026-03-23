@@ -213,6 +213,13 @@ pub fn parseSubmoduleContainer(self: anytype, units: *std.array_list.Managed(Pro
                 root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, line, lp, err);
                 return err;
             };
+            if (decl_node == .interface_block) {
+                const parent_decls = if (self.module_preludes.get(submodule_header.parent_name)) |parent_prelude|
+                    parent_prelude.decls
+                else
+                    &.{};
+                validateSubmoduleVisibleGenericSpecificReuse(self.diag_bag, decl_node.interface_block, parent_decls);
+            }
             try module_decls.append(decl_node);
             try module_decl_sources.append(root_diagnostics.sourceFromLine(line));
             continue;
@@ -541,6 +548,15 @@ pub fn parseProgramUnitBody(
                 !root_control.isEndIfLine(stmt_lp) and
                 !root_control.isEndBlockLine(stmt_lp))
             {
+                if (headerLineStartsModuleProcedure(header_line) and !isEndProcedureTokens(line, tokens)) {
+                    self.diag_bag.set(
+                        line.span.start_line,
+                        if (line.segments.len > 0) line.segments[0].column else 1,
+                        catalog.parser.unexpected_token.code,
+                        "Expecting END PROCEDURE statement",
+                        line.text,
+                    );
+                }
                 self.index += 1;
                 break;
             }
@@ -707,6 +723,69 @@ fn noteMissingSubmoduleProcedure(diag_bag: *parse_diag.Bag, header_line: logical
     );
 }
 
+fn validateSubmoduleVisibleGenericSpecificReuse(
+    diag_bag: *parse_diag.Bag,
+    interface_block: ast.InterfaceBlock,
+    visible_decls: []const Decl,
+) void {
+    if (interface_block.name == null) return;
+
+    for (interface_block.procedure_headers) |proc_header| {
+        if (!declsContainInterfaceProcedure(visible_decls, proc_header.name)) continue;
+        diag_bag.set(
+            if (proc_header.source.line == 0) 1 else proc_header.source.line,
+            if (proc_header.source.column == 0) 1 else proc_header.source.column,
+            catalog.semantic.duplicate_declaration.code,
+            "is already present in the interface",
+            proc_header.source.text,
+        );
+        return;
+    }
+    for (interface_block.specific_procedures, 0..) |proc_name, idx| {
+        if (!declsContainInterfaceProcedure(visible_decls, proc_name)) continue;
+        const source = interface_block.specific_procedure_sources[idx];
+        diag_bag.set(
+            if (source.line == 0) 1 else source.line,
+            if (source.column == 0) 1 else source.column,
+            catalog.semantic.duplicate_declaration.code,
+            "is already present in the interface",
+            source.text,
+        );
+        return;
+    }
+    for (interface_block.module_procedures, 0..) |proc_name, idx| {
+        if (!declsContainInterfaceProcedure(visible_decls, proc_name)) continue;
+        const source = interface_block.module_procedure_sources[idx];
+        diag_bag.set(
+            if (source.line == 0) 1 else source.line,
+            if (source.column == 0) 1 else source.column,
+            catalog.semantic.duplicate_declaration.code,
+            "is already present in the interface",
+            source.text,
+        );
+        return;
+    }
+}
+
+fn declsContainInterfaceProcedure(visible_decls: []const Decl, procedure_name: []const u8) bool {
+    for (visible_decls) |decl_node| {
+        if (decl_node != .interface_block) continue;
+        for (decl_node.interface_block.procedure_headers) |proc_header| {
+            if (std.ascii.eqlIgnoreCase(proc_header.name, procedure_name)) return true;
+        }
+        for (decl_node.interface_block.procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, procedure_name)) return true;
+        }
+        for (decl_node.interface_block.specific_procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, procedure_name)) return true;
+        }
+        for (decl_node.interface_block.module_procedures) |proc_name| {
+            if (std.ascii.eqlIgnoreCase(proc_name, procedure_name)) return true;
+        }
+    }
+    return false;
+}
+
 fn validateSubmoduleProcedureMatch(
     diag_bag: *parse_diag.Bag,
     unit_header_line: logical_line.LogicalLine,
@@ -757,7 +836,7 @@ fn validateSubmoduleProcedureMatch(
             unit_header_line.span.start_line,
             if (unit_header_line.segments.len > 0) unit_header_line.segments[0].column else 1,
             catalog.parser.unexpected_token.code,
-            "Mismatch in number of MODULE PROCEDURE formal",
+            "Mismatch in number of MODULE PROCEDURE formal arguments",
             unit_header_line.text,
         );
     }
@@ -765,6 +844,10 @@ fn validateSubmoduleProcedureMatch(
     validateProcedurePrefixMatch(diag_bag, unit_header_line, inherited.elemental, unit.elemental, "ELEMENTAL");
     validateProcedurePrefixMatch(diag_bag, unit_header_line, inherited.pure, unit.pure, "PURE");
     validateProcedurePrefixMatch(diag_bag, unit_header_line, inherited.recursive, unit.recursive, "RECURSIVE");
+
+    const parsed = root_interface.interfaceProcedureFromUnit(unit, .{}, .{});
+    validateSubmoduleDummyArgumentMatch(diag_bag, unit_header_line, inherited, parsed);
+    validateSubmoduleFunctionResultMatch(diag_bag, unit_header_line, inherited, parsed);
 }
 
 fn validateProcedurePrefixMatch(
@@ -791,6 +874,200 @@ fn validateProcedurePrefixMatch(
 
 fn formalCount(proc_header: ast.InterfaceProcedure) usize {
     return proc_header.args.len + proc_header.alt_return_dummy_count;
+}
+
+fn headerLineStartsModuleProcedure(line: logical_line.LogicalLine) bool {
+    const tokens = lexer.lexLogicalLine(std.heap.page_allocator, line) catch return false;
+    defer std.heap.page_allocator.free(tokens);
+    var lp = LineParser.init(line, tokens);
+    if (!lp.consumeKeyword("MODULE")) return false;
+    return lp.consumeKeyword("PROCEDURE");
+}
+
+const ProcedureEntityInfo = struct {
+    declared: bool = false,
+    type_spec: ?ast.ProcedureTypeSpec = null,
+    rank: usize = 0,
+    allocatable: bool = false,
+    pointer: bool = false,
+};
+
+fn validateSubmoduleDummyArgumentMatch(
+    diag_bag: *parse_diag.Bag,
+    unit_header_line: logical_line.LogicalLine,
+    inherited: ast.InterfaceProcedure,
+    parsed: ast.InterfaceProcedure,
+) void {
+    const shared_count = @min(inherited.args.len, parsed.args.len);
+    var idx: usize = 0;
+    while (idx < shared_count) : (idx += 1) {
+        const inherited_name = inherited.args[idx];
+        const parsed_name = parsed.args[idx];
+        if (!std.ascii.eqlIgnoreCase(inherited_name, parsed_name)) {
+            diag_bag.set(
+                unit_header_line.span.start_line,
+                if (unit_header_line.segments.len > 0) unit_header_line.segments[0].column else 1,
+                catalog.parser.unexpected_token.code,
+                "Mismatch in MODULE PROCEDURE formal argument names",
+                unit_header_line.text,
+            );
+            return;
+        }
+
+        const inherited_info = findProcedureEntityInfo(inherited, inherited_name, null);
+        var parsed_info = findProcedureEntityInfo(parsed, parsed_name, null);
+        if (!parsed_info.declared) parsed_info = inherited_info;
+        if (inherited_info.rank != parsed_info.rank) {
+            diag_bag.set(
+                unit_header_line.span.start_line,
+                if (unit_header_line.segments.len > 0) unit_header_line.segments[0].column else 1,
+                catalog.parser.unexpected_token.code,
+                "Rank mismatch in argument",
+                unit_header_line.text,
+            );
+            return;
+        }
+        if (!procedureTypeSpecMatches(inherited_info.type_spec, parsed_info.type_spec, inherited_name, parsed_name)) {
+            diag_bag.set(
+                unit_header_line.span.start_line,
+                if (unit_header_line.segments.len > 0) unit_header_line.segments[0].column else 1,
+                catalog.parser.unexpected_token.code,
+                "Type mismatch in argument",
+                unit_header_line.text,
+            );
+            return;
+        }
+    }
+}
+
+fn validateSubmoduleFunctionResultMatch(
+    diag_bag: *parse_diag.Bag,
+    unit_header_line: logical_line.LogicalLine,
+    inherited: ast.InterfaceProcedure,
+    parsed: ast.InterfaceProcedure,
+) void {
+    if (inherited.kind != .function or parsed.kind != .function) return;
+
+    const inherited_result = findProcedureEntityInfo(inherited, inherited.result_name orelse inherited.name, inherited.type_spec);
+    var parsed_result = findProcedureEntityInfo(parsed, parsed.result_name orelse parsed.name, parsed.type_spec);
+    if (!parsed_result.declared and parsed.type_spec == null) parsed_result = inherited_result;
+
+    if (inherited_result.rank != parsed_result.rank) {
+        diag_bag.set(
+            unit_header_line.span.start_line,
+            if (unit_header_line.segments.len > 0) unit_header_line.segments[0].column else 1,
+            catalog.parser.unexpected_token.code,
+            "Rank mismatch in function result",
+            unit_header_line.text,
+        );
+        return;
+    }
+    if (!procedureTypeSpecMatches(
+        inherited_result.type_spec,
+        parsed_result.type_spec,
+        inherited.result_name orelse inherited.name,
+        parsed.result_name orelse parsed.name,
+    )) {
+        diag_bag.set(
+            unit_header_line.span.start_line,
+            if (unit_header_line.segments.len > 0) unit_header_line.segments[0].column else 1,
+            catalog.parser.unexpected_token.code,
+            "Type mismatch in function result",
+            unit_header_line.text,
+        );
+        return;
+    }
+    if (inherited_result.allocatable != parsed_result.allocatable) {
+        diag_bag.set(
+            unit_header_line.span.start_line,
+            if (unit_header_line.segments.len > 0) unit_header_line.segments[0].column else 1,
+            catalog.parser.unexpected_token.code,
+            "ALLOCATABLE attribute mismatch in function result",
+            unit_header_line.text,
+        );
+    }
+}
+
+fn findProcedureEntityInfo(
+    proc_header: ast.InterfaceProcedure,
+    entity_name: []const u8,
+    fallback_type_spec: ?ast.ProcedureTypeSpec,
+) ProcedureEntityInfo {
+    var info: ProcedureEntityInfo = .{};
+    for (proc_header.decls) |decl_node| {
+        switch (decl_node) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, entity_name)) continue;
+                    info.declared = true;
+                    info.type_spec = .{
+                        .type_kind = type_decl.type_kind,
+                        .kind_selector = type_decl.kind_selector,
+                        .derived_type_name = type_decl.derived_type_name,
+                        .polymorphic = type_decl.polymorphic,
+                    };
+                    info.rank = item.dims.len;
+                    info.allocatable = type_decl.allocatable;
+                    info.pointer = type_decl.pointer;
+                }
+            },
+            .procedure => |procedure_decl| {
+                for (procedure_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, entity_name)) continue;
+                    info.declared = true;
+                    info.type_spec = switch (procedure_decl.interface) {
+                        .type_spec => |type_spec| type_spec,
+                        else => info.type_spec,
+                    };
+                    info.rank = item.dims.len;
+                    info.pointer = procedure_decl.pointer;
+                }
+            },
+            .dimension => |dimension_decl| {
+                for (dimension_decl.items) |item| {
+                    if (!std.ascii.eqlIgnoreCase(item.name, entity_name)) continue;
+                    info.declared = true;
+                    info.rank = item.dims.len;
+                    info.allocatable = info.allocatable or dimension_decl.allocatable;
+                    info.pointer = info.pointer or dimension_decl.pointer;
+                }
+            },
+            else => {},
+        }
+    }
+    if (info.type_spec == null) info.type_spec = fallback_type_spec orelse implicitProcedureTypeSpec(entity_name);
+    return info;
+}
+
+fn implicitProcedureTypeSpec(name: []const u8) ast.ProcedureTypeSpec {
+    const first = if (name.len == 0) 'a' else std.ascii.toLower(name[0]);
+    const type_kind: ast.TypeKind = if (first >= 'i' and first <= 'n') .integer else .real;
+    return .{
+        .type_kind = type_kind,
+        .kind_selector = null,
+        .derived_type_name = null,
+        .polymorphic = false,
+    };
+}
+
+fn procedureTypeSpecMatches(
+    inherited: ?ast.ProcedureTypeSpec,
+    actual: ?ast.ProcedureTypeSpec,
+    inherited_name: []const u8,
+    actual_name: []const u8,
+) bool {
+    const lhs = inherited orelse implicitProcedureTypeSpec(inherited_name);
+    const rhs = actual orelse implicitProcedureTypeSpec(actual_name);
+    if (lhs.type_kind != rhs.type_kind) return false;
+    if (lhs.polymorphic != rhs.polymorphic) return false;
+    if ((lhs.kind_selector == null) != (rhs.kind_selector == null)) return false;
+    if (lhs.type_kind == .derived) {
+        if (lhs.derived_type_name == null or rhs.derived_type_name == null) {
+            return lhs.derived_type_name == null and rhs.derived_type_name == null;
+        }
+        if (!std.ascii.eqlIgnoreCase(lhs.derived_type_name.?, rhs.derived_type_name.?)) return false;
+    }
+    return true;
 }
 
 fn noteInvalidModuleProcedureInterfaceBodyLines(self: anytype, is_module_interface_body: bool, start_index: usize, end_index: usize) void {
