@@ -104,6 +104,10 @@ pub const DerivedBindingInfo = struct {
 
 pub const IntrinsicWrapperKind = enum {
     iabs,
+    dcos,
+    dcosh,
+    dexp,
+    conjg,
 };
 
 pub const StringPool = struct {

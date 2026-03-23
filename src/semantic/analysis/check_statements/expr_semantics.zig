@@ -257,6 +257,7 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
                     }
                 }
                 if (resolve_symbols.lookupKnownProcedureSig(self, call.name) == null and
+                    procedure_interfaces.visibleSingleTargetGenericSig(self, call.name) == null and
                     resolve_symbols.lookupKnownFunctionResolvedSpec(self, call.name) == null and
                     procedure_calls.hasVisibleGenericInterface(self, call.name))
                 {

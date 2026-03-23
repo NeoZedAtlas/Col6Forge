@@ -63,7 +63,8 @@ pub fn checkProcedureActualArgsForCall(
     args: []const ast.CallArg,
     comptime deps: anytype,
 ) CheckError!void {
-    const sig = resolve_symbols.lookupKnownProcedureSig(self, callee_name) orelse return;
+    const sig = resolve_symbols.lookupKnownProcedureSig(self, callee_name) orelse
+        procedure_interfaces.visibleSingleTargetGenericSig(self, callee_name) orelse return;
     if (sig.args.len == 0) return;
     var formal_idx: usize = 0;
     for (args) |arg| {
@@ -81,7 +82,8 @@ pub fn checkProcedureActualArgsForExprCall(
     args: []*ast.Expr,
     comptime deps: anytype,
 ) CheckError!void {
-    const sig = resolve_symbols.lookupKnownProcedureSig(self, callee_name) orelse return;
+    const sig = resolve_symbols.lookupKnownProcedureSig(self, callee_name) orelse
+        procedure_interfaces.visibleSingleTargetGenericSig(self, callee_name) orelse return;
     if (sig.args.len == 0) return;
     const count = @min(sig.args.len, args.len);
     var idx: usize = 0;
@@ -210,7 +212,7 @@ pub fn checkKnownProcedureCallArity(
         if (sym.storage == .dummy) return;
     }
 
-    if (resolve_symbols.lookupKnownProcedureSig(self, name)) |sig| {
+    if (resolve_symbols.lookupKnownProcedureSig(self, name) orelse procedure_interfaces.visibleSingleTargetGenericSig(self, name)) |sig| {
         if (is_call_stmt and sig.kind != .subroutine) {
             return emitNamedProcedureDiagnostic(self, name, error.InvalidArgumentCount, "actual argument is not a subroutine");
         }

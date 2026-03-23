@@ -42,6 +42,16 @@ pub fn appendGenericInterfaceSigs(
     }
 }
 
+pub fn visibleSingleTargetGenericSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_name = decl.interface_block.name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
+        return singleTargetGenericInterfaceSig(self, decl.interface_block);
+    }
+    return null;
+}
+
 pub fn genericProcedureSigAmbiguous(a: context.Context.ProcedureSig, b: context.Context.ProcedureSig) bool {
     if (a.kind != b.kind) return false;
     if (genericRequiredArgCount(a) != genericRequiredArgCount(b)) return false;
@@ -113,6 +123,38 @@ pub fn interfaceBlockHasProcedureHeader(interface_block: ast.InterfaceBlock, nam
         if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
     }
     return false;
+}
+
+fn singleTargetGenericInterfaceSig(
+    self: *context.Context,
+    interface_block: ast.InterfaceBlock,
+) ?context.Context.ProcedureSig {
+    const total = interface_block.module_procedures.len +
+        interface_block.specific_procedures.len +
+        interface_block.procedures.len +
+        interface_block.procedure_headers.len;
+    if (total != 1) return null;
+
+    if (interface_block.procedure_headers.len == 1) {
+        return resolve_symbols.lookupKnownProcedureSig(self, interface_block.procedure_headers[0].name);
+    }
+    if (interface_block.module_procedures.len == 1) {
+        const proc_name = interface_block.module_procedures[0];
+        if (resolve_symbols.lookupKnownProcedureSig(self, proc_name)) |sig| return sig;
+        const source = interface_block.module_procedure_sources[0];
+        if (source.owner_name) |owner_name| {
+            const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, proc_name }) catch return null;
+            return resolve_symbols.lookupKnownProcedureSig(self, qualified);
+        }
+        return null;
+    }
+    if (interface_block.specific_procedures.len == 1) {
+        return resolve_symbols.lookupKnownProcedureSig(self, interface_block.specific_procedures[0]);
+    }
+    if (interface_block.procedures.len == 1) {
+        return resolve_symbols.lookupKnownProcedureSig(self, interface_block.procedures[0]);
+    }
+    return null;
 }
 
 fn genericRequiredArgCount(sig: context.Context.ProcedureSig) usize {

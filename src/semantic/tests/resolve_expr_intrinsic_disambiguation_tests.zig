@@ -288,3 +288,47 @@ test "resolve_expr rejects scalar section-like syntax for non-character scalar" 
 
     try testing.expectError(error.InvalidSubscript, analyzeProgram(arena.allocator(), program));
 }
+
+test "resolve_expr visible single-target generic can shadow intrinsic name unless current scope marks INTRINSIC" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    const source =
+        "      MODULE M\n" ++
+        "        TYPE INT\n" ++
+        "          INTEGER VAL\n" ++
+        "        END TYPE INT\n" ++
+        "        INTERFACE ICHAR\n" ++
+        "          MODULE PROCEDURE UCH\n" ++
+        "        END INTERFACE\n" ++
+        "      CONTAINS\n" ++
+        "        FUNCTION UCH(C)\n" ++
+        "          CHARACTER*1 C\n" ++
+        "          TYPE(INT) UCH\n" ++
+        "          INTRINSIC ICHAR\n" ++
+        "          UCH%VAL = 127 - ICHAR(C)\n" ++
+        "        END FUNCTION UCH\n" ++
+        "      END MODULE M\n" ++
+        "      PROGRAM P\n" ++
+        "        USE M\n" ++
+        "        PRINT *, ICHAR('~')\n" ++
+        "      END PROGRAM P\n";
+
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    try testing.expect(sem.units.len >= 2);
+    const caller = sem.units[sem.units.len - 1];
+    var found = false;
+    for (caller.symbols) |sym| {
+        if (!std.ascii.eqlIgnoreCase(sym.name, "ICHAR")) continue;
+        found = true;
+        try testing.expect(!sym.is_intrinsic);
+        try testing.expect(sym.kind == .function);
+    }
+    try testing.expect(found);
+}

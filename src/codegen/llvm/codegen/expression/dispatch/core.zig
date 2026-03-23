@@ -240,6 +240,25 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
             if (ctx.getStatementFunction(call_or_sub.name)) |def| {
                 return emitStatementFunctionCall(ctx, builder, call_or_sub.name, def, call_or_sub.args);
             }
+            if (!sym.is_intrinsic) {
+                if (resolution.resolveSingleTargetGenericProcedure(ctx, call_or_sub.name)) |resolved_generic| {
+                    const result_spec = resolved_generic.sig.result_type_spec;
+                    const ret_ty: ir.IRType = if (resolved_generic.sig.is_pointer)
+                        .ptr
+                    else if (result_spec) |spec|
+                        (if (spec.lowered_kind == .derived or spec.lowered_kind == .character) .ptr else ctx.typeFromKind(spec.lowered_kind))
+                    else
+                        ctx.typeFromKind(sym.loweredKind());
+                    if (result_spec != null and result_spec.?.lowered_kind == .character) {
+                        const result_len = result_spec.?.char_len orelse 1;
+                        const fn_name = try resolution.ensureExternalDeclForResolvedCall(ctx, resolved_generic.lookup_name, resolved_generic.ir_name, .void, call_or_sub.args, true);
+                        const ptr = try call.emitCharacterCall(ctx, builder, fn_name, result_len, call_or_sub.args);
+                        return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
+                    }
+                    const fn_name = try resolution.ensureExternalDeclForResolvedCall(ctx, resolved_generic.lookup_name, resolved_generic.ir_name, ret_ty, call_or_sub.args, false);
+                    return call.emitCall(ctx, builder, fn_name, ret_ty, call_or_sub.args, false);
+                }
+            }
             if (sym.is_intrinsic) {
                 return intrinsics.emitIntrinsicCall(ctx, builder, call_or_sub.name, call_or_sub.args);
             }

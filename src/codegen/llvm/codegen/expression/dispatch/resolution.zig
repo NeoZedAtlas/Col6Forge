@@ -101,11 +101,23 @@ pub fn binaryDefinedOperatorName(op: ast.BinaryOp) ?[]const u8 {
 }
 
 pub fn resolveSingleTargetGenericProcedureName(ctx: *Context, generic_name: []const u8) ?[]const u8 {
+    const resolved = resolveSingleTargetGenericProcedure(ctx, generic_name) orelse return null;
+    return resolved.procedure_name;
+}
+
+pub const ResolvedGenericProcedure = struct {
+    procedure_name: []const u8,
+    lookup_name: []const u8,
+    ir_name: []const u8,
+    sig: ast.sema.KnownProcedureSig,
+};
+
+pub fn resolveSingleTargetGenericProcedure(ctx: *Context, generic_name: []const u8) ?ResolvedGenericProcedure {
     for (ctx.unit.decls) |decl| {
         if (decl != .interface_block) continue;
         const interface_name = decl.interface_block.name orelse continue;
         if (!std.ascii.eqlIgnoreCase(interface_name, generic_name)) continue;
-        return singleTargetInterfaceProcedureName(decl.interface_block);
+        return singleTargetInterfaceProcedure(ctx, decl.interface_block);
     }
     return null;
 }
@@ -260,6 +272,82 @@ fn singleTargetInterfaceProcedureName(interface_block: anytype) ?[]const u8 {
     if (specific_count == 1) return interface_block.specific_procedures[0];
     if (procedure_count == 1) return interface_block.procedures[0];
     return interface_block.procedure_headers[0].name;
+}
+
+fn singleTargetInterfaceProcedure(ctx: *Context, interface_block: anytype) ?ResolvedGenericProcedure {
+    const total = interface_block.module_procedures.len + interface_block.specific_procedures.len + interface_block.procedures.len + interface_block.procedure_headers.len;
+    if (total != 1) return null;
+
+    if (interface_block.module_procedures.len == 1) {
+        const proc_name = interface_block.module_procedures[0];
+        const source = interface_block.module_procedure_sources[0];
+        const owner_name = source.owner_name;
+        const sig = lookupInterfaceProcedureSig(ctx, proc_name, owner_name) orelse return null;
+        const lookup_name = if (owner_name) |owner|
+            std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ owner, proc_name }) catch return null
+        else
+            proc_name;
+        const ir_name = if (owner_name) |owner|
+            utils.mangleProcedureUnitName(ctx.allocator, .{
+                .kind = sig.kind,
+                .name = proc_name,
+                .owner_name = owner,
+                .owner_kind = .module,
+                .args = &.{},
+                .decls = &.{},
+                .stmts = &.{},
+            }) catch return null
+        else
+            (ctx.mangleName(proc_name) catch return null);
+        return .{
+            .procedure_name = proc_name,
+            .lookup_name = lookup_name,
+            .ir_name = ir_name,
+            .sig = sig,
+        };
+    }
+    if (interface_block.specific_procedures.len == 1) {
+        const proc_name = interface_block.specific_procedures[0];
+        const sig = ctx.lookupKnownProcedureSig(proc_name) orelse return null;
+        const ir_name = ctx.mangleName(proc_name) catch return null;
+        return .{
+            .procedure_name = proc_name,
+            .lookup_name = proc_name,
+            .ir_name = ir_name,
+            .sig = sig,
+        };
+    }
+    if (interface_block.procedures.len == 1) {
+        const proc_name = interface_block.procedures[0];
+        const sig = ctx.lookupKnownProcedureSig(proc_name) orelse return null;
+        const ir_name = ctx.mangleName(proc_name) catch return null;
+        return .{
+            .procedure_name = proc_name,
+            .lookup_name = proc_name,
+            .ir_name = ir_name,
+            .sig = sig,
+        };
+    }
+    if (interface_block.procedure_headers.len == 1) {
+        const proc_name = interface_block.procedure_headers[0].name;
+        const sig = ctx.lookupKnownProcedureSig(proc_name) orelse return null;
+        const ir_name = ctx.mangleName(proc_name) catch return null;
+        return .{
+            .procedure_name = proc_name,
+            .lookup_name = proc_name,
+            .ir_name = ir_name,
+            .sig = sig,
+        };
+    }
+    return null;
+}
+
+fn lookupInterfaceProcedureSig(ctx: *Context, proc_name: []const u8, owner_name: ?[]const u8) ?ast.sema.KnownProcedureSig {
+    if (owner_name) |owner| {
+        const qualified = std.fmt.allocPrint(ctx.allocator, "{s}::{s}", .{ owner, proc_name }) catch return null;
+        if (ctx.lookupKnownProcedureSig(qualified)) |sig| return sig;
+    }
+    return ctx.lookupKnownProcedureSig(proc_name);
 }
 
 fn promoteNumericKind(left: ast.TypeKind, right: ast.TypeKind) ast.TypeKind {

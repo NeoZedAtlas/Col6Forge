@@ -847,6 +847,47 @@ test "emitModuleToWriter supports SIZE with KIND parameter on array expressions"
     try testing.expect(std.mem.indexOf(u8, output, "i64") != null);
 }
 
+test "emitModuleToWriter lowers intrinsic procedure actuals through wrappers" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine test_d(fn, val, res)\n" ++
+        "  double precision fn\n" ++
+        "  double precision val, res\n" ++
+        "  print *, fn(val), res\n" ++
+        "end subroutine\n" ++
+        "subroutine test_c(fn, val, res)\n" ++
+        "  complex fn\n" ++
+        "  complex val, res\n" ++
+        "  print *, fn(val), res\n" ++
+        "end subroutine\n" ++
+        "program specifics\n" ++
+        "  intrinsic dcos\n" ++
+        "  intrinsic conjg\n" ++
+        "  call test_d(dcos, 1d0, dcos(1d0))\n" ++
+        "  call test_c(conjg, (1.0,1.0), conjg((1.0,1.0)))\n" ++
+        "end program\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "intrinsic_proc_actuals.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "define double @__cf_intrinsic_dcos") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "define { float, float } @__cf_intrinsic_conjg") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "ptr @__cf_intrinsic_dcos") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "ptr @__cf_intrinsic_conjg") != null);
+}
+
 test "emitModuleToWriter lowers contiguous section assignment from whole array with copy loop" {
     const testing = std.testing;
     const allocator = testing.allocator;

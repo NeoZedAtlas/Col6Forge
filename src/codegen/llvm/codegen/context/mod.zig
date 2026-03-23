@@ -531,6 +531,37 @@ pub const Context = struct {
             }
             return wrapper;
         }
+        if (std.ascii.eqlIgnoreCase(name, "DCOS")) {
+            const wrapper = "__cf_intrinsic_dcos";
+            if (!self.intrinsic_wrappers.contains(wrapper)) {
+                _ = try self.ensureDeclRaw("cos", .f64, &[_]IRType{.f64}, false);
+                try self.intrinsic_wrappers.put(wrapper, .dcos);
+            }
+            return wrapper;
+        }
+        if (std.ascii.eqlIgnoreCase(name, "DCOSH")) {
+            const wrapper = "__cf_intrinsic_dcosh";
+            if (!self.intrinsic_wrappers.contains(wrapper)) {
+                _ = try self.ensureDeclRaw("cosh", .f64, &[_]IRType{.f64}, false);
+                try self.intrinsic_wrappers.put(wrapper, .dcosh);
+            }
+            return wrapper;
+        }
+        if (std.ascii.eqlIgnoreCase(name, "DEXP")) {
+            const wrapper = "__cf_intrinsic_dexp";
+            if (!self.intrinsic_wrappers.contains(wrapper)) {
+                _ = try self.ensureDeclRaw("exp", .f64, &[_]IRType{.f64}, false);
+                try self.intrinsic_wrappers.put(wrapper, .dexp);
+            }
+            return wrapper;
+        }
+        if (std.ascii.eqlIgnoreCase(name, "CONJG")) {
+            const wrapper = "__cf_intrinsic_conjg";
+            if (!self.intrinsic_wrappers.contains(wrapper)) {
+                try self.intrinsic_wrappers.put(wrapper, .conjg);
+            }
+            return wrapper;
+        }
         return null;
     }
 

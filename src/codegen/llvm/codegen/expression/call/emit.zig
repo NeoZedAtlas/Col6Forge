@@ -171,7 +171,7 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
     switch (expr.*) {
         .identifier => |name| {
             if (ctx.findSymbol(name)) |sym| {
-                if (!sym.type_explicit and !sym.is_external) {
+                if (sym.is_intrinsic or (!sym.type_explicit and !sym.is_external)) {
                     if (try ctx.ensureIntrinsicWrapper(name)) |wrapper| {
                         const ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{wrapper});
                         return .{ .ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true } };
@@ -200,6 +200,10 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
                     const ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{mangled});
                     return .{ .ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true } };
                 }
+            }
+            if (try ctx.ensureIntrinsicWrapper(name)) |wrapper| {
+                const ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{wrapper});
+                return .{ .ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true } };
             }
             return .{ .ptr = try ctx.getPointer(name) };
         },

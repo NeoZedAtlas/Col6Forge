@@ -23,6 +23,7 @@ pub fn resolveCallOrSubscriptExpr(
     var sym = self.symbols.items[idx];
     var kind: ResolvedRefKind = .unknown;
     var resolved_spec = sym.type_spec;
+    const visible_generic_sig = visibleSingleTargetGenericSig(self, call.name);
     if (structureConstructorTypeSpec(self, call.name, sym)) |ctor_spec| {
         const type_name = ctor_spec.derived_type_name orelse call.name;
         if (isAbstractDerivedType(self, type_name)) {
@@ -62,7 +63,8 @@ pub fn resolveCallOrSubscriptExpr(
             sym.kind == .variable and
             sym.dims.len == 0 and
             call.args.len > 0 and
-            symbols_mod.isIntrinsicName(call.name))
+            symbols_mod.isIntrinsicName(call.name) and
+            visible_generic_sig == null)
         {
             sym.is_intrinsic = true;
             self.symbols.items[idx] = sym;
@@ -76,13 +78,16 @@ pub fn resolveCallOrSubscriptExpr(
         }
         if (sym.dims.len > 0) {
             kind = .subscript;
-        } else if (symbols_mod.lookupKnownProcedureSig(self, call.name)) |sig| {
+        } else if (symbols_mod.lookupKnownProcedureSig(self, call.name) orelse visible_generic_sig) |sig| {
             if (sig.kind == .function) {
                 kind = .call;
                 if (sym.kind == .variable) sym.kind = .function;
                 if (!sym.is_intrinsic and sym.storage != .dummy) sym.is_external = true;
                 if (!sym.type_explicit) {
-                    if (symbols_mod.lookupKnownFunctionResolvedSpec(self, call.name)) |fn_spec| {
+                    if (sig.result_type_spec) |fn_spec| {
+                        sym.applyTypeSpec(fn_spec);
+                        sym.type_explicit = true;
+                    } else if (symbols_mod.lookupKnownFunctionResolvedSpec(self, call.name)) |fn_spec| {
                         sym.applyTypeSpec(fn_spec);
                         sym.type_explicit = true;
                     }
@@ -208,7 +213,7 @@ pub fn exprRankForCallOrSubscript(
     const kind: ResolvedRefKind = deps.refKindIndex(self, @intFromPtr(expr_node)) orelse
         (if (sym.dims.len > 0) .subscript else .call);
     if (kind == .subscript) return 0;
-    if (symbols_mod.lookupKnownProcedureSig(self, call.name)) |sig| return sig.result_rank;
+    if (symbols_mod.lookupKnownProcedureSig(self, call.name) orelse visibleSingleTargetGenericSig(self, call.name)) |sig| return sig.result_rank;
     return sym.dims.len;
 }
 
@@ -241,6 +246,9 @@ pub fn exprTypeSpecForCallOrSubscript(
     const idx = try symbols_mod.ensureSymbol(self, call.name);
     const sym = self.symbols.items[idx];
     if (sym.is_intrinsic) return intrinsicReturnType(self, call.name, sym.type_spec, call.args, deps);
+    if (visibleSingleTargetGenericSig(self, call.name)) |sig| {
+        if (sig.result_type_spec) |spec| return spec;
+    }
     return sym.type_spec;
 }
 
@@ -324,6 +332,48 @@ fn hasProcedureActualExprArgs(self: *context.Context, args: []*ast.Expr) bool {
         }
     }
     return false;
+}
+
+fn visibleSingleTargetGenericSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_name = decl.interface_block.name orelse continue;
+        if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
+        return singleTargetGenericInterfaceSig(self, decl.interface_block);
+    }
+    return null;
+}
+
+fn singleTargetGenericInterfaceSig(
+    self: *context.Context,
+    interface_block: ast.InterfaceBlock,
+) ?context.Context.ProcedureSig {
+    const total = interface_block.module_procedures.len +
+        interface_block.specific_procedures.len +
+        interface_block.procedures.len +
+        interface_block.procedure_headers.len;
+    if (total != 1) return null;
+
+    if (interface_block.procedure_headers.len == 1) {
+        return symbols_mod.lookupKnownProcedureSig(self, interface_block.procedure_headers[0].name);
+    }
+    if (interface_block.module_procedures.len == 1) {
+        const proc_name = interface_block.module_procedures[0];
+        if (symbols_mod.lookupKnownProcedureSig(self, proc_name)) |sig| return sig;
+        const source = interface_block.module_procedure_sources[0];
+        if (source.owner_name) |owner_name| {
+            const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, proc_name }) catch return null;
+            return symbols_mod.lookupKnownProcedureSig(self, qualified);
+        }
+        return null;
+    }
+    if (interface_block.specific_procedures.len == 1) {
+        return symbols_mod.lookupKnownProcedureSig(self, interface_block.specific_procedures[0]);
+    }
+    if (interface_block.procedures.len == 1) {
+        return symbols_mod.lookupKnownProcedureSig(self, interface_block.procedures[0]);
+    }
+    return null;
 }
 
 fn requiresExplicitInterfaceForActuals(
