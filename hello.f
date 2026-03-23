@@ -1,0 +1,3 @@
+      PROGRAM HELLO
+      WRITE (*,*) 'HELLO, COL6FORGE'
+      END
