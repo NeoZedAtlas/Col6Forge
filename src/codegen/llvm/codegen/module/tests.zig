@@ -819,6 +819,34 @@ test "emitModuleToWriter supports SIZE over whole-array class component in speci
     try testing.expect(std.mem.indexOf(u8, output, "alloca [10 x float]") != null);
 }
 
+test "emitModuleToWriter supports SIZE with KIND parameter on array expressions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test_64\n" ++
+        "  implicit none\n" ++
+        "  integer, parameter :: long = selected_int_kind(18)\n" ++
+        "  integer, dimension(:), allocatable :: array\n" ++
+        "  print *, size(array, kind=long)\n" ++
+        "end program test_64\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "size_kind_arg.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "i64") != null);
+}
+
 test "emitModuleToWriter lowers contiguous section assignment from whole array with copy loop" {
     const testing = std.testing;
     const allocator = testing.allocator;

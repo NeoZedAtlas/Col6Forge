@@ -131,8 +131,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 };
                 const const_val = check_const.coerceParameterValue(
                     self,
-                    sym.loweredKind(),
-                    sym.effectiveCharLen(),
+                    sym.type_spec,
                     assigned_value,
                 ) catch |err| {
                     if (err == error.ParameterTypeMismatch) {
@@ -869,8 +868,7 @@ pub fn applyTypeDeclParameter(self: *context.Context, decl: ast.TypeDecl) !void 
         };
         const const_val = check_const.coerceParameterValue(
             self,
-            sym.loweredKind(),
-            sym.effectiveCharLen(),
+            sym.type_spec,
             assigned_value,
         ) catch |err| {
             if (err == error.ParameterTypeMismatch) {

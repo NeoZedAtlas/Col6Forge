@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../../input.zig");
 const common = @import("../../common.zig");
 const utils = @import("../../utils.zig");
+const evaluator = @import("../../../../../semantic/evaluator.zig");
 const binary = @import("../binary.zig");
 const casting = @import("../casting.zig");
 const dispatch = @import("../dispatch/mod.zig");
@@ -593,7 +594,7 @@ fn lookupArraySubjectForSize(ctx: *Context, expr: *Expr) ?SizeArraySubject {
 }
 
 pub fn emitIntrinsicSize(ctx: *Context, builder: anytype, args: []*Expr) EmitError!ValueRef {
-    if (args.len < 1 or args.len > 2) return error.InvalidIntrinsicCall;
+    if (args.len < 1 or args.len > 3) return error.InvalidIntrinsicCall;
     const subject = lookupArraySubjectForSize(ctx, args[0]) orelse return error.UnsupportedIntrinsicType;
     const rank: usize = switch (subject) {
         .symbol => |sym| sym.dims.len,
@@ -603,13 +604,26 @@ pub fn emitIntrinsicSize(ctx: *Context, builder: anytype, args: []*Expr) EmitErr
             break :blk component.dims.len;
         },
     };
+    var requested_dim: ?usize = null;
+    var result_ty = ctx.defaultIntegerIRType();
+
+    if (args.len == 2) {
+        const second = evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType;
+        if (second >= 1 and second <= rank) {
+            requested_dim = @intCast(second - 1);
+        } else {
+            result_ty = integerKindToIRType(second) orelse return error.UnsupportedIntrinsicType;
+        }
+    } else if (args.len == 3) {
+        const dim_value = evalConstIntArg(ctx, args[1]) orelse return error.UnsupportedIntrinsicType;
+        if (dim_value < 1 or dim_value > rank) return error.InvalidIntrinsicCall;
+        requested_dim = @intCast(dim_value - 1);
+        const kind_value = evalConstIntArg(ctx, args[2]) orelse return error.UnsupportedIntrinsicType;
+        result_ty = integerKindToIRType(kind_value) orelse return error.UnsupportedIntrinsicType;
+    }
 
     var value = blk: {
-        if (args.len == 2) {
-            const dim_value = intLiteralValue(args[1]) orelse return error.UnsupportedIntrinsicType;
-            if (dim_value < 1) return error.InvalidIntrinsicCall;
-            const dim_index: usize = @intCast(dim_value - 1);
-            if (dim_index >= rank) return error.InvalidIntrinsicCall;
+        if (requested_dim) |dim_index| {
             break :blk switch (subject) {
                 .symbol => |sym| try emitSymbolDimExtentValue(ctx, builder, sym, dim_index),
                 .component => |comp| try emitComponentDimExtentValue(ctx, builder, comp, dim_index),
@@ -627,10 +641,47 @@ pub fn emitIntrinsicSize(ctx: *Context, builder: anytype, args: []*Expr) EmitErr
         }
         break :blk total;
     };
-    if (value.ty != ctx.defaultIntegerIRType()) {
-        value = try casting.coerce(ctx, builder, value, ctx.defaultIntegerIRType());
+    if (value.ty != result_ty) {
+        value = try casting.coerce(ctx, builder, value, result_ty);
     }
     return value;
+}
+
+fn evalConstIntArg(ctx: *Context, expr: *Expr) ?i64 {
+    const value = evaluator.evalConst(expr, .{
+        .ctx = ctx,
+        .resolveFn = resolveCodegenConstValue,
+        .arrayExtentFn = resolveCodegenArrayExtent,
+    }) catch return null;
+    return switch (value orelse return null) {
+        .integer => |v| v,
+        else => null,
+    };
+}
+
+fn resolveCodegenConstValue(raw_ctx: *anyopaque, name: []const u8) ?ast.sema.ConstValue {
+    const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
+    const sym = ctx.findSymbol(name) orelse return null;
+    if (sym.kind != .parameter) return null;
+    return sym.const_value;
+}
+
+fn resolveCodegenArrayExtent(raw_ctx: *anyopaque, name: []const u8, dim: ?usize) ?i64 {
+    const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
+    const sym = ctx.findSymbol(name) orelse return null;
+    if (sym.dims.len == 0) return null;
+    const dims = if (dim) |dim_index|
+        sym.dims[dim_index .. dim_index + 1]
+    else
+        sym.dims;
+    const extent = common.arrayElementCount(ctx.sem, dims) catch return null;
+    return @intCast(extent);
+}
+
+fn integerKindToIRType(kind_value: i64) ?IRType {
+    if (kind_value <= 0) return null;
+    if (kind_value >= 8) return .i64;
+    return .i32;
 }
 
 pub fn emitIntrinsicAllocated(args: []*Expr) EmitError!ValueRef {

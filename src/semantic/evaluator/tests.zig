@@ -17,6 +17,22 @@ fn testResolveConst(_: *anyopaque, name: []const u8) ?@import("../symbol/mod.zig
     return null;
 }
 
+fn testMeasureExpr(_: *anyopaque, expr: *const ast.Expr, measure: evaluator.ExprMeasureKind) ?i64 {
+    return switch (measure) {
+        .storage_size_bits => switch (expr.*) {
+            .literal => |lit| switch (lit.kind) {
+                .string => 16,
+                else => null,
+            },
+            else => null,
+        },
+        .sizeof_bytes, .c_sizeof_bytes => switch (expr.*) {
+            .identifier => |name| if (std.ascii.eqlIgnoreCase(name, "mpi_status_c_obj")) 4 else null,
+            else => null,
+        },
+    };
+}
+
 test "const call dispatch recognizes DATAN alias" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -87,6 +103,27 @@ test "const call dispatch handles SELECTED_REAL_KIND" {
 
     const call = try a.create(ast.Expr);
     call.* = .{ .call_or_subscript = .{ .name = "selected_real_kind", .args = args } };
+
+    const value = (try evalConst(call, null)) orelse return error.TestExpectedEqual;
+    switch (value) {
+        .integer => |v| try testing.expectEqual(@as(i64, 8), v),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "const call dispatch handles SELECTED_INT_KIND" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const precision = try a.create(ast.Expr);
+    precision.* = .{ .literal = .{ .kind = .integer, .text = "18" } };
+    const args = try a.alloc(*ast.Expr, 1);
+    args[0] = precision;
+
+    const call = try a.create(ast.Expr);
+    call.* = .{ .call_or_subscript = .{ .name = "selected_int_kind", .args = args } };
 
     const value = (try evalConst(call, null)) orelse return error.TestExpectedEqual;
     switch (value) {
@@ -171,6 +208,46 @@ test "const call dispatch handles INT CEILING LOG REAL chain" {
     const value = (try evalConst(int_call, resolver)) orelse return error.TestExpectedEqual;
     switch (value) {
         .integer => |v| try testing.expectEqual(@as(i64, 6), v),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "const call dispatch handles STORAGE_SIZE and C_SIZEOF via expr measure callback" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const string_arg = try a.create(ast.Expr);
+    string_arg.* = .{ .literal = .{ .kind = .string, .text = "'aa'" } };
+    const storage_args = try a.alloc(*ast.Expr, 1);
+    storage_args[0] = string_arg;
+    const storage_call = try a.create(ast.Expr);
+    storage_call.* = .{ .call_or_subscript = .{ .name = "storage_size", .args = storage_args } };
+
+    const ident_arg = try a.create(ast.Expr);
+    ident_arg.* = .{ .identifier = "MPI_Status_C_obj" };
+    const sizeof_args = try a.alloc(*ast.Expr, 1);
+    sizeof_args[0] = ident_arg;
+    const sizeof_call = try a.create(ast.Expr);
+    sizeof_call.* = .{ .call_or_subscript = .{ .name = "c_sizeof", .args = sizeof_args } };
+
+    var sentinel: u8 = 0;
+    const resolver = ConstResolver{
+        .ctx = &sentinel,
+        .resolveFn = nullResolveConst,
+        .exprMeasureFn = testMeasureExpr,
+    };
+
+    const storage_value = (try evalConst(storage_call, resolver)) orelse return error.TestExpectedEqual;
+    switch (storage_value) {
+        .integer => |v| try testing.expectEqual(@as(i64, 16), v),
+        else => return error.TestExpectedEqual,
+    }
+
+    const sizeof_value = (try evalConst(sizeof_call, resolver)) orelse return error.TestExpectedEqual;
+    switch (sizeof_value) {
+        .integer => |v| try testing.expectEqual(@as(i64, 4), v),
         else => return error.TestExpectedEqual,
     }
 }

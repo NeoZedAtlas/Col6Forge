@@ -2,8 +2,10 @@ const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const symbols = @import("../symbol/mod.zig");
 const literals = @import("literals.zig");
+const evaluator = @import("../evaluator.zig");
 
 const ConstValue = symbols.ConstValue;
+const ExprMeasureKind = evaluator.ExprMeasureKind;
 
 const ConstCallKind = enum {
     len,
@@ -19,8 +21,12 @@ const ConstCallKind = enum {
     min,
     max,
     selected_real_kind,
+    selected_int_kind,
     kind,
     bit_size,
+    storage_size,
+    sizeof,
+    c_sizeof,
     real,
     log,
     ceiling,
@@ -44,8 +50,12 @@ const ConstCallMap = std.StaticStringMap(ConstCallKind).initComptime(.{
     .{ "MIN", .min },
     .{ "MAX", .max },
     .{ "SELECTED_REAL_KIND", .selected_real_kind },
+    .{ "SELECTED_INT_KIND", .selected_int_kind },
     .{ "KIND", .kind },
     .{ "BIT_SIZE", .bit_size },
+    .{ "STORAGE_SIZE", .storage_size },
+    .{ "SIZEOF", .sizeof },
+    .{ "C_SIZEOF", .c_sizeof },
     .{ "REAL", .real },
     .{ "LOG", .log },
     .{ "DLOG", .log },
@@ -152,6 +162,15 @@ pub fn evalConstCall(
             }
             return .{ .integer = selectedRealKindForPrecision(p) };
         },
+        .selected_int_kind => {
+            if (call.args.len != 1) return null;
+            const precision = (try eval_const_fn(call.args[0], resolver)) orelse return null;
+            const p = switch (precision) {
+                .integer => |v| v,
+                else => return null,
+            };
+            return .{ .integer = selectedIntKindForDigits(p) };
+        },
         .kind => {
             if (call.args.len != 1) return null;
             return .{ .integer = (try evalConstKind(call.args[0], resolver, eval_const_fn)) orelse return null };
@@ -161,6 +180,9 @@ pub fn evalConstCall(
             const bits = (try evalConstBitSize(call.args[0], resolver, eval_const_fn)) orelse return null;
             return .{ .integer = bits };
         },
+        .storage_size => return evalConstExprMeasure(call.args, resolver, eval_const_fn, .storage_size_bits),
+        .sizeof => return evalConstExprMeasure(call.args, resolver, eval_const_fn, .sizeof_bytes),
+        .c_sizeof => return evalConstExprMeasure(call.args, resolver, eval_const_fn, .c_sizeof_bytes),
         .real => {
             if (call.args.len == 0 or call.args.len > 2) return null;
             const arg = (try eval_const_fn(call.args[0], resolver)) orelse return null;
@@ -274,6 +296,29 @@ fn selectedRealKindForPrecision(precision: i64) i64 {
     if (precision <= 6) return 4;
     if (precision <= 15) return 8;
     return -1;
+}
+
+fn selectedIntKindForDigits(precision: i64) i64 {
+    if (precision <= 2) return 1;
+    if (precision <= 4) return 2;
+    if (precision <= 9) return 4;
+    if (precision <= 18) return 8;
+    return -1;
+}
+
+fn evalConstExprMeasure(
+    args: []const *ast.Expr,
+    resolver: anytype,
+    eval_const_fn: anytype,
+    measure: ExprMeasureKind,
+) !?ConstValue {
+    if (args.len == 0 or args.len > 2) return null;
+    const res = resolver orelse return null;
+    if (args.len == 2) {
+        const kind_value = (try eval_const_fn(args[1], resolver)) orelse return null;
+        if (kind_value != .integer) return null;
+    }
+    return .{ .integer = res.exprMeasure(args[0], measure) orelse return null };
 }
 
 fn evalConstKind(expr: *const ast.Expr, resolver: anytype, eval_const_fn: anytype) !?i64 {

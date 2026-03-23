@@ -12,10 +12,11 @@ pub fn checkParameterAssign(self: *context.Context, assign: ast.ParamAssign) !Co
 
 pub fn coerceParameterValue(
     self: *context.Context,
-    target: ast.TypeKind,
-    target_char_len: ?usize,
+    target_spec: symbols.TypeSpec,
     value: ConstValue,
 ) !ConstValue {
+    const target = target_spec.lowered_kind;
+    const target_char_len = if (target == .character) target_spec.char_len else null;
     switch (target) {
         .character => {
             if (value != .string) return error.ParameterTypeMismatch;
@@ -29,8 +30,8 @@ pub fn coerceParameterValue(
             else => return error.ParameterTypeMismatch,
         },
         .integer => switch (value) {
-            .integer => |v| return .{ .integer = try checkedIntegerForTarget(self, target, v) },
-            .real => |v| return .{ .integer = try realToIntegerForTarget(self, target, v.value) },
+            .integer => |v| return .{ .integer = try checkedIntegerForTypeSpec(self, target_spec, v) },
+            .real => |v| return .{ .integer = try realToIntegerForTypeSpec(self, target_spec, v.value) },
             .complex, .logical, .string => return error.ParameterTypeMismatch,
         },
         .real => switch (value) {
@@ -61,27 +62,37 @@ pub fn coerceParameterValue(
 
 pub fn checkParameterType(
     self: *context.Context,
-    target: ast.TypeKind,
-    target_char_len: ?usize,
+    target_spec: symbols.TypeSpec,
     value: ConstValue,
 ) !ConstValue {
-    return coerceParameterValue(self, target, target_char_len, value);
+    return coerceParameterValue(self, target_spec, value);
 }
 
-fn realToIntegerForTarget(self: *context.Context, target: ast.TypeKind, v: f64) !i64 {
+fn realToIntegerForTypeSpec(self: *context.Context, target_spec: symbols.TypeSpec, v: f64) !i64 {
     if (!std.math.isFinite(v)) return error.ParameterTypeMismatch;
     const truncated = @trunc(v);
-    const bounds = self.target_layout.integerBounds(target);
+    const bounds = integerBoundsForTypeSpec(self, target_spec);
     const min: f64 = @floatFromInt(bounds.min);
     const max: f64 = @floatFromInt(bounds.max);
     if (truncated < min or truncated > max) return error.ParameterTypeMismatch;
     return @as(i64, @intFromFloat(truncated));
 }
 
-fn checkedIntegerForTarget(self: *context.Context, target: ast.TypeKind, v: i64) !i64 {
-    const bounds = self.target_layout.integerBounds(target);
+fn checkedIntegerForTypeSpec(self: *context.Context, target_spec: symbols.TypeSpec, v: i64) !i64 {
+    const bounds = integerBoundsForTypeSpec(self, target_spec);
     if (v < bounds.min or v > bounds.max) return error.ParameterTypeMismatch;
     return v;
+}
+
+fn integerBoundsForTypeSpec(self: *context.Context, spec: symbols.TypeSpec) context.Context.IntegerBounds {
+    const bits: u16 = blk: {
+        const kind_value = spec.kind_value orelse break :blk self.target_layout.default_integer_bits;
+        if (kind_value <= 0) break :blk self.target_layout.default_integer_bits;
+        if (kind_value <= 16) break :blk @intCast(kind_value * 8);
+        break :blk @intCast(@min(kind_value, 64));
+    };
+    const layout: context.Context.TargetLayout = .{ .default_integer_bits = bits };
+    return layout.integerBounds(.integer);
 }
 
 fn checkedRealForTarget(target: ast.TypeKind, value: f64) !f64 {

@@ -6,12 +6,19 @@ const literals = @import("literals.zig");
 const unary_binary = @import("unary_binary.zig");
 
 const ConstValue = symbols.ConstValue;
+pub const ExprMeasureKind = enum {
+    storage_size_bits,
+    sizeof_bytes,
+    c_sizeof_bytes,
+};
+
 pub const ConstResolver = struct {
     ctx: *anyopaque,
     resolveFn: *const fn (ctx: *anyopaque, name: []const u8) ?ConstValue,
     allocator: ?std.mem.Allocator = null,
     internStringFn: ?*const fn (ctx: *anyopaque, text: []const u8) anyerror![]const u8 = null,
     arrayExtentFn: ?*const fn (ctx: *anyopaque, name: []const u8, dim: ?usize) ?i64 = null,
+    exprMeasureFn: ?*const fn (ctx: *anyopaque, expr: *const ast.Expr, measure: ExprMeasureKind) ?i64 = null,
 
     pub fn resolve(self: ConstResolver, name: []const u8) ?ConstValue {
         return self.resolveFn(self.ctx, name);
@@ -25,6 +32,11 @@ pub const ConstResolver = struct {
 
     pub fn arrayExtent(self: ConstResolver, name: []const u8, dim: ?usize) ?i64 {
         if (self.arrayExtentFn) |extent_fn| return extent_fn(self.ctx, name, dim);
+        return null;
+    }
+
+    pub fn exprMeasure(self: ConstResolver, expr: *const ast.Expr, measure: ExprMeasureKind) ?i64 {
+        if (self.exprMeasureFn) |measure_fn| return measure_fn(self.ctx, expr, measure);
         return null;
     }
 };
