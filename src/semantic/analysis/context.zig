@@ -14,6 +14,12 @@ pub const Context = struct {
             dims: []*ast.Expr = &.{},
             pointer: bool = false,
             allocatable: bool = false,
+            procedure: bool = false,
+            procedure_sig: ?ProcedureSig = null,
+            procedure_kind: ?ast.ProgramUnitKind = null,
+            procedure_has_explicit_interface: bool = false,
+            procedure_nopass: bool = false,
+            procedure_pass_name: ?[]const u8 = null,
         };
 
         pub const BindingInfo = struct {
@@ -120,6 +126,22 @@ pub const Context = struct {
         actual_requires_explicit_interface: bool = false,
     };
 
+    pub const ImplicitActualClass = enum {
+        scalar,
+        sequence,
+    };
+
+    pub const ImplicitCallArgSig = struct {
+        type_spec: symbols.TypeSpec,
+        actual_class: ImplicitActualClass,
+        source: ast.SourceRef = .{},
+        mismatch_reported: bool = false,
+    };
+
+    pub const ImplicitCallSig = struct {
+        args: []ImplicitCallArgSig,
+    };
+
     pub const BuiltinConstant = struct {
         module_name: []const u8,
         type_spec: symbols.TypeSpec,
@@ -140,6 +162,7 @@ pub const Context = struct {
     known_function_type_spec_cache: std.StringHashMap(?symbols.TypeSpec),
     known_procedure_sig_cache: std.StringHashMap(?ProcedureSig),
     intrinsic_arity_cache: std.StringHashMap(?intrinsics.Arity),
+    implicit_call_sigs: std.StringHashMap(ImplicitCallSig),
     builtin_constants: std.StringHashMap(BuiltinConstant),
     derived_types: std.StringHashMap(DerivedTypeInfo),
     const_string_pool: std.StringHashMap([]const u8),
@@ -168,8 +191,10 @@ pub const Context = struct {
     known_host_interface_sources: *const std.StringHashMap(ast.DeclSource),
     known_host_abstract_interfaces: *const std.StringHashMap(void),
     known_host_owner: ?[]const u8,
+    known_host_implicit_call_sigs: ?*std.StringHashMap(ImplicitCallSig),
     target_layout: TargetLayout,
     range_check: bool,
+    allow_argument_mismatch: bool,
     use_imports_preinstalled: bool,
 
     pub const Owner = struct {
@@ -235,6 +260,7 @@ pub const Context = struct {
             .known_function_type_spec_cache = std.StringHashMap(?symbols.TypeSpec).init(arena),
             .known_procedure_sig_cache = std.StringHashMap(?ProcedureSig).init(arena),
             .intrinsic_arity_cache = std.StringHashMap(?intrinsics.Arity).init(arena),
+            .implicit_call_sigs = std.StringHashMap(ImplicitCallSig).init(arena),
             .builtin_constants = std.StringHashMap(BuiltinConstant).init(arena),
             .derived_types = std.StringHashMap(DerivedTypeInfo).init(arena),
             .const_string_pool = std.StringHashMap([]const u8).init(arena),
@@ -263,8 +289,10 @@ pub const Context = struct {
             .known_host_interface_sources = known_host_interface_sources,
             .known_host_abstract_interfaces = known_host_abstract_interfaces,
             .known_host_owner = known_host_owner,
+            .known_host_implicit_call_sigs = null,
             .target_layout = target_layout,
             .range_check = range_check,
+            .allow_argument_mismatch = false,
             .use_imports_preinstalled = false,
         };
         ctx.current_unit = &ctx.unit;

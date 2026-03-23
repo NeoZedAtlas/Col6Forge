@@ -196,6 +196,9 @@ pub fn parseDecl(lp: *LineParser, arena: std.mem.Allocator) !Decl {
             .pointer = attrs.pointer,
             .optional = attrs.optional,
             .save = attrs.save,
+            .nopass = attrs.nopass,
+            .pass_name = attrs.pass_name,
+            .private = attrs.private,
         } };
     }
 

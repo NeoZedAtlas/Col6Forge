@@ -64,6 +64,8 @@ fn annotateDerivedBindingOwners(
         .bind_c = derived.bind_c,
         .components = derived.components,
         .component_sources = derived.component_sources,
+        .procedure_components = derived.procedure_components,
+        .procedure_component_sources = derived.procedure_component_sources,
         .bindings = bindings,
     };
 }

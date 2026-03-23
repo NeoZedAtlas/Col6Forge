@@ -150,7 +150,7 @@ pub fn emitProjectedComponentArrayView(
 ) anyerror!?ProjectedComponentArrayView {
     if (comp.has_parens or comp.args.len != 0) return null;
     const component = try lookupComponentLayout(ctx, comp);
-    if (component.dims.len != 0 or component.pointer or component.allocatable) return null;
+    if (component.procedure or component.dims.len != 0 or component.pointer or component.allocatable) return null;
     if (component.type_spec.lowered_kind == .derived or component.type_spec.lowered_kind == .character) return null;
 
     const base_view = try emitDerivedArrayBaseView(ctx, builder, comp.base) orelse return null;

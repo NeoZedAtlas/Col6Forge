@@ -63,6 +63,11 @@ pub const Resolver = struct {
             } else {
                 ctx.setCurrentDeclSource(null);
             }
+            if (shouldSkipMirroredHostTypeDecl(ctx, decl, decl_idx)) {
+                ctx.setCurrentDeclSource(null);
+                ctx.setCurrentDeclIndex(null);
+                continue;
+            }
             switch (decl) {
                 .type_decl => |type_decl| {
                     decls.applyTypeDecl(ctx, type_decl) catch |err| {
@@ -154,6 +159,12 @@ pub const Resolver = struct {
         ctx.popScope();
     }
 };
+
+fn shouldSkipMirroredHostTypeDecl(ctx: *context.Context, decl: ast.Decl, decl_idx: usize) bool {
+    if (ctx.unit.owner_name == null) return false;
+    if (decl_idx >= ctx.unit.prelude_decl_count) return false;
+    return decl == .type_decl or decl == .parameter;
+}
 
 fn unitScopeKind(kind: ast.ProgramUnitKind) scope.ScopeKind {
     return switch (kind) {
@@ -303,7 +314,98 @@ fn buildDerivedComponentInfo(
         }
         ctx.setCurrentDeclSource(prior_decl_source);
     }
+    for (derived.procedure_components, 0..) |procedure_decl, component_idx| {
+        const component_source = if (derived.procedure_component_sources.len > 0 and component_idx < derived.procedure_component_sources.len)
+            derived.procedure_component_sources[component_idx]
+        else
+            ctx.current_decl_source;
+        ctx.setCurrentDeclSource(component_source);
+        for (procedure_decl.items) |item| {
+            const sig = try resolveDerivedProcedureComponentSig(ctx, procedure_decl);
+            const spec = try resolveDerivedProcedureComponentTypeSpec(ctx, procedure_decl, item.name, sig);
+            try components.append(.{
+                .name = item.name,
+                .type_spec = spec,
+                .dims = &.{},
+                .pointer = procedure_decl.pointer,
+                .allocatable = false,
+                .procedure = true,
+                .procedure_sig = sig,
+                .procedure_kind = derivedProcedureComponentKind(ctx, procedure_decl, sig),
+                .procedure_has_explicit_interface = derivedProcedureComponentHasExplicitInterface(procedure_decl, sig),
+                .procedure_nopass = procedure_decl.nopass,
+                .procedure_pass_name = procedure_decl.pass_name,
+            });
+        }
+        ctx.setCurrentDeclSource(prior_decl_source);
+    }
     return try components.toOwnedSlice();
+}
+
+fn resolveDerivedProcedureComponentSig(
+    ctx: *context.Context,
+    procedure_decl: ast.ProcedureDecl,
+) !?context.Context.ProcedureSig {
+    return switch (procedure_decl.interface) {
+        .none => null,
+        .name => |interface_name| symbols_mod.lookupKnownProcedureSig(ctx, interface_name),
+        .type_spec => |type_spec| .{
+            .kind = .function,
+            .arg_count = 0,
+            .args = &.{},
+            .result_type_spec = try decls.resolvedDeclTypeSpec(
+                ctx,
+                type_spec.type_kind,
+                type_spec.derived_type_name,
+                type_spec.kind_selector,
+                type_spec.polymorphic,
+            ),
+        },
+    };
+}
+
+fn resolveDerivedProcedureComponentTypeSpec(
+    ctx: *context.Context,
+    procedure_decl: ast.ProcedureDecl,
+    item_name: []const u8,
+    sig: ?context.Context.ProcedureSig,
+) !symbols.TypeSpec {
+    if (sig) |resolved_sig| {
+        if (resolved_sig.result_type_spec) |result_spec| return result_spec;
+    }
+    return switch (procedure_decl.interface) {
+        .type_spec => |type_spec| try decls.resolvedDeclTypeSpec(
+            ctx,
+            type_spec.type_kind,
+            type_spec.derived_type_name,
+            type_spec.kind_selector,
+            type_spec.polymorphic,
+        ),
+        else => symbols_mod.implicitTypeSpec(ctx, item_name),
+    };
+}
+
+fn derivedProcedureComponentKind(
+    ctx: *context.Context,
+    procedure_decl: ast.ProcedureDecl,
+    sig: ?context.Context.ProcedureSig,
+) ?ast.ProgramUnitKind {
+    if (sig) |resolved_sig| return resolved_sig.kind;
+    return switch (procedure_decl.interface) {
+        .type_spec => .function,
+        .none => .subroutine,
+        .name => |interface_name| if (symbols_mod.lookupKnownFunctionTypeSpec(ctx, interface_name) != null) .function else .subroutine,
+    };
+}
+
+fn derivedProcedureComponentHasExplicitInterface(
+    procedure_decl: ast.ProcedureDecl,
+    sig: ?context.Context.ProcedureSig,
+) bool {
+    return switch (procedure_decl.interface) {
+        .name => sig != null,
+        else => false,
+    };
 }
 
 fn resolveDerivedCharacterComponentLen(ctx: *context.Context, expr: *ast.Expr) !usize {

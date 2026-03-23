@@ -37,4 +37,5 @@ pub const KnownProcedureSig = struct {
 pub const AnalyzeOptions = struct {
     target_layout: context.Context.TargetLayout = .{},
     range_check: bool = false,
+    allow_argument_mismatch: bool = false,
 };

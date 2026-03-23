@@ -443,7 +443,7 @@ pub const Context = struct {
     pub fn componentIRType(self: *const Context, comp: input.ComponentExpr) !IRType {
         const base_name = self.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
         const component = self.lookupDerivedComponentLayout(base_name, comp.name) orelse return error.UnknownSymbol;
-        return if (component.pointer or component.type_spec.lowered_kind == .character or component.type_spec.lowered_kind == .derived)
+        return if (component.procedure or component.pointer or component.type_spec.lowered_kind == .character or component.type_spec.lowered_kind == .derived)
             .ptr
         else
             llvm_types.typeFromKindWithLayout(component.type_spec.lowered_kind, self.options.target_layout);
@@ -796,7 +796,7 @@ pub const Context = struct {
                 const count = if (type_decl.pointer or type_decl.allocatable)
                     @as(usize, 1)
                 else
-                    common.arrayElementCount(self.sem, item.dims) catch |err| switch (err) {
+                    self.codegenArrayElementCount(item.dims) catch |err| switch (err) {
                         error.ArrayDimNotConstant => return error.ArraysUnsupported,
                         else => return err,
                     };
@@ -817,6 +817,29 @@ pub const Context = struct {
                 alignment = @max(alignment, elem.alignment);
             }
         }
+        for (derived.procedure_components) |procedure_decl| {
+            for (procedure_decl.items) |item| {
+                const elem = try self.procedureComponentElemInfo(procedure_decl, item.name);
+                const offset = alignForward(size, elem.alignment);
+                try components.append(.{
+                    .name = item.name,
+                    .type_spec = elem.type_spec,
+                    .dims = &.{},
+                    .pointer = procedure_decl.pointer,
+                    .allocatable = false,
+                    .procedure = true,
+                    .procedure_sig = elem.sig,
+                    .procedure_nopass = procedure_decl.nopass,
+                    .procedure_pass_name = procedure_decl.pass_name,
+                    .offset = offset,
+                    .elem_size = elem.element_size,
+                    .size = elem.storage_size,
+                    .alignment = elem.alignment,
+                });
+                size = offset + elem.storage_size;
+                alignment = @max(alignment, elem.alignment);
+            }
+        }
         size = alignForward(size, alignment);
         return .{
             .name = derived.name,
@@ -829,10 +852,27 @@ pub const Context = struct {
 
     const ComponentElemInfo = struct {
         type_spec: input.TypeSpec,
+        sig: ?input.sema.KnownProcedureSig = null,
         storage_size: usize,
         element_size: usize,
         alignment: usize,
     };
+
+    fn procedureComponentElemInfo(
+        self: *Context,
+        procedure_decl: input.ProcedureDecl,
+        item_name: []const u8,
+    ) !ComponentElemInfo {
+        const sig = self.resolveProcedureComponentSig(procedure_decl);
+        const type_spec = self.resolveProcedureComponentTypeSpec(procedure_decl, item_name, sig);
+        return .{
+            .type_spec = type_spec,
+            .sig = sig,
+            .storage_size = @sizeOf(usize),
+            .element_size = @sizeOf(usize),
+            .alignment = @alignOf(usize),
+        };
+    }
 
     fn componentElemSizeAlign(self: *Context, type_decl: input.TypeDecl, item: input.Declarator) !ComponentElemInfo {
         const direct = try self.componentDirectElemSizeAlign(type_decl, item);
@@ -840,6 +880,7 @@ pub const Context = struct {
         const descriptor_bytes = componentDescriptorBytes(item.dims.len);
         return .{
             .type_spec = direct.type_spec,
+            .sig = null,
             .storage_size = @sizeOf(usize) + descriptor_bytes,
             .element_size = direct.element_size,
             .alignment = @max(@alignOf(usize), @alignOf(i64)),
@@ -857,6 +898,7 @@ pub const Context = struct {
                         // derived layout to size the containing type.
                         return .{
                             .type_spec = spec,
+                            .sig = null,
                             .storage_size = @sizeOf(usize),
                             .element_size = @sizeOf(usize),
                             .alignment = @alignOf(usize),
@@ -866,6 +908,7 @@ pub const Context = struct {
                 };
                 return .{
                     .type_spec = spec,
+                    .sig = null,
                     .storage_size = layout.size,
                     .element_size = layout.size,
                     .alignment = layout.alignment,
@@ -875,6 +918,7 @@ pub const Context = struct {
                 spec = input.TypeSpec.fromKind(.derived).withPolymorphic(true);
                 return .{
                     .type_spec = spec,
+                    .sig = null,
                     .storage_size = @sizeOf(usize),
                     .element_size = @sizeOf(usize),
                     .alignment = @alignOf(usize),
@@ -888,6 +932,7 @@ pub const Context = struct {
             spec = spec.withCharacterLength(.constant, char_len.?);
             return .{
                 .type_spec = spec,
+                .sig = null,
                 .storage_size = char_len.?,
                 .element_size = char_len.?,
                 .alignment = 1,
@@ -897,9 +942,102 @@ pub const Context = struct {
         const sa = sizeAlignForIRType(ir_ty);
         return .{
             .type_spec = spec,
+            .sig = null,
             .storage_size = sa.size,
             .element_size = sa.size,
             .alignment = sa.alignment,
+        };
+    }
+
+    fn resolveProcedureComponentSig(self: *const Context, procedure_decl: input.ProcedureDecl) ?input.sema.KnownProcedureSig {
+        return switch (procedure_decl.interface) {
+            .none => null,
+            .name => |interface_name| self.lookupKnownProcedureSig(interface_name),
+            .type_spec => |type_spec| .{
+                .name = "",
+                .kind = .function,
+                .arg_count = 0,
+                .args = &.{},
+                .result_type_spec = procedureTypeSpec(type_spec),
+            },
+        };
+    }
+
+    fn resolveProcedureComponentTypeSpec(
+        self: *const Context,
+        procedure_decl: input.ProcedureDecl,
+        item_name: []const u8,
+        sig: ?input.sema.KnownProcedureSig,
+    ) input.TypeSpec {
+        _ = self;
+        if (sig) |resolved_sig| {
+            if (resolved_sig.result_type_spec) |result_spec| return result_spec;
+        }
+        return switch (procedure_decl.interface) {
+            .type_spec => |type_spec| procedureTypeSpec(type_spec),
+            else => implicitTypeSpecForName(item_name),
+        };
+    }
+
+    fn codegenArrayElementCount(self: *Context, dims: []*input.Expr) !usize {
+        if (dims.len == 0) return 1;
+        var total: usize = 1;
+        for (dims) |dim| {
+            const value = (self.codegenDimSizeValue(dim) catch |err| switch (err) {
+                error.NumberTooLong => return error.ArraySizeOverflow,
+                else => return err,
+            }) orelse return error.ArrayDimNotConstant;
+            if (value <= 0) return error.InvalidArrayDim;
+            const dim_u: usize = @intCast(value);
+            const mul = @mulWithOverflow(total, dim_u);
+            if (mul[1] != 0) return error.ArraySizeOverflow;
+            total = mul[0];
+        }
+        return total;
+    }
+
+    fn codegenDimSizeValue(self: *Context, dim: *input.Expr) !?i64 {
+        switch (dim.*) {
+            .literal => |lit| {
+                if (lit.kind == .assumed_size) return null;
+                return self.codegenEvalConstInt(dim);
+            },
+            .dim_range => |range| {
+                if (range.stride != null) return null;
+                if (range.upper.* == .literal and range.upper.literal.kind == .assumed_size) {
+                    return null;
+                }
+                const upper = (self.codegenEvalConstInt(range.upper) catch |err| switch (err) {
+                    error.NumberTooLong => return error.ArraySizeOverflow,
+                    else => return err,
+                }) orelse return null;
+                const lower = if (range.lower) |lower_expr|
+                    (self.codegenEvalConstInt(lower_expr) catch |err| switch (err) {
+                        error.NumberTooLong => return error.ArraySizeOverflow,
+                        else => return err,
+                    }) orelse return null
+                else
+                    1;
+                const diff = @subWithOverflow(upper, lower);
+                if (diff[1] != 0) return error.ArraySizeOverflow;
+                const extent = @addWithOverflow(diff[0], @as(i64, 1));
+                if (extent[1] != 0) return error.ArraySizeOverflow;
+                return extent[0];
+            },
+            else => return self.codegenEvalConstInt(dim),
+        }
+    }
+
+    fn codegenEvalConstInt(self: *Context, expr: *input.Expr) !?i64 {
+        const resolver = evaluator.ConstResolver{
+            .ctx = self,
+            .resolveFn = resolveCodegenConstValue,
+            .arrayExtentFn = resolveCodegenArrayExtent,
+        };
+        const value = try evaluator.evalConst(expr, resolver);
+        return switch (value orelse return null) {
+            .integer => |v| v,
+            else => null,
         };
     }
 };
@@ -950,10 +1088,13 @@ fn inferConstantCharLen(ctx: *const Context, expr: ?*input.Expr) ?usize {
 
 fn resolveCodegenConstValue(raw_ctx: *anyopaque, name: []const u8) ?input.sema.ConstValue {
     const ctx: *Context = @ptrCast(@alignCast(raw_ctx));
-    const idx = ctx.symbolIndexForName(name) orelse return null;
-    const sym = ctx.sem.symbols[idx];
-    if (sym.kind != .parameter) return null;
-    return sym.const_value;
+    if (ctx.symbolIndexForName(name)) |idx| {
+        const sym = ctx.sem.symbols[idx];
+        if (sym.kind == .parameter and sym.const_value != null) {
+            return sym.const_value;
+        }
+    }
+    return resolveMirroredPreludeParameterConstValue(ctx, name);
 }
 
 fn resolveCodegenArrayExtent(raw_ctx: *anyopaque, name: []const u8, dim: ?usize) ?i64 {
@@ -963,6 +1104,22 @@ fn resolveCodegenArrayExtent(raw_ctx: *anyopaque, name: []const u8, dim: ?usize)
     if (sym.dims.len == 0) return null;
     const extent = common.arrayElementCount(ctx.sem, if (dim) |dim_idx| sym.dims[dim_idx .. dim_idx + 1] else sym.dims) catch return null;
     return @intCast(extent);
+}
+
+fn resolveMirroredPreludeParameterConstValue(ctx: *Context, name: []const u8) ?input.sema.ConstValue {
+    for (ctx.unit.decls) |decl| {
+        if (decl != .parameter) continue;
+        for (decl.parameter.assigns) |assign| {
+            if (!std.ascii.eqlIgnoreCase(assign.name, name)) continue;
+            const resolver = evaluator.ConstResolver{
+                .ctx = ctx,
+                .resolveFn = resolveCodegenConstValue,
+                .arrayExtentFn = resolveCodegenArrayExtent,
+            };
+            return evaluator.evalConst(assign.value, resolver) catch null;
+        }
+    }
+    return null;
 }
 
 fn builtinDerivedTypeLayout(name: []const u8) ?DerivedTypeLayout {
@@ -1085,6 +1242,25 @@ fn shapeProductForExpr(expr_node: *input.Expr) ?usize {
         total = std.math.mul(usize, total, usize_value) catch return null;
     }
     return total;
+}
+
+fn procedureTypeSpec(proc_type: input.ProcedureTypeSpec) input.TypeSpec {
+    var spec = if (proc_type.derived_type_name) |derived_name|
+        input.TypeSpec.fromDerived(derived_name)
+    else if (proc_type.polymorphic)
+        input.TypeSpec.fromKind(.derived)
+    else
+        input.TypeSpec.fromResolvedKind(proc_type.type_kind, proc_type.type_kind, null);
+    spec = spec.withPolymorphic(proc_type.polymorphic);
+    return spec;
+}
+
+fn implicitTypeSpecForName(name: []const u8) input.TypeSpec {
+    if (name.len != 0) {
+        const first = std.ascii.toUpper(name[0]);
+        if (first >= 'I' and first <= 'N') return input.TypeSpec.fromResolvedKind(.integer, .integer, null);
+    }
+    return input.TypeSpec.fromResolvedKind(.real, .real, null);
 }
 
 test {

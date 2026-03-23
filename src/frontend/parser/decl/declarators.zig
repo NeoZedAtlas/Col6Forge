@@ -117,11 +117,20 @@ pub fn consumeDeclAttributes(lp: *LineParser, arena: std.mem.Allocator) !DeclAtt
             if (context.eqNoCase(attr_name, "ALLOCATABLE")) attrs.allocatable = true;
             if (context.eqNoCase(attr_name, "POINTER")) attrs.pointer = true;
             if (context.eqNoCase(attr_name, "OPTIONAL")) attrs.optional = true;
+            if (context.eqNoCase(attr_name, "NOPASS")) attrs.nopass = true;
+            if (context.eqNoCase(attr_name, "PRIVATE")) attrs.private = true;
+            if (context.eqNoCase(attr_name, "PUBLIC")) attrs.private = false;
             if (context.eqNoCase(attr_name, "EXTERNAL")) attrs.external = true;
             if (context.eqNoCase(attr_name, "ASYNCHRONOUS")) attrs.asynchronous = true;
             if (context.eqNoCase(attr_name, "CONTIGUOUS")) attrs.contiguous = true;
             if (context.eqNoCase(attr_name, "VALUE")) attrs.value_attr = true;
             if (context.eqNoCase(attr_name, "VOLATILE")) attrs.volatile_attr = true;
+            if (context.eqNoCase(attr_name, "PASS")) {
+                if (lp.consume(.l_paren)) {
+                    attrs.pass_name = lp.readName(arena) orelse return error.MissingName;
+                    _ = lp.expect(.r_paren) orelse return error.UnexpectedToken;
+                }
+            }
             if (context.eqNoCase(attr_name, "INTENT")) {
                 _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;
                 attrs.intent = if (lp.consumeKeyword("INOUT"))

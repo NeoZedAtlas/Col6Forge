@@ -67,6 +67,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
     var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena);
     var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena);
     var known_host_abstract_interfaces = std.StringHashMap(void).init(arena);
+    var known_host_implicit_call_sigs = std.StringHashMap(context.Context.ImplicitCallSig).init(arena);
     var host_symbols_active = false;
     var active_host_owner: ?[]const u8 = null;
 
@@ -83,6 +84,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             &known_host_derived_types,
             &known_host_interface_sources,
             &known_host_abstract_interfaces,
+            &known_host_implicit_call_sigs,
             &host_symbols_active,
             &active_host_owner,
             unit.*,
@@ -103,6 +105,8 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             options.range_check,
             diag_bag,
         );
+        unit_analyzer.ctx.allow_argument_mismatch = options.allow_argument_mismatch;
+        unit_analyzer.ctx.known_host_implicit_call_sigs = &known_host_implicit_call_sigs;
         const sem_unit = unit_analyzer.analyze() catch |err| {
             if (first_error == null) first_error = err;
             try units.append(.{
@@ -117,9 +121,11 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
                 &known_host_derived_types,
                 &known_host_interface_sources,
                 &known_host_abstract_interfaces,
+                &known_host_implicit_call_sigs,
                 arena,
                 unit.*,
                 &unit_analyzer.ctx.derived_types,
+                &unit_analyzer.ctx.implicit_call_sigs,
                 unit_analyzer.ctx.symbols.items,
                 &host_symbols_active,
                 &active_host_owner,
@@ -132,9 +138,11 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             &known_host_derived_types,
             &known_host_interface_sources,
             &known_host_abstract_interfaces,
+            &known_host_implicit_call_sigs,
             arena,
             unit.*,
             &unit_analyzer.ctx.derived_types,
+            &unit_analyzer.ctx.implicit_call_sigs,
             sem_unit.symbols,
             &host_symbols_active,
             &active_host_owner,
@@ -185,16 +193,16 @@ fn inferProgramProcedures(
 ) !void {
     for (program.units) |unit| {
         if (unit.kind == .function) {
-            const key = try symbol_lookup.lowerDup(arena, unit.name);
             const inferred = function_type.inferFunctionTypeSpec(unit);
-            try known_function_type_specs.put(key, inferred);
             if (unit.owner_name) |owner_name| {
                 const qualified_key = try qualifiedProcedureKey(arena, owner_name, unit.name);
                 try known_function_type_specs.put(qualified_key, inferred);
+            } else {
+                const key = try symbol_lookup.lowerDup(arena, unit.name);
+                try known_function_type_specs.put(key, inferred);
             }
         }
         if (unit.kind == .function or unit.kind == .subroutine) {
-            const key = try symbol_lookup.lowerDup(arena, unit.name);
             const sig: context.Context.ProcedureSig = .{
                 .kind = unit.kind,
                 .arg_count = unit.args.len,
@@ -211,10 +219,12 @@ fn inferProgramProcedures(
                 .result_procedure_pointer = if (unit.kind == .function) function_type.inferFunctionResultIsProcedurePointer(unit) else false,
                 .actual_requires_explicit_interface = unit.owner_name != null,
             };
-            try known_procedure_sigs.put(key, sig);
             if (unit.owner_name) |owner_name| {
                 const qualified_key = try qualifiedProcedureKey(arena, owner_name, unit.name);
                 try known_procedure_sigs.put(qualified_key, sig);
+            } else {
+                const key = try symbol_lookup.lowerDup(arena, unit.name);
+                try known_procedure_sigs.put(key, sig);
             }
         }
     }
@@ -225,6 +235,7 @@ fn clearInactiveHostContext(
     known_host_derived_types: *std.StringHashMap(context.Context.DerivedTypeInfo),
     known_host_interface_sources: *std.StringHashMap(ast.DeclSource),
     known_host_abstract_interfaces: *std.StringHashMap(void),
+    known_host_implicit_call_sigs: *std.StringHashMap(context.Context.ImplicitCallSig),
     host_symbols_active: *bool,
     active_host_owner: *?[]const u8,
     unit: ast.ProgramUnit,
@@ -234,6 +245,7 @@ fn clearInactiveHostContext(
     known_host_derived_types.clearRetainingCapacity();
     known_host_interface_sources.clearRetainingCapacity();
     known_host_abstract_interfaces.clearRetainingCapacity();
+    known_host_implicit_call_sigs.clearRetainingCapacity();
     host_symbols_active.* = false;
     active_host_owner.* = null;
 }
@@ -243,9 +255,11 @@ fn refreshHostContextIfNeeded(
     known_host_derived_types: *std.StringHashMap(context.Context.DerivedTypeInfo),
     known_host_interface_sources: *std.StringHashMap(ast.DeclSource),
     known_host_abstract_interfaces: *std.StringHashMap(void),
+    known_host_implicit_call_sigs: *std.StringHashMap(context.Context.ImplicitCallSig),
     arena: std.mem.Allocator,
     unit: ast.ProgramUnit,
     derived_types: *const std.StringHashMap(context.Context.DerivedTypeInfo),
+    implicit_call_sigs: *const std.StringHashMap(context.Context.ImplicitCallSig),
     host_symbols: []const symbols.Symbol,
     host_symbols_active: *bool,
     active_host_owner: *?[]const u8,
@@ -261,6 +275,12 @@ fn refreshHostContextIfNeeded(
         derived_types,
         unit,
     );
+    known_host_implicit_call_sigs.clearRetainingCapacity();
+    var it = implicit_call_sigs.iterator();
+    while (it.next()) |entry| {
+        const key = try symbol_lookup.lowerDup(arena, entry.key_ptr.*);
+        try known_host_implicit_call_sigs.put(key, entry.value_ptr.*);
+    }
     host_symbols_active.* = true;
     active_host_owner.* = unit.name;
 }

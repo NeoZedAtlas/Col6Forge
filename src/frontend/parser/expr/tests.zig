@@ -226,6 +226,33 @@ test "parseExpr accepts keyword actual arguments in calls" {
     }
 }
 
+test "parseExpr handles array section followed by substring suffix" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source = "      STR(:)(1:2)\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+    const tokens = try lexer.lexLogicalLine(allocator, lines[0]);
+    defer allocator.free(tokens);
+    var lp = LineParser.init(lines[0], tokens);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const node = try parseExpr(&lp, arena.allocator(), 0);
+
+    switch (node.*) {
+        .substring => |sub| {
+            try testing.expectEqualStrings("STR", sub.name);
+            try testing.expectEqual(@as(usize, 1), sub.args.len);
+            try testing.expect(sub.args[0].* == .dim_range);
+            try testing.expect(sub.start != null);
+            try testing.expect(sub.end != null);
+        },
+        else => return error.UnexpectedToken,
+    }
+}
+
 test "parseExpr handles array constructor" {
     const testing = std.testing;
     const allocator = testing.allocator;

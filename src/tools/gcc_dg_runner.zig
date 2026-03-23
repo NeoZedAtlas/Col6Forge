@@ -348,6 +348,7 @@ const TestCase = struct {
     rel_path: []const u8,
     work_name: []const u8,
     range_check: bool,
+    allow_argument_mismatch: bool,
     expect_compile_error: bool,
     expect_should_fail: bool,
     expected_error_patterns: []ExpectedErrorPattern,
@@ -391,6 +392,7 @@ const PruneOutputPattern = struct {
 
 const CaseExpectations = struct {
     range_check: bool,
+    allow_argument_mismatch: bool,
     expect_compile_error: bool,
     expect_should_fail: bool,
     expected_error_patterns: []ExpectedErrorPattern,
@@ -417,6 +419,7 @@ const ParsedDiagDirectives = struct {
 
 const SupportedDgOptions = struct {
     range_check: bool = false,
+    allow_argument_mismatch: bool = false,
 };
 
 fn collectRunnableCases(
@@ -459,6 +462,7 @@ fn collectRunnableCases(
             .rel_path = rel_path,
             .work_name = work_name,
             .range_check = expectations.range_check,
+            .allow_argument_mismatch = expectations.allow_argument_mismatch,
             .expect_compile_error = expectations.expect_compile_error,
             .expect_should_fail = expectations.expect_should_fail,
             .expected_error_patterns = expectations.expected_error_patterns,
@@ -508,6 +512,7 @@ fn classifyCase(
 
     return .{ .runnable = .{
         .range_check = supported_options.range_check,
+        .allow_argument_mismatch = supported_options.allow_argument_mismatch,
         .expect_compile_error = parsed_diag.has_error,
         .expect_should_fail = parsed_diag.has_should_fail,
         .expected_error_patterns = parsed_diag.error_patterns,
@@ -652,6 +657,7 @@ fn parseSupportedDgOptions(text: []const u8) SupportedDgOptions {
         if (!containsNoCase(line, "dg-options") and !containsNoCase(line, "dg-additional-options")) continue;
         if (containsNoCase(line, "-fno-range-check")) result.range_check = false;
         if (containsNoCase(line, "-frange-check")) result.range_check = true;
+        if (containsNoCase(line, "-fallow-argument-mismatch")) result.allow_argument_mismatch = true;
     }
     return result;
 }
@@ -1141,6 +1147,7 @@ fn emitPipelineToFile(
     emit: Col6Forge.EmitKind,
     output_path: []const u8,
     range_check: bool,
+    allow_argument_mismatch: bool,
     diag_bag: *Col6Forge.diag.Bag,
 ) !void {
     const result = try Col6Forge.runPipelineWithOptionsAndDiagnostics(
@@ -1151,6 +1158,7 @@ fn emitPipelineToFile(
             .coarse_source_map = false,
             .capture_profile = false,
             .range_check = range_check,
+            .allow_argument_mismatch = allow_argument_mismatch,
         },
         diag_bag,
     );
@@ -1401,7 +1409,7 @@ fn processCase(
     var pipeline_diag_bag = Col6Forge.diag.Bag.init(allocator);
     defer pipeline_diag_bag.deinit();
 
-    emitPipelineToFile(allocator, abs_input_path, options.emit, ll_path, case.range_check, &pipeline_diag_bag) catch |err| {
+    emitPipelineToFile(allocator, abs_input_path, options.emit, ll_path, case.range_check, case.allow_argument_mismatch, &pipeline_diag_bag) catch |err| {
         compile_failed = true;
         diag_text = try formatPipelineFailureText(allocator, log_state, abs_input_path, &pipeline_diag_bag, err, !expect_failure);
     };

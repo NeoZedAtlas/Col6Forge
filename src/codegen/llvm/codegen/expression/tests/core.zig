@@ -219,6 +219,188 @@ test "emitExpr prefers component subscripting over type-bound call when componen
     try testing.expectEqual(IRType.i32, value.ty);
 }
 
+test "emitExpr loads bare procedure component pointer" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const symbols = try a.alloc(sema.Symbol, 1);
+    symbols[0] = makeTestSymbol("OBJ", sema.TypeSpec.fromDerived("t"), &.{}, .variable, .local);
+
+    const sem_unit = sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(sema.ResolvedRef, 0),
+    };
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(ast.Decl, 0),
+        .stmts = try a.alloc(ast.Stmt, 0),
+    };
+
+    var decls = std.StringHashMap(context.IRDecl).init(a);
+    defer decls.deinit();
+    var defined = std.StringHashMap(void).init(a);
+    defer defined.deinit();
+    var formats = std.StringHashMap(context.FormatInfo).init(a);
+    defer formats.deinit();
+    var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
+    defer inline_formats.deinit();
+    var string_pool = context.StringPool.init(a);
+    defer string_pool.deinit();
+    var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
+    defer intrinsic_wrappers.deinit();
+    var known_procedure_sigs = context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig).initContext(a, .{});
+    defer known_procedure_sigs.deinit();
+
+    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{});
+    defer ctx.deinit();
+
+    try ctx.locals.put("OBJ", .{ .name = "%objslot", .ty = .ptr, .is_ptr = true });
+    try ctx.derived_type_layouts.put("t", .{
+        .name = "t",
+        .parent_name = null,
+        .components = &.{.{
+            .name = "ppc",
+            .type_spec = sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+            .dims = &.{},
+            .pointer = true,
+            .allocatable = false,
+            .procedure = true,
+            .procedure_sig = .{
+                .name = "ifc",
+                .kind = .function,
+                .arg_count = 0,
+                .args = &.{},
+                .result_type_spec = sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+            },
+            .procedure_nopass = true,
+            .offset = 0,
+            .elem_size = @sizeOf(usize),
+            .size = @sizeOf(usize),
+            .alignment = @alignOf(usize),
+        }},
+        .size = @sizeOf(usize),
+        .alignment = @alignOf(usize),
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const base = try makeIdent(a, "OBJ");
+    const expr_node = try a.create(Expr);
+    expr_node.* = .{ .component = .{
+        .base = base,
+        .name = "ppc",
+        .args = &.{},
+        .has_parens = false,
+    } };
+
+    const value = try emitExpr(&ctx, &builder, expr_node);
+    try testing.expectEqual(IRType.ptr, value.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "load ptr") != null);
+}
+
+test "emitExpr calls procedure component indirectly" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const symbols = try a.alloc(sema.Symbol, 1);
+    symbols[0] = makeTestSymbol("OBJ", sema.TypeSpec.fromDerived("t"), &.{}, .variable, .local);
+
+    const sem_unit = sema.SemanticUnit{
+        .name = "UNIT",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(sema.ResolvedRef, 0),
+    };
+    const unit = ast.ProgramUnit{
+        .kind = .subroutine,
+        .name = "UNIT",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(ast.Decl, 0),
+        .stmts = try a.alloc(ast.Stmt, 0),
+    };
+
+    var decls = std.StringHashMap(context.IRDecl).init(a);
+    defer decls.deinit();
+    var defined = std.StringHashMap(void).init(a);
+    defer defined.deinit();
+    var formats = std.StringHashMap(context.FormatInfo).init(a);
+    defer formats.deinit();
+    var inline_formats = std.AutoHashMap(usize, context.FormatInfo).init(a);
+    defer inline_formats.deinit();
+    var string_pool = context.StringPool.init(a);
+    defer string_pool.deinit();
+    var intrinsic_wrappers = std.StringHashMap(context.IntrinsicWrapperKind).init(a);
+    defer intrinsic_wrappers.deinit();
+    var known_procedure_sigs = context.CaseInsensitiveStringHashMap(ast.sema.KnownProcedureSig).initContext(a, .{});
+    defer known_procedure_sigs.deinit();
+
+    var ctx = try Context.init(a, "test.f", unit, &sem_unit, &decls, &defined, &formats, &inline_formats, &string_pool, &intrinsic_wrappers, &known_procedure_sigs, .{});
+    defer ctx.deinit();
+
+    try ctx.locals.put("OBJ", .{ .name = "%objslot", .ty = .ptr, .is_ptr = true });
+    try ctx.derived_type_layouts.put("t", .{
+        .name = "t",
+        .parent_name = null,
+        .components = &.{.{
+            .name = "ppc",
+            .type_spec = sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+            .dims = &.{},
+            .pointer = true,
+            .allocatable = false,
+            .procedure = true,
+            .procedure_sig = .{
+                .name = "ifc",
+                .kind = .function,
+                .arg_count = 0,
+                .args = &.{},
+                .result_type_spec = sema.TypeSpec.fromResolvedKind(.integer, .integer, null),
+            },
+            .procedure_nopass = true,
+            .offset = 0,
+            .elem_size = @sizeOf(usize),
+            .size = @sizeOf(usize),
+            .alignment = @alignOf(usize),
+        }},
+        .size = @sizeOf(usize),
+        .alignment = @alignOf(usize),
+    });
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
+    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
+
+    const base = try makeIdent(a, "OBJ");
+    const expr_node = try a.create(Expr);
+    expr_node.* = .{ .component = .{
+        .base = base,
+        .name = "ppc",
+        .args = &.{},
+        .has_parens = true,
+    } };
+
+    const value = try emitExpr(&ctx, &builder, expr_node);
+    try testing.expectEqual(IRType.i32, value.ty);
+    try testing.expect(std.mem.indexOf(u8, buffer.items, "call i32 %") != null);
+}
+
 test "emitBinary i64 arithmetic and comparisons use integer ops" {
     const testing = std.testing;
     const allocator = testing.allocator;

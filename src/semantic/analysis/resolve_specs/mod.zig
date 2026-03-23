@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const catalog = @import("../../../common/error_catalog.zig");
 const context = @import("../context.zig");
 const symbols = @import("../../symbol/mod.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
@@ -58,16 +59,20 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                             // Assumed-length CHARACTER*(*) isn't a constant length; fall back to 1.
                             char_len = 1;
                         } else {
-                            const value = (try constants.evalConst(self, len_expr)) orelse return error.InvalidCharLen;
-                            switch (value) {
-                                .integer => |int_val| {
-                                    if (int_val <= 0) return error.InvalidCharLen;
-                                    char_len = @intCast(int_val);
-                                },
-                                .real => return error.InvalidCharLen,
-                                .complex => return error.InvalidCharLen,
-                                .logical => return error.InvalidCharLen,
-                                .string => return error.InvalidCharLen,
+                            if (try constants.evalConst(self, len_expr)) |value| {
+                                switch (value) {
+                                    .integer => |int_val| {
+                                        if (int_val <= 0) return error.InvalidCharLen;
+                                        char_len = @intCast(int_val);
+                                    },
+                                    .real, .complex, .logical, .string => {
+                                        if (emitImplicitCharLenTypingDiagnostics(self, len_expr)) return error.InvalidCharLen;
+                                        return error.InvalidCharLen;
+                                    },
+                                }
+                            } else {
+                                if (emitImplicitCharLenTypingDiagnostics(self, len_expr)) return error.InvalidCharLen;
+                                return error.InvalidCharLen;
                             }
                         }
                     }
@@ -237,6 +242,120 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .type_decl => return error.UnexpectedTypeDecl,
     }
+}
+
+fn emitImplicitCharLenTypingDiagnostics(self: *context.Context, expr: *ast.Expr) bool {
+    if (!exprHasIdentifier(expr)) return false;
+    const decl_source = self.current_decl_source orelse ast.DeclSource{};
+    const line = if (decl_source.line == 0) 1 else decl_source.line;
+    const column = if (decl_source.column == 0) 1 else decl_source.column;
+    if (currentFunctionResultNeedsType(self) and exprMentionsCurrentFunctionResult(self, expr)) {
+        self.setDiagnostic(
+            line,
+            column,
+            catalog.semantic.invalid_char_len.code,
+            "has no IMPLICIT type",
+            decl_source.text,
+        );
+    }
+    self.setDiagnostic(
+        line,
+        column,
+        catalog.semantic.invalid_char_len.code,
+        "used before it is typed",
+        decl_source.text,
+    );
+    return true;
+}
+
+fn currentFunctionResultNeedsType(self: *context.Context) bool {
+    if (self.unit.kind != .function) return false;
+    const result_name = self.unit.result_name orelse self.unit.name;
+    const idx = symbols_mod.findSymbolIndex(self, result_name) orelse return true;
+    return !self.symbols.items[idx].type_explicit;
+}
+
+fn exprMentionsCurrentFunctionResult(self: *context.Context, expr: *ast.Expr) bool {
+    const result_name = self.unit.result_name orelse self.unit.name;
+    return exprMentionsIdentifier(expr, result_name);
+}
+
+fn exprHasIdentifier(expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .identifier => true,
+        .unary => |un| exprHasIdentifier(un.expr),
+        .binary => |bin| exprHasIdentifier(bin.left) or exprHasIdentifier(bin.right),
+        .call_or_subscript => |call| blk: {
+            for (call.args) |arg| {
+                if (exprHasIdentifier(arg)) break :blk true;
+            }
+            break :blk false;
+        },
+        .component => |comp| exprHasIdentifier(comp.base),
+        .substring => |sub| blk: {
+            if (exprHasIdentifierInSlice(sub.args)) break :blk true;
+            if (sub.start != null and exprHasIdentifier(sub.start.?)) break :blk true;
+            if (sub.end != null and exprHasIdentifier(sub.end.?)) break :blk true;
+            break :blk false;
+        },
+        .dim_range => |range| blk: {
+            if (range.lower != null and exprHasIdentifier(range.lower.?)) break :blk true;
+            if (exprHasIdentifier(range.upper)) break :blk true;
+            if (range.stride != null and exprHasIdentifier(range.stride.?)) break :blk true;
+            break :blk false;
+        },
+        .array_constructor => |ctor| exprHasIdentifierInSlice(ctor.items),
+        .complex_literal => |lit| exprHasIdentifier(lit.real) or exprHasIdentifier(lit.imag),
+        .implied_do => |ido| exprHasIdentifierInSlice(ido.items) or exprHasIdentifier(ido.start) or exprHasIdentifier(ido.end) or (ido.step != null and exprHasIdentifier(ido.step.?)),
+        else => false,
+    };
+}
+
+fn exprHasIdentifierInSlice(items: []const *ast.Expr) bool {
+    for (items) |item| {
+        if (exprHasIdentifier(item)) return true;
+    }
+    return false;
+}
+
+fn exprMentionsIdentifier(expr: *ast.Expr, name: []const u8) bool {
+    return switch (expr.*) {
+        .identifier => |ident| std.ascii.eqlIgnoreCase(ident, name),
+        .unary => |un| exprMentionsIdentifier(un.expr, name),
+        .binary => |bin| exprMentionsIdentifier(bin.left, name) or exprMentionsIdentifier(bin.right, name),
+        .call_or_subscript => |call| blk: {
+            if (std.ascii.eqlIgnoreCase(call.name, name)) break :blk true;
+            for (call.args) |arg| {
+                if (exprMentionsIdentifier(arg, name)) break :blk true;
+            }
+            break :blk false;
+        },
+        .component => |comp| exprMentionsIdentifier(comp.base, name),
+        .substring => |sub| blk: {
+            if (std.ascii.eqlIgnoreCase(sub.name, name)) break :blk true;
+            if (exprMentionsIdentifierInSlice(sub.args, name)) break :blk true;
+            if (sub.start != null and exprMentionsIdentifier(sub.start.?, name)) break :blk true;
+            if (sub.end != null and exprMentionsIdentifier(sub.end.?, name)) break :blk true;
+            break :blk false;
+        },
+        .dim_range => |range| blk: {
+            if (range.lower != null and exprMentionsIdentifier(range.lower.?, name)) break :blk true;
+            if (exprMentionsIdentifier(range.upper, name)) break :blk true;
+            if (range.stride != null and exprMentionsIdentifier(range.stride.?, name)) break :blk true;
+            break :blk false;
+        },
+        .array_constructor => |ctor| exprMentionsIdentifierInSlice(ctor.items, name),
+        .complex_literal => |lit| exprMentionsIdentifier(lit.real, name) or exprMentionsIdentifier(lit.imag, name),
+        .implied_do => |ido| exprMentionsIdentifierInSlice(ido.items, name) or exprMentionsIdentifier(ido.start, name) or exprMentionsIdentifier(ido.end, name) or (ido.step != null and exprMentionsIdentifier(ido.step.?, name)),
+        else => false,
+    };
+}
+
+fn exprMentionsIdentifierInSlice(items: []const *ast.Expr, name: []const u8) bool {
+    for (items) |item| {
+        if (exprMentionsIdentifier(item, name)) return true;
+    }
+    return false;
 }
 
 fn isImportedPreludeDecl(self: *context.Context) bool {

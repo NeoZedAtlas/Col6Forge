@@ -126,6 +126,28 @@ pub fn hasSubstringRange(lp: LineParser) bool {
     return colon_count == 1;
 }
 
+pub fn hasTrailingSubstringSuffix(lp: LineParser) bool {
+    var depth: usize = 0;
+    var idx = lp.index;
+    while (idx < lp.tokens.len) : (idx += 1) {
+        const tok = lp.tokens[idx];
+        switch (tok.kind) {
+            .l_paren => depth += 1,
+            .r_paren => {
+                if (depth == 0) {
+                    var tail = lp;
+                    tail.index = idx + 1;
+                    if (!tail.consume(.l_paren)) return false;
+                    return hasSubstringRange(tail);
+                }
+                depth -= 1;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
 pub fn hasArgumentDimRange(lp: LineParser) bool {
     var depth: usize = 0;
     var idx = lp.index;

@@ -120,6 +120,14 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
         .component => |comp| {
             const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return error.UnknownSymbol;
             if (ctx.lookupDerivedComponentLayout(base_type_name, comp.name)) |component| {
+                if (component.procedure) {
+                    if (comp.has_parens) return emitProcedureComponentCall(ctx, builder, comp, component);
+                    if (comp.args.len != 0) return error.InvalidSubscript;
+                    const ptr = try memory.emitComponentStoragePtr(ctx, builder, comp);
+                    const tmp = try ctx.nextTemp();
+                    try builder.load(tmp, .ptr, ptr);
+                    return .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+                }
                 const ptr = try memory.emitComponentPtr(ctx, builder, comp);
                 const ty = try ctx.componentIRType(comp);
                 if (component.pointer) {
@@ -319,6 +327,79 @@ fn emitTypeBoundProcedureCall(ctx: *Context, builder: anytype, comp: ast.Compone
     return call.emitCall(ctx, builder, fn_name, ret_ty, actuals, false);
 }
 
+fn emitProcedureComponentCall(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    component: context.DerivedComponentLayout,
+) !ValueRef {
+    const proc_sig = component.procedure_sig orelse return error.UnknownSymbol;
+    if (proc_sig.kind != .function) return error.InvalidExpression;
+    if (proc_sig.result_rank != 0) return error.UnsupportedArrayActual;
+
+    const actuals = try buildProcedureComponentActuals(ctx, comp, component, proc_sig);
+    defer ctx.allocator.free(actuals);
+
+    const slot_ptr = try memory.emitComponentStoragePtr(ctx, builder, .{
+        .base = comp.base,
+        .name = comp.name,
+        .args = &.{},
+        .has_parens = false,
+    });
+    const fn_ptr_name = try ctx.nextTemp();
+    try builder.load(fn_ptr_name, .ptr, slot_ptr);
+    const fn_ptr = ValueRef{ .name = fn_ptr_name, .ty = .ptr, .is_ptr = false };
+
+    const result_spec = component.procedure_sig.?.result_type_spec orelse component.type_spec;
+    if (result_spec.lowered_kind == .character) {
+        const result_len = result_spec.char_len orelse return error.NonConstantCharacterLength;
+        const ptr = try call.emitIndirectCharacterCall(ctx, builder, fn_ptr, result_len, actuals);
+        return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
+    }
+
+    const ret_ty: ir.IRType = if (proc_sig.is_pointer)
+        .ptr
+    else if (result_spec.lowered_kind == .derived)
+        .ptr
+    else
+        ctx.typeFromKind(result_spec.lowered_kind);
+    return call.emitIndirectCall(ctx, builder, fn_ptr, ret_ty, actuals, false);
+}
+
+fn buildProcedureComponentActuals(
+    ctx: *Context,
+    comp: ast.ComponentExpr,
+    component: context.DerivedComponentLayout,
+    proc_sig: ast.sema.KnownProcedureSig,
+) ![]*Expr {
+    const extra: usize = if (component.procedure_nopass) 0 else 1;
+    const actuals = try ctx.allocator.alloc(*Expr, comp.args.len + extra);
+    const pass_idx = if (component.procedure_nopass) null else procedureComponentPassArgIndex(proc_sig, component.procedure_pass_name);
+    var actual_idx: usize = 0;
+    var comp_idx: usize = 0;
+    while (actual_idx < actuals.len) : (actual_idx += 1) {
+        if (pass_idx != null and actual_idx == pass_idx.?) {
+            actuals[actual_idx] = comp.base;
+            continue;
+        }
+        actuals[actual_idx] = comp.args[comp_idx];
+        comp_idx += 1;
+    }
+    return actuals;
+}
+
+fn procedureComponentPassArgIndex(
+    sig: ast.sema.KnownProcedureSig,
+    pass_name: ?[]const u8,
+) ?usize {
+    if (sig.args.len == 0) return null;
+    const target = pass_name orelse return 0;
+    for (sig.args, 0..) |arg, idx| {
+        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
+    }
+    return null;
+}
+
 fn emitDefinedUnaryOperatorCall(
     ctx: *Context,
     builder: anytype,
@@ -396,16 +477,23 @@ fn emitStructureConstructorByTypeName(
         try builder.allocaArray(object_name, .i8, layout.size);
     }
     const object_ptr = ValueRef{ .name = object_name, .ty = .ptr, .is_ptr = true };
-    if (call_or_sub.args.len != layout.components.len) return error.InvalidArgumentCount;
+    var data_component_count: usize = 0;
+    for (layout.components) |component| {
+        if (!component.procedure) data_component_count += 1;
+    }
+    if (call_or_sub.args.len != data_component_count) return error.InvalidArgumentCount;
 
-    for (layout.components, 0..) |component, idx| {
+    var arg_idx: usize = 0;
+    for (layout.components) |component| {
+        if (component.procedure) continue;
         var component_ptr = object_ptr;
         if (component.offset != 0) {
             const gep_name = try ctx.nextTemp();
             try builder.gep(gep_name, .i8, object_ptr, try ctx.constI64(@intCast(component.offset)));
             component_ptr = .{ .name = gep_name, .ty = .ptr, .is_ptr = true };
         }
-        try emitStructureConstructorComponentStore(ctx, builder, component_ptr, component, call_or_sub.args[idx]);
+        try emitStructureConstructorComponentStore(ctx, builder, component_ptr, component, call_or_sub.args[arg_idx]);
+        arg_idx += 1;
     }
     return .{ .name = object_ptr.name, .ty = .ptr, .is_ptr = false };
 }

@@ -259,6 +259,10 @@ fn renameDerivedTypeDef(
     for (derived.components, 0..) |component, idx| {
         components[idx] = renameTypeDecl(component, only_items);
     }
+    const procedure_components = try arena.alloc(ast.ProcedureDecl, derived.procedure_components.len);
+    for (derived.procedure_components, 0..) |procedure_component, idx| {
+        procedure_components[idx] = renameProcedureDecl(procedure_component, only_items);
+    }
     const bindings = try arena.dupe(ast.TypeBoundProcedureBinding, derived.bindings);
     return .{
         .name = local_name orelse derived.name,
@@ -268,6 +272,8 @@ fn renameDerivedTypeDef(
         .bind_c = derived.bind_c,
         .components = components,
         .component_sources = derived.component_sources,
+        .procedure_components = procedure_components,
+        .procedure_component_sources = derived.procedure_component_sources,
         .bindings = bindings,
     };
 }

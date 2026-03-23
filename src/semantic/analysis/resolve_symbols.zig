@@ -374,7 +374,8 @@ pub fn lookupKnownFunctionTypeSpec(self: *context.Context, name: []const u8) ?Ty
     if (getLowercaseMapValue(?TypeSpec, &self.known_function_type_spec_cache, name)) |cached| {
         return cached;
     }
-    const resolved = getLowercaseMapValue(TypeSpec, self.known_function_type_specs, name);
+    const resolved = lookupQualifiedKnownFunctionTypeSpec(self, name) orelse
+        getLowercaseMapValue(TypeSpec, self.known_function_type_specs, name);
     putKnownFunctionTypeSpecCache(self, name, resolved);
     return resolved;
 }
@@ -383,9 +384,26 @@ pub fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?contex
     if (getLowercaseMapValue(?context.Context.ProcedureSig, &self.known_procedure_sig_cache, name)) |cached| {
         return cached;
     }
-    const resolved = getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, name);
+    const resolved = lookupQualifiedKnownProcedureSig(self, name) orelse
+        getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, name);
     putKnownProcedureSigCache(self, name, resolved);
     return resolved;
+}
+
+fn lookupQualifiedKnownFunctionTypeSpec(self: *context.Context, name: []const u8) ?TypeSpec {
+    const owner_name = lexicalProcedureLookupOwner(self) orelse return null;
+    const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, name }) catch return null;
+    return getLowercaseMapValue(TypeSpec, self.known_function_type_specs, qualified);
+}
+
+fn lookupQualifiedKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+    const owner_name = lexicalProcedureLookupOwner(self) orelse return null;
+    const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, name }) catch return null;
+    return getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, qualified);
+}
+
+fn lexicalProcedureLookupOwner(self: *context.Context) ?[]const u8 {
+    return self.unit.owner_name orelse self.unit.name;
 }
 
 fn putKnownFunctionTypeSpecCache(self: *context.Context, name: []const u8, resolved: ?TypeSpec) void {

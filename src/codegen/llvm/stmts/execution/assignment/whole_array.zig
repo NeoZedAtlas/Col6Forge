@@ -4,6 +4,7 @@ const common = @import("../../../codegen/common.zig");
 const context = @import("../../../codegen/context/mod.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
 const expr_memory = @import("../../../codegen/expression/memory.zig");
+const expr_dispatch = @import("../../../codegen/expression/dispatch/mod.zig");
 const array_actuals = @import("../../../codegen/expression/call/array_actuals.zig");
 const io_utils = @import("../../io/utils.zig");
 const ir = @import("../../../../ir.zig");
@@ -18,6 +19,12 @@ const ValueRef = context.ValueRef;
 const resolveArrayActual = array_actuals.resolveArrayActual;
 
 const EmitError = anyerror;
+
+const CharacterArrayTargetInfo = struct {
+    name: []const u8,
+    sym: ast.sema.Symbol,
+    whole_array_section: bool,
+};
 
 pub fn emitContiguousSectionScalarAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
     if (assign.target.* != .call_or_subscript) return false;
@@ -142,6 +149,57 @@ pub fn emitWholeArrayScalarAssignment(ctx: *Context, builder: anytype, assign: a
     const value = try expr.emitExpr(ctx, builder, assign.value);
     const coerced = try expr.coerce(ctx, builder, value, elem_ty);
     try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, count_val, coerced);
+    return true;
+}
+
+pub fn emitWholeCharacterArrayScalarAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    const target_info = wholeCharacterArrayTarget(ctx, assign.target) orelse return false;
+    const target_name = target_info.name;
+    const target_sym = target_info.sym;
+
+    const base_ptr = try wholeArrayBasePtr(ctx, builder, target_name, target_sym);
+    const elem_len_i32 = try expr_dispatch.emitCharacterSymbolLenValue(ctx, target_name, target_sym);
+    var elem_len_i64 = try expr_dispatch.emitCharacterSymbolLenValueI64(ctx, builder, target_name, target_sym);
+    if (elem_len_i64.ty != .i64) {
+        elem_len_i64 = try expr.coerce(ctx, builder, elem_len_i64, .i64);
+    }
+    const count = try emitCharacterArrayTargetElemCount(ctx, builder, target_info);
+
+    const idx_ptr = try ctx.nextTemp();
+    try builder.alloca(idx_ptr, .i64);
+    try builder.store(character_mod.constI64(ctx, 0), .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+
+    const loop_head = try ctx.nextLabel("arr_char_fill_head");
+    const loop_body = try ctx.nextLabel("arr_char_fill_body");
+    const loop_exit = try ctx.nextLabel("arr_char_fill_exit");
+    try builder.br(loop_head);
+
+    try builder.label(loop_head);
+    const idx_tmp = try ctx.nextTemp();
+    try builder.load(idx_tmp, .i64, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    const idx_val = ValueRef{ .name = idx_tmp, .ty = .i64, .is_ptr = false };
+    const cond_tmp = try ctx.nextTemp();
+    try builder.compare(cond_tmp, "icmp", "slt", .i64, idx_val, count);
+    try builder.brCond(.{ .name = cond_tmp, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
+
+    try builder.label(loop_body);
+    const byte_offset = try expr.emitMul(ctx, builder, idx_val, elem_len_i64);
+    const elem_ptr_name = try ctx.nextTemp();
+    try builder.gep(elem_ptr_name, .i8, base_ptr, byte_offset);
+    try character_mod.storeCharacterValueDynamic(
+        ctx,
+        builder,
+        .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true },
+        elem_len_i32,
+        assign.value,
+    );
+
+    const next_tmp = try ctx.nextTemp();
+    try builder.binary(next_tmp, "add", .i64, idx_val, character_mod.constI64(ctx, 1));
+    try builder.store(.{ .name = next_tmp, .ty = .i64, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.br(loop_head);
+
+    try builder.label(loop_exit);
     return true;
 }
 
@@ -505,6 +563,23 @@ fn wholeArrayConstructorTarget(ctx: *Context, expr_node: *ast.Expr) ?struct { na
     };
 }
 
+fn wholeCharacterArrayTarget(ctx: *Context, expr_node: *ast.Expr) ?CharacterArrayTargetInfo {
+    return switch (expr_node.*) {
+        .identifier => |name| blk: {
+            const sym = ctx.findSymbol(name) orelse break :blk null;
+            if (!sym.isCharacter() or sym.dims.len == 0) break :blk null;
+            break :blk .{ .name = name, .sym = sym, .whole_array_section = false };
+        },
+        .substring => |sub| blk: {
+            if (!isWholeArraySectionSubstringTarget(ctx, sub)) break :blk null;
+            const sym = ctx.findSymbol(sub.name) orelse break :blk null;
+            if (!sym.isCharacter() or sym.dims.len == 0) break :blk null;
+            break :blk .{ .name = sub.name, .sym = sym, .whole_array_section = true };
+        },
+        else => null,
+    };
+}
+
 pub fn isWholeArraySectionSubstringTarget(ctx: *Context, sub: ast.SubstringExpr) bool {
     if (!isArraySectionSubstringTarget(ctx, sub)) return false;
     if (sub.start != null or sub.end != null) return false;
@@ -569,6 +644,22 @@ fn emitDynamicElemCount(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) E
         total = try expr.emitMul(ctx, builder, total, extent);
     }
     return total;
+}
+
+fn emitCharacterArrayTargetElemCount(
+    ctx: *Context,
+    builder: anytype,
+    target_info: CharacterArrayTargetInfo,
+) EmitError!ValueRef {
+    _ = target_info.whole_array_section;
+    const elem_count = ctx.arrayElemCountForSymbol(target_info.sym) catch |err| switch (err) {
+        error.ArrayDimNotConstant => null,
+        else => return err,
+    };
+    return if (elem_count) |count|
+        character_mod.constI64(ctx, @intCast(count))
+    else
+        try emitDynamicElemCount(ctx, builder, target_info.sym);
 }
 
 fn emitRequireTargetArrayShape(

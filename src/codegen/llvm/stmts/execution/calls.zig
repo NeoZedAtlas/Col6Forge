@@ -3,6 +3,7 @@ const ast = @import("../../../input.zig");
 const context = @import("../../codegen/context/mod.zig");
 const expr = @import("../../codegen/expression/mod.zig");
 const expr_call = @import("../../codegen/expression/call/mod.zig");
+const expr_memory = @import("../../codegen/expression/memory.zig");
 const utils = @import("../../codegen/utils.zig");
 const cfg = @import("../cfg.zig");
 const ir = @import("../../../ir.zig");
@@ -19,6 +20,25 @@ pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!v
     defer ctx.setCurrentSource(prev_source);
     if (call.binding_base) |base| {
         const base_name = ctx.derivedTypeNameForExpr(base) orelse return error.UnknownSymbol;
+        if (ctx.lookupDerivedComponentLayout(base_name, call.name)) |component| {
+            if (!component.procedure) return error.UnknownSymbol;
+            const base_actuals = try collectCallExprArgs(ctx.allocator, call);
+            defer ctx.allocator.free(base_actuals);
+            const actuals = try buildProcedureComponentActuals(ctx, base, component, base_actuals);
+            defer ctx.allocator.free(actuals);
+
+            const slot_ptr = try expr_memory.emitComponentStoragePtr(ctx, builder, .{
+                .base = base,
+                .name = call.name,
+                .args = &.{},
+                .has_parens = false,
+            });
+            const fn_ptr_name = try ctx.nextTemp();
+            try builder.load(fn_ptr_name, .ptr, slot_ptr);
+            const fn_ptr = ValueRef{ .name = fn_ptr_name, .ty = .ptr, .is_ptr = false };
+            _ = try expr.emitIndirectCall(ctx, builder, fn_ptr, .void, actuals, true);
+            return;
+        }
         const binding = ctx.lookupDerivedBinding(base_name, call.name) orelse return error.UnknownSymbol;
         const proc_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
         const lookup_name = try boundProcedureLookupName(ctx, binding, proc_name);
@@ -53,6 +73,45 @@ pub fn emitCall(ctx: *Context, builder: anytype, call: ast.CallStmt) EmitError!v
     }
     const fn_name = try ensureTypedExternalDeclForCall(ctx, call.name, .void, args);
     _ = try expr.emitCall(ctx, builder, fn_name, .void, args, true);
+}
+
+fn buildProcedureComponentActuals(
+    ctx: *Context,
+    base: *ast.Expr,
+    component: context.DerivedComponentLayout,
+    args: []*ast.Expr,
+) ![]*ast.Expr {
+    const extra: usize = if (component.procedure_nopass) 0 else 1;
+    const actuals = try ctx.allocator.alloc(*ast.Expr, args.len + extra);
+    const pass_idx = if (component.procedure_nopass)
+        null
+    else if (component.procedure_sig == null)
+        @as(?usize, 0)
+    else
+        procedureComponentPassArgIndex(component.procedure_sig.?, component.procedure_pass_name);
+    var actual_idx: usize = 0;
+    var arg_idx: usize = 0;
+    while (actual_idx < actuals.len) : (actual_idx += 1) {
+        if (pass_idx != null and actual_idx == pass_idx.?) {
+            actuals[actual_idx] = base;
+            continue;
+        }
+        actuals[actual_idx] = args[arg_idx];
+        arg_idx += 1;
+    }
+    return actuals;
+}
+
+fn procedureComponentPassArgIndex(
+    sig: ast.sema.KnownProcedureSig,
+    pass_name: ?[]const u8,
+) ?usize {
+    if (sig.args.len == 0) return null;
+    const target = pass_name orelse return 0;
+    for (sig.args, 0..) |arg, idx| {
+        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
+    }
+    return null;
 }
 
 pub fn emitCallValue(ctx: *Context, builder: anytype, call: ast.CallStmt, ret_ty: ir.IRType) EmitError!ValueRef {

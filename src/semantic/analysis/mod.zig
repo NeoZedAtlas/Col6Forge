@@ -1400,6 +1400,176 @@ test "data actual checking preserves later rank mismatch after earlier call arit
     try testing.expect(std.mem.indexOf(u8, second.message, "Rank mismatch in argument") != null);
 }
 
+test "keyword actual without visible interface requires explicit interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "external bar\n" ++
+        "call bar(a=5)\n" ++
+        "call foo(a=5)\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = split_api.analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_bag) catch {};
+    const first = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(first);
+    const second = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(second);
+
+    try testing.expectEqualStrings(catalog.semantic.explicit_interface_required.code, first.code);
+    try testing.expectEqualStrings(catalog.semantic.explicit_interface_required.code, second.code);
+}
+
+test "contained procedure lookup does not collide across different owners" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "implicit none\n" ++
+        "integer :: i(10)\n" ++
+        "call foo(i(8))\n" ++
+        "contains\n" ++
+        "  subroutine foo(a)\n" ++
+        "    integer :: a(4)\n" ++
+        "  end subroutine foo\n" ++
+        "end\n" ++
+        "\n" ++
+        "subroutine test()\n" ++
+        "  implicit none\n" ++
+        "  character(len=5), pointer :: c\n" ++
+        "  call foo(c)\n" ++
+        "contains\n" ++
+        "  subroutine foo(a)\n" ++
+        "    character(len=3), pointer :: a\n" ++
+        "  end subroutine foo\n" ++
+        "end subroutine test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = split_api.analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_bag) catch {};
+    const first = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(first);
+    const second = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(second);
+
+    try testing.expect(std.mem.indexOf(u8, first.message, "Rank mismatch in argument") != null);
+    try testing.expect(std.mem.indexOf(u8, second.message, "Character length mismatch") != null);
+}
+
+test "parity and norm2 DIM arguments must stay scalar" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  logical, parameter :: a(*,*) = reshape([.true.,.false.], shape=[1,2])\n" ++
+        "  real,    parameter :: r(*,*) = reshape([1.,2.], shape=[1,2])\n" ++
+        "  print *, parity(a, dim=[1])\n" ++
+        "  print *, norm2(r, dim=[1])\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = split_api.analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_bag) catch {};
+    const first = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(first);
+    const second = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(second);
+
+    try testing.expect(std.mem.indexOf(u8, first.message, "must be a scalar") != null);
+    try testing.expect(std.mem.indexOf(u8, second.message, "must be a scalar") != null);
+}
+
+test "allow argument mismatch suppresses implicit external hard errors across contained procedures" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  real :: a\n" ++
+        "  call foo(a)\n" ++
+        "contains\n" ++
+        "  subroutine bar\n" ++
+        "    integer :: b\n" ++
+        "    call foo(b)\n" ++
+        "  end subroutine bar\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = try split_api.analyzeProgramWithKnownAndOptionsAndDiagnostics(
+        arena.allocator(),
+        program,
+        &.{},
+        &.{},
+        .{ .allow_argument_mismatch = true },
+        &diag_bag,
+    );
+    try testing.expect(!diag_bag.has());
+}
+
+test "mirrored host parameters must not shadow contained procedure host association" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module teststr\n" ++
+        "  implicit none\n" ++
+        "  integer, parameter :: grh_size = 20, nmax = 64\n" ++
+        "  type strtype\n" ++
+        "    integer :: size\n" ++
+        "    character :: mdr(nmax)\n" ++
+        "  end type strtype\n" ++
+        "contains\n" ++
+        "  subroutine sub2(string, str_size)\n" ++
+        "    integer, intent(in) :: str_size\n" ++
+        "    character, intent(out) :: string(str_size)\n" ++
+        "  end subroutine sub2\n" ++
+        "  subroutine sub1(a)\n" ++
+        "    type(strtype), intent(inout) :: a\n" ++
+        "    call sub2(a%mdr(grh_size + 1), a%size - grh_size)\n" ++
+        "  end subroutine sub1\n" ++
+        "end module teststr\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
 test "nopass type-bound call rejects array base object" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1580,4 +1750,125 @@ test "array constructor rejects abstract imported module type items" {
     try testing.expectError(error.AssignmentTypeMismatch, split_api.analyzeProgram(arena.allocator(), program));
     const got = diag.take() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.indexOf(u8, got.message, "is of the ABSTRACT type") != null);
+}
+
+test "external procedure without visible explicit interface does not enforce dummy rank" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  implicit none\n" ++
+        "  real :: a(3,4)\n" ++
+        "  real :: r\n" ++
+        "  external ff\n" ++
+        "  r = ff(a(2,3))\n" ++
+        "end program p\n" ++
+        "real function ff(x)\n" ++
+        "  real :: x(2,2)\n" ++
+        "  ff = x(1,1)\n" ++
+        "end function ff\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expect(diag.take() == null);
+}
+
+test "standalone assumed-length character function definition does not conflict with caller declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  implicit none\n" ++
+        "  character*2 :: arg, cf\n" ++
+        "  arg = 'ab'\n" ++
+        "  print *, cf(arg)\n" ++
+        "end program p\n" ++
+        "character*(*) function cf(arg)\n" ++
+        "  character*(*) :: arg\n" ++
+        "  cf = arg\n" ++
+        "end function cf\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expect(diag.take() == null);
+}
+
+test "procedure component CALL uses component path with default PASS" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module moda\n" ++
+        "  implicit none\n" ++
+        "  type :: a\n" ++
+        "    procedure(a_proc), pointer :: proc\n" ++
+        "  end type a\n" ++
+        "contains\n" ++
+        "  subroutine a_proc(this, stat)\n" ++
+        "    class(a), intent(inout) :: this\n" ++
+        "    integer, intent(out) :: stat\n" ++
+        "    stat = 0\n" ++
+        "  end subroutine a_proc\n" ++
+        "end module moda\n" ++
+        "program p\n" ++
+        "  use moda\n" ++
+        "  implicit none\n" ++
+        "  integer :: ierr, i\n" ++
+        "  type(a), allocatable :: arr(:)\n" ++
+        "  allocate(arr(2))\n" ++
+        "  do i = 1, 2\n" ++
+        "    arr(i)%proc => a_proc\n" ++
+        "    call arr(i)%proc(ierr)\n" ++
+        "  end do\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expect(diag.take() == null);
+}
+
+test "typed procedure component call accepts actual args without explicit interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  implicit none\n" ++
+        "  type coefficients_t\n" ++
+        "    procedure(real), pointer, nopass :: vfunc\n" ++
+        "  end type coefficients_t\n" ++
+        "  type(coefficients_t) :: coeff\n" ++
+        "  real, dimension(3) :: x\n" ++
+        "  print *, abs(coeff%vfunc(x(:)))\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expect(diag.take() == null);
 }

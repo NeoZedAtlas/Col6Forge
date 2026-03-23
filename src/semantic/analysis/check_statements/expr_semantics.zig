@@ -45,6 +45,27 @@ pub fn checkSpecialExprCallConstraints(
     name: []const u8,
     args: []*ast.Expr,
 ) CheckError!void {
+    if (intrinsicRequiresDoublePrecisionArgs(name)) {
+        for (args) |arg| {
+            const spec = try resolve_expr.exprTypeSpec(self, arg);
+            if (spec.lowered_kind != .double_precision) {
+                return emitExprConstraintDiagnostic(self, arg, "must be double precision");
+            }
+        }
+    }
+    if (std.ascii.eqlIgnoreCase(name, "dprod")) {
+        for (args) |arg| {
+            const spec = try resolve_expr.exprTypeSpec(self, arg);
+            if (spec.lowered_kind != .real) {
+                return emitExprConstraintDiagnostic(self, arg, "must be default real");
+            }
+        }
+    }
+    if (std.ascii.eqlIgnoreCase(name, "parity") or std.ascii.eqlIgnoreCase(name, "norm2")) {
+        if (args.len > 1 and resolve_expr.exprRank(self, args[1]) != 0) {
+            return emitExprConstraintDiagnostic(self, args[1], "must be a scalar");
+        }
+    }
     if (std.ascii.eqlIgnoreCase(name, "allocated")) {
         if (args.len > 0 and !exprIsAllocatableEntity(self, args[0])) {
             return emitExprConstraintDiagnostic(self, args[0], "must be ALLOCATABLE");
@@ -56,6 +77,38 @@ pub fn checkSpecialExprCallConstraints(
             return emitExprConstraintDiagnostic(self, args[0], "must be a POINTER");
         }
     }
+}
+
+fn intrinsicRequiresDoublePrecisionArgs(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "dabs") or
+        std.ascii.eqlIgnoreCase(name, "dacos") or
+        std.ascii.eqlIgnoreCase(name, "dacosh") or
+        std.ascii.eqlIgnoreCase(name, "dasin") or
+        std.ascii.eqlIgnoreCase(name, "dasinh") or
+        std.ascii.eqlIgnoreCase(name, "datan") or
+        std.ascii.eqlIgnoreCase(name, "datan2") or
+        std.ascii.eqlIgnoreCase(name, "datanh") or
+        std.ascii.eqlIgnoreCase(name, "dbesj0") or
+        std.ascii.eqlIgnoreCase(name, "dbesj1") or
+        std.ascii.eqlIgnoreCase(name, "dbesy0") or
+        std.ascii.eqlIgnoreCase(name, "dbesy1") or
+        std.ascii.eqlIgnoreCase(name, "dcos") or
+        std.ascii.eqlIgnoreCase(name, "dcosh") or
+        std.ascii.eqlIgnoreCase(name, "ddim") or
+        std.ascii.eqlIgnoreCase(name, "derf") or
+        std.ascii.eqlIgnoreCase(name, "derfc") or
+        std.ascii.eqlIgnoreCase(name, "dexp") or
+        std.ascii.eqlIgnoreCase(name, "dgamma") or
+        std.ascii.eqlIgnoreCase(name, "dlgama") or
+        std.ascii.eqlIgnoreCase(name, "dlog") or
+        std.ascii.eqlIgnoreCase(name, "dlog10") or
+        std.ascii.eqlIgnoreCase(name, "dmod") or
+        std.ascii.eqlIgnoreCase(name, "dsign") or
+        std.ascii.eqlIgnoreCase(name, "dsin") or
+        std.ascii.eqlIgnoreCase(name, "dsinh") or
+        std.ascii.eqlIgnoreCase(name, "dsqrt") or
+        std.ascii.eqlIgnoreCase(name, "dtan") or
+        std.ascii.eqlIgnoreCase(name, "dtanh");
 }
 
 pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: anytype) CheckError!ast.TypeKind {
@@ -152,6 +205,13 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
             }
             const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
             if (resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
+                if (component.procedure) {
+                    if (!comp.has_parens) return try resolve_expr.exprType(self, expr);
+                    try procedure_calls.checkProcedureComponent(self, comp.base, component, comp.args, false, .{
+                        .dummyArgTypeCompatible = deps.dummyArgTypeCompatible,
+                    });
+                    return try resolve_expr.exprType(self, expr);
+                }
                 if (component.dims.len == 0 and comp.args.len != 0) {
                     self.setCurrentSource(self.sourceForExpr(expr));
                     return error.InvalidSubscript;

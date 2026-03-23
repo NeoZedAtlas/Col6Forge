@@ -84,6 +84,12 @@ pub fn trackCharAssignment(ctx: *Context, target: *ast.Expr, value: ?[]const u8)
             const key = formatCharArrayKey(&key_buf, call.name, idx_val) catch return;
             updateCharMap(&ctx.char_array_values, ctx, key, value);
         },
+        .substring => |sub| {
+            const sym = ctx.findSymbol(sub.name) orelse return;
+            if (sym.isCharacter() and sym.dims.len > 0 and sub.args.len == 0) {
+                invalidateCharArrayEntries(ctx, sub.name);
+            }
+        },
         else => {},
     }
 }

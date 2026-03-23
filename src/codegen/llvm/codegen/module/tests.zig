@@ -1015,6 +1015,76 @@ test "emitModuleToWriter lowers contiguous section assignment from whole array w
     try testing.expect(std.mem.indexOf(u8, output, "arr_copy_head") != null);
 }
 
+test "emitModuleToWriter lowers character whole-array section scalar assignment through array fill loop" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "  implicit none\n" ++
+        "  integer, parameter :: n = 8\n" ++
+        "  character :: string(n)\n" ++
+        "  string(:) = 'a'\n" ++
+        "end program test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "char_section_scalar_assign.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "arr_char_fill_head") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "str_loop_cond") != null);
+}
+
+test "emitModuleToWriter resolves mirrored prelude parameters for derived layouts used by contained procedure calls" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module teststr\n" ++
+        "  implicit none\n" ++
+        "  integer, parameter :: grh_size = 20, nmax = 64\n" ++
+        "  type strtype\n" ++
+        "    integer :: size\n" ++
+        "    character :: mdr(nmax)\n" ++
+        "  end type strtype\n" ++
+        "contains\n" ++
+        "  subroutine sub2(string, str_size)\n" ++
+        "    integer, intent(in) :: str_size\n" ++
+        "    character, intent(out) :: string(str_size)\n" ++
+        "    string(:) = 'a'\n" ++
+        "  end subroutine sub2\n" ++
+        "  subroutine sub1(a)\n" ++
+        "    type(strtype), intent(inout) :: a\n" ++
+        "    call sub2(a%mdr(grh_size + 1), a%size - grh_size)\n" ++
+        "  end subroutine sub1\n" ++
+        "end module teststr\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "mirrored_prelude_char_component_call.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "arr_char_fill_head") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "call void @subroutine_sub2_") != null);
+}
+
 test "emitModuleToWriter lowers SUM over implied-do array constructor" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -69,6 +69,9 @@ pub const ProcedureDecl = struct {
     pointer: bool = false,
     optional: bool = false,
     save: bool = false,
+    nopass: bool = false,
+    pass_name: ?[]const u8 = null,
+    private: bool = false,
 };
 
 pub const InterfaceProcedure = struct {
@@ -95,6 +98,8 @@ pub const DerivedTypeDef = struct {
     bind_c: bool = false,
     components: []const TypeDecl = &.{},
     component_sources: []const @import("program.zig").DeclSource = &.{},
+    procedure_components: []const ProcedureDecl = &.{},
+    procedure_component_sources: []const @import("program.zig").DeclSource = &.{},
     bindings: []const TypeBoundProcedureBinding = &.{},
 };
 

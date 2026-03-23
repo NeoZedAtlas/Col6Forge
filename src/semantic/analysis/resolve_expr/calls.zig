@@ -211,6 +211,15 @@ pub fn resolveComponentExpr(
     const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
     try ensureResolvedDerivedTypeForComponentBase(self, derived_name, expr_node);
     if (symbols_mod.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
+        if (component.procedure) {
+            if (!comp.has_parens) {
+                try deps.cacheExprType(self, expr_node, component.type_spec);
+                return;
+            }
+            try validateProcedureComponentCall(self, comp.base, component, comp.args, deps);
+            try deps.cacheExprType(self, expr_node, try procedureComponentResultTypeSpec(component));
+            return;
+        }
         try validateComponentArgs(self, component.dims, comp.args, deps);
         try deps.cacheExprType(self, expr_node, component.type_spec);
         return;
@@ -246,6 +255,10 @@ pub fn exprRankForComponent(
     if (base_spec.lowered_kind != .derived) return 0;
     const derived_name = base_spec.derived_type_name orelse return 0;
     const component = symbols_mod.lookupDerivedComponent(self, derived_name, comp.name) orelse return 0;
+    if (component.procedure and comp.has_parens) {
+        const sig = component.procedure_sig orelse return 0;
+        return sig.result_rank;
+    }
     return if (comp.args.len == 0) component.dims.len else 0;
 }
 
@@ -297,6 +310,7 @@ pub fn exprTypeSpecForComponent(
     const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
     try ensureResolvedDerivedTypeForComponentBase(self, derived_name, comp.base);
     if (symbols_mod.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
+        if (component.procedure and comp.has_parens) return procedureComponentResultTypeSpec(component);
         return component.type_spec;
     }
     const binding = symbols_mod.lookupDerivedBinding(self, derived_name, comp.name) orelse return error.InvalidSubscript;
@@ -631,6 +645,37 @@ fn validateTypeBoundProcedureCall(
     }
 }
 
+fn validateProcedureComponentCall(
+    self: *context.Context,
+    passed_object: *ast.Expr,
+    component: context.Context.DerivedTypeInfo.ComponentInfo,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) ResolveError!void {
+    const sig = component.procedure_sig;
+    const procedure_kind = if (sig) |resolved_sig| resolved_sig.kind else component.procedure_kind orelse return error.InvalidSubscript;
+    if (procedure_kind != .function) return error.InvalidSubscript;
+    if (!component.procedure_has_explicit_interface) return;
+
+    const resolved_sig = sig orelse return;
+    const actual_count = args.len + @as(usize, if (component.procedure_nopass) 0 else 1);
+    if (actual_count > resolved_sig.arg_count) return error.InvalidArgumentCount;
+    if (actual_count < minimumRequiredProcedureArgs(resolved_sig)) return error.InvalidArgumentCount;
+
+    const pass_idx = if (component.procedure_nopass) null else bindingPassArgIndex(resolved_sig, component.procedure_pass_name);
+    var actual_idx: usize = 0;
+    var formal_idx: usize = 0;
+    while (formal_idx < resolved_sig.args.len) : (formal_idx += 1) {
+        if (pass_idx != null and formal_idx == pass_idx.?) {
+            try validateTypeBoundProcedureActual(self, resolved_sig.args[formal_idx], passed_object, deps);
+            continue;
+        }
+        if (actual_idx >= args.len) break;
+        try validateTypeBoundProcedureActual(self, resolved_sig.args[formal_idx], args[actual_idx], deps);
+        actual_idx += 1;
+    }
+}
+
 fn validateTypeBoundProcedureActual(
     self: *context.Context,
     formal: context.Context.ProcedureSig.ArgSig,
@@ -678,6 +723,14 @@ fn typeBoundProcedureResultTypeSpec(
         }
     }
     return symbols_mod.lookupKnownFunctionResolvedSpec(self, result_name) orelse return error.InvalidSubscript;
+}
+
+fn procedureComponentResultTypeSpec(
+    component: context.Context.DerivedTypeInfo.ComponentInfo,
+) ResolveError!symbols.TypeSpec {
+    const sig = component.procedure_sig orelse return error.InvalidSubscript;
+    if (sig.kind != .function) return error.InvalidSubscript;
+    return sig.result_type_spec orelse component.type_spec;
 }
 
 fn minimumRequiredProcedureArgs(sig: context.Context.ProcedureSig) usize {

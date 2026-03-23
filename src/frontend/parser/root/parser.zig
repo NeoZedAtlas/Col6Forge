@@ -329,6 +329,8 @@ pub const Parser = struct {
         self.index += 1;
         var components = std.array_list.Managed(ast.TypeDecl).init(self.arena);
         var component_sources = std.array_list.Managed(DeclSource).init(self.arena);
+        var procedure_components = std.array_list.Managed(ast.ProcedureDecl).init(self.arena);
+        var procedure_component_sources = std.array_list.Managed(DeclSource).init(self.arena);
         var bindings = std.array_list.Managed(ast.TypeBoundProcedureBinding).init(self.arena);
         var in_contains = false;
         var sequence = false;
@@ -380,6 +382,8 @@ pub const Parser = struct {
                     .bind_c = header.bind_c,
                     .components = try components.toOwnedSlice(),
                     .component_sources = try component_sources.toOwnedSlice(),
+                    .procedure_components = try procedure_components.toOwnedSlice(),
+                    .procedure_component_sources = try procedure_component_sources.toOwnedSlice(),
                     .bindings = try bindings.toOwnedSlice(),
                 } };
             }
@@ -402,6 +406,9 @@ pub const Parser = struct {
                 if (component_decl == .type_decl) {
                     try components.append(component_decl.type_decl);
                     try component_sources.append(root_diagnostics.sourceFromLine(line));
+                } else if (component_decl == .procedure) {
+                    try procedure_components.append(component_decl.procedure);
+                    try procedure_component_sources.append(root_diagnostics.sourceFromLine(line));
                 }
             } else if (in_contains and body_lp.consumeKeyword("PRIVATE") and body_lp.peek() == null) {
                 if (saw_binding_stmt) {

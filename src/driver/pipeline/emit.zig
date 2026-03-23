@@ -79,6 +79,7 @@ pub fn emitLlvmModule(
         .{
             .target_layout = options.semantic_target_layout,
             .range_check = options.range_check,
+            .allow_argument_mismatch = options.allow_argument_mismatch,
         },
         &semantic_diag_bag,
     ) catch |err| {
@@ -196,7 +197,11 @@ pub fn emitLlvmModuleToWriter(
         program,
         options.known_function_types,
         options.known_procedure_sigs,
-        .{ .target_layout = options.semantic_target_layout },
+        .{
+            .target_layout = options.semantic_target_layout,
+            .range_check = options.range_check,
+            .allow_argument_mismatch = options.allow_argument_mismatch,
+        },
         &semantic_diag_bag,
     ) catch |err| {
         if (profile) |p| {

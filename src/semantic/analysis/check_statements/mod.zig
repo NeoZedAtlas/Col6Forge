@@ -154,6 +154,12 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 const base_spec = try resolve_expr.exprTypeSpec(self, base);
                 if (base_spec.lowered_kind != .derived) return error.InvalidArgumentCount;
                 const derived_name = base_spec.derived_type_name orelse return error.InvalidArgumentCount;
+                if (resolve_symbols.lookupDerivedComponent(self, derived_name, call.name)) |component| {
+                    if (!component.procedure) return error.InvalidArgumentCount;
+                    return procedure_calls.checkProcedureComponent(self, base, component, procedure_calls.collectCallExprArgsScratch(self, call.args), true, .{
+                        .dummyArgTypeCompatible = dummyArgTypeCompatible,
+                    });
+                }
                 const binding = resolve_symbols.lookupDerivedBinding(self, derived_name, call.name) orelse return error.InvalidArgumentCount;
                 return procedure_calls.checkTypeBoundProcedureComponent(self, base, binding, procedure_calls.collectCallExprArgsScratch(self, call.args), true, .{
                     .dummyArgTypeCompatible = dummyArgTypeCompatible,

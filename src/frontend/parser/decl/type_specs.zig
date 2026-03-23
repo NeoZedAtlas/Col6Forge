@@ -12,9 +12,9 @@ pub const ParsedCharacterLen = common.ParsedCharacterLen;
 pub fn parseImplicitTypeKind(lp: *LineParser, arena: std.mem.Allocator) !ImplicitTypeSpec {
     if (lp.isKeywordSplit("CHARACTER")) {
         _ = lp.consumeKeyword("CHARACTER");
-        var char_len: ?*ast.Expr = null;
-        if (lp.consume(.star)) char_len = try declarators.parseCharacterLen(lp, arena);
-        return .{ .type_kind = .character, .kind_selector = null, .char_len = char_len };
+        var parsed_len: ParsedCharacterLen = .{};
+        if (lp.consume(.star) or lp.peekIs(.l_paren)) parsed_len = try declarators.parseCharacterLenSpec(lp, arena);
+        return .{ .type_kind = .character, .kind_selector = parsed_len.kind_selector, .char_len = parsed_len.expr };
     }
     if (lp.isKeywordSplit("INTEGER")) {
         _ = lp.consumeKeyword("INTEGER");

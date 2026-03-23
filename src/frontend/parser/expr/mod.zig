@@ -126,7 +126,7 @@ fn parsePrimary(lp: *LineParser, arena: std.mem.Allocator, depth: usize) ParseEx
             }
             const name = lp.readName(arena) orelse return error.UnexpectedToken;
             if (lp.consume(.l_paren)) {
-                if (shared.hasSubstringRange(lp.*)) {
+                if (shared.hasSubstringRange(lp.*) and !shared.hasTrailingSubstringSuffix(lp.*)) {
                     const args = @constCast(@as([]const *Expr, &[_]*Expr{}));
                     var start_expr: ?*Expr = null;
                     if (!lp.peekIs(.colon)) {

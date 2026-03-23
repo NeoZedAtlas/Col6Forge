@@ -6,6 +6,7 @@ const context = @import("context.zig");
 const symbols_mod = @import("resolve_symbols.zig");
 const constants = @import("resolve_const.zig");
 const type_kind_selector = @import("../type_kind_selector.zig");
+const procedure_interfaces = @import("check_statements/procedure_interfaces.zig");
 
 const StorageClass = symbols.StorageClass;
 const CharacterLengthKind = symbols.CharacterLengthKind;
@@ -115,12 +116,13 @@ pub fn applyDeclarator(
                     if (int_val < 0) return error.InvalidCharLen;
                     length = @intCast(int_val);
                 },
-                .real => return error.InvalidCharLen,
-                .complex => return error.InvalidCharLen,
-                .logical => return error.InvalidCharLen,
-                .string => return error.InvalidCharLen,
+                .real, .complex, .logical, .string => {
+                    if (emitCharacterLenTypingDiagnostic(self, len_expr)) return error.InvalidCharLen;
+                    return error.InvalidCharLen;
+                },
             }
         } else {
+            if (emitCharacterLenTypingDiagnostic(self, len_expr)) return error.InvalidCharLen;
             // Keep deferred/assumed length only where the rest of the semantic
             // pipeline already supports unknown CHARACTER size.
             if (allowsDeferredCharacterLength(self, sym.*)) {
@@ -157,12 +159,72 @@ fn validateConcreteAbstractTypeUse(self: *context.Context, type_spec: symbols.Ty
     return error.UnexpectedTypeDecl;
 }
 
+fn emitCharacterLenTypingDiagnostic(self: *context.Context, expr: *ast.Expr) bool {
+    if (!exprHasIdentifier(expr)) return false;
+    const decl_source = self.current_decl_source orelse ast.DeclSource{};
+    self.setDiagnostic(
+        if (decl_source.line == 0) 1 else decl_source.line,
+        if (decl_source.column == 0) 1 else decl_source.column,
+        catalog.semantic.invalid_char_len.code,
+        "used before it is typed",
+        decl_source.text,
+    );
+    return true;
+}
+
+fn exprHasIdentifier(expr: *ast.Expr) bool {
+    return switch (expr.*) {
+        .identifier => true,
+        .unary => |un| exprHasIdentifier(un.expr),
+        .binary => |bin| exprHasIdentifier(bin.left) or exprHasIdentifier(bin.right),
+        .call_or_subscript => |call| blk: {
+            for (call.args) |arg| {
+                if (exprHasIdentifier(arg)) break :blk true;
+            }
+            break :blk false;
+        },
+        .component => |comp| exprHasIdentifier(comp.base),
+        .substring => |sub| blk: {
+            for (sub.args) |arg| {
+                if (exprHasIdentifier(arg)) break :blk true;
+            }
+            if (sub.start != null and exprHasIdentifier(sub.start.?)) break :blk true;
+            if (sub.end != null and exprHasIdentifier(sub.end.?)) break :blk true;
+            break :blk false;
+        },
+        .dim_range => |range| blk: {
+            if (range.lower != null and exprHasIdentifier(range.lower.?)) break :blk true;
+            if (exprHasIdentifier(range.upper)) break :blk true;
+            if (range.stride != null and exprHasIdentifier(range.stride.?)) break :blk true;
+            break :blk false;
+        },
+        .array_constructor => |ctor| blk: {
+            for (ctor.items) |item| {
+                if (exprHasIdentifier(item)) break :blk true;
+            }
+            break :blk false;
+        },
+        .complex_literal => |lit| exprHasIdentifier(lit.real) or exprHasIdentifier(lit.imag),
+        .implied_do => |ido| blk: {
+            for (ido.items) |item| {
+                if (exprHasIdentifier(item)) break :blk true;
+            }
+            if (exprHasIdentifier(ido.start) or exprHasIdentifier(ido.end)) break :blk true;
+            if (ido.step != null and exprHasIdentifier(ido.step.?)) break :blk true;
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
 fn validateKnownFunctionResultDeclaration(
     self: *context.Context,
     sym: symbols.Symbol,
     prefer_length_message: bool,
 ) !void {
     if (sym.storage == .dummy) return;
+    if (self.unit.kind == .function and self.unit.owner_name == null and self.unit.prelude_decl_count == 0) return;
+    if (self.unit.kind != .function and !procedure_interfaces.calleeHasVisibleExplicitInterface(self, sym.name)) return;
     const known_sig = symbols_mod.lookupKnownProcedureSig(self, sym.name) orelse return;
     if (known_sig.kind != .function) return;
     const known_spec = symbols_mod.lookupKnownFunctionResolvedSpec(self, sym.name) orelse return;
