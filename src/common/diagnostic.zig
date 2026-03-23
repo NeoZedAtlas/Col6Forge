@@ -1,4 +1,8 @@
 const std = @import("std");
+const error_catalog = @import("error_catalog.zig");
+
+const docs_dir = "docs";
+const docs_file = "errors.md";
 
 pub const Diagnostic = struct {
     file_path: []const u8,
@@ -97,7 +101,7 @@ pub fn writeDiagnostic(writer: *std.Io.Writer, diag: Diagnostic) !void {
         diag.message,
     });
     if (diag.code.len != 0) {
-        try writer.print("help: see docs/errors.md#{s}\n", .{diag.code});
+        try writer.print("help: see {s}/{s}#{s}\n", .{ docs_dir, docs_file, diag.code });
     }
     if (diag.line_text.len == 0) return;
     try writer.print("{s}\n", .{diag.line_text});
@@ -114,22 +118,25 @@ test "writeDiagnostic keeps docs help line ahead of source context" {
     const testing = std.testing;
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
+    const info = error_catalog.semantic.invalid_char_len;
+    const expected = try std.fmt.allocPrint(testing.allocator,
+        "demo.f:2:7: error[{s}]: {s}\n" ++
+            "help: see {s}/{s}#{s}\n" ++
+            "      CHARACTER*(*) A\n" ++
+            "      ^\n",
+        .{ info.code, info.message, docs_dir, docs_file, info.code },
+    );
+    defer testing.allocator.free(expected);
 
     try writeDiagnostic(&out.writer, .{
         .file_path = "demo.f",
         .line = 2,
         .column = 7,
-        .code = "CF3103",
-        .message = "invalid CHARACTER length specification",
+        .code = info.code,
+        .message = info.message,
         .line_text = "      CHARACTER*(*) A",
     });
     try out.writer.flush();
 
-    try testing.expectEqualStrings(
-        "demo.f:2:7: error[CF3103]: invalid CHARACTER length specification\n" ++
-            "help: see docs/errors.md#CF3103\n" ++
-            "      CHARACTER*(*) A\n" ++
-            "      ^\n",
-        out.writer.buffered(),
-    );
+    try testing.expectEqualStrings(expected, out.writer.buffered());
 }
