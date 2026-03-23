@@ -323,10 +323,7 @@ pub fn parseSubmoduleContainer(self: anytype, units: *std.array_list.Managed(Pro
 
         const unit_header_line = self.lines[self.index];
         const parsing_internal = self.pending_owner_name != null;
-        var unit = if (try parseInheritedModuleProcedureUnit(self, stored_decls))
-            |parsed| parsed
-        else
-            try self.parseProgramUnit();
+        var unit = if (try parseInheritedModuleProcedureUnit(self, stored_decls)) |parsed| parsed else try self.parseProgramUnit();
         const requires_interface = unit.is_module_procedure;
         if (!parsing_internal) {
             unit.is_module_procedure = true;
@@ -1129,13 +1126,16 @@ pub fn importUsedModulePreludes(self: anytype, unit: ProgramUnit) !ProgramUnit {
         if (stmt_node.node != .use_stmt) continue;
         const use_stmt = stmt_node.node.use_stmt;
         const prelude = self.module_preludes.get(use_stmt.module_name) orelse continue;
-        if (use_stmt.only_items.len == 0) {
+        if (!use_stmt.has_only and use_stmt.only_items.len == 0) {
             if (seen.contains(use_stmt.module_name)) continue;
             imported = try root_prelude.prependDecls(self.arena, imported, prelude.decls, prelude.decl_sources);
             try seen.put(use_stmt.module_name, {});
             continue;
         }
-        const selected = try root_prelude.selectPreludeDecls(self.arena, prelude, use_stmt, self.diag_bag);
+        const selected = if (use_stmt.has_only)
+            try root_prelude.selectPreludeDecls(self.arena, prelude, use_stmt, self.diag_bag)
+        else
+            try root_prelude.importPreludeDecls(self.arena, &.{}, &.{}, &.{use_stmt}, &self.module_preludes, self.diag_bag);
         if (selected.decls.len == 0) continue;
         imported = try root_prelude.prependDecls(self.arena, imported, selected.decls, selected.decl_sources);
     }

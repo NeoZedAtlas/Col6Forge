@@ -54,14 +54,16 @@ pub fn importPreludeDecls(
     var seen_full_imports = CaseInsensitiveStringHashMap(void).initContext(arena, .{});
     for (module_uses) |module_use| {
         const prelude = preludes.get(module_use.module_name) orelse continue;
-        if (module_use.only_items.len == 0) {
+        if (!module_use.has_only and module_use.only_items.len == 0) {
             if (seen_full_imports.contains(module_use.module_name)) continue;
         }
-        const selected = if (module_use.only_items.len == 0)
+        const selected = if (!module_use.has_only and module_use.only_items.len == 0)
             ImportedPreludeDecls{
                 .decls = prelude.decls,
                 .decl_sources = prelude.decl_sources,
             }
+        else if (!module_use.has_only)
+            try renameFullPreludeDecls(arena, prelude, module_use)
         else
             try selectPreludeDecls(arena, prelude, module_use, diag_bag);
         var filtered_selected = std.array_list.Managed(Decl).init(arena);
@@ -75,7 +77,7 @@ pub fn importPreludeDecls(
             try filtered_sources.append(selected_source);
         }
         if (filtered_selected.items.len == 0) {
-            if (module_use.only_items.len == 0) {
+            if (!module_use.has_only and module_use.only_items.len == 0) {
                 try seen_full_imports.put(module_use.module_name, {});
             }
             continue;
@@ -90,11 +92,36 @@ pub fn importPreludeDecls(
         @memcpy(combined_sources[0..filtered_sources.items.len], filtered_sources.items);
         @memcpy(combined_sources[filtered_sources.items.len..], imported_sources);
         imported_sources = combined_sources;
-        if (module_use.only_items.len == 0) {
+        if (!module_use.has_only and module_use.only_items.len == 0) {
             try seen_full_imports.put(module_use.module_name, {});
         }
     }
     return .{ .decls = imported_decls, .decl_sources = imported_sources };
+}
+
+fn renameFullPreludeDecls(
+    arena: std.mem.Allocator,
+    prelude: ModulePrelude,
+    use_stmt: ast.UseStmt,
+) !ImportedPreludeDecls {
+    var renamed_decls = std.array_list.Managed(Decl).init(arena);
+    var renamed_sources = std.array_list.Managed(DeclSource).init(arena);
+
+    for (prelude.decls, 0..) |decl_node, idx| {
+        const local_name = if (preludeDeclExportedName(decl_node)) |exported_name|
+            renamePreludeTypeName(exported_name, use_stmt.only_items)
+        else
+            null;
+        try renamed_decls.append(try renamePreludeDecl(arena, decl_node, local_name, use_stmt.only_items));
+        if (idx < prelude.decl_sources.len) {
+            try renamed_sources.append(prelude.decl_sources[idx]);
+        }
+    }
+
+    return .{
+        .decls = try renamed_decls.toOwnedSlice(),
+        .decl_sources = try renamed_sources.toOwnedSlice(),
+    };
 }
 
 pub fn tryParsePreludeUseImport(lp: *LineParser, arena: std.mem.Allocator) !?ast.UseStmt {
@@ -210,16 +237,14 @@ fn preludeDeclExportedName(decl_node: Decl) ?[]const u8 {
 fn renamePreludeDecl(
     arena: std.mem.Allocator,
     decl_node: Decl,
-    local_name: []const u8,
+    local_name: ?[]const u8,
     only_items: []const ast.UseOnlyItem,
 ) !Decl {
     return switch (decl_node) {
         .derived_type_def => |derived| .{ .derived_type_def = try renameDerivedTypeDef(arena, derived, local_name, only_items) },
-        .interface_block => |interface_block| blk: {
-            var renamed = interface_block;
-            renamed.name = local_name;
-            break :blk .{ .interface_block = renamed };
-        },
+        .interface_block => |interface_block| .{ .interface_block = try renameInterfaceBlock(arena, interface_block, local_name, only_items) },
+        .type_decl => |type_decl| .{ .type_decl = renameTypeDecl(type_decl, only_items) },
+        .procedure => |procedure_decl| .{ .procedure = renameProcedureDecl(procedure_decl, only_items) },
         else => decl_node,
     };
 }
@@ -227,20 +252,16 @@ fn renamePreludeDecl(
 fn renameDerivedTypeDef(
     arena: std.mem.Allocator,
     derived: ast.DerivedTypeDef,
-    local_name: []const u8,
+    local_name: ?[]const u8,
     only_items: []const ast.UseOnlyItem,
 ) !ast.DerivedTypeDef {
     const components = try arena.alloc(ast.TypeDecl, derived.components.len);
     for (derived.components, 0..) |component, idx| {
-        var renamed_component = component;
-        if (component.derived_type_name) |type_name| {
-            renamed_component.derived_type_name = renamePreludeTypeName(type_name, only_items);
-        }
-        components[idx] = renamed_component;
+        components[idx] = renameTypeDecl(component, only_items);
     }
     const bindings = try arena.dupe(ast.TypeBoundProcedureBinding, derived.bindings);
     return .{
-        .name = local_name,
+        .name = local_name orelse derived.name,
         .parent_name = if (derived.parent_name) |parent| renamePreludeTypeName(parent, only_items) else null,
         .abstract = derived.abstract,
         .sequence = derived.sequence,
@@ -249,6 +270,78 @@ fn renameDerivedTypeDef(
         .component_sources = derived.component_sources,
         .bindings = bindings,
     };
+}
+
+fn renameInterfaceBlock(
+    arena: std.mem.Allocator,
+    interface_block: ast.InterfaceBlock,
+    local_name: ?[]const u8,
+    only_items: []const ast.UseOnlyItem,
+) !ast.InterfaceBlock {
+    const module_procedures = try renameNameList(arena, interface_block.module_procedures, only_items);
+    const specific_procedures = try renameNameList(arena, interface_block.specific_procedures, only_items);
+    const procedures = try renameNameList(arena, interface_block.procedures, only_items);
+    const procedure_headers = try arena.alloc(ast.InterfaceProcedure, interface_block.procedure_headers.len);
+    for (interface_block.procedure_headers, 0..) |proc_header, idx| {
+        procedure_headers[idx] = renameInterfaceProcedure(proc_header, only_items);
+    }
+    var renamed = interface_block;
+    renamed.name = local_name orelse interface_block.name;
+    renamed.module_procedures = module_procedures;
+    renamed.specific_procedures = specific_procedures;
+    renamed.procedures = procedures;
+    renamed.procedure_headers = procedure_headers;
+    return renamed;
+}
+
+fn renameInterfaceProcedure(
+    proc_header: ast.InterfaceProcedure,
+    only_items: []const ast.UseOnlyItem,
+) ast.InterfaceProcedure {
+    var renamed = proc_header;
+    renamed.name = renamePreludeTypeName(proc_header.name, only_items);
+    if (proc_header.type_spec) |type_spec| {
+        renamed.type_spec = renameProcedureTypeSpec(type_spec, only_items);
+    }
+    if (proc_header.decls.len == 0) return renamed;
+    return renamed;
+}
+
+fn renameNameList(
+    arena: std.mem.Allocator,
+    names: []const []const u8,
+    only_items: []const ast.UseOnlyItem,
+) ![]const []const u8 {
+    const renamed = try arena.alloc([]const u8, names.len);
+    for (names, 0..) |name, idx| {
+        renamed[idx] = renamePreludeTypeName(name, only_items);
+    }
+    return renamed;
+}
+
+fn renameTypeDecl(type_decl: ast.TypeDecl, only_items: []const ast.UseOnlyItem) ast.TypeDecl {
+    var renamed = type_decl;
+    if (type_decl.derived_type_name) |type_name| {
+        renamed.derived_type_name = renamePreludeTypeName(type_name, only_items);
+    }
+    return renamed;
+}
+
+fn renameProcedureDecl(procedure_decl: ast.ProcedureDecl, only_items: []const ast.UseOnlyItem) ast.ProcedureDecl {
+    var renamed = procedure_decl;
+    renamed.interface = switch (procedure_decl.interface) {
+        .type_spec => |type_spec| .{ .type_spec = renameProcedureTypeSpec(type_spec, only_items) },
+        else => procedure_decl.interface,
+    };
+    return renamed;
+}
+
+fn renameProcedureTypeSpec(type_spec: ast.ProcedureTypeSpec, only_items: []const ast.UseOnlyItem) ast.ProcedureTypeSpec {
+    var renamed = type_spec;
+    if (type_spec.derived_type_name) |type_name| {
+        renamed.derived_type_name = renamePreludeTypeName(type_name, only_items);
+    }
+    return renamed;
 }
 
 fn renamePreludeTypeName(name: []const u8, only_items: []const ast.UseOnlyItem) []const u8 {

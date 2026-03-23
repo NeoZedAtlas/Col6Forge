@@ -72,14 +72,30 @@ pub fn lookupDerivedBinding(
     type_name: []const u8,
     binding_name: []const u8,
 ) ?context.Context.DerivedTypeInfo.BindingInfo {
-    var current = lookupDerivedType(self, type_name) orelse return null;
+    const current = lookupDerivedType(self, type_name) orelse return null;
     while (true) {
         for (current.bindings) |binding| {
             if (std.ascii.eqlIgnoreCase(binding.name, binding_name)) return binding;
         }
         const parent = current.parent_name orelse return null;
-        current = lookupDerivedType(self, parent) orelse return null;
+        const inherited = lookupDerivedBinding(self, parent, binding_name) orelse return null;
+        if (lookupOverrideBinding(current.bindings, inherited)) |override| return override;
+        return inherited;
     }
+}
+
+fn lookupOverrideBinding(
+    bindings: []const context.Context.DerivedTypeInfo.BindingInfo,
+    inherited: context.Context.DerivedTypeInfo.BindingInfo,
+) ?context.Context.DerivedTypeInfo.BindingInfo {
+    const inherited_target = inherited.implementation_name orelse inherited.name;
+    for (bindings) |binding| {
+        if (std.ascii.eqlIgnoreCase(binding.name, inherited_target)) return binding;
+        if (binding.implementation_name) |impl_name| {
+            if (std.ascii.eqlIgnoreCase(impl_name, inherited_target)) return binding;
+        }
+    }
+    return null;
 }
 
 pub fn isSameOrExtension(self: *const context.Context, candidate: []const u8, base: []const u8) bool {

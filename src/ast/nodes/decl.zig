@@ -103,6 +103,7 @@ pub const TypeBoundProcedureBinding = struct {
     owner_name: ?[]const u8 = null,
     owner_kind: ?@import("program.zig").LexicalOwnerKind = null,
     source: @import("program.zig").DeclSource = .{},
+    is_generic: bool = false,
     interface_name: ?[]const u8 = null,
     implementation_name: ?[]const u8 = null,
     deferred: bool = false,

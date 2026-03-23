@@ -279,11 +279,16 @@ fn validateDerivedTypeDef(self: *context.Context, derived: ast.DerivedTypeDef) !
         if (first_error == null) first_error = err;
     }
 
-    for (derived.bindings) |binding| {
-        if (validateDerivedBinding(self, derived, binding)) |err| {
+    for (derived.bindings, 0..) |binding, binding_idx| {
+        if (validateDerivedBinding(self, derived, binding, binding_idx)) |err| {
             if (!self.usesExplicitDiagnosticBag()) return err;
             if (first_error == null) first_error = err;
         }
+    }
+
+    if (validateGenericBindingFamilies(self, derived)) |err| {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_error == null) first_error = err;
     }
 
     if (!derived.abstract and typeHasDeferredBindingRequirement(self, derived)) {
@@ -364,6 +369,7 @@ fn validateDerivedBinding(
     self: *context.Context,
     derived: ast.DerivedTypeDef,
     binding: ast.TypeBoundProcedureBinding,
+    binding_idx: usize,
 ) ?anyerror {
     if (binding.syntax_error_message) |message| {
         setBindingDiagnostic(self, binding, message);
@@ -405,6 +411,18 @@ fn validateDerivedBinding(
             return error.UnexpectedTypeDecl;
         }
     }
+    if (binding.is_generic) {
+        if (validateGenericBindingTarget(self, derived, binding)) |err| return err;
+        return null;
+    }
+    if (findEarlierParsedGenericBindingIndex(derived.bindings, binding.name, binding_idx) != null) {
+        setBindingDiagnostic(self, binding, "already a procedure");
+        return error.DuplicateDeclaration;
+    }
+    if (ancestorHasGenericBinding(self, derived.parent_name, binding.name)) {
+        setBindingDiagnostic(self, binding, "Cannot overwrite GENERIC");
+        return error.DuplicateDeclaration;
+    }
     if (binding.deferred and bindingOverridesConcreteParent(self, derived, binding.name)) {
         setBindingDiagnostic(self, binding, "must not be DEFERRED");
         return error.DuplicateDeclaration;
@@ -425,6 +443,200 @@ fn validateDerivedBinding(
     }
     if (validatePassedObjectDummyConstraints(self, binding)) |err| {
         return err;
+    }
+    return null;
+}
+
+fn validateGenericBindingTarget(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    binding: ast.TypeBoundProcedureBinding,
+) ?anyerror {
+    const target_name = binding.implementation_name orelse {
+        setBindingDiagnostic(self, binding, "Undefined specific binding");
+        return error.UnexpectedTypeDecl;
+    };
+    if (findParsedBindingByName(derived.bindings, target_name)) |target| {
+        if (!target.is_generic) return null;
+        setBindingDiagnostic(self, binding, "must target a specific binding");
+        return error.UnexpectedTypeDecl;
+    }
+    if (findAncestorBindingByName(self, derived.parent_name, target_name)) |target| {
+        if (!target.is_generic) return null;
+        setBindingDiagnostic(self, binding, "must target a specific binding");
+        return error.UnexpectedTypeDecl;
+    }
+    setBindingDiagnostic(self, binding, "Undefined specific binding");
+    return error.UnexpectedTypeDecl;
+}
+
+fn validateGenericBindingFamilies(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+) ?anyerror {
+    var handled = std.StringHashMap(void).init(self.arena);
+    var first_error: ?anyerror = null;
+
+    for (derived.bindings) |binding| {
+        if (!binding.is_generic) continue;
+        if (handled.contains(binding.name)) continue;
+        handled.put(binding.name, {}) catch return error.OutOfMemory;
+        if (validateGenericBindingFamily(self, derived, binding.name)) |err| {
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_error == null) first_error = err;
+        }
+    }
+    return first_error;
+}
+
+fn validateGenericBindingFamily(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    generic_name: []const u8,
+) ?anyerror {
+    var current_family_list = std.array_list.Managed(ast.TypeBoundProcedureBinding).init(self.arena);
+    for (derived.bindings) |binding| {
+        if (!binding.is_generic) continue;
+        if (!std.ascii.eqlIgnoreCase(binding.name, generic_name)) continue;
+        current_family_list.append(binding) catch return error.OutOfMemory;
+    }
+    const current_family = current_family_list.items;
+    if (current_family.len == 0) return null;
+
+    var first_error: ?anyerror = null;
+    const first_current = current_family[0];
+    const first_current_idx = firstCurrentGenericBindingIndex(derived.bindings, generic_name).?;
+
+    if (findEarlierParsedNonGenericBindingByName(derived.bindings, generic_name, first_current_idx) != null) {
+        setBindingDiagnostic(self, first_current, "already a non-generic procedure");
+        if (!self.usesExplicitDiagnosticBag()) return error.DuplicateDeclaration;
+        first_error = error.DuplicateDeclaration;
+    }
+    if (ancestorHasNonGenericBinding(self, derived.parent_name, generic_name)) {
+        setBindingDiagnostic(self, first_current, "cannot overwrite specific");
+        if (!self.usesExplicitDiagnosticBag()) return error.DuplicateDeclaration;
+        if (first_error == null) first_error = error.DuplicateDeclaration;
+    }
+
+    if (validateGenericBindingAccess(self, derived, current_family)) |err| {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_error == null) first_error = err;
+    }
+    if (validateGenericBindingDuplicates(self, derived, current_family)) |err| {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_error == null) first_error = err;
+    }
+    if (validateGenericBindingKinds(self, derived, current_family)) |err| {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_error == null) first_error = err;
+    }
+    if (validateGenericBindingAmbiguity(self, derived, current_family)) |err| {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_error == null) first_error = err;
+    }
+
+    return first_error;
+}
+
+fn validateGenericBindingAccess(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    current_family: []const ast.TypeBoundProcedureBinding,
+) ?anyerror {
+    const inherited_binding = firstAncestorGenericBindingByName(self, derived.parent_name, current_family[0].name);
+    const expected_private = if (inherited_binding) |binding| binding.private else current_family[0].private;
+
+    for (current_family, 0..) |binding, idx| {
+        if (idx == 0 and inherited_binding == null) continue;
+        if (binding.private == expected_private) continue;
+        setBindingDiagnostic(self, binding, "same access");
+        return error.DuplicateDeclaration;
+    }
+    return null;
+}
+
+fn validateGenericBindingDuplicates(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    current_family: []const ast.TypeBoundProcedureBinding,
+) ?anyerror {
+    var seen = std.StringHashMap(void).init(self.arena);
+    collectAncestorGenericBindingTargets(self, derived.parent_name, current_family[0].name, &seen);
+
+    for (current_family) |binding| {
+        const target_name = binding.implementation_name orelse continue;
+        if (seen.contains(target_name)) {
+            setBindingDiagnostic(self, binding, "already defined as specific binding");
+            return error.DuplicateDeclaration;
+        }
+        seen.put(target_name, {}) catch return error.OutOfMemory;
+    }
+    return null;
+}
+
+fn validateGenericBindingKinds(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    current_family: []const ast.TypeBoundProcedureBinding,
+) ?anyerror {
+    var baseline_kind: ?ast.ProgramUnitKind = null;
+
+    var parent_name = derived.parent_name;
+    while (parent_name) |name| {
+        const parent = symbols_mod.lookupDerivedType(self, name) orelse break;
+        for (parent.bindings) |binding| {
+            if (!binding.is_generic or !std.ascii.eqlIgnoreCase(binding.name, current_family[0].name)) continue;
+            const target = genericBindingInfoTargetSpecific(self, parent, binding) orelse continue;
+            baseline_kind = target.sig.kind;
+            break;
+        }
+        if (baseline_kind != null) break;
+        parent_name = parent.parent_name;
+    }
+
+    for (current_family) |binding| {
+        const target = genericBindingTargetSpecific(self, derived, binding) orelse continue;
+        const sig = target.sig;
+        if (baseline_kind == null) {
+            baseline_kind = sig.kind;
+            continue;
+        }
+        if (baseline_kind.? == sig.kind) continue;
+        setBindingDiagnostic(self, current_family[0], "mixed FUNCTION/SUBROUTINE");
+        return error.DuplicateDeclaration;
+    }
+    return null;
+}
+
+fn validateGenericBindingAmbiguity(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    current_family: []const ast.TypeBoundProcedureBinding,
+) ?anyerror {
+    var specifics = std.array_list.Managed(GenericBindingSpecific).init(self.arena);
+    collectAncestorGenericBindingSpecifics(self, derived.parent_name, current_family[0].name, &specifics);
+    var unresolved_current_specifics: usize = 0;
+    for (current_family) |binding| {
+        const target = genericBindingTargetSpecific(self, derived, binding) orelse {
+            unresolved_current_specifics += 1;
+            continue;
+        };
+        specifics.append(target) catch return error.OutOfMemory;
+    }
+
+    if (unresolved_current_specifics >= 2) {
+        setBindingDiagnostic(self, current_family[0], "are ambiguous");
+        return error.DuplicateDeclaration;
+    }
+
+    var i: usize = 0;
+    while (i < specifics.items.len) : (i += 1) {
+        var j: usize = i + 1;
+        while (j < specifics.items.len) : (j += 1) {
+            if (!genericBindingSpecificAmbiguous(specifics.items[i], specifics.items[j])) continue;
+            setBindingDiagnostic(self, current_family[0], "are ambiguous");
+            return error.DuplicateDeclaration;
+        }
     }
     return null;
 }
@@ -799,6 +1011,61 @@ fn bindingReferenceSig(
     return symbols_mod.lookupKnownProcedureSig(self, impl_name);
 }
 
+const GenericBindingSpecific = struct {
+    sig: context.Context.ProcedureSig,
+    pass_idx: ?usize,
+};
+
+fn genericBindingTargetSpecific(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    binding: ast.TypeBoundProcedureBinding,
+) ?GenericBindingSpecific {
+    const target_name = binding.implementation_name orelse return null;
+    if (findParsedBindingByName(derived.bindings, target_name)) |target| {
+        if (target.is_generic) return null;
+        const sig = bindingReferenceSig(self, target) orelse return null;
+        return .{
+            .sig = sig,
+            .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+        };
+    }
+    if (findAncestorBindingByName(self, derived.parent_name, target_name)) |target| {
+        if (target.is_generic) return null;
+        const sig = bindingInfoReferenceSig(self, target) orelse return null;
+        return .{
+            .sig = sig,
+            .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+        };
+    }
+    return null;
+}
+
+fn genericBindingInfoTargetSpecific(
+    self: *context.Context,
+    derived: context.Context.DerivedTypeInfo,
+    binding: context.Context.DerivedTypeInfo.BindingInfo,
+) ?GenericBindingSpecific {
+    const target_name = binding.implementation_name orelse return null;
+    if (findResolvedBindingByName(derived.bindings, target_name)) |target| {
+        if (target.is_generic) return null;
+        const sig = bindingInfoReferenceSig(self, target) orelse return null;
+        return .{
+            .sig = sig,
+            .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+        };
+    }
+    if (findAncestorBindingByName(self, derived.parent_name, target_name)) |target| {
+        if (target.is_generic) return null;
+        const sig = bindingInfoReferenceSig(self, target) orelse return null;
+        return .{
+            .sig = sig,
+            .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+        };
+    }
+    return null;
+}
+
 fn lookupQualifiedProcedureSig(
     self: *context.Context,
     owner_name: ?[]const u8,
@@ -807,6 +1074,171 @@ fn lookupQualifiedProcedureSig(
     const owner = owner_name orelse return null;
     const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner, proc_name }) catch return null;
     return symbols_mod.lookupKnownProcedureSig(self, qualified);
+}
+
+fn firstCurrentGenericBindingIndex(
+    bindings: []const ast.TypeBoundProcedureBinding,
+    name: []const u8,
+) ?usize {
+    for (bindings, 0..) |binding, idx| {
+        if (!binding.is_generic) continue;
+        if (std.ascii.eqlIgnoreCase(binding.name, name)) return idx;
+    }
+    return null;
+}
+
+fn findEarlierParsedGenericBindingIndex(
+    bindings: []const ast.TypeBoundProcedureBinding,
+    name: []const u8,
+    before_idx: usize,
+) ?usize {
+    var idx: usize = 0;
+    while (idx < before_idx and idx < bindings.len) : (idx += 1) {
+        if (!bindings[idx].is_generic) continue;
+        if (std.ascii.eqlIgnoreCase(bindings[idx].name, name)) return idx;
+    }
+    return null;
+}
+
+fn findEarlierParsedNonGenericBindingByName(
+    bindings: []const ast.TypeBoundProcedureBinding,
+    name: []const u8,
+    before_idx: usize,
+) ?ast.TypeBoundProcedureBinding {
+    var idx: usize = 0;
+    while (idx < before_idx and idx < bindings.len) : (idx += 1) {
+        if (bindings[idx].is_generic) continue;
+        if (std.ascii.eqlIgnoreCase(bindings[idx].name, name)) return bindings[idx];
+    }
+    return null;
+}
+
+fn ancestorHasGenericBinding(
+    self: *context.Context,
+    parent_name: ?[]const u8,
+    name: []const u8,
+) bool {
+    return firstAncestorGenericBindingByName(self, parent_name, name) != null;
+}
+
+fn ancestorHasNonGenericBinding(
+    self: *context.Context,
+    parent_name: ?[]const u8,
+    name: []const u8,
+) bool {
+    var current_name = parent_name;
+    while (current_name) |parent| {
+        const derived = symbols_mod.lookupDerivedType(self, parent) orelse return false;
+        for (derived.bindings) |binding| {
+            if (binding.is_generic) continue;
+            if (std.ascii.eqlIgnoreCase(binding.name, name)) return true;
+        }
+        current_name = derived.parent_name;
+    }
+    return false;
+}
+
+fn firstAncestorGenericBindingByName(
+    self: *context.Context,
+    parent_name: ?[]const u8,
+    name: []const u8,
+) ?context.Context.DerivedTypeInfo.BindingInfo {
+    var current_name = parent_name;
+    while (current_name) |parent| {
+        const derived = symbols_mod.lookupDerivedType(self, parent) orelse return null;
+        for (derived.bindings) |binding| {
+            if (!binding.is_generic) continue;
+            if (std.ascii.eqlIgnoreCase(binding.name, name)) return binding;
+        }
+        current_name = derived.parent_name;
+    }
+    return null;
+}
+
+fn collectAncestorGenericBindingTargets(
+    self: *context.Context,
+    parent_name: ?[]const u8,
+    name: []const u8,
+    seen: *std.StringHashMap(void),
+) void {
+    var current_name = parent_name;
+    while (current_name) |parent| {
+        const derived = symbols_mod.lookupDerivedType(self, parent) orelse return;
+        for (derived.bindings) |binding| {
+            if (!binding.is_generic) continue;
+            if (!std.ascii.eqlIgnoreCase(binding.name, name)) continue;
+            const target_name = binding.implementation_name orelse continue;
+            seen.put(target_name, {}) catch return;
+        }
+        current_name = derived.parent_name;
+    }
+}
+
+fn collectAncestorGenericBindingSpecifics(
+    self: *context.Context,
+    parent_name: ?[]const u8,
+    name: []const u8,
+    specifics: *std.array_list.Managed(GenericBindingSpecific),
+) void {
+    var current_name = parent_name;
+    while (current_name) |parent| {
+        const derived = symbols_mod.lookupDerivedType(self, parent) orelse return;
+        for (derived.bindings) |binding| {
+            if (!binding.is_generic) continue;
+            if (!std.ascii.eqlIgnoreCase(binding.name, name)) continue;
+            const target = genericBindingInfoTargetSpecific(self, derived, binding) orelse continue;
+            specifics.append(target) catch return;
+        }
+        current_name = derived.parent_name;
+    }
+}
+
+fn genericBindingSpecificAmbiguous(a: GenericBindingSpecific, b: GenericBindingSpecific) bool {
+    if (a.sig.kind != b.sig.kind) return false;
+    if (genericBindingRequiredArgCount(a) != genericBindingRequiredArgCount(b)) return false;
+
+    var a_idx: usize = 0;
+    var b_idx: usize = 0;
+    while (true) {
+        while (genericBindingShouldSkipArg(a, a_idx)) : (a_idx += 1) {}
+        while (genericBindingShouldSkipArg(b, b_idx)) : (b_idx += 1) {}
+        if (a_idx >= a.sig.args.len or b_idx >= b.sig.args.len) {
+            return a_idx >= a.sig.args.len and b_idx >= b.sig.args.len;
+        }
+        if (!genericBindingArgEquivalent(a.sig.args[a_idx], b.sig.args[b_idx])) return false;
+        a_idx += 1;
+        b_idx += 1;
+    }
+}
+
+fn genericBindingRequiredArgCount(specific: GenericBindingSpecific) usize {
+    var count: usize = 0;
+    for (specific.sig.args, 0..) |arg, idx| {
+        if (specific.pass_idx != null and idx == specific.pass_idx.?) continue;
+        if (!arg.optional) count += 1;
+    }
+    return count;
+}
+
+fn genericBindingShouldSkipArg(specific: GenericBindingSpecific, idx: usize) bool {
+    if (idx >= specific.sig.args.len) return false;
+    if (specific.pass_idx != null and idx == specific.pass_idx.?) return true;
+    return specific.sig.args[idx].optional;
+}
+
+fn genericBindingArgEquivalent(a: context.Context.ProcedureSig.ArgSig, b: context.Context.ProcedureSig.ArgSig) bool {
+    if (a.is_procedure or b.is_procedure) return a.is_procedure and b.is_procedure;
+    if (a.rank != b.rank) return false;
+    if (a.pointer != b.pointer) return false;
+    if (a.allocatable != b.allocatable) return false;
+    if (a.type_spec.lowered_kind != b.type_spec.lowered_kind) return false;
+    if (a.type_spec.lowered_kind == .derived) {
+        if (a.type_spec.derived_type_name == null or b.type_spec.derived_type_name == null) {
+            return a.type_spec.derived_type_name == null and b.type_spec.derived_type_name == null;
+        }
+        return std.ascii.eqlIgnoreCase(a.type_spec.derived_type_name.?, b.type_spec.derived_type_name.?);
+    }
+    return true;
 }
 
 fn bindingPassArgIndex(
@@ -827,6 +1259,20 @@ fn findResolvedBindingByName(
 ) ?context.Context.DerivedTypeInfo.BindingInfo {
     for (bindings) |binding| {
         if (std.ascii.eqlIgnoreCase(binding.name, name)) return binding;
+    }
+    return null;
+}
+
+fn findAncestorBindingByName(
+    self: *context.Context,
+    parent_name: ?[]const u8,
+    name: []const u8,
+) ?context.Context.DerivedTypeInfo.BindingInfo {
+    var current_name = parent_name;
+    while (current_name) |parent| {
+        const derived = symbols_mod.lookupDerivedType(self, parent) orelse return null;
+        if (findResolvedBindingByName(derived.bindings, name)) |binding| return binding;
+        current_name = derived.parent_name;
     }
     return null;
 }

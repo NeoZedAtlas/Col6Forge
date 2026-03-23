@@ -123,16 +123,21 @@ pub fn buildTypeBoundProcedureActuals(
     comp: ast.ComponentExpr,
     binding: context.DerivedBindingInfo,
 ) ![]*Expr {
+    const proc_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
+    const lookup_name = try boundProcedureLookupName(ctx, binding, proc_name);
+    const proc_sig = ctx.lookupKnownProcedureSig(lookup_name) orelse ctx.lookupKnownProcedureSig(proc_name);
+    const pass_idx = if (binding.nopass or proc_sig == null) null else bindingPassArgIndex(proc_sig.?, binding.pass_name);
     const extra: usize = if (binding.nopass) 0 else 1;
     const actuals = try ctx.allocator.alloc(*Expr, comp.args.len + extra);
-    var out_idx: usize = 0;
-    if (!binding.nopass) {
-        actuals[out_idx] = comp.base;
-        out_idx += 1;
-    }
-    for (comp.args) |arg| {
-        actuals[out_idx] = arg;
-        out_idx += 1;
+    var actual_idx: usize = 0;
+    var comp_idx: usize = 0;
+    while (actual_idx < actuals.len) : (actual_idx += 1) {
+        if (pass_idx != null and actual_idx == pass_idx.?) {
+            actuals[actual_idx] = comp.base;
+            continue;
+        }
+        actuals[actual_idx] = comp.args[comp_idx];
+        comp_idx += 1;
     }
     return actuals;
 }
@@ -358,6 +363,18 @@ fn inferConstantCharLen(len_expr: ?*Expr) ?usize {
         },
         else => null,
     };
+}
+
+fn bindingPassArgIndex(
+    sig: ast.sema.KnownProcedureSig,
+    pass_name: ?[]const u8,
+) ?usize {
+    if (sig.args.len == 0) return null;
+    const target = pass_name orelse return 0;
+    for (sig.args, 0..) |arg, idx| {
+        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
+    }
+    return null;
 }
 
 fn buildAbiParamTypes(

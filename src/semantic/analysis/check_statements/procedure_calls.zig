@@ -128,15 +128,17 @@ pub fn checkTypeBoundProcedureComponent(
         return error.InvalidArgumentCount;
     }
 
+    const pass_idx = if (binding.nopass) null else bindingPassArgIndex(sig, binding.pass_name);
+    var actual_idx: usize = 0;
     var formal_idx: usize = 0;
-    if (!binding.nopass and formal_idx < sig.args.len) {
-        try checkTypeBoundProcedureActual(self, sig.args[formal_idx], passed_object, deps);
-        formal_idx += 1;
-    }
-    for (args) |arg| {
-        if (formal_idx >= sig.args.len) break;
-        try checkTypeBoundProcedureActual(self, sig.args[formal_idx], arg, deps);
-        formal_idx += 1;
+    while (formal_idx < sig.args.len) : (formal_idx += 1) {
+        if (pass_idx != null and formal_idx == pass_idx.?) {
+            try checkTypeBoundProcedureActual(self, sig.args[formal_idx], passed_object, deps);
+            continue;
+        }
+        if (actual_idx >= args.len) break;
+        try checkTypeBoundProcedureActual(self, sig.args[formal_idx], args[actual_idx], deps);
+        actual_idx += 1;
     }
 }
 
@@ -450,6 +452,18 @@ fn typeBoundProcedureSig(
     return resolve_symbols.lookupKnownProcedureSig(self, impl_name) orelse
         (if (binding.interface_name) |iface_name| resolve_symbols.lookupKnownProcedureSig(self, iface_name) else null) orelse
         resolve_symbols.lookupKnownProcedureSig(self, binding.name);
+}
+
+fn bindingPassArgIndex(
+    sig: context.Context.ProcedureSig,
+    pass_name: ?[]const u8,
+) ?usize {
+    if (sig.args.len == 0) return null;
+    const target = pass_name orelse return 0;
+    for (sig.args, 0..) |arg, idx| {
+        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
+    }
+    return null;
 }
 
 fn checkProcedureActualArg(

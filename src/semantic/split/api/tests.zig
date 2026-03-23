@@ -280,6 +280,94 @@ test "analyzeProgram accepts renamed derived types imported through module prelu
     try testing.expect(found);
 }
 
+test "analyzeProgram keeps non-renamed derived types visible for USE rename without ONLY" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  type t1\n" ++
+        "    integer :: i\n" ++
+        "  end type t1\n" ++
+        "  type t2\n" ++
+        "    integer :: j\n" ++
+        "  end type t2\n" ++
+        "end module m1\n" ++
+        "subroutine s(x, y)\n" ++
+        "  use m1, u1 => t1\n" ++
+        "  type(u1), intent(in) :: x\n" ++
+        "  type(t2), intent(in) :: y\n" ++
+        "end subroutine s\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem = try analyzeProgram(arena.allocator(), program);
+
+    try testing.expectEqual(@as(usize, 1), sem.units.len);
+    const unit = sem.units[0];
+    var found_x = false;
+    var found_y = false;
+    for (unit.symbols) |sym| {
+        if (std.ascii.eqlIgnoreCase(sym.name, "x")) {
+            found_x = true;
+            try testing.expectEqualStrings("u1", sym.type_spec.derived_type_name.?);
+        }
+        if (std.ascii.eqlIgnoreCase(sym.name, "y")) {
+            found_y = true;
+            try testing.expectEqualStrings("t2", sym.type_spec.derived_type_name.?);
+        }
+    }
+    try testing.expect(found_x);
+    try testing.expect(found_y);
+}
+
+test "analyzeProgram accepts inherited generic type-bound calls dispatched through overriding specifics" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  type :: base_t\n" ++
+        "  contains\n" ++
+        "    procedure, pass(a) :: allocate_mnnz => base_allocate_mnnz\n" ++
+        "    generic, public :: allocate => allocate_mnnz\n" ++
+        "  end type base_t\n" ++
+        "  type, extends(base_t) :: child_t\n" ++
+        "  contains\n" ++
+        "    procedure, pass(a) :: allocate_mnnz => child_allocate_mnnz\n" ++
+        "  end type child_t\n" ++
+        "  interface\n" ++
+        "    subroutine base_allocate_mnnz(m,n,a,nz)\n" ++
+        "      import base_t\n" ++
+        "      integer, intent(in) :: m, n\n" ++
+        "      class(base_t), intent(inout) :: a\n" ++
+        "      integer, intent(in), optional :: nz\n" ++
+        "    end subroutine base_allocate_mnnz\n" ++
+        "    subroutine child_allocate_mnnz(m,n,a,nz)\n" ++
+        "      import child_t\n" ++
+        "      integer, intent(in) :: m, n\n" ++
+        "      class(child_t), intent(inout) :: a\n" ++
+        "      integer, intent(in), optional :: nz\n" ++
+        "    end subroutine child_allocate_mnnz\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine runit()\n" ++
+        "    type(child_t) :: x\n" ++
+        "    call x%allocate(1, 2, nz=3)\n" ++
+        "  end subroutine runit\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    _ = try analyzeProgram(arena.allocator(), program);
+}
+
 test "analyzeProgram preserves used derived types for module and implicit-main contained procedures" {
     const testing = std.testing;
     const allocator = testing.allocator;

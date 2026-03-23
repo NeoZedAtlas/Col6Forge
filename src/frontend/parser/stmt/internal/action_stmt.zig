@@ -517,9 +517,11 @@ pub fn parseUseStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!Stm
 
     const module_name = lp.readName(arena) orelse return error.MissingName;
     var only_items = std.array_list.Managed(UseOnlyItem).init(arena);
+    var has_only = false;
 
     if (lp.consume(.comma)) {
         if (lp.consumeKeyword("ONLY")) {
+            has_only = true;
             _ = lp.expect(.colon) orelse return error.UnexpectedToken;
             try parseUseRenameItems(arena, lp, &only_items, false);
         } else {
@@ -530,6 +532,7 @@ pub fn parseUseStatement(arena: std.mem.Allocator, lp: *LineParser) anyerror!Stm
     return .{
         .use_stmt = .{
             .module_name = module_name,
+            .has_only = has_only,
             .only_items = try only_items.toOwnedSlice(),
             .source = .{
                 .line = lp.line.span.start_line,

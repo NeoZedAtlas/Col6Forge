@@ -1240,6 +1240,147 @@ test "parseProgram imports renamed USE items through module preludes without ONL
     try testing.expectEqualStrings("u1", unit.decls[1].type_decl.derived_type_name.?);
 }
 
+test "parseProgram keeps non-renamed module exports visible for USE rename without ONLY" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  type t1\n" ++
+        "    integer :: value\n" ++
+        "  end type t1\n" ++
+        "  type t2\n" ++
+        "    integer :: value\n" ++
+        "  end type t2\n" ++
+        "end module m1\n" ++
+        "subroutine s(x, y)\n" ++
+        "  use m1, u1 => t1\n" ++
+        "  type(u1), intent(in) :: x\n" ++
+        "  type(t2), intent(in) :: y\n" ++
+        "end subroutine s\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqual(@as(usize, 4), unit.decls.len);
+    try testing.expect(unit.decls[0] == .derived_type_def);
+    try testing.expectEqualStrings("u1", unit.decls[0].derived_type_def.name);
+    try testing.expect(unit.decls[1] == .derived_type_def);
+    try testing.expectEqualStrings("t2", unit.decls[1].derived_type_def.name);
+}
+
+test "parseProgram captures generic type-bound bindings in derived types" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  type :: t\n" ++
+        "  contains\n" ++
+        "    procedure :: allocate_mnnz\n" ++
+        "    generic, public :: allocate => allocate_mnnz\n" ++
+        "  end type t\n" ++
+        "end module m\n" ++
+        "subroutine s(x)\n" ++
+        "  use m\n" ++
+        "  type(t), intent(inout) :: x\n" ++
+        "end subroutine s\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqualStrings("s", unit.name);
+    try testing.expectEqual(@as(usize, 2), unit.decls.len);
+    try testing.expect(unit.decls[0] == .derived_type_def);
+    const derived = unit.decls[0].derived_type_def;
+    try testing.expectEqualStrings("t", derived.name);
+    try testing.expectEqual(@as(usize, 2), derived.bindings.len);
+    try testing.expect(!derived.bindings[0].is_generic);
+    try testing.expectEqualStrings("allocate_mnnz", derived.bindings[0].name);
+    try testing.expect(derived.bindings[1].is_generic);
+    try testing.expectEqualStrings("allocate", derived.bindings[1].name);
+    try testing.expectEqualStrings("allocate_mnnz", derived.bindings[1].implementation_name.?);
+    try testing.expect(unit.decls[1] == .type_decl);
+}
+
+test "parseProgram captures multi-target operator type-bound generics" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  type :: t\n" ++
+        "  contains\n" ++
+        "    procedure, nopass :: p1\n" ++
+        "    procedure, nopass :: p2\n" ++
+        "    generic :: operator(==) => p1, p2\n" ++
+        "  end type t\n" ++
+        "end module m\n" ++
+        "subroutine s(x)\n" ++
+        "  use m\n" ++
+        "  type(t), intent(inout) :: x\n" ++
+        "end subroutine s\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const derived = program.units[0].decls[0].derived_type_def;
+    try testing.expectEqual(@as(usize, 4), derived.bindings.len);
+    try testing.expectEqualStrings("operator(==)", derived.bindings[2].name);
+    try testing.expectEqualStrings("p1", derived.bindings[2].implementation_name.?);
+    try testing.expect(derived.bindings[2].is_generic);
+    try testing.expectEqualStrings("operator(==)", derived.bindings[3].name);
+    try testing.expectEqualStrings("p2", derived.bindings[3].implementation_name.?);
+    try testing.expect(derived.bindings[3].is_generic);
+}
+
+test "parseProgramWithDiagnostics reports type-bound generic attribute and target syntax errors" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  type :: t\n" ++
+        "  contains\n" ++
+        "    procedure, nopass :: p1\n" ++
+        "    generic, pass :: gen1 => p1\n" ++
+        "    generic :: gen2 => p1 x\n" ++
+        "  end type t\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag_bag = parse_diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+    _ = try parseProgramWithDiagnostics(arena.allocator(), lines, &diag_bag);
+
+    var saw_access_spec = false;
+    var saw_junk_after = false;
+    while (diag_bag.take()) |diag| {
+        defer diag_bag.release(diag);
+        if (std.mem.indexOf(u8, diag.message, "Expected access-specifier") != null) saw_access_spec = true;
+        if (std.mem.indexOf(u8, diag.message, "Junk after binding target") != null) saw_junk_after = true;
+    }
+    try testing.expect(saw_access_spec);
+    try testing.expect(saw_junk_after);
+}
+
 test "parseProgramWithDiagnostics captures parse errors in explicit bag" {
     const testing = std.testing;
     const allocator = testing.allocator;

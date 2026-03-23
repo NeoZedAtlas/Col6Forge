@@ -436,6 +436,7 @@ fn buildDerivedBindingInfo(
             .name = binding.name,
             .owner_name = binding.owner_name orelse owner_name,
             .owner_kind = binding.owner_kind orelse owner_kind,
+            .is_generic = binding.is_generic,
             .interface_name = binding.interface_name,
             .implementation_name = binding.implementation_name,
             .deferred = binding.deferred,

@@ -138,7 +138,7 @@ fn printStmt(writer: anytype, stmt: ast.Stmt) !void {
             try writer.print(";   stmt label={s} assign {s} to {s}\n", .{ label_text, assign.label, assign.target });
         },
         .use_stmt => |use_stmt| {
-            try writer.print(";   stmt label={s} use {s} only({d})\n", .{ label_text, use_stmt.module_name, use_stmt.only_items.len });
+            try writer.print(";   stmt label={s} use {s} has_only={} items({d})\n", .{ label_text, use_stmt.module_name, use_stmt.has_only, use_stmt.only_items.len });
         },
         .call => |call| {
             try writer.print(";   stmt label={s} call {s}({d})\n", .{ label_text, call.name, call.args.len });

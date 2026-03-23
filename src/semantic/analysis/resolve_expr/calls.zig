@@ -466,15 +466,17 @@ fn validateTypeBoundProcedureCall(
     if (actual_count > sig.arg_count) return error.InvalidArgumentCount;
     if (actual_count < minimumRequiredProcedureArgs(sig)) return error.InvalidArgumentCount;
 
+    const pass_idx = if (binding.nopass) null else bindingPassArgIndex(sig, binding.pass_name);
+    var actual_idx: usize = 0;
     var formal_idx: usize = 0;
-    if (!binding.nopass and formal_idx < sig.args.len) {
-        try validateTypeBoundProcedureActual(self, sig.args[formal_idx], passed_object, deps);
-        formal_idx += 1;
-    }
-    for (args) |arg| {
-        if (formal_idx >= sig.args.len) break;
-        try validateTypeBoundProcedureActual(self, sig.args[formal_idx], arg, deps);
-        formal_idx += 1;
+    while (formal_idx < sig.args.len) : (formal_idx += 1) {
+        if (pass_idx != null and formal_idx == pass_idx.?) {
+            try validateTypeBoundProcedureActual(self, sig.args[formal_idx], passed_object, deps);
+            continue;
+        }
+        if (actual_idx >= args.len) break;
+        try validateTypeBoundProcedureActual(self, sig.args[formal_idx], args[actual_idx], deps);
+        actual_idx += 1;
     }
 }
 
@@ -534,4 +536,16 @@ fn minimumRequiredProcedureArgs(sig: context.Context.ProcedureSig) usize {
         if (!arg.optional) required += 1;
     }
     return required;
+}
+
+fn bindingPassArgIndex(
+    sig: context.Context.ProcedureSig,
+    pass_name: ?[]const u8,
+) ?usize {
+    if (sig.args.len == 0) return null;
+    const target = pass_name orelse return 0;
+    for (sig.args, 0..) |arg, idx| {
+        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
+    }
+    return null;
 }

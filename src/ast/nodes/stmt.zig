@@ -108,6 +108,7 @@ pub const AssignLabelStmt = struct {
 
 pub const UseStmt = struct {
     module_name: []const u8,
+    has_only: bool = false,
     only_items: []const UseOnlyItem,
     source: SourceRef = .{},
 };

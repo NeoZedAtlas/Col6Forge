@@ -20,6 +20,7 @@ pub const Context = struct {
             name: []const u8,
             owner_name: ?[]const u8 = null,
             owner_kind: ?ast.LexicalOwnerKind = null,
+            is_generic: bool = false,
             interface_name: ?[]const u8 = null,
             implementation_name: ?[]const u8 = null,
             deferred: bool = false,

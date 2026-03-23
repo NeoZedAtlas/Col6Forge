@@ -816,6 +816,138 @@ test "type-bound binding target must be a module procedure" {
     try testing.expect(std.mem.indexOf(u8, got.message, "must be a module procedure") != null);
 }
 
+test "type-bound generic binding targets a specific binding without module procedure rejection" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: t\n" ++
+        "  contains\n" ++
+        "    procedure :: p => impl\n" ++
+        "    generic :: g => p\n" ++
+        "  end type t\n" ++
+        "  interface\n" ++
+        "    subroutine impl(this)\n" ++
+        "      import t\n" ++
+        "      class(t), intent(inout) :: this\n" ++
+        "    end subroutine impl\n" ++
+        "  end interface\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expect(diag.take() == null);
+}
+
+test "type-bound generic binding rejects generic targets and missing specifics" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: t\n" ++
+        "  contains\n" ++
+        "    generic :: f => g\n" ++
+        "    generic :: g => h\n" ++
+        "  end type t\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.UnexpectedTypeDecl, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "must target a specific binding") != null or
+        std.mem.indexOf(u8, got.message, "Undefined specific binding") != null);
+}
+
+test "type-bound generic family ambiguity follows specific PASS positions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  type t\n" ++
+        "  contains\n" ++
+        "    procedure, pass(this) :: sub1\n" ++
+        "    procedure, pass(this) :: sub2\n" ++
+        "    generic :: gen => sub1, sub2\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "  subroutine sub1(x, this)\n" ++
+        "    integer :: x\n" ++
+        "    class(t) :: this\n" ++
+        "  end subroutine sub1\n" ++
+        "  subroutine sub2(this, y)\n" ++
+        "    class(t) :: this\n" ++
+        "    integer :: y\n" ++
+        "  end subroutine sub2\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.DuplicateDeclaration, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.duplicate_declaration.code));
+    try testing.expect(std.mem.indexOf(u8, got.message, "are ambiguous") != null);
+}
+
+test "type-bound PASS(name) call uses the declared passed-object position" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: t\n" ++
+        "  contains\n" ++
+        "    procedure, pass(a) :: allocate_mnnz => impl\n" ++
+        "    generic :: allocate => allocate_mnnz\n" ++
+        "  end type t\n" ++
+        "  interface\n" ++
+        "    subroutine impl(m, n, a, nz)\n" ++
+        "      import t\n" ++
+        "      integer, intent(in) :: m, n\n" ++
+        "      class(t), intent(inout) :: a\n" ++
+        "      integer, intent(in), optional :: nz\n" ++
+        "    end subroutine impl\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine runit()\n" ++
+        "    type(t) :: x\n" ++
+        "    call x%allocate(1, 2, nz=3)\n" ++
+        "  end subroutine runit\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+    try testing.expect(diag.take() == null);
+}
+
 test "type-bound override must also be PURE" {
     const testing = std.testing;
     const allocator = testing.allocator;

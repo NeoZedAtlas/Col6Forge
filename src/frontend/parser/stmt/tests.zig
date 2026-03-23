@@ -342,6 +342,7 @@ test "parseStatement parses USE ONLY rename arrow token" {
     const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expect(stmt_node.node == .use_stmt);
     try testing.expectEqualStrings("ISO_FORTRAN_ENV", stmt_node.node.use_stmt.module_name);
+    try testing.expect(stmt_node.node.use_stmt.has_only);
     try testing.expectEqual(@as(usize, 1), stmt_node.node.use_stmt.only_items.len);
     try testing.expectEqualStrings("NWRITE", stmt_node.node.use_stmt.only_items[0].local_name);
     try testing.expectEqualStrings("OUTPUT_UNIT", stmt_node.node.use_stmt.only_items[0].remote_name);
@@ -367,6 +368,7 @@ test "parseStatement parses USE rename list without ONLY" {
     const stmt_node = try parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names);
     try testing.expect(stmt_node.node == .use_stmt);
     try testing.expectEqualStrings("BAR_PRT", stmt_node.node.use_stmt.module_name);
+    try testing.expect(!stmt_node.node.use_stmt.has_only);
     try testing.expectEqual(@as(usize, 1), stmt_node.node.use_stmt.only_items.len);
     try testing.expectEqualStrings("FOO_DPRT", stmt_node.node.use_stmt.only_items[0].local_name);
     try testing.expectEqualStrings("BAR_DPRT", stmt_node.node.use_stmt.only_items[0].remote_name);
@@ -1827,4 +1829,3 @@ test "parseStatement rejects unsupported REWIND controls instead of swallowing" 
         parseStatement(arena.allocator(), lines, &idx, &do_ctx, &param_ints, &param_strings, &array_names),
     );
 }
-

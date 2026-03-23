@@ -447,6 +447,106 @@ pub fn parseTypeBoundProcedureBindings(
     return out.toOwnedSlice();
 }
 
+pub fn parseTypeBoundGenericBindings(
+    arena: std.mem.Allocator,
+    lp: *LineParser,
+) ![]const ast.TypeBoundProcedureBinding {
+    if (!lp.consumeKeyword("GENERIC")) return error.UnexpectedToken;
+
+    var private = false;
+    var syntax_error_message: ?[]const u8 = null;
+    while (lp.consume(.comma)) {
+        if (consumeDoubleColon(lp)) break;
+        const attr_name = lp.readName(arena) orelse {
+            syntax_error_message = "Expected access-specifier";
+            break;
+        };
+        if (std.ascii.eqlIgnoreCase(attr_name, "PRIVATE")) {
+            private = true;
+        } else if (std.ascii.eqlIgnoreCase(attr_name, "PUBLIC")) {
+            private = false;
+        } else {
+            if (syntax_error_message == null) syntax_error_message = "Expected access-specifier";
+            if (lp.consume(.l_paren)) {
+                try consumeBalancedParens(lp);
+            }
+        }
+    }
+    _ = consumeDoubleColon(lp);
+
+    var out = std.array_list.Managed(ast.TypeBoundProcedureBinding).init(arena);
+    const binding_name = try parseGenericBindingName(arena, lp) orelse {
+        try out.append(.{
+            .name = "__invalid_binding__",
+            .is_generic = true,
+            .private = private,
+            .syntax_error_message = syntax_error_message orelse "Expected binding name",
+        });
+        return out.toOwnedSlice();
+    };
+
+    var saw_arrow = false;
+    if (lp.consume(.equals)) {
+        saw_arrow = true;
+        if (!lp.consume(.greater) and syntax_error_message == null) {
+            syntax_error_message = "Expected specific binding";
+        }
+    } else if (syntax_error_message == null) {
+        syntax_error_message = "Expected specific binding";
+    }
+
+    while (true) {
+        var binding_error_message = syntax_error_message;
+        const implementation_name = if (!saw_arrow)
+            null
+        else
+            lp.readName(arena) orelse blk: {
+                if (binding_error_message == null) binding_error_message = "Expected specific binding";
+                break :blk null;
+            };
+
+        if (implementation_name != null and lp.peek() != null and !lp.peekIs(.comma) and binding_error_message == null) {
+            binding_error_message = "Junk after binding target";
+        }
+
+        try out.append(.{
+            .name = binding_name,
+            .is_generic = true,
+            .implementation_name = implementation_name,
+            .private = private,
+            .syntax_error_message = binding_error_message,
+        });
+
+        if (implementation_name == null) break;
+        if (!lp.consume(.comma)) break;
+        saw_arrow = true;
+        if (lp.peek() == null) break;
+    }
+    return out.toOwnedSlice();
+}
+
+fn parseGenericBindingName(arena: std.mem.Allocator, lp: *LineParser) !?[]const u8 {
+    const base_name = lp.readName(arena) orelse return null;
+    if (!std.ascii.eqlIgnoreCase(base_name, "OPERATOR") and !std.ascii.eqlIgnoreCase(base_name, "ASSIGNMENT")) {
+        return base_name;
+    }
+    if (!lp.consume(.l_paren)) return base_name;
+
+    var buffer = std.array_list.Managed(u8).init(arena);
+    errdefer buffer.deinit();
+    try buffer.appendSlice(base_name);
+    try buffer.append('(');
+    while (lp.peek()) |tok| {
+        _ = lp.next();
+        if (tok.kind == .r_paren) {
+            try buffer.append(')');
+            return @as([]const u8, try buffer.toOwnedSlice());
+        }
+        try buffer.appendSlice(lp.tokenText(tok));
+    }
+    return @as([]const u8, try buffer.toOwnedSlice());
+}
+
 pub fn parseSubmoduleHeader(arena: std.mem.Allocator, lp: *LineParser) !SubmoduleHeader {
     if (!lp.consumeKeyword("SUBMODULE")) return error.UnexpectedToken;
     _ = lp.expect(.l_paren) orelse return error.UnexpectedToken;

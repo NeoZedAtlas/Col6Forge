@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../../input.zig");
 const ir = @import("../../../../ir.zig");
 const common = @import("../../common.zig");
+const cg_context = @import("../../context/mod.zig");
 const utils = @import("../../utils.zig");
 
 const binary = @import("../binary.zig");
@@ -19,6 +20,7 @@ pub const CharacterValuePlan = shared.CharacterValuePlan;
 
 const Expr = shared.Expr;
 const Context = shared.Context;
+const DerivedBindingInfo = cg_context.DerivedBindingInfo;
 const ValueRef = shared.ValueRef;
 const EmitError = shared.EmitError;
 
@@ -42,6 +44,7 @@ pub fn isCharacterExpr(ctx: *Context, expr: *Expr) bool {
         .substring => true,
         .literal => |lit| lit.kind == .string or lit.kind == .hollerith,
         .binary => |bin| bin.op == .concat,
+        .component => |comp| comp.has_parens and typeBoundCharacterResultLen(ctx, comp) != null,
         .implied_do => |implied| implied.items.len != 0 and isCharacterExpr(ctx, implied.items[0]),
         else => false,
     };
@@ -91,6 +94,10 @@ pub fn constantCharacterLenForExpr(ctx: *Context, expr: *Expr) ?usize {
             const left_len = constantCharacterLenForExpr(ctx, bin.left) orelse return null;
             const right_len = constantCharacterLenForExpr(ctx, bin.right) orelse return null;
             return left_len + right_len;
+        },
+        .component => |comp| {
+            if (!comp.has_parens) return null;
+            return typeBoundCharacterResultLen(ctx, comp);
         },
         .implied_do => |implied| {
             if (implied.items.len == 0) return null;
@@ -378,6 +385,23 @@ pub fn emitCharacterValuePlanImpl(
                 .kind = .concat_temp,
             });
         },
+        .component => |comp| {
+            if (!comp.has_parens) return null;
+            const info = typeBoundCharacterResultInfo(ctx, comp) orelse return null;
+            const actuals = try resolution.buildTypeBoundProcedureActuals(ctx, comp, info.binding);
+            defer ctx.allocator.free(actuals);
+            const fn_name = try resolution.ensureExternalDeclForResolvedCall(ctx, info.lookup_name, info.ir_name, .void, actuals, true);
+            const ptr = try call.emitCharacterCall(ctx, builder, fn_name, info.result_len, actuals);
+            const len_val = try ctx.constI32(@intCast(info.result_len));
+            return try shared.validatedCharacterValuePlan(.{
+                .ptr = .{ .name = ptr.name, .ty = .ptr, .is_ptr = true },
+                .logical_len = len_val,
+                .storage_len = len_val,
+                .logical_len_const = info.result_len,
+                .storage_len_const = info.result_len,
+                .kind = .function_result,
+            });
+        },
         else => return null,
     }
 }
@@ -509,6 +533,11 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
             const right_len = try emitCharacterLenValueImpl(ctx, builder, bin.right, subst_depth) orelse return null;
             return try binary.emitAdd(ctx, builder, left_len, right_len);
         },
+        .component => |comp| {
+            if (!comp.has_parens) return null;
+            const result_len = typeBoundCharacterResultLen(ctx, comp) orelse return null;
+            return try ctx.constI32(@intCast(result_len));
+        },
         .implied_do => |implied| {
             if (implied.items.len == 0) return null;
             return emitCharacterLenValueImpl(ctx, builder, implied.items[0], subst_depth);
@@ -528,6 +557,36 @@ fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {
     const length = int_eval.checkedAdd(span, 1) orelse return null;
     if (length <= 0) return null;
     return std.math.cast(usize, length);
+}
+
+const TypeBoundCharacterResultInfo = struct {
+    binding: DerivedBindingInfo,
+    lookup_name: []const u8,
+    ir_name: []const u8,
+    result_len: usize,
+};
+
+fn typeBoundCharacterResultLen(ctx: *Context, comp: ast.ComponentExpr) ?usize {
+    const info = typeBoundCharacterResultInfo(ctx, comp) orelse return null;
+    return info.result_len;
+}
+
+fn typeBoundCharacterResultInfo(ctx: *Context, comp: ast.ComponentExpr) ?TypeBoundCharacterResultInfo {
+    const base_type_name = ctx.derivedTypeNameForExpr(comp.base) orelse return null;
+    const binding = ctx.lookupDerivedBinding(base_type_name, comp.name) orelse return null;
+    const proc_name = binding.implementation_name orelse binding.interface_name orelse binding.name;
+    const lookup_name = resolution.boundProcedureLookupName(ctx, binding, proc_name) catch return null;
+    const ir_name = resolution.boundProcedureIRName(ctx, binding, proc_name) catch return null;
+    const proc_sig = ctx.lookupKnownProcedureSig(lookup_name) orelse ctx.lookupKnownProcedureSig(proc_name) orelse return null;
+    const result_spec = resolution.boundProcedureResultSpec(ctx, binding, proc_sig) orelse return null;
+    if (result_spec.lowered_kind != .character) return null;
+    const result_len = result_spec.char_len orelse return null;
+    return .{
+        .binding = binding,
+        .lookup_name = lookup_name,
+        .ir_name = ir_name,
+        .result_len = result_len,
+    };
 }
 
 fn isInternalLiteralSubstringName(name: []const u8) bool {

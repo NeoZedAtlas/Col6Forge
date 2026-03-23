@@ -413,6 +413,17 @@ pub const Parser = struct {
                         line.text,
                     );
                 }
+            } else if (in_contains and body_lp.isKeywordSplit("GENERIC")) {
+                const type_bound_bindings = root_header.parseTypeBoundGenericBindings(self.arena, &body_lp) catch |err| {
+                    root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, line, body_lp, err);
+                    return err;
+                };
+                for (type_bound_bindings) |binding| {
+                    var stored = binding;
+                    stored.source = root_diagnostics.sourceFromLine(line);
+                    try bindings.append(stored);
+                }
+                saw_binding_stmt = true;
             } else if (in_contains and body_lp.isKeywordSplit("PROCEDURE")) {
                 const type_bound_bindings = root_header.parseTypeBoundProcedureBindings(self.arena, &body_lp) catch |err| {
                     root_diagnostics.setParseDiagnosticFromStream(self.diag_bag, line, body_lp, err);
