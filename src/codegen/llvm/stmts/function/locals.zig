@@ -14,6 +14,7 @@ const EmitError = anyerror;
 pub const LocalInstallOptions = struct {
     return_symbol_name: []const u8,
     uses_explicit_result_name: bool,
+    uses_hidden_result_ptr: bool,
     is_character_function: bool,
     is_complex_sret_function: bool,
 };
@@ -42,7 +43,7 @@ pub fn installFunctionLocals(
         if (sym.kind == .parameter and !shouldMaterializeParameterArrayLocal(sym)) continue;
         if (sym.kind == .subroutine) continue;
         if (sym.kind == .function and !sym.is_pointer and !is_return_symbol and ctx.unit.kind != .function) continue;
-        if (is_return_symbol and (options.is_character_function or options.is_complex_sret_function)) continue;
+        if (is_return_symbol and options.uses_hidden_result_ptr) continue;
         if (ctx.locals.contains(sym.name)) continue;
         if (saved_state.isSaved(save_info, sym.name) and !is_return_symbol) continue;
         if (sym.is_pointer) {

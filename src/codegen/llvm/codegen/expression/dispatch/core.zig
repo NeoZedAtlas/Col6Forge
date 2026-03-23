@@ -234,6 +234,9 @@ fn emitExprImpl(ctx: *Context, builder: anytype, expr: *Expr, subst_depth: usize
                 return value;
             }
             if (kind != .call) return error.AmbiguousCallOrSubscript;
+            if (ctx.lookupKnownProcedureSig(call_or_sub.name)) |proc_sig| {
+                if (proc_sig.result_rank != 0) return error.UnsupportedArrayActual;
+            }
             if (isStructureConstructorCall(ctx, sym, call_or_sub)) {
                 return emitStructureConstructor(ctx, builder, call_or_sub, sym);
             }

@@ -48,6 +48,7 @@ pub fn emitFunction(ctx: *Context, builder: anytype) EmitError!void {
     try locals_mod.installFunctionLocals(ctx, builder, &save_info, .{
         .return_symbol_name = sig_info.return_symbol_name,
         .uses_explicit_result_name = sig_info.uses_explicit_result_name,
+        .uses_hidden_result_ptr = sig_info.uses_hidden_result_ptr,
         .is_character_function = sig_info.is_character_function,
         .is_complex_sret_function = sig_info.is_complex_sret_function,
     });

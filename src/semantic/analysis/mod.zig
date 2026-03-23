@@ -608,6 +608,156 @@ test "polymorphic actual requires explicit interface" {
     try testing.expectEqualStrings(catalog.semantic.explicit_interface_required.code, got.code);
 }
 
+test "assumed-shape dummy without visible interface requires explicit interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  real, dimension(2) :: a\n" ++
+        "  call foo(a)\n" ++
+        "end program main\n" ++
+        "subroutine foo(a)\n" ++
+        "  real, dimension(:) :: a\n" ++
+        "end subroutine foo\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expectEqualStrings(catalog.semantic.explicit_interface_required.code, got.code);
+}
+
+test "optional dummy without visible interface requires explicit interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  real :: a\n" ++
+        "  call sub(a)\n" ++
+        "end program main\n" ++
+        "subroutine sub(a, i)\n" ++
+        "  real :: a\n" ++
+        "  integer, optional :: i\n" ++
+        "end subroutine sub\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[0];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expectEqualStrings(catalog.semantic.explicit_interface_required.code, got.code);
+}
+
+test "array-valued function without visible interface requires explicit interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "function test(n)\n" ++
+        "  real, dimension(2) :: test\n" ++
+        "  integer :: n\n" ++
+        "  test = n\n" ++
+        "end function test\n" ++
+        "program arr\n" ++
+        "  real, dimension(2) :: res\n" ++
+        "  res = test(2)\n" ++
+        "end program arr\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    try testing.expectEqual(@as(usize, 2), program.units.len);
+
+    var known_function_type_specs = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+
+    diag.clear();
+    var unit = program.units[1];
+    var analyzer_instance = UnitAnalyzer.init(
+        arena.allocator(),
+        &unit,
+        &.{},
+        &known_function_type_specs,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        null,
+        .{},
+        false,
+    );
+    _ = analyzer_instance.analyze() catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    defer diag.releaseTaken(got);
+    try testing.expectEqualStrings(catalog.semantic.explicit_interface_required.code, got.code);
+}
+
 test "abstract parent component binding call is rejected" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -1207,6 +1357,47 @@ test "type-bound PASS dummy must not be pointer" {
     const got = diag.take() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.duplicate_declaration.code));
     try testing.expect(std.mem.indexOf(u8, got.message, "must not be POINTER") != null);
+}
+
+test "data actual checking preserves later rank mismatch after earlier call arity error" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "function a(b)\n" ++
+        "  real :: b\n" ++
+        "  b = 2.0\n" ++
+        "  a = 1.0\n" ++
+        "end function\n" ++
+        "\n" ++
+        "program gg\n" ++
+        "  real :: h\n" ++
+        "  character (5) :: chr = 'hello'\n" ++
+        "  h = a()\n" ++
+        "  call test([chr])\n" ++
+        "end program gg\n" ++
+        "\n" ++
+        "subroutine test(a)\n" ++
+        "  character (5) :: a\n" ++
+        "end subroutine test\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = split_api.analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_bag) catch {};
+    const first = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(first);
+    const second = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(second);
+
+    try testing.expect(std.mem.indexOf(u8, first.message, "Missing actual argument") != null);
+    try testing.expect(std.mem.indexOf(u8, second.message, "Rank mismatch in argument") != null);
 }
 
 test "nopass type-bound call rejects array base object" {

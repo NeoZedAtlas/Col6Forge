@@ -14,7 +14,7 @@ pub const CheckError = anyerror;
 pub fn identifierRequiresArgumentList(self: *context.Context, expr: *ast.Expr) bool {
     if (expr.* != .identifier) return false;
     const name = expr.identifier;
-    if (resolve_symbols.lookupKnownProcedureSig(self, name)) |sig| {
+    if (resolvedProcedureSig(self, name)) |sig| {
         return sig.kind == .function;
     }
     const idx = resolve_symbols.findSymbolIndex(self, name) orelse return false;
@@ -63,8 +63,7 @@ pub fn checkProcedureActualArgsForCall(
     args: []const ast.CallArg,
     comptime deps: anytype,
 ) CheckError!void {
-    const sig = resolve_symbols.lookupKnownProcedureSig(self, callee_name) orelse
-        procedure_interfaces.visibleSingleTargetGenericSig(self, callee_name) orelse return;
+    const sig = resolvedProcedureSig(self, callee_name) orelse return;
     if (sig.args.len == 0) return;
     var formal_idx: usize = 0;
     for (args) |arg| {
@@ -82,8 +81,7 @@ pub fn checkProcedureActualArgsForExprCall(
     args: []*ast.Expr,
     comptime deps: anytype,
 ) CheckError!void {
-    const sig = resolve_symbols.lookupKnownProcedureSig(self, callee_name) orelse
-        procedure_interfaces.visibleSingleTargetGenericSig(self, callee_name) orelse return;
+    const sig = resolvedProcedureSig(self, callee_name) orelse return;
     if (sig.args.len == 0) return;
     const count = @min(sig.args.len, args.len);
     var idx: usize = 0;
@@ -212,7 +210,7 @@ pub fn checkKnownProcedureCallArity(
         if (sym.storage == .dummy) return;
     }
 
-    if (resolve_symbols.lookupKnownProcedureSig(self, name) orelse procedure_interfaces.visibleSingleTargetGenericSig(self, name)) |sig| {
+    if (resolvedProcedureSig(self, name)) |sig| {
         if (is_call_stmt and sig.kind != .subroutine) {
             return emitNamedProcedureDiagnostic(self, name, error.InvalidArgumentCount, "actual argument is not a subroutine");
         }
@@ -278,6 +276,9 @@ pub fn checkExplicitInterfaceRequirementForCallArgs(
     symbol_idx: ?usize,
 ) CheckError!void {
     if (procedure_interfaces.calleeHasVisibleExplicitInterface(self, name)) return;
+    if (procedure_interfaces.calleeRequiresExplicitInterface(self, name)) {
+        return error.ExplicitInterfaceRequired;
+    }
     const has_procedure_actual = hasProcedureActualCallArg(self, args);
     const has_interface_sensitive_actual = hasExplicitInterfaceSensitiveCallArg(self, args);
     if (symbol_idx orelse resolve_symbols.findSymbolIndex(self, name)) |idx| {
@@ -313,6 +314,9 @@ pub fn checkExplicitInterfaceRequirementForExprArgs(
     symbol_idx: ?usize,
 ) CheckError!void {
     if (procedure_interfaces.calleeHasVisibleExplicitInterface(self, name)) return;
+    if (procedure_interfaces.calleeRequiresExplicitInterface(self, name)) {
+        return error.ExplicitInterfaceRequired;
+    }
     const has_procedure_actual = hasProcedureActualExprArg(self, args);
     const has_interface_sensitive_actual = hasExplicitInterfaceSensitiveExprArg(self, args);
     if (symbol_idx orelse resolve_symbols.findSymbolIndex(self, name)) |idx| {
@@ -475,7 +479,9 @@ fn checkProcedureActualArg(
     comptime deps: anytype,
 ) CheckError!void {
     try abstract_expr_use.rejectNonpolymorphicAbstractExprUse(self, actual_expr, error.InvalidArgumentCount);
-    if (!formal.is_procedure) return;
+    if (!formal.is_procedure) {
+        return checkDataActualArgCompatibility(self, formal, actual_expr, deps);
+    }
     switch (actual_expr.*) {
         .identifier => |name| {
             const actual_sig = resolve_symbols.lookupKnownProcedureSig(self, name) orelse lookupProcedureDeclaratorSig(self, name);
@@ -583,6 +589,22 @@ fn checkProcedureActualArg(
                 return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(expected_kind));
             }
         },
+    }
+}
+
+fn checkDataActualArgCompatibility(
+    self: *context.Context,
+    formal: context.Context.ProcedureSig.ArgSig,
+    actual_expr: *ast.Expr,
+    comptime deps: anytype,
+) CheckError!void {
+    const actual_rank = resolve_expr.exprRank(self, actual_expr);
+    if (formal.rank != actual_rank) {
+        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Rank mismatch in argument");
+    }
+    const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
+    if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
+        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
     }
 }
 
@@ -770,6 +792,11 @@ fn lookupProcedureDeclaratorSig(self: *context.Context, name: []const u8) ?conte
         }
     }
     return null;
+}
+
+fn resolvedProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+    return procedure_interfaces.visibleSingleTargetGenericSig(self, name) orelse
+        resolve_symbols.lookupKnownProcedureSig(self, name);
 }
 
 fn abstractPassedObjectTypeName(self: *context.Context, expr: *ast.Expr) ?[]const u8 {

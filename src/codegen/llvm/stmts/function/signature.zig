@@ -18,8 +18,10 @@ pub const SignatureInfo = struct {
     uses_explicit_result_name: bool,
     has_alt_return: bool,
     return_ty: ?llvm_types.IRType,
+    uses_hidden_result_ptr: bool,
     is_character_function: bool,
     is_complex_sret_function: bool,
+    is_array_result_function: bool,
     func_name: []const u8,
 };
 
@@ -35,11 +37,15 @@ pub fn analyze(ctx: *Context) EmitError!SignatureInfo {
     var return_ty: ?llvm_types.IRType = null;
     var is_character_function = false;
     var is_complex_sret_function = false;
+    var is_array_result_function = false;
+    var uses_hidden_result_ptr = false;
     if (ctx.unit.kind == .function) {
         const sym = ctx.findSymbol(return_symbol_name) orelse return error.UnknownSymbol;
         is_character_function = sym.isCharacter();
+        is_array_result_function = sym.dims.len != 0;
         is_complex_sret_function = ctx.abiUsesHiddenResultPtr(ctx.typeFromKind(sym.loweredKind()));
-        if (!is_character_function) {
+        uses_hidden_result_ptr = is_character_function or is_complex_sret_function or is_array_result_function;
+        if (!uses_hidden_result_ptr) {
             const nominal_ret_ty = if (sym.is_pointer) llvm_types.IRType.ptr else ctx.typeFromKind(sym.loweredKind());
             return_ty = ctx.abiFunctionReturnType(nominal_ret_ty);
         }
@@ -53,8 +59,10 @@ pub fn analyze(ctx: *Context) EmitError!SignatureInfo {
         .uses_explicit_result_name = uses_explicit_result_name,
         .has_alt_return = has_alt_return,
         .return_ty = return_ty,
+        .uses_hidden_result_ptr = uses_hidden_result_ptr,
         .is_character_function = is_character_function,
         .is_complex_sret_function = is_complex_sret_function,
+        .is_array_result_function = is_array_result_function,
         .func_name = func_name,
     };
 }
@@ -80,7 +88,7 @@ pub fn emit(ctx: *Context, builder: anytype, info: SignatureInfo) EmitError!void
     defer char_dummy_len_args.deinit();
 
     var result_len_arg_name: ?[]const u8 = null;
-    const has_hidden_result_arg = info.is_character_function or info.is_complex_sret_function;
+    const has_hidden_result_arg = info.uses_hidden_result_ptr;
 
     var next_arg_index: usize = 0;
     if (has_hidden_result_arg) {

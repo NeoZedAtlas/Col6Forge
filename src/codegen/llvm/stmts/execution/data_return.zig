@@ -117,7 +117,7 @@ pub fn emitDefaultReturn(ctx: *Context, builder: anytype) EmitError!void {
         const ret_ty = if (sym.is_pointer) llvm_types.IRType.ptr else ctx.typeFromKind(sym.loweredKind());
         const abi_ret_ty = ctx.abiFunctionReturnType(ret_ty);
         const ret_ptr = ctx.locals.get(return_symbol_name) orelse return error.UnknownSymbol;
-        if (ctx.abiUsesHiddenResultPtr(ret_ty)) {
+        if (sym.dims.len != 0 or ctx.abiUsesHiddenResultPtr(ret_ty)) {
             // Hidden-result ABI returns through the caller-provided pointer; function returns void.
             try ctx.emitHeapTempFrees(builder);
             try builder.retVoid();

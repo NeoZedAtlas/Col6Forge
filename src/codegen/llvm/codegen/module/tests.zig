@@ -657,6 +657,104 @@ test "emitModuleToWriter resolves derived layout dependencies across imported mo
     try emitModuleToWriter(&writer, allocator, program, sem_prog, "derived_prelude_layouts.f90", .{});
 }
 
+test "emitModuleToWriter supports use-only imported recursive derived pointer layouts" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module module_foo\n" ++
+        "  type :: foo_node\n" ++
+        "    type(foo_node_private), pointer :: p\n" ++
+        "  end type\n" ++
+        "  type :: foo_node_private\n" ++
+        "    type(foo_node), dimension(-1:1) :: link\n" ++
+        "  end type\n" ++
+        "  type :: foo\n" ++
+        "    type(foo_node) :: root\n" ++
+        "  end type\n" ++
+        "end module module_foo\n" ++
+        "function foo_insert()\n" ++
+        "  use module_foo, only: foo, foo_node\n" ++
+        "  integer :: foo_insert\n" ++
+        "  type(foo_node) :: parent, current\n" ++
+        "  integer :: cmp\n" ++
+        "  parent = current\n" ++
+        "  current = current%p%link(cmp)\n" ++
+        "end function foo_insert\n" ++
+        "function foo_count()\n" ++
+        "  use module_foo, only: foo\n" ++
+        "  integer :: foo_count\n" ++
+        "end function foo_count\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "recursive_use_only_layouts.f90", .{});
+}
+
+test "emitModuleToWriter lowers fixed-shape entry-expanded array functions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program test\n" ++
+        "interface\n" ++
+        "  function bad_stuff(n)\n" ++
+        "    integer :: bad_stuff(2)\n" ++
+        "    integer :: n(2)\n" ++
+        "  end function bad_stuff\n" ++
+        "  recursive function rec_stuff(n) result(tmp)\n" ++
+        "    integer :: n(2), tmp(2)\n" ++
+        "  end function rec_stuff\n" ++
+        "end interface\n" ++
+        "  integer :: res(2)\n" ++
+        "  res = bad_stuff((/-19,-30/))\n" ++
+        "end program test\n" ++
+        "recursive function bad_stuff(n)\n" ++
+        "  integer :: bad_stuff(2)\n" ++
+        "  integer :: n(2), tmp(2), ent = 0, sent = 0\n" ++
+        "  save ent, sent\n" ++
+        "  ent = -1\n" ++
+        "  entry rec_stuff(n) result(tmp)\n" ++
+        "  if (ent == -1) then\n" ++
+        "    sent = ent\n" ++
+        "    ent = 0\n" ++
+        "  end if\n" ++
+        "  ent = ent + 1\n" ++
+        "  tmp = 1\n" ++
+        "  if (maxval(n) < 5) then\n" ++
+        "    tmp = tmp + rec_stuff(n+1)\n" ++
+        "    ent = ent - 1\n" ++
+        "  endif\n" ++
+        "  if (ent == 1) then\n" ++
+        "    if (sent == -1) then\n" ++
+        "      bad_stuff = tmp + bad_stuff(1)\n" ++
+        "    end if\n" ++
+        "    ent = 0\n" ++
+        "    sent = 0\n" ++
+        "  end if\n" ++
+        "end function bad_stuff\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "entry_array_function.f90", .{});
+}
+
 test "emitModuleToWriter supports declarator initializer with implied-do structure constructor array" {
     const testing = std.testing;
     const allocator = testing.allocator;

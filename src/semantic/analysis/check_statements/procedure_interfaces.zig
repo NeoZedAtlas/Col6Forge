@@ -70,7 +70,13 @@ pub fn genericProcedureSigAmbiguous(a: context.Context.ProcedureSig, b: context.
 }
 
 pub fn calleeHasVisibleExplicitInterface(self: *context.Context, name: []const u8) bool {
-    if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return true;
+    if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
+        const sym = self.symbols.items[idx];
+        if ((sym.kind == .function or sym.kind == .subroutine) and !sym.is_external) return true;
+    }
+    if (resolve_symbols.lookupKnownProcedureSig(self, name)) |sig| {
+        if (sig.actual_requires_explicit_interface) return true;
+    }
     for (self.unit.decls) |decl| {
         if (decl != .interface_block) continue;
         const interface_block = decl.interface_block;
@@ -81,7 +87,16 @@ pub fn calleeHasVisibleExplicitInterface(self: *context.Context, name: []const u
             if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
         }
     }
+    var it = self.known_host_interface_sources.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return true;
+    }
     return false;
+}
+
+pub fn calleeRequiresExplicitInterface(self: *context.Context, name: []const u8) bool {
+    const sig = resolve_symbols.lookupKnownProcedureSig(self, name) orelse return false;
+    return procedureSigRequiresExplicitInterface(sig);
 }
 
 pub fn requiresExplicitInterfaceForActual(self: *context.Context, expr: *ast.Expr) bool {
@@ -163,6 +178,18 @@ fn genericRequiredArgCount(sig: context.Context.ProcedureSig) usize {
         if (!arg.optional) count += 1;
     }
     return count;
+}
+
+fn procedureSigRequiresExplicitInterface(sig: context.Context.ProcedureSig) bool {
+    if (sig.result_rank != 0) return true;
+    if (sig.is_pointer or sig.result_allocatable or sig.result_contiguous or sig.result_procedure_pointer) return true;
+    for (sig.args) |arg| {
+        if (arg.optional) return true;
+        if (arg.requires_descriptor) return true;
+        if (arg.pointer or arg.allocatable or arg.contiguous) return true;
+        if (arg.type_spec.polymorphic) return true;
+    }
+    return false;
 }
 
 fn genericSigHasDerivedOrProcedureRequiredArg(sig: context.Context.ProcedureSig) bool {

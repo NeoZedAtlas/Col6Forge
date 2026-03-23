@@ -201,6 +201,207 @@ test "runPipelineWithOptionsAndDiagnostics accepts slash array constructor assig
     try testing.expect(!diag_bag.has());
 }
 
+test "runPipelineWithOptionsAndDiagnostics accepts fixed-shape entry-expanded array functions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "! { dg-do compile }\n" ++
+        "! Test the fix for the fourth problem in PR40011, where the\n" ++
+        "! entries were not resolved, resulting in a segfault.\n" ++
+        "!\n" ++
+        "! Contributed by Dominique d'Humieres <dominiq@lps.ens.fr>\n" ++
+        "!\n" ++
+        "program test\n" ++
+        "interface\n" ++
+        "  function bad_stuff(n)\n" ++
+        "    integer :: bad_stuff (2)\n" ++
+        "    integer :: n(2)\n" ++
+        "  end function bad_stuff\n" ++
+        "   recursive function rec_stuff(n) result (tmp)\n" ++
+        "    integer :: n(2), tmp(2)\n" ++
+        "  end function rec_stuff\n" ++
+        "end interface\n" ++
+        "   integer :: res(2)\n" ++
+        "  res = bad_stuff((/-19,-30/))\n" ++
+        "\n" ++
+        "end program test\n" ++
+        "\n" ++
+        "  recursive function bad_stuff(n)\n" ++
+        "    integer :: bad_stuff (2)\n" ++
+        "    integer :: n(2), tmp(2), ent = 0, sent = 0\n" ++
+        "    save ent, sent\n" ++
+        "    ent = -1\n" ++
+        "   entry rec_stuff(n) result (tmp)\n" ++
+        "    if (ent == -1) then\n" ++
+        "      sent = ent\n" ++
+        "      ent = 0\n" ++
+        "    end if\n" ++
+        "    ent = ent + 1\n" ++
+        "    tmp = 1\n" ++
+        "    if(maxval (n) < 5) then\n" ++
+        "      tmp = tmp + rec_stuff (n+1)\n" ++
+        "      ent = ent - 1\n" ++
+        "    endif\n" ++
+        "    if (ent == 1) then\n" ++
+        "      if (sent == -1) then\n" ++
+        "        bad_stuff = tmp + bad_stuff (1)\n" ++
+        "      end if\n" ++
+        "      ent = 0\n" ++
+        "      sent = 0\n" ++
+        "    end if\n" ++
+        "  end function bad_stuff\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "entry_array_function_pipeline.f90", source);
+    defer allocator.free(file_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    const result = try runPipelineWithOptionsAndDiagnostics(allocator, file_path, .llvm, .{}, &diag_bag);
+    defer allocator.free(result.output);
+    try testing.expect(!diag_bag.has());
+}
+
+test "runPipelineToWriterWithOptionsAndDiagnostics accepts fixed-shape entry-expanded array functions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "! { dg-do compile }\n" ++
+        "! Test the fix for the fourth problem in PR40011, where the\n" ++
+        "! entries were not resolved, resulting in a segfault.\n" ++
+        "!\n" ++
+        "! Contributed by Dominique d'Humieres <dominiq@lps.ens.fr>\n" ++
+        "!\n" ++
+        "program test\n" ++
+        "interface\n" ++
+        "  function bad_stuff(n)\n" ++
+        "    integer :: bad_stuff (2)\n" ++
+        "    integer :: n(2)\n" ++
+        "  end function bad_stuff\n" ++
+        "   recursive function rec_stuff(n) result (tmp)\n" ++
+        "    integer :: n(2), tmp(2)\n" ++
+        "  end function rec_stuff\n" ++
+        "end interface\n" ++
+        "   integer :: res(2)\n" ++
+        "  res = bad_stuff((/-19,-30/))\n" ++
+        "\n" ++
+        "end program test\n" ++
+        "\n" ++
+        "  recursive function bad_stuff(n)\n" ++
+        "    integer :: bad_stuff (2)\n" ++
+        "    integer :: n(2), tmp(2), ent = 0, sent = 0\n" ++
+        "    save ent, sent\n" ++
+        "    ent = -1\n" ++
+        "   entry rec_stuff(n) result (tmp)\n" ++
+        "    if (ent == -1) then\n" ++
+        "      sent = ent\n" ++
+        "      ent = 0\n" ++
+        "    end if\n" ++
+        "    ent = ent + 1\n" ++
+        "    tmp = 1\n" ++
+        "    if(maxval (n) < 5) then\n" ++
+        "      tmp = tmp + rec_stuff (n+1)\n" ++
+        "      ent = ent - 1\n" ++
+        "    endif\n" ++
+        "    if (ent == 1) then\n" ++
+        "      if (sent == -1) then\n" ++
+        "        bad_stuff = tmp + bad_stuff (1)\n" ++
+        "      end if\n" ++
+        "      ent = 0\n" ++
+        "      sent = 0\n" ++
+        "    end if\n" ++
+        "  end function bad_stuff\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "entry_array_function_writer.f90", source);
+    defer allocator.free(file_path);
+
+    var output = std.ArrayList(u8).init(allocator);
+    defer output.deinit();
+    var writer = output.writer();
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try runPipelineToWriterWithOptionsAndDiagnostics(allocator, file_path, .llvm, &writer, .{}, &diag_bag);
+    try testing.expect(!diag_bag.has());
+    try testing.expect(output.items.len != 0);
+}
+
+test "runPipelineToWriterWithOptionsAndDiagnostics accepts fixed-shape entry-expanded array functions with GPA allocator" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "! { dg-do compile }\n" ++
+        "! Test the fix for the fourth problem in PR40011, where the\n" ++
+        "! entries were not resolved, resulting in a segfault.\n" ++
+        "!\n" ++
+        "! Contributed by Dominique d'Humieres <dominiq@lps.ens.fr>\n" ++
+        "!\n" ++
+        "program test\n" ++
+        "interface\n" ++
+        "  function bad_stuff(n)\n" ++
+        "    integer :: bad_stuff (2)\n" ++
+        "    integer :: n(2)\n" ++
+        "  end function bad_stuff\n" ++
+        "   recursive function rec_stuff(n) result (tmp)\n" ++
+        "    integer :: n(2), tmp(2)\n" ++
+        "  end function rec_stuff\n" ++
+        "end interface\n" ++
+        "   integer :: res(2)\n" ++
+        "  res = bad_stuff((/-19,-30/))\n" ++
+        "\n" ++
+        "end program test\n" ++
+        "\n" ++
+        "  recursive function bad_stuff(n)\n" ++
+        "    integer :: bad_stuff (2)\n" ++
+        "    integer :: n(2), tmp(2), ent = 0, sent = 0\n" ++
+        "    save ent, sent\n" ++
+        "    ent = -1\n" ++
+        "   entry rec_stuff(n) result (tmp)\n" ++
+        "    if (ent == -1) then\n" ++
+        "      sent = ent\n" ++
+        "      ent = 0\n" ++
+        "    end if\n" ++
+        "    ent = ent + 1\n" ++
+        "    tmp = 1\n" ++
+        "    if(maxval (n) < 5) then\n" ++
+        "      tmp = tmp + rec_stuff (n+1)\n" ++
+        "      ent = ent - 1\n" ++
+        "    endif\n" ++
+        "    if (ent == 1) then\n" ++
+        "      if (sent == -1) then\n" ++
+        "        bad_stuff = tmp + bad_stuff (1)\n" ++
+        "      end if\n" ++
+        "      ent = 0\n" ++
+        "      sent = 0\n" ++
+        "    end if\n" ++
+        "  end function bad_stuff\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "entry_array_function_writer_gpa.f90", source);
+    defer allocator.free(file_path);
+
+    var output = std.ArrayList(u8).init(allocator);
+    defer output.deinit();
+    var writer = output.writer();
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try runPipelineToWriterWithOptionsAndDiagnostics(allocator, file_path, .llvm, &writer, .{}, &diag_bag);
+    try std.testing.expect(!diag_bag.has());
+    try std.testing.expect(output.items.len != 0);
+}
+
 test "runPipelineWithOptionsAndDiagnostics rejects abstract type array constructor items across module use" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -537,6 +738,99 @@ test "runPipelineWithOptionsAndDiagnostics accepts repository interface_assignme
     const absolute_path = try std.fs.cwd().realpathAlloc(
         allocator,
         "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90",
+    );
+    defer allocator.free(absolute_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        absolute_path,
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try std.testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository whole_file_9 case" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/whole_file_9.f90",
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository whole_file_9 absolute path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const absolute_path = try std.fs.cwd().realpathAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/whole_file_9.f90",
+    );
+    defer allocator.free(absolute_path);
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    _ = try runPipelineWithOptionsAndDiagnostics(
+        allocator,
+        absolute_path,
+        .llvm,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+}
+
+test "runPipelineToWriterWithOptionsAndDiagnostics accepts repository whole_file_9 absolute path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const absolute_path = try std.fs.cwd().realpathAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/whole_file_9.f90",
+    );
+    defer allocator.free(absolute_path);
+
+    var output = std.ArrayList(u8).init(allocator);
+    defer output.deinit();
+    var writer = output.writer();
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try runPipelineToWriterWithOptionsAndDiagnostics(
+        allocator,
+        absolute_path,
+        .llvm,
+        &writer,
+        .{},
+        &diag_bag,
+    );
+    try testing.expect(diag_bag.take() == null);
+    try testing.expect(output.items.len != 0);
+}
+
+test "runPipelineWithOptionsAndDiagnostics accepts repository whole_file_9 with GPA allocator" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const absolute_path = try std.fs.cwd().realpathAlloc(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/whole_file_9.f90",
     );
     defer allocator.free(absolute_path);
 

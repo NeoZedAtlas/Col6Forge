@@ -186,7 +186,7 @@ pub fn ensureSymbol(self: *context.Context, name: []const u8) !usize {
             else => .subroutine,
         };
         const proc_spec = if (proc_kind == .function)
-            lookupKnownFunctionResolvedSpec(self, name) orelse implicitInfo(self, name).type_spec
+            implicitInfo(self, name).type_spec
         else
             TypeSpec.fromResolvedKind(.real, .real, null);
         var symbol = Symbol.init(name, proc_spec, &.{}, proc_kind, .local);

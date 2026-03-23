@@ -4,6 +4,7 @@ const context = @import("../../context/mod.zig");
 const common = @import("../../common.zig");
 const memory = @import("../memory.zig");
 const dispatch = @import("../dispatch/mod.zig");
+const resolution = @import("../dispatch/resolution.zig");
 const binary = @import("../binary.zig");
 const utils = @import("../../utils.zig");
 const llvm_types = @import("../../../types.zig");
@@ -251,6 +252,11 @@ pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Exp
             });
         },
         .call_or_subscript => |call| blk: {
+            const kind = ctx.ref_kinds.get(@as(usize, @intFromPtr(expr))) orelse .unknown;
+            if (kind == .call) {
+                if (try analyzeKnownArrayFunctionActual(ctx, builder, call)) |actual| break :blk actual;
+                break :blk null;
+            }
             const sym = ctx.findSymbol(call.name) orelse break :blk null;
             if (sym.dims.len == 0 or call.args.len != sym.dims.len) break :blk null;
 
@@ -294,10 +300,124 @@ pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Exp
     };
 }
 
+fn analyzeKnownArrayFunctionActual(
+    ctx: *Context,
+    builder: anytype,
+    call: ast.CallOrSubscript,
+) !?ArrayActualPlan {
+    const sig = ctx.lookupKnownProcedureSig(call.name) orelse return null;
+    if (sig.result_rank == 0) return null;
+    const result_spec = sig.result_type_spec orelse return null;
+    if (result_spec.lowered_kind == .character or result_spec.lowered_kind == .derived) return null;
+
+    const extents = try materializeKnownArrayResultExtents(ctx, sig) orelse return null;
+    const elem_ty = storageIRTypeForProcedureResult(ctx, result_spec);
+    const elem_count = try emitExtentProductI64(ctx, builder, extents);
+    const tmp_name = try ctx.nextTemp();
+    try builder.allocaArrayValue(tmp_name, elem_ty, elem_count);
+    const result_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
+
+    var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer abi_args.deinit();
+    try abi_args.append(result_ptr);
+    try appendKnownArrayFunctionCallArgs(ctx, builder, &abi_args, call.args, sig);
+
+    const fn_name = try resolution.ensureExternalDeclForCall(ctx, call.name, .void, call.args, false);
+    try builder.callTyped(null, .void, fn_name, abi_args.items);
+
+    return try validatedArrayActual(.{
+        .base_ptr = result_ptr,
+        .elem_ty = elem_ty,
+        .extents = extents,
+        .multipliers = try emitContiguousMultipliers(ctx, builder, extents),
+        .address_scale = i64Const(ctx, 1),
+        .storage = .materialized_temp,
+    });
+}
+
+fn appendKnownArrayFunctionCallArgs(
+    ctx: *Context,
+    builder: anytype,
+    abi_args: *std.array_list.Managed(ValueRef),
+    args: []*Expr,
+    sig: ast.sema.KnownProcedureSig,
+) !void {
+    var resolved_args = std.array_list.Managed(ArgPointerResult).init(ctx.allocator);
+    defer resolved_args.deinit();
+
+    for (args) |arg| {
+        const resolved = try emitKnownArrayFunctionArgPointer(ctx, builder, arg);
+        try resolved_args.append(resolved);
+        try abi_args.append(resolved.ptr);
+    }
+    for (args, 0..) |arg, idx| {
+        if (idx >= sig.args.len or !sig.args[idx].requires_descriptor) continue;
+        const desc = if (resolved_args.items[idx].descriptor_actual) |actual|
+            try materializeKnownActualDescriptor(ctx, builder, actual, sig.args[idx])
+        else
+            try materializeActualDescriptor(ctx, builder, arg, sig.args[idx]);
+        try abi_args.append(desc.extent_ptr);
+        try abi_args.append(desc.multiplier_ptr);
+    }
+    for (args) |arg| {
+        if (try emitCharacterLengthArg(ctx, builder, arg)) |len_val| {
+            try abi_args.append(len_val);
+        }
+    }
+}
+
+fn emitKnownArrayFunctionArgPointer(
+    ctx: *Context,
+    builder: anytype,
+    expr: *Expr,
+) !ArgPointerResult {
+    if (try resolveArrayActual(ctx, builder, expr)) |actual| {
+        return .{ .ptr = actual.base_ptr, .descriptor_actual = actual };
+    }
+    if (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) |char_value| {
+        return .{ .ptr = char_value.ptr };
+    }
+
+    const value = try dispatch.emitExpr(ctx, builder, expr);
+    if (value.ty == .ptr) {
+        return .{ .ptr = .{ .name = value.name, .ty = .ptr, .is_ptr = true } };
+    }
+    const alloc_ty = if (value.ty == .i1) ctx.defaultIntegerIRType() else value.ty;
+    const tmp = try ctx.nextTemp();
+    try builder.alloca(tmp, alloc_ty);
+    const ptr = ValueRef{ .name = tmp, .ty = .ptr, .is_ptr = true };
+    const stored = if (alloc_ty == value.ty) value else try casting.coerce(ctx, builder, value, alloc_ty);
+    try builder.store(stored, ptr);
+    return .{ .ptr = ptr };
+}
+
+fn materializeKnownArrayResultExtents(
+    ctx: *Context,
+    sig: ast.sema.KnownProcedureSig,
+) !?[]ValueRef {
+    if (sig.result_shape_signature.len == 0) return null;
+    const extents = try ctx.allocator.alloc(ValueRef, sig.result_shape_signature.len);
+    for (sig.result_shape_signature, 0..) |shape, idx| {
+        const parsed = std.fmt.parseInt(i64, shape, 10) catch return null;
+        extents[idx] = i64Const(ctx, parsed);
+    }
+    return extents;
+}
+
+fn storageIRTypeForProcedureResult(ctx: *Context, spec: ast.TypeSpec) IRType {
+    return if (spec.lowered_kind == .logical)
+        llvm_types.defaultIntegerType(ctx.options.target_layout)
+    else
+        ctx.typeFromKind(spec.lowered_kind);
+}
+
 pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror!?ArrayActualPlan {
     if (try analyzeAddressableArrayActual(ctx, builder, expr)) |actual| return try validatedArrayActual(actual);
     if (expr.* == .array_constructor) {
         if (try analyzeStaticZeroSizedArrayConstructorActual(ctx, builder, expr.array_constructor)) |actual| {
+            return try validatedArrayActual(actual);
+        }
+        if (try analyzeStaticMaterializedArrayConstructorActual(ctx, builder, expr.array_constructor)) |actual| {
             return try validatedArrayActual(actual);
         }
     }
@@ -342,6 +462,44 @@ fn analyzeStaticZeroSizedArrayConstructorActual(
     };
 }
 
+fn analyzeStaticMaterializedArrayConstructorActual(
+    ctx: *Context,
+    builder: anytype,
+    ctor: ast.ArrayConstructor,
+) anyerror!?ArrayActualPlan {
+    const elem_count = staticArrayConstructorCount(ctor) orelse return null;
+    if (elem_count == 0) return null;
+    if (!arrayConstructorHasOnlyScalarItems(ctor)) return null;
+
+    const elem_info = arrayConstructorElementInfo(ctx, ctor) orelse return null;
+    if (elem_info.elem_ty == .i8) return null;
+
+    const buf_name = try ctx.nextTemp();
+    try builder.allocaArrayValue(buf_name, elem_info.elem_ty, i64Const(ctx, @intCast(elem_count)));
+    const base_ptr = ValueRef{ .name = buf_name, .ty = .ptr, .is_ptr = true };
+
+    for (ctor.items, 0..) |item, idx| {
+        const value = try dispatch.emitExpr(ctx, builder, item);
+        const coerced = try casting.coerce(ctx, builder, value, elem_info.elem_ty);
+        const elem_ptr_name = try ctx.nextTemp();
+        try builder.gep(elem_ptr_name, elem_info.elem_ty, base_ptr, i64Const(ctx, @intCast(idx)));
+        try builder.store(coerced, .{ .name = elem_ptr_name, .ty = .ptr, .is_ptr = true });
+    }
+
+    const extents = try ctx.allocator.alloc(ValueRef, 1);
+    extents[0] = i64Const(ctx, @intCast(elem_count));
+    const multipliers = try ctx.allocator.alloc(ValueRef, 1);
+    multipliers[0] = i64Const(ctx, 1);
+    return .{
+        .base_ptr = base_ptr,
+        .elem_ty = elem_info.elem_ty,
+        .extents = extents,
+        .multipliers = multipliers,
+        .address_scale = elem_info.address_scale,
+        .storage = .materialized_temp,
+    };
+}
+
 const ArrayConstructorElementInfo = struct {
     elem_ty: IRType,
     address_scale: ValueRef,
@@ -372,6 +530,13 @@ fn arrayConstructorRepresentativeExpr(ctor: ast.ArrayConstructor) ?*Expr {
         return item;
     }
     return null;
+}
+
+fn arrayConstructorHasOnlyScalarItems(ctor: ast.ArrayConstructor) bool {
+    for (ctor.items) |item| {
+        if (item.* == .implied_do) return false;
+    }
+    return true;
 }
 
 fn staticArrayConstructorCount(ctor: ast.ArrayConstructor) ?usize {

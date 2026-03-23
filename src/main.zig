@@ -322,6 +322,19 @@ test "main entry import graph accepts repository array_constructor_14 file" {
     try testing.expect(result.output.len != 0);
 }
 
+test "main entry import graph accepts repository whole_file_9 file" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    const result = try Col6Forge.runPipelineWithOptions(
+        allocator,
+        "tests/gcc-tests/gfortran.dg/whole_file_9.f90",
+        .llvm,
+        .{},
+    );
+    defer allocator.free(result.output);
+    try testing.expect(result.output.len != 0);
+}
+
 fn failWithUsage(parse_err: ParseArgError) noreturn {
     printUsage(std.fs.File.stderr()) catch {};
     var stderr = std.fs.File.stderr();

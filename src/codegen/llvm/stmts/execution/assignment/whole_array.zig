@@ -4,6 +4,7 @@ const common = @import("../../../codegen/common.zig");
 const context = @import("../../../codegen/context/mod.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
 const expr_memory = @import("../../../codegen/expression/memory.zig");
+const array_actuals = @import("../../../codegen/expression/call/array_actuals.zig");
 const io_utils = @import("../../io/utils.zig");
 const ir = @import("../../../../ir.zig");
 const llvm_types = @import("../../../types.zig");
@@ -14,6 +15,7 @@ const character_mod = @import("character.zig");
 
 const Context = context.Context;
 const ValueRef = context.ValueRef;
+const resolveArrayActual = array_actuals.resolveArrayActual;
 
 const EmitError = anyerror;
 
@@ -140,6 +142,24 @@ pub fn emitWholeArrayScalarAssignment(ctx: *Context, builder: anytype, assign: a
     const value = try expr.emitExpr(ctx, builder, assign.value);
     const coerced = try expr.coerce(ctx, builder, value, elem_ty);
     try emitLinearFillLoop(ctx, builder, base_ptr, elem_ty, count_val, coerced);
+    return true;
+}
+
+pub fn emitWholeArrayExprAssignment(ctx: *Context, builder: anytype, assign: ast.Assignment) EmitError!bool {
+    const target_info = wholeArrayConstructorTarget(ctx, assign.target) orelse return false;
+    if (target_info.sym.dims.len == 0) return false;
+    if (target_info.sym.isCharacter()) return false;
+    if (target_info.sym.loweredKind() == .derived) return false;
+
+    const src_actual = (try resolveArrayActual(ctx, builder, assign.value)) orelse return false;
+    if (src_actual.elem_ty != common.symbolElementIRType(target_info.sym, ctx.options.target_layout)) return false;
+    if (src_actual.extents.len != target_info.sym.dims.len) return false;
+
+    try emitRequireTargetArrayShape(ctx, builder, target_info.sym, src_actual.extents);
+
+    const dst_ptr = try wholeArrayBasePtr(ctx, builder, target_info.name, target_info.sym);
+    const count = try emitExtentProductI64(ctx, builder, src_actual.extents);
+    try emitLinearCopyLoop(ctx, builder, dst_ptr, src_actual.base_ptr, src_actual.elem_ty, count);
     return true;
 }
 
@@ -546,6 +566,55 @@ fn emitDynamicElemCount(ctx: *Context, builder: anytype, sym: ast.sema.Symbol) E
         if (extent.ty != .i64) {
             extent = try expr.coerce(ctx, builder, extent, .i64);
         }
+        total = try expr.emitMul(ctx, builder, total, extent);
+    }
+    return total;
+}
+
+fn emitRequireTargetArrayShape(
+    ctx: *Context,
+    builder: anytype,
+    target_sym: ast.sema.Symbol,
+    src_extents: []const ValueRef,
+) EmitError!void {
+    if (target_sym.dims.len != src_extents.len) return error.UnsupportedArrayActual;
+    if (src_extents.len == 0) return;
+
+    var all_equal = ValueRef{ .name = "true", .ty = .i1, .is_ptr = false };
+    for (src_extents, 0..) |src_extent, dim_idx| {
+        var target_extent = try expr.emitSymbolDimExtent(ctx, builder, target_sym, dim_idx);
+        if (target_extent.ty != .i64) target_extent = try expr.coerce(ctx, builder, target_extent, .i64);
+        const cmp_name = try ctx.nextTemp();
+        try builder.compare(cmp_name, "icmp", "eq", .i64, target_extent, src_extent);
+        const cmp_val = ValueRef{ .name = cmp_name, .ty = .i1, .is_ptr = false };
+        if (std.mem.eql(u8, all_equal.name, "true")) {
+            all_equal = cmp_val;
+        } else {
+            const and_name = try ctx.nextTemp();
+            try builder.binary(and_name, "and", .i1, all_equal, cmp_val);
+            all_equal = .{ .name = and_name, .ty = .i1, .is_ptr = false };
+        }
+    }
+
+    const ok_label = try ctx.nextLabel("array_assign_shape_ok");
+    const fail_label = try ctx.nextLabel("array_assign_shape_fail");
+    try builder.brCond(all_equal, ok_label, fail_label);
+
+    try builder.label(fail_label);
+    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, &.{}, false);
+    try builder.callTyped(null, .void, trap_name, &.{});
+    try builder.emitUnreachable();
+
+    try builder.label(ok_label);
+}
+
+fn emitExtentProductI64(
+    ctx: *Context,
+    builder: anytype,
+    extents: []const ValueRef,
+) EmitError!ValueRef {
+    var total = character_mod.constI64(ctx, 1);
+    for (extents) |extent| {
         total = try expr.emitMul(ctx, builder, total, extent);
     }
     return total;

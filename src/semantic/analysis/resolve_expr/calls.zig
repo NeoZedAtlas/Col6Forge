@@ -78,13 +78,32 @@ pub fn resolveCallOrSubscriptExpr(
         }
         if (sym.dims.len > 0) {
             kind = .subscript;
-        } else if (symbols_mod.lookupKnownProcedureSig(self, call.name) orelse visible_generic_sig) |sig| {
+        } else if (resolvedProcedureSig(self, call.name, sym.is_intrinsic, visible_generic_sig)) |sig|
+        {
             if (sig.kind == .function) {
+                const was_variable = sym.kind == .variable;
+                const known_result_spec = sig.result_type_spec orelse symbols_mod.lookupKnownFunctionResolvedSpec(self, call.name);
+                if (shouldCheckImplicitFunctionReferenceMismatch(self, call.name, sym, visible_generic_sig) and
+                    !sym.type_explicit and
+                    known_result_spec != null)
+                {
+                    if (functionReferenceMismatchMessage(sym.type_spec, known_result_spec.?)) |message| {
+                        const source = self.sourceForExpr(expr_node) orelse ast.SourceRef{};
+                        self.setDiagnostic(
+                            if (source.line == 0) 1 else source.line,
+                            if (source.column == 0) 1 else source.column,
+                            catalog.semantic.invalid_argument_count.code,
+                            message,
+                            source.text,
+                        );
+                        return error.InvalidArgumentCount;
+                    }
+                }
                 kind = .call;
                 if (sym.kind == .variable) sym.kind = .function;
-                if (!sym.is_intrinsic and sym.storage != .dummy) sym.is_external = true;
+                if (!sym.is_intrinsic and sym.storage != .dummy and was_variable) sym.is_external = true;
                 if (!sym.type_explicit) {
-                    if (sig.result_type_spec) |fn_spec| {
+                    if (known_result_spec) |fn_spec| {
                         sym.applyTypeSpec(fn_spec);
                         sym.type_explicit = true;
                     } else if (symbols_mod.lookupKnownFunctionResolvedSpec(self, call.name)) |fn_spec| {
@@ -97,9 +116,10 @@ pub fn resolveCallOrSubscriptExpr(
                 return error.InvalidSubscript;
             }
         } else if (symbols_mod.lookupKnownFunctionResolvedSpec(self, call.name)) |fn_spec| {
+            const was_variable = sym.kind == .variable;
             kind = .call;
             if (sym.kind == .variable) sym.kind = .function;
-            if (!sym.is_intrinsic and sym.storage != .dummy) sym.is_external = true;
+            if (!sym.is_intrinsic and sym.storage != .dummy and was_variable) sym.is_external = true;
             if (!sym.type_explicit) {
                 sym.applyTypeSpec(fn_spec);
                 sym.type_explicit = true;
@@ -213,7 +233,7 @@ pub fn exprRankForCallOrSubscript(
     const kind: ResolvedRefKind = deps.refKindIndex(self, @intFromPtr(expr_node)) orelse
         (if (sym.dims.len > 0) .subscript else .call);
     if (kind == .subscript) return 0;
-    if (symbols_mod.lookupKnownProcedureSig(self, call.name) orelse visibleSingleTargetGenericSig(self, call.name)) |sig| return sig.result_rank;
+    if (resolvedProcedureSig(self, call.name, false, visibleSingleTargetGenericSig(self, call.name))) |sig| return sig.result_rank;
     return sym.dims.len;
 }
 
@@ -344,6 +364,70 @@ fn visibleSingleTargetGenericSig(self: *context.Context, name: []const u8) ?cont
     return null;
 }
 
+fn resolvedProcedureSig(
+    self: *context.Context,
+    name: []const u8,
+    intrinsic_override: bool,
+    visible_generic_sig: ?context.Context.ProcedureSig,
+) ?context.Context.ProcedureSig {
+    if (intrinsic_override) return null;
+    return visible_generic_sig orelse symbols_mod.lookupKnownProcedureSig(self, name);
+}
+
+fn isImplicitExternalFunctionReference(sym: symbols.Symbol) bool {
+    if (sym.is_intrinsic) return false;
+    if (!sym.is_external) return false;
+    if (sym.storage == .dummy) return false;
+    if (sym.kind != .function and sym.kind != .variable) return false;
+    return sym.dims.len == 0;
+}
+
+fn shouldCheckImplicitFunctionReferenceMismatch(
+    self: *context.Context,
+    name: []const u8,
+    sym: symbols.Symbol,
+    visible_generic_sig: ?context.Context.ProcedureSig,
+) bool {
+    if (!isImplicitExternalFunctionReference(sym)) return false;
+    if (visible_generic_sig != null) return false;
+    if (hasVisibleExplicitInterface(self, name)) return false;
+    if (isCurrentUnitProcedureReference(self, name)) return false;
+    return true;
+}
+
+fn hasVisibleExplicitInterface(self: *context.Context, name: []const u8) bool {
+    if (symbols_mod.findSymbolIndex(self, name)) |idx| {
+        const sym = self.symbols.items[idx];
+        if ((sym.kind == .function or sym.kind == .subroutine) and !sym.is_external) return true;
+    }
+    if (symbols_mod.lookupKnownProcedureSig(self, name)) |sig| {
+        if (sig.actual_requires_explicit_interface) return true;
+    }
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_block = decl.interface_block;
+        if (interface_block.name) |interface_name| {
+            if (std.ascii.eqlIgnoreCase(interface_name, name)) return true;
+        }
+        for (interface_block.procedure_headers) |proc_header| {
+            if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
+        }
+    }
+    var it = self.known_host_interface_sources.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return true;
+    }
+    return false;
+}
+
+fn isCurrentUnitProcedureReference(self: *context.Context, name: []const u8) bool {
+    if (std.ascii.eqlIgnoreCase(self.unit.name, name)) return true;
+    if (self.unit.result_name) |result_name| {
+        if (std.ascii.eqlIgnoreCase(result_name, name)) return true;
+    }
+    return false;
+}
+
 fn singleTargetGenericInterfaceSig(
     self: *context.Context,
     interface_block: ast.InterfaceBlock,
@@ -390,6 +474,23 @@ fn requiresExplicitInterfaceForActuals(
         if (spec.lowered_kind == .derived and spec.polymorphic) return true;
     }
     return false;
+}
+
+fn functionReferenceMismatchMessage(declared: symbols.TypeSpec, known: symbols.TypeSpec) ?[]const u8 {
+    if (declared.lowered_kind == .character and known.lowered_kind == .character) {
+        if (declared.char_len_kind != known.char_len_kind or declared.char_len != known.char_len) {
+            return "Character length mismatch";
+        }
+    }
+    if (declared.lowered_kind != known.lowered_kind) return "Return type mismatch";
+    if (declared.kind_value != known.kind_value) return "Return type mismatch";
+    if (declared.polymorphic != known.polymorphic) return "Return type mismatch";
+    if (declared.lowered_kind == .derived) {
+        const declared_name = declared.derived_type_name orelse return "Return type mismatch";
+        const known_name = known.derived_type_name orelse return "Return type mismatch";
+        if (!std.ascii.eqlIgnoreCase(declared_name, known_name)) return "Return type mismatch";
+    }
+    return null;
 }
 
 fn ensureResolvedDerivedTypeForComponentBase(

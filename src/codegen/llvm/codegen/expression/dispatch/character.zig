@@ -247,7 +247,8 @@ pub fn emitCharacterValuePlanImpl(
                 return emitInternalLiteralSubstringPlan(ctx, builder, call_or_sub.args);
             }
             if (isTrimIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 1) {
-                return emitCharacterValuePlanImpl(ctx, builder, call_or_sub.args[0], subst_depth);
+                const base_plan = (try emitCharacterValuePlanImpl(ctx, builder, call_or_sub.args[0], subst_depth)) orelse return null;
+                return try emitTrimmedCharacterPlan(ctx, builder, base_plan);
             }
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
             if (!sym.isCharacter()) return null;
@@ -363,25 +364,24 @@ pub fn emitCharacterValuePlanImpl(
             if (bin.op != .concat) return null;
             const left = (try emitCharacterValuePlanImpl(ctx, builder, bin.left, subst_depth)) orelse return null;
             const right = (try emitCharacterValuePlanImpl(ctx, builder, bin.right, subst_depth)) orelse return null;
-            const left_len = left.logical_len_const orelse return error.UnsupportedConcat;
-            const right_len = right.logical_len_const orelse return error.UnsupportedConcat;
-            const total_len = left_len + right_len;
+            const left_len = try coerceCharacterLenToI32(ctx, builder, left.logical_len);
+            const right_len = try coerceCharacterLenToI32(ctx, builder, right.logical_len);
+            const total_len = try binary.emitAdd(ctx, builder, left_len, right_len);
             const buf_name = try ctx.nextTemp();
-            if (total_len <= 1) {
-                try builder.alloca(buf_name, .i8);
-            } else {
-                try builder.allocaArray(buf_name, .i8, total_len);
-            }
+            try builder.allocaArrayValue(buf_name, .i8, total_len);
             const buf_ptr = ValueRef{ .name = buf_name, .ty = .ptr, .is_ptr = true };
-            try copyCharacterBytesFromPlan(ctx, builder, buf_ptr, left, 0);
-            try copyCharacterBytesFromPlan(ctx, builder, buf_ptr, right, left_len);
-            const len_val = try ctx.constI32(@intCast(total_len));
+            try copyCharacterBytesFromPlanDynamic(ctx, builder, buf_ptr, utils.zeroValue(.i32), left);
+            try copyCharacterBytesFromPlanDynamic(ctx, builder, buf_ptr, left_len, right);
+            const total_len_const = if (left.logical_len_const != null and right.logical_len_const != null)
+                left.logical_len_const.? + right.logical_len_const.?
+            else
+                null;
             return try shared.validatedCharacterValuePlan(.{
                 .ptr = buf_ptr,
-                .logical_len = len_val,
-                .storage_len = len_val,
-                .logical_len_const = total_len,
-                .storage_len_const = total_len,
+                .logical_len = total_len,
+                .storage_len = total_len,
+                .logical_len_const = total_len_const,
+                .storage_len_const = total_len_const,
                 .kind = .concat_temp,
             });
         },
@@ -429,6 +429,56 @@ pub fn copyCharacterBytesFromPlan(
         try builder.gep(dst_gep, .i8, dst_ptr, dst_off);
         try builder.store(.{ .name = tmp, .ty = .i8, .is_ptr = false }, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
     }
+}
+
+fn copyCharacterBytesFromPlanDynamic(
+    ctx: *Context,
+    builder: anytype,
+    dst_ptr: ValueRef,
+    dst_offset: ValueRef,
+    src: CharacterValuePlan,
+) EmitError!void {
+    try src.validate();
+    const offset_i32 = try coerceCharacterLenToI32(ctx, builder, dst_offset);
+    const src_len_i32 = try coerceCharacterLenToI32(ctx, builder, src.logical_len);
+
+    const idx_ptr = try ctx.nextTemp();
+    try builder.alloca(idx_ptr, .i32);
+    try builder.store(utils.zeroValue(.i32), .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+
+    const loop_cond = try ctx.nextLabel("char_copy_cond");
+    const loop_body = try ctx.nextLabel("char_copy_body");
+    const loop_inc = try ctx.nextLabel("char_copy_inc");
+    const loop_end = try ctx.nextLabel("char_copy_end");
+
+    try builder.br(loop_cond);
+
+    try builder.label(loop_cond);
+    const idx_val_tmp = try ctx.nextTemp();
+    try builder.load(idx_val_tmp, .i32, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    const idx_val = ValueRef{ .name = idx_val_tmp, .ty = .i32, .is_ptr = false };
+    const cmp_tmp = try ctx.nextTemp();
+    try builder.compare(cmp_tmp, "icmp", "slt", .i32, idx_val, src_len_i32);
+    try builder.brCond(.{ .name = cmp_tmp, .ty = .i1, .is_ptr = false }, loop_body, loop_end);
+
+    try builder.label(loop_body);
+    const src_gep = try ctx.nextTemp();
+    try builder.gep(src_gep, .i8, src.ptr, idx_val);
+    const src_tmp = try ctx.nextTemp();
+    try builder.load(src_tmp, .i8, .{ .name = src_gep, .ty = .ptr, .is_ptr = true });
+    const dst_idx = try binary.emitAdd(ctx, builder, offset_i32, idx_val);
+    const dst_gep = try ctx.nextTemp();
+    try builder.gep(dst_gep, .i8, dst_ptr, dst_idx);
+    try builder.store(.{ .name = src_tmp, .ty = .i8, .is_ptr = false }, .{ .name = dst_gep, .ty = .ptr, .is_ptr = true });
+    try builder.br(loop_inc);
+
+    try builder.label(loop_inc);
+    const next_tmp = try ctx.nextTemp();
+    try builder.binary(next_tmp, "add", .i32, idx_val, utils.oneValue());
+    try builder.store(.{ .name = next_tmp, .ty = .i32, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.br(loop_cond);
+
+    try builder.label(loop_end);
 }
 
 pub fn emitCharCompare(
@@ -487,7 +537,9 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
                 return plan.logical_len;
             }
             if (isTrimIntrinsicName(call_or_sub.name) and call_or_sub.args.len == 1) {
-                return emitCharacterLenValueImpl(ctx, builder, call_or_sub.args[0], subst_depth);
+                const base_plan = (try emitCharacterValuePlanImpl(ctx, builder, call_or_sub.args[0], subst_depth)) orelse return null;
+                const trimmed = try emitTrimmedCharacterPlan(ctx, builder, base_plan);
+                return trimmed.logical_len;
             }
             const sym = ctx.findSymbol(call_or_sub.name) orelse return null;
             if (!sym.isCharacter()) return null;
@@ -544,6 +596,69 @@ fn emitCharacterLenValueImpl(ctx: *Context, builder: anytype, expr: *Expr, subst
         },
         else => return null,
     }
+}
+
+fn coerceCharacterLenToI32(ctx: *Context, builder: anytype, len_val: ValueRef) EmitError!ValueRef {
+    if (len_val.ty == .i32) return len_val;
+    return casting.coerceCheckedI32(ctx, builder, len_val);
+}
+
+fn emitTrimmedCharacterPlan(
+    ctx: *Context,
+    builder: anytype,
+    base_plan: CharacterValuePlan,
+) EmitError!CharacterValuePlan {
+    try base_plan.validate();
+    const base_len = try coerceCharacterLenToI32(ctx, builder, base_plan.logical_len);
+
+    const idx_ptr = try ctx.nextTemp();
+    try builder.alloca(idx_ptr, .i32);
+    try builder.store(base_len, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+
+    const loop_cond = try ctx.nextLabel("trim_len_cond");
+    const loop_body = try ctx.nextLabel("trim_len_body");
+    const char_check = try ctx.nextLabel("trim_len_check");
+    const loop_end = try ctx.nextLabel("trim_len_end");
+
+    try builder.br(loop_cond);
+
+    try builder.label(loop_cond);
+    const idx_val_tmp = try ctx.nextTemp();
+    try builder.load(idx_val_tmp, .i32, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    const idx_val = ValueRef{ .name = idx_val_tmp, .ty = .i32, .is_ptr = false };
+    const has_chars_tmp = try ctx.nextTemp();
+    try builder.compare(has_chars_tmp, "icmp", "sgt", .i32, idx_val, utils.zeroValue(.i32));
+    try builder.brCond(.{ .name = has_chars_tmp, .ty = .i1, .is_ptr = false }, loop_body, loop_end);
+
+    try builder.label(loop_body);
+    const prev_idx = try binary.emitSub(ctx, builder, idx_val, utils.oneValue());
+    const char_gep = try ctx.nextTemp();
+    try builder.gep(char_gep, .i8, base_plan.ptr, prev_idx);
+    const char_tmp = try ctx.nextTemp();
+    try builder.load(char_tmp, .i8, .{ .name = char_gep, .ty = .ptr, .is_ptr = true });
+    const ch = ValueRef{ .name = char_tmp, .ty = .i8, .is_ptr = false };
+    const blank = ValueRef{ .name = try ctx.intLiteral(32), .ty = .i8, .is_ptr = false };
+    const is_blank_tmp = try ctx.nextTemp();
+    try builder.compare(is_blank_tmp, "icmp", "eq", .i8, ch, blank);
+    try builder.brCond(.{ .name = is_blank_tmp, .ty = .i1, .is_ptr = false }, char_check, loop_end);
+
+    try builder.label(char_check);
+    try builder.store(prev_idx, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.br(loop_cond);
+
+    try builder.label(loop_end);
+    const result_tmp = try ctx.nextTemp();
+    try builder.load(result_tmp, .i32, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    const result_len = ValueRef{ .name = result_tmp, .ty = .i32, .is_ptr = false };
+
+    return try shared.validatedCharacterValuePlan(.{
+        .ptr = base_plan.ptr,
+        .logical_len = result_len,
+        .storage_len = base_plan.storage_len,
+        .logical_len_const = null,
+        .storage_len_const = base_plan.storage_len_const,
+        .kind = .substring_view,
+    });
 }
 
 fn substringLen(ctx: *Context, sub: ast.SubstringExpr) ?usize {

@@ -850,8 +850,20 @@ pub const Context = struct {
         var spec = input.TypeSpec.fromResolvedKind(type_decl.type_kind, type_decl.type_kind, null);
         if (type_decl.type_kind == .derived) {
             if (type_decl.derived_type_name) |derived_name| {
-                const layout = self.findDerivedTypeLayout(derived_name) orelse return error.UnknownSymbol;
                 spec = input.TypeSpec.fromDerived(derived_name).withPolymorphic(type_decl.polymorphic);
+                const layout = self.findDerivedTypeLayout(derived_name) orelse {
+                    if ((type_decl.pointer or type_decl.allocatable) and item.dims.len == 0) {
+                        // Scalar descriptor-bearing components do not require the target
+                        // derived layout to size the containing type.
+                        return .{
+                            .type_spec = spec,
+                            .storage_size = @sizeOf(usize),
+                            .element_size = @sizeOf(usize),
+                            .alignment = @alignOf(usize),
+                        };
+                    }
+                    return error.UnknownSymbol;
+                };
                 return .{
                     .type_spec = spec,
                     .storage_size = layout.size,

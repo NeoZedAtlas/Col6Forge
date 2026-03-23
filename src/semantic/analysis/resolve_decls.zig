@@ -15,8 +15,9 @@ pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
     resolved_type = resolved_type.withPolymorphic(decl.polymorphic);
     for (decl.items) |item| {
         try applyDeclarator(self, resolved_type, item, .local, true, decl.allocatable, decl.pointer);
+        const idx = symbols_mod.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
+        try validateKnownFunctionResultDeclaration(self, self.symbols.items[idx], true);
         if (decl.external) {
-            const idx = symbols_mod.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
             self.symbols.items[idx].is_external = true;
         }
     }
@@ -29,6 +30,7 @@ pub fn applyProcedureDecl(self: *context.Context, decl: ast.ProcedureDecl) !void
 
         const idx = symbols_mod.findSymbolIndex(self, item.name) orelse return error.UnknownSymbol;
         var sym = &self.symbols.items[idx];
+        try validateKnownFunctionResultDeclaration(self, sym.*, false);
         if (resolved.kind) |kind| {
             sym.kind = kind;
         }
@@ -153,6 +155,48 @@ fn validateConcreteAbstractTypeUse(self: *context.Context, type_spec: symbols.Ty
         decl_source.text,
     );
     return error.UnexpectedTypeDecl;
+}
+
+fn validateKnownFunctionResultDeclaration(
+    self: *context.Context,
+    sym: symbols.Symbol,
+    prefer_length_message: bool,
+) !void {
+    if (sym.storage == .dummy) return;
+    const known_sig = symbols_mod.lookupKnownProcedureSig(self, sym.name) orelse return;
+    if (known_sig.kind != .function) return;
+    const known_spec = symbols_mod.lookupKnownFunctionResolvedSpec(self, sym.name) orelse return;
+    const message = functionResultMismatchMessage(sym.type_spec, known_spec, prefer_length_message) orelse return;
+    const decl_source = self.current_decl_source orelse ast.DeclSource{};
+    self.setDiagnostic(
+        if (decl_source.line == 0) 1 else decl_source.line,
+        if (decl_source.column == 0) 1 else decl_source.column,
+        catalog.semantic.invalid_argument_count.code,
+        message,
+        decl_source.text,
+    );
+    return error.InvalidArgumentCount;
+}
+
+fn functionResultMismatchMessage(
+    declared: symbols.TypeSpec,
+    known: symbols.TypeSpec,
+    prefer_length_message: bool,
+) ?[]const u8 {
+    if (declared.lowered_kind == .character and known.lowered_kind == .character) {
+        if (declared.char_len_kind != known.char_len_kind or declared.char_len != known.char_len) {
+            return if (prefer_length_message) "Character length mismatch" else "Character length mismatch in function result";
+        }
+    }
+    if (declared.lowered_kind != known.lowered_kind) return "Return type mismatch of function";
+    if (declared.kind_value != known.kind_value) return "Return type mismatch of function";
+    if (declared.polymorphic != known.polymorphic) return "Return type mismatch of function";
+    if (declared.lowered_kind == .derived) {
+        const declared_name = declared.derived_type_name orelse return "Return type mismatch of function";
+        const known_name = known.derived_type_name orelse return "Return type mismatch of function";
+        if (!std.ascii.eqlIgnoreCase(declared_name, known_name)) return "Return type mismatch of function";
+    }
+    return null;
 }
 
 fn allowsDeferredCharacterLength(self: *context.Context, sym: symbols.Symbol) bool {
