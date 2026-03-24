@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const ast = @import("../../../../ast/nodes.zig");
 const input = @import("../../../input.zig");
 const catalog = @import("../../../../common/error_catalog.zig");
@@ -1331,14 +1330,12 @@ test "emitModuleToWriter declares external logical function with default integer
     var buffer = std.array_list.Managed(u8).init(allocator);
     defer buffer.deinit();
     var writer = buffer.writer();
-    try emitModuleToWriter(&writer, allocator, program, sem_prog, "external_logical_call.f", .{});
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "external_logical_call.f", .{
+        .target = "x86_64-pc-windows-msvc",
+    });
 
     const output = buffer.items;
-    const expected_decl = if (builtin.os.tag == .windows)
-        "declare i32 @lsame_(ptr, ptr, i32, i32)"
-    else
-        "declare i32 @lsame_(ptr, ptr, i64, i64)";
-    try testing.expect(std.mem.indexOf(u8, output, expected_decl) != null);
+    try testing.expect(std.mem.indexOf(u8, output, "declare i32 @lsame_(ptr, ptr, i32, i32)") != null);
     try testing.expect(std.mem.indexOf(u8, output, "call i32 @lsame_(") != null);
     try testing.expect(std.mem.indexOf(u8, output, "declare i1 @lsame_(") == null);
 }

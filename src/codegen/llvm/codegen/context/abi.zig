@@ -6,21 +6,21 @@ const llvm_types = @import("../../types.zig");
 
 const IRType = ir.IRType;
 
-fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    if (needle.len == 0) return true;
-    if (haystack.len < needle.len) return false;
-    var idx: usize = 0;
-    while (idx + needle.len <= haystack.len) : (idx += 1) {
-        if (std.ascii.eqlIgnoreCase(haystack[idx .. idx + needle.len], needle)) return true;
-    }
-    return false;
+fn targetTokenIsWindowsOs(token: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(token, "windows") or
+        std.ascii.startsWithIgnoreCase(token, "windows.") or
+        std.ascii.eqlIgnoreCase(token, "mingw") or
+        std.ascii.eqlIgnoreCase(token, "mingw32");
 }
 
 pub fn targetIsWindows(target: ?[]const u8) bool {
     const triple = target orelse return builtin.os.tag == .windows;
-    return containsIgnoreCase(triple, "windows") or
-        containsIgnoreCase(triple, "mingw") or
-        containsIgnoreCase(triple, "msvc");
+    var it = std.mem.splitScalar(u8, triple, '-');
+    _ = it.next();
+    while (it.next()) |token| {
+        if (targetTokenIsWindowsOs(token)) return true;
+    }
+    return false;
 }
 
 pub fn fortranAbiReturnTypeForTarget(target: ?[]const u8, ret_ty: IRType) IRType {
@@ -51,27 +51,39 @@ pub fn fortranAbiReturnType(ret_ty: IRType) IRType {
 pub fn fortranAbiUsesHiddenResultPtr(ret_ty: IRType) bool {
     return fortranAbiUsesHiddenResultPtrForTarget(null, ret_ty);
 }
-test "fortranAbiReturnType uses sret ABI for complex*16" {
+
+test "targetIsWindows only matches structured target tokens" {
     const testing = std.testing;
-    if (builtin.os.tag == .windows) {
-        try testing.expectEqual(IRType.void, fortranAbiReturnType(.complex_f64));
-        try testing.expect(fortranAbiUsesHiddenResultPtr(.complex_f64));
-        try testing.expectEqual(IRType.i64, fortranAbiReturnType(.complex_f32));
-        try testing.expect(!fortranAbiUsesHiddenResultPtr(.complex_f32));
-    } else {
-        try testing.expectEqual(IRType.complex_f64, fortranAbiReturnType(.complex_f64));
-        try testing.expect(!fortranAbiUsesHiddenResultPtr(.complex_f64));
-        try testing.expectEqual(IRType.v2f32, fortranAbiReturnType(.complex_f32));
-        try testing.expect(!fortranAbiUsesHiddenResultPtr(.complex_f32));
-    }
+
+    try testing.expect(targetIsWindows("x86_64-pc-windows-msvc"));
+    try testing.expect(targetIsWindows("x86_64-w64-mingw32"));
+    try testing.expect(targetIsWindows("x86_64-windows.win11_ge-gnu"));
+
+    try testing.expect(!targetIsWindows("x86_64-linux-gnu"));
+    try testing.expect(!targetIsWindows("x86_64-wmsvc-linux"));
+    try testing.expect(!targetIsWindows("x86_64-unknown-linux-msvc"));
+}
+
+test "fortranAbiReturnType uses explicit target ABI for complex returns" {
+    const testing = std.testing;
+
+    try testing.expectEqual(IRType.void, fortranAbiReturnTypeForTarget("x86_64-pc-windows-msvc", .complex_f64));
+    try testing.expect(fortranAbiUsesHiddenResultPtrForTarget("x86_64-pc-windows-msvc", .complex_f64));
+    try testing.expectEqual(IRType.i64, fortranAbiReturnTypeForTarget("x86_64-pc-windows-msvc", .complex_f32));
+    try testing.expect(!fortranAbiUsesHiddenResultPtrForTarget("x86_64-pc-windows-msvc", .complex_f32));
+
+    try testing.expectEqual(IRType.complex_f64, fortranAbiReturnTypeForTarget("x86_64-linux-gnu", .complex_f64));
+    try testing.expect(!fortranAbiUsesHiddenResultPtrForTarget("x86_64-linux-gnu", .complex_f64));
+    try testing.expectEqual(IRType.v2f32, fortranAbiReturnTypeForTarget("x86_64-linux-gnu", .complex_f32));
+    try testing.expect(!fortranAbiUsesHiddenResultPtrForTarget("x86_64-linux-gnu", .complex_f32));
 }
 
 test "fortranFunctionAbiReturnType widens logical results to default integer" {
     const testing = std.testing;
 
-    try testing.expectEqual(IRType.i32, fortranFunctionAbiReturnTypeForTarget(null, .{}, .i1));
+    try testing.expectEqual(IRType.i32, fortranFunctionAbiReturnTypeForTarget("x86_64-linux-gnu", .{}, .i1));
     try testing.expectEqual(
         IRType.i64,
-        fortranFunctionAbiReturnTypeForTarget(null, .{ .default_integer_bits = 64 }, .i1),
+        fortranFunctionAbiReturnTypeForTarget("x86_64-linux-gnu", .{ .default_integer_bits = 64 }, .i1),
     );
 }

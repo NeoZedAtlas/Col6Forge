@@ -43,6 +43,12 @@ const makeTestSymbol = h.makeTestSymbol;
 const makeLiteral = h.makeLiteral;
 const makeIdent = h.makeIdent;
 
+fn initHarnessForTarget(allocator: std.mem.Allocator, target: ?[]const u8) !TestHarness {
+    var harness = try TestHarness.init(allocator);
+    harness.ctx.options.target = target;
+    return harness;
+}
+
 test "emitCall and emitArgPointer build call args" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -69,45 +75,59 @@ test "emitCall complex_f64 uses hidden sret pointer and void call ABI" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var harness = try TestHarness.init(allocator);
-    defer harness.deinit();
-
-    var buffer = std.array_list.Managed(u8).init(allocator);
-    defer buffer.deinit();
-    const writer = buffer.writer();
-    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
-
     const no_args = @constCast(&[_]*Expr{});
-    const call_val = try emitCall(&harness.ctx, &builder, "zfun_", .complex_f64, no_args, false);
-    try testing.expectEqual(IRType.complex_f64, call_val.ty);
-    if (@import("builtin").os.tag == .windows) {
-        try testing.expect(std.mem.indexOf(u8, buffer.items, "call void @zfun_(ptr") != null);
-        try testing.expect(std.mem.indexOf(u8, buffer.items, "call ptr @zfun_") == null);
-    } else {
-        try testing.expect(std.mem.indexOf(u8, buffer.items, "call {double, double} @zfun_(") != null);
-    }
+
+    var windows_harness = try initHarnessForTarget(allocator, "x86_64-pc-windows-msvc");
+    defer windows_harness.deinit();
+    var windows_buffer = std.array_list.Managed(u8).init(allocator);
+    defer windows_buffer.deinit();
+    const windows_writer = windows_buffer.writer();
+    var windows_builder = builder_mod.Builder(@TypeOf(windows_writer)).init(windows_writer);
+
+    const windows_call = try emitCall(&windows_harness.ctx, &windows_builder, "zfun_", .complex_f64, no_args, false);
+    try testing.expectEqual(IRType.complex_f64, windows_call.ty);
+    try testing.expect(std.mem.indexOf(u8, windows_buffer.items, "call void @zfun_(ptr") != null);
+    try testing.expect(std.mem.indexOf(u8, windows_buffer.items, "call ptr @zfun_") == null);
+
+    var linux_harness = try initHarnessForTarget(allocator, "x86_64-linux-gnu");
+    defer linux_harness.deinit();
+    var linux_buffer = std.array_list.Managed(u8).init(allocator);
+    defer linux_buffer.deinit();
+    const linux_writer = linux_buffer.writer();
+    var linux_builder = builder_mod.Builder(@TypeOf(linux_writer)).init(linux_writer);
+
+    const linux_call = try emitCall(&linux_harness.ctx, &linux_builder, "zfun_", .complex_f64, no_args, false);
+    try testing.expectEqual(IRType.complex_f64, linux_call.ty);
+    try testing.expect(std.mem.indexOf(u8, linux_buffer.items, "call {double, double} @zfun_(") != null);
 }
 
 test "emitCall complex_f32 ABI matches target convention" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var harness = try TestHarness.init(allocator);
-    defer harness.deinit();
-
-    var buffer = std.array_list.Managed(u8).init(allocator);
-    defer buffer.deinit();
-    const writer = buffer.writer();
-    var builder = builder_mod.Builder(@TypeOf(writer)).init(writer);
-
     const no_args = @constCast(&[_]*Expr{});
-    const call_val = try emitCall(&harness.ctx, &builder, "cfun_", .complex_f32, no_args, false);
-    try testing.expectEqual(IRType.complex_f32, call_val.ty);
-    if (@import("builtin").os.tag == .windows) {
-        try testing.expect(std.mem.indexOf(u8, buffer.items, "call i64 @cfun_(") != null);
-    } else {
-        try testing.expect(std.mem.indexOf(u8, buffer.items, "call <2 x float> @cfun_(") != null);
-    }
+
+    var windows_harness = try initHarnessForTarget(allocator, "x86_64-pc-windows-msvc");
+    defer windows_harness.deinit();
+    var windows_buffer = std.array_list.Managed(u8).init(allocator);
+    defer windows_buffer.deinit();
+    const windows_writer = windows_buffer.writer();
+    var windows_builder = builder_mod.Builder(@TypeOf(windows_writer)).init(windows_writer);
+
+    const windows_call = try emitCall(&windows_harness.ctx, &windows_builder, "cfun_", .complex_f32, no_args, false);
+    try testing.expectEqual(IRType.complex_f32, windows_call.ty);
+    try testing.expect(std.mem.indexOf(u8, windows_buffer.items, "call i64 @cfun_(") != null);
+
+    var linux_harness = try initHarnessForTarget(allocator, "x86_64-linux-gnu");
+    defer linux_harness.deinit();
+    var linux_buffer = std.array_list.Managed(u8).init(allocator);
+    defer linux_buffer.deinit();
+    const linux_writer = linux_buffer.writer();
+    var linux_builder = builder_mod.Builder(@TypeOf(linux_writer)).init(linux_writer);
+
+    const linux_call = try emitCall(&linux_harness.ctx, &linux_builder, "cfun_", .complex_f32, no_args, false);
+    try testing.expectEqual(IRType.complex_f32, linux_call.ty);
+    try testing.expect(std.mem.indexOf(u8, linux_buffer.items, "call <2 x float> @cfun_(") != null);
 }
 
 test "emitCall appends descriptor arrays for known deferred-shape dummy" {
