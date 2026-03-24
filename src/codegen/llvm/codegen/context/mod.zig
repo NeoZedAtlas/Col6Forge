@@ -318,7 +318,7 @@ pub const Context = struct {
                 const block_name = try self.allocPrefixedName("L", label);
                 try self.label_map.put(label, block_name);
                 try self.label_index.put(label, idx);
-                const canonical = canonicalNumericLabel(label);
+                const canonical = utils.canonicalNumericLabel(label);
                 if (!std.mem.eql(u8, canonical, label)) {
                     if (!self.label_map.contains(canonical)) {
                         try self.label_map.put(canonical, block_name);
@@ -1139,16 +1139,6 @@ fn builtinDerivedTypeLayout(name: []const u8) ?DerivedTypeLayout {
         };
     }
     return null;
-}
-
-fn canonicalNumericLabel(label: []const u8) []const u8 {
-    if (label.len == 0) return label;
-    for (label) |ch| {
-        if (!std.ascii.isDigit(ch)) return label;
-    }
-    var start: usize = 0;
-    while (start + 1 < label.len and label[start] == '0') : (start += 1) {}
-    return label[start..];
 }
 
 fn stmtCanFallthroughInBlock(stmt: ast.Stmt) bool {

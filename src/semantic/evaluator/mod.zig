@@ -42,6 +42,8 @@ pub const ConstResolver = struct {
 };
 
 pub const realLiteralHasDoublePrecisionHint = literals.realLiteralHasDoublePrecisionHint;
+pub const parseInt = literals.parseInt;
+pub const parseReal = literals.parseReal;
 
 pub fn evalConst(expr: *const ast.Expr, resolver: ?ConstResolver) !?ConstValue {
     switch (expr.*) {

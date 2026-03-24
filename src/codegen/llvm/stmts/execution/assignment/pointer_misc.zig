@@ -4,6 +4,7 @@ const context = @import("../../../codegen/context/mod.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
 const expr_call = @import("../../../codegen/expression/call/mod.zig");
 const expr_memory = @import("../../../codegen/expression/memory.zig");
+const utils = @import("../../../codegen/utils.zig");
 const character_mod = @import("character.zig");
 
 const Context = context.Context;
@@ -99,21 +100,11 @@ pub fn emitAssignLabel(ctx: *Context, builder: anytype, assign: ast.AssignLabelS
 
 fn resolveAssignedLabelBlock(ctx: *Context, label: []const u8) ?[]const u8 {
     if (ctx.label_map.get(label)) |target| return target;
-    const canonical = canonicalNumericLabel(label);
+    const canonical = utils.canonicalNumericLabel(label);
     if (!std.mem.eql(u8, canonical, label)) {
         if (ctx.label_map.get(canonical)) |target| return target;
     }
     return null;
-}
-
-fn canonicalNumericLabel(label: []const u8) []const u8 {
-    if (label.len == 0) return label;
-    for (label) |ch| {
-        if (!std.ascii.isDigit(ch)) return label;
-    }
-    var start: usize = 0;
-    while (start + 1 < label.len and label[start] == '0') : (start += 1) {}
-    return label[start..];
 }
 
 pub fn targetExprSymbol(ctx: *Context, expr_node: *ast.Expr) ?ast.sema.Symbol {

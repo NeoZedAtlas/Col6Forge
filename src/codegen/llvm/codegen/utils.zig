@@ -47,6 +47,16 @@ pub fn lowerName(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
     return buffer.toOwnedSlice();
 }
 
+pub fn canonicalNumericLabel(label: []const u8) []const u8 {
+    if (label.len == 0) return label;
+    for (label) |ch| {
+        if (!std.ascii.isDigit(ch)) return label;
+    }
+    var start: usize = 0;
+    while (start + 1 < label.len and label[start] == '0') : (start += 1) {}
+    return label[start..];
+}
+
 pub fn savedGlobalName(allocator: std.mem.Allocator, unit: ast.ProgramUnit, symbol_name: []const u8) ![]const u8 {
     const unit_mangled = try mangleProcedureUnitName(allocator, unit);
     const sym_lower = try lowerName(allocator, symbol_name);

@@ -3,6 +3,7 @@ const ast = @import("../../../input.zig");
 const llvm_types = @import("../../types.zig");
 const evaluator = @import("../../../../semantic/evaluator.zig");
 const context = @import("../context/mod.zig");
+const utils = @import("../utils.zig");
 
 pub const ArithIfStrategy = enum {
     Float,
@@ -83,6 +84,7 @@ pub fn resolveAssignedGotoTargetsNoList(
     }
 
     if (targets.items.len == 0) return error.MissingLabel;
+    std.sort.heap(BranchTarget, targets.items, {}, branchTargetLessThan);
     return targets.toOwnedSlice(allocator);
 }
 
@@ -93,13 +95,12 @@ pub fn resolveAssignedGotoSwitchTargets(
     global_label_map: *const std.StringHashMap([]const u8),
     workspace: *BranchWorkspace,
 ) ![]BranchTarget {
-    const plan = if (labels.len == 0)
-        try resolveAssignedGotoTargetsNoList(allocator, local_label_map, global_label_map)
-    else
-        try resolveGotoTargets(allocator, labels, local_label_map, global_label_map, .assigned);
-    defer allocator.free(plan);
+    if (labels.len == 0) {
+        return resolveAssignedGotoTargetsNoList(allocator, local_label_map, global_label_map);
+    }
 
-    if (labels.len == 0) return allocator.dupe(BranchTarget, plan);
+    const plan = try resolveGotoTargets(allocator, labels, local_label_map, global_label_map, .assigned);
+    defer allocator.free(plan);
     return dedupeBranchTargetsByIndex(allocator, plan, workspace);
 }
 
@@ -174,7 +175,7 @@ fn resolveLabel(
     label: []const u8,
 ) ?[]const u8 {
     if (global_map.get(label)) |name| return name;
-    const canonical = canonicalNumericLabel(label);
+    const canonical = utils.canonicalNumericLabel(label);
     if (!std.mem.eql(u8, canonical, label)) {
         if (global_map.get(canonical)) |name| return name;
     }
@@ -236,12 +237,13 @@ fn isPurelyLiteral(expr_node: *ast.Expr) bool {
 fn stepSignFromLiteral(lit: ast.Literal) StepSign {
     switch (lit.kind) {
         .integer => {
-            const value = std.fmt.parseInt(i64, lit.text, 10) catch return .unknown;
+            const value = evaluator.parseInt(lit.text) catch return .unknown;
             return if (value < 0) .negative else .non_negative;
         },
         .real => {
-            const value = std.fmt.parseFloat(f64, lit.text) catch return .unknown;
-            return if (value < 0.0) .negative else .non_negative;
+            const value = evaluator.parseReal(lit.text) catch return .unknown;
+            if (std.math.isNan(value.value)) return .unknown;
+            return if (value.value < 0.0) .negative else .non_negative;
         },
         else => return .unknown,
     }
@@ -281,14 +283,9 @@ test "resolveGotoTargets assigned mode uses numeric label value" {
     try testing.expectEqual(@as(i64, 30), plan[1].index);
 }
 
-fn canonicalNumericLabel(label: []const u8) []const u8 {
-    if (label.len == 0) return label;
-    for (label) |ch| {
-        if (!std.ascii.isDigit(ch)) return label;
-    }
-    var start: usize = 0;
-    while (start + 1 < label.len and label[start] == '0') : (start += 1) {}
-    return label[start..];
+fn branchTargetLessThan(_: void, lhs: BranchTarget, rhs: BranchTarget) bool {
+    if (lhs.index != rhs.index) return lhs.index < rhs.index;
+    return std.mem.lessThan(u8, lhs.target_block, rhs.target_block);
 }
 
 test "resolveAssignedGotoTargetsNoList collects numeric labels from global map" {
@@ -309,6 +306,7 @@ test "resolveAssignedGotoTargetsNoList collects numeric labels from global map" 
     }
     try testing.expect(saw10);
     try testing.expect(saw20);
+    try testing.expect(plan[0].index <= plan[1].index);
 }
 
 test "resolveAssignedGotoTargetsNoList prefers global map entries on duplicate labels" {
@@ -375,4 +373,63 @@ test "resolveAssignedGotoIndirectDestinations deduplicates repeated target block
 
     try testing.expectEqual(@as(usize, 1), destinations.len);
     try testing.expectEqualStrings("L10", destinations[0]);
+}
+
+test "resolveAssignedGotoTargetsNoList returns targets in ascending numeric order" {
+    const testing = std.testing;
+    var map = std.StringHashMap([]const u8).init(testing.allocator);
+    defer map.deinit();
+    try map.put("30", "L30");
+    try map.put("0010", "L10");
+    try map.put("20", "L20");
+
+    const plan = try resolveAssignedGotoTargetsNoList(testing.allocator, null, &map);
+    defer testing.allocator.free(plan);
+
+    try testing.expectEqual(@as(usize, 3), plan.len);
+    try testing.expectEqual(@as(i64, 10), plan[0].index);
+    try testing.expectEqual(@as(i64, 20), plan[1].index);
+    try testing.expectEqual(@as(i64, 30), plan[2].index);
+}
+
+test "resolveAssignedGotoIndirectDestinations stays stable across unordered label maps" {
+    const testing = std.testing;
+    var map = std.StringHashMap([]const u8).init(testing.allocator);
+    defer map.deinit();
+    try map.put("30", "L30");
+    try map.put("10", "L10");
+    try map.put("20", "L20");
+
+    var workspace = BranchWorkspace.init(testing.allocator);
+    defer workspace.deinit();
+
+    const destinations = try resolveAssignedGotoIndirectDestinations(testing.allocator, null, &map, &workspace);
+    defer testing.allocator.free(destinations);
+
+    try testing.expectEqual(@as(usize, 3), destinations.len);
+    try testing.expectEqualStrings("L10", destinations[0]);
+    try testing.expectEqualStrings("L20", destinations[1]);
+    try testing.expectEqualStrings("L30", destinations[2]);
+}
+
+test "determineStepSign accepts Fortran D exponent literals" {
+    const testing = std.testing;
+    const lit = ast.Literal{
+        .kind = .real,
+        .text = "1.0D-5",
+    };
+    try testing.expectEqual(StepSign.non_negative, stepSignFromLiteral(lit));
+
+    var positive = ast.Expr{
+        .literal = lit,
+    };
+    try testing.expectEqual(StepSign.non_negative, determineStepSign(&positive));
+
+    var negative = ast.Expr{
+        .unary = .{
+            .op = .minus,
+            .expr = &positive,
+        },
+    };
+    try testing.expectEqual(StepSign.negative, determineStepSign(&negative));
 }

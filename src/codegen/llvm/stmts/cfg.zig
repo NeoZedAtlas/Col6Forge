@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../input.zig");
 const context = @import("../codegen/context/mod.zig");
+const utils = @import("../codegen/utils.zig");
 
 const Stmt = ast.Stmt;
 const Context = context.Context;
@@ -42,7 +43,7 @@ pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !Local
     var prev_had_label = false;
     for (stmts, 0..) |stmt, idx| {
         const name = if (stmt.label) |label| blk: {
-            const canonical = canonicalNumericLabel(label);
+            const canonical = utils.canonicalNumericLabel(label);
             const block_name = blk_name: {
                 if (ctx.label_map.get(label)) |existing| break :blk_name existing;
                 if (!std.mem.eql(u8, canonical, label)) {
@@ -102,7 +103,7 @@ pub fn buildLocalBlocks(ctx: *Context, stmts: []Stmt, prefix: []const u8) !Local
 
 pub fn resolveLabel(ctx: *Context, local_map: ?*const std.StringHashMap([]const u8), label: []const u8) ?[]const u8 {
     if (ctx.label_map.get(label)) |name| return name;
-    const canonical = canonicalNumericLabel(label);
+    const canonical = utils.canonicalNumericLabel(label);
     if (!std.mem.eql(u8, canonical, label)) {
         if (ctx.label_map.get(canonical)) |name| return name;
     }
@@ -122,16 +123,6 @@ pub fn findLabelIndex(stmts: []Stmt, label: []const u8) ?usize {
         }
     }
     return null;
-}
-
-fn canonicalNumericLabel(label: []const u8) []const u8 {
-    if (label.len == 0) return label;
-    for (label) |ch| {
-        if (!std.ascii.isDigit(ch)) return label;
-    }
-    var start: usize = 0;
-    while (start + 1 < label.len and label[start] == '0') : (start += 1) {}
-    return label[start..];
 }
 
 fn stmtCanFallthroughInBlock(stmt: Stmt) bool {
