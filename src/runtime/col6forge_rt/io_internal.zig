@@ -1,4 +1,4 @@
-﻿const std = @import("std");
+const std = @import("std");
 
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
@@ -47,13 +47,13 @@ fn trimAsciiSpace(text: []const u8) []const u8 {
 
 fn parseFloatSlice(text: []const u8) ?f64 {
     const trimmed = trimAsciiSpace(text);
-    if (trimmed.len == 0) return null;
+    if (trimmed.len == 0) return 0.0;
     return std.fmt.parseFloat(f64, trimmed) catch null;
 }
 
 fn parseIntegerSlice(text: []const u8) ?c_int {
     const trimmed = trimAsciiSpace(text);
-    if (trimmed.len == 0) return null;
+    if (trimmed.len == 0) return 0;
     const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return null;
     if (parsed < std.math.minInt(c_int) or parsed > std.math.maxInt(c_int)) return null;
     return @intCast(parsed);
@@ -61,7 +61,7 @@ fn parseIntegerSlice(text: []const u8) ?c_int {
 
 fn parseInteger64Slice(text: []const u8) ?i64 {
     const trimmed = trimAsciiSpace(text);
-    if (trimmed.len == 0) return null;
+    if (trimmed.len == 0) return 0;
     return std.fmt.parseInt(i64, trimmed, 10) catch null;
 }
 
@@ -858,6 +858,31 @@ test "writeInternalMarkedSlice ignores oversized relative tab" {
     try std.testing.expectEqualSlices(u8, "    ", out[0..]);
 }
 
+test "read internal core treats blank fixed-width integer fields as zero" {
+    var record = [_]u8{
+        '4', '4', ' ', ' ', ' ', ' ', ' ',
+        '2', '9', ' ', ' ', ' ', ' ', ' ',
+        '4', '5', ' ', ' ', ' ', ' ', ' ',
+    };
+    const fmt = "%7d%7d%7d%7d%7d%7d%7d%7d%7d%7d%7d%7d";
+
+    var values: [12]c_int = [_]c_int{0} ** 12;
+    var ptrs: [12]?*anyopaque = undefined;
+    var kinds: [12]u8 = [_]u8{'d'} ** 12;
+    for (&values, 0..) |*value, idx| {
+        ptrs[idx] = @ptrCast(value);
+    }
+
+    const status = col6forge_read_internal_core(&record, record.len, 1, fmt, &ptrs, &kinds, values.len);
+    try std.testing.expectEqual(@as(c_int, 12), status);
+    try std.testing.expectEqual(@as(c_int, 44), values[0]);
+    try std.testing.expectEqual(@as(c_int, 29), values[1]);
+    try std.testing.expectEqual(@as(c_int, 45), values[2]);
+    for (values[3..]) |value| {
+        try std.testing.expectEqual(@as(c_int, 0), value);
+    }
+}
+
 pub export fn col6forge_write_internal_core(buf: ?[*]u8, len: c_int, src: ?[*:0]const u8) callconv(.c) void {
     if (buf == null or src == null or len <= 0) return;
 
@@ -919,4 +944,3 @@ test "internal io helpers detect overflow" {
     try std.testing.expect(checkedMul(std.math.maxInt(usize), 2) == null);
     try std.testing.expect(checkedAdd(std.math.maxInt(usize), 1) == null);
 }
-

@@ -113,13 +113,13 @@ fn trimAsciiSpace(text: []const u8) []const u8 {
 
 fn parseFloatField(field: []const u8) ?f64 {
     const trimmed = trimAsciiSpace(field);
-    if (trimmed.len == 0) return null;
+    if (trimmed.len == 0) return 0.0;
     return std.fmt.parseFloat(f64, trimmed) catch null;
 }
 
 fn parseIntegerField(field: []const u8) ?c_int {
     const trimmed = trimAsciiSpace(field);
-    if (trimmed.len == 0) return null;
+    if (trimmed.len == 0) return 0;
     const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return null;
     if (parsed < std.math.minInt(c_int) or parsed > std.math.maxInt(c_int)) return null;
     return @intCast(parsed);
@@ -127,7 +127,7 @@ fn parseIntegerField(field: []const u8) ?c_int {
 
 fn parseInteger64Field(field: []const u8) ?i64 {
     const trimmed = trimAsciiSpace(field);
-    if (trimmed.len == 0) return null;
+    if (trimmed.len == 0) return 0;
     return std.fmt.parseInt(i64, trimmed, 10) catch null;
 }
 
@@ -986,4 +986,27 @@ test "dynamic formatted read stream consumes runtime implied-do sequence" {
     try std.testing.expectEqual(@as(c_int, 11), a1);
     try std.testing.expectEqual(@as(c_int, 22), a2);
     try std.testing.expectEqual(@as(c_int, 33), a3);
+}
+
+test "formatted read stream treats blank fixed-width integer fields as zero" {
+    var record = [_]u8{
+        '4', '4', ' ', ' ', ' ', ' ', ' ',
+        '2', '9', ' ', ' ', ' ', ' ', ' ',
+        '4', '5', ' ', ' ', ' ', ' ', ' ',
+    };
+    const fmt = "%7d%7d%7d%7d%7d%7d%7d%7d%7d%7d%7d%7d";
+    const state_any = col6forge_read_internal_stream_begin_dynamic(&record, record.len, 1, fmt.ptr, fmt.len) orelse return error.TestUnexpectedResult;
+    defer _ = col6forge_formatted_read_stream_finish(state_any);
+
+    var values: [12]c_int = [_]c_int{0} ** 12;
+    for (&values) |*value| {
+        try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(value), 'd', 0));
+    }
+
+    try std.testing.expectEqual(@as(c_int, 44), values[0]);
+    try std.testing.expectEqual(@as(c_int, 29), values[1]);
+    try std.testing.expectEqual(@as(c_int, 45), values[2]);
+    for (values[3..]) |value| {
+        try std.testing.expectEqual(@as(c_int, 0), value);
+    }
 }
