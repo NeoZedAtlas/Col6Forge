@@ -1,6 +1,6 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM102.f"
-@common_blank_ = common global [120 x i8] zeroinitializer, align 1
+@__BLNK__ = common global [120 x i8] zeroinitializer, align 1
 @fmt_fm102_77701 = private unnamed_addr constant [242 x i8] c"%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s%1s\0A\00", align 1
 @fmt_fm102_77702 = private unnamed_addr constant [69 x i8] c"          PREMATURE EOF ONLY %3d RECORDS LUN %2d OUT OF %3d RECORDS\0A\00", align 1
 @fmt_fm102_77703 = private unnamed_addr constant [45 x i8] c"          FILE ON LUN %2d OK... %3d RECORDS\0A\00", align 1
@@ -54,8 +54,8 @@ entry:
   %t23 = alloca i32
   %t24 = alloca i32
   %t25 = alloca i32
-  %t26 = getelementptr i8, ptr @common_blank_, i32 0
-  %t27 = getelementptr i8, ptr @common_blank_, i32 60
+  %t26 = getelementptr i8, ptr @__BLNK__, i32 0
+  %t27 = getelementptr i8, ptr @__BLNK__, i32 60
   br label %bb0
 bb0:
   %t28 = alloca i8

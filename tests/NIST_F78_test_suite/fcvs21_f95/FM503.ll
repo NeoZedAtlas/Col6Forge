@@ -1,7 +1,7 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM503.f"
-@common_blk7_ = common global [12 x i8] zeroinitializer, align 1
-@common_blk9_ = common global [40 x i8] zeroinitializer, align 8
+@blk7_ = common global [12 x i8] zeroinitializer, align 1
+@blk9_ = common global [40 x i8] zeroinitializer, align 8
 define void @fm503_() {
 entry:
   br label %bb0
@@ -15,14 +15,14 @@ exit:
 }
 define void @blockdata0_() {
 entry:
-  %t0 = getelementptr i8, ptr @common_blk9_, i32 0
-  %t1 = getelementptr i8, ptr @common_blk9_, i32 4
-  %t2 = getelementptr i8, ptr @common_blk9_, i32 8
-  %t3 = getelementptr i8, ptr @common_blk9_, i32 16
-  %t4 = getelementptr i8, ptr @common_blk9_, i32 24
-  %t5 = getelementptr i8, ptr @common_blk9_, i32 32
-  %t6 = getelementptr i8, ptr @common_blk7_, i32 0
-  %t7 = getelementptr i8, ptr @common_blk7_, i32 6
+  %t0 = getelementptr i8, ptr @blk9_, i32 0
+  %t1 = getelementptr i8, ptr @blk9_, i32 4
+  %t2 = getelementptr i8, ptr @blk9_, i32 8
+  %t3 = getelementptr i8, ptr @blk9_, i32 16
+  %t4 = getelementptr i8, ptr @blk9_, i32 24
+  %t5 = getelementptr i8, ptr @blk9_, i32 32
+  %t6 = getelementptr i8, ptr @blk7_, i32 0
+  %t7 = getelementptr i8, ptr @blk7_, i32 6
   br label %bb0
 bb0:
   store float 3.424999952316284e0, ptr %t0
@@ -188,14 +188,14 @@ entry:
   %t29 = alloca i32
   %t30 = alloca i32
   %t31 = alloca i32
-  %t32 = getelementptr i8, ptr @common_blk9_, i32 0
-  %t33 = getelementptr i8, ptr @common_blk9_, i32 4
-  %t34 = getelementptr i8, ptr @common_blk9_, i32 8
-  %t35 = getelementptr i8, ptr @common_blk9_, i32 16
-  %t36 = getelementptr i8, ptr @common_blk9_, i32 24
-  %t37 = getelementptr i8, ptr @common_blk9_, i32 32
-  %t38 = getelementptr i8, ptr @common_blk7_, i32 0
-  %t39 = getelementptr i8, ptr @common_blk7_, i32 6
+  %t32 = getelementptr i8, ptr @blk9_, i32 0
+  %t33 = getelementptr i8, ptr @blk9_, i32 4
+  %t34 = getelementptr i8, ptr @blk9_, i32 8
+  %t35 = getelementptr i8, ptr @blk9_, i32 16
+  %t36 = getelementptr i8, ptr @blk9_, i32 24
+  %t37 = getelementptr i8, ptr @blk9_, i32 32
+  %t38 = getelementptr i8, ptr @blk7_, i32 0
+  %t39 = getelementptr i8, ptr @blk7_, i32 6
   br label %bb0
 bb0:
   %t40 = alloca i8, i32 13

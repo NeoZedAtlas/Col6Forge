@@ -152,7 +152,7 @@ fn ensureTypedExternalDeclForResolvedCall(
         if (!existing.varargs) return mangled;
         const param_types = try buildSubroutineAbiParamTypes(ctx, lookup_name, args);
         try ctx.decls.put(mangled, .{
-            .ret_type = ctx.abiReturnType(ret_ty),
+            .ret_type = ctx.abiFunctionReturnType(ret_ty),
             .sig = try formatParamSig(ctx, param_types),
             .varargs = false,
         });
@@ -162,7 +162,7 @@ fn ensureTypedExternalDeclForResolvedCall(
     const param_types = try buildSubroutineAbiParamTypes(ctx, lookup_name, args);
     return ctx.ensureDeclRaw(
         mangled,
-        ctx.abiReturnType(ret_ty),
+        ctx.abiFunctionReturnType(ret_ty),
         param_types,
         false,
     );

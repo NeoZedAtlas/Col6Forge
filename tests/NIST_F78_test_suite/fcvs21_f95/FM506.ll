@@ -1,6 +1,6 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM506.f"
-@common_blk8_ = common global [13 x i8] zeroinitializer, align 1
+@blk8_ = common global [13 x i8] zeroinitializer, align 1
 define void @fm506_() {
 entry:
   %t0 = alloca i32
@@ -16,10 +16,10 @@ exit:
 }
 define void @an507_() {
 entry:
-  %t0 = getelementptr i8, ptr @common_blk8_, i32 0
-  %t1 = getelementptr i8, ptr @common_blk8_, i32 3
-  %t2 = getelementptr i8, ptr @common_blk8_, i32 5
-  %t3 = getelementptr i8, ptr @common_blk8_, i32 10
+  %t0 = getelementptr i8, ptr @blk8_, i32 0
+  %t1 = getelementptr i8, ptr @blk8_, i32 3
+  %t2 = getelementptr i8, ptr @blk8_, i32 5
+  %t3 = getelementptr i8, ptr @blk8_, i32 10
   br label %bb0
 bb0:
   %t4 = alloca i8, i32 3
@@ -222,10 +222,10 @@ entry:
   %t20 = alloca i32
   %t21 = alloca i32
   %t22 = alloca i32
-  %t23 = getelementptr i8, ptr @common_blk8_, i32 0
-  %t24 = getelementptr i8, ptr @common_blk8_, i32 3
-  %t25 = getelementptr i8, ptr @common_blk8_, i32 5
-  %t26 = getelementptr i8, ptr @common_blk8_, i32 10
+  %t23 = getelementptr i8, ptr @blk8_, i32 0
+  %t24 = getelementptr i8, ptr @blk8_, i32 3
+  %t25 = getelementptr i8, ptr @blk8_, i32 5
+  %t26 = getelementptr i8, ptr @blk8_, i32 10
   br label %bb0
 bb0:
   %t27 = alloca i8, i32 13

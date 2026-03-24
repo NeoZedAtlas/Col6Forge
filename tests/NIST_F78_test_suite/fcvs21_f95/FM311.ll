@@ -1,6 +1,6 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM311.f"
-@common_ifos19_ = common global [4 x i8] zeroinitializer, align 4
+@ifos19_ = common global [4 x i8] zeroinitializer, align 4
 @fmt_fm311_90001 = private unnamed_addr constant [32 x i8] c"                         FM311\0A\00", align 1
 @fmt_fm311_90000 = private unnamed_addr constant [43 x i8] c"                     END OF PROGRAM FM311\0A\00", align 1
 @fmt_fm311_80000 = private unnamed_addr constant [23 x i8] c"     %5d      DELETED\0A\00", align 1
@@ -80,7 +80,7 @@ entry:
   %t56 = alloca i32
   %t57 = alloca i32
   %t58 = alloca float
-  %t59 = getelementptr i8, ptr @common_ifos19_, i32 0
+  %t59 = getelementptr i8, ptr @ifos19_, i32 0
   br label %bb0
 bb0:
   store i32 6, ptr %t8

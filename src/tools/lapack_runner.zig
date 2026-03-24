@@ -24,7 +24,42 @@ const INSTALL_EXTRAS = [_][]const u8{
     "dsecnd_INT_CPU_TIME.f",
 };
 
-const FORTRAN_FALLBACK = [_][]const u8{};
+const FORTRAN_FALLBACK = [_][]const u8{
+    "schkec.f",
+    "serrec.f",
+    "sget31.f",
+    "sget32.f",
+    "sget33.f",
+    "sget34.f",
+    "sget35.f",
+    "sget36.f",
+    "sget37.f",
+    "sget38.f",
+    "sget39.f",
+    "cchkec.f",
+    "cerrec.f",
+    "cget35.f",
+    "cget36.f",
+    "cget37.f",
+    "cget38.f",
+    "zchkec.f",
+    "zerrec.f",
+    "zget35.f",
+    "zget36.f",
+    "zget37.f",
+    "zget38.f",
+    "dchkec.f",
+    "derrec.f",
+    "dget31.f",
+    "dget32.f",
+    "dget33.f",
+    "dget34.f",
+    "dget35.f",
+    "dget36.f",
+    "dget37.f",
+    "dget38.f",
+    "dget39.f",
+};
 
 const XLINTSTS_VARS = [_][]const u8{ "ALINTST", "SCLNTST", "SLINTST" };
 const XLINTSTC_VARS = [_][]const u8{ "ALINTST", "SCLNTST", "CLINTST" };
@@ -43,7 +78,7 @@ const DT_INPUTS = [_][]const u8{"dtest.in"};
 const ZT_INPUTS = [_][]const u8{"ztest.in"};
 const DST_INPUTS = [_][]const u8{"dstest.in"};
 const ZCT_INPUTS = [_][]const u8{"zctest.in"};
-const EIG_INPUTS = [_][]const u8{
+const EIG_REAL_INPUTS = [_][]const u8{
     "nep.in",
     "sep.in",
     "svd.in",
@@ -58,6 +93,66 @@ const EIG_INPUTS = [_][]const u8{
     "sgbal.in",
     "sgbak.in",
     "sbb.in",
+    "glm.in",
+    "gqr.in",
+    "gsv.in",
+    "lse.in",
+};
+const EIG_COMPLEX_INPUTS = [_][]const u8{
+    "nep.in",
+    "sep.in",
+    "svd.in",
+    "cec.in",
+    "ced.in",
+    "cgg.in",
+    "cgd.in",
+    "csb.in",
+    "csg.in",
+    "cbal.in",
+    "cbak.in",
+    "cgbal.in",
+    "cgbak.in",
+    "cbb.in",
+    "glm.in",
+    "gqr.in",
+    "gsv.in",
+    "lse.in",
+};
+const EIG_DOUBLE_INPUTS = [_][]const u8{
+    "nep.in",
+    "sep.in",
+    "svd.in",
+    "dec.in",
+    "ded.in",
+    "dgg.in",
+    "dgd.in",
+    "dsb.in",
+    "dsg.in",
+    "dbal.in",
+    "dbak.in",
+    "dgbal.in",
+    "dgbak.in",
+    "dbb.in",
+    "glm.in",
+    "gqr.in",
+    "gsv.in",
+    "lse.in",
+};
+const EIG_COMPLEX16_INPUTS = [_][]const u8{
+    "nep.in",
+    "sep.in",
+    "svd.in",
+    "zec.in",
+    "zed.in",
+    "zgg.in",
+    "zgd.in",
+    "zsb.in",
+    "zsg.in",
+    "zbal.in",
+    "zbak.in",
+    "zgbal.in",
+    "zgbak.in",
+    "zbb.in",
     "glm.in",
     "gqr.in",
     "gsv.in",
@@ -79,10 +174,10 @@ const ALL_CASES = [_]LapackCase{
     .{ .name = "xlintstz", .suite_dir = "LIN", .inputs = ZT_INPUTS[0..], .make_vars = XLINTSTZ_VARS[0..], .allow_translation = true },
     .{ .name = "xlintstds", .suite_dir = "LIN", .inputs = DST_INPUTS[0..], .make_vars = XLINTSTDS_VARS[0..], .allow_translation = true },
     .{ .name = "xlintstzc", .suite_dir = "LIN", .inputs = ZCT_INPUTS[0..], .make_vars = XLINTSTZC_VARS[0..], .allow_translation = true },
-    .{ .name = "xeigtsts", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTS_VARS[0..], .allow_translation = true },
-    .{ .name = "xeigtstc", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTC_VARS[0..], .allow_translation = true },
-    .{ .name = "xeigtstd", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTD_VARS[0..], .allow_translation = true },
-    .{ .name = "xeigtstz", .suite_dir = "EIG", .inputs = EIG_INPUTS[0..], .make_vars = XEIGTSTZ_VARS[0..], .allow_translation = true },
+    .{ .name = "xeigtsts", .suite_dir = "EIG", .inputs = EIG_REAL_INPUTS[0..], .make_vars = XEIGTSTS_VARS[0..], .allow_translation = false },
+    .{ .name = "xeigtstc", .suite_dir = "EIG", .inputs = EIG_COMPLEX_INPUTS[0..], .make_vars = XEIGTSTC_VARS[0..], .allow_translation = false },
+    .{ .name = "xeigtstd", .suite_dir = "EIG", .inputs = EIG_DOUBLE_INPUTS[0..], .make_vars = XEIGTSTD_VARS[0..], .allow_translation = false },
+    .{ .name = "xeigtstz", .suite_dir = "EIG", .inputs = EIG_COMPLEX16_INPUTS[0..], .make_vars = XEIGTSTZ_VARS[0..], .allow_translation = false },
 };
 
 const Options = struct {
@@ -1345,20 +1440,24 @@ fn compileTranslatedCase(
         try trans_objs.append(allocator, obj_path);
     }
 
-    const runtime_output_dir = if (incremental) cache_dir else cwd;
-    var runtime_artifacts = prepareRuntimeArtifacts(
-        allocator,
-        root_path,
-        runtime_output_dir,
-        runtime_backend,
-        timeout_ms,
-        runtime_cache_key,
-        incremental,
-    ) catch |err| {
-        std.log.err("runtime backend prepare failed: {s}\n", .{@errorName(err)});
-        return false;
-    };
-    defer runtime_artifacts.deinit(allocator);
+    const link_runtime = shouldLinkRuntimeArtifacts(trans_objs.items.len);
+    var runtime_artifacts: ?RuntimeArtifacts = null;
+    if (link_runtime) {
+        const runtime_output_dir = if (incremental) cache_dir else cwd;
+        runtime_artifacts = prepareRuntimeArtifacts(
+            allocator,
+            root_path,
+            runtime_output_dir,
+            runtime_backend,
+            timeout_ms,
+            runtime_cache_key,
+            incremental,
+        ) catch |err| {
+            std.log.err("runtime backend prepare failed: {s}\n", .{@errorName(err)});
+            return false;
+        };
+    }
+    defer if (runtime_artifacts) |*artifacts| artifacts.deinit(allocator);
 
     var link_args: std.ArrayList([]const u8) = .empty;
     defer link_args.deinit(allocator);
@@ -1370,9 +1469,11 @@ fn compileTranslatedCase(
     try link_args.appendSlice(allocator, fallback_objs.items);
     try link_args.appendSlice(allocator, trans_objs.items);
     try link_args.appendSlice(allocator, &.{ libs.tmg_lib, libs.lapack_lib, libs.blas_lib });
-    try runtime_artifacts.appendToArgs(allocator, &link_args);
-    if (runtime_artifacts.zig_object != null and builtin.os.tag == .windows) {
-        try link_args.append(allocator, "-lntdll");
+    if (runtime_artifacts) |artifacts| {
+        try artifacts.appendToArgs(allocator, &link_args);
+        if (artifacts.zig_object != null and builtin.os.tag == .windows) {
+            try link_args.append(allocator, "-lntdll");
+        }
     }
 
     const link_res = runProcessCaptureWithInput(allocator, link_args.items, cwd, null, timeout_ms) catch |err| {
@@ -1385,6 +1486,10 @@ fn compileTranslatedCase(
         return false;
     }
     return true;
+}
+
+fn shouldLinkRuntimeArtifacts(translated_object_count: usize) bool {
+    return translated_object_count > 0;
 }
 
 fn recordFallback(
@@ -2180,4 +2285,9 @@ test "outputsEquivalent accepts numeric differences inside punctuation" {
         " value=(1.234567E+03,-0.000000E+00)\n",
         " value=(1.2345669D+03,0.000000E+00)\n",
     ));
+}
+
+test "shouldLinkRuntimeArtifacts only links runtime when translated objects exist" {
+    try std.testing.expect(!shouldLinkRuntimeArtifacts(0));
+    try std.testing.expect(shouldLinkRuntimeArtifacts(1));
 }

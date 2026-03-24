@@ -6,6 +6,7 @@ const common = @import("../../common.zig");
 const memory = @import("../memory.zig");
 const dispatch = @import("../dispatch/mod.zig");
 const casting = @import("../casting.zig");
+const utils = @import("../../utils.zig");
 
 const Expr = shared.Expr;
 const IRType = shared.IRType;
@@ -156,6 +157,37 @@ pub fn emitArgPointer(ctx: *Context, builder: anytype, expr: *Expr) !ValueRef {
     return (try emitArgPointerDetailed(ctx, builder, expr)).ptr;
 }
 
+pub fn procedureDesignatorPointer(ctx: *Context, name: []const u8) !?ValueRef {
+    if (try ctx.ensureIntrinsicWrapper(name)) |wrapper| {
+        const ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{wrapper});
+        return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+    }
+
+    const sym = ctx.findSymbol(name) orelse {
+        if (ctx.lookupKnownProcedureSig(name) == null) return null;
+        if (try procedureDefinedIRName(ctx, name, null)) |ir_name| {
+            const ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{ir_name});
+            return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+        }
+        return null;
+    };
+    if (sym.is_pointer) return null;
+    if (!(sym.kind == .function or sym.kind == .subroutine or sym.is_external)) return null;
+    if (sym.storage == .dummy and sym.is_external) {
+        return try ctx.getPointer(name);
+    }
+    if (try procedureDefinedIRName(ctx, name, sym)) |ir_name| {
+        const ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{ir_name});
+        return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+    }
+    if (!sym.is_external) return null;
+
+    const ret_ty = procedureReturnIRType(ctx, name, sym);
+    const mangled = try ctx.ensureDecl(name, ret_ty);
+    const ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{mangled});
+    return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+}
+
 fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPointerResult {
     if (try emitMaterializedArrayExprActual(ctx, builder, expr)) |materialized| {
         return materialized;
@@ -170,6 +202,9 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
     }
     switch (expr.*) {
         .identifier => |name| {
+            if (try procedureDesignatorPointer(ctx, name)) |proc_ptr| {
+                return .{ .ptr = proc_ptr };
+            }
             if (ctx.findSymbol(name)) |sym| {
                 if (sym.is_intrinsic or (!sym.type_explicit and !sym.is_external)) {
                     if (try ctx.ensureIntrinsicWrapper(name)) |wrapper| {
@@ -191,19 +226,6 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
                         return .{ .ptr = ptr };
                     }
                 }
-                if (sym.storage == .dummy and sym.is_external) {
-                    return .{ .ptr = try ctx.getPointer(name) };
-                }
-                if (sym.is_external) {
-                    const ret_ty = if (sym.kind == .function) ctx.typeFromKind(sym.loweredKind()) else .void;
-                    const mangled = try ctx.ensureDecl(name, ret_ty);
-                    const ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{mangled});
-                    return .{ .ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true } };
-                }
-            }
-            if (try ctx.ensureIntrinsicWrapper(name)) |wrapper| {
-                const ptr_name = try std.fmt.allocPrint(ctx.allocator, "@{s}", .{wrapper});
-                return .{ .ptr = .{ .name = ptr_name, .ty = .ptr, .is_ptr = true } };
             }
             return .{ .ptr = try ctx.getPointer(name) };
         },
@@ -238,6 +260,58 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
     const stored = if (alloc_ty == value.ty) value else try casting.coerce(ctx, builder, value, alloc_ty);
     try builder.store(stored, ptr);
     return .{ .ptr = ptr };
+}
+
+fn procedureDefinedIRName(
+    ctx: *Context,
+    name: []const u8,
+    sym_opt: ?ast.sema.Symbol,
+) !?[]const u8 {
+    const plain = try ctx.mangleName(name);
+    if (ctx.defined.contains(plain) or ctx.decls.contains(plain)) return plain;
+
+    const owner_name = ctx.unit.owner_name orelse switch (ctx.unit.kind) {
+        .program, .subroutine, .function => ctx.unit.name,
+        else => return null,
+    };
+    const owner_kind = ctx.unit.owner_kind orelse switch (ctx.unit.kind) {
+        .module => ast.LexicalOwnerKind.module,
+        else => ast.LexicalOwnerKind.procedure,
+    };
+    const proc_kind = if (sym_opt) |sym|
+        switch (sym.kind) {
+            .function => ast.ProgramUnitKind.function,
+            else => ast.ProgramUnitKind.subroutine,
+        }
+    else if (ctx.lookupKnownProcedureSig(name)) |sig|
+        sig.kind
+    else
+        ast.ProgramUnitKind.subroutine;
+    const owned = try utils.mangleProcedureUnitName(ctx.allocator, .{
+        .kind = proc_kind,
+        .name = name,
+        .owner_name = owner_name,
+        .owner_kind = owner_kind,
+        .args = &.{},
+        .decls = &.{},
+        .stmts = &.{},
+    });
+    if (ctx.defined.contains(owned) or ctx.decls.contains(owned)) return owned;
+    return null;
+}
+
+fn procedureReturnIRType(ctx: *Context, name: []const u8, sym: ast.sema.Symbol) IRType {
+    if (ctx.lookupKnownProcedureSig(name)) |sig| {
+        if (sig.kind != .function) return .void;
+        if (sig.is_pointer or sig.result_rank != 0 or sig.result_allocatable) return .ptr;
+        if (sig.result_type_spec) |spec| {
+            return switch (spec.lowered_kind) {
+                .character, .derived => .ptr,
+                else => ctx.typeFromKind(spec.lowered_kind),
+            };
+        }
+    }
+    return if (sym.kind == .function) ctx.typeFromKind(sym.loweredKind()) else .void;
 }
 
 fn appendAbiActualArgs(

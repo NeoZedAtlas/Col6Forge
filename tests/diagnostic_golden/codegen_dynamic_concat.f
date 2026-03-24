@@ -1,4 +1,5 @@
-      SUBROUTINE S(A,B,C)
-      CHARACTER*(*) A,B,C
-      C = A // B
+      SUBROUTINE S(A,C,I)
+      CHARACTER*(*) A,C
+      INTEGER I
+      C = A // I
       END

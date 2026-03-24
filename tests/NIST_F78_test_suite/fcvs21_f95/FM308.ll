@@ -1,6 +1,6 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM308.f"
-@common_blank_ = common global [4 x i8] zeroinitializer, align 4
+@__BLNK__ = common global [4 x i8] zeroinitializer, align 4
 @fmt_fm308_90001 = private unnamed_addr constant [32 x i8] c"                         FM308\0A\00", align 1
 @fmt_fm308_90000 = private unnamed_addr constant [43 x i8] c"                     END OF PROGRAM FM308\0A\00", align 1
 @fmt_fm308_80000 = private unnamed_addr constant [23 x i8] c"     %5d      DELETED\0A\00", align 1
@@ -42,7 +42,7 @@ entry:
   %t18 = alloca float
   %t19 = alloca float
   %t20 = alloca i32
-  %t21 = getelementptr i8, ptr @common_blank_, i32 0
+  %t21 = getelementptr i8, ptr @__BLNK__, i32 0
   br label %bb0
 bb0:
   store float 2.2300000190734863e0, ptr %t4
@@ -3789,7 +3789,7 @@ exit:
 define float @ff310_() {
 entry:
   %t0 = alloca float
-  %t1 = getelementptr i8, ptr @common_blank_, i32 0
+  %t1 = getelementptr i8, ptr @__BLNK__, i32 0
   br label %bb0
 bb0:
   %t2 = load float, ptr %t1

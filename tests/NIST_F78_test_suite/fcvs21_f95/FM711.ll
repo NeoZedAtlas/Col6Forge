@@ -1,6 +1,6 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM711.f"
-@common_blank_ = common global [8 x i8] zeroinitializer, align 4
+@__BLNK__ = common global [8 x i8] zeroinitializer, align 4
 @fmt_fm711_70010 = private unnamed_addr constant [5 x i8] c"%5d\0A\00", align 1
 @fmt_fm711_90001 = private unnamed_addr constant [64 x i8] c"                                                         FM711\0A\00", align 1
 @fmt_fm711_90000 = private unnamed_addr constant [73 x i8] c"                                                   END OF PROGRAM FM711\0A\00", align 1
@@ -75,8 +75,8 @@ entry:
   %t26 = alloca i32
   %t27 = alloca i32
   %t28 = alloca i32
-  %t29 = getelementptr i8, ptr @common_blank_, i32 0
-  %t30 = getelementptr i8, ptr @common_blank_, i32 4
+  %t29 = getelementptr i8, ptr @__BLNK__, i32 0
+  %t30 = getelementptr i8, ptr @__BLNK__, i32 4
   br label %bb0
 bb0:
   %t31 = sext i32 1 to i64
@@ -2126,8 +2126,8 @@ exit:
 }
 define void @sn713_(ptr %arg0, ptr %arg1, ptr %arg2) {
 entry:
-  %t0 = getelementptr i8, ptr @common_blank_, i32 0
-  %t1 = getelementptr i8, ptr @common_blank_, i32 4
+  %t0 = getelementptr i8, ptr @__BLNK__, i32 0
+  %t1 = getelementptr i8, ptr @__BLNK__, i32 4
   br label %bb0
 bb0:
   %t2 = sext i32 3 to i64

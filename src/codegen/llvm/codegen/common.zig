@@ -128,9 +128,9 @@ pub fn buildUnitCommonLayoutsWithOptions(
 
 pub fn commonGlobalName(allocator: std.mem.Allocator, key: []const u8) ![]const u8 {
     if (key.len == 0) {
-        return std.fmt.allocPrint(allocator, "common_blank_", .{});
+        return std.fmt.allocPrint(allocator, "__BLNK__", .{});
     }
-    return std.fmt.allocPrint(allocator, "common_{s}_", .{key});
+    return std.fmt.allocPrint(allocator, "{s}_", .{key});
 }
 
 const SizeAlign = struct {
@@ -372,7 +372,7 @@ test "buildUnitCommonLayouts computes offsets and alignment" {
     try testing.expectEqual(@as(usize, 1), layouts.len);
     const layout = layouts[0];
     try testing.expectEqualStrings("blk", layout.key);
-    try testing.expectEqualStrings("common_blk_", layout.global_name);
+    try testing.expectEqualStrings("blk_", layout.global_name);
     try testing.expectEqual(@as(usize, 8), layout.size);
     try testing.expectEqual(@as(usize, 4), layout.alignment);
     try testing.expectEqual(@as(usize, 2), layout.items.len);
@@ -483,7 +483,7 @@ test "commonGlobalName formats blank blocks" {
 
     const blank = try commonGlobalName(allocator, "");
     defer allocator.free(blank);
-    try testing.expectEqualStrings("common_blank_", blank);
+    try testing.expectEqualStrings("__BLNK__", blank);
 }
 
 test "arrayElementCount reports overflow for constant dimension arithmetic" {

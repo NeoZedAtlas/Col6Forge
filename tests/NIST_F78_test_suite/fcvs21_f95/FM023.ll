@@ -1,6 +1,6 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM023.f"
-@common_blank_ = common global [40 x i8] zeroinitializer, align 4
+@__BLNK__ = common global [40 x i8] zeroinitializer, align 4
 @fmt_fm023_90000 = private unnamed_addr constant [3 x i8] c"1\0A\00", align 1
 @fmt_fm023_90002 = private unnamed_addr constant [3 x i8] c" \0A\00", align 1
 @fmt_fm023_90001 = private unnamed_addr constant [47 x i8] c"           FORTRAN COMPILER VALIDATION SYSTEM\0A\00", align 1
@@ -44,10 +44,10 @@ entry:
   %t21 = alloca i32
   %t22 = alloca i32
   %t23 = alloca i32
-  %t24 = getelementptr i8, ptr @common_blank_, i32 0
-  %t25 = getelementptr i8, ptr @common_blank_, i32 16
-  %t26 = getelementptr i8, ptr @common_blank_, i32 32
-  %t27 = getelementptr i8, ptr @common_blank_, i32 36
+  %t24 = getelementptr i8, ptr @__BLNK__, i32 0
+  %t25 = getelementptr i8, ptr @__BLNK__, i32 16
+  %t26 = getelementptr i8, ptr @__BLNK__, i32 32
+  %t27 = getelementptr i8, ptr @__BLNK__, i32 36
   br label %bb0
 bb0:
   %t28 = sext i32 2 to i64

@@ -893,9 +893,9 @@ pub const Context = struct {
             if (type_decl.derived_type_name) |derived_name| {
                 spec = input.TypeSpec.fromDerived(derived_name).withPolymorphic(type_decl.polymorphic);
                 const layout = self.findDerivedTypeLayout(derived_name) orelse {
-                    if ((type_decl.pointer or type_decl.allocatable) and item.dims.len == 0) {
-                        // Scalar descriptor-bearing components do not require the target
-                        // derived layout to size the containing type.
+                    if (type_decl.pointer or type_decl.allocatable) {
+                        // Descriptor-bearing derived components do not require the target
+                        // derived layout to size the containing type layout.
                         return .{
                             .type_spec = spec,
                             .sig = null,

@@ -1,6 +1,6 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM050.f"
-@common_blank_ = common global [92 x i8] zeroinitializer, align 4
+@__BLNK__ = common global [92 x i8] zeroinitializer, align 4
 @fmt_fm050_90000 = private unnamed_addr constant [3 x i8] c"1\0A\00", align 1
 @fmt_fm050_90002 = private unnamed_addr constant [3 x i8] c" \0A\00", align 1
 @fmt_fm050_90001 = private unnamed_addr constant [47 x i8] c"           FORTRAN COMPILER VALIDATION SYSTEM\0A\00", align 1
@@ -37,10 +37,10 @@ entry:
   %t14 = alloca i32
   %t15 = alloca i32
   %t16 = alloca i32
-  %t17 = getelementptr i8, ptr @common_blank_, i32 0
-  %t18 = getelementptr i8, ptr @common_blank_, i32 4
-  %t19 = getelementptr i8, ptr @common_blank_, i32 8
-  %t20 = getelementptr i8, ptr @common_blank_, i32 12
+  %t17 = getelementptr i8, ptr @__BLNK__, i32 0
+  %t18 = getelementptr i8, ptr @__BLNK__, i32 4
+  %t19 = getelementptr i8, ptr @__BLNK__, i32 8
+  %t20 = getelementptr i8, ptr @__BLNK__, i32 12
   br label %bb0
 bb0:
   store i32 5, ptr %t0
@@ -1435,7 +1435,7 @@ exit:
 }
 define void @fs051_() {
 entry:
-  %t0 = getelementptr i8, ptr @common_blank_, i32 0
+  %t0 = getelementptr i8, ptr @__BLNK__, i32 0
   br label %bb0
 bb0:
   %t1 = load float, ptr %t0
@@ -1447,9 +1447,9 @@ exit:
 }
 define void @fs052_() {
 entry:
-  %t0 = getelementptr i8, ptr @common_blank_, i32 0
-  %t1 = getelementptr i8, ptr @common_blank_, i32 4
-  %t2 = getelementptr i8, ptr @common_blank_, i32 8
+  %t0 = getelementptr i8, ptr @__BLNK__, i32 0
+  %t1 = getelementptr i8, ptr @__BLNK__, i32 4
+  %t2 = getelementptr i8, ptr @__BLNK__, i32 8
   br label %bb0
 bb0:
   %t3 = load i32, ptr %t2
@@ -1580,10 +1580,10 @@ exit:
 define void @fs055_() {
 entry:
   %t0 = alloca i32
-  %t1 = getelementptr i8, ptr @common_blank_, i32 0
-  %t2 = getelementptr i8, ptr @common_blank_, i32 4
-  %t3 = getelementptr i8, ptr @common_blank_, i32 8
-  %t4 = getelementptr i8, ptr @common_blank_, i32 12
+  %t1 = getelementptr i8, ptr @__BLNK__, i32 0
+  %t2 = getelementptr i8, ptr @__BLNK__, i32 4
+  %t3 = getelementptr i8, ptr @__BLNK__, i32 8
+  %t4 = getelementptr i8, ptr @__BLNK__, i32 12
   br label %bb0
 bb0:
   %t5 = alloca i32

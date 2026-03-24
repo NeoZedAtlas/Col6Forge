@@ -1,6 +1,6 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM722.f"
-@common_bvn001_ = common global [8 x i8] zeroinitializer, align 8
+@bvn001_ = common global [8 x i8] zeroinitializer, align 8
 @fmt_fm722_90001 = private unnamed_addr constant [64 x i8] c"                                                         FM722\0A\00", align 1
 @fmt_fm722_90000 = private unnamed_addr constant [73 x i8] c"                                                   END OF PROGRAM FM722\0A\00", align 1
 @fmt_fm722_80000 = private unnamed_addr constant [55 x i8] c"   %3d    DELETED                                %31s\0A\00", align 1
@@ -85,7 +85,7 @@ entry:
   %t37 = alloca {float, float}
   %t38 = alloca float
   %t39 = alloca float
-  %t40 = getelementptr i8, ptr @common_bvn001_, i32 0
+  %t40 = getelementptr i8, ptr @bvn001_, i32 0
   br label %bb0
 bb0:
   %t41 = sext i32 1 to i64
@@ -2370,7 +2370,7 @@ exit:
 }
 define void @sn725_(ptr %arg0, ptr %arg1) {
 entry:
-  %t0 = getelementptr i8, ptr @common_bvn001_, i32 0
+  %t0 = getelementptr i8, ptr @bvn001_, i32 0
   br label %bb0
 bb0:
   %t1 = call double %arg0(ptr %arg1)

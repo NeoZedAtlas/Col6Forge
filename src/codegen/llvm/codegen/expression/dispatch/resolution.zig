@@ -243,7 +243,7 @@ pub fn ensureExternalDeclForResolvedCall(
     const decl_ret_ty = if (proc_sig != null and proc_sig.?.result_rank != 0)
         ir.IRType.void
     else
-        ctx.abiReturnType(ret_ty);
+        ctx.abiFunctionReturnType(ret_ty);
 
     if (ctx.decls.get(mangled)) |existing| {
         if (!existing.varargs) return mangled;

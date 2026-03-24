@@ -1,7 +1,7 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM328.f"
-@common_blank_ = common global [64 x i8] zeroinitializer, align 4
-@common_blk1_ = common global [12 x i8] zeroinitializer, align 4
+@__BLNK__ = common global [64 x i8] zeroinitializer, align 4
+@blk1_ = common global [12 x i8] zeroinitializer, align 4
 @fmt_fm328_90001 = private unnamed_addr constant [32 x i8] c"                         FM328\0A\00", align 1
 @fmt_fm328_90000 = private unnamed_addr constant [43 x i8] c"                     END OF PROGRAM FM328\0A\00", align 1
 @fmt_fm328_80000 = private unnamed_addr constant [23 x i8] c"     %5d      DELETED\0A\00", align 1
@@ -54,11 +54,11 @@ entry:
   %t29 = alloca i32
   %t30 = alloca float
   %t31 = alloca i32
-  %t32 = getelementptr i8, ptr @common_blk1_, i32 0
-  %t33 = getelementptr i8, ptr @common_blk1_, i32 4
-  %t34 = getelementptr i8, ptr @common_blk1_, i32 8
-  %t35 = getelementptr i8, ptr @common_blank_, i32 0
-  %t36 = getelementptr i8, ptr @common_blank_, i32 24
+  %t32 = getelementptr i8, ptr @blk1_, i32 0
+  %t33 = getelementptr i8, ptr @blk1_, i32 4
+  %t34 = getelementptr i8, ptr @blk1_, i32 8
+  %t35 = getelementptr i8, ptr @__BLNK__, i32 0
+  %t36 = getelementptr i8, ptr @__BLNK__, i32 24
   br label %bb0
 bb0:
   store i32 5, ptr %t10
@@ -3161,9 +3161,9 @@ exit:
 }
 define void @fs329_(ptr %arg0, ptr %arg1, ptr %arg2) {
 entry:
-  %t0 = getelementptr i8, ptr @common_blk1_, i32 0
-  %t1 = getelementptr i8, ptr @common_blk1_, i32 4
-  %t2 = getelementptr i8, ptr @common_blk1_, i32 8
+  %t0 = getelementptr i8, ptr @blk1_, i32 0
+  %t1 = getelementptr i8, ptr @blk1_, i32 4
+  %t2 = getelementptr i8, ptr @blk1_, i32 8
   br label %bb0
 bb0:
   %t3 = load i32, ptr %arg0
@@ -3197,9 +3197,9 @@ exit:
 }
 define void @fs331_(ptr %arg0) {
 entry:
-  %t0 = getelementptr i8, ptr @common_blk1_, i32 0
-  %t1 = getelementptr i8, ptr @common_blk1_, i32 4
-  %t2 = getelementptr i8, ptr @common_blk1_, i32 8
+  %t0 = getelementptr i8, ptr @blk1_, i32 0
+  %t1 = getelementptr i8, ptr @blk1_, i32 4
+  %t2 = getelementptr i8, ptr @blk1_, i32 8
   br label %bb0
 bb0:
   %t3 = sext i32 1 to i64
@@ -3236,9 +3236,9 @@ exit:
 }
 define void @fs332_(ptr %arg0) {
 entry:
-  %t0 = getelementptr i8, ptr @common_blk1_, i32 0
-  %t1 = getelementptr i8, ptr @common_blk1_, i32 4
-  %t2 = getelementptr i8, ptr @common_blk1_, i32 8
+  %t0 = getelementptr i8, ptr @blk1_, i32 0
+  %t1 = getelementptr i8, ptr @blk1_, i32 4
+  %t2 = getelementptr i8, ptr @blk1_, i32 8
   br label %bb0
 bb0:
   %t3 = sext i32 1 to i64
@@ -3299,9 +3299,9 @@ exit:
 }
 define void @fs333_(ptr %arg0, ptr %arg1) {
 entry:
-  %t0 = getelementptr i8, ptr @common_blk1_, i32 0
-  %t1 = getelementptr i8, ptr @common_blk1_, i32 4
-  %t2 = getelementptr i8, ptr @common_blk1_, i32 8
+  %t0 = getelementptr i8, ptr @blk1_, i32 0
+  %t1 = getelementptr i8, ptr @blk1_, i32 4
+  %t2 = getelementptr i8, ptr @blk1_, i32 8
   br label %bb0
 bb0:
   %t3 = call i32 %arg0(ptr %arg1)
@@ -3313,9 +3313,9 @@ exit:
 }
 define void @fs334_(ptr %arg0, ptr %arg1) {
 entry:
-  %t0 = getelementptr i8, ptr @common_blk1_, i32 0
-  %t1 = getelementptr i8, ptr @common_blk1_, i32 4
-  %t2 = getelementptr i8, ptr @common_blk1_, i32 8
+  %t0 = getelementptr i8, ptr @blk1_, i32 0
+  %t1 = getelementptr i8, ptr @blk1_, i32 4
+  %t2 = getelementptr i8, ptr @blk1_, i32 8
   br label %bb0
 bb0:
   call void %arg0(ptr %arg1)

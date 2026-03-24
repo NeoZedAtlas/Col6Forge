@@ -1,6 +1,6 @@
 ; ModuleID = 'col6forge'
 source_filename = "tests/NIST_F78_test_suite/fcvs21_f95/FM056.f"
-@common_blank_ = common global [48 x i8] zeroinitializer, align 4
+@__BLNK__ = common global [48 x i8] zeroinitializer, align 4
 @fmt_fm056_90000 = private unnamed_addr constant [3 x i8] c"1\0A\00", align 1
 @fmt_fm056_90002 = private unnamed_addr constant [3 x i8] c" \0A\00", align 1
 @fmt_fm056_90001 = private unnamed_addr constant [47 x i8] c"           FORTRAN COMPILER VALIDATION SYSTEM\0A\00", align 1
@@ -30,7 +30,7 @@ entry:
   %t7 = alloca i32
   %t8 = alloca i32
   %t9 = alloca i32
-  %t10 = getelementptr i8, ptr @common_blank_, i32 0
+  %t10 = getelementptr i8, ptr @__BLNK__, i32 0
   br label %bb0
 bb0:
   store i32 5, ptr %t0
@@ -1468,7 +1468,7 @@ exit:
 define void @fs057_(ptr %arg0) {
 entry:
   %t0 = alloca i32
-  %t1 = getelementptr i8, ptr @common_blank_, i32 0
+  %t1 = getelementptr i8, ptr @__BLNK__, i32 0
   br label %bb0
 bb0:
   %t2 = sext i32 1 to i64
@@ -1503,7 +1503,7 @@ exit:
 define void @fs058_(ptr %arg0, ptr %arg1) {
 entry:
   %t0 = alloca i32
-  %t1 = getelementptr i8, ptr @common_blank_, i32 0
+  %t1 = getelementptr i8, ptr @__BLNK__, i32 0
   br label %bb0
 bb0:
   store i32 3, ptr %t0
@@ -1544,7 +1544,7 @@ exit:
 define i32 @ff059_(ptr %arg0, ptr %arg1, ptr %arg2) {
 entry:
   %t0 = alloca i32
-  %t1 = getelementptr i8, ptr @common_blank_, i32 0
+  %t1 = getelementptr i8, ptr @__BLNK__, i32 0
   br label %bb0
 bb0:
   %t2 = sext i32 6 to i64

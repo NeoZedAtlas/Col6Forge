@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../../input.zig");
 const context = @import("../../../codegen/context/mod.zig");
 const expr = @import("../../../codegen/expression/mod.zig");
+const expr_call = @import("../../../codegen/expression/call/mod.zig");
 const expr_memory = @import("../../../codegen/expression/memory.zig");
 const character_mod = @import("character.zig");
 
@@ -132,6 +133,9 @@ fn emitPointerValue(ctx: *Context, builder: anytype, expr_node: *ast.Expr) EmitE
                 const tmp = try ctx.nextTemp();
                 try builder.load(tmp, .ptr, slot);
                 break :blk .{ .name = tmp, .ty = .ptr, .is_ptr = false };
+            }
+            if (try expr_call.procedureDesignatorPointer(ctx, name)) |proc_ptr| {
+                break :blk .{ .name = proc_ptr.name, .ty = .ptr, .is_ptr = false };
             }
             break :blk try expr.emitLValue(ctx, builder, expr_node);
         },
