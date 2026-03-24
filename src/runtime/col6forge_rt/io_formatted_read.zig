@@ -12,6 +12,7 @@ extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 extern fn col6forge_apply_blank_mode(buf: ?[*]u8, used: ?*c_int, blank_mode: c_int) void;
 extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
+extern fn col6forge_open_unit_copy_filename(unit: c_int, out: ?[*]u8, len: usize) c_int;
 extern fn col6forge_open_unit_blank_code(unit: c_int) c_int;
 extern fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long) c_int;
 extern fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) void;
@@ -144,6 +145,14 @@ fn shouldGracefullyExitOnReadEof(is_stdin: bool, code: c_int) bool {
     return code == -1 and is_stdin;
 }
 
+fn defaultInputUnitUsesStdin(unit: c_int) bool {
+    if (unit != 5 and unit != 0) return false;
+    if (col6forge_open_unit_is_open(unit) == 0) return true;
+
+    var filename_buf: [4096]u8 = [_]u8{0} ** 4096;
+    return col6forge_open_unit_copy_filename(unit, &filename_buf, filename_buf.len) == 0;
+}
+
 fn abortReadFatal(unit: c_int, is_stdin: bool, managed_read_stream: bool, stream: ?*FILE, start_pos: c_long) void {
     if (!is_stdin and managed_read_stream and stream != null) {
         col6forge_unit_stream_release_read(unit, @ptrCast(stream.?), start_pos, 0);
@@ -271,8 +280,7 @@ fn initExternalStreamState(
         .status_mode = status_mode,
     };
 
-    const unit_opened = col6forge_open_unit_is_open(unit) != 0;
-    if ((unit == 5 or unit == 0) and !unit_opened) {
+    if (defaultInputUnitUsesStdin(unit)) {
         state.source.external.is_stdin = true;
         state.source.external.stream = col6forge_rt_stdin();
         if (state.source.external.stream == null) {
@@ -689,13 +697,11 @@ pub export fn col6forge_formatted_read_core(
     const fmt_c = fmt.?;
     const total_args: usize = @intCast(@max(arg_count, 0));
 
-    const unit_opened = col6forge_open_unit_is_open(unit) != 0;
-
     var is_stdin = false;
     var managed_read_stream = false;
     var start_pos: c_long = 0;
     var stream: *FILE = undefined;
-    if ((unit == 5 or unit == 0) and !unit_opened) {
+    if (defaultInputUnitUsesStdin(unit)) {
         is_stdin = true;
         stream = col6forge_rt_stdin() orelse {
             if (status_mode != 0) return 1;

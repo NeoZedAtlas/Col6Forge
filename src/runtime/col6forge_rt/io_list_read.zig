@@ -106,6 +106,10 @@ const ListInput = struct {
     managed: bool,
 };
 
+fn shouldGracefullyExitOnListReadEof(is_stdin: bool, code: c_int) bool {
+    return code == -1 and is_stdin;
+}
+
 fn listReadFailWithContext(
     unit: c_int,
     status_mode: c_int,
@@ -115,6 +119,13 @@ fn listReadFailWithContext(
     commit_pos: bool,
 ) c_int {
     if (status_mode != 0) return code;
+    if (shouldGracefullyExitOnListReadEof(input.is_stdin, code)) {
+        if (!input_closed.*) {
+            col6forgeCloseListInput(unit, input.*, commit_pos);
+            input_closed.* = true;
+        }
+        exit(0);
+    }
     if (col6forge_io_should_abort() != 0) {
         if (!input_closed.*) {
             col6forgeCloseListInput(unit, input.*, commit_pos);
@@ -324,6 +335,12 @@ fn beginListReadStream(unit: c_int, status_mode: c_int) ?*ListReadStreamState {
 
 fn listReadStreamFail(stream: *ListReadStreamState, code: c_int) c_int {
     if (stream.status == 0) stream.status = code;
+    if (stream.status_mode == 0 and stream.input) |input| {
+        if (shouldGracefullyExitOnListReadEof(input.is_stdin, code)) {
+            closeListReadStreamState(stream);
+            exit(0);
+        }
+    }
     if (stream.status_mode == 0 and col6forge_io_should_abort() != 0) {
         closeListReadStreamState(stream);
         col6forge_report_runtime_io_fatal();
@@ -1377,4 +1394,10 @@ test "empty list read consumes one record" {
     var read_ptrs: [1]?*anyopaque = .{@ptrCast(&out)};
     try std.testing.expectEqual(@as(c_int, 0), col6forge_read_list_v(unit, &read_ptrs, &scalar_kinds, &scalar_lens, 1, 1));
     try std.testing.expectEqual(second_in, out);
+}
+
+test "graceful list stdin EOF only applies to stdin EOF" {
+    try std.testing.expect(shouldGracefullyExitOnListReadEof(true, -1));
+    try std.testing.expect(!shouldGracefullyExitOnListReadEof(false, -1));
+    try std.testing.expect(!shouldGracefullyExitOnListReadEof(true, 1));
 }

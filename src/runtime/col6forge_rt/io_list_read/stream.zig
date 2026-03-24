@@ -18,6 +18,7 @@ const parseIntegerToken = shared.parseIntegerToken;
 const parseInteger64Token = shared.parseInteger64Token;
 const parseFloat32Token = shared.parseFloat32Token;
 const parseFloat64Token = shared.parseFloat64Token;
+const shouldGracefullyExitOnListReadEof = shared.shouldGracefullyExitOnListReadEof;
 const cstrlenRaw = shared.cstrlenRaw;
 const checkedMulI64 = shared.checkedMulI64;
 const offsetBytes = shared.offsetBytes;
@@ -80,6 +81,14 @@ pub fn beginListReadStream(unit: c_int, status_mode: c_int) ?*ListReadStreamStat
 
 fn listReadStreamFail(stream: *ListReadStreamState, code: c_int) c_int {
     if (stream.status == 0) stream.status = code;
+    if (stream.status_mode == 0) {
+        if (stream.input) |input| {
+            if (shouldGracefullyExitOnListReadEof(input.is_stdin, code)) {
+                closeListReadStreamState(stream);
+                exit(0);
+            }
+        }
+    }
     if (stream.status_mode == 0 and col6forge_io_should_abort() != 0) {
         closeListReadStreamState(stream);
         col6forge_report_runtime_io_fatal();

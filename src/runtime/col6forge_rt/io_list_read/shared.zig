@@ -12,6 +12,7 @@ pub extern fn col6forge_report_runtime_io_fatal() void;
 pub extern fn col6forge_normalize_exponent(buf: ?[*]u8) void;
 pub extern fn col6forge_parse_logical_field(buf: ?[*]const u8, len: c_int) c_int;
 pub extern fn col6forge_open_unit_is_open(unit: c_int) c_int;
+pub extern fn col6forge_open_unit_copy_filename(unit: c_int, out: ?[*]u8, len: usize) c_int;
 pub extern fn col6forge_unit_stream_acquire_read(unit: c_int, out_stream: ?*?*anyopaque, out_start_pos: ?*c_long) c_int;
 pub extern fn col6forge_unit_stream_release_read(unit: c_int, stream: ?*anyopaque, start_pos: c_long, commit_pos: c_int) void;
 pub extern fn col6forge_list_write_stream_begin(unit: c_int, strict_status: c_int) ?*anyopaque;
@@ -106,6 +107,10 @@ pub const ListInput = struct {
     managed: bool,
 };
 
+pub fn shouldGracefullyExitOnListReadEof(is_stdin: bool, code: c_int) bool {
+    return code == -1 and is_stdin;
+}
+
 pub fn listReadFailWithContext(
     unit: c_int,
     status_mode: c_int,
@@ -115,6 +120,13 @@ pub fn listReadFailWithContext(
     commit_pos: bool,
 ) c_int {
     if (status_mode != 0) return code;
+    if (shouldGracefullyExitOnListReadEof(input.is_stdin, code)) {
+        if (!input_closed.*) {
+            col6forgeCloseListInput(unit, input.*, commit_pos);
+            input_closed.* = true;
+        }
+        exit(0);
+    }
     if (col6forge_io_should_abort() != 0) {
         if (!input_closed.*) {
             col6forgeCloseListInput(unit, input.*, commit_pos);
@@ -176,9 +188,16 @@ pub fn parseFloat32Token(token: []u8) ?f32 {
     return @floatCast(parsed);
 }
 
+fn defaultInputUnitUsesStdin(unit: c_int) bool {
+    if (unit != 5 and unit != 0) return false;
+    if (col6forge_open_unit_is_open(unit) == 0) return true;
+
+    var filename_buf: [4096]u8 = [_]u8{0} ** 4096;
+    return col6forge_open_unit_copy_filename(unit, &filename_buf, filename_buf.len) == 0;
+}
+
 pub fn col6forgeOpenListInput(unit: c_int) ?ListInput {
-    const unit_opened = col6forge_open_unit_is_open(unit) != 0;
-    if ((unit == 5 or unit == 0) and !unit_opened) {
+    if (defaultInputUnitUsesStdin(unit)) {
         const stdin = col6forge_rt_stdin() orelse return null;
         return .{ .file = stdin, .is_stdin = true, .start_pos = 0, .managed = false };
     }

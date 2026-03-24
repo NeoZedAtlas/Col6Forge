@@ -8,6 +8,7 @@ const offsetBytes = shared.offsetBytes;
 const checkedMul = shared.checkedMul;
 const checkedAdd = shared.checkedAdd;
 const checkedMulI64 = shared.checkedMulI64;
+const shouldGracefullyExitOnListReadEof = shared.shouldGracefullyExitOnListReadEof;
 const col6forge_list_write_stream_begin = shared.col6forge_list_write_stream_begin;
 const col6forge_write_list_stream_typed = shared.col6forge_write_list_stream_typed;
 const col6forge_write_list_stream_n = shared.col6forge_write_list_stream_n;
@@ -100,4 +101,10 @@ test "empty list read consumes one record" {
     var read_ptrs: [1]?*anyopaque = .{@ptrCast(&out)};
     try std.testing.expectEqual(@as(c_int, 0), col6forge_read_list_v(unit, &read_ptrs, &scalar_kinds, &scalar_lens, 1, 1));
     try std.testing.expectEqual(second_in, out);
+}
+
+test "graceful list stdin EOF only applies to stdin EOF" {
+    try std.testing.expect(shouldGracefullyExitOnListReadEof(true, -1));
+    try std.testing.expect(!shouldGracefullyExitOnListReadEof(false, -1));
+    try std.testing.expect(!shouldGracefullyExitOnListReadEof(true, 1));
 }
