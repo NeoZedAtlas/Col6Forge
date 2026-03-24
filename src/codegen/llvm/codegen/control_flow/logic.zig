@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../../../input.zig");
 const llvm_types = @import("../../types.zig");
 const evaluator = @import("../../../../semantic/evaluator.zig");
+const context = @import("../context/mod.zig");
 
 pub const ArithIfStrategy = enum {
     Float,
@@ -13,10 +14,8 @@ pub const GotoTargetMode = enum {
     assigned,
 };
 
-pub const BranchTarget = struct {
-    index: i64,
-    target_block: []const u8,
-};
+pub const BranchTarget = context.BranchTarget;
+const BranchWorkspace = context.BranchWorkspace;
 
 pub const StepSign = enum {
     unknown,
@@ -87,6 +86,34 @@ pub fn resolveAssignedGotoTargetsNoList(
     return targets.toOwnedSlice(allocator);
 }
 
+pub fn resolveAssignedGotoSwitchTargets(
+    allocator: std.mem.Allocator,
+    labels: []const []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+    global_label_map: *const std.StringHashMap([]const u8),
+    workspace: *BranchWorkspace,
+) ![]BranchTarget {
+    const plan = if (labels.len == 0)
+        try resolveAssignedGotoTargetsNoList(allocator, local_label_map, global_label_map)
+    else
+        try resolveGotoTargets(allocator, labels, local_label_map, global_label_map, .assigned);
+    defer allocator.free(plan);
+
+    if (labels.len == 0) return allocator.dupe(BranchTarget, plan);
+    return dedupeBranchTargetsByIndex(allocator, plan, workspace);
+}
+
+pub fn resolveAssignedGotoIndirectDestinations(
+    allocator: std.mem.Allocator,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+    global_label_map: *const std.StringHashMap([]const u8),
+    workspace: *BranchWorkspace,
+) ![][]const u8 {
+    const plan = try resolveAssignedGotoTargetsNoList(allocator, local_label_map, global_label_map);
+    defer allocator.free(plan);
+    return collectUniqueTargetBlocks(allocator, plan, workspace);
+}
+
 fn appendAssignedTargetFromEntry(
     allocator: std.mem.Allocator,
     targets: *std.ArrayList(BranchTarget),
@@ -101,6 +128,35 @@ fn appendAssignedTargetFromEntry(
         .index = branch_value,
         .target_block = target_block,
     });
+}
+
+fn dedupeBranchTargetsByIndex(
+    allocator: std.mem.Allocator,
+    targets: []const BranchTarget,
+    workspace: *BranchWorkspace,
+) ![]BranchTarget {
+    workspace.reset();
+    for (targets) |item| {
+        if (workspace.seen_values.contains(item.index)) continue;
+        try workspace.seen_values.put(item.index, {});
+        try workspace.unique_targets.append(item);
+    }
+    return allocator.dupe(BranchTarget, workspace.unique_targets.items);
+}
+
+fn collectUniqueTargetBlocks(
+    allocator: std.mem.Allocator,
+    targets: []const BranchTarget,
+    workspace: *BranchWorkspace,
+) ![][]const u8 {
+    workspace.reset();
+    for (targets) |item| {
+        if (workspace.seen_blocks.contains(item.target_block)) continue;
+        try workspace.seen_blocks.put(item.target_block, {});
+        try workspace.destination_blocks.append(item.target_block);
+    }
+    if (workspace.destination_blocks.items.len == 0) return error.MissingLabel;
+    return allocator.dupe([]const u8, workspace.destination_blocks.items);
 }
 
 pub fn analyzeLoopConfig(ctx: *const @import("../context/mod.zig").Context, loop: ast.DoLoopStmt, var_kind: ast.TypeKind) LoopConfig {
@@ -285,4 +341,38 @@ test "resolveGotoTargets accepts zero-padded label lookup via canonical key" {
     try testing.expectEqual(@as(usize, 1), plan.len);
     try testing.expectEqual(@as(i64, 12), plan[0].index);
     try testing.expectEqualStrings("L12", plan[0].target_block);
+}
+
+test "resolveAssignedGotoSwitchTargets deduplicates repeated explicit label values" {
+    const testing = std.testing;
+    var map = std.StringHashMap([]const u8).init(testing.allocator);
+    defer map.deinit();
+    try map.put("10", "L10");
+
+    var workspace = BranchWorkspace.init(testing.allocator);
+    defer workspace.deinit();
+
+    const plan = try resolveAssignedGotoSwitchTargets(testing.allocator, &[_][]const u8{ "0010", "10" }, null, &map, &workspace);
+    defer testing.allocator.free(plan);
+
+    try testing.expectEqual(@as(usize, 1), plan.len);
+    try testing.expectEqual(@as(i64, 10), plan[0].index);
+    try testing.expectEqualStrings("L10", plan[0].target_block);
+}
+
+test "resolveAssignedGotoIndirectDestinations deduplicates repeated target blocks" {
+    const testing = std.testing;
+    var map = std.StringHashMap([]const u8).init(testing.allocator);
+    defer map.deinit();
+    try map.put("10", "L10");
+    try map.put("20", "L10");
+
+    var workspace = BranchWorkspace.init(testing.allocator);
+    defer workspace.deinit();
+
+    const destinations = try resolveAssignedGotoIndirectDestinations(testing.allocator, null, &map, &workspace);
+    defer testing.allocator.free(destinations);
+
+    try testing.expectEqual(@as(usize, 1), destinations.len);
+    try testing.expectEqualStrings("L10", destinations[0]);
 }

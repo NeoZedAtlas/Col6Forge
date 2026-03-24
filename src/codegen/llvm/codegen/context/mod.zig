@@ -23,6 +23,8 @@ pub const FormatInfo = types.FormatInfo;
 pub const ValueRef = types.ValueRef;
 pub const StatementFunction = types.StatementFunction;
 pub const StatementFunctionSubst = types.StatementFunctionSubst;
+pub const BranchTarget = types.BranchTarget;
+pub const BranchWorkspace = types.BranchWorkspace;
 pub const RuntimeArrayDescriptor = types.RuntimeArrayDescriptor;
 pub const DerivedComponentLayout = types.DerivedComponentLayout;
 pub const DerivedTypeLayout = types.DerivedTypeLayout;
@@ -63,6 +65,7 @@ pub const Context = struct {
     string_pool: *StringPool,
     statement_functions: std.StringHashMap(StatementFunction),
     stmt_func_stack: std.array_list.Managed(StatementFunctionSubst),
+    branch_workspace: BranchWorkspace,
     intrinsic_wrappers: *std.StringHashMap(IntrinsicWrapperKind),
     static_array_values: CaseInsensitiveStringHashMap([]const *input.Expr),
     char_values: std.StringHashMap([]const u8),
@@ -152,6 +155,7 @@ pub const Context = struct {
             .string_pool = string_pool,
             .statement_functions = std.StringHashMap(StatementFunction).init(allocator),
             .stmt_func_stack = std.array_list.Managed(StatementFunctionSubst).init(allocator),
+            .branch_workspace = BranchWorkspace.init(allocator),
             .intrinsic_wrappers = intrinsic_wrappers,
             .static_array_values = CaseInsensitiveStringHashMap([]const *input.Expr).initContext(allocator, .{}),
             .char_values = std.StringHashMap([]const u8).init(allocator),
@@ -174,6 +178,7 @@ pub const Context = struct {
         errdefer ctx.symbol_index_exact.deinit();
         errdefer ctx.symbol_index.deinit();
         errdefer ctx.array_elem_count_cache.deinit();
+        errdefer ctx.branch_workspace.deinit();
         errdefer ctx.static_array_values.deinit();
 
         for (sem.symbols, 0..) |sym, idx| {
@@ -258,6 +263,7 @@ pub const Context = struct {
         self.array_elem_count_cache.deinit();
         self.statement_functions.deinit();
         self.stmt_func_stack.deinit();
+        self.branch_workspace.deinit();
         self.static_array_values.deinit();
         var it = self.char_values.iterator();
         while (it.next()) |entry| {

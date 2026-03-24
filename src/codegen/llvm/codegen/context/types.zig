@@ -63,6 +63,41 @@ pub const StatementFunctionSubst = struct {
     actuals: []*input.Expr,
 };
 
+pub const BranchTarget = struct {
+    index: i64,
+    target_block: []const u8,
+};
+
+pub const BranchWorkspace = struct {
+    unique_targets: std.array_list.Managed(BranchTarget),
+    destination_blocks: std.array_list.Managed([]const u8),
+    seen_values: std.AutoHashMap(i64, void),
+    seen_blocks: std.StringHashMap(void),
+
+    pub fn init(allocator: std.mem.Allocator) BranchWorkspace {
+        return .{
+            .unique_targets = std.array_list.Managed(BranchTarget).init(allocator),
+            .destination_blocks = std.array_list.Managed([]const u8).init(allocator),
+            .seen_values = std.AutoHashMap(i64, void).init(allocator),
+            .seen_blocks = std.StringHashMap(void).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *BranchWorkspace) void {
+        self.unique_targets.deinit();
+        self.destination_blocks.deinit();
+        self.seen_values.deinit();
+        self.seen_blocks.deinit();
+    }
+
+    pub fn reset(self: *BranchWorkspace) void {
+        self.unique_targets.clearRetainingCapacity();
+        self.destination_blocks.clearRetainingCapacity();
+        self.seen_values.clearRetainingCapacity();
+        self.seen_blocks.clearRetainingCapacity();
+    }
+};
+
 pub const RuntimeArrayDescriptor = struct {
     rank: usize,
     lower_slots: []ValueRef,

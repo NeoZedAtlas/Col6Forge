@@ -45,25 +45,23 @@ pub fn emitAssignedGoto(
     next_block: []const u8,
     local_label_map: ?*const std.StringHashMap([]const u8),
 ) EmitError!void {
+    // ASSIGNED GOTO has two lowering modes:
+    // if locals.zig materialized `ctx.assigned_goto_slots`, ASSIGN stores a blockaddress and
+    // the no-list form must branch indirectly through that slot; otherwise we fall back to the
+    // integer selector path and branch by resolved numeric labels.
     if (gt.labels.len == 0) {
         if (ctx.assigned_goto_slots.get(gt.var_name)) |slot_ptr| {
             const addr_tmp = try ctx.nextTemp();
             try builder.load(addr_tmp, .ptr, slot_ptr);
             const addr = ValueRef{ .name = addr_tmp, .ty = .ptr, .is_ptr = false };
 
-            const plan_no_list = try logic.resolveAssignedGotoTargetsNoList(ctx.allocator, local_label_map, &ctx.label_map);
-            defer ctx.allocator.free(plan_no_list);
-
-            var destinations = std.array_list.Managed([]const u8).init(ctx.allocator);
-            defer destinations.deinit();
-            var seen_labels = std.StringHashMap(void).init(ctx.allocator);
-            defer seen_labels.deinit();
-            for (plan_no_list) |item| {
-                if (seen_labels.contains(item.target_block)) continue;
-                try seen_labels.put(item.target_block, {});
-                try destinations.append(item.target_block);
-            }
-            if (destinations.items.len == 0) return error.MissingLabel;
+            const destinations = try logic.resolveAssignedGotoIndirectDestinations(
+                ctx.allocator,
+                local_label_map,
+                &ctx.label_map,
+                &ctx.branch_workspace,
+            );
+            defer ctx.allocator.free(destinations);
 
             const invalid_label = try ctx.nextLabel("assigned_goto_invalid");
             const indir_label = try ctx.nextLabel("assigned_goto_indirect");
@@ -80,7 +78,7 @@ pub fn emitAssignedGoto(
             try builder.brCond(is_null, invalid_label, indir_label);
 
             try builder.label(indir_label);
-            try builder.indirectBr(addr, destinations.items);
+            try builder.indirectBr(addr, destinations);
 
             try builder.label(invalid_label);
             try builder.emitUnreachable();
@@ -96,35 +94,22 @@ pub fn emitAssignedGoto(
     var sel = ValueRef{ .name = tmp, .ty = ty, .is_ptr = false };
     sel = try expr.coerceCheckedI32(ctx, builder, sel);
 
-    const plan = if (gt.labels.len == 0)
-        try logic.resolveAssignedGotoTargetsNoList(ctx.allocator, local_label_map, &ctx.label_map)
-    else
-        try logic.resolveGotoTargets(ctx.allocator, gt.labels, local_label_map, &ctx.label_map, .assigned);
+    const plan = try logic.resolveAssignedGotoSwitchTargets(
+        ctx.allocator,
+        gt.labels,
+        local_label_map,
+        &ctx.label_map,
+        &ctx.branch_workspace,
+    );
     defer ctx.allocator.free(plan);
 
     var cases = std.array_list.Managed(@TypeOf(builder.*).SwitchCase).init(ctx.allocator);
     defer cases.deinit();
-    if (gt.labels.len == 0) {
-        // No-list path is already de-duplicated by resolver.
-        for (plan) |item| {
-            try cases.append(.{
-                .value = item.index,
-                .label = item.target_block,
-            });
-        }
-    } else {
-        // Explicit ASSIGNED GOTO label lists may repeat numeric labels.
-        // Deduplicate switch values to keep deterministic IR and golden output.
-        var seen = std.AutoHashMap(i64, void).init(ctx.allocator);
-        defer seen.deinit();
-        for (plan) |item| {
-            if (seen.contains(item.index)) continue;
-            try seen.put(item.index, {});
-            try cases.append(.{
-                .value = item.index,
-                .label = item.target_block,
-            });
-        }
+    for (plan) |item| {
+        try cases.append(.{
+            .value = item.index,
+            .label = item.target_block,
+        });
     }
     const invalid_label = try ctx.nextLabel("assigned_goto_invalid");
     // ASSIGNED GOTO must not silently fall through when the selector is invalid.
