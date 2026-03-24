@@ -3,6 +3,7 @@ const ast = @import("../../../input.zig");
 const context = @import("../context/mod.zig");
 const ir = @import("../../../ir.zig");
 const expr = @import("../expression/mod.zig");
+const runtime_fail = @import("../runtime_fail.zig");
 const utils = @import("../utils.zig");
 const logic = @import("logic.zig");
 
@@ -11,6 +12,11 @@ const IRType = ir.IRType;
 const ValueRef = context.ValueRef;
 
 const EmitError = anyerror;
+
+const TripCountResult = struct {
+    value: ValueRef,
+    done_label: []const u8,
+};
 
 pub fn emitDo(
     ctx: *Context,
@@ -189,22 +195,12 @@ fn emitDoImpl(
     const loop = stmt.node.do_loop;
     const sym = ctx.findSymbol(loop.var_name) orelse return error.UnknownSymbol;
     const config = logic.analyzeLoopConfig(ctx, loop, sym.loweredKind());
-    const is_float = config.var_type == .f32 or config.var_type == .f64;
-    const cmp_instr = if (is_float) "fcmp" else "icmp";
-    const pred_ge = if (is_float) "oge" else "sge";
+    if (config.var_type != .i32 and config.var_type != .i64) return error.UnsupportedControlFlow;
 
     const var_ptr = try ctx.getPointer(loop.var_name);
-    const step_addr_name = try ctx.nextTemp();
-    try builder.alloca(step_addr_name, config.var_type);
-    const step_addr = ValueRef{ .name = step_addr_name, .ty = .ptr, .is_ptr = true };
-
-    const trip_addr_name = try ctx.nextTemp();
-    try builder.alloca(trip_addr_name, .i64);
-    const trip_addr = ValueRef{ .name = trip_addr_name, .ty = .ptr, .is_ptr = true };
-
-    const iter_addr_name = try ctx.nextTemp();
-    try builder.alloca(iter_addr_name, .i64);
-    const iter_addr = ValueRef{ .name = iter_addr_name, .ty = .ptr, .is_ptr = true };
+    const prelude_label = try ctx.nextLabel("do_prelude");
+    try builder.br(prelude_label);
+    try builder.label(prelude_label);
 
     const start_val = try expr.emitExpr(ctx, builder, loop.start);
     const start_coerced = try expr.coerce(ctx, builder, start_val, config.var_type);
@@ -218,47 +214,60 @@ fn emitDoImpl(
     else
         oneValueForType(config.var_type);
     const step_val = try expr.coerce(ctx, builder, step_val_raw, config.var_type);
-    try builder.store(step_val, step_addr);
 
-    switch (config.step_sign) {
+    const trip_info = blk: switch (config.step_sign) {
         .non_negative => {
-            try emitStoreTripCountForSign(ctx, builder, config.var_type, start_coerced, end_val, step_val, true, trip_addr, null);
+            break :blk try emitTripCountForSign(ctx, builder, config.var_type, start_coerced, end_val, step_val, true);
         },
         .negative => {
-            try emitStoreTripCountForSign(ctx, builder, config.var_type, start_coerced, end_val, step_val, false, trip_addr, null);
+            break :blk try emitTripCountForSign(ctx, builder, config.var_type, start_coerced, end_val, step_val, false);
         },
         .unknown => {
             const sign_pos_label = try ctx.nextLabel("do_trip_pos");
             const sign_neg_label = try ctx.nextLabel("do_trip_neg");
             const sign_done_label = try ctx.nextLabel("do_trip_done");
-
             const step_nonneg_name = try ctx.nextTemp();
-            try builder.compare(step_nonneg_name, cmp_instr, pred_ge, config.var_type, step_val, utils.zeroValue(config.var_type));
+            try builder.compare(step_nonneg_name, "icmp", "sge", config.var_type, step_val, utils.zeroValue(config.var_type));
             const step_nonneg = ValueRef{ .name = step_nonneg_name, .ty = .i1, .is_ptr = false };
             try builder.brCond(step_nonneg, sign_pos_label, sign_neg_label);
 
             try builder.label(sign_pos_label);
-            try emitStoreTripCountForSign(ctx, builder, config.var_type, start_coerced, end_val, step_val, true, trip_addr, sign_done_label);
+            const pos_trip = try emitTripCountForSign(ctx, builder, config.var_type, start_coerced, end_val, step_val, true);
+            try builder.br(sign_done_label);
 
             try builder.label(sign_neg_label);
-            try emitStoreTripCountForSign(ctx, builder, config.var_type, start_coerced, end_val, step_val, false, trip_addr, sign_done_label);
+            const neg_trip = try emitTripCountForSign(ctx, builder, config.var_type, start_coerced, end_val, step_val, false);
+            try builder.br(sign_done_label);
 
             try builder.label(sign_done_label);
+            const trip_name = try ctx.nextTemp();
+            try builder.phi(trip_name, .i64, &.{
+                .{ .value = pos_trip.value, .label = pos_trip.done_label },
+                .{ .value = neg_trip.value, .label = neg_trip.done_label },
+            });
+            break :blk TripCountResult{
+                .value = .{ .name = trip_name, .ty = .i64, .is_ptr = false },
+                .done_label = sign_done_label,
+            };
         },
-    }
-
-    try builder.store(constI64(0), iter_addr);
+    };
+    const trip_count = trip_info.value;
 
     const test_label = try ctx.nextLabel(config.test_label_prefix);
     const inc_label = try ctx.nextLabel(config.inc_label_prefix);
+    const iter_name = try ctx.nextTemp();
+    const iter_next_name = try ctx.nextTemp();
+    const iter_next = ValueRef{ .name = iter_next_name, .ty = .i64, .is_ptr = false };
 
     try builder.br(test_label);
     try builder.label(test_label);
-
-    const iter_loaded = try expr.loadValue(ctx, builder, iter_addr, .i64);
-    const trip_loaded = try expr.loadValue(ctx, builder, trip_addr, .i64);
+    try builder.phi(iter_name, .i64, &.{
+        .{ .value = constI64(0), .label = trip_info.done_label },
+        .{ .value = iter_next, .label = inc_label },
+    });
+    const iter_loaded = ValueRef{ .name = iter_name, .ty = .i64, .is_ptr = false };
     const has_more_name = try ctx.nextTemp();
-    try builder.compare(has_more_name, "icmp", "slt", .i64, iter_loaded, trip_loaded);
+    try builder.compare(has_more_name, "icmp", "slt", .i64, iter_loaded, trip_count);
     const has_more = ValueRef{ .name = has_more_name, .ty = .i1, .is_ptr = false };
     const body_start = block_names[do_idx + 1];
     try builder.brCond(has_more, body_start, after_loop);
@@ -271,19 +280,14 @@ fn emitDoImpl(
 
     try builder.label(inc_label);
     const var_loaded = try expr.loadValue(ctx, builder, var_ptr, config.var_type);
-    const step_loaded = try expr.loadValue(ctx, builder, step_addr, config.var_type);
-    const sum = try expr.emitBinary(ctx, builder, .add, var_loaded, step_loaded);
+    const sum = try expr.emitBinary(ctx, builder, .add, var_loaded, step_val);
     const sum_coerced = try expr.coerce(ctx, builder, sum, config.var_type);
     try builder.store(sum_coerced, var_ptr);
-
-    const iter_loaded2 = try expr.loadValue(ctx, builder, iter_addr, .i64);
-    const iter_next_name = try ctx.nextTemp();
-    try builder.binary(iter_next_name, "add", .i64, iter_loaded2, constI64(1));
-    try builder.store(.{ .name = iter_next_name, .ty = .i64, .is_ptr = false }, iter_addr);
+    try builder.binary(iter_next_name, "add", .i64, iter_loaded, constI64(1));
     try builder.br(test_label);
 }
 
-fn emitStoreTripCountForSign(
+fn emitTripCountForSign(
     ctx: *Context,
     builder: anytype,
     var_ty: IRType,
@@ -291,76 +295,72 @@ fn emitStoreTripCountForSign(
     end_val: ValueRef,
     step_val: ValueRef,
     is_non_negative_step: bool,
-    trip_addr: ValueRef,
-    done_label_override: ?[]const u8,
-) EmitError!void {
-    const is_float = var_ty == .f32 or var_ty == .f64;
-    const cmp_instr = if (is_float) "fcmp" else "icmp";
-    const pred_le = if (is_float) "ole" else "sle";
-    const pred_ge = if (is_float) "oge" else "sge";
-    const pred_ne = if (is_float) "one" else "ne";
-    const div_op = if (is_float) "fdiv" else "sdiv";
-    const sub_op = if (is_float) "fsub" else "sub";
-    const add_op = if (is_float) "fadd" else "add";
-
+) EmitError!TripCountResult {
     const range_ok_name = try ctx.nextTemp();
     if (is_non_negative_step) {
-        try builder.compare(range_ok_name, cmp_instr, pred_le, var_ty, start_val, end_val);
+        try builder.compare(range_ok_name, "icmp", "sle", var_ty, start_val, end_val);
     } else {
-        try builder.compare(range_ok_name, cmp_instr, pred_ge, var_ty, start_val, end_val);
+        try builder.compare(range_ok_name, "icmp", "sge", var_ty, start_val, end_val);
     }
     const range_ok = ValueRef{ .name = range_ok_name, .ty = .i1, .is_ptr = false };
 
     var step_abs = step_val;
     if (!is_non_negative_step) {
         const neg_name = try ctx.nextTemp();
-        try builder.binary(neg_name, sub_op, var_ty, utils.zeroValue(var_ty), step_val);
+        try builder.binary(neg_name, "sub", var_ty, utils.zeroValue(var_ty), step_val);
         step_abs = .{ .name = neg_name, .ty = var_ty, .is_ptr = false };
     }
 
     const step_nonzero_name = try ctx.nextTemp();
-    try builder.compare(step_nonzero_name, cmp_instr, pred_ne, var_ty, step_abs, utils.zeroValue(var_ty));
+    try builder.compare(step_nonzero_name, "icmp", "ne", var_ty, step_abs, utils.zeroValue(var_ty));
     const step_nonzero = ValueRef{ .name = step_nonzero_name, .ty = .i1, .is_ptr = false };
 
-    const valid_name = try ctx.nextTemp();
-    try builder.binary(valid_name, "and", .i1, range_ok, step_nonzero);
-    const valid = ValueRef{ .name = valid_name, .ty = .i1, .is_ptr = false };
-
     const calc_label = try ctx.nextLabel("do_trip_calc");
-    const zero_label = try ctx.nextLabel("do_trip_zero");
-    const done_label = done_label_override orelse try ctx.nextLabel("do_trip_done");
-    try builder.brCond(valid, calc_label, zero_label);
+    const empty_label = try ctx.nextLabel("do_trip_empty");
+    const range_label = try ctx.nextLabel("do_trip_range");
+    const invalid_step_label = try ctx.nextLabel("do_trip_zero_step");
+    const done_label = try ctx.nextLabel("do_trip_done");
+    try builder.brCond(step_nonzero, range_label, invalid_step_label);
+
+    try builder.label(invalid_step_label);
+    try runtime_fail.emitRuntimeCheckFailureTrap(ctx, builder, "zero DO loop step");
+
+    try builder.label(range_label);
+    try builder.brCond(range_ok, calc_label, empty_label);
 
     try builder.label(calc_label);
     const diff_name = try ctx.nextTemp();
     if (is_non_negative_step) {
-        try builder.binary(diff_name, sub_op, var_ty, end_val, start_val);
+        try builder.binary(diff_name, "sub", var_ty, end_val, start_val);
     } else {
-        try builder.binary(diff_name, sub_op, var_ty, start_val, end_val);
+        try builder.binary(diff_name, "sub", var_ty, start_val, end_val);
     }
     const diff = ValueRef{ .name = diff_name, .ty = var_ty, .is_ptr = false };
 
-    // Use INT((diff + step_abs) / step_abs) to avoid undercounting floating loops
-    // due to binary rounding before integer conversion.
     const numer_name = try ctx.nextTemp();
-    try builder.binary(numer_name, add_op, var_ty, diff, step_abs);
+    try builder.binary(numer_name, "add", var_ty, diff, step_abs);
     const numer = ValueRef{ .name = numer_name, .ty = var_ty, .is_ptr = false };
 
     const quot_name = try ctx.nextTemp();
-    try builder.binary(quot_name, div_op, var_ty, numer, step_abs);
+    try builder.binary(quot_name, "sdiv", var_ty, numer, step_abs);
     const quot = ValueRef{ .name = quot_name, .ty = var_ty, .is_ptr = false };
 
     const trip_i64 = try castToI64(ctx, builder, quot);
-    try builder.store(trip_i64, trip_addr);
     try builder.br(done_label);
 
-    try builder.label(zero_label);
-    try builder.store(constI64(0), trip_addr);
+    try builder.label(empty_label);
     try builder.br(done_label);
 
-    if (done_label_override == null) {
-        try builder.label(done_label);
-    }
+    try builder.label(done_label);
+    const trip_name = try ctx.nextTemp();
+    try builder.phi(trip_name, .i64, &.{
+        .{ .value = trip_i64, .label = calc_label },
+        .{ .value = constI64(0), .label = empty_label },
+    });
+    return .{
+        .value = .{ .name = trip_name, .ty = .i64, .is_ptr = false },
+        .done_label = done_label,
+    };
 }
 
 fn emitDoWhileImpl(
@@ -439,7 +439,6 @@ fn castToI64(ctx: *Context, builder: anytype, value: ValueRef) EmitError!ValueRe
     const cast_name = try ctx.nextTemp();
     const instr: []const u8 = switch (value.ty) {
         .i32 => "sext",
-        .f32, .f64 => "fptosi",
         else => return error.UnsupportedControlFlow,
     };
     try builder.cast(cast_name, instr, value.ty, value, .i64);

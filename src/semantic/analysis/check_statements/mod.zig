@@ -3,6 +3,7 @@ const ast = @import("../../../ast/nodes.zig");
 const catalog = @import("../../../common/error_catalog.zig");
 const symbols = @import("../../symbol/mod.zig");
 const context = @import("../context.zig");
+const resolve_const = @import("../resolve_const.zig");
 const resolve_expr = @import("../resolve_expr.zig");
 const resolve_symbols = @import("../resolve_symbols.zig");
 const leaf_helpers = @import("leaf_helpers.zig");
@@ -277,9 +278,24 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
         .pause => {},
         .stop => {},
         .do_loop => |loop| {
+            const loop_idx = resolve_symbols.findSymbolIndex(self, loop.var_name) orelse return error.UnknownSymbol;
+            const loop_sym = self.symbols.items[loop_idx];
+            if (loop_sym.loweredKind() != .integer or loop_sym.dims.len != 0) {
+                return emitCurrentStmtConstraint(self, "DO variable must be a scalar INTEGER");
+            }
             try expr_semantics.checkExpr(self, loop.start, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
             try expr_semantics.checkExpr(self, loop.end, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
-            if (loop.step) |step| try expr_semantics.checkExpr(self, step, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
+            if (loop.step) |step| {
+                const step_ty = try expr_semantics.checkExprType(self, step, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
+                if (step_ty != .integer) {
+                    return emitExprConstraint(self, step, "DO step must be INTEGER");
+                }
+                if (try resolve_const.evalConst(self, step)) |value| {
+                    if (value == .integer and value.integer == 0) {
+                        return emitExprConstraint(self, step, "DO step must not be zero");
+                    }
+                }
+            }
         },
         .do_while => |loop| try expr_semantics.checkLogicalConditionExpr(self, loop.condition, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible }),
         .do_infinite => {},
@@ -352,3 +368,26 @@ fn dummyArgTypeCompatible(
         std.ascii.eqlIgnoreCase(expected_name, actual_name);
 }
 
+fn emitCurrentStmtConstraint(self: *context.Context, message: []const u8) CheckError {
+    const stmt = self.current_stmt orelse return error.AssignmentTypeMismatch;
+    self.setDiagnostic(
+        if (stmt.source_line == 0) 1 else stmt.source_line,
+        if (stmt.source_column == 0) 1 else stmt.source_column,
+        catalog.semantic.assignment_type_mismatch.code,
+        message,
+        stmt.source_text,
+    );
+    return error.AssignmentTypeMismatch;
+}
+
+fn emitExprConstraint(self: *context.Context, expr_node: *ast.Expr, message: []const u8) CheckError {
+    const source = self.sourceForExpr(expr_node) orelse ast.SourceRef{};
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.assignment_type_mismatch.code,
+        message,
+        source.text,
+    );
+    return error.AssignmentTypeMismatch;
+}

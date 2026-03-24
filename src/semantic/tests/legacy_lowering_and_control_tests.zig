@@ -371,3 +371,52 @@ test "semantic reports CF3130 for REAL DO WHILE condition" {
     try testing.expect(std.mem.eql(u8, diag.code, "CF3130"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "DO WHILE (R)"));
 }
+
+test "semantic rejects REAL DO control variable" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      REAL I\n" ++
+        "      DO 10 I = 1, 3\n" ++
+        "   10 CONTINUE\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.AssignmentTypeMismatch, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3108"));
+    try testing.expectEqualStrings("DO variable must be a scalar INTEGER", diag.message);
+    try testing.expect(std.mem.eql(u8, diag.line_text, "DO 10 I = 1, 3"));
+}
+
+test "semantic rejects compile-time zero DO step" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER I\n" ++
+        "      DO 10 I = 1, 3, 0\n" ++
+        "   10 CONTINUE\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.AssignmentTypeMismatch, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3108"));
+    try testing.expectEqualStrings("DO step must not be zero", diag.message);
+}

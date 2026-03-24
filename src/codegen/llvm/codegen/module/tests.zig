@@ -1610,6 +1610,190 @@ test "assigned GOTO narrows widened selector through checked i32 path" {
     try testing.expect(std.mem.indexOf(u8, output, "switch i64 %") == null);
 }
 
+test "DO loop lowering keeps trip count and iterator in SSA" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const one_expr = try makeLiteralExpr(a, .integer, "1");
+    const three_expr = try makeLiteralExpr(a, .integer, "3");
+
+    const stmt_list = try a.alloc(input.Stmt, 3);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .do_loop = .{
+            .end_label = "0010",
+            .var_name = "I",
+            .start = one_expr,
+            .end = three_expr,
+            .step = null,
+        } },
+        .source_line = 3,
+        .source_column = 7,
+        .source_text = "      DO 10 I = 1, 3",
+    };
+    stmt_list[1] = .{ .label = "0010", .node = .{ .cont = {} } };
+    stmt_list[2] = .{ .label = null, .node = .{ .cont = {} } };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const symbols = try a.alloc(input.sema.Symbol, 1);
+    symbols[0] = makeLocalScalarSymbol("I", .integer);
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "do_loop_ssa.f", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, " = phi i64 ") != null);
+    try testing.expectEqual(@as(usize, 0), std.mem.count(u8, output, "alloca i64"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "alloca i32"));
+}
+
+test "DO loop lowering traps on runtime zero step" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const one_expr = try makeLiteralExpr(a, .integer, "1");
+    const three_expr = try makeLiteralExpr(a, .integer, "3");
+    const step_expr = try makeIdentExpr(a, "S");
+
+    const stmt_list = try a.alloc(input.Stmt, 3);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .do_loop = .{
+            .end_label = "0010",
+            .var_name = "I",
+            .start = one_expr,
+            .end = three_expr,
+            .step = step_expr,
+        } },
+        .source_line = 3,
+        .source_column = 7,
+        .source_text = "      DO 10 I = 1, 3, S",
+    };
+    stmt_list[1] = .{ .label = "0010", .node = .{ .cont = {} } };
+    stmt_list[2] = .{ .label = null, .node = .{ .cont = {} } };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const symbols = try a.alloc(input.sema.Symbol, 2);
+    symbols[0] = makeLocalScalarSymbol("I", .integer);
+    symbols[1] = makeLocalScalarSymbol("S", .integer);
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "do_loop_zero_step.f", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "@col6forge_set_runtime_source_context") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "@col6forge_report_runtime_check_failure") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "zero DO loop step") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "@llvm.trap") != null);
+}
+
+test "codegen rejects REAL DO control variable fallback" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const one_expr = try makeLiteralExpr(a, .integer, "1");
+    const three_expr = try makeLiteralExpr(a, .integer, "3");
+
+    const stmt_list = try a.alloc(input.Stmt, 3);
+    stmt_list[0] = .{
+        .label = null,
+        .node = .{ .do_loop = .{
+            .end_label = "0010",
+            .var_name = "I",
+            .start = one_expr,
+            .end = three_expr,
+            .step = null,
+        } },
+    };
+    stmt_list[1] = .{ .label = "0010", .node = .{ .cont = {} } };
+    stmt_list[2] = .{ .label = null, .node = .{ .cont = {} } };
+
+    const unit = input.ProgramUnit{
+        .kind = .subroutine,
+        .name = "S",
+        .args = &[_][]const u8{},
+        .decls = try a.alloc(input.Decl, 0),
+        .stmts = stmt_list,
+    };
+    const units = try a.alloc(input.ProgramUnit, 1);
+    units[0] = unit;
+    const program = input.Program{ .units = units };
+
+    const symbols = try a.alloc(input.sema.Symbol, 1);
+    symbols[0] = makeLocalScalarSymbol("I", .real);
+    const sem_unit = input.sema.SemanticUnit{
+        .name = "S",
+        .kind = .subroutine,
+        .symbols = symbols,
+        .implicit_rules = try a.alloc(input.sema.ImplicitRule, 0),
+        .resolved_refs = try a.alloc(input.sema.ResolvedRef, 0),
+    };
+    const sem_units = try a.alloc(input.sema.SemanticUnit, 1);
+    sem_units[0] = sem_unit;
+    const sem_prog = input.sema.SemanticProgram{ .units = sem_units };
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try testing.expectError(error.UnsupportedControlFlow, emitModuleToWriter(&writer, allocator, program, sem_prog, "do_loop_real_var.f", .{}));
+}
+
 test "WHERE lowering rejects rank-mismatched mask and target arrays" {
     const testing = std.testing;
     const allocator = testing.allocator;
