@@ -1590,6 +1590,58 @@ test "known implicit external still permits sequence association actuals" {
     _ = try split_api.analyzeProgram(arena.allocator(), program);
 }
 
+test "seeded known external remains F77-compatible without explicit interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  call foo(1)\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    const known_proc_sigs = [_]split_api.KnownProcedureSig{
+        .{
+            .name = "foo",
+            .kind = .subroutine,
+            .arg_count = 1,
+            .args = &.{
+                .{
+                    .name = "a",
+                    .type_spec = symbols.TypeSpec.fromResolvedKind(.real, .real, null),
+                },
+            },
+        },
+    };
+
+    _ = try split_api.analyzeProgramWithKnown(arena.allocator(), program, &.{}, &known_proc_sigs);
+}
+
+test "explicit external suppresses implicit call consistency tracking" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  external foo\n" ++
+        "  call foo(1)\n" ++
+        "  call foo('ab')\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
 test "mirrored host parameters must not shadow contained procedure host association" {
     const testing = std.testing;
     const allocator = testing.allocator;

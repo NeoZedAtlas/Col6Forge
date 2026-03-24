@@ -181,6 +181,7 @@ fn seedKnownProcedures(
             .result_contiguous = known.result_contiguous,
             .result_procedure_pointer = known.result_procedure_pointer,
             .actual_requires_explicit_interface = known.actual_requires_explicit_interface,
+            .definition_known_from_current_program = known.definition_known_from_current_program,
         });
     }
 }
@@ -218,6 +219,7 @@ fn inferProgramProcedures(
                 .result_contiguous = if (unit.kind == .function) function_type.inferFunctionResultContiguous(unit) else false,
                 .result_procedure_pointer = if (unit.kind == .function) function_type.inferFunctionResultIsProcedurePointer(unit) else false,
                 .actual_requires_explicit_interface = unit.owner_name != null,
+                .definition_known_from_current_program = true,
             };
             if (unit.owner_name) |owner_name| {
                 const qualified_key = try qualifiedProcedureKey(arena, owner_name, unit.name);

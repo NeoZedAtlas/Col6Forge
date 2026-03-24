@@ -124,6 +124,7 @@ pub const Context = struct {
         result_contiguous: bool = false,
         result_procedure_pointer: bool = false,
         actual_requires_explicit_interface: bool = false,
+        definition_known_from_current_program: bool = false,
     };
 
     pub const ImplicitActualClass = enum {

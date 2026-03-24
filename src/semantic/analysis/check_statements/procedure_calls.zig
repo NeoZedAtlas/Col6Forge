@@ -856,6 +856,7 @@ fn checkKnownImplicitProcedureScalarActualArgsForCall(
     args: []const ast.CallArg,
     comptime deps: anytype,
 ) CheckError!void {
+    if (!sig.definition_known_from_current_program) return;
     if (sig.args.len == 0) return;
     var formal_idx: usize = 0;
     for (args) |arg| {
@@ -872,6 +873,7 @@ fn checkKnownImplicitProcedureScalarActualArgsForExprCall(
     args: []*ast.Expr,
     comptime deps: anytype,
 ) CheckError!void {
+    if (!sig.definition_known_from_current_program) return;
     if (sig.args.len == 0) return;
     const count = @min(sig.args.len, args.len);
     var idx: usize = 0;
@@ -1049,7 +1051,8 @@ fn shouldTrackImplicitExternalCall(self: *context.Context, name: []const u8) boo
     if (hasVisibleGenericInterface(self, name)) return false;
     if (leaf_helpers.lookupIntrinsicArity(self, name) != null) return false;
     if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
-        if (self.symbols.items[idx].is_intrinsic) return false;
+        const sym = self.symbols.items[idx];
+        if (sym.is_intrinsic or sym.is_external) return false;
     }
     return true;
 }

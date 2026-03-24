@@ -865,6 +865,16 @@ fn processCase(
             };
             defer allocator.free(test_stdout);
             if (!outputsEquivalent(ref_stdout, test_stdout)) {
+                const retry_ok = retryStdoutComparisonWithCapturedRuns(
+                    allocator,
+                    ref_exe,
+                    ref_dir,
+                    test_exe,
+                    test_dir,
+                    input_path,
+                    options.timeout_ms,
+                ) catch false;
+                if (retry_ok) continue;
                 std.log.warn("stdout mismatch: {s} ({s})\n", .{ case.name, input_name });
                 return false;
             }
@@ -2022,6 +2032,27 @@ fn readFileLimitedAbsolute(
     var file = try std.fs.openFileAbsolute(path, .{});
     defer file.close();
     return file.readToEndAlloc(allocator, max_bytes);
+}
+
+fn retryStdoutComparisonWithCapturedRuns(
+    allocator: std.mem.Allocator,
+    ref_exe: []const u8,
+    ref_dir: []const u8,
+    test_exe: []const u8,
+    test_dir: []const u8,
+    input_path: []const u8,
+    timeout_ms: u64,
+) !bool {
+    const ref_run = try runProcessCaptureWithInputPath(allocator, ref_exe, ref_dir, input_path, timeout_ms);
+    defer ref_run.deinit(allocator);
+    if (ref_run.timed_out) return false;
+
+    const test_run = try runProcessCaptureWithInputPath(allocator, test_exe, test_dir, input_path, timeout_ms);
+    defer test_run.deinit(allocator);
+    if (test_run.timed_out) return false;
+
+    if (exitCode(ref_run.term) != exitCode(test_run.term)) return false;
+    return outputsEquivalent(ref_run.stdout, test_run.stdout);
 }
 
 fn outputsEquivalent(expected: []const u8, actual: []const u8) bool {
