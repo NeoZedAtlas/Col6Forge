@@ -50,6 +50,53 @@ pub fn emitSubscriptPtr(ctx: *Context, builder: anytype, call: CallOrSubscript) 
     return .{ .name = gep, .ty = .ptr, .is_ptr = true };
 }
 
+pub fn emitLinearizedArrayOffset(
+    ctx: *Context,
+    builder: anytype,
+    linear_idx: ValueRef,
+    extents: []const ValueRef,
+    multipliers: []const ValueRef,
+) !ValueRef {
+    if (extents.len != multipliers.len) return error.InvalidArrayDim;
+    var remaining = linear_idx;
+    var offset = i64Const(ctx, 0);
+    for (extents, 0..) |extent, idx| {
+        const coord = if (idx + 1 == extents.len)
+            remaining
+        else blk: {
+            const coord_tmp = try ctx.nextTemp();
+            try builder.binary(coord_tmp, "srem", .i64, remaining, extent);
+            const next_remaining_tmp = try ctx.nextTemp();
+            try builder.binary(next_remaining_tmp, "sdiv", .i64, remaining, extent);
+            remaining = .{ .name = next_remaining_tmp, .ty = .i64, .is_ptr = false };
+            break :blk ValueRef{ .name = coord_tmp, .ty = .i64, .is_ptr = false };
+        };
+        const term = try binary.emitMul(ctx, builder, coord, multipliers[idx]);
+        offset = try binary.emitAdd(ctx, builder, offset, term);
+    }
+    return offset;
+}
+
+pub fn emitLinearizedArrayElementPtr(
+    ctx: *Context,
+    builder: anytype,
+    base_ptr: ValueRef,
+    elem_ty: ir.IRType,
+    extents: []const ValueRef,
+    multipliers: []const ValueRef,
+    address_scale: ValueRef,
+    idx_val: ValueRef,
+) !ValueRef {
+    if (extents.len != multipliers.len) return error.InvalidArrayDim;
+    var offset = try emitLinearizedArrayOffset(ctx, builder, idx_val, extents, multipliers);
+    if (!valueRefEquals(address_scale, i64Const(ctx, 1))) {
+        offset = try binary.emitMul(ctx, builder, offset, address_scale);
+    }
+    const ptr_name = try ctx.nextTemp();
+    try builder.gep(ptr_name, elem_ty, base_ptr, offset);
+    return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+}
+
 // Compute the linear element offset for Fortran arrays (column-major order).
 // Preconditions: sym.dims.len > 0 and args.len == sym.dims.len.
 fn emitColumnMajorOffset(ctx: *Context, builder: anytype, sym: ast.sema.Symbol, args: []*Expr) !ValueRef {
@@ -471,6 +518,10 @@ fn oneIndexValue() ValueRef {
 
 fn i64Const(ctx: *Context, value: i64) ValueRef {
     return .{ .name = ctx.intLiteral(value) catch "0", .ty = .i64, .is_ptr = false };
+}
+
+fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
+    return a.ty == b.ty and a.is_ptr == b.is_ptr and std.mem.eql(u8, a.name, b.name);
 }
 
 fn emitBoundsCheck(ctx: *Context, builder: anytype, index: ValueRef, lower: ValueRef, upper: ValueRef) !void {

@@ -23,6 +23,16 @@ fn formatRuntimeIoFatalMessage(
     return std.fmt.bufPrint(buffer, "runtime I/O fatal at {s}:{d}:{d}\n", .{ path, line, column });
 }
 
+fn formatRuntimeCheckFailureMessage(
+    buffer: []u8,
+    kind: []const u8,
+    path: []const u8,
+    line: usize,
+    column: usize,
+) ![]const u8 {
+    return std.fmt.bufPrint(buffer, "runtime check failed ({s}) at {s}:{d}:{d}\n", .{ kind, path, line, column });
+}
+
 pub export fn col6forge_set_io_fatal_mode(mode: c_int) callconv(.c) void {
     // 0 => return status code on fatal read path.
     // non-zero => preserve historical abort-on-fatal behavior.
@@ -64,6 +74,23 @@ pub export fn col6forge_report_runtime_io_fatal() callconv(.c) void {
     _ = fflush(stderr);
 }
 
+pub export fn col6forge_report_runtime_check_failure(kind: ?[*:0]const u8) callconv(.c) void {
+    const path = runtime_source_context.path orelse return;
+    const stderr = col6forge_rt_stderr() orelse return;
+    const kind_text = if (kind) |ptr| std.mem.span(ptr) else "runtime check";
+
+    var buffer: [1024]u8 = undefined;
+    const text = formatRuntimeCheckFailureMessage(
+        &buffer,
+        kind_text,
+        std.mem.span(path),
+        @intCast(if (runtime_source_context.line > 0) runtime_source_context.line else 1),
+        @intCast(if (runtime_source_context.column > 0) runtime_source_context.column else 1),
+    ) catch return;
+    _ = fwrite(@ptrCast(text.ptr), 1, text.len, stderr);
+    _ = fflush(stderr);
+}
+
 test "io fatal mode defaults to abort and can be toggled" {
     const prev = col6forge_get_io_fatal_mode();
     defer col6forge_set_io_fatal_mode(prev);
@@ -79,6 +106,12 @@ test "runtime io fatal message formats source location" {
     var buffer: [1024]u8 = undefined;
     const text = try formatRuntimeIoFatalMessage(&buffer, "tests/runtime_read.f", 7, 13);
     try std.testing.expectEqualStrings("runtime I/O fatal at tests/runtime_read.f:7:13\n", text);
+}
+
+test "runtime check failure message formats source location" {
+    var buffer: [1024]u8 = undefined;
+    const text = try formatRuntimeCheckFailureMessage(&buffer, "WHERE shape mismatch", "tests/where.f", 11, 5);
+    try std.testing.expectEqualStrings("runtime check failed (WHERE shape mismatch) at tests/where.f:11:5\n", text);
 }
 
 test "runtime source context can be set and cleared" {

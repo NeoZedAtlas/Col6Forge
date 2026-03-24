@@ -5,7 +5,9 @@ const common = @import("../common.zig");
 const context = @import("../context/mod.zig");
 const llvm_types = @import("../../types.zig");
 const expr = @import("../expression/mod.zig");
+const expr_memory = @import("../expression/memory.zig");
 const cfg = @import("../../stmts/cfg.zig");
+const runtime_fail = @import("../runtime_fail.zig");
 const utils = @import("../utils.zig");
 const logic = @import("logic.zig");
 const builder_mod = @import("../builder.zig");
@@ -91,13 +93,25 @@ pub fn emitIfSingle(
     comptime emit_stmt_fn: anytype,
 ) EmitError!bool {
     const inner = ifs.stmt.*;
+    return emitConditionalInlineStmt(ctx, builder, ifs.condition, inner, next_block, local_label_map, emit_stmt_fn);
+}
+
+fn emitConditionalInlineStmt(
+    ctx: *Context,
+    builder: anytype,
+    condition: *ast.Expr,
+    inner: ast.StmtNode,
+    next_block: []const u8,
+    local_label_map: ?*const std.StringHashMap([]const u8),
+    comptime emit_stmt_fn: anytype,
+) EmitError!bool {
     switch (inner) {
         // LOGICAL IF (cond) stmt must not nest IF statements.
         .if_single, .if_block => return error.ControlFlowUnsupported,
         else => {},
     }
 
-    const cond = try expr.emitCond(ctx, builder, ifs.condition);
+    const cond = try expr.emitCond(ctx, builder, condition);
     const then_label = try ctx.nextLabel("if_then");
     try builder.brCond(cond, then_label, next_block);
     try builder.label(then_label);
@@ -178,19 +192,20 @@ pub fn emitWhere(
     comptime emit_stmt_fn: anytype,
 ) EmitError!bool {
     if (!isArrayValuedExpr(ctx, where.mask)) {
-        const assign_node = ast.StmtNode{
-            .assignment = .{
-                .target = where.target,
-                .value = where.value,
+        return emitConditionalInlineStmt(
+            ctx,
+            builder,
+            where.mask,
+            .{
+                .assignment = .{
+                    .target = where.target,
+                    .value = where.value,
+                },
             },
-        };
-        const assign_ptr = try ctx.allocator.create(ast.StmtNode);
-        assign_ptr.* = assign_node;
-        const lowered = ast.IfSingle{
-            .condition = where.mask,
-            .stmt = assign_ptr,
-        };
-        return emitIfSingle(ctx, builder, lowered, next_block, local_label_map, emit_stmt_fn);
+            next_block,
+            local_label_map,
+            emit_stmt_fn,
+        );
     }
 
     const mask_name = switch (where.mask.*) {
@@ -219,21 +234,32 @@ pub fn emitWhere(
 
     if (target_sym.dims.len != mask_sym.dims.len) return error.InvalidSubscript;
 
-    const total_count = try emitArrayElemCount(ctx, builder, target_sym);
-    if (value_array_name) |arr_name| {
-        const value_sym = ctx.findSymbol(arr_name) orelse return error.UnknownSymbol;
-        if (value_sym.dims.len != target_sym.dims.len) return error.InvalidSubscript;
-        const value_count = try emitArrayElemCount(ctx, builder, value_sym);
-        try ensureCompatibleArrayExtents(ctx, builder, total_count, value_count);
-    }
-    const mask_count = try emitArrayElemCount(ctx, builder, mask_sym);
-    try ensureCompatibleArrayExtents(ctx, builder, total_count, mask_count);
+    const target_extents = try emitSymbolDimExtents(ctx, builder, target_sym);
+    const target_multipliers = try emitSymbolDimMultipliers(ctx, builder, target_sym);
+    const total_count = try emitExtentProduct(ctx, builder, target_extents);
+
+    const mask_extents = try emitSymbolDimExtents(ctx, builder, mask_sym);
+    const mask_multipliers = try emitSymbolDimMultipliers(ctx, builder, mask_sym);
+    try ensureCompatibleArrayShape(ctx, builder, target_extents, mask_extents);
 
     const mask_base = ctx.locals.get(mask_name) orelse return error.UnknownSymbol;
     const target_base = ctx.locals.get(target_name) orelse return error.UnknownSymbol;
-    const target_ty = common.symbolStorageIRType(target_sym, ctx.options.target_layout);
-    const value_base: ?ValueRef = if (value_array_name) |arr_name| ctx.locals.get(arr_name) orelse return error.UnknownSymbol else null;
-    const mask_elem_ty = common.symbolStorageIRType(mask_sym, ctx.options.target_layout);
+    const target_elem_ty = common.symbolElementIRType(target_sym, ctx.options.target_layout);
+    const mask_elem_ty = common.symbolElementIRType(mask_sym, ctx.options.target_layout);
+
+    var value_base: ?ValueRef = null;
+    var value_elem_ty: llvm_types.IRType = undefined;
+    var value_extents: []const ValueRef = &.{};
+    var value_multipliers: []const ValueRef = &.{};
+    if (value_array_name) |arr_name| {
+        const value_sym = ctx.findSymbol(arr_name) orelse return error.UnknownSymbol;
+        if (value_sym.dims.len != target_sym.dims.len) return error.InvalidSubscript;
+        value_extents = try emitSymbolDimExtents(ctx, builder, value_sym);
+        value_multipliers = try emitSymbolDimMultipliers(ctx, builder, value_sym);
+        try ensureCompatibleArrayShape(ctx, builder, target_extents, value_extents);
+        value_base = ctx.locals.get(arr_name) orelse return error.UnknownSymbol;
+        value_elem_ty = common.symbolElementIRType(value_sym, ctx.options.target_layout);
+    }
 
     const idx_ptr = try ctx.nextTemp();
     try builder.alloca(idx_ptr, .i64);
@@ -257,10 +283,18 @@ pub fn emitWhere(
     try builder.brCond(.{ .name = cond_tmp, .ty = .i1, .is_ptr = false }, loop_body, loop_end);
 
     try builder.label(loop_body);
-    const mask_gep = try ctx.nextTemp();
-    try builder.gep(mask_gep, mask_elem_ty, mask_base, idx_val);
+    const mask_ptr = try expr_memory.emitLinearizedArrayElementPtr(
+        ctx,
+        builder,
+        mask_base,
+        mask_elem_ty,
+        mask_extents,
+        mask_multipliers,
+        constI64(ctx, 1),
+        idx_val,
+    );
     const mask_val_tmp = try ctx.nextTemp();
-    try builder.load(mask_val_tmp, mask_elem_ty, .{ .name = mask_gep, .ty = .ptr, .is_ptr = true });
+    try builder.load(mask_val_tmp, mask_elem_ty, mask_ptr);
     const mask_cond = try expr.coerce(
         ctx,
         builder,
@@ -270,20 +304,36 @@ pub fn emitWhere(
     try builder.brCond(mask_cond, loop_then, loop_else);
 
     try builder.label(loop_then);
-    const target_gep = try ctx.nextTemp();
-    try builder.gep(target_gep, target_ty, target_base, idx_val);
-    const target_ptr = ValueRef{ .name = target_gep, .ty = .ptr, .is_ptr = true };
+    const target_ptr = try expr_memory.emitLinearizedArrayElementPtr(
+        ctx,
+        builder,
+        target_base,
+        target_elem_ty,
+        target_extents,
+        target_multipliers,
+        constI64(ctx, 1),
+        idx_val,
+    );
 
     var rhs: ValueRef = undefined;
     if (value_base) |base| {
-        const rhs_gep = try ctx.nextTemp();
-        try builder.gep(rhs_gep, target_ty, base, idx_val);
+        const rhs_ptr = try expr_memory.emitLinearizedArrayElementPtr(
+            ctx,
+            builder,
+            base,
+            value_elem_ty,
+            value_extents,
+            value_multipliers,
+            constI64(ctx, 1),
+            idx_val,
+        );
         const rhs_tmp = try ctx.nextTemp();
-        try builder.load(rhs_tmp, target_ty, .{ .name = rhs_gep, .ty = .ptr, .is_ptr = true });
-        rhs = .{ .name = rhs_tmp, .ty = target_ty, .is_ptr = false };
+        try builder.load(rhs_tmp, value_elem_ty, rhs_ptr);
+        rhs = .{ .name = rhs_tmp, .ty = value_elem_ty, .is_ptr = false };
+        rhs = try expr.coerce(ctx, builder, rhs, target_elem_ty);
     } else {
         rhs = try expr.emitExpr(ctx, builder, where.value);
-        rhs = try expr.coerce(ctx, builder, rhs, target_ty);
+        rhs = try expr.coerce(ctx, builder, rhs, target_elem_ty);
     }
     try builder.store(rhs, target_ptr);
     try builder.br(loop_inc);
@@ -309,8 +359,8 @@ fn constI64(ctx: *Context, value: i64) ValueRef {
     };
 }
 
-fn emitArrayElemCount(ctx: *Context, builder: anytype, sym: sema.Symbol) EmitError!ValueRef {
-    var total = constI64(ctx, 1);
+fn emitSymbolDimExtents(ctx: *Context, builder: anytype, sym: sema.Symbol) EmitError![]const ValueRef {
+    const extents = try ctx.allocator.alloc(ValueRef, sym.dims.len);
     for (sym.dims, 0..) |dim, dim_idx| {
         var extent = expr.emitSymbolDimExtent(ctx, builder, sym, dim_idx) catch |err| switch (err) {
             error.UnknownSymbol => expr.emitDimValue(ctx, builder, dim) catch |inner| switch (inner) {
@@ -322,26 +372,60 @@ fn emitArrayElemCount(ctx: *Context, builder: anytype, sym: sema.Symbol) EmitErr
         if (extent.ty != .i64) {
             extent = try expr.coerce(ctx, builder, extent, .i64);
         }
+        extents[dim_idx] = extent;
+    }
+    return extents;
+}
+
+fn emitSymbolDimMultipliers(ctx: *Context, builder: anytype, sym: sema.Symbol) EmitError![]const ValueRef {
+    const multipliers = try ctx.allocator.alloc(ValueRef, sym.dims.len);
+    for (sym.dims, 0..) |_, dim_idx| {
+        var multiplier = try expr.emitSymbolDimMultiplier(ctx, builder, sym, dim_idx);
+        if (multiplier.ty != .i64) {
+            multiplier = try expr.coerce(ctx, builder, multiplier, .i64);
+        }
+        multipliers[dim_idx] = multiplier;
+    }
+    return multipliers;
+}
+
+fn emitExtentProduct(ctx: *Context, builder: anytype, extents: []const ValueRef) EmitError!ValueRef {
+    var total = constI64(ctx, 1);
+    for (extents) |extent| {
         total = try expr.emitMul(ctx, builder, total, extent);
     }
     return total;
 }
 
-fn ensureCompatibleArrayExtents(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) EmitError!void {
-    if (std.mem.eql(u8, lhs.name, rhs.name)) return;
+fn ensureCompatibleArrayShape(
+    ctx: *Context,
+    builder: anytype,
+    lhs: []const ValueRef,
+    rhs: []const ValueRef,
+) EmitError!void {
+    if (lhs.len != rhs.len) return error.InvalidSubscript;
+    if (lhs.len == 0) return;
 
-    const mismatch_name = try ctx.nextTemp();
-    try builder.compare(mismatch_name, "icmp", "ne", .i64, lhs, rhs);
-    const mismatch = ValueRef{ .name = mismatch_name, .ty = .i1, .is_ptr = false };
+    var all_equal = ValueRef{ .name = "true", .ty = .i1, .is_ptr = false };
+    for (lhs, rhs) |lhs_extent, rhs_extent| {
+        const cmp_name = try ctx.nextTemp();
+        try builder.compare(cmp_name, "icmp", "eq", .i64, lhs_extent, rhs_extent);
+        const cmp_val = ValueRef{ .name = cmp_name, .ty = .i1, .is_ptr = false };
+        if (std.mem.eql(u8, all_equal.name, "true")) {
+            all_equal = cmp_val;
+        } else {
+            const and_name = try ctx.nextTemp();
+            try builder.binary(and_name, "and", .i1, all_equal, cmp_val);
+            all_equal = .{ .name = and_name, .ty = .i1, .is_ptr = false };
+        }
+    }
 
     const fail_label = try ctx.nextLabel("where_shape_fail");
     const ok_label = try ctx.nextLabel("where_shape_ok");
-    try builder.brCond(mismatch, fail_label, ok_label);
+    try builder.brCond(all_equal, ok_label, fail_label);
 
     try builder.label(fail_label);
-    const trap_name = try ctx.ensureDeclRaw("llvm.trap", .void, &.{}, false);
-    try builder.callTyped(null, .void, trap_name, &.{});
-    try builder.emitUnreachable();
+    try runtime_fail.emitRuntimeCheckFailureTrap(ctx, builder, "WHERE shape mismatch");
 
     try builder.label(ok_label);
 }

@@ -953,11 +953,9 @@ fn emitIntrinsicArrayConversionLoop(
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
-    const src_elem_ptr_name = try ctx.nextTemp();
-    try emitArrayActualElementPtr(
+    const src_elem_ptr = try memory.emitLinearizedArrayElementPtr(
         ctx,
         builder,
-        src_elem_ptr_name,
         src_ptr,
         src_ty,
         src_extents,
@@ -966,7 +964,7 @@ fn emitIntrinsicArrayConversionLoop(
         idx_val,
     );
     const src_val_name = try ctx.nextTemp();
-    try builder.load(src_val_name, src_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
+    try builder.load(src_val_name, src_ty, src_elem_ptr);
     const src_val = ValueRef{ .name = src_val_name, .ty = src_ty, .is_ptr = false };
     const converted = try casting.coerce(ctx, builder, src_val, dst_ty);
 
@@ -980,33 +978,6 @@ fn emitIntrinsicArrayConversionLoop(
     try builder.br(loop_head);
 
     try builder.label(loop_exit);
-}
-
-fn emitLinearizedActualOffset(
-    ctx: *Context,
-    builder: anytype,
-    linear_idx: ValueRef,
-    extents: []const ValueRef,
-    multipliers: []const ValueRef,
-) !ValueRef {
-    if (extents.len != multipliers.len) return error.InvalidAbiState;
-    var remaining = linear_idx;
-    var offset = i64Const(ctx, 0);
-    for (extents, 0..) |extent, idx| {
-        const coord = if (idx + 1 == extents.len)
-            remaining
-        else blk: {
-            const coord_tmp = try ctx.nextTemp();
-            try builder.binary(coord_tmp, "srem", .i64, remaining, extent);
-            const next_remaining_tmp = try ctx.nextTemp();
-            try builder.binary(next_remaining_tmp, "sdiv", .i64, remaining, extent);
-            remaining = .{ .name = next_remaining_tmp, .ty = .i64, .is_ptr = false };
-            break :blk ValueRef{ .name = coord_tmp, .ty = .i64, .is_ptr = false };
-        };
-        const term = try emitMulI64(ctx, builder, coord, multipliers[idx]);
-        offset = try emitAddI64(ctx, builder, offset, term);
-    }
-    return offset;
 }
 
 fn isNegatableArrayElementType(ty: IRType) bool {
@@ -1086,11 +1057,9 @@ fn emitArrayActualElement(
     actual: ArrayActualPlan,
 ) !ValueRef {
     try actual.validate();
-    const src_elem_ptr_name = try ctx.nextTemp();
-    try emitArrayActualElementPtr(
+    const src_elem_ptr = try memory.emitLinearizedArrayElementPtr(
         ctx,
         builder,
-        src_elem_ptr_name,
         actual.base_ptr,
         actual.elem_ty,
         actual.extents,
@@ -1099,7 +1068,7 @@ fn emitArrayActualElement(
         idx_val,
     );
     const src_val_name = try ctx.nextTemp();
-    try builder.load(src_val_name, actual.elem_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
+    try builder.load(src_val_name, actual.elem_ty, src_elem_ptr);
     return .{ .name = src_val_name, .ty = actual.elem_ty, .is_ptr = false };
 }
 
@@ -1132,11 +1101,9 @@ fn emitNegatedArrayActualLoop(
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
-    const src_elem_ptr_name = try ctx.nextTemp();
-    try emitArrayActualElementPtr(
+    const src_elem_ptr = try memory.emitLinearizedArrayElementPtr(
         ctx,
         builder,
-        src_elem_ptr_name,
         src_ptr,
         elem_ty,
         src_extents,
@@ -1145,7 +1112,7 @@ fn emitNegatedArrayActualLoop(
         idx_val,
     );
     const src_val_name = try ctx.nextTemp();
-    try builder.load(src_val_name, elem_ty, .{ .name = src_elem_ptr_name, .ty = .ptr, .is_ptr = true });
+    try builder.load(src_val_name, elem_ty, src_elem_ptr);
     const src_val = ValueRef{ .name = src_val_name, .ty = elem_ty, .is_ptr = false };
 
     const neg_name = try ctx.nextTemp();
@@ -1168,25 +1135,6 @@ fn emitNegatedArrayActualLoop(
     try builder.label(loop_exit);
 }
 
-fn emitArrayActualElementPtr(
-    ctx: *Context,
-    builder: anytype,
-    ptr_name: []const u8,
-    base_ptr: ValueRef,
-    elem_ty: IRType,
-    extents: []const ValueRef,
-    multipliers: []const ValueRef,
-    address_scale: ValueRef,
-    idx_val: ValueRef,
-) !void {
-    if (extents.len != multipliers.len) return error.InvalidArrayActualPlan;
-    var offset = try emitLinearizedActualOffset(ctx, builder, idx_val, extents, multipliers);
-    if (!valueRefEquals(address_scale, i64Const(ctx, 1))) {
-        offset = try emitMulI64(ctx, builder, offset, address_scale);
-    }
-    try builder.gep(ptr_name, elem_ty, base_ptr, offset);
-}
-
 fn actualAddressScaleForSymbol(
     ctx: *Context,
     builder: anytype,
@@ -1195,10 +1143,6 @@ fn actualAddressScaleForSymbol(
 ) !ValueRef {
     if (!sym.isCharacter()) return i64Const(ctx, 1);
     return charSymbolLengthValueI64(ctx, builder, name, sym);
-}
-
-fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
-    return a.ty == b.ty and a.is_ptr == b.is_ptr and std.mem.eql(u8, a.name, b.name);
 }
 
 pub fn isIntrinsicArrayConversionArg(ctx: *Context, call: ast.CallOrSubscript) bool {
