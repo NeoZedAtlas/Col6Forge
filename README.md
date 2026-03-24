@@ -36,22 +36,31 @@ The repository also includes multiple built-in development toolsets for golden t
 - Fixed form normalization covers classic column rules, and is compatible with tab-format as well as continuation variants shifted right by one or two columns.
 - Diagnostics for both free form and fixed form attempt to fall back to the original source row and column, rather than solely reporting the normalized logical line position.
 
-### Syntax and Semantic Coverage
+### Language Support Status
 
-Topics directly covered by the current source code and tests include:
+**Stable (Production Ready)**
+- **F77 Core**: Fixed-form source, basic types (INTEGER, REAL, DOUBLE PRECISION, COMPLEX, LOGICAL, CHARACTER), `COMMON`, `DO`/`IF`, `SUBROUTINE`/`FUNCTION`, `ENTRY`, alternate returns
+- **F90 Arrays**: `ALLOCATABLE`, array constructors `[...]`, basic array operations
+- **F2003 OOP Basics**: Derived types, `EXTENDS` (type inheritance), member access
 
-- Basic `PROGRAM`, `SUBROUTINE`, `FUNCTION`, and implicit main programs.
-- `CONTAINS` internal procedures.
-- `ENTRY`, `RESULT`, and alternate returns.
-- `MODULE`, `USE`, `ONLY`, rename, and module prelude propagation.
-- `INTERFACE`, generic interfaces, `assignment(=)`, and module procedures.
-- `SUBMODULE` and inherited module procedure implementations.
-- Derived types, `ABSTRACT`, `EXTENDS`, `PUBLIC`, and `BIND(C)`.
-- Type-bound generics, deferred bindings, and related constraint checks.
-- `COMMON` / `EQUIVALENCE` consistency checks.
-- Implicit typing rules.
-- Intrinsic resolution and arity checks for calls.
-- Array constructors, partial array lowering, and repository-related test cases.
+**Experimental (Parsed but Incomplete Codegen)**
+- **F90 Modules**: `MODULE` syntax parsed, but procedures inside modules may fail to link
+- **F2003 C Interop**: `BIND(C)` and `iso_c_binding` parsed, but symbol generation incomplete
+- **SUBMODULE**: Syntax recognized, but codegen not fully implemented
+- **Advanced Features**: `INTERFACE`, generic interfaces, type-bound procedures, `ABSTRACT`, deferred bindings
+
+**Not Supported**
+- **F2008+ Concurrency**: `DO CONCURRENT`, Coarrays, `SYNC` statements
+- **F2008+ Parallel**: No parallel runtime features
+- **Advanced F2003**: Procedure pointers, abstract interfaces with complex signatures
+
+### Additional Coverage
+
+- `CONTAINS` internal procedures
+- `USE`, `ONLY`, rename, and module prelude propagation
+- `EQUIVALENCE` consistency checks
+- Implicit typing rules
+- Intrinsic resolution and arity checks for calls
 
 ### Code Generation and Runtime
 
