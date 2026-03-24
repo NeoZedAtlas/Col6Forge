@@ -140,6 +140,10 @@ fn isAllAsterisksField(field: []const u8) bool {
     return true;
 }
 
+fn shouldGracefullyExitOnReadEof(is_stdin: bool, code: c_int) bool {
+    return code == -1 and is_stdin;
+}
+
 fn abortReadFatal(unit: c_int, is_stdin: bool, managed_read_stream: bool, stream: ?*FILE, start_pos: c_long) void {
     if (!is_stdin and managed_read_stream and stream != null) {
         col6forge_unit_stream_release_read(unit, @ptrCast(stream.?), start_pos, 0);
@@ -162,6 +166,7 @@ fn failRead(
 ) c_int {
     commit_stream_pos.* = false;
     if (status_mode != 0) return code;
+    if (shouldGracefullyExitOnReadEof(is_stdin, code)) exit(0);
     abortReadFatal(unit, is_stdin, managed_read_stream, stream, start_pos);
     return code;
 }
@@ -354,6 +359,7 @@ fn failStream(state: *FormattedReadStreamState, code: c_int) c_int {
     state.commit_stream_pos = false;
     if (state.status_mode == 0 and state.source == .external) {
         const src = state.source.external;
+        if (shouldGracefullyExitOnReadEof(src.is_stdin, code)) exit(0);
         abortReadFatal(src.unit, src.is_stdin, src.managed_read_stream, src.stream, src.start_pos);
     }
     return state.status;
@@ -1009,4 +1015,10 @@ test "formatted read stream treats blank fixed-width integer fields as zero" {
     for (values[3..]) |value| {
         try std.testing.expectEqual(@as(c_int, 0), value);
     }
+}
+
+test "graceful stdin EOF only applies to stdin EOF" {
+    try std.testing.expect(shouldGracefullyExitOnReadEof(true, -1));
+    try std.testing.expect(!shouldGracefullyExitOnReadEof(false, -1));
+    try std.testing.expect(!shouldGracefullyExitOnReadEof(true, 1));
 }
