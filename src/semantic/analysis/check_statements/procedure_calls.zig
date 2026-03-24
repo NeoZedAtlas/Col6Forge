@@ -66,7 +66,10 @@ pub fn checkProcedureActualArgsForCall(
 ) CheckError!void {
     try checkImplicitExternalCallConsistencyForCall(self, callee_name, args);
     const sig = resolvedProcedureSig(self, callee_name) orelse return;
-    if (!procedure_interfaces.calleeHasVisibleExplicitInterface(self, callee_name)) return;
+    if (!procedure_interfaces.calleeHasVisibleExplicitInterface(self, callee_name)) {
+        try checkKnownImplicitProcedureScalarActualArgsForCall(self, sig, args, deps);
+        return;
+    }
     if (sig.args.len == 0) return;
     var formal_idx: usize = 0;
     for (args) |arg| {
@@ -86,7 +89,10 @@ pub fn checkProcedureActualArgsForExprCall(
 ) CheckError!void {
     try checkImplicitExternalCallConsistencyForExpr(self, callee_name, args);
     const sig = resolvedProcedureSig(self, callee_name) orelse return;
-    if (!procedure_interfaces.calleeHasVisibleExplicitInterface(self, callee_name)) return;
+    if (!procedure_interfaces.calleeHasVisibleExplicitInterface(self, callee_name)) {
+        try checkKnownImplicitProcedureScalarActualArgsForExprCall(self, sig, args, deps);
+        return;
+    }
     if (sig.args.len == 0) return;
     const count = @min(sig.args.len, args.len);
     var idx: usize = 0;
@@ -842,6 +848,69 @@ fn procedureDummyDataArgMismatchMessage(
     if (formal.type_spec.polymorphic != actual.type_spec.polymorphic) return "Type mismatch in argument";
     if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual.type_spec)) return "Type mismatch in argument";
     return null;
+}
+
+fn checkKnownImplicitProcedureScalarActualArgsForCall(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    args: []const ast.CallArg,
+    comptime deps: anytype,
+) CheckError!void {
+    if (sig.args.len == 0) return;
+    var formal_idx: usize = 0;
+    for (args) |arg| {
+        if (arg != .expr) continue;
+        if (formal_idx >= sig.args.len) break;
+        try checkKnownImplicitProcedureScalarActualArg(self, sig.args[formal_idx], arg.expr.value, deps);
+        formal_idx += 1;
+    }
+}
+
+fn checkKnownImplicitProcedureScalarActualArgsForExprCall(
+    self: *context.Context,
+    sig: context.Context.ProcedureSig,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) CheckError!void {
+    if (sig.args.len == 0) return;
+    const count = @min(sig.args.len, args.len);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        try checkKnownImplicitProcedureScalarActualArg(self, sig.args[idx], args[idx], deps);
+    }
+}
+
+fn checkKnownImplicitProcedureScalarActualArg(
+    self: *context.Context,
+    formal: context.Context.ProcedureSig.ArgSig,
+    actual_expr: *ast.Expr,
+    comptime deps: anytype,
+) CheckError!void {
+    if (!knownImplicitProcedureScalarTypeCheckEligibleActual(self, actual_expr)) return;
+    if (formal.is_procedure) return;
+    if (formal.rank != 0) return;
+    if (formal.requires_descriptor or formal.pointer or formal.allocatable or formal.type_spec.polymorphic) return;
+
+    try resolve_expr.resolveExpr(self, actual_expr);
+    if (resolve_expr.exprRank(self, actual_expr) != 0) return;
+    const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
+    if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
+        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+    }
+}
+
+fn knownImplicitProcedureScalarTypeCheckEligibleActual(
+    self: *context.Context,
+    expr: *ast.Expr,
+) bool {
+    return switch (expr.*) {
+        .literal, .complex_literal => true,
+        .unary => |unary| knownImplicitProcedureScalarTypeCheckEligibleActual(self, unary.expr),
+        .binary => |binary| knownImplicitProcedureScalarTypeCheckEligibleActual(self, binary.left) and
+            knownImplicitProcedureScalarTypeCheckEligibleActual(self, binary.right),
+        .identifier => false,
+        .call_or_subscript, .substring, .component, .array_constructor, .dim_range, .implied_do => false,
+    };
 }
 
 fn shapeSignatureMismatch(formal: []const []const u8, actual: []const []const u8) bool {

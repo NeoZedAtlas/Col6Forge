@@ -1538,6 +1538,58 @@ test "allow argument mismatch suppresses implicit external hard errors across co
     try testing.expect(!diag_bag.has());
 }
 
+test "known implicit external rejects simple scalar type mismatch" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module x\n" ++
+        "contains\n" ++
+        "  subroutine a\n" ++
+        "    call foo(1)\n" ++
+        "  end subroutine a\n" ++
+        "end module x\n" ++
+        "\n" ++
+        "subroutine foo(a)\n" ++
+        "  real :: a\n" ++
+        "end subroutine foo\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    try testing.expectError(error.InvalidArgumentCount, split_api.analyzeProgram(arena.allocator(), program));
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, got.code, catalog.semantic.invalid_argument_count.code));
+    try testing.expect(std.mem.indexOf(u8, got.message, "Type mismatch in argument") != null);
+}
+
+test "known implicit external still permits sequence association actuals" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program main\n" ++
+        "  real :: a(3,4)\n" ++
+        "  call foo(a(3,3))\n" ++
+        "end program main\n" ++
+        "\n" ++
+        "subroutine foo(x)\n" ++
+        "  real :: x(4)\n" ++
+        "end subroutine foo\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
 test "mirrored host parameters must not shadow contained procedure host association" {
     const testing = std.testing;
     const allocator = testing.allocator;
