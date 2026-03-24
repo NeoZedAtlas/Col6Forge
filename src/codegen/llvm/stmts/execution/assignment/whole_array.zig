@@ -17,6 +17,7 @@ const character_mod = @import("character.zig");
 const Context = context.Context;
 const ValueRef = context.ValueRef;
 const resolveArrayActual = array_actuals.resolveArrayActual;
+const emitOwnedHeapActualFree = array_actuals.emitOwnedHeapActualFree;
 
 const EmitError = anyerror;
 
@@ -218,6 +219,7 @@ pub fn emitWholeArrayExprAssignment(ctx: *Context, builder: anytype, assign: ast
     const dst_ptr = try wholeArrayBasePtr(ctx, builder, target_info.name, target_info.sym);
     const count = try emitExtentProductI64(ctx, builder, src_actual.extents);
     try emitLinearCopyLoop(ctx, builder, dst_ptr, src_actual.base_ptr, src_actual.elem_ty, count);
+    try emitOwnedHeapActualFree(ctx, builder, src_actual.owned_heap_ptr);
     return true;
 }
 

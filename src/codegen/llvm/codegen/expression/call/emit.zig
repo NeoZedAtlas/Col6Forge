@@ -194,7 +194,7 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
     }
     if (expr.* == .array_constructor) {
         if (try resolveArrayActual(ctx, builder, expr)) |actual| {
-            return .{ .ptr = actual.base_ptr, .descriptor_actual = actual };
+            return .{ .ptr = actual.base_ptr, .owned_heap_ptr = actual.owned_heap_ptr, .descriptor_actual = actual };
         }
     }
     if (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) |char_value| {
@@ -235,7 +235,7 @@ fn emitArgPointerDetailed(ctx: *Context, builder: anytype, expr: *Expr) !ArgPoin
                 return try emitIntrinsicArrayConversionArgPointer(ctx, builder, call);
             }
             if (try analyzeAddressableArrayActual(ctx, builder, expr)) |actual| {
-                return .{ .ptr = actual.base_ptr, .descriptor_actual = actual };
+                return .{ .ptr = actual.base_ptr, .owned_heap_ptr = actual.owned_heap_ptr, .descriptor_actual = actual };
             }
             if (kind == .subscript) {
                 return .{ .ptr = try memory.emitSubscriptPtr(ctx, builder, call) };

@@ -9,6 +9,7 @@ const binary = @import("../binary.zig");
 const utils = @import("../../utils.zig");
 const llvm_types = @import("../../../types.zig");
 const casting = @import("../casting.zig");
+const runtime_fail = @import("../../runtime_fail.zig");
 const shared = @import("shared.zig");
 
 const Expr = shared.Expr;
@@ -95,9 +96,7 @@ fn emitBinaryArrayExprActual(
     if (!isMaterializableArrayElementType(result_ty)) return null;
 
     const elem_count = try emitExtentProductI64(ctx, builder, result_actual.extents);
-    const tmp_name = try ctx.nextTemp();
-    try builder.allocaArrayValue(tmp_name, result_ty, elem_count);
-    const dst_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
+    const dst_ptr = try emitHeapArrayTempPointer(ctx, builder, result_ty, elem_count);
     const multipliers = try emitContiguousMultipliers(ctx, builder, result_actual.extents);
 
     try emitBinaryArrayActualLoop(
@@ -112,9 +111,12 @@ fn emitBinaryArrayExprActual(
         result_ty,
         elem_count,
     );
+    try emitMaybeFreeOwnedArrayActual(ctx, builder, left_array);
+    try emitMaybeFreeOwnedArrayActual(ctx, builder, right_array);
 
     return .{
         .ptr = dst_ptr,
+        .owned_heap_ptr = dst_ptr,
         .descriptor_actual = try validatedArrayActual(.{
             .base_ptr = dst_ptr,
             .elem_ty = result_ty,
@@ -122,6 +124,8 @@ fn emitBinaryArrayExprActual(
             .multipliers = multipliers,
             .address_scale = i64Const(ctx, 1),
             .storage = .materialized_temp,
+            .owned_heap_ptr = dst_ptr,
+            .contiguous = true,
         }),
     };
 }
@@ -176,9 +180,7 @@ fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?Ar
     if (!isNegatableArrayElementType(src_actual.elem_ty)) return null;
 
     const elem_count = try emitExtentProductI64(ctx, builder, src_actual.extents);
-    const tmp_name = try ctx.nextTemp();
-    try builder.allocaArrayValue(tmp_name, src_actual.elem_ty, elem_count);
-    const dst_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
+    const dst_ptr = try emitHeapArrayTempPointer(ctx, builder, src_actual.elem_ty, elem_count);
     const multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents);
     try emitNegatedArrayActualLoop(
         ctx,
@@ -188,11 +190,14 @@ fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?Ar
         src_actual.extents,
         src_actual.multipliers,
         src_actual.address_scale,
+        src_actual.contiguous,
         dst_ptr,
         elem_count,
     );
+    try emitMaybeFreeOwnedArrayActual(ctx, builder, src_actual);
     return .{
         .ptr = dst_ptr,
+        .owned_heap_ptr = dst_ptr,
         .descriptor_actual = try validatedArrayActual(.{
             .base_ptr = dst_ptr,
             .elem_ty = src_actual.elem_ty,
@@ -200,6 +205,8 @@ fn emitNegatedArrayExprActual(ctx: *Context, builder: anytype, expr: *Expr) !?Ar
             .multipliers = multipliers,
             .address_scale = i64Const(ctx, 1),
             .storage = .materialized_temp,
+            .owned_heap_ptr = dst_ptr,
+            .contiguous = true,
         }),
     };
 }
@@ -249,6 +256,7 @@ pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Exp
                 .multipliers = multipliers,
                 .address_scale = try actualAddressScaleForSymbol(ctx, builder, name, sym),
                 .storage = .direct,
+                .contiguous = false,
             });
         },
         .call_or_subscript => |call| blk: {
@@ -294,6 +302,7 @@ pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Exp
                 .multipliers = multipliers,
                 .address_scale = try actualAddressScaleForSymbol(ctx, builder, call.name, sym),
                 .storage = .direct,
+                .contiguous = false,
             });
         },
         else => null,
@@ -313,17 +322,18 @@ fn analyzeKnownArrayFunctionActual(
     const extents = try materializeKnownArrayResultExtents(ctx, sig) orelse return null;
     const elem_ty = storageIRTypeForProcedureResult(ctx, result_spec);
     const elem_count = try emitExtentProductI64(ctx, builder, extents);
-    const tmp_name = try ctx.nextTemp();
-    try builder.allocaArrayValue(tmp_name, elem_ty, elem_count);
-    const result_ptr = ValueRef{ .name = tmp_name, .ty = .ptr, .is_ptr = true };
+    const result_ptr = try emitHeapArrayTempPointer(ctx, builder, elem_ty, elem_count);
 
     var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer abi_args.deinit();
+    var owned_heap_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer owned_heap_args.deinit();
     try abi_args.append(result_ptr);
-    try appendKnownArrayFunctionCallArgs(ctx, builder, &abi_args, call.args, sig);
+    try appendKnownArrayFunctionCallArgs(ctx, builder, &abi_args, &owned_heap_args, call.args, sig);
 
     const fn_name = try resolution.ensureExternalDeclForCall(ctx, call.name, .void, call.args, false);
     try builder.callTyped(null, .void, fn_name, abi_args.items);
+    try emitOwnedHeapArgFrees(ctx, builder, owned_heap_args.items);
 
     return try validatedArrayActual(.{
         .base_ptr = result_ptr,
@@ -332,6 +342,8 @@ fn analyzeKnownArrayFunctionActual(
         .multipliers = try emitContiguousMultipliers(ctx, builder, extents),
         .address_scale = i64Const(ctx, 1),
         .storage = .materialized_temp,
+        .owned_heap_ptr = result_ptr,
+        .contiguous = true,
     });
 }
 
@@ -339,6 +351,7 @@ fn appendKnownArrayFunctionCallArgs(
     ctx: *Context,
     builder: anytype,
     abi_args: *std.array_list.Managed(ValueRef),
+    owned_heap_args: *std.array_list.Managed(ValueRef),
     args: []*Expr,
     sig: ast.sema.KnownProcedureSig,
 ) !void {
@@ -349,6 +362,9 @@ fn appendKnownArrayFunctionCallArgs(
         const resolved = try emitKnownArrayFunctionArgPointer(ctx, builder, arg);
         try resolved_args.append(resolved);
         try abi_args.append(resolved.ptr);
+        if (resolved.owned_heap_ptr) |heap_ptr| {
+            try owned_heap_args.append(heap_ptr);
+        }
     }
     for (args, 0..) |arg, idx| {
         if (idx >= sig.args.len or !sig.args[idx].requires_descriptor) continue;
@@ -372,7 +388,7 @@ fn emitKnownArrayFunctionArgPointer(
     expr: *Expr,
 ) !ArgPointerResult {
     if (try resolveArrayActual(ctx, builder, expr)) |actual| {
-        return .{ .ptr = actual.base_ptr, .descriptor_actual = actual };
+        return .{ .ptr = actual.base_ptr, .owned_heap_ptr = actual.owned_heap_ptr, .descriptor_actual = actual };
     }
     if (try dispatch.emitCharacterValuePlan(ctx, builder, expr)) |char_value| {
         return .{ .ptr = char_value.ptr };
@@ -459,6 +475,7 @@ fn analyzeStaticZeroSizedArrayConstructorActual(
         .multipliers = multipliers,
         .address_scale = elem_info.address_scale,
         .storage = .materialized_temp,
+        .contiguous = false,
     };
 }
 
@@ -474,9 +491,7 @@ fn analyzeStaticMaterializedArrayConstructorActual(
     const elem_info = arrayConstructorElementInfo(ctx, ctor) orelse return null;
     if (elem_info.elem_ty == .i8) return null;
 
-    const buf_name = try ctx.nextTemp();
-    try builder.allocaArrayValue(buf_name, elem_info.elem_ty, i64Const(ctx, @intCast(elem_count)));
-    const base_ptr = ValueRef{ .name = buf_name, .ty = .ptr, .is_ptr = true };
+    const base_ptr = try emitHeapArrayTempPointer(ctx, builder, elem_info.elem_ty, i64Const(ctx, @intCast(elem_count)));
 
     for (ctor.items, 0..) |item, idx| {
         const value = try dispatch.emitExpr(ctx, builder, item);
@@ -497,6 +512,8 @@ fn analyzeStaticMaterializedArrayConstructorActual(
         .multipliers = multipliers,
         .address_scale = elem_info.address_scale,
         .storage = .materialized_temp,
+        .owned_heap_ptr = base_ptr,
+        .contiguous = true,
     };
 }
 
@@ -616,6 +633,7 @@ fn analyzeIntrinsicConversionActual(
         .multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents),
         .address_scale = i64Const(ctx, 1),
         .storage = .materialized_temp,
+        .contiguous = true,
     });
 }
 
@@ -657,6 +675,12 @@ pub fn emitOwnedHeapArgFrees(ctx: *Context, builder: anytype, owned_heap_args: [
     }
 }
 
+pub fn emitOwnedHeapActualFree(ctx: *Context, builder: anytype, owned_heap_ptr: ?ValueRef) !void {
+    if (owned_heap_ptr) |ptr| {
+        try emitOwnedHeapArgFrees(ctx, builder, &.{ptr});
+    }
+}
+
 pub fn isCharacterActualArg(ctx: *Context, expr: *Expr) bool {
     return dispatch.isCharacterExpr(ctx, expr);
 }
@@ -689,6 +713,10 @@ fn i64Const(ctx: *Context, value: i64) ValueRef {
     return .{ .name = ctx.intLiteral(value) catch unreachable, .ty = .i64, .is_ptr = false };
 }
 
+fn valueRefEquals(a: ValueRef, b: ValueRef) bool {
+    return a.ty == b.ty and a.is_ptr == b.is_ptr and std.mem.eql(u8, a.name, b.name);
+}
+
 pub fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, call: ast.CallOrSubscript) !ArgPointerResult {
     if (call.args.len != 1) return error.InvalidIntrinsicCall;
     const dst_ty = intrinsicArrayConversionType(call.name) orelse return error.UnsupportedIntrinsicType;
@@ -697,12 +725,7 @@ pub fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, c
     const src_ty = src_actual.elem_ty;
     const elem_count = try emitExtentProductI64(ctx, builder, src_actual.extents);
 
-    const elem_size = i64Const(ctx, @intCast(byteSizeForIRType(dst_ty)));
-    const total_bytes = try emitMulI64(ctx, builder, elem_count, elem_size);
-    const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &[_]IRType{.i64}, false);
-    const heap_ptr_name = try ctx.nextTemp();
-    try builder.callTyped(heap_ptr_name, .ptr, malloc_name, &.{total_bytes});
-    const heap_ptr = ValueRef{ .name = heap_ptr_name, .ty = .ptr, .is_ptr = true };
+    const heap_ptr = try emitHeapArrayTempPointer(ctx, builder, dst_ty, elem_count);
 
     try emitIntrinsicArrayConversionLoop(
         ctx,
@@ -712,10 +735,12 @@ pub fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, c
         src_actual.extents,
         src_actual.multipliers,
         src_actual.address_scale,
+        src_actual.contiguous,
         heap_ptr,
         dst_ty,
         elem_count,
     );
+    try emitMaybeFreeOwnedArrayActual(ctx, builder, src_actual);
     return .{
         .ptr = heap_ptr,
         .owned_heap_ptr = heap_ptr,
@@ -726,6 +751,8 @@ pub fn emitIntrinsicArrayConversionArgPointer(ctx: *Context, builder: anytype, c
             .multipliers = try emitContiguousMultipliers(ctx, builder, src_actual.extents),
             .address_scale = i64Const(ctx, 1),
             .storage = .materialized_temp,
+            .owned_heap_ptr = heap_ptr,
+            .contiguous = true,
         }),
     };
 }
@@ -759,6 +786,69 @@ fn byteSizeForIRType(ty: IRType) usize {
         .ptr => @sizeOf(usize),
         .void => 1,
     };
+}
+
+fn emitHeapArrayTempPointer(
+    ctx: *Context,
+    builder: anytype,
+    elem_ty: IRType,
+    elem_count: ValueRef,
+) !ValueRef {
+    const elem_size = i64Const(ctx, @intCast(byteSizeForIRType(elem_ty)));
+    const total_bytes = try emitMulI64(ctx, builder, elem_count, elem_size);
+    return emitHeapAllocBytes(ctx, builder, total_bytes);
+}
+
+fn emitHeapAllocBytes(
+    ctx: *Context,
+    builder: anytype,
+    requested_bytes: ValueRef,
+) !ValueRef {
+    const needs_min_name = try ctx.nextTemp();
+    try builder.compare(needs_min_name, "icmp", "eq", .i64, requested_bytes, i64Const(ctx, 0));
+    const safe_bytes_name = try ctx.nextTemp();
+    try builder.select(
+        safe_bytes_name,
+        .i64,
+        .{ .name = needs_min_name, .ty = .i1, .is_ptr = false },
+        i64Const(ctx, 1),
+        requested_bytes,
+    );
+    const safe_bytes = ValueRef{ .name = safe_bytes_name, .ty = .i64, .is_ptr = false };
+
+    const malloc_name = try ctx.ensureDeclRaw("malloc", .ptr, &[_]IRType{.i64}, false);
+    const heap_ptr_name = try ctx.nextTemp();
+    try builder.callTyped(heap_ptr_name, .ptr, malloc_name, &.{safe_bytes});
+    const heap_ptr = ValueRef{ .name = heap_ptr_name, .ty = .ptr, .is_ptr = true };
+
+    const is_null_name = try ctx.nextTemp();
+    try builder.compare(
+        is_null_name,
+        "icmp",
+        "eq",
+        .ptr,
+        heap_ptr,
+        .{ .name = "null", .ty = .ptr, .is_ptr = false },
+    );
+    const alloc_ok = try ctx.nextLabel("array_alloc_ok");
+    const alloc_fail = try ctx.nextLabel("array_alloc_fail");
+    try builder.brCond(.{ .name = is_null_name, .ty = .i1, .is_ptr = false }, alloc_fail, alloc_ok);
+
+    try builder.label(alloc_fail);
+    try runtime_fail.emitRuntimeCheckFailureTrap(ctx, builder, "array temporary allocation failed");
+
+    try builder.label(alloc_ok);
+    return heap_ptr;
+}
+
+fn emitMaybeFreeOwnedArrayActual(
+    ctx: *Context,
+    builder: anytype,
+    actual: ?ArrayActualPlan,
+) !void {
+    if (actual) |resolved| {
+        try emitOwnedHeapActualFree(ctx, builder, resolved.owned_heap_ptr);
+    }
 }
 
 fn emitMulI64(ctx: *Context, builder: anytype, lhs: ValueRef, rhs: ValueRef) !ValueRef {
@@ -931,29 +1021,34 @@ fn emitIntrinsicArrayConversionLoop(
     src_extents: []const ValueRef,
     src_multipliers: []const ValueRef,
     src_address_scale: ValueRef,
+    src_contiguous: bool,
     dst_ptr: ValueRef,
     dst_ty: IRType,
     elem_count: ValueRef,
 ) !void {
-    const idx_ptr = try ctx.nextTemp();
-    try builder.alloca(idx_ptr, .i64);
-    try builder.store(i64Const(ctx, 0), .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
-
+    const loop_preheader = try ctx.nextLabel("conv_arg_preheader");
     const loop_head = try ctx.nextLabel("conv_arg_head");
     const loop_body = try ctx.nextLabel("conv_arg_body");
     const loop_exit = try ctx.nextLabel("conv_arg_exit");
+    const next_name = try ctx.nextTemp();
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_preheader);
     try builder.br(loop_head);
 
     try builder.label(loop_head);
     const idx_name = try ctx.nextTemp();
-    try builder.load(idx_name, .i64, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.phi(idx_name, .i64, &.{
+        .{ .value = i64Const(ctx, 0), .label = loop_preheader },
+        .{ .value = .{ .name = next_name, .ty = .i64, .is_ptr = false }, .label = loop_body },
+    });
     const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
     const cond_name = try ctx.nextTemp();
     try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
-    const src_elem_ptr = try memory.emitLinearizedArrayElementPtr(
+    const src_elem_ptr = try emitArrayActualElementPtr(
         ctx,
         builder,
         src_ptr,
@@ -961,6 +1056,7 @@ fn emitIntrinsicArrayConversionLoop(
         src_extents,
         src_multipliers,
         src_address_scale,
+        src_contiguous,
         idx_val,
     );
     const src_val_name = try ctx.nextTemp();
@@ -972,9 +1068,7 @@ fn emitIntrinsicArrayConversionLoop(
     try builder.gep(dst_elem_ptr_name, dst_ty, dst_ptr, idx_val);
     try builder.store(converted, .{ .name = dst_elem_ptr_name, .ty = .ptr, .is_ptr = true });
 
-    const next_name = try ctx.nextTemp();
     try builder.binary(next_name, "add", .i64, idx_val, i64Const(ctx, 1));
-    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
     try builder.br(loop_head);
 
     try builder.label(loop_exit);
@@ -1006,18 +1100,22 @@ fn emitBinaryArrayActualLoop(
     result_ty: IRType,
     elem_count: ValueRef,
 ) !void {
-    const idx_ptr = try ctx.nextTemp();
-    try builder.alloca(idx_ptr, .i64);
-    try builder.store(i64Const(ctx, 0), .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
-
+    const loop_preheader = try ctx.nextLabel("binary_arg_preheader");
     const loop_head = try ctx.nextLabel("binary_arg_head");
     const loop_body = try ctx.nextLabel("binary_arg_body");
     const loop_exit = try ctx.nextLabel("binary_arg_exit");
+    const next_name = try ctx.nextTemp();
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_preheader);
     try builder.br(loop_head);
 
     try builder.label(loop_head);
     const idx_name = try ctx.nextTemp();
-    try builder.load(idx_name, .i64, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.phi(idx_name, .i64, &.{
+        .{ .value = i64Const(ctx, 0), .label = loop_preheader },
+        .{ .value = .{ .name = next_name, .ty = .i64, .is_ptr = false }, .label = loop_body },
+    });
     const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
     const cond_name = try ctx.nextTemp();
     try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
@@ -1042,9 +1140,7 @@ fn emitBinaryArrayActualLoop(
     try builder.gep(dst_elem_ptr_name, result_ty, dst_ptr, idx_val);
     try builder.store(result_val, .{ .name = dst_elem_ptr_name, .ty = .ptr, .is_ptr = true });
 
-    const next_name = try ctx.nextTemp();
     try builder.binary(next_name, "add", .i64, idx_val, i64Const(ctx, 1));
-    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
     try builder.br(loop_head);
 
     try builder.label(loop_exit);
@@ -1057,7 +1153,7 @@ fn emitArrayActualElement(
     actual: ArrayActualPlan,
 ) !ValueRef {
     try actual.validate();
-    const src_elem_ptr = try memory.emitLinearizedArrayElementPtr(
+    const src_elem_ptr = try emitArrayActualElementPtr(
         ctx,
         builder,
         actual.base_ptr,
@@ -1065,11 +1161,40 @@ fn emitArrayActualElement(
         actual.extents,
         actual.multipliers,
         actual.address_scale,
+        actual.contiguous,
         idx_val,
     );
     const src_val_name = try ctx.nextTemp();
     try builder.load(src_val_name, actual.elem_ty, src_elem_ptr);
     return .{ .name = src_val_name, .ty = actual.elem_ty, .is_ptr = false };
+}
+
+fn emitArrayActualElementPtr(
+    ctx: *Context,
+    builder: anytype,
+    base_ptr: ValueRef,
+    elem_ty: IRType,
+    extents: []const ValueRef,
+    multipliers: []const ValueRef,
+    address_scale: ValueRef,
+    contiguous: bool,
+    idx_val: ValueRef,
+) !ValueRef {
+    if (contiguous and valueRefEquals(address_scale, i64Const(ctx, 1))) {
+        const ptr_name = try ctx.nextTemp();
+        try builder.gep(ptr_name, elem_ty, base_ptr, idx_val);
+        return .{ .name = ptr_name, .ty = .ptr, .is_ptr = true };
+    }
+    return memory.emitLinearizedArrayElementPtr(
+        ctx,
+        builder,
+        base_ptr,
+        elem_ty,
+        extents,
+        multipliers,
+        address_scale,
+        idx_val,
+    );
 }
 
 fn emitNegatedArrayActualLoop(
@@ -1080,28 +1205,33 @@ fn emitNegatedArrayActualLoop(
     src_extents: []const ValueRef,
     src_multipliers: []const ValueRef,
     src_address_scale: ValueRef,
+    src_contiguous: bool,
     dst_ptr: ValueRef,
     elem_count: ValueRef,
 ) !void {
-    const idx_ptr = try ctx.nextTemp();
-    try builder.alloca(idx_ptr, .i64);
-    try builder.store(i64Const(ctx, 0), .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
-
+    const loop_preheader = try ctx.nextLabel("neg_arg_preheader");
     const loop_head = try ctx.nextLabel("neg_arg_head");
     const loop_body = try ctx.nextLabel("neg_arg_body");
     const loop_exit = try ctx.nextLabel("neg_arg_exit");
+    const next_name = try ctx.nextTemp();
+    try builder.br(loop_preheader);
+
+    try builder.label(loop_preheader);
     try builder.br(loop_head);
 
     try builder.label(loop_head);
     const idx_name = try ctx.nextTemp();
-    try builder.load(idx_name, .i64, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
+    try builder.phi(idx_name, .i64, &.{
+        .{ .value = i64Const(ctx, 0), .label = loop_preheader },
+        .{ .value = .{ .name = next_name, .ty = .i64, .is_ptr = false }, .label = loop_body },
+    });
     const idx_val = ValueRef{ .name = idx_name, .ty = .i64, .is_ptr = false };
     const cond_name = try ctx.nextTemp();
     try builder.compare(cond_name, "icmp", "slt", .i64, idx_val, elem_count);
     try builder.brCond(.{ .name = cond_name, .ty = .i1, .is_ptr = false }, loop_body, loop_exit);
 
     try builder.label(loop_body);
-    const src_elem_ptr = try memory.emitLinearizedArrayElementPtr(
+    const src_elem_ptr = try emitArrayActualElementPtr(
         ctx,
         builder,
         src_ptr,
@@ -1109,6 +1239,7 @@ fn emitNegatedArrayActualLoop(
         src_extents,
         src_multipliers,
         src_address_scale,
+        src_contiguous,
         idx_val,
     );
     const src_val_name = try ctx.nextTemp();
@@ -1127,9 +1258,7 @@ fn emitNegatedArrayActualLoop(
     try builder.gep(dst_elem_ptr_name, elem_ty, dst_ptr, idx_val);
     try builder.store(.{ .name = neg_name, .ty = elem_ty, .is_ptr = false }, .{ .name = dst_elem_ptr_name, .ty = .ptr, .is_ptr = true });
 
-    const next_name = try ctx.nextTemp();
     try builder.binary(next_name, "add", .i64, idx_val, i64Const(ctx, 1));
-    try builder.store(.{ .name = next_name, .ty = .i64, .is_ptr = false }, .{ .name = idx_ptr, .ty = .ptr, .is_ptr = true });
     try builder.br(loop_head);
 
     try builder.label(loop_exit);

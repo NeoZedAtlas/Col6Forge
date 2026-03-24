@@ -26,10 +26,15 @@ pub const ArrayActualPlan = struct {
     multipliers: []ValueRef,
     address_scale: ValueRef,
     storage: ArrayActualStorage,
+    owned_heap_ptr: ?ValueRef = null,
+    contiguous: bool = false,
     pub fn validate(self: ArrayActualPlan) !void {
         if (self.base_ptr.ty != .ptr or !self.base_ptr.is_ptr) return error.InvalidArrayActualPlan;
         if (self.extents.len != self.multipliers.len) return error.InvalidArrayActualPlan;
         if (self.address_scale.ty != .i64 or self.address_scale.is_ptr) return error.InvalidArrayActualPlan;
+        if (self.owned_heap_ptr) |owned| {
+            if (owned.ty != .ptr or !owned.is_ptr) return error.InvalidArrayActualPlan;
+        }
         for (self.extents) |extent| {
             if (extent.ty != .i64 or extent.is_ptr) return error.InvalidArrayActualPlan;
         }
