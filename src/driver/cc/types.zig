@@ -13,6 +13,7 @@ pub const ParsedArgs = struct {
     output_path: ?[]const u8,
     compile_only: bool,
     bounds_check: bool,
+    dialect: Col6Forge.Dialect,
     pause_mode: Col6Forge.PauseMode,
     time_report: bool,
     show_help: bool,
@@ -28,7 +29,9 @@ pub const ParsedArgs = struct {
 pub const ParseArgError = union(enum) {
     missing_input_file,
     missing_output_path,
+    missing_std,
     missing_pause_mode,
+    invalid_std: []const u8,
     invalid_pause_mode: []const u8,
 };
 

@@ -106,6 +106,7 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
             diag_bag,
         );
         unit_analyzer.ctx.allow_argument_mismatch = options.allow_argument_mismatch;
+        unit_analyzer.ctx.dialect = options.dialect;
         unit_analyzer.ctx.known_host_implicit_call_sigs = &known_host_implicit_call_sigs;
         const sem_unit = unit_analyzer.analyze() catch |err| {
             if (first_error == null) first_error = err;

@@ -11,6 +11,7 @@ pub const Diagnostic = diag.Diagnostic;
 pub const EmitKind = pipeline.EmitKind;
 pub const PipelineOptions = pipeline.PipelineOptions;
 pub const PauseMode = pipeline.PauseMode;
+pub const Dialect = sema.Dialect;
 pub const PipelineStage = pipeline.PipelineStage;
 pub const PipelineProfileSample = pipeline.PipelineProfileSample;
 pub const LogicalLine = frontend.LogicalLine;

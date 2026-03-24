@@ -201,6 +201,57 @@ test "runPipelineWithOptionsAndDiagnostics accepts slash array constructor assig
     try testing.expect(!diag_bag.has());
 }
 
+test "runPipeline rejects real DO by default but accepts it under f77 dialect lowering" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      REAL X\n" ++
+        "      DO 10 X = 0.5, 1.5, 0.5\n" ++
+        "         PRINT *, X\n" ++
+        "10    CONTINUE\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "legacy_real_do.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.AssignmentTypeMismatch, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+
+    const result = try runPipelineWithOptions(allocator, file_path, .llvm, .{ .dialect = .f77_legacy });
+    defer allocator.free(result.output);
+
+    try testing.expect(std.mem.indexOf(u8, result.output, "do_while_test") != null);
+}
+
+test "runPipeline accepts integer DO with real bounds under f77 dialect lowering" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER I, ACC\n" ++
+        "      ACC = 0\n" ++
+        "      DO 10 I = 6.7, 9.325D0\n" ++
+        "         ACC = ACC + I\n" ++
+        "10    CONTINUE\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "legacy_integer_do_real_bounds.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.AssignmentTypeMismatch, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+
+    const result = try runPipelineWithOptions(allocator, file_path, .llvm, .{ .dialect = .f77_legacy });
+    defer allocator.free(result.output);
+
+    try testing.expect(std.mem.indexOf(u8, result.output, "do_while_test") != null);
+}
+
 test "runPipelineWithOptionsAndDiagnostics accepts fixed-shape entry-expanded array functions" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -141,6 +141,7 @@ pub const Resolver = struct {
         // Intrinsic array-conversion lowering is mandatory for currently supported
         // backend forms. Unsupported shapes must remain fatal here.
         if (first_stmt_error == null) {
+            try rewrite_calls.lowerLegacyDialectLoops(ctx);
             try rewrite_calls.lowerIntrinsicArrayConversions(ctx);
 
             // Re-resolve rewritten statements and refresh reference/type caches against

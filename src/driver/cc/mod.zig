@@ -59,6 +59,7 @@ fn run(allocator: std.mem.Allocator, args: []const []const u8) !void {
         work_rel,
         parsed.fortran_inputs,
         parsed.bounds_check,
+        parsed.dialect,
         parsed.pause_mode,
         runtime_cfg.target,
         parsed.time_report,
@@ -160,7 +161,9 @@ fn printParseArgError(file: std.fs.File, parse_err: types.ParseArgError) !void {
     switch (parse_err) {
         .missing_input_file => try writer.interface.writeAll("error: missing input files\n"),
         .missing_output_path => try writer.interface.writeAll("error: missing output path after -o\n"),
+        .missing_std => try writer.interface.writeAll("error: missing standard after -std\n"),
         .missing_pause_mode => try writer.interface.writeAll("error: missing pause mode after -fpause-mode\n"),
+        .invalid_std => |value| try writer.interface.print("error: invalid Fortran standard: {s}\n", .{value}),
         .invalid_pause_mode => |value| try writer.interface.print("error: invalid pause mode: {s}\n", .{value}),
     }
     try writer.interface.flush();
@@ -179,6 +182,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  -o <path>                   Output object/executable path
         \\  -emit-llvm                  Emit LLVM IR internally (default)
         \\  -fbounds-check              Enable runtime array bounds checks in pipeline
+        \\  -std <default|f77>          Fortran dialect gate for Col6Forge lowering (default: default)
         \\  -fpause-mode <auto|continue|stop>  PAUSE runtime policy (default: auto)
         \\  -ftime-report, --time-report  Print parse/sema/codegen timing report to stderr
         \\  -h, --help                  Show this help

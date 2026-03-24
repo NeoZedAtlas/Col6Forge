@@ -7,6 +7,7 @@ const symbols = @import("../symbol/mod.zig");
 const api = @import("../split/api/mod.zig");
 const function_type = @import("../split/function_type.zig");
 const analyzeProgram = api.analyzeProgram;
+const analyzeProgramWithOptions = api.analyzeProgramWithOptions;
 const analyzeProgramWithKnown = api.analyzeProgramWithKnown;
 const takeDiagnostic = api.takeDiagnostic;
 const clearDiagnostic = api.clearDiagnostic;
@@ -419,4 +420,37 @@ test "semantic rejects compile-time zero DO step" {
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3108"));
     try testing.expectEqualStrings("DO step must not be zero", diag.message);
+}
+
+test "semantic f77 dialect lowers integer DO with real bounds and step" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER I, ACC\n" ++
+        "      ACC = 0\n" ++
+        "      DO 10 I = 6.7, 9.325D0\n" ++
+        "         ACC = ACC + I\n" ++
+        "10    CONTINUE\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgramWithOptions(arena.allocator(), program, .{ .dialect = .f77_legacy });
+
+    const stmts = program.units[0].stmts;
+    try testing.expect(stmts.len >= 7);
+    var found_do_while = false;
+    for (stmts) |stmt| {
+        if (stmt.node == .do_while) {
+            found_do_while = true;
+            break;
+        }
+    }
+    try testing.expect(found_do_while);
 }

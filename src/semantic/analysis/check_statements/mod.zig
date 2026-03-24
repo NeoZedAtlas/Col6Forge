@@ -280,19 +280,31 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
         .do_loop => |loop| {
             const loop_idx = resolve_symbols.findSymbolIndex(self, loop.var_name) orelse return error.UnknownSymbol;
             const loop_sym = self.symbols.items[loop_idx];
-            if (loop_sym.loweredKind() != .integer or loop_sym.dims.len != 0) {
+            const loop_kind = loop_sym.loweredKind();
+            const allow_legacy_numeric_do = self.dialect == .f77_legacy and loop_sym.dims.len == 0 and isLegacyDialectDoControlKind(loop_kind);
+            if ((loop_kind != .integer or loop_sym.dims.len != 0) and !allow_legacy_numeric_do) {
                 return emitCurrentStmtConstraint(self, "DO variable must be a scalar INTEGER");
             }
             try expr_semantics.checkExpr(self, loop.start, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
             try expr_semantics.checkExpr(self, loop.end, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
             if (loop.step) |step| {
                 const step_ty = try expr_semantics.checkExprType(self, step, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
-                if (step_ty != .integer) {
+                if (self.dialect == .f77_legacy) {
+                    if (!isLegacyDialectDoControlKind(step_ty)) {
+                        return emitExprConstraint(self, step, "DO step must be numeric under -std=f77");
+                    }
+                } else if (step_ty != .integer) {
                     return emitExprConstraint(self, step, "DO step must be INTEGER");
                 }
                 if (try resolve_const.evalConst(self, step)) |value| {
-                    if (value == .integer and value.integer == 0) {
-                        return emitExprConstraint(self, step, "DO step must not be zero");
+                    switch (value) {
+                        .integer => |v| if (v == 0) {
+                            return emitExprConstraint(self, step, "DO step must not be zero");
+                        },
+                        .real => |v| if (v.value == 0.0) {
+                            return emitExprConstraint(self, step, "DO step must not be zero");
+                        },
+                        else => {},
                     }
                 }
             }
@@ -366,6 +378,13 @@ fn dummyArgTypeCompatible(
         resolve_symbols.isSameOrExtension(self, actual_name, expected_name)
     else
         std.ascii.eqlIgnoreCase(expected_name, actual_name);
+}
+
+fn isLegacyDialectDoControlKind(kind: ast.TypeKind) bool {
+    return switch (kind) {
+        .integer, .real, .double_precision => true,
+        else => false,
+    };
 }
 
 fn emitCurrentStmtConstraint(self: *context.Context, message: []const u8) CheckError {

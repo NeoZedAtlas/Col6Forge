@@ -16,6 +16,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) types.P
     var output_path: ?[]const u8 = null;
     var compile_only = false;
     var bounds_check = false;
+    var dialect: Col6Forge.Dialect = .default;
     var pause_mode: Col6Forge.PauseMode = .auto;
     var time_report = false;
     var show_help = false;
@@ -50,6 +51,22 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) types.P
         if (std.mem.eql(u8, arg, "-fbounds-check")) {
             bounds_check = true;
             continue;
+        }
+        if (std.mem.eql(u8, arg, "-std")) {
+            if (i + 1 >= args.len) return .{ .failure = .missing_std };
+            const maybe_dialect = parseDialect(args[i + 1]);
+            if (maybe_dialect) |resolved| {
+                i += 1;
+                dialect = resolved;
+                continue;
+            }
+        }
+        if (std.mem.startsWith(u8, arg, "-std=")) {
+            const value = arg["-std=".len..];
+            if (parseDialect(value)) |resolved| {
+                dialect = resolved;
+                continue;
+            }
         }
         if (std.mem.eql(u8, arg, "-fpause-mode")) {
             if (i + 1 >= args.len) return .{ .failure = .missing_pause_mode };
@@ -96,11 +113,20 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) types.P
         .output_path = output_path,
         .compile_only = compile_only,
         .bounds_check = bounds_check,
+        .dialect = dialect,
         .pause_mode = pause_mode,
         .time_report = time_report,
         .show_help = show_help,
         .forward_args = forward_args.toOwnedSlice(allocator) catch return .{ .failure = .missing_input_file },
     } };
+}
+
+fn parseDialect(value: []const u8) ?Col6Forge.Dialect {
+    if (std.ascii.eqlIgnoreCase(value, "default")) return .default;
+    if (std.ascii.eqlIgnoreCase(value, "f95")) return .default;
+    if (std.ascii.eqlIgnoreCase(value, "f77")) return .f77_legacy;
+    if (std.ascii.eqlIgnoreCase(value, "legacy")) return .f77_legacy;
+    return null;
 }
 
 pub fn parsePauseMode(value: []const u8) ?Col6Forge.PauseMode {
@@ -117,6 +143,7 @@ pub fn forwardFlagNeedsValue(flag: []const u8) bool {
         "-F",
         "-D",
         "-U",
+        "-std",
         "-x",
         "-target",
         "--target",
@@ -278,4 +305,21 @@ test "parse cc args accepts -fpause-mode" {
     var parsed = outcome.success;
     defer parsed.deinit(allocator);
     try testing.expect(parsed.pause_mode == .stop);
+}
+
+test "parse cc args consumes Fortran -std=f77" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const outcome = parseArgs(allocator, &[_][]const u8{
+        "col6forge",
+        "cc",
+        "-std=f77",
+        "a.f",
+    });
+    const parsed = outcome.success;
+    defer parsed.deinit(allocator);
+
+    try testing.expectEqual(Col6Forge.Dialect.f77_legacy, parsed.dialect);
+    try testing.expectEqual(@as(usize, 0), parsed.forward_args.len);
 }

@@ -80,6 +80,7 @@ pub fn emitLlvmModule(
             .target_layout = options.semantic_target_layout,
             .range_check = options.range_check,
             .allow_argument_mismatch = options.allow_argument_mismatch,
+            .dialect = options.dialect,
         },
         &semantic_diag_bag,
     ) catch |err| {
@@ -201,6 +202,7 @@ pub fn emitLlvmModuleToWriter(
             .target_layout = options.semantic_target_layout,
             .range_check = options.range_check,
             .allow_argument_mismatch = options.allow_argument_mismatch,
+            .dialect = options.dialect,
         },
         &semantic_diag_bag,
     ) catch |err| {

@@ -35,6 +35,7 @@ pub const KnownFunctionType = api.KnownFunctionType;
 pub const KnownProcedureSig = api.KnownProcedureSig;
 pub const AnalyzeOptions = api.AnalyzeOptions;
 pub const TargetLayout = context.TargetLayout;
+pub const Dialect = context.Dialect;
 
 pub const analyzeProgram = api.analyzeProgram;
 pub const analyzeProgramWithKnown = api.analyzeProgramWithKnown;

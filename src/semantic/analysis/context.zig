@@ -7,6 +7,11 @@ const scope = @import("../scope.zig");
 const intrinsics = @import("intrinsics.zig");
 
 pub const Context = struct {
+    pub const Dialect = enum {
+        default,
+        f77_legacy,
+    };
+
     pub const DerivedTypeInfo = struct {
         pub const ComponentInfo = struct {
             name: []const u8,
@@ -196,6 +201,7 @@ pub const Context = struct {
     target_layout: TargetLayout,
     range_check: bool,
     allow_argument_mismatch: bool,
+    dialect: Dialect,
     use_imports_preinstalled: bool,
 
     pub const Owner = struct {
@@ -294,6 +300,7 @@ pub const Context = struct {
             .target_layout = target_layout,
             .range_check = range_check,
             .allow_argument_mismatch = false,
+            .dialect = .default,
             .use_imports_preinstalled = false,
         };
         ctx.current_unit = &ctx.unit;

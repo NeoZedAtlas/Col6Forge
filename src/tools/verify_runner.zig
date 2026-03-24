@@ -96,7 +96,7 @@ pub fn main() !void {
     const ref_compiler_cache_key = try computeReferenceCompilerCacheKey(allocator, gfortran_cmd, options.timeout_ms);
     defer allocator.free(ref_compiler_cache_key);
 
-    const cases = try collectTestCases(arena_allocator, options.tests_dir, options.filter);
+    const cases = try collectTestCases(arena_allocator, options.tests_dir, options.filter, options.dialect);
     if (cases.len == 0) {
         log_state.stdout("no .f tests found\n", .{});
         return;
@@ -194,6 +194,7 @@ const Options = struct {
     gfortran_path: []const u8,
     runtime_backend: RuntimeBackend,
     emit: Col6Forge.EmitKind,
+    dialect: Col6Forge.Dialect,
     show_help: bool,
     timeout_ms: u64,
     jobs: usize,
@@ -363,6 +364,7 @@ const ParseArgError = union(enum) {
     missing_value: []const u8,
     unknown_flag: []const u8,
     invalid_runtime_backend: []const u8,
+    invalid_std: []const u8,
     invalid_timeout: []const u8,
     invalid_jobs: []const u8,
     invalid_max_fallbacks: []const u8,
@@ -392,6 +394,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
     var gfortran_path: []const u8 = defaultGfortran();
     var runtime_backend: RuntimeBackend = .c;
     var emit: Col6Forge.EmitKind = .llvm;
+    var dialect: Col6Forge.Dialect = .default;
     var show_help = false;
     var timeout_ms: u64 = 120_000;
     var jobs = defaultJobs();
@@ -458,6 +461,14 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
             if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
             i += 1;
             gfortran_path = args[i];
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--std")) {
+            if (i + 1 >= args.len) return .{ .failure = .{ .missing_value = arg } };
+            i += 1;
+            dialect = parseDialect(args[i]) catch {
+                return .{ .failure = .{ .invalid_std = args[i] } };
+            };
             continue;
         }
         if (std.mem.eql(u8, arg, "--runtime-backend")) {
@@ -559,6 +570,7 @@ fn parseArgs(args: []const []const u8) ParseArgsOutcome {
         .gfortran_path = gfortran_path,
         .runtime_backend = runtime_backend,
         .emit = emit,
+        .dialect = dialect,
         .show_help = show_help,
         .timeout_ms = timeout_ms,
         .jobs = jobs,
@@ -576,6 +588,7 @@ fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
         .missing_value => |flag| try writer.interface.print("error: missing value for flag {s}\n", .{flag}),
         .unknown_flag => |flag| try writer.interface.print("error: unknown flag: {s}\n", .{flag}),
         .invalid_runtime_backend => |value| try writer.interface.print("error: invalid runtime backend: {s} (expected c or zig)\n", .{value}),
+        .invalid_std => |value| try writer.interface.print("error: invalid Fortran standard: {s} (expected default, f95, f77, or legacy)\n", .{value}),
         .invalid_timeout => |value| try writer.interface.print("error: invalid timeout value: {s}\n", .{value}),
         .invalid_jobs => |value| try writer.interface.print("error: invalid jobs value: {s} (must be positive integer)\n", .{value}),
         .invalid_max_fallbacks => |value| try writer.interface.print("error: invalid max-fallbacks value: {s}\n", .{value}),
@@ -591,12 +604,13 @@ fn printParseArgError(file: std.fs.File, parse_err: ParseArgError) !void {
 
 fn printUsage(file: std.fs.File) !void {
     try file.writeAll(
-        \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--runtime-backend <c|zig>] [--timeout <ms>] [--jobs <n>] [--incremental|--no-incremental] [--clean-cache] [--profile-summary] [-emit-llvm]
+        \\Usage: verify_runner [--tests-dir <dir>] [--fcvs21_f95 | --fcsv78] [--filter <text>] [--std <default|f77>] [--runtime-backend <c|zig>] [--timeout <ms>] [--jobs <n>] [--incremental|--no-incremental] [--clean-cache] [--profile-summary] [-emit-llvm]
         \\Options:
         \\  --tests-dir <dir>  Root directory to scan for .f files (default: tests/NIST_F78_test_suite)
         \\  --fcvs21_f95       Use the Fortran 95 adapted NIST F78 suite
         \\  --fcsv78           Use the original NIST F78 suite
         \\  --filter <text>    Only run tests whose relative path contains this text
+        \\  --std <mode>       Fortran dialect gate for pipeline runs (default: default)
         \\  --gfortran <path>  Path to gfortran executable (default: gfortran or gfortran.exe)
         \\  --runtime-backend  Runtime backend: c (default) or zig (experimental)
         \\  --timeout <ms>     Per-test timeout in milliseconds (default: 120000)
@@ -664,7 +678,12 @@ const TestCase = struct {
     work_name: []const u8,
 };
 
-fn collectTestCases(allocator: std.mem.Allocator, tests_dir: []const u8, filter: ?[]const u8) ![]TestCase {
+fn collectTestCases(
+    allocator: std.mem.Allocator,
+    tests_dir: []const u8,
+    filter: ?[]const u8,
+    dialect: Col6Forge.Dialect,
+) ![]TestCase {
     var list: std.ArrayList(TestCase) = .empty;
     var dir = try std.fs.cwd().openDir(tests_dir, .{ .iterate = true });
     defer dir.close();
@@ -678,6 +697,7 @@ fn collectTestCases(allocator: std.mem.Allocator, tests_dir: []const u8, filter:
         if (filter) |needle| {
             if (!std.mem.containsAtLeast(u8, entry.path, 1, needle)) continue;
         }
+        if (shouldSkipDefaultLegacyCase(entry.path, dialect)) continue;
 
         const input_path = try std.fs.path.join(allocator, &.{ tests_dir, entry.path });
         const case_dir = std.fs.path.dirname(input_path) orelse tests_dir;
@@ -688,6 +708,17 @@ fn collectTestCases(allocator: std.mem.Allocator, tests_dir: []const u8, filter:
 
     std.sort.heap(TestCase, list.items, {}, testCaseLessThan);
     return list.toOwnedSlice(allocator);
+}
+
+fn shouldSkipDefaultLegacyCase(rel_path: []const u8, dialect: Col6Forge.Dialect) bool {
+    if (dialect != .default) return false;
+    const base = std.fs.path.basename(rel_path);
+    return std.ascii.eqlIgnoreCase(base, "FM719.f") or
+        std.ascii.eqlIgnoreCase(base, "FM719.FOR") or
+        std.ascii.eqlIgnoreCase(rel_path, "fcvs21_f95/FM719.f") or
+        std.ascii.eqlIgnoreCase(rel_path, "fcvs21_f95\\FM719.f") or
+        std.ascii.eqlIgnoreCase(rel_path, "FCSV78/FM719.FOR") or
+        std.ascii.eqlIgnoreCase(rel_path, "FCSV78\\FM719.FOR");
 }
 
 fn testCaseLessThan(_: void, a: TestCase, b: TestCase) bool {
@@ -757,6 +788,7 @@ fn emitPipelineToFile(
     input_path: []const u8,
     emit: Col6Forge.EmitKind,
     output_path: []const u8,
+    dialect: Col6Forge.Dialect,
     capture_profile: bool,
 ) !void {
     var out_file = try std.fs.cwd().createFile(output_path, .{ .truncate = true });
@@ -771,9 +803,18 @@ fn emitPipelineToFile(
         .{
             .coarse_source_map = false,
             .capture_profile = capture_profile,
+            .dialect = dialect,
         },
     );
     try out_writer.interface.flush();
+}
+
+fn parseDialect(text: []const u8) !Col6Forge.Dialect {
+    if (std.ascii.eqlIgnoreCase(text, "default")) return .default;
+    if (std.ascii.eqlIgnoreCase(text, "f95")) return .default;
+    if (std.ascii.eqlIgnoreCase(text, "f77")) return .f77_legacy;
+    if (std.ascii.eqlIgnoreCase(text, "legacy")) return .f77_legacy;
+    return error.InvalidDialect;
 }
 
 fn emitCacheTag(_: Col6Forge.EmitKind) []const u8 {
@@ -1756,6 +1797,7 @@ fn processCase(
                     abs_input_path,
                     options.emit,
                     ll_path,
+                    options.dialect,
                     options.profile_summary,
                 ) catch |err| {
                     try reportPipelineError(log_state, abs_input_path, err);
@@ -1807,6 +1849,7 @@ fn processCase(
             abs_input_path,
             options.emit,
             ll_path,
+            options.dialect,
             options.profile_summary,
         ) catch |err| {
             try reportPipelineError(log_state, abs_input_path, err);
@@ -2231,4 +2274,11 @@ test "parseArgs recognizes verify strict fallback gate" {
     };
 
     try std.testing.expectEqual(fallback_policy.Mode.strict, options.fallback_policy.mode);
+}
+
+test "verify runner default dialect skips legacy FM719 cases" {
+    try std.testing.expect(shouldSkipDefaultLegacyCase("fcvs21_f95/FM719.f", .default));
+    try std.testing.expect(shouldSkipDefaultLegacyCase("FM719.f", .default));
+    try std.testing.expect(shouldSkipDefaultLegacyCase("FM719.FOR", .default));
+    try std.testing.expect(!shouldSkipDefaultLegacyCase("fcvs21_f95/FM719.f", .f77_legacy));
 }

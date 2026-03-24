@@ -4,6 +4,7 @@ const symbols = @import("../../symbol/mod.zig");
 
 pub const SemanticProgram = symbols.SemanticProgram;
 pub const SemanticUnit = symbols.SemanticUnit;
+pub const Dialect = context.Context.Dialect;
 
 pub const KnownFunctionType = struct {
     name: []const u8,
@@ -39,4 +40,5 @@ pub const AnalyzeOptions = struct {
     target_layout: context.Context.TargetLayout = .{},
     range_check: bool = false,
     allow_argument_mismatch: bool = false,
+    dialect: Dialect = .default,
 };

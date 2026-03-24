@@ -70,6 +70,7 @@ pub fn translateFortranInputs(
     work_rel: []const u8,
     fortran_inputs: []const []const u8,
     bounds_check: bool,
+    dialect: Col6Forge.Dialect,
     pause_mode: Col6Forge.PauseMode,
     target: ?[]const u8,
     time_report: bool,
@@ -93,6 +94,7 @@ pub fn translateFortranInputs(
             input_path,
             ll_path,
             bounds_check,
+            dialect,
             pause_mode,
             target,
             time_report,
@@ -200,6 +202,7 @@ pub fn emitPipelineToWriter(
     input_path: []const u8,
     writer: anytype,
     bounds_check: bool,
+    dialect: Col6Forge.Dialect,
     pause_mode: Col6Forge.PauseMode,
     target: ?[]const u8,
     time_report: bool,
@@ -213,6 +216,7 @@ pub fn emitPipelineToWriter(
         writer,
         .{
             .bounds_check = bounds_check,
+            .dialect = dialect,
             .pause_mode = pause_mode,
             .target = target,
             .time_report = time_report,
@@ -228,6 +232,7 @@ fn emitPipelineToFile(
     input_path: []const u8,
     output_path: []const u8,
     bounds_check: bool,
+    dialect: Col6Forge.Dialect,
     pause_mode: Col6Forge.PauseMode,
     target: ?[]const u8,
     time_report: bool,
@@ -243,6 +248,7 @@ fn emitPipelineToFile(
         input_path,
         &out_writer.interface,
         bounds_check,
+        dialect,
         pause_mode,
         target,
         time_report,
@@ -281,7 +287,7 @@ test "emitPipelineToFile preserves fine-grained fixed-form diagnostics for cc tr
 
     try testing.expectError(
         error.UnexpectedToken,
-        emitPipelineToFile(allocator, input_path, output_path, false, .auto, null, false, &.{}, &.{}),
+        emitPipelineToFile(allocator, input_path, output_path, false, .default, .auto, null, false, &.{}, &.{}),
     );
 
     const diag_info = Col6Forge.takeLastPipelineDiagnostic() orelse return error.TestExpectedEqual;
@@ -306,6 +312,7 @@ test "emitPipelineToFile accepts repository interface_assignment_4" {
         "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90",
         output_path,
         false,
+        .default,
         .auto,
         null,
         false,
@@ -324,7 +331,7 @@ test "translateFortranInputs accepts repository interface_assignment_4 with coll
     const work_rel = try tmp.dir.realpathAlloc(allocator, ".");
     defer allocator.free(work_rel);
 
-    const inputs = [_][]const u8{ "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90" };
+    const inputs = [_][]const u8{"tests/gcc-tests/gfortran.dg/interface_assignment_4.f90"};
     const known = try collectFortranKnownSymbols(allocator, &inputs);
     defer {
         for (known.function_types) |entry| allocator.free(entry.name);
@@ -341,6 +348,7 @@ test "translateFortranInputs accepts repository interface_assignment_4 with coll
         work_rel,
         &inputs,
         false,
+        .default,
         .auto,
         null,
         false,
@@ -365,7 +373,7 @@ test "translateFortranInputs accepts repository interface_assignment_4 with coll
     const work_rel = try tmp.dir.realpathAlloc(allocator, ".");
     defer allocator.free(work_rel);
 
-    const inputs = [_][]const u8{ "tests/gcc-tests/gfortran.dg/interface_assignment_4.f90" };
+    const inputs = [_][]const u8{"tests/gcc-tests/gfortran.dg/interface_assignment_4.f90"};
     const known = try collectFortranKnownSymbols(allocator, &inputs);
     defer {
         for (known.function_types) |entry| allocator.free(entry.name);
@@ -382,6 +390,7 @@ test "translateFortranInputs accepts repository interface_assignment_4 with coll
         work_rel,
         &inputs,
         false,
+        .default,
         .auto,
         null,
         false,

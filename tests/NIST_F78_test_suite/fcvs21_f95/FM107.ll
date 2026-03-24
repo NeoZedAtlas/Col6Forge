@@ -189,2924 +189,2910 @@ bb30:
   store i32 137, ptr %t15
   store i32 80, ptr %t16
   store i32 0000, ptr %t17
-  %t67 = alloca i32
-  %t68 = alloca i64
-  %t69 = alloca i64
+  br label %do_prelude6
+do_prelude6:
   store i32 1, ptr %t18
-  store i32 1, ptr %t67
-  %t70 = icmp sle i32 1, 31
-  %t71 = icmp ne i32 1, 0
-  %t72 = and i1 %t70, %t71
-  br i1 %t72, label %do_trip_calc6, label %do_trip_zero7
-do_trip_calc6:
-  %t73 = sub i32 31, 1
-  %t74 = add i32 %t73, 1
-  %t75 = sdiv i32 %t74, 1
-  %t76 = sext i32 %t75 to i64
-  store i64 %t76, ptr %t68
-  br label %do_trip_done8
-do_trip_zero7:
-  store i64 0, ptr %t68
-  br label %do_trip_done8
-do_trip_done8:
-  store i64 0, ptr %t69
-  br label %do_test9
-do_test9:
-  %t77 = load i64, ptr %t69
-  %t78 = load i64, ptr %t68
-  %t79 = icmp slt i64 %t77, %t78
-  br i1 %t79, label %bb38, label %bb42
+  %t67 = icmp sle i32 1, 31
+  %t68 = icmp ne i32 1, 0
+  br i1 %t68, label %do_trip_range9, label %do_trip_zero_step10
+do_trip_zero_step10:
+  %t69 = getelementptr [5 x i8], ptr @str8, i32 0, i32 0
+  call void @col6forge_report_runtime_check_failure(ptr %t69)
+  call void @llvm.trap()
+  unreachable
+do_trip_range9:
+  br i1 %t67, label %do_trip_calc7, label %do_trip_empty8
+do_trip_calc7:
+  %t70 = sub i32 31, 1
+  %t71 = add i32 %t70, 1
+  %t72 = sdiv i32 %t71, 1
+  %t73 = sext i32 %t72 to i64
+  br label %do_trip_done11
+do_trip_empty8:
+  br label %do_trip_done11
+do_trip_done11:
+  %t74 = phi i64 [ %t73, %do_trip_calc7 ], [ 0, %do_trip_empty8 ]
+  br label %do_test12
+do_test12:
+  %t75 = phi i64 [ 0, %do_trip_done11 ], [ %t76, %do_inc13 ]
+  %t77 = icmp slt i64 %t75, %t74
+  br i1 %t77, label %bb38, label %bb42
 bb38:
-  %t80 = alloca i32
-  %t81 = alloca i64
-  %t82 = alloca i64
+  br label %do_prelude14
+do_prelude14:
   store i32 1, ptr %t19
-  store i32 1, ptr %t80
-  %t83 = icmp sle i32 1, 20
-  %t84 = icmp ne i32 1, 0
-  %t85 = and i1 %t83, %t84
-  br i1 %t85, label %do_trip_calc11, label %do_trip_zero12
-do_trip_calc11:
-  %t86 = sub i32 20, 1
-  %t87 = add i32 %t86, 1
-  %t88 = sdiv i32 %t87, 1
-  %t89 = sext i32 %t88 to i64
-  store i64 %t89, ptr %t81
-  br label %do_trip_done13
-do_trip_zero12:
-  store i64 0, ptr %t81
-  br label %do_trip_done13
-do_trip_done13:
-  store i64 0, ptr %t82
-  br label %do_test14
-do_test14:
-  %t90 = load i64, ptr %t82
-  %t91 = load i64, ptr %t81
-  %t92 = icmp slt i64 %t90, %t91
-  br i1 %t92, label %bb39, label %L1143
+  %t78 = icmp sle i32 1, 20
+  %t79 = icmp ne i32 1, 0
+  br i1 %t79, label %do_trip_range17, label %do_trip_zero_step18
+do_trip_zero_step18:
+  %t80 = getelementptr [5 x i8], ptr @str8, i32 0, i32 0
+  call void @col6forge_report_runtime_check_failure(ptr %t80)
+  call void @llvm.trap()
+  unreachable
+do_trip_range17:
+  br i1 %t78, label %do_trip_calc15, label %do_trip_empty16
+do_trip_calc15:
+  %t81 = sub i32 20, 1
+  %t82 = add i32 %t81, 1
+  %t83 = sdiv i32 %t82, 1
+  %t84 = sext i32 %t83 to i64
+  br label %do_trip_done19
+do_trip_empty16:
+  br label %do_trip_done19
+do_trip_done19:
+  %t85 = phi i64 [ %t84, %do_trip_calc15 ], [ 0, %do_trip_empty16 ]
+  br label %do_test20
+do_test20:
+  %t86 = phi i64 [ 0, %do_trip_done19 ], [ %t87, %do_inc21 ]
+  %t88 = icmp slt i64 %t86, %t85
+  br i1 %t88, label %bb39, label %L1143
 bb39:
-  %t93 = load i32, ptr %t18
-  %t94 = sext i32 %t93 to i64
-  %t95 = sub i64 %t94, 1
-  %t96 = mul i64 %t95, 1
-  %t97 = add i64 0, %t96
-  %t98 = load i32, ptr %t19
-  %t99 = sext i32 %t98 to i64
-  %t100 = sub i64 %t99, 1
-  %t101 = sext i32 31 to i64
-  %t102 = mul i64 1, %t101
-  %t103 = mul i64 %t100, %t102
-  %t104 = add i64 %t97, %t103
-  %t105 = getelementptr i32, ptr %t0, i64 %t104
-  %t106 = load i32, ptr %t18
-  %t107 = load i32, ptr %t19
-  %t108 = add i32 %t106, %t107
-  %t109 = add i32 %t108, 99
-  store i32 %t109, ptr %t105
+  %t89 = load i32, ptr %t18
+  %t90 = sext i32 %t89 to i64
+  %t91 = sub i64 %t90, 1
+  %t92 = mul i64 %t91, 1
+  %t93 = add i64 0, %t92
+  %t94 = load i32, ptr %t19
+  %t95 = sext i32 %t94 to i64
+  %t96 = sub i64 %t95, 1
+  %t97 = sext i32 31 to i64
+  %t98 = mul i64 1, %t97
+  %t99 = mul i64 %t96, %t98
+  %t100 = add i64 %t93, %t99
+  %t101 = getelementptr i32, ptr %t0, i64 %t100
+  %t102 = load i32, ptr %t18
+  %t103 = load i32, ptr %t19
+  %t104 = add i32 %t102, %t103
+  %t105 = add i32 %t104, 99
+  store i32 %t105, ptr %t101
   br label %L1142
 L1142:
-  br label %do_inc15
-do_inc15:
-  %t110 = load i32, ptr %t19
-  %t111 = load i32, ptr %t80
-  %t112 = add i32 %t110, %t111
-  store i32 %t112, ptr %t19
-  %t113 = load i64, ptr %t82
-  %t114 = add i64 %t113, 1
-  store i64 %t114, ptr %t82
-  br label %do_test14
+  br label %do_inc21
+do_inc21:
+  %t106 = load i32, ptr %t19
+  %t107 = add i32 %t106, 1
+  store i32 %t107, ptr %t19
+  %t87 = add i64 %t86, 1
+  br label %do_test20
 L1143:
-  br label %do_inc10
-do_inc10:
-  %t115 = load i32, ptr %t18
-  %t116 = load i32, ptr %t67
-  %t117 = add i32 %t115, %t116
-  store i32 %t117, ptr %t18
-  %t118 = load i64, ptr %t69
-  %t119 = add i64 %t118, 1
-  store i64 %t119, ptr %t69
-  br label %do_test9
+  br label %do_inc13
+do_inc13:
+  %t108 = load i32, ptr %t18
+  %t109 = add i32 %t108, 1
+  store i32 %t109, ptr %t18
+  %t76 = add i64 %t75, 1
+  br label %do_test12
 bb42:
-  %t120 = alloca i32
-  %t121 = alloca i64
-  %t122 = alloca i64
+  br label %do_prelude22
+do_prelude22:
   store i32 1, ptr %t18
-  store i32 1, ptr %t120
-  %t123 = icmp sle i32 1, 31
-  %t124 = icmp ne i32 1, 0
-  %t125 = and i1 %t123, %t124
-  br i1 %t125, label %do_trip_calc16, label %do_trip_zero17
-do_trip_calc16:
-  %t126 = sub i32 31, 1
-  %t127 = add i32 %t126, 1
-  %t128 = sdiv i32 %t127, 1
-  %t129 = sext i32 %t128 to i64
-  store i64 %t129, ptr %t121
-  br label %do_trip_done18
-do_trip_zero17:
-  store i64 0, ptr %t121
-  br label %do_trip_done18
-do_trip_done18:
-  store i64 0, ptr %t122
-  br label %do_test19
-do_test19:
-  %t130 = load i64, ptr %t122
-  %t131 = load i64, ptr %t121
-  %t132 = icmp slt i64 %t130, %t131
-  br i1 %t132, label %bb43, label %bb49
+  %t110 = icmp sle i32 1, 31
+  %t111 = icmp ne i32 1, 0
+  br i1 %t111, label %do_trip_range25, label %do_trip_zero_step26
+do_trip_zero_step26:
+  %t112 = getelementptr [5 x i8], ptr @str8, i32 0, i32 0
+  call void @col6forge_report_runtime_check_failure(ptr %t112)
+  call void @llvm.trap()
+  unreachable
+do_trip_range25:
+  br i1 %t110, label %do_trip_calc23, label %do_trip_empty24
+do_trip_calc23:
+  %t113 = sub i32 31, 1
+  %t114 = add i32 %t113, 1
+  %t115 = sdiv i32 %t114, 1
+  %t116 = sext i32 %t115 to i64
+  br label %do_trip_done27
+do_trip_empty24:
+  br label %do_trip_done27
+do_trip_done27:
+  %t117 = phi i64 [ %t116, %do_trip_calc23 ], [ 0, %do_trip_empty24 ]
+  br label %do_test28
+do_test28:
+  %t118 = phi i64 [ 0, %do_trip_done27 ], [ %t119, %do_inc29 ]
+  %t120 = icmp slt i64 %t118, %t117
+  br i1 %t120, label %bb43, label %bb49
 bb43:
-  %t133 = alloca i32
-  %t134 = alloca i64
-  %t135 = alloca i64
+  br label %do_prelude30
+do_prelude30:
   store i32 1, ptr %t19
-  store i32 1, ptr %t133
-  %t136 = icmp sle i32 1, 10
-  %t137 = icmp ne i32 1, 0
-  %t138 = and i1 %t136, %t137
-  br i1 %t138, label %do_trip_calc21, label %do_trip_zero22
-do_trip_calc21:
-  %t139 = sub i32 10, 1
-  %t140 = add i32 %t139, 1
-  %t141 = sdiv i32 %t140, 1
-  %t142 = sext i32 %t141 to i64
-  store i64 %t142, ptr %t134
-  br label %do_trip_done23
-do_trip_zero22:
-  store i64 0, ptr %t134
-  br label %do_trip_done23
-do_trip_done23:
-  store i64 0, ptr %t135
-  br label %do_test24
-do_test24:
-  %t143 = load i64, ptr %t135
-  %t144 = load i64, ptr %t134
-  %t145 = icmp slt i64 %t143, %t144
-  br i1 %t145, label %bb44, label %L1146
+  %t121 = icmp sle i32 1, 10
+  %t122 = icmp ne i32 1, 0
+  br i1 %t122, label %do_trip_range33, label %do_trip_zero_step34
+do_trip_zero_step34:
+  %t123 = getelementptr [5 x i8], ptr @str8, i32 0, i32 0
+  call void @col6forge_report_runtime_check_failure(ptr %t123)
+  call void @llvm.trap()
+  unreachable
+do_trip_range33:
+  br i1 %t121, label %do_trip_calc31, label %do_trip_empty32
+do_trip_calc31:
+  %t124 = sub i32 10, 1
+  %t125 = add i32 %t124, 1
+  %t126 = sdiv i32 %t125, 1
+  %t127 = sext i32 %t126 to i64
+  br label %do_trip_done35
+do_trip_empty32:
+  br label %do_trip_done35
+do_trip_done35:
+  %t128 = phi i64 [ %t127, %do_trip_calc31 ], [ 0, %do_trip_empty32 ]
+  br label %do_test36
+do_test36:
+  %t129 = phi i64 [ 0, %do_trip_done35 ], [ %t130, %do_inc37 ]
+  %t131 = icmp slt i64 %t129, %t128
+  br i1 %t131, label %bb44, label %L1146
 bb44:
-  %t146 = alloca i32
-  %t147 = alloca i64
-  %t148 = alloca i64
+  br label %do_prelude38
+do_prelude38:
   store i32 1, ptr %t20
-  store i32 1, ptr %t146
-  %t149 = icmp sle i32 1, 2
-  %t150 = icmp ne i32 1, 0
-  %t151 = and i1 %t149, %t150
-  br i1 %t151, label %do_trip_calc26, label %do_trip_zero27
-do_trip_calc26:
-  %t152 = sub i32 2, 1
-  %t153 = add i32 %t152, 1
-  %t154 = sdiv i32 %t153, 1
-  %t155 = sext i32 %t154 to i64
-  store i64 %t155, ptr %t147
-  br label %do_trip_done28
-do_trip_zero27:
-  store i64 0, ptr %t147
-  br label %do_trip_done28
-do_trip_done28:
-  store i64 0, ptr %t148
-  br label %do_test29
-do_test29:
-  %t156 = load i64, ptr %t148
-  %t157 = load i64, ptr %t147
-  %t158 = icmp slt i64 %t156, %t157
-  br i1 %t158, label %bb45, label %L1145
+  %t132 = icmp sle i32 1, 2
+  %t133 = icmp ne i32 1, 0
+  br i1 %t133, label %do_trip_range41, label %do_trip_zero_step42
+do_trip_zero_step42:
+  %t134 = getelementptr [5 x i8], ptr @str8, i32 0, i32 0
+  call void @col6forge_report_runtime_check_failure(ptr %t134)
+  call void @llvm.trap()
+  unreachable
+do_trip_range41:
+  br i1 %t132, label %do_trip_calc39, label %do_trip_empty40
+do_trip_calc39:
+  %t135 = sub i32 2, 1
+  %t136 = add i32 %t135, 1
+  %t137 = sdiv i32 %t136, 1
+  %t138 = sext i32 %t137 to i64
+  br label %do_trip_done43
+do_trip_empty40:
+  br label %do_trip_done43
+do_trip_done43:
+  %t139 = phi i64 [ %t138, %do_trip_calc39 ], [ 0, %do_trip_empty40 ]
+  br label %do_test44
+do_test44:
+  %t140 = phi i64 [ 0, %do_trip_done43 ], [ %t141, %do_inc45 ]
+  %t142 = icmp slt i64 %t140, %t139
+  br i1 %t142, label %bb45, label %L1145
 bb45:
-  %t159 = load i32, ptr %t18
-  %t160 = sext i32 %t159 to i64
-  %t161 = sub i64 %t160, 1
-  %t162 = mul i64 %t161, 1
-  %t163 = add i64 0, %t162
-  %t164 = load i32, ptr %t19
-  %t165 = sext i32 %t164 to i64
-  %t166 = sub i64 %t165, 1
-  %t167 = sext i32 31 to i64
-  %t168 = mul i64 1, %t167
-  %t169 = mul i64 %t166, %t168
-  %t170 = add i64 %t163, %t169
-  %t171 = load i32, ptr %t20
-  %t172 = sext i32 %t171 to i64
-  %t173 = sub i64 %t172, 1
-  %t174 = sext i32 31 to i64
-  %t175 = mul i64 1, %t174
-  %t176 = sext i32 10 to i64
-  %t177 = mul i64 %t175, %t176
-  %t178 = mul i64 %t173, %t177
-  %t179 = add i64 %t170, %t178
-  %t180 = getelementptr i32, ptr %t1, i64 %t179
-  %t181 = load i32, ptr %t18
-  %t182 = load i32, ptr %t19
-  %t183 = add i32 %t181, %t182
-  %t184 = load i32, ptr %t20
-  %t185 = add i32 %t183, %t184
-  %t186 = add i32 %t185, 298
-  store i32 %t186, ptr %t180
+  %t143 = load i32, ptr %t18
+  %t144 = sext i32 %t143 to i64
+  %t145 = sub i64 %t144, 1
+  %t146 = mul i64 %t145, 1
+  %t147 = add i64 0, %t146
+  %t148 = load i32, ptr %t19
+  %t149 = sext i32 %t148 to i64
+  %t150 = sub i64 %t149, 1
+  %t151 = sext i32 31 to i64
+  %t152 = mul i64 1, %t151
+  %t153 = mul i64 %t150, %t152
+  %t154 = add i64 %t147, %t153
+  %t155 = load i32, ptr %t20
+  %t156 = sext i32 %t155 to i64
+  %t157 = sub i64 %t156, 1
+  %t158 = sext i32 31 to i64
+  %t159 = mul i64 1, %t158
+  %t160 = sext i32 10 to i64
+  %t161 = mul i64 %t159, %t160
+  %t162 = mul i64 %t157, %t161
+  %t163 = add i64 %t154, %t162
+  %t164 = getelementptr i32, ptr %t1, i64 %t163
+  %t165 = load i32, ptr %t18
+  %t166 = load i32, ptr %t19
+  %t167 = add i32 %t165, %t166
+  %t168 = load i32, ptr %t20
+  %t169 = add i32 %t167, %t168
+  %t170 = add i32 %t169, 298
+  store i32 %t170, ptr %t164
   br label %L1144
 L1144:
-  br label %do_inc30
-do_inc30:
-  %t187 = load i32, ptr %t20
-  %t188 = load i32, ptr %t146
-  %t189 = add i32 %t187, %t188
-  store i32 %t189, ptr %t20
-  %t190 = load i64, ptr %t148
-  %t191 = add i64 %t190, 1
-  store i64 %t191, ptr %t148
-  br label %do_test29
+  br label %do_inc45
+do_inc45:
+  %t171 = load i32, ptr %t20
+  %t172 = add i32 %t171, 1
+  store i32 %t172, ptr %t20
+  %t141 = add i64 %t140, 1
+  br label %do_test44
 L1145:
-  br label %do_inc25
-do_inc25:
-  %t192 = load i32, ptr %t19
-  %t193 = load i32, ptr %t133
-  %t194 = add i32 %t192, %t193
-  store i32 %t194, ptr %t19
-  %t195 = load i64, ptr %t135
-  %t196 = add i64 %t195, 1
-  store i64 %t196, ptr %t135
-  br label %do_test24
+  br label %do_inc37
+do_inc37:
+  %t173 = load i32, ptr %t19
+  %t174 = add i32 %t173, 1
+  store i32 %t174, ptr %t19
+  %t130 = add i64 %t129, 1
+  br label %do_test36
 L1146:
-  br label %do_inc20
-do_inc20:
-  %t197 = load i32, ptr %t18
-  %t198 = load i32, ptr %t120
-  %t199 = add i32 %t197, %t198
-  store i32 %t199, ptr %t18
-  %t200 = load i64, ptr %t122
-  %t201 = add i64 %t200, 1
-  store i64 %t201, ptr %t122
-  br label %do_test19
+  br label %do_inc29
+do_inc29:
+  %t175 = load i32, ptr %t18
+  %t176 = add i32 %t175, 1
+  store i32 %t176, ptr %t18
+  %t119 = add i64 %t118, 1
+  br label %do_test28
 bb49:
   store i32 1, ptr %t21
-  %t202 = alloca i32
-  %t203 = alloca i64
-  %t204 = alloca i64
+  br label %do_prelude46
+do_prelude46:
   store i32 1, ptr %t18
-  store i32 1, ptr %t202
-  %t205 = icmp sle i32 1, 31
-  %t206 = icmp ne i32 1, 0
-  %t207 = and i1 %t205, %t206
-  br i1 %t207, label %do_trip_calc31, label %do_trip_zero32
-do_trip_calc31:
-  %t208 = sub i32 31, 1
-  %t209 = add i32 %t208, 1
-  %t210 = sdiv i32 %t209, 1
-  %t211 = sext i32 %t210 to i64
-  store i64 %t211, ptr %t203
-  br label %do_trip_done33
-do_trip_zero32:
-  store i64 0, ptr %t203
-  br label %do_trip_done33
-do_trip_done33:
-  store i64 0, ptr %t204
-  br label %do_test34
-do_test34:
-  %t212 = load i64, ptr %t204
-  %t213 = load i64, ptr %t203
-  %t214 = icmp slt i64 %t212, %t213
-  br i1 %t214, label %bb51, label %bb59
+  %t177 = icmp sle i32 1, 31
+  %t178 = icmp ne i32 1, 0
+  br i1 %t178, label %do_trip_range49, label %do_trip_zero_step50
+do_trip_zero_step50:
+  %t179 = getelementptr [5 x i8], ptr @str8, i32 0, i32 0
+  call void @col6forge_report_runtime_check_failure(ptr %t179)
+  call void @llvm.trap()
+  unreachable
+do_trip_range49:
+  br i1 %t177, label %do_trip_calc47, label %do_trip_empty48
+do_trip_calc47:
+  %t180 = sub i32 31, 1
+  %t181 = add i32 %t180, 1
+  %t182 = sdiv i32 %t181, 1
+  %t183 = sext i32 %t182 to i64
+  br label %do_trip_done51
+do_trip_empty48:
+  br label %do_trip_done51
+do_trip_done51:
+  %t184 = phi i64 [ %t183, %do_trip_calc47 ], [ 0, %do_trip_empty48 ]
+  br label %do_test52
+do_test52:
+  %t185 = phi i64 [ 0, %do_trip_done51 ], [ %t186, %do_inc53 ]
+  %t187 = icmp slt i64 %t185, %t184
+  br i1 %t187, label %bb51, label %bb59
 bb51:
-  %t215 = load i32, ptr %t18
-  %t216 = icmp eq i32 %t215, 31
-  br i1 %t216, label %if_then36, label %bb52
-if_then36:
+  %t188 = load i32, ptr %t18
+  %t189 = icmp eq i32 %t188, 31
+  br i1 %t189, label %if_then54, label %bb52
+if_then54:
   store i32 9999, ptr %t17
   br label %bb52
 bb52:
-  %t217 = load i32, ptr %t21
-  %t218 = sub i32 %t217, 1
-  %t219 = icmp slt i32 %t218, 0
-  br i1 %t219, label %L1147, label %arith_if_zero37
-arith_if_zero37:
-  %t220 = icmp eq i32 %t218, 0
-  br i1 %t220, label %L1147, label %L1148
+  %t190 = load i32, ptr %t21
+  %t191 = sub i32 %t190, 1
+  %t192 = icmp slt i32 %t191, 0
+  br i1 %t192, label %L1147, label %arith_if_zero55
+arith_if_zero55:
+  %t193 = icmp eq i32 %t191, 0
+  br i1 %t193, label %L1147, label %L1148
 L1147:
-  %t221 = load i32, ptr %t11
-  %t222 = load i32, ptr %t12
-  %t223 = load i32, ptr %t13
-  %t224 = load i32, ptr %t14
-  %t225 = load i32, ptr %t18
-  %t226 = load i32, ptr %t15
-  %t227 = load i32, ptr %t16
-  %t228 = load i32, ptr %t17
-  %t229 = load i32, ptr %t18
-  %t230 = sext i32 %t229 to i64
-  %t231 = sub i64 %t230, 1
-  %t232 = mul i64 %t231, 1
-  %t233 = add i64 0, %t232
-  %t234 = sext i32 1 to i64
-  %t235 = sub i64 %t234, 1
-  %t236 = sext i32 31 to i64
-  %t237 = mul i64 1, %t236
-  %t238 = mul i64 %t235, %t237
-  %t239 = add i64 %t233, %t238
-  %t240 = getelementptr i32, ptr %t0, i64 %t239
-  %t241 = load i32, ptr %t18
-  %t242 = sext i32 %t241 to i64
-  %t243 = sub i64 %t242, 1
-  %t244 = mul i64 %t243, 1
-  %t245 = add i64 0, %t244
-  %t246 = sext i32 1 to i64
-  %t247 = sub i64 %t246, 1
-  %t248 = sext i32 31 to i64
-  %t249 = mul i64 1, %t248
-  %t250 = mul i64 %t247, %t249
-  %t251 = add i64 %t245, %t250
-  %t252 = getelementptr i32, ptr %t0, i64 %t251
-  %t253 = load i32, ptr %t252
-  %t254 = load i32, ptr %t18
-  %t255 = sext i32 %t254 to i64
-  %t256 = sub i64 %t255, 1
-  %t257 = mul i64 %t256, 1
-  %t258 = add i64 0, %t257
-  %t259 = sext i32 2 to i64
-  %t260 = sub i64 %t259, 1
-  %t261 = sext i32 31 to i64
-  %t262 = mul i64 1, %t261
-  %t263 = mul i64 %t260, %t262
-  %t264 = add i64 %t258, %t263
-  %t265 = getelementptr i32, ptr %t0, i64 %t264
-  %t266 = load i32, ptr %t18
-  %t267 = sext i32 %t266 to i64
-  %t268 = sub i64 %t267, 1
-  %t269 = mul i64 %t268, 1
-  %t270 = add i64 0, %t269
-  %t271 = sext i32 2 to i64
-  %t272 = sub i64 %t271, 1
-  %t273 = sext i32 31 to i64
-  %t274 = mul i64 1, %t273
-  %t275 = mul i64 %t272, %t274
-  %t276 = add i64 %t270, %t275
-  %t277 = getelementptr i32, ptr %t0, i64 %t276
-  %t278 = load i32, ptr %t277
-  %t279 = load i32, ptr %t18
-  %t280 = sext i32 %t279 to i64
-  %t281 = sub i64 %t280, 1
-  %t282 = mul i64 %t281, 1
-  %t283 = add i64 0, %t282
-  %t284 = sext i32 3 to i64
-  %t285 = sub i64 %t284, 1
-  %t286 = sext i32 31 to i64
-  %t287 = mul i64 1, %t286
-  %t288 = mul i64 %t285, %t287
-  %t289 = add i64 %t283, %t288
-  %t290 = getelementptr i32, ptr %t0, i64 %t289
-  %t291 = load i32, ptr %t18
-  %t292 = sext i32 %t291 to i64
-  %t293 = sub i64 %t292, 1
-  %t294 = mul i64 %t293, 1
-  %t295 = add i64 0, %t294
-  %t296 = sext i32 3 to i64
-  %t297 = sub i64 %t296, 1
-  %t298 = sext i32 31 to i64
-  %t299 = mul i64 1, %t298
-  %t300 = mul i64 %t297, %t299
-  %t301 = add i64 %t295, %t300
-  %t302 = getelementptr i32, ptr %t0, i64 %t301
-  %t303 = load i32, ptr %t302
-  %t304 = load i32, ptr %t18
-  %t305 = sext i32 %t304 to i64
-  %t306 = sub i64 %t305, 1
-  %t307 = mul i64 %t306, 1
-  %t308 = add i64 0, %t307
-  %t309 = sext i32 4 to i64
-  %t310 = sub i64 %t309, 1
-  %t311 = sext i32 31 to i64
-  %t312 = mul i64 1, %t311
-  %t313 = mul i64 %t310, %t312
-  %t314 = add i64 %t308, %t313
-  %t315 = getelementptr i32, ptr %t0, i64 %t314
-  %t316 = load i32, ptr %t18
-  %t317 = sext i32 %t316 to i64
-  %t318 = sub i64 %t317, 1
-  %t319 = mul i64 %t318, 1
-  %t320 = add i64 0, %t319
-  %t321 = sext i32 4 to i64
-  %t322 = sub i64 %t321, 1
-  %t323 = sext i32 31 to i64
-  %t324 = mul i64 1, %t323
-  %t325 = mul i64 %t322, %t324
-  %t326 = add i64 %t320, %t325
-  %t327 = getelementptr i32, ptr %t0, i64 %t326
-  %t328 = load i32, ptr %t327
-  %t329 = load i32, ptr %t18
-  %t330 = sext i32 %t329 to i64
-  %t331 = sub i64 %t330, 1
-  %t332 = mul i64 %t331, 1
-  %t333 = add i64 0, %t332
-  %t334 = sext i32 5 to i64
-  %t335 = sub i64 %t334, 1
-  %t336 = sext i32 31 to i64
-  %t337 = mul i64 1, %t336
-  %t338 = mul i64 %t335, %t337
-  %t339 = add i64 %t333, %t338
-  %t340 = getelementptr i32, ptr %t0, i64 %t339
-  %t341 = load i32, ptr %t18
-  %t342 = sext i32 %t341 to i64
-  %t343 = sub i64 %t342, 1
-  %t344 = mul i64 %t343, 1
-  %t345 = add i64 0, %t344
-  %t346 = sext i32 5 to i64
-  %t347 = sub i64 %t346, 1
-  %t348 = sext i32 31 to i64
-  %t349 = mul i64 1, %t348
-  %t350 = mul i64 %t347, %t349
-  %t351 = add i64 %t345, %t350
-  %t352 = getelementptr i32, ptr %t0, i64 %t351
-  %t353 = load i32, ptr %t352
-  %t354 = load i32, ptr %t18
-  %t355 = sext i32 %t354 to i64
-  %t356 = sub i64 %t355, 1
-  %t357 = mul i64 %t356, 1
-  %t358 = add i64 0, %t357
-  %t359 = sext i32 6 to i64
-  %t360 = sub i64 %t359, 1
-  %t361 = sext i32 31 to i64
-  %t362 = mul i64 1, %t361
-  %t363 = mul i64 %t360, %t362
-  %t364 = add i64 %t358, %t363
-  %t365 = getelementptr i32, ptr %t0, i64 %t364
-  %t366 = load i32, ptr %t18
-  %t367 = sext i32 %t366 to i64
-  %t368 = sub i64 %t367, 1
-  %t369 = mul i64 %t368, 1
-  %t370 = add i64 0, %t369
-  %t371 = sext i32 6 to i64
-  %t372 = sub i64 %t371, 1
-  %t373 = sext i32 31 to i64
-  %t374 = mul i64 1, %t373
-  %t375 = mul i64 %t372, %t374
-  %t376 = add i64 %t370, %t375
-  %t377 = getelementptr i32, ptr %t0, i64 %t376
-  %t378 = load i32, ptr %t377
-  %t379 = load i32, ptr %t18
-  %t380 = sext i32 %t379 to i64
-  %t381 = sub i64 %t380, 1
-  %t382 = mul i64 %t381, 1
-  %t383 = add i64 0, %t382
-  %t384 = sext i32 7 to i64
-  %t385 = sub i64 %t384, 1
-  %t386 = sext i32 31 to i64
-  %t387 = mul i64 1, %t386
-  %t388 = mul i64 %t385, %t387
-  %t389 = add i64 %t383, %t388
-  %t390 = getelementptr i32, ptr %t0, i64 %t389
-  %t391 = load i32, ptr %t18
-  %t392 = sext i32 %t391 to i64
-  %t393 = sub i64 %t392, 1
-  %t394 = mul i64 %t393, 1
-  %t395 = add i64 0, %t394
-  %t396 = sext i32 7 to i64
-  %t397 = sub i64 %t396, 1
-  %t398 = sext i32 31 to i64
-  %t399 = mul i64 1, %t398
-  %t400 = mul i64 %t397, %t399
-  %t401 = add i64 %t395, %t400
-  %t402 = getelementptr i32, ptr %t0, i64 %t401
-  %t403 = load i32, ptr %t402
-  %t404 = load i32, ptr %t18
-  %t405 = sext i32 %t404 to i64
-  %t406 = sub i64 %t405, 1
-  %t407 = mul i64 %t406, 1
-  %t408 = add i64 0, %t407
-  %t409 = sext i32 8 to i64
-  %t410 = sub i64 %t409, 1
-  %t411 = sext i32 31 to i64
-  %t412 = mul i64 1, %t411
-  %t413 = mul i64 %t410, %t412
-  %t414 = add i64 %t408, %t413
-  %t415 = getelementptr i32, ptr %t0, i64 %t414
-  %t416 = load i32, ptr %t18
-  %t417 = sext i32 %t416 to i64
-  %t418 = sub i64 %t417, 1
-  %t419 = mul i64 %t418, 1
-  %t420 = add i64 0, %t419
-  %t421 = sext i32 8 to i64
-  %t422 = sub i64 %t421, 1
-  %t423 = sext i32 31 to i64
-  %t424 = mul i64 1, %t423
-  %t425 = mul i64 %t422, %t424
-  %t426 = add i64 %t420, %t425
-  %t427 = getelementptr i32, ptr %t0, i64 %t426
-  %t428 = load i32, ptr %t427
-  %t429 = load i32, ptr %t18
-  %t430 = sext i32 %t429 to i64
-  %t431 = sub i64 %t430, 1
-  %t432 = mul i64 %t431, 1
-  %t433 = add i64 0, %t432
-  %t434 = sext i32 9 to i64
-  %t435 = sub i64 %t434, 1
-  %t436 = sext i32 31 to i64
-  %t437 = mul i64 1, %t436
-  %t438 = mul i64 %t435, %t437
-  %t439 = add i64 %t433, %t438
-  %t440 = getelementptr i32, ptr %t0, i64 %t439
-  %t441 = load i32, ptr %t18
-  %t442 = sext i32 %t441 to i64
-  %t443 = sub i64 %t442, 1
-  %t444 = mul i64 %t443, 1
-  %t445 = add i64 0, %t444
-  %t446 = sext i32 9 to i64
-  %t447 = sub i64 %t446, 1
-  %t448 = sext i32 31 to i64
-  %t449 = mul i64 1, %t448
-  %t450 = mul i64 %t447, %t449
-  %t451 = add i64 %t445, %t450
-  %t452 = getelementptr i32, ptr %t0, i64 %t451
-  %t453 = load i32, ptr %t452
-  %t454 = load i32, ptr %t18
-  %t455 = sext i32 %t454 to i64
-  %t456 = sub i64 %t455, 1
-  %t457 = mul i64 %t456, 1
-  %t458 = add i64 0, %t457
-  %t459 = sext i32 10 to i64
-  %t460 = sub i64 %t459, 1
-  %t461 = sext i32 31 to i64
-  %t462 = mul i64 1, %t461
-  %t463 = mul i64 %t460, %t462
-  %t464 = add i64 %t458, %t463
-  %t465 = getelementptr i32, ptr %t0, i64 %t464
-  %t466 = load i32, ptr %t18
-  %t467 = sext i32 %t466 to i64
-  %t468 = sub i64 %t467, 1
-  %t469 = mul i64 %t468, 1
-  %t470 = add i64 0, %t469
-  %t471 = sext i32 10 to i64
-  %t472 = sub i64 %t471, 1
-  %t473 = sext i32 31 to i64
-  %t474 = mul i64 1, %t473
-  %t475 = mul i64 %t472, %t474
-  %t476 = add i64 %t470, %t475
-  %t477 = getelementptr i32, ptr %t0, i64 %t476
-  %t478 = load i32, ptr %t477
-  %t479 = load i32, ptr %t18
-  %t480 = sext i32 %t479 to i64
-  %t481 = sub i64 %t480, 1
-  %t482 = mul i64 %t481, 1
-  %t483 = add i64 0, %t482
-  %t484 = sext i32 11 to i64
-  %t485 = sub i64 %t484, 1
-  %t486 = sext i32 31 to i64
-  %t487 = mul i64 1, %t486
-  %t488 = mul i64 %t485, %t487
-  %t489 = add i64 %t483, %t488
-  %t490 = getelementptr i32, ptr %t0, i64 %t489
-  %t491 = load i32, ptr %t18
-  %t492 = sext i32 %t491 to i64
-  %t493 = sub i64 %t492, 1
-  %t494 = mul i64 %t493, 1
-  %t495 = add i64 0, %t494
-  %t496 = sext i32 11 to i64
-  %t497 = sub i64 %t496, 1
-  %t498 = sext i32 31 to i64
-  %t499 = mul i64 1, %t498
-  %t500 = mul i64 %t497, %t499
-  %t501 = add i64 %t495, %t500
-  %t502 = getelementptr i32, ptr %t0, i64 %t501
-  %t503 = load i32, ptr %t502
-  %t504 = load i32, ptr %t18
-  %t505 = sext i32 %t504 to i64
-  %t506 = sub i64 %t505, 1
-  %t507 = mul i64 %t506, 1
-  %t508 = add i64 0, %t507
-  %t509 = sext i32 12 to i64
-  %t510 = sub i64 %t509, 1
-  %t511 = sext i32 31 to i64
-  %t512 = mul i64 1, %t511
-  %t513 = mul i64 %t510, %t512
-  %t514 = add i64 %t508, %t513
-  %t515 = getelementptr i32, ptr %t0, i64 %t514
-  %t516 = load i32, ptr %t18
-  %t517 = sext i32 %t516 to i64
-  %t518 = sub i64 %t517, 1
-  %t519 = mul i64 %t518, 1
-  %t520 = add i64 0, %t519
-  %t521 = sext i32 12 to i64
-  %t522 = sub i64 %t521, 1
-  %t523 = sext i32 31 to i64
-  %t524 = mul i64 1, %t523
-  %t525 = mul i64 %t522, %t524
-  %t526 = add i64 %t520, %t525
-  %t527 = getelementptr i32, ptr %t0, i64 %t526
-  %t528 = load i32, ptr %t527
-  %t529 = load i32, ptr %t18
-  %t530 = sext i32 %t529 to i64
-  %t531 = sub i64 %t530, 1
-  %t532 = mul i64 %t531, 1
-  %t533 = add i64 0, %t532
-  %t534 = sext i32 13 to i64
-  %t535 = sub i64 %t534, 1
-  %t536 = sext i32 31 to i64
-  %t537 = mul i64 1, %t536
-  %t538 = mul i64 %t535, %t537
-  %t539 = add i64 %t533, %t538
-  %t540 = getelementptr i32, ptr %t0, i64 %t539
-  %t541 = load i32, ptr %t18
-  %t542 = sext i32 %t541 to i64
-  %t543 = sub i64 %t542, 1
-  %t544 = mul i64 %t543, 1
-  %t545 = add i64 0, %t544
-  %t546 = sext i32 13 to i64
-  %t547 = sub i64 %t546, 1
-  %t548 = sext i32 31 to i64
-  %t549 = mul i64 1, %t548
-  %t550 = mul i64 %t547, %t549
-  %t551 = add i64 %t545, %t550
-  %t552 = getelementptr i32, ptr %t0, i64 %t551
-  %t553 = load i32, ptr %t552
-  %t554 = load i32, ptr %t18
-  %t555 = sext i32 %t554 to i64
-  %t556 = sub i64 %t555, 1
-  %t557 = mul i64 %t556, 1
-  %t558 = add i64 0, %t557
-  %t559 = sext i32 14 to i64
-  %t560 = sub i64 %t559, 1
-  %t561 = sext i32 31 to i64
-  %t562 = mul i64 1, %t561
-  %t563 = mul i64 %t560, %t562
-  %t564 = add i64 %t558, %t563
-  %t565 = getelementptr i32, ptr %t0, i64 %t564
-  %t566 = load i32, ptr %t18
-  %t567 = sext i32 %t566 to i64
-  %t568 = sub i64 %t567, 1
-  %t569 = mul i64 %t568, 1
-  %t570 = add i64 0, %t569
-  %t571 = sext i32 14 to i64
-  %t572 = sub i64 %t571, 1
-  %t573 = sext i32 31 to i64
-  %t574 = mul i64 1, %t573
-  %t575 = mul i64 %t572, %t574
-  %t576 = add i64 %t570, %t575
-  %t577 = getelementptr i32, ptr %t0, i64 %t576
-  %t578 = load i32, ptr %t577
-  %t579 = load i32, ptr %t18
-  %t580 = sext i32 %t579 to i64
-  %t581 = sub i64 %t580, 1
-  %t582 = mul i64 %t581, 1
-  %t583 = add i64 0, %t582
-  %t584 = sext i32 15 to i64
-  %t585 = sub i64 %t584, 1
-  %t586 = sext i32 31 to i64
-  %t587 = mul i64 1, %t586
-  %t588 = mul i64 %t585, %t587
-  %t589 = add i64 %t583, %t588
-  %t590 = getelementptr i32, ptr %t0, i64 %t589
-  %t591 = load i32, ptr %t18
-  %t592 = sext i32 %t591 to i64
-  %t593 = sub i64 %t592, 1
-  %t594 = mul i64 %t593, 1
-  %t595 = add i64 0, %t594
-  %t596 = sext i32 15 to i64
-  %t597 = sub i64 %t596, 1
-  %t598 = sext i32 31 to i64
-  %t599 = mul i64 1, %t598
-  %t600 = mul i64 %t597, %t599
-  %t601 = add i64 %t595, %t600
-  %t602 = getelementptr i32, ptr %t0, i64 %t601
-  %t603 = load i32, ptr %t602
-  %t604 = load i32, ptr %t18
-  %t605 = sext i32 %t604 to i64
-  %t606 = sub i64 %t605, 1
-  %t607 = mul i64 %t606, 1
-  %t608 = add i64 0, %t607
-  %t609 = sext i32 16 to i64
-  %t610 = sub i64 %t609, 1
-  %t611 = sext i32 31 to i64
-  %t612 = mul i64 1, %t611
-  %t613 = mul i64 %t610, %t612
-  %t614 = add i64 %t608, %t613
-  %t615 = getelementptr i32, ptr %t0, i64 %t614
-  %t616 = load i32, ptr %t18
-  %t617 = sext i32 %t616 to i64
-  %t618 = sub i64 %t617, 1
-  %t619 = mul i64 %t618, 1
-  %t620 = add i64 0, %t619
-  %t621 = sext i32 16 to i64
-  %t622 = sub i64 %t621, 1
-  %t623 = sext i32 31 to i64
-  %t624 = mul i64 1, %t623
-  %t625 = mul i64 %t622, %t624
-  %t626 = add i64 %t620, %t625
-  %t627 = getelementptr i32, ptr %t0, i64 %t626
-  %t628 = load i32, ptr %t627
-  %t629 = load i32, ptr %t18
-  %t630 = sext i32 %t629 to i64
-  %t631 = sub i64 %t630, 1
-  %t632 = mul i64 %t631, 1
-  %t633 = add i64 0, %t632
-  %t634 = sext i32 17 to i64
-  %t635 = sub i64 %t634, 1
-  %t636 = sext i32 31 to i64
-  %t637 = mul i64 1, %t636
-  %t638 = mul i64 %t635, %t637
-  %t639 = add i64 %t633, %t638
-  %t640 = getelementptr i32, ptr %t0, i64 %t639
-  %t641 = load i32, ptr %t18
-  %t642 = sext i32 %t641 to i64
-  %t643 = sub i64 %t642, 1
-  %t644 = mul i64 %t643, 1
-  %t645 = add i64 0, %t644
-  %t646 = sext i32 17 to i64
-  %t647 = sub i64 %t646, 1
-  %t648 = sext i32 31 to i64
-  %t649 = mul i64 1, %t648
-  %t650 = mul i64 %t647, %t649
-  %t651 = add i64 %t645, %t650
-  %t652 = getelementptr i32, ptr %t0, i64 %t651
-  %t653 = load i32, ptr %t652
-  %t654 = load i32, ptr %t18
-  %t655 = sext i32 %t654 to i64
-  %t656 = sub i64 %t655, 1
-  %t657 = mul i64 %t656, 1
-  %t658 = add i64 0, %t657
-  %t659 = sext i32 18 to i64
-  %t660 = sub i64 %t659, 1
-  %t661 = sext i32 31 to i64
-  %t662 = mul i64 1, %t661
-  %t663 = mul i64 %t660, %t662
-  %t664 = add i64 %t658, %t663
-  %t665 = getelementptr i32, ptr %t0, i64 %t664
-  %t666 = load i32, ptr %t18
-  %t667 = sext i32 %t666 to i64
-  %t668 = sub i64 %t667, 1
-  %t669 = mul i64 %t668, 1
-  %t670 = add i64 0, %t669
-  %t671 = sext i32 18 to i64
-  %t672 = sub i64 %t671, 1
-  %t673 = sext i32 31 to i64
-  %t674 = mul i64 1, %t673
-  %t675 = mul i64 %t672, %t674
-  %t676 = add i64 %t670, %t675
-  %t677 = getelementptr i32, ptr %t0, i64 %t676
-  %t678 = load i32, ptr %t677
-  %t679 = load i32, ptr %t18
-  %t680 = sext i32 %t679 to i64
-  %t681 = sub i64 %t680, 1
-  %t682 = mul i64 %t681, 1
-  %t683 = add i64 0, %t682
-  %t684 = sext i32 19 to i64
-  %t685 = sub i64 %t684, 1
-  %t686 = sext i32 31 to i64
-  %t687 = mul i64 1, %t686
-  %t688 = mul i64 %t685, %t687
-  %t689 = add i64 %t683, %t688
-  %t690 = getelementptr i32, ptr %t0, i64 %t689
-  %t691 = load i32, ptr %t18
-  %t692 = sext i32 %t691 to i64
-  %t693 = sub i64 %t692, 1
-  %t694 = mul i64 %t693, 1
-  %t695 = add i64 0, %t694
-  %t696 = sext i32 19 to i64
-  %t697 = sub i64 %t696, 1
-  %t698 = sext i32 31 to i64
-  %t699 = mul i64 1, %t698
-  %t700 = mul i64 %t697, %t699
-  %t701 = add i64 %t695, %t700
-  %t702 = getelementptr i32, ptr %t0, i64 %t701
-  %t703 = load i32, ptr %t702
-  %t704 = load i32, ptr %t18
-  %t705 = sext i32 %t704 to i64
-  %t706 = sub i64 %t705, 1
-  %t707 = mul i64 %t706, 1
-  %t708 = add i64 0, %t707
-  %t709 = sext i32 20 to i64
-  %t710 = sub i64 %t709, 1
-  %t711 = sext i32 31 to i64
-  %t712 = mul i64 1, %t711
-  %t713 = mul i64 %t710, %t712
-  %t714 = add i64 %t708, %t713
-  %t715 = getelementptr i32, ptr %t0, i64 %t714
-  %t716 = load i32, ptr %t18
-  %t717 = sext i32 %t716 to i64
-  %t718 = sub i64 %t717, 1
-  %t719 = mul i64 %t718, 1
-  %t720 = add i64 0, %t719
-  %t721 = sext i32 20 to i64
-  %t722 = sub i64 %t721, 1
-  %t723 = sext i32 31 to i64
-  %t724 = mul i64 1, %t723
-  %t725 = mul i64 %t722, %t724
-  %t726 = add i64 %t720, %t725
-  %t727 = getelementptr i32, ptr %t0, i64 %t726
-  %t728 = load i32, ptr %t727
-  %t729 = getelementptr [84 x i8], ptr @str8, i32 0, i32 0
-  %t730 = alloca i32, i32 27
-  %t731 = getelementptr i32, ptr %t730, i32 0
-  store i32 %t222, ptr %t731
-  %t732 = getelementptr i32, ptr %t730, i32 1
-  store i32 %t223, ptr %t732
-  %t733 = getelementptr i32, ptr %t730, i32 2
-  store i32 %t224, ptr %t733
-  %t734 = getelementptr i32, ptr %t730, i32 3
-  store i32 %t225, ptr %t734
-  %t735 = getelementptr i32, ptr %t730, i32 4
-  store i32 %t226, ptr %t735
-  %t736 = getelementptr i32, ptr %t730, i32 5
-  store i32 %t227, ptr %t736
-  %t737 = getelementptr i32, ptr %t730, i32 6
-  store i32 %t228, ptr %t737
-  %t738 = getelementptr i32, ptr %t730, i32 7
-  store i32 %t253, ptr %t738
-  %t739 = getelementptr i32, ptr %t730, i32 8
-  store i32 %t278, ptr %t739
-  %t740 = getelementptr i32, ptr %t730, i32 9
-  store i32 %t303, ptr %t740
-  %t741 = getelementptr i32, ptr %t730, i32 10
-  store i32 %t328, ptr %t741
-  %t742 = getelementptr i32, ptr %t730, i32 11
-  store i32 %t353, ptr %t742
-  %t743 = getelementptr i32, ptr %t730, i32 12
-  store i32 %t378, ptr %t743
-  %t744 = getelementptr i32, ptr %t730, i32 13
-  store i32 %t403, ptr %t744
-  %t745 = getelementptr i32, ptr %t730, i32 14
-  store i32 %t428, ptr %t745
-  %t746 = getelementptr i32, ptr %t730, i32 15
-  store i32 %t453, ptr %t746
-  %t747 = getelementptr i32, ptr %t730, i32 16
-  store i32 %t478, ptr %t747
-  %t748 = getelementptr i32, ptr %t730, i32 17
-  store i32 %t503, ptr %t748
-  %t749 = getelementptr i32, ptr %t730, i32 18
-  store i32 %t528, ptr %t749
-  %t750 = getelementptr i32, ptr %t730, i32 19
-  store i32 %t553, ptr %t750
-  %t751 = getelementptr i32, ptr %t730, i32 20
-  store i32 %t578, ptr %t751
-  %t752 = getelementptr i32, ptr %t730, i32 21
-  store i32 %t603, ptr %t752
-  %t753 = getelementptr i32, ptr %t730, i32 22
-  store i32 %t628, ptr %t753
-  %t754 = getelementptr i32, ptr %t730, i32 23
-  store i32 %t653, ptr %t754
-  %t755 = getelementptr i32, ptr %t730, i32 24
-  store i32 %t678, ptr %t755
-  %t756 = getelementptr i32, ptr %t730, i32 25
-  store i32 %t703, ptr %t756
-  %t757 = getelementptr i32, ptr %t730, i32 26
-  store i32 %t728, ptr %t757
-  %t758 = alloca ptr, i32 27
-  %t759 = getelementptr ptr, ptr %t758, i32 0
-  store ptr %t731, ptr %t759
-  %t760 = getelementptr ptr, ptr %t758, i32 1
-  store ptr %t732, ptr %t760
-  %t761 = getelementptr ptr, ptr %t758, i32 2
-  store ptr %t733, ptr %t761
-  %t762 = getelementptr ptr, ptr %t758, i32 3
-  store ptr %t734, ptr %t762
-  %t763 = getelementptr ptr, ptr %t758, i32 4
-  store ptr %t735, ptr %t763
-  %t764 = getelementptr ptr, ptr %t758, i32 5
-  store ptr %t736, ptr %t764
-  %t765 = getelementptr ptr, ptr %t758, i32 6
-  store ptr %t737, ptr %t765
-  %t766 = getelementptr ptr, ptr %t758, i32 7
-  store ptr %t738, ptr %t766
-  %t767 = getelementptr ptr, ptr %t758, i32 8
-  store ptr %t739, ptr %t767
-  %t768 = getelementptr ptr, ptr %t758, i32 9
-  store ptr %t740, ptr %t768
-  %t769 = getelementptr ptr, ptr %t758, i32 10
-  store ptr %t741, ptr %t769
-  %t770 = getelementptr ptr, ptr %t758, i32 11
-  store ptr %t742, ptr %t770
-  %t771 = getelementptr ptr, ptr %t758, i32 12
-  store ptr %t743, ptr %t771
-  %t772 = getelementptr ptr, ptr %t758, i32 13
-  store ptr %t744, ptr %t772
-  %t773 = getelementptr ptr, ptr %t758, i32 14
-  store ptr %t745, ptr %t773
-  %t774 = getelementptr ptr, ptr %t758, i32 15
-  store ptr %t746, ptr %t774
-  %t775 = getelementptr ptr, ptr %t758, i32 16
-  store ptr %t747, ptr %t775
-  %t776 = getelementptr ptr, ptr %t758, i32 17
-  store ptr %t748, ptr %t776
-  %t777 = getelementptr ptr, ptr %t758, i32 18
-  store ptr %t749, ptr %t777
-  %t778 = getelementptr ptr, ptr %t758, i32 19
-  store ptr %t750, ptr %t778
-  %t779 = getelementptr ptr, ptr %t758, i32 20
-  store ptr %t751, ptr %t779
-  %t780 = getelementptr ptr, ptr %t758, i32 21
-  store ptr %t752, ptr %t780
-  %t781 = getelementptr ptr, ptr %t758, i32 22
-  store ptr %t753, ptr %t781
-  %t782 = getelementptr ptr, ptr %t758, i32 23
-  store ptr %t754, ptr %t782
-  %t783 = getelementptr ptr, ptr %t758, i32 24
-  store ptr %t755, ptr %t783
-  %t784 = getelementptr ptr, ptr %t758, i32 25
-  store ptr %t756, ptr %t784
-  %t785 = getelementptr ptr, ptr %t758, i32 26
-  store ptr %t757, ptr %t785
-  %t786 = getelementptr [28 x i8], ptr @str9, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t221, ptr %t729, ptr %t758, ptr %t786, i32 27, i32 0)
+  %t194 = load i32, ptr %t11
+  %t195 = load i32, ptr %t12
+  %t196 = load i32, ptr %t13
+  %t197 = load i32, ptr %t14
+  %t198 = load i32, ptr %t18
+  %t199 = load i32, ptr %t15
+  %t200 = load i32, ptr %t16
+  %t201 = load i32, ptr %t17
+  %t202 = load i32, ptr %t18
+  %t203 = sext i32 %t202 to i64
+  %t204 = sub i64 %t203, 1
+  %t205 = mul i64 %t204, 1
+  %t206 = add i64 0, %t205
+  %t207 = sext i32 1 to i64
+  %t208 = sub i64 %t207, 1
+  %t209 = sext i32 31 to i64
+  %t210 = mul i64 1, %t209
+  %t211 = mul i64 %t208, %t210
+  %t212 = add i64 %t206, %t211
+  %t213 = getelementptr i32, ptr %t0, i64 %t212
+  %t214 = load i32, ptr %t18
+  %t215 = sext i32 %t214 to i64
+  %t216 = sub i64 %t215, 1
+  %t217 = mul i64 %t216, 1
+  %t218 = add i64 0, %t217
+  %t219 = sext i32 1 to i64
+  %t220 = sub i64 %t219, 1
+  %t221 = sext i32 31 to i64
+  %t222 = mul i64 1, %t221
+  %t223 = mul i64 %t220, %t222
+  %t224 = add i64 %t218, %t223
+  %t225 = getelementptr i32, ptr %t0, i64 %t224
+  %t226 = load i32, ptr %t225
+  %t227 = load i32, ptr %t18
+  %t228 = sext i32 %t227 to i64
+  %t229 = sub i64 %t228, 1
+  %t230 = mul i64 %t229, 1
+  %t231 = add i64 0, %t230
+  %t232 = sext i32 2 to i64
+  %t233 = sub i64 %t232, 1
+  %t234 = sext i32 31 to i64
+  %t235 = mul i64 1, %t234
+  %t236 = mul i64 %t233, %t235
+  %t237 = add i64 %t231, %t236
+  %t238 = getelementptr i32, ptr %t0, i64 %t237
+  %t239 = load i32, ptr %t18
+  %t240 = sext i32 %t239 to i64
+  %t241 = sub i64 %t240, 1
+  %t242 = mul i64 %t241, 1
+  %t243 = add i64 0, %t242
+  %t244 = sext i32 2 to i64
+  %t245 = sub i64 %t244, 1
+  %t246 = sext i32 31 to i64
+  %t247 = mul i64 1, %t246
+  %t248 = mul i64 %t245, %t247
+  %t249 = add i64 %t243, %t248
+  %t250 = getelementptr i32, ptr %t0, i64 %t249
+  %t251 = load i32, ptr %t250
+  %t252 = load i32, ptr %t18
+  %t253 = sext i32 %t252 to i64
+  %t254 = sub i64 %t253, 1
+  %t255 = mul i64 %t254, 1
+  %t256 = add i64 0, %t255
+  %t257 = sext i32 3 to i64
+  %t258 = sub i64 %t257, 1
+  %t259 = sext i32 31 to i64
+  %t260 = mul i64 1, %t259
+  %t261 = mul i64 %t258, %t260
+  %t262 = add i64 %t256, %t261
+  %t263 = getelementptr i32, ptr %t0, i64 %t262
+  %t264 = load i32, ptr %t18
+  %t265 = sext i32 %t264 to i64
+  %t266 = sub i64 %t265, 1
+  %t267 = mul i64 %t266, 1
+  %t268 = add i64 0, %t267
+  %t269 = sext i32 3 to i64
+  %t270 = sub i64 %t269, 1
+  %t271 = sext i32 31 to i64
+  %t272 = mul i64 1, %t271
+  %t273 = mul i64 %t270, %t272
+  %t274 = add i64 %t268, %t273
+  %t275 = getelementptr i32, ptr %t0, i64 %t274
+  %t276 = load i32, ptr %t275
+  %t277 = load i32, ptr %t18
+  %t278 = sext i32 %t277 to i64
+  %t279 = sub i64 %t278, 1
+  %t280 = mul i64 %t279, 1
+  %t281 = add i64 0, %t280
+  %t282 = sext i32 4 to i64
+  %t283 = sub i64 %t282, 1
+  %t284 = sext i32 31 to i64
+  %t285 = mul i64 1, %t284
+  %t286 = mul i64 %t283, %t285
+  %t287 = add i64 %t281, %t286
+  %t288 = getelementptr i32, ptr %t0, i64 %t287
+  %t289 = load i32, ptr %t18
+  %t290 = sext i32 %t289 to i64
+  %t291 = sub i64 %t290, 1
+  %t292 = mul i64 %t291, 1
+  %t293 = add i64 0, %t292
+  %t294 = sext i32 4 to i64
+  %t295 = sub i64 %t294, 1
+  %t296 = sext i32 31 to i64
+  %t297 = mul i64 1, %t296
+  %t298 = mul i64 %t295, %t297
+  %t299 = add i64 %t293, %t298
+  %t300 = getelementptr i32, ptr %t0, i64 %t299
+  %t301 = load i32, ptr %t300
+  %t302 = load i32, ptr %t18
+  %t303 = sext i32 %t302 to i64
+  %t304 = sub i64 %t303, 1
+  %t305 = mul i64 %t304, 1
+  %t306 = add i64 0, %t305
+  %t307 = sext i32 5 to i64
+  %t308 = sub i64 %t307, 1
+  %t309 = sext i32 31 to i64
+  %t310 = mul i64 1, %t309
+  %t311 = mul i64 %t308, %t310
+  %t312 = add i64 %t306, %t311
+  %t313 = getelementptr i32, ptr %t0, i64 %t312
+  %t314 = load i32, ptr %t18
+  %t315 = sext i32 %t314 to i64
+  %t316 = sub i64 %t315, 1
+  %t317 = mul i64 %t316, 1
+  %t318 = add i64 0, %t317
+  %t319 = sext i32 5 to i64
+  %t320 = sub i64 %t319, 1
+  %t321 = sext i32 31 to i64
+  %t322 = mul i64 1, %t321
+  %t323 = mul i64 %t320, %t322
+  %t324 = add i64 %t318, %t323
+  %t325 = getelementptr i32, ptr %t0, i64 %t324
+  %t326 = load i32, ptr %t325
+  %t327 = load i32, ptr %t18
+  %t328 = sext i32 %t327 to i64
+  %t329 = sub i64 %t328, 1
+  %t330 = mul i64 %t329, 1
+  %t331 = add i64 0, %t330
+  %t332 = sext i32 6 to i64
+  %t333 = sub i64 %t332, 1
+  %t334 = sext i32 31 to i64
+  %t335 = mul i64 1, %t334
+  %t336 = mul i64 %t333, %t335
+  %t337 = add i64 %t331, %t336
+  %t338 = getelementptr i32, ptr %t0, i64 %t337
+  %t339 = load i32, ptr %t18
+  %t340 = sext i32 %t339 to i64
+  %t341 = sub i64 %t340, 1
+  %t342 = mul i64 %t341, 1
+  %t343 = add i64 0, %t342
+  %t344 = sext i32 6 to i64
+  %t345 = sub i64 %t344, 1
+  %t346 = sext i32 31 to i64
+  %t347 = mul i64 1, %t346
+  %t348 = mul i64 %t345, %t347
+  %t349 = add i64 %t343, %t348
+  %t350 = getelementptr i32, ptr %t0, i64 %t349
+  %t351 = load i32, ptr %t350
+  %t352 = load i32, ptr %t18
+  %t353 = sext i32 %t352 to i64
+  %t354 = sub i64 %t353, 1
+  %t355 = mul i64 %t354, 1
+  %t356 = add i64 0, %t355
+  %t357 = sext i32 7 to i64
+  %t358 = sub i64 %t357, 1
+  %t359 = sext i32 31 to i64
+  %t360 = mul i64 1, %t359
+  %t361 = mul i64 %t358, %t360
+  %t362 = add i64 %t356, %t361
+  %t363 = getelementptr i32, ptr %t0, i64 %t362
+  %t364 = load i32, ptr %t18
+  %t365 = sext i32 %t364 to i64
+  %t366 = sub i64 %t365, 1
+  %t367 = mul i64 %t366, 1
+  %t368 = add i64 0, %t367
+  %t369 = sext i32 7 to i64
+  %t370 = sub i64 %t369, 1
+  %t371 = sext i32 31 to i64
+  %t372 = mul i64 1, %t371
+  %t373 = mul i64 %t370, %t372
+  %t374 = add i64 %t368, %t373
+  %t375 = getelementptr i32, ptr %t0, i64 %t374
+  %t376 = load i32, ptr %t375
+  %t377 = load i32, ptr %t18
+  %t378 = sext i32 %t377 to i64
+  %t379 = sub i64 %t378, 1
+  %t380 = mul i64 %t379, 1
+  %t381 = add i64 0, %t380
+  %t382 = sext i32 8 to i64
+  %t383 = sub i64 %t382, 1
+  %t384 = sext i32 31 to i64
+  %t385 = mul i64 1, %t384
+  %t386 = mul i64 %t383, %t385
+  %t387 = add i64 %t381, %t386
+  %t388 = getelementptr i32, ptr %t0, i64 %t387
+  %t389 = load i32, ptr %t18
+  %t390 = sext i32 %t389 to i64
+  %t391 = sub i64 %t390, 1
+  %t392 = mul i64 %t391, 1
+  %t393 = add i64 0, %t392
+  %t394 = sext i32 8 to i64
+  %t395 = sub i64 %t394, 1
+  %t396 = sext i32 31 to i64
+  %t397 = mul i64 1, %t396
+  %t398 = mul i64 %t395, %t397
+  %t399 = add i64 %t393, %t398
+  %t400 = getelementptr i32, ptr %t0, i64 %t399
+  %t401 = load i32, ptr %t400
+  %t402 = load i32, ptr %t18
+  %t403 = sext i32 %t402 to i64
+  %t404 = sub i64 %t403, 1
+  %t405 = mul i64 %t404, 1
+  %t406 = add i64 0, %t405
+  %t407 = sext i32 9 to i64
+  %t408 = sub i64 %t407, 1
+  %t409 = sext i32 31 to i64
+  %t410 = mul i64 1, %t409
+  %t411 = mul i64 %t408, %t410
+  %t412 = add i64 %t406, %t411
+  %t413 = getelementptr i32, ptr %t0, i64 %t412
+  %t414 = load i32, ptr %t18
+  %t415 = sext i32 %t414 to i64
+  %t416 = sub i64 %t415, 1
+  %t417 = mul i64 %t416, 1
+  %t418 = add i64 0, %t417
+  %t419 = sext i32 9 to i64
+  %t420 = sub i64 %t419, 1
+  %t421 = sext i32 31 to i64
+  %t422 = mul i64 1, %t421
+  %t423 = mul i64 %t420, %t422
+  %t424 = add i64 %t418, %t423
+  %t425 = getelementptr i32, ptr %t0, i64 %t424
+  %t426 = load i32, ptr %t425
+  %t427 = load i32, ptr %t18
+  %t428 = sext i32 %t427 to i64
+  %t429 = sub i64 %t428, 1
+  %t430 = mul i64 %t429, 1
+  %t431 = add i64 0, %t430
+  %t432 = sext i32 10 to i64
+  %t433 = sub i64 %t432, 1
+  %t434 = sext i32 31 to i64
+  %t435 = mul i64 1, %t434
+  %t436 = mul i64 %t433, %t435
+  %t437 = add i64 %t431, %t436
+  %t438 = getelementptr i32, ptr %t0, i64 %t437
+  %t439 = load i32, ptr %t18
+  %t440 = sext i32 %t439 to i64
+  %t441 = sub i64 %t440, 1
+  %t442 = mul i64 %t441, 1
+  %t443 = add i64 0, %t442
+  %t444 = sext i32 10 to i64
+  %t445 = sub i64 %t444, 1
+  %t446 = sext i32 31 to i64
+  %t447 = mul i64 1, %t446
+  %t448 = mul i64 %t445, %t447
+  %t449 = add i64 %t443, %t448
+  %t450 = getelementptr i32, ptr %t0, i64 %t449
+  %t451 = load i32, ptr %t450
+  %t452 = load i32, ptr %t18
+  %t453 = sext i32 %t452 to i64
+  %t454 = sub i64 %t453, 1
+  %t455 = mul i64 %t454, 1
+  %t456 = add i64 0, %t455
+  %t457 = sext i32 11 to i64
+  %t458 = sub i64 %t457, 1
+  %t459 = sext i32 31 to i64
+  %t460 = mul i64 1, %t459
+  %t461 = mul i64 %t458, %t460
+  %t462 = add i64 %t456, %t461
+  %t463 = getelementptr i32, ptr %t0, i64 %t462
+  %t464 = load i32, ptr %t18
+  %t465 = sext i32 %t464 to i64
+  %t466 = sub i64 %t465, 1
+  %t467 = mul i64 %t466, 1
+  %t468 = add i64 0, %t467
+  %t469 = sext i32 11 to i64
+  %t470 = sub i64 %t469, 1
+  %t471 = sext i32 31 to i64
+  %t472 = mul i64 1, %t471
+  %t473 = mul i64 %t470, %t472
+  %t474 = add i64 %t468, %t473
+  %t475 = getelementptr i32, ptr %t0, i64 %t474
+  %t476 = load i32, ptr %t475
+  %t477 = load i32, ptr %t18
+  %t478 = sext i32 %t477 to i64
+  %t479 = sub i64 %t478, 1
+  %t480 = mul i64 %t479, 1
+  %t481 = add i64 0, %t480
+  %t482 = sext i32 12 to i64
+  %t483 = sub i64 %t482, 1
+  %t484 = sext i32 31 to i64
+  %t485 = mul i64 1, %t484
+  %t486 = mul i64 %t483, %t485
+  %t487 = add i64 %t481, %t486
+  %t488 = getelementptr i32, ptr %t0, i64 %t487
+  %t489 = load i32, ptr %t18
+  %t490 = sext i32 %t489 to i64
+  %t491 = sub i64 %t490, 1
+  %t492 = mul i64 %t491, 1
+  %t493 = add i64 0, %t492
+  %t494 = sext i32 12 to i64
+  %t495 = sub i64 %t494, 1
+  %t496 = sext i32 31 to i64
+  %t497 = mul i64 1, %t496
+  %t498 = mul i64 %t495, %t497
+  %t499 = add i64 %t493, %t498
+  %t500 = getelementptr i32, ptr %t0, i64 %t499
+  %t501 = load i32, ptr %t500
+  %t502 = load i32, ptr %t18
+  %t503 = sext i32 %t502 to i64
+  %t504 = sub i64 %t503, 1
+  %t505 = mul i64 %t504, 1
+  %t506 = add i64 0, %t505
+  %t507 = sext i32 13 to i64
+  %t508 = sub i64 %t507, 1
+  %t509 = sext i32 31 to i64
+  %t510 = mul i64 1, %t509
+  %t511 = mul i64 %t508, %t510
+  %t512 = add i64 %t506, %t511
+  %t513 = getelementptr i32, ptr %t0, i64 %t512
+  %t514 = load i32, ptr %t18
+  %t515 = sext i32 %t514 to i64
+  %t516 = sub i64 %t515, 1
+  %t517 = mul i64 %t516, 1
+  %t518 = add i64 0, %t517
+  %t519 = sext i32 13 to i64
+  %t520 = sub i64 %t519, 1
+  %t521 = sext i32 31 to i64
+  %t522 = mul i64 1, %t521
+  %t523 = mul i64 %t520, %t522
+  %t524 = add i64 %t518, %t523
+  %t525 = getelementptr i32, ptr %t0, i64 %t524
+  %t526 = load i32, ptr %t525
+  %t527 = load i32, ptr %t18
+  %t528 = sext i32 %t527 to i64
+  %t529 = sub i64 %t528, 1
+  %t530 = mul i64 %t529, 1
+  %t531 = add i64 0, %t530
+  %t532 = sext i32 14 to i64
+  %t533 = sub i64 %t532, 1
+  %t534 = sext i32 31 to i64
+  %t535 = mul i64 1, %t534
+  %t536 = mul i64 %t533, %t535
+  %t537 = add i64 %t531, %t536
+  %t538 = getelementptr i32, ptr %t0, i64 %t537
+  %t539 = load i32, ptr %t18
+  %t540 = sext i32 %t539 to i64
+  %t541 = sub i64 %t540, 1
+  %t542 = mul i64 %t541, 1
+  %t543 = add i64 0, %t542
+  %t544 = sext i32 14 to i64
+  %t545 = sub i64 %t544, 1
+  %t546 = sext i32 31 to i64
+  %t547 = mul i64 1, %t546
+  %t548 = mul i64 %t545, %t547
+  %t549 = add i64 %t543, %t548
+  %t550 = getelementptr i32, ptr %t0, i64 %t549
+  %t551 = load i32, ptr %t550
+  %t552 = load i32, ptr %t18
+  %t553 = sext i32 %t552 to i64
+  %t554 = sub i64 %t553, 1
+  %t555 = mul i64 %t554, 1
+  %t556 = add i64 0, %t555
+  %t557 = sext i32 15 to i64
+  %t558 = sub i64 %t557, 1
+  %t559 = sext i32 31 to i64
+  %t560 = mul i64 1, %t559
+  %t561 = mul i64 %t558, %t560
+  %t562 = add i64 %t556, %t561
+  %t563 = getelementptr i32, ptr %t0, i64 %t562
+  %t564 = load i32, ptr %t18
+  %t565 = sext i32 %t564 to i64
+  %t566 = sub i64 %t565, 1
+  %t567 = mul i64 %t566, 1
+  %t568 = add i64 0, %t567
+  %t569 = sext i32 15 to i64
+  %t570 = sub i64 %t569, 1
+  %t571 = sext i32 31 to i64
+  %t572 = mul i64 1, %t571
+  %t573 = mul i64 %t570, %t572
+  %t574 = add i64 %t568, %t573
+  %t575 = getelementptr i32, ptr %t0, i64 %t574
+  %t576 = load i32, ptr %t575
+  %t577 = load i32, ptr %t18
+  %t578 = sext i32 %t577 to i64
+  %t579 = sub i64 %t578, 1
+  %t580 = mul i64 %t579, 1
+  %t581 = add i64 0, %t580
+  %t582 = sext i32 16 to i64
+  %t583 = sub i64 %t582, 1
+  %t584 = sext i32 31 to i64
+  %t585 = mul i64 1, %t584
+  %t586 = mul i64 %t583, %t585
+  %t587 = add i64 %t581, %t586
+  %t588 = getelementptr i32, ptr %t0, i64 %t587
+  %t589 = load i32, ptr %t18
+  %t590 = sext i32 %t589 to i64
+  %t591 = sub i64 %t590, 1
+  %t592 = mul i64 %t591, 1
+  %t593 = add i64 0, %t592
+  %t594 = sext i32 16 to i64
+  %t595 = sub i64 %t594, 1
+  %t596 = sext i32 31 to i64
+  %t597 = mul i64 1, %t596
+  %t598 = mul i64 %t595, %t597
+  %t599 = add i64 %t593, %t598
+  %t600 = getelementptr i32, ptr %t0, i64 %t599
+  %t601 = load i32, ptr %t600
+  %t602 = load i32, ptr %t18
+  %t603 = sext i32 %t602 to i64
+  %t604 = sub i64 %t603, 1
+  %t605 = mul i64 %t604, 1
+  %t606 = add i64 0, %t605
+  %t607 = sext i32 17 to i64
+  %t608 = sub i64 %t607, 1
+  %t609 = sext i32 31 to i64
+  %t610 = mul i64 1, %t609
+  %t611 = mul i64 %t608, %t610
+  %t612 = add i64 %t606, %t611
+  %t613 = getelementptr i32, ptr %t0, i64 %t612
+  %t614 = load i32, ptr %t18
+  %t615 = sext i32 %t614 to i64
+  %t616 = sub i64 %t615, 1
+  %t617 = mul i64 %t616, 1
+  %t618 = add i64 0, %t617
+  %t619 = sext i32 17 to i64
+  %t620 = sub i64 %t619, 1
+  %t621 = sext i32 31 to i64
+  %t622 = mul i64 1, %t621
+  %t623 = mul i64 %t620, %t622
+  %t624 = add i64 %t618, %t623
+  %t625 = getelementptr i32, ptr %t0, i64 %t624
+  %t626 = load i32, ptr %t625
+  %t627 = load i32, ptr %t18
+  %t628 = sext i32 %t627 to i64
+  %t629 = sub i64 %t628, 1
+  %t630 = mul i64 %t629, 1
+  %t631 = add i64 0, %t630
+  %t632 = sext i32 18 to i64
+  %t633 = sub i64 %t632, 1
+  %t634 = sext i32 31 to i64
+  %t635 = mul i64 1, %t634
+  %t636 = mul i64 %t633, %t635
+  %t637 = add i64 %t631, %t636
+  %t638 = getelementptr i32, ptr %t0, i64 %t637
+  %t639 = load i32, ptr %t18
+  %t640 = sext i32 %t639 to i64
+  %t641 = sub i64 %t640, 1
+  %t642 = mul i64 %t641, 1
+  %t643 = add i64 0, %t642
+  %t644 = sext i32 18 to i64
+  %t645 = sub i64 %t644, 1
+  %t646 = sext i32 31 to i64
+  %t647 = mul i64 1, %t646
+  %t648 = mul i64 %t645, %t647
+  %t649 = add i64 %t643, %t648
+  %t650 = getelementptr i32, ptr %t0, i64 %t649
+  %t651 = load i32, ptr %t650
+  %t652 = load i32, ptr %t18
+  %t653 = sext i32 %t652 to i64
+  %t654 = sub i64 %t653, 1
+  %t655 = mul i64 %t654, 1
+  %t656 = add i64 0, %t655
+  %t657 = sext i32 19 to i64
+  %t658 = sub i64 %t657, 1
+  %t659 = sext i32 31 to i64
+  %t660 = mul i64 1, %t659
+  %t661 = mul i64 %t658, %t660
+  %t662 = add i64 %t656, %t661
+  %t663 = getelementptr i32, ptr %t0, i64 %t662
+  %t664 = load i32, ptr %t18
+  %t665 = sext i32 %t664 to i64
+  %t666 = sub i64 %t665, 1
+  %t667 = mul i64 %t666, 1
+  %t668 = add i64 0, %t667
+  %t669 = sext i32 19 to i64
+  %t670 = sub i64 %t669, 1
+  %t671 = sext i32 31 to i64
+  %t672 = mul i64 1, %t671
+  %t673 = mul i64 %t670, %t672
+  %t674 = add i64 %t668, %t673
+  %t675 = getelementptr i32, ptr %t0, i64 %t674
+  %t676 = load i32, ptr %t675
+  %t677 = load i32, ptr %t18
+  %t678 = sext i32 %t677 to i64
+  %t679 = sub i64 %t678, 1
+  %t680 = mul i64 %t679, 1
+  %t681 = add i64 0, %t680
+  %t682 = sext i32 20 to i64
+  %t683 = sub i64 %t682, 1
+  %t684 = sext i32 31 to i64
+  %t685 = mul i64 1, %t684
+  %t686 = mul i64 %t683, %t685
+  %t687 = add i64 %t681, %t686
+  %t688 = getelementptr i32, ptr %t0, i64 %t687
+  %t689 = load i32, ptr %t18
+  %t690 = sext i32 %t689 to i64
+  %t691 = sub i64 %t690, 1
+  %t692 = mul i64 %t691, 1
+  %t693 = add i64 0, %t692
+  %t694 = sext i32 20 to i64
+  %t695 = sub i64 %t694, 1
+  %t696 = sext i32 31 to i64
+  %t697 = mul i64 1, %t696
+  %t698 = mul i64 %t695, %t697
+  %t699 = add i64 %t693, %t698
+  %t700 = getelementptr i32, ptr %t0, i64 %t699
+  %t701 = load i32, ptr %t700
+  %t702 = getelementptr [84 x i8], ptr @str9, i32 0, i32 0
+  %t703 = alloca i32, i32 27
+  %t704 = getelementptr i32, ptr %t703, i32 0
+  store i32 %t195, ptr %t704
+  %t705 = getelementptr i32, ptr %t703, i32 1
+  store i32 %t196, ptr %t705
+  %t706 = getelementptr i32, ptr %t703, i32 2
+  store i32 %t197, ptr %t706
+  %t707 = getelementptr i32, ptr %t703, i32 3
+  store i32 %t198, ptr %t707
+  %t708 = getelementptr i32, ptr %t703, i32 4
+  store i32 %t199, ptr %t708
+  %t709 = getelementptr i32, ptr %t703, i32 5
+  store i32 %t200, ptr %t709
+  %t710 = getelementptr i32, ptr %t703, i32 6
+  store i32 %t201, ptr %t710
+  %t711 = getelementptr i32, ptr %t703, i32 7
+  store i32 %t226, ptr %t711
+  %t712 = getelementptr i32, ptr %t703, i32 8
+  store i32 %t251, ptr %t712
+  %t713 = getelementptr i32, ptr %t703, i32 9
+  store i32 %t276, ptr %t713
+  %t714 = getelementptr i32, ptr %t703, i32 10
+  store i32 %t301, ptr %t714
+  %t715 = getelementptr i32, ptr %t703, i32 11
+  store i32 %t326, ptr %t715
+  %t716 = getelementptr i32, ptr %t703, i32 12
+  store i32 %t351, ptr %t716
+  %t717 = getelementptr i32, ptr %t703, i32 13
+  store i32 %t376, ptr %t717
+  %t718 = getelementptr i32, ptr %t703, i32 14
+  store i32 %t401, ptr %t718
+  %t719 = getelementptr i32, ptr %t703, i32 15
+  store i32 %t426, ptr %t719
+  %t720 = getelementptr i32, ptr %t703, i32 16
+  store i32 %t451, ptr %t720
+  %t721 = getelementptr i32, ptr %t703, i32 17
+  store i32 %t476, ptr %t721
+  %t722 = getelementptr i32, ptr %t703, i32 18
+  store i32 %t501, ptr %t722
+  %t723 = getelementptr i32, ptr %t703, i32 19
+  store i32 %t526, ptr %t723
+  %t724 = getelementptr i32, ptr %t703, i32 20
+  store i32 %t551, ptr %t724
+  %t725 = getelementptr i32, ptr %t703, i32 21
+  store i32 %t576, ptr %t725
+  %t726 = getelementptr i32, ptr %t703, i32 22
+  store i32 %t601, ptr %t726
+  %t727 = getelementptr i32, ptr %t703, i32 23
+  store i32 %t626, ptr %t727
+  %t728 = getelementptr i32, ptr %t703, i32 24
+  store i32 %t651, ptr %t728
+  %t729 = getelementptr i32, ptr %t703, i32 25
+  store i32 %t676, ptr %t729
+  %t730 = getelementptr i32, ptr %t703, i32 26
+  store i32 %t701, ptr %t730
+  %t731 = alloca ptr, i32 27
+  %t732 = getelementptr ptr, ptr %t731, i32 0
+  store ptr %t704, ptr %t732
+  %t733 = getelementptr ptr, ptr %t731, i32 1
+  store ptr %t705, ptr %t733
+  %t734 = getelementptr ptr, ptr %t731, i32 2
+  store ptr %t706, ptr %t734
+  %t735 = getelementptr ptr, ptr %t731, i32 3
+  store ptr %t707, ptr %t735
+  %t736 = getelementptr ptr, ptr %t731, i32 4
+  store ptr %t708, ptr %t736
+  %t737 = getelementptr ptr, ptr %t731, i32 5
+  store ptr %t709, ptr %t737
+  %t738 = getelementptr ptr, ptr %t731, i32 6
+  store ptr %t710, ptr %t738
+  %t739 = getelementptr ptr, ptr %t731, i32 7
+  store ptr %t711, ptr %t739
+  %t740 = getelementptr ptr, ptr %t731, i32 8
+  store ptr %t712, ptr %t740
+  %t741 = getelementptr ptr, ptr %t731, i32 9
+  store ptr %t713, ptr %t741
+  %t742 = getelementptr ptr, ptr %t731, i32 10
+  store ptr %t714, ptr %t742
+  %t743 = getelementptr ptr, ptr %t731, i32 11
+  store ptr %t715, ptr %t743
+  %t744 = getelementptr ptr, ptr %t731, i32 12
+  store ptr %t716, ptr %t744
+  %t745 = getelementptr ptr, ptr %t731, i32 13
+  store ptr %t717, ptr %t745
+  %t746 = getelementptr ptr, ptr %t731, i32 14
+  store ptr %t718, ptr %t746
+  %t747 = getelementptr ptr, ptr %t731, i32 15
+  store ptr %t719, ptr %t747
+  %t748 = getelementptr ptr, ptr %t731, i32 16
+  store ptr %t720, ptr %t748
+  %t749 = getelementptr ptr, ptr %t731, i32 17
+  store ptr %t721, ptr %t749
+  %t750 = getelementptr ptr, ptr %t731, i32 18
+  store ptr %t722, ptr %t750
+  %t751 = getelementptr ptr, ptr %t731, i32 19
+  store ptr %t723, ptr %t751
+  %t752 = getelementptr ptr, ptr %t731, i32 20
+  store ptr %t724, ptr %t752
+  %t753 = getelementptr ptr, ptr %t731, i32 21
+  store ptr %t725, ptr %t753
+  %t754 = getelementptr ptr, ptr %t731, i32 22
+  store ptr %t726, ptr %t754
+  %t755 = getelementptr ptr, ptr %t731, i32 23
+  store ptr %t727, ptr %t755
+  %t756 = getelementptr ptr, ptr %t731, i32 24
+  store ptr %t728, ptr %t756
+  %t757 = getelementptr ptr, ptr %t731, i32 25
+  store ptr %t729, ptr %t757
+  %t758 = getelementptr ptr, ptr %t731, i32 26
+  store ptr %t730, ptr %t758
+  %t759 = getelementptr [28 x i8], ptr @str10, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t194, ptr %t702, ptr %t731, ptr %t759, i32 27, i32 0)
   br label %bb54
 bb54:
   store i32 2, ptr %t21
   br label %L1149
 L1148:
-  %t787 = load i32, ptr %t11
-  %t788 = load i32, ptr %t12
-  %t789 = load i32, ptr %t13
-  %t790 = load i32, ptr %t14
-  %t791 = load i32, ptr %t18
-  %t792 = load i32, ptr %t15
-  %t793 = load i32, ptr %t16
-  %t794 = load i32, ptr %t17
-  %t795 = load i32, ptr %t18
-  %t796 = sext i32 %t795 to i64
-  %t797 = sub i64 %t796, 1
-  %t798 = mul i64 %t797, 1
-  %t799 = add i64 0, %t798
-  %t800 = sext i32 1 to i64
-  %t801 = sub i64 %t800, 1
-  %t802 = sext i32 31 to i64
-  %t803 = mul i64 1, %t802
-  %t804 = mul i64 %t801, %t803
-  %t805 = add i64 %t799, %t804
-  %t806 = sext i32 1 to i64
-  %t807 = sub i64 %t806, 1
-  %t808 = sext i32 31 to i64
-  %t809 = mul i64 1, %t808
-  %t810 = sext i32 10 to i64
-  %t811 = mul i64 %t809, %t810
-  %t812 = mul i64 %t807, %t811
-  %t813 = add i64 %t805, %t812
-  %t814 = getelementptr i32, ptr %t1, i64 %t813
-  %t815 = load i32, ptr %t18
-  %t816 = sext i32 %t815 to i64
-  %t817 = sub i64 %t816, 1
-  %t818 = mul i64 %t817, 1
-  %t819 = add i64 0, %t818
-  %t820 = sext i32 1 to i64
+  %t760 = load i32, ptr %t11
+  %t761 = load i32, ptr %t12
+  %t762 = load i32, ptr %t13
+  %t763 = load i32, ptr %t14
+  %t764 = load i32, ptr %t18
+  %t765 = load i32, ptr %t15
+  %t766 = load i32, ptr %t16
+  %t767 = load i32, ptr %t17
+  %t768 = load i32, ptr %t18
+  %t769 = sext i32 %t768 to i64
+  %t770 = sub i64 %t769, 1
+  %t771 = mul i64 %t770, 1
+  %t772 = add i64 0, %t771
+  %t773 = sext i32 1 to i64
+  %t774 = sub i64 %t773, 1
+  %t775 = sext i32 31 to i64
+  %t776 = mul i64 1, %t775
+  %t777 = mul i64 %t774, %t776
+  %t778 = add i64 %t772, %t777
+  %t779 = sext i32 1 to i64
+  %t780 = sub i64 %t779, 1
+  %t781 = sext i32 31 to i64
+  %t782 = mul i64 1, %t781
+  %t783 = sext i32 10 to i64
+  %t784 = mul i64 %t782, %t783
+  %t785 = mul i64 %t780, %t784
+  %t786 = add i64 %t778, %t785
+  %t787 = getelementptr i32, ptr %t1, i64 %t786
+  %t788 = load i32, ptr %t18
+  %t789 = sext i32 %t788 to i64
+  %t790 = sub i64 %t789, 1
+  %t791 = mul i64 %t790, 1
+  %t792 = add i64 0, %t791
+  %t793 = sext i32 1 to i64
+  %t794 = sub i64 %t793, 1
+  %t795 = sext i32 31 to i64
+  %t796 = mul i64 1, %t795
+  %t797 = mul i64 %t794, %t796
+  %t798 = add i64 %t792, %t797
+  %t799 = sext i32 1 to i64
+  %t800 = sub i64 %t799, 1
+  %t801 = sext i32 31 to i64
+  %t802 = mul i64 1, %t801
+  %t803 = sext i32 10 to i64
+  %t804 = mul i64 %t802, %t803
+  %t805 = mul i64 %t800, %t804
+  %t806 = add i64 %t798, %t805
+  %t807 = getelementptr i32, ptr %t1, i64 %t806
+  %t808 = load i32, ptr %t807
+  %t809 = load i32, ptr %t18
+  %t810 = sext i32 %t809 to i64
+  %t811 = sub i64 %t810, 1
+  %t812 = mul i64 %t811, 1
+  %t813 = add i64 0, %t812
+  %t814 = sext i32 1 to i64
+  %t815 = sub i64 %t814, 1
+  %t816 = sext i32 31 to i64
+  %t817 = mul i64 1, %t816
+  %t818 = mul i64 %t815, %t817
+  %t819 = add i64 %t813, %t818
+  %t820 = sext i32 2 to i64
   %t821 = sub i64 %t820, 1
   %t822 = sext i32 31 to i64
   %t823 = mul i64 1, %t822
-  %t824 = mul i64 %t821, %t823
-  %t825 = add i64 %t819, %t824
-  %t826 = sext i32 1 to i64
-  %t827 = sub i64 %t826, 1
-  %t828 = sext i32 31 to i64
-  %t829 = mul i64 1, %t828
-  %t830 = sext i32 10 to i64
-  %t831 = mul i64 %t829, %t830
-  %t832 = mul i64 %t827, %t831
-  %t833 = add i64 %t825, %t832
-  %t834 = getelementptr i32, ptr %t1, i64 %t833
-  %t835 = load i32, ptr %t834
-  %t836 = load i32, ptr %t18
-  %t837 = sext i32 %t836 to i64
-  %t838 = sub i64 %t837, 1
-  %t839 = mul i64 %t838, 1
-  %t840 = add i64 0, %t839
-  %t841 = sext i32 1 to i64
-  %t842 = sub i64 %t841, 1
-  %t843 = sext i32 31 to i64
-  %t844 = mul i64 1, %t843
-  %t845 = mul i64 %t842, %t844
-  %t846 = add i64 %t840, %t845
-  %t847 = sext i32 2 to i64
-  %t848 = sub i64 %t847, 1
-  %t849 = sext i32 31 to i64
-  %t850 = mul i64 1, %t849
-  %t851 = sext i32 10 to i64
-  %t852 = mul i64 %t850, %t851
-  %t853 = mul i64 %t848, %t852
-  %t854 = add i64 %t846, %t853
-  %t855 = getelementptr i32, ptr %t1, i64 %t854
-  %t856 = load i32, ptr %t18
-  %t857 = sext i32 %t856 to i64
-  %t858 = sub i64 %t857, 1
-  %t859 = mul i64 %t858, 1
-  %t860 = add i64 0, %t859
+  %t824 = sext i32 10 to i64
+  %t825 = mul i64 %t823, %t824
+  %t826 = mul i64 %t821, %t825
+  %t827 = add i64 %t819, %t826
+  %t828 = getelementptr i32, ptr %t1, i64 %t827
+  %t829 = load i32, ptr %t18
+  %t830 = sext i32 %t829 to i64
+  %t831 = sub i64 %t830, 1
+  %t832 = mul i64 %t831, 1
+  %t833 = add i64 0, %t832
+  %t834 = sext i32 1 to i64
+  %t835 = sub i64 %t834, 1
+  %t836 = sext i32 31 to i64
+  %t837 = mul i64 1, %t836
+  %t838 = mul i64 %t835, %t837
+  %t839 = add i64 %t833, %t838
+  %t840 = sext i32 2 to i64
+  %t841 = sub i64 %t840, 1
+  %t842 = sext i32 31 to i64
+  %t843 = mul i64 1, %t842
+  %t844 = sext i32 10 to i64
+  %t845 = mul i64 %t843, %t844
+  %t846 = mul i64 %t841, %t845
+  %t847 = add i64 %t839, %t846
+  %t848 = getelementptr i32, ptr %t1, i64 %t847
+  %t849 = load i32, ptr %t848
+  %t850 = load i32, ptr %t18
+  %t851 = sext i32 %t850 to i64
+  %t852 = sub i64 %t851, 1
+  %t853 = mul i64 %t852, 1
+  %t854 = add i64 0, %t853
+  %t855 = sext i32 2 to i64
+  %t856 = sub i64 %t855, 1
+  %t857 = sext i32 31 to i64
+  %t858 = mul i64 1, %t857
+  %t859 = mul i64 %t856, %t858
+  %t860 = add i64 %t854, %t859
   %t861 = sext i32 1 to i64
   %t862 = sub i64 %t861, 1
   %t863 = sext i32 31 to i64
   %t864 = mul i64 1, %t863
-  %t865 = mul i64 %t862, %t864
-  %t866 = add i64 %t860, %t865
-  %t867 = sext i32 2 to i64
-  %t868 = sub i64 %t867, 1
-  %t869 = sext i32 31 to i64
-  %t870 = mul i64 1, %t869
-  %t871 = sext i32 10 to i64
-  %t872 = mul i64 %t870, %t871
-  %t873 = mul i64 %t868, %t872
-  %t874 = add i64 %t866, %t873
-  %t875 = getelementptr i32, ptr %t1, i64 %t874
-  %t876 = load i32, ptr %t875
-  %t877 = load i32, ptr %t18
-  %t878 = sext i32 %t877 to i64
-  %t879 = sub i64 %t878, 1
-  %t880 = mul i64 %t879, 1
-  %t881 = add i64 0, %t880
-  %t882 = sext i32 2 to i64
-  %t883 = sub i64 %t882, 1
-  %t884 = sext i32 31 to i64
-  %t885 = mul i64 1, %t884
-  %t886 = mul i64 %t883, %t885
-  %t887 = add i64 %t881, %t886
-  %t888 = sext i32 1 to i64
-  %t889 = sub i64 %t888, 1
-  %t890 = sext i32 31 to i64
-  %t891 = mul i64 1, %t890
-  %t892 = sext i32 10 to i64
-  %t893 = mul i64 %t891, %t892
-  %t894 = mul i64 %t889, %t893
-  %t895 = add i64 %t887, %t894
-  %t896 = getelementptr i32, ptr %t1, i64 %t895
-  %t897 = load i32, ptr %t18
-  %t898 = sext i32 %t897 to i64
-  %t899 = sub i64 %t898, 1
-  %t900 = mul i64 %t899, 1
-  %t901 = add i64 0, %t900
+  %t865 = sext i32 10 to i64
+  %t866 = mul i64 %t864, %t865
+  %t867 = mul i64 %t862, %t866
+  %t868 = add i64 %t860, %t867
+  %t869 = getelementptr i32, ptr %t1, i64 %t868
+  %t870 = load i32, ptr %t18
+  %t871 = sext i32 %t870 to i64
+  %t872 = sub i64 %t871, 1
+  %t873 = mul i64 %t872, 1
+  %t874 = add i64 0, %t873
+  %t875 = sext i32 2 to i64
+  %t876 = sub i64 %t875, 1
+  %t877 = sext i32 31 to i64
+  %t878 = mul i64 1, %t877
+  %t879 = mul i64 %t876, %t878
+  %t880 = add i64 %t874, %t879
+  %t881 = sext i32 1 to i64
+  %t882 = sub i64 %t881, 1
+  %t883 = sext i32 31 to i64
+  %t884 = mul i64 1, %t883
+  %t885 = sext i32 10 to i64
+  %t886 = mul i64 %t884, %t885
+  %t887 = mul i64 %t882, %t886
+  %t888 = add i64 %t880, %t887
+  %t889 = getelementptr i32, ptr %t1, i64 %t888
+  %t890 = load i32, ptr %t889
+  %t891 = load i32, ptr %t18
+  %t892 = sext i32 %t891 to i64
+  %t893 = sub i64 %t892, 1
+  %t894 = mul i64 %t893, 1
+  %t895 = add i64 0, %t894
+  %t896 = sext i32 2 to i64
+  %t897 = sub i64 %t896, 1
+  %t898 = sext i32 31 to i64
+  %t899 = mul i64 1, %t898
+  %t900 = mul i64 %t897, %t899
+  %t901 = add i64 %t895, %t900
   %t902 = sext i32 2 to i64
   %t903 = sub i64 %t902, 1
   %t904 = sext i32 31 to i64
   %t905 = mul i64 1, %t904
-  %t906 = mul i64 %t903, %t905
-  %t907 = add i64 %t901, %t906
-  %t908 = sext i32 1 to i64
-  %t909 = sub i64 %t908, 1
-  %t910 = sext i32 31 to i64
-  %t911 = mul i64 1, %t910
-  %t912 = sext i32 10 to i64
-  %t913 = mul i64 %t911, %t912
-  %t914 = mul i64 %t909, %t913
-  %t915 = add i64 %t907, %t914
-  %t916 = getelementptr i32, ptr %t1, i64 %t915
-  %t917 = load i32, ptr %t916
-  %t918 = load i32, ptr %t18
-  %t919 = sext i32 %t918 to i64
-  %t920 = sub i64 %t919, 1
-  %t921 = mul i64 %t920, 1
-  %t922 = add i64 0, %t921
-  %t923 = sext i32 2 to i64
-  %t924 = sub i64 %t923, 1
-  %t925 = sext i32 31 to i64
-  %t926 = mul i64 1, %t925
-  %t927 = mul i64 %t924, %t926
-  %t928 = add i64 %t922, %t927
-  %t929 = sext i32 2 to i64
-  %t930 = sub i64 %t929, 1
-  %t931 = sext i32 31 to i64
-  %t932 = mul i64 1, %t931
-  %t933 = sext i32 10 to i64
-  %t934 = mul i64 %t932, %t933
-  %t935 = mul i64 %t930, %t934
-  %t936 = add i64 %t928, %t935
-  %t937 = getelementptr i32, ptr %t1, i64 %t936
-  %t938 = load i32, ptr %t18
-  %t939 = sext i32 %t938 to i64
-  %t940 = sub i64 %t939, 1
-  %t941 = mul i64 %t940, 1
-  %t942 = add i64 0, %t941
-  %t943 = sext i32 2 to i64
+  %t906 = sext i32 10 to i64
+  %t907 = mul i64 %t905, %t906
+  %t908 = mul i64 %t903, %t907
+  %t909 = add i64 %t901, %t908
+  %t910 = getelementptr i32, ptr %t1, i64 %t909
+  %t911 = load i32, ptr %t18
+  %t912 = sext i32 %t911 to i64
+  %t913 = sub i64 %t912, 1
+  %t914 = mul i64 %t913, 1
+  %t915 = add i64 0, %t914
+  %t916 = sext i32 2 to i64
+  %t917 = sub i64 %t916, 1
+  %t918 = sext i32 31 to i64
+  %t919 = mul i64 1, %t918
+  %t920 = mul i64 %t917, %t919
+  %t921 = add i64 %t915, %t920
+  %t922 = sext i32 2 to i64
+  %t923 = sub i64 %t922, 1
+  %t924 = sext i32 31 to i64
+  %t925 = mul i64 1, %t924
+  %t926 = sext i32 10 to i64
+  %t927 = mul i64 %t925, %t926
+  %t928 = mul i64 %t923, %t927
+  %t929 = add i64 %t921, %t928
+  %t930 = getelementptr i32, ptr %t1, i64 %t929
+  %t931 = load i32, ptr %t930
+  %t932 = load i32, ptr %t18
+  %t933 = sext i32 %t932 to i64
+  %t934 = sub i64 %t933, 1
+  %t935 = mul i64 %t934, 1
+  %t936 = add i64 0, %t935
+  %t937 = sext i32 3 to i64
+  %t938 = sub i64 %t937, 1
+  %t939 = sext i32 31 to i64
+  %t940 = mul i64 1, %t939
+  %t941 = mul i64 %t938, %t940
+  %t942 = add i64 %t936, %t941
+  %t943 = sext i32 1 to i64
   %t944 = sub i64 %t943, 1
   %t945 = sext i32 31 to i64
   %t946 = mul i64 1, %t945
-  %t947 = mul i64 %t944, %t946
-  %t948 = add i64 %t942, %t947
-  %t949 = sext i32 2 to i64
-  %t950 = sub i64 %t949, 1
-  %t951 = sext i32 31 to i64
-  %t952 = mul i64 1, %t951
-  %t953 = sext i32 10 to i64
-  %t954 = mul i64 %t952, %t953
-  %t955 = mul i64 %t950, %t954
-  %t956 = add i64 %t948, %t955
-  %t957 = getelementptr i32, ptr %t1, i64 %t956
-  %t958 = load i32, ptr %t957
-  %t959 = load i32, ptr %t18
-  %t960 = sext i32 %t959 to i64
-  %t961 = sub i64 %t960, 1
-  %t962 = mul i64 %t961, 1
-  %t963 = add i64 0, %t962
-  %t964 = sext i32 3 to i64
-  %t965 = sub i64 %t964, 1
-  %t966 = sext i32 31 to i64
-  %t967 = mul i64 1, %t966
-  %t968 = mul i64 %t965, %t967
-  %t969 = add i64 %t963, %t968
-  %t970 = sext i32 1 to i64
-  %t971 = sub i64 %t970, 1
-  %t972 = sext i32 31 to i64
-  %t973 = mul i64 1, %t972
-  %t974 = sext i32 10 to i64
-  %t975 = mul i64 %t973, %t974
-  %t976 = mul i64 %t971, %t975
-  %t977 = add i64 %t969, %t976
-  %t978 = getelementptr i32, ptr %t1, i64 %t977
-  %t979 = load i32, ptr %t18
-  %t980 = sext i32 %t979 to i64
-  %t981 = sub i64 %t980, 1
-  %t982 = mul i64 %t981, 1
-  %t983 = add i64 0, %t982
-  %t984 = sext i32 3 to i64
+  %t947 = sext i32 10 to i64
+  %t948 = mul i64 %t946, %t947
+  %t949 = mul i64 %t944, %t948
+  %t950 = add i64 %t942, %t949
+  %t951 = getelementptr i32, ptr %t1, i64 %t950
+  %t952 = load i32, ptr %t18
+  %t953 = sext i32 %t952 to i64
+  %t954 = sub i64 %t953, 1
+  %t955 = mul i64 %t954, 1
+  %t956 = add i64 0, %t955
+  %t957 = sext i32 3 to i64
+  %t958 = sub i64 %t957, 1
+  %t959 = sext i32 31 to i64
+  %t960 = mul i64 1, %t959
+  %t961 = mul i64 %t958, %t960
+  %t962 = add i64 %t956, %t961
+  %t963 = sext i32 1 to i64
+  %t964 = sub i64 %t963, 1
+  %t965 = sext i32 31 to i64
+  %t966 = mul i64 1, %t965
+  %t967 = sext i32 10 to i64
+  %t968 = mul i64 %t966, %t967
+  %t969 = mul i64 %t964, %t968
+  %t970 = add i64 %t962, %t969
+  %t971 = getelementptr i32, ptr %t1, i64 %t970
+  %t972 = load i32, ptr %t971
+  %t973 = load i32, ptr %t18
+  %t974 = sext i32 %t973 to i64
+  %t975 = sub i64 %t974, 1
+  %t976 = mul i64 %t975, 1
+  %t977 = add i64 0, %t976
+  %t978 = sext i32 3 to i64
+  %t979 = sub i64 %t978, 1
+  %t980 = sext i32 31 to i64
+  %t981 = mul i64 1, %t980
+  %t982 = mul i64 %t979, %t981
+  %t983 = add i64 %t977, %t982
+  %t984 = sext i32 2 to i64
   %t985 = sub i64 %t984, 1
   %t986 = sext i32 31 to i64
   %t987 = mul i64 1, %t986
-  %t988 = mul i64 %t985, %t987
-  %t989 = add i64 %t983, %t988
-  %t990 = sext i32 1 to i64
-  %t991 = sub i64 %t990, 1
-  %t992 = sext i32 31 to i64
-  %t993 = mul i64 1, %t992
-  %t994 = sext i32 10 to i64
-  %t995 = mul i64 %t993, %t994
-  %t996 = mul i64 %t991, %t995
-  %t997 = add i64 %t989, %t996
-  %t998 = getelementptr i32, ptr %t1, i64 %t997
-  %t999 = load i32, ptr %t998
-  %t1000 = load i32, ptr %t18
-  %t1001 = sext i32 %t1000 to i64
-  %t1002 = sub i64 %t1001, 1
-  %t1003 = mul i64 %t1002, 1
-  %t1004 = add i64 0, %t1003
-  %t1005 = sext i32 3 to i64
-  %t1006 = sub i64 %t1005, 1
-  %t1007 = sext i32 31 to i64
-  %t1008 = mul i64 1, %t1007
-  %t1009 = mul i64 %t1006, %t1008
-  %t1010 = add i64 %t1004, %t1009
-  %t1011 = sext i32 2 to i64
-  %t1012 = sub i64 %t1011, 1
-  %t1013 = sext i32 31 to i64
-  %t1014 = mul i64 1, %t1013
-  %t1015 = sext i32 10 to i64
-  %t1016 = mul i64 %t1014, %t1015
-  %t1017 = mul i64 %t1012, %t1016
-  %t1018 = add i64 %t1010, %t1017
-  %t1019 = getelementptr i32, ptr %t1, i64 %t1018
-  %t1020 = load i32, ptr %t18
-  %t1021 = sext i32 %t1020 to i64
-  %t1022 = sub i64 %t1021, 1
-  %t1023 = mul i64 %t1022, 1
-  %t1024 = add i64 0, %t1023
-  %t1025 = sext i32 3 to i64
+  %t988 = sext i32 10 to i64
+  %t989 = mul i64 %t987, %t988
+  %t990 = mul i64 %t985, %t989
+  %t991 = add i64 %t983, %t990
+  %t992 = getelementptr i32, ptr %t1, i64 %t991
+  %t993 = load i32, ptr %t18
+  %t994 = sext i32 %t993 to i64
+  %t995 = sub i64 %t994, 1
+  %t996 = mul i64 %t995, 1
+  %t997 = add i64 0, %t996
+  %t998 = sext i32 3 to i64
+  %t999 = sub i64 %t998, 1
+  %t1000 = sext i32 31 to i64
+  %t1001 = mul i64 1, %t1000
+  %t1002 = mul i64 %t999, %t1001
+  %t1003 = add i64 %t997, %t1002
+  %t1004 = sext i32 2 to i64
+  %t1005 = sub i64 %t1004, 1
+  %t1006 = sext i32 31 to i64
+  %t1007 = mul i64 1, %t1006
+  %t1008 = sext i32 10 to i64
+  %t1009 = mul i64 %t1007, %t1008
+  %t1010 = mul i64 %t1005, %t1009
+  %t1011 = add i64 %t1003, %t1010
+  %t1012 = getelementptr i32, ptr %t1, i64 %t1011
+  %t1013 = load i32, ptr %t1012
+  %t1014 = load i32, ptr %t18
+  %t1015 = sext i32 %t1014 to i64
+  %t1016 = sub i64 %t1015, 1
+  %t1017 = mul i64 %t1016, 1
+  %t1018 = add i64 0, %t1017
+  %t1019 = sext i32 4 to i64
+  %t1020 = sub i64 %t1019, 1
+  %t1021 = sext i32 31 to i64
+  %t1022 = mul i64 1, %t1021
+  %t1023 = mul i64 %t1020, %t1022
+  %t1024 = add i64 %t1018, %t1023
+  %t1025 = sext i32 1 to i64
   %t1026 = sub i64 %t1025, 1
   %t1027 = sext i32 31 to i64
   %t1028 = mul i64 1, %t1027
-  %t1029 = mul i64 %t1026, %t1028
-  %t1030 = add i64 %t1024, %t1029
-  %t1031 = sext i32 2 to i64
-  %t1032 = sub i64 %t1031, 1
-  %t1033 = sext i32 31 to i64
-  %t1034 = mul i64 1, %t1033
-  %t1035 = sext i32 10 to i64
-  %t1036 = mul i64 %t1034, %t1035
-  %t1037 = mul i64 %t1032, %t1036
-  %t1038 = add i64 %t1030, %t1037
-  %t1039 = getelementptr i32, ptr %t1, i64 %t1038
-  %t1040 = load i32, ptr %t1039
-  %t1041 = load i32, ptr %t18
-  %t1042 = sext i32 %t1041 to i64
-  %t1043 = sub i64 %t1042, 1
-  %t1044 = mul i64 %t1043, 1
-  %t1045 = add i64 0, %t1044
-  %t1046 = sext i32 4 to i64
-  %t1047 = sub i64 %t1046, 1
-  %t1048 = sext i32 31 to i64
-  %t1049 = mul i64 1, %t1048
-  %t1050 = mul i64 %t1047, %t1049
-  %t1051 = add i64 %t1045, %t1050
-  %t1052 = sext i32 1 to i64
-  %t1053 = sub i64 %t1052, 1
-  %t1054 = sext i32 31 to i64
-  %t1055 = mul i64 1, %t1054
-  %t1056 = sext i32 10 to i64
-  %t1057 = mul i64 %t1055, %t1056
-  %t1058 = mul i64 %t1053, %t1057
-  %t1059 = add i64 %t1051, %t1058
-  %t1060 = getelementptr i32, ptr %t1, i64 %t1059
-  %t1061 = load i32, ptr %t18
-  %t1062 = sext i32 %t1061 to i64
-  %t1063 = sub i64 %t1062, 1
-  %t1064 = mul i64 %t1063, 1
-  %t1065 = add i64 0, %t1064
-  %t1066 = sext i32 4 to i64
+  %t1029 = sext i32 10 to i64
+  %t1030 = mul i64 %t1028, %t1029
+  %t1031 = mul i64 %t1026, %t1030
+  %t1032 = add i64 %t1024, %t1031
+  %t1033 = getelementptr i32, ptr %t1, i64 %t1032
+  %t1034 = load i32, ptr %t18
+  %t1035 = sext i32 %t1034 to i64
+  %t1036 = sub i64 %t1035, 1
+  %t1037 = mul i64 %t1036, 1
+  %t1038 = add i64 0, %t1037
+  %t1039 = sext i32 4 to i64
+  %t1040 = sub i64 %t1039, 1
+  %t1041 = sext i32 31 to i64
+  %t1042 = mul i64 1, %t1041
+  %t1043 = mul i64 %t1040, %t1042
+  %t1044 = add i64 %t1038, %t1043
+  %t1045 = sext i32 1 to i64
+  %t1046 = sub i64 %t1045, 1
+  %t1047 = sext i32 31 to i64
+  %t1048 = mul i64 1, %t1047
+  %t1049 = sext i32 10 to i64
+  %t1050 = mul i64 %t1048, %t1049
+  %t1051 = mul i64 %t1046, %t1050
+  %t1052 = add i64 %t1044, %t1051
+  %t1053 = getelementptr i32, ptr %t1, i64 %t1052
+  %t1054 = load i32, ptr %t1053
+  %t1055 = load i32, ptr %t18
+  %t1056 = sext i32 %t1055 to i64
+  %t1057 = sub i64 %t1056, 1
+  %t1058 = mul i64 %t1057, 1
+  %t1059 = add i64 0, %t1058
+  %t1060 = sext i32 4 to i64
+  %t1061 = sub i64 %t1060, 1
+  %t1062 = sext i32 31 to i64
+  %t1063 = mul i64 1, %t1062
+  %t1064 = mul i64 %t1061, %t1063
+  %t1065 = add i64 %t1059, %t1064
+  %t1066 = sext i32 2 to i64
   %t1067 = sub i64 %t1066, 1
   %t1068 = sext i32 31 to i64
   %t1069 = mul i64 1, %t1068
-  %t1070 = mul i64 %t1067, %t1069
-  %t1071 = add i64 %t1065, %t1070
-  %t1072 = sext i32 1 to i64
-  %t1073 = sub i64 %t1072, 1
-  %t1074 = sext i32 31 to i64
-  %t1075 = mul i64 1, %t1074
-  %t1076 = sext i32 10 to i64
-  %t1077 = mul i64 %t1075, %t1076
-  %t1078 = mul i64 %t1073, %t1077
-  %t1079 = add i64 %t1071, %t1078
-  %t1080 = getelementptr i32, ptr %t1, i64 %t1079
-  %t1081 = load i32, ptr %t1080
-  %t1082 = load i32, ptr %t18
-  %t1083 = sext i32 %t1082 to i64
-  %t1084 = sub i64 %t1083, 1
-  %t1085 = mul i64 %t1084, 1
-  %t1086 = add i64 0, %t1085
-  %t1087 = sext i32 4 to i64
-  %t1088 = sub i64 %t1087, 1
-  %t1089 = sext i32 31 to i64
-  %t1090 = mul i64 1, %t1089
-  %t1091 = mul i64 %t1088, %t1090
-  %t1092 = add i64 %t1086, %t1091
-  %t1093 = sext i32 2 to i64
-  %t1094 = sub i64 %t1093, 1
-  %t1095 = sext i32 31 to i64
-  %t1096 = mul i64 1, %t1095
-  %t1097 = sext i32 10 to i64
-  %t1098 = mul i64 %t1096, %t1097
-  %t1099 = mul i64 %t1094, %t1098
-  %t1100 = add i64 %t1092, %t1099
-  %t1101 = getelementptr i32, ptr %t1, i64 %t1100
-  %t1102 = load i32, ptr %t18
-  %t1103 = sext i32 %t1102 to i64
-  %t1104 = sub i64 %t1103, 1
-  %t1105 = mul i64 %t1104, 1
-  %t1106 = add i64 0, %t1105
-  %t1107 = sext i32 4 to i64
+  %t1070 = sext i32 10 to i64
+  %t1071 = mul i64 %t1069, %t1070
+  %t1072 = mul i64 %t1067, %t1071
+  %t1073 = add i64 %t1065, %t1072
+  %t1074 = getelementptr i32, ptr %t1, i64 %t1073
+  %t1075 = load i32, ptr %t18
+  %t1076 = sext i32 %t1075 to i64
+  %t1077 = sub i64 %t1076, 1
+  %t1078 = mul i64 %t1077, 1
+  %t1079 = add i64 0, %t1078
+  %t1080 = sext i32 4 to i64
+  %t1081 = sub i64 %t1080, 1
+  %t1082 = sext i32 31 to i64
+  %t1083 = mul i64 1, %t1082
+  %t1084 = mul i64 %t1081, %t1083
+  %t1085 = add i64 %t1079, %t1084
+  %t1086 = sext i32 2 to i64
+  %t1087 = sub i64 %t1086, 1
+  %t1088 = sext i32 31 to i64
+  %t1089 = mul i64 1, %t1088
+  %t1090 = sext i32 10 to i64
+  %t1091 = mul i64 %t1089, %t1090
+  %t1092 = mul i64 %t1087, %t1091
+  %t1093 = add i64 %t1085, %t1092
+  %t1094 = getelementptr i32, ptr %t1, i64 %t1093
+  %t1095 = load i32, ptr %t1094
+  %t1096 = load i32, ptr %t18
+  %t1097 = sext i32 %t1096 to i64
+  %t1098 = sub i64 %t1097, 1
+  %t1099 = mul i64 %t1098, 1
+  %t1100 = add i64 0, %t1099
+  %t1101 = sext i32 5 to i64
+  %t1102 = sub i64 %t1101, 1
+  %t1103 = sext i32 31 to i64
+  %t1104 = mul i64 1, %t1103
+  %t1105 = mul i64 %t1102, %t1104
+  %t1106 = add i64 %t1100, %t1105
+  %t1107 = sext i32 1 to i64
   %t1108 = sub i64 %t1107, 1
   %t1109 = sext i32 31 to i64
   %t1110 = mul i64 1, %t1109
-  %t1111 = mul i64 %t1108, %t1110
-  %t1112 = add i64 %t1106, %t1111
-  %t1113 = sext i32 2 to i64
-  %t1114 = sub i64 %t1113, 1
-  %t1115 = sext i32 31 to i64
-  %t1116 = mul i64 1, %t1115
-  %t1117 = sext i32 10 to i64
-  %t1118 = mul i64 %t1116, %t1117
-  %t1119 = mul i64 %t1114, %t1118
-  %t1120 = add i64 %t1112, %t1119
-  %t1121 = getelementptr i32, ptr %t1, i64 %t1120
-  %t1122 = load i32, ptr %t1121
-  %t1123 = load i32, ptr %t18
-  %t1124 = sext i32 %t1123 to i64
-  %t1125 = sub i64 %t1124, 1
-  %t1126 = mul i64 %t1125, 1
-  %t1127 = add i64 0, %t1126
-  %t1128 = sext i32 5 to i64
-  %t1129 = sub i64 %t1128, 1
-  %t1130 = sext i32 31 to i64
-  %t1131 = mul i64 1, %t1130
-  %t1132 = mul i64 %t1129, %t1131
-  %t1133 = add i64 %t1127, %t1132
-  %t1134 = sext i32 1 to i64
-  %t1135 = sub i64 %t1134, 1
-  %t1136 = sext i32 31 to i64
-  %t1137 = mul i64 1, %t1136
-  %t1138 = sext i32 10 to i64
-  %t1139 = mul i64 %t1137, %t1138
-  %t1140 = mul i64 %t1135, %t1139
-  %t1141 = add i64 %t1133, %t1140
-  %t1142 = getelementptr i32, ptr %t1, i64 %t1141
-  %t1143 = load i32, ptr %t18
-  %t1144 = sext i32 %t1143 to i64
-  %t1145 = sub i64 %t1144, 1
-  %t1146 = mul i64 %t1145, 1
-  %t1147 = add i64 0, %t1146
-  %t1148 = sext i32 5 to i64
+  %t1111 = sext i32 10 to i64
+  %t1112 = mul i64 %t1110, %t1111
+  %t1113 = mul i64 %t1108, %t1112
+  %t1114 = add i64 %t1106, %t1113
+  %t1115 = getelementptr i32, ptr %t1, i64 %t1114
+  %t1116 = load i32, ptr %t18
+  %t1117 = sext i32 %t1116 to i64
+  %t1118 = sub i64 %t1117, 1
+  %t1119 = mul i64 %t1118, 1
+  %t1120 = add i64 0, %t1119
+  %t1121 = sext i32 5 to i64
+  %t1122 = sub i64 %t1121, 1
+  %t1123 = sext i32 31 to i64
+  %t1124 = mul i64 1, %t1123
+  %t1125 = mul i64 %t1122, %t1124
+  %t1126 = add i64 %t1120, %t1125
+  %t1127 = sext i32 1 to i64
+  %t1128 = sub i64 %t1127, 1
+  %t1129 = sext i32 31 to i64
+  %t1130 = mul i64 1, %t1129
+  %t1131 = sext i32 10 to i64
+  %t1132 = mul i64 %t1130, %t1131
+  %t1133 = mul i64 %t1128, %t1132
+  %t1134 = add i64 %t1126, %t1133
+  %t1135 = getelementptr i32, ptr %t1, i64 %t1134
+  %t1136 = load i32, ptr %t1135
+  %t1137 = load i32, ptr %t18
+  %t1138 = sext i32 %t1137 to i64
+  %t1139 = sub i64 %t1138, 1
+  %t1140 = mul i64 %t1139, 1
+  %t1141 = add i64 0, %t1140
+  %t1142 = sext i32 5 to i64
+  %t1143 = sub i64 %t1142, 1
+  %t1144 = sext i32 31 to i64
+  %t1145 = mul i64 1, %t1144
+  %t1146 = mul i64 %t1143, %t1145
+  %t1147 = add i64 %t1141, %t1146
+  %t1148 = sext i32 2 to i64
   %t1149 = sub i64 %t1148, 1
   %t1150 = sext i32 31 to i64
   %t1151 = mul i64 1, %t1150
-  %t1152 = mul i64 %t1149, %t1151
-  %t1153 = add i64 %t1147, %t1152
-  %t1154 = sext i32 1 to i64
-  %t1155 = sub i64 %t1154, 1
-  %t1156 = sext i32 31 to i64
-  %t1157 = mul i64 1, %t1156
-  %t1158 = sext i32 10 to i64
-  %t1159 = mul i64 %t1157, %t1158
-  %t1160 = mul i64 %t1155, %t1159
-  %t1161 = add i64 %t1153, %t1160
-  %t1162 = getelementptr i32, ptr %t1, i64 %t1161
-  %t1163 = load i32, ptr %t1162
-  %t1164 = load i32, ptr %t18
-  %t1165 = sext i32 %t1164 to i64
-  %t1166 = sub i64 %t1165, 1
-  %t1167 = mul i64 %t1166, 1
-  %t1168 = add i64 0, %t1167
-  %t1169 = sext i32 5 to i64
-  %t1170 = sub i64 %t1169, 1
-  %t1171 = sext i32 31 to i64
-  %t1172 = mul i64 1, %t1171
-  %t1173 = mul i64 %t1170, %t1172
-  %t1174 = add i64 %t1168, %t1173
-  %t1175 = sext i32 2 to i64
-  %t1176 = sub i64 %t1175, 1
-  %t1177 = sext i32 31 to i64
-  %t1178 = mul i64 1, %t1177
-  %t1179 = sext i32 10 to i64
-  %t1180 = mul i64 %t1178, %t1179
-  %t1181 = mul i64 %t1176, %t1180
-  %t1182 = add i64 %t1174, %t1181
-  %t1183 = getelementptr i32, ptr %t1, i64 %t1182
-  %t1184 = load i32, ptr %t18
-  %t1185 = sext i32 %t1184 to i64
-  %t1186 = sub i64 %t1185, 1
-  %t1187 = mul i64 %t1186, 1
-  %t1188 = add i64 0, %t1187
-  %t1189 = sext i32 5 to i64
+  %t1152 = sext i32 10 to i64
+  %t1153 = mul i64 %t1151, %t1152
+  %t1154 = mul i64 %t1149, %t1153
+  %t1155 = add i64 %t1147, %t1154
+  %t1156 = getelementptr i32, ptr %t1, i64 %t1155
+  %t1157 = load i32, ptr %t18
+  %t1158 = sext i32 %t1157 to i64
+  %t1159 = sub i64 %t1158, 1
+  %t1160 = mul i64 %t1159, 1
+  %t1161 = add i64 0, %t1160
+  %t1162 = sext i32 5 to i64
+  %t1163 = sub i64 %t1162, 1
+  %t1164 = sext i32 31 to i64
+  %t1165 = mul i64 1, %t1164
+  %t1166 = mul i64 %t1163, %t1165
+  %t1167 = add i64 %t1161, %t1166
+  %t1168 = sext i32 2 to i64
+  %t1169 = sub i64 %t1168, 1
+  %t1170 = sext i32 31 to i64
+  %t1171 = mul i64 1, %t1170
+  %t1172 = sext i32 10 to i64
+  %t1173 = mul i64 %t1171, %t1172
+  %t1174 = mul i64 %t1169, %t1173
+  %t1175 = add i64 %t1167, %t1174
+  %t1176 = getelementptr i32, ptr %t1, i64 %t1175
+  %t1177 = load i32, ptr %t1176
+  %t1178 = load i32, ptr %t18
+  %t1179 = sext i32 %t1178 to i64
+  %t1180 = sub i64 %t1179, 1
+  %t1181 = mul i64 %t1180, 1
+  %t1182 = add i64 0, %t1181
+  %t1183 = sext i32 6 to i64
+  %t1184 = sub i64 %t1183, 1
+  %t1185 = sext i32 31 to i64
+  %t1186 = mul i64 1, %t1185
+  %t1187 = mul i64 %t1184, %t1186
+  %t1188 = add i64 %t1182, %t1187
+  %t1189 = sext i32 1 to i64
   %t1190 = sub i64 %t1189, 1
   %t1191 = sext i32 31 to i64
   %t1192 = mul i64 1, %t1191
-  %t1193 = mul i64 %t1190, %t1192
-  %t1194 = add i64 %t1188, %t1193
-  %t1195 = sext i32 2 to i64
-  %t1196 = sub i64 %t1195, 1
-  %t1197 = sext i32 31 to i64
-  %t1198 = mul i64 1, %t1197
-  %t1199 = sext i32 10 to i64
-  %t1200 = mul i64 %t1198, %t1199
-  %t1201 = mul i64 %t1196, %t1200
-  %t1202 = add i64 %t1194, %t1201
-  %t1203 = getelementptr i32, ptr %t1, i64 %t1202
-  %t1204 = load i32, ptr %t1203
-  %t1205 = load i32, ptr %t18
-  %t1206 = sext i32 %t1205 to i64
-  %t1207 = sub i64 %t1206, 1
-  %t1208 = mul i64 %t1207, 1
-  %t1209 = add i64 0, %t1208
-  %t1210 = sext i32 6 to i64
-  %t1211 = sub i64 %t1210, 1
-  %t1212 = sext i32 31 to i64
-  %t1213 = mul i64 1, %t1212
-  %t1214 = mul i64 %t1211, %t1213
-  %t1215 = add i64 %t1209, %t1214
-  %t1216 = sext i32 1 to i64
-  %t1217 = sub i64 %t1216, 1
-  %t1218 = sext i32 31 to i64
-  %t1219 = mul i64 1, %t1218
-  %t1220 = sext i32 10 to i64
-  %t1221 = mul i64 %t1219, %t1220
-  %t1222 = mul i64 %t1217, %t1221
-  %t1223 = add i64 %t1215, %t1222
-  %t1224 = getelementptr i32, ptr %t1, i64 %t1223
-  %t1225 = load i32, ptr %t18
-  %t1226 = sext i32 %t1225 to i64
-  %t1227 = sub i64 %t1226, 1
-  %t1228 = mul i64 %t1227, 1
-  %t1229 = add i64 0, %t1228
-  %t1230 = sext i32 6 to i64
+  %t1193 = sext i32 10 to i64
+  %t1194 = mul i64 %t1192, %t1193
+  %t1195 = mul i64 %t1190, %t1194
+  %t1196 = add i64 %t1188, %t1195
+  %t1197 = getelementptr i32, ptr %t1, i64 %t1196
+  %t1198 = load i32, ptr %t18
+  %t1199 = sext i32 %t1198 to i64
+  %t1200 = sub i64 %t1199, 1
+  %t1201 = mul i64 %t1200, 1
+  %t1202 = add i64 0, %t1201
+  %t1203 = sext i32 6 to i64
+  %t1204 = sub i64 %t1203, 1
+  %t1205 = sext i32 31 to i64
+  %t1206 = mul i64 1, %t1205
+  %t1207 = mul i64 %t1204, %t1206
+  %t1208 = add i64 %t1202, %t1207
+  %t1209 = sext i32 1 to i64
+  %t1210 = sub i64 %t1209, 1
+  %t1211 = sext i32 31 to i64
+  %t1212 = mul i64 1, %t1211
+  %t1213 = sext i32 10 to i64
+  %t1214 = mul i64 %t1212, %t1213
+  %t1215 = mul i64 %t1210, %t1214
+  %t1216 = add i64 %t1208, %t1215
+  %t1217 = getelementptr i32, ptr %t1, i64 %t1216
+  %t1218 = load i32, ptr %t1217
+  %t1219 = load i32, ptr %t18
+  %t1220 = sext i32 %t1219 to i64
+  %t1221 = sub i64 %t1220, 1
+  %t1222 = mul i64 %t1221, 1
+  %t1223 = add i64 0, %t1222
+  %t1224 = sext i32 6 to i64
+  %t1225 = sub i64 %t1224, 1
+  %t1226 = sext i32 31 to i64
+  %t1227 = mul i64 1, %t1226
+  %t1228 = mul i64 %t1225, %t1227
+  %t1229 = add i64 %t1223, %t1228
+  %t1230 = sext i32 2 to i64
   %t1231 = sub i64 %t1230, 1
   %t1232 = sext i32 31 to i64
   %t1233 = mul i64 1, %t1232
-  %t1234 = mul i64 %t1231, %t1233
-  %t1235 = add i64 %t1229, %t1234
-  %t1236 = sext i32 1 to i64
-  %t1237 = sub i64 %t1236, 1
-  %t1238 = sext i32 31 to i64
-  %t1239 = mul i64 1, %t1238
-  %t1240 = sext i32 10 to i64
-  %t1241 = mul i64 %t1239, %t1240
-  %t1242 = mul i64 %t1237, %t1241
-  %t1243 = add i64 %t1235, %t1242
-  %t1244 = getelementptr i32, ptr %t1, i64 %t1243
-  %t1245 = load i32, ptr %t1244
-  %t1246 = load i32, ptr %t18
-  %t1247 = sext i32 %t1246 to i64
-  %t1248 = sub i64 %t1247, 1
-  %t1249 = mul i64 %t1248, 1
-  %t1250 = add i64 0, %t1249
-  %t1251 = sext i32 6 to i64
-  %t1252 = sub i64 %t1251, 1
-  %t1253 = sext i32 31 to i64
-  %t1254 = mul i64 1, %t1253
-  %t1255 = mul i64 %t1252, %t1254
-  %t1256 = add i64 %t1250, %t1255
-  %t1257 = sext i32 2 to i64
-  %t1258 = sub i64 %t1257, 1
-  %t1259 = sext i32 31 to i64
-  %t1260 = mul i64 1, %t1259
-  %t1261 = sext i32 10 to i64
-  %t1262 = mul i64 %t1260, %t1261
-  %t1263 = mul i64 %t1258, %t1262
-  %t1264 = add i64 %t1256, %t1263
-  %t1265 = getelementptr i32, ptr %t1, i64 %t1264
-  %t1266 = load i32, ptr %t18
-  %t1267 = sext i32 %t1266 to i64
-  %t1268 = sub i64 %t1267, 1
-  %t1269 = mul i64 %t1268, 1
-  %t1270 = add i64 0, %t1269
-  %t1271 = sext i32 6 to i64
+  %t1234 = sext i32 10 to i64
+  %t1235 = mul i64 %t1233, %t1234
+  %t1236 = mul i64 %t1231, %t1235
+  %t1237 = add i64 %t1229, %t1236
+  %t1238 = getelementptr i32, ptr %t1, i64 %t1237
+  %t1239 = load i32, ptr %t18
+  %t1240 = sext i32 %t1239 to i64
+  %t1241 = sub i64 %t1240, 1
+  %t1242 = mul i64 %t1241, 1
+  %t1243 = add i64 0, %t1242
+  %t1244 = sext i32 6 to i64
+  %t1245 = sub i64 %t1244, 1
+  %t1246 = sext i32 31 to i64
+  %t1247 = mul i64 1, %t1246
+  %t1248 = mul i64 %t1245, %t1247
+  %t1249 = add i64 %t1243, %t1248
+  %t1250 = sext i32 2 to i64
+  %t1251 = sub i64 %t1250, 1
+  %t1252 = sext i32 31 to i64
+  %t1253 = mul i64 1, %t1252
+  %t1254 = sext i32 10 to i64
+  %t1255 = mul i64 %t1253, %t1254
+  %t1256 = mul i64 %t1251, %t1255
+  %t1257 = add i64 %t1249, %t1256
+  %t1258 = getelementptr i32, ptr %t1, i64 %t1257
+  %t1259 = load i32, ptr %t1258
+  %t1260 = load i32, ptr %t18
+  %t1261 = sext i32 %t1260 to i64
+  %t1262 = sub i64 %t1261, 1
+  %t1263 = mul i64 %t1262, 1
+  %t1264 = add i64 0, %t1263
+  %t1265 = sext i32 7 to i64
+  %t1266 = sub i64 %t1265, 1
+  %t1267 = sext i32 31 to i64
+  %t1268 = mul i64 1, %t1267
+  %t1269 = mul i64 %t1266, %t1268
+  %t1270 = add i64 %t1264, %t1269
+  %t1271 = sext i32 1 to i64
   %t1272 = sub i64 %t1271, 1
   %t1273 = sext i32 31 to i64
   %t1274 = mul i64 1, %t1273
-  %t1275 = mul i64 %t1272, %t1274
-  %t1276 = add i64 %t1270, %t1275
-  %t1277 = sext i32 2 to i64
-  %t1278 = sub i64 %t1277, 1
-  %t1279 = sext i32 31 to i64
-  %t1280 = mul i64 1, %t1279
-  %t1281 = sext i32 10 to i64
-  %t1282 = mul i64 %t1280, %t1281
-  %t1283 = mul i64 %t1278, %t1282
-  %t1284 = add i64 %t1276, %t1283
-  %t1285 = getelementptr i32, ptr %t1, i64 %t1284
-  %t1286 = load i32, ptr %t1285
-  %t1287 = load i32, ptr %t18
-  %t1288 = sext i32 %t1287 to i64
-  %t1289 = sub i64 %t1288, 1
-  %t1290 = mul i64 %t1289, 1
-  %t1291 = add i64 0, %t1290
-  %t1292 = sext i32 7 to i64
-  %t1293 = sub i64 %t1292, 1
-  %t1294 = sext i32 31 to i64
-  %t1295 = mul i64 1, %t1294
-  %t1296 = mul i64 %t1293, %t1295
-  %t1297 = add i64 %t1291, %t1296
-  %t1298 = sext i32 1 to i64
-  %t1299 = sub i64 %t1298, 1
-  %t1300 = sext i32 31 to i64
-  %t1301 = mul i64 1, %t1300
-  %t1302 = sext i32 10 to i64
-  %t1303 = mul i64 %t1301, %t1302
-  %t1304 = mul i64 %t1299, %t1303
-  %t1305 = add i64 %t1297, %t1304
-  %t1306 = getelementptr i32, ptr %t1, i64 %t1305
-  %t1307 = load i32, ptr %t18
-  %t1308 = sext i32 %t1307 to i64
-  %t1309 = sub i64 %t1308, 1
-  %t1310 = mul i64 %t1309, 1
-  %t1311 = add i64 0, %t1310
-  %t1312 = sext i32 7 to i64
+  %t1275 = sext i32 10 to i64
+  %t1276 = mul i64 %t1274, %t1275
+  %t1277 = mul i64 %t1272, %t1276
+  %t1278 = add i64 %t1270, %t1277
+  %t1279 = getelementptr i32, ptr %t1, i64 %t1278
+  %t1280 = load i32, ptr %t18
+  %t1281 = sext i32 %t1280 to i64
+  %t1282 = sub i64 %t1281, 1
+  %t1283 = mul i64 %t1282, 1
+  %t1284 = add i64 0, %t1283
+  %t1285 = sext i32 7 to i64
+  %t1286 = sub i64 %t1285, 1
+  %t1287 = sext i32 31 to i64
+  %t1288 = mul i64 1, %t1287
+  %t1289 = mul i64 %t1286, %t1288
+  %t1290 = add i64 %t1284, %t1289
+  %t1291 = sext i32 1 to i64
+  %t1292 = sub i64 %t1291, 1
+  %t1293 = sext i32 31 to i64
+  %t1294 = mul i64 1, %t1293
+  %t1295 = sext i32 10 to i64
+  %t1296 = mul i64 %t1294, %t1295
+  %t1297 = mul i64 %t1292, %t1296
+  %t1298 = add i64 %t1290, %t1297
+  %t1299 = getelementptr i32, ptr %t1, i64 %t1298
+  %t1300 = load i32, ptr %t1299
+  %t1301 = load i32, ptr %t18
+  %t1302 = sext i32 %t1301 to i64
+  %t1303 = sub i64 %t1302, 1
+  %t1304 = mul i64 %t1303, 1
+  %t1305 = add i64 0, %t1304
+  %t1306 = sext i32 7 to i64
+  %t1307 = sub i64 %t1306, 1
+  %t1308 = sext i32 31 to i64
+  %t1309 = mul i64 1, %t1308
+  %t1310 = mul i64 %t1307, %t1309
+  %t1311 = add i64 %t1305, %t1310
+  %t1312 = sext i32 2 to i64
   %t1313 = sub i64 %t1312, 1
   %t1314 = sext i32 31 to i64
   %t1315 = mul i64 1, %t1314
-  %t1316 = mul i64 %t1313, %t1315
-  %t1317 = add i64 %t1311, %t1316
-  %t1318 = sext i32 1 to i64
-  %t1319 = sub i64 %t1318, 1
-  %t1320 = sext i32 31 to i64
-  %t1321 = mul i64 1, %t1320
-  %t1322 = sext i32 10 to i64
-  %t1323 = mul i64 %t1321, %t1322
-  %t1324 = mul i64 %t1319, %t1323
-  %t1325 = add i64 %t1317, %t1324
-  %t1326 = getelementptr i32, ptr %t1, i64 %t1325
-  %t1327 = load i32, ptr %t1326
-  %t1328 = load i32, ptr %t18
-  %t1329 = sext i32 %t1328 to i64
-  %t1330 = sub i64 %t1329, 1
-  %t1331 = mul i64 %t1330, 1
-  %t1332 = add i64 0, %t1331
-  %t1333 = sext i32 7 to i64
-  %t1334 = sub i64 %t1333, 1
-  %t1335 = sext i32 31 to i64
-  %t1336 = mul i64 1, %t1335
-  %t1337 = mul i64 %t1334, %t1336
-  %t1338 = add i64 %t1332, %t1337
-  %t1339 = sext i32 2 to i64
-  %t1340 = sub i64 %t1339, 1
-  %t1341 = sext i32 31 to i64
-  %t1342 = mul i64 1, %t1341
-  %t1343 = sext i32 10 to i64
-  %t1344 = mul i64 %t1342, %t1343
-  %t1345 = mul i64 %t1340, %t1344
-  %t1346 = add i64 %t1338, %t1345
-  %t1347 = getelementptr i32, ptr %t1, i64 %t1346
-  %t1348 = load i32, ptr %t18
-  %t1349 = sext i32 %t1348 to i64
-  %t1350 = sub i64 %t1349, 1
-  %t1351 = mul i64 %t1350, 1
-  %t1352 = add i64 0, %t1351
-  %t1353 = sext i32 7 to i64
+  %t1316 = sext i32 10 to i64
+  %t1317 = mul i64 %t1315, %t1316
+  %t1318 = mul i64 %t1313, %t1317
+  %t1319 = add i64 %t1311, %t1318
+  %t1320 = getelementptr i32, ptr %t1, i64 %t1319
+  %t1321 = load i32, ptr %t18
+  %t1322 = sext i32 %t1321 to i64
+  %t1323 = sub i64 %t1322, 1
+  %t1324 = mul i64 %t1323, 1
+  %t1325 = add i64 0, %t1324
+  %t1326 = sext i32 7 to i64
+  %t1327 = sub i64 %t1326, 1
+  %t1328 = sext i32 31 to i64
+  %t1329 = mul i64 1, %t1328
+  %t1330 = mul i64 %t1327, %t1329
+  %t1331 = add i64 %t1325, %t1330
+  %t1332 = sext i32 2 to i64
+  %t1333 = sub i64 %t1332, 1
+  %t1334 = sext i32 31 to i64
+  %t1335 = mul i64 1, %t1334
+  %t1336 = sext i32 10 to i64
+  %t1337 = mul i64 %t1335, %t1336
+  %t1338 = mul i64 %t1333, %t1337
+  %t1339 = add i64 %t1331, %t1338
+  %t1340 = getelementptr i32, ptr %t1, i64 %t1339
+  %t1341 = load i32, ptr %t1340
+  %t1342 = load i32, ptr %t18
+  %t1343 = sext i32 %t1342 to i64
+  %t1344 = sub i64 %t1343, 1
+  %t1345 = mul i64 %t1344, 1
+  %t1346 = add i64 0, %t1345
+  %t1347 = sext i32 8 to i64
+  %t1348 = sub i64 %t1347, 1
+  %t1349 = sext i32 31 to i64
+  %t1350 = mul i64 1, %t1349
+  %t1351 = mul i64 %t1348, %t1350
+  %t1352 = add i64 %t1346, %t1351
+  %t1353 = sext i32 1 to i64
   %t1354 = sub i64 %t1353, 1
   %t1355 = sext i32 31 to i64
   %t1356 = mul i64 1, %t1355
-  %t1357 = mul i64 %t1354, %t1356
-  %t1358 = add i64 %t1352, %t1357
-  %t1359 = sext i32 2 to i64
-  %t1360 = sub i64 %t1359, 1
-  %t1361 = sext i32 31 to i64
-  %t1362 = mul i64 1, %t1361
-  %t1363 = sext i32 10 to i64
-  %t1364 = mul i64 %t1362, %t1363
-  %t1365 = mul i64 %t1360, %t1364
-  %t1366 = add i64 %t1358, %t1365
-  %t1367 = getelementptr i32, ptr %t1, i64 %t1366
-  %t1368 = load i32, ptr %t1367
-  %t1369 = load i32, ptr %t18
-  %t1370 = sext i32 %t1369 to i64
-  %t1371 = sub i64 %t1370, 1
-  %t1372 = mul i64 %t1371, 1
-  %t1373 = add i64 0, %t1372
-  %t1374 = sext i32 8 to i64
-  %t1375 = sub i64 %t1374, 1
-  %t1376 = sext i32 31 to i64
-  %t1377 = mul i64 1, %t1376
-  %t1378 = mul i64 %t1375, %t1377
-  %t1379 = add i64 %t1373, %t1378
-  %t1380 = sext i32 1 to i64
-  %t1381 = sub i64 %t1380, 1
-  %t1382 = sext i32 31 to i64
-  %t1383 = mul i64 1, %t1382
-  %t1384 = sext i32 10 to i64
-  %t1385 = mul i64 %t1383, %t1384
-  %t1386 = mul i64 %t1381, %t1385
-  %t1387 = add i64 %t1379, %t1386
-  %t1388 = getelementptr i32, ptr %t1, i64 %t1387
-  %t1389 = load i32, ptr %t18
-  %t1390 = sext i32 %t1389 to i64
-  %t1391 = sub i64 %t1390, 1
-  %t1392 = mul i64 %t1391, 1
-  %t1393 = add i64 0, %t1392
-  %t1394 = sext i32 8 to i64
+  %t1357 = sext i32 10 to i64
+  %t1358 = mul i64 %t1356, %t1357
+  %t1359 = mul i64 %t1354, %t1358
+  %t1360 = add i64 %t1352, %t1359
+  %t1361 = getelementptr i32, ptr %t1, i64 %t1360
+  %t1362 = load i32, ptr %t18
+  %t1363 = sext i32 %t1362 to i64
+  %t1364 = sub i64 %t1363, 1
+  %t1365 = mul i64 %t1364, 1
+  %t1366 = add i64 0, %t1365
+  %t1367 = sext i32 8 to i64
+  %t1368 = sub i64 %t1367, 1
+  %t1369 = sext i32 31 to i64
+  %t1370 = mul i64 1, %t1369
+  %t1371 = mul i64 %t1368, %t1370
+  %t1372 = add i64 %t1366, %t1371
+  %t1373 = sext i32 1 to i64
+  %t1374 = sub i64 %t1373, 1
+  %t1375 = sext i32 31 to i64
+  %t1376 = mul i64 1, %t1375
+  %t1377 = sext i32 10 to i64
+  %t1378 = mul i64 %t1376, %t1377
+  %t1379 = mul i64 %t1374, %t1378
+  %t1380 = add i64 %t1372, %t1379
+  %t1381 = getelementptr i32, ptr %t1, i64 %t1380
+  %t1382 = load i32, ptr %t1381
+  %t1383 = load i32, ptr %t18
+  %t1384 = sext i32 %t1383 to i64
+  %t1385 = sub i64 %t1384, 1
+  %t1386 = mul i64 %t1385, 1
+  %t1387 = add i64 0, %t1386
+  %t1388 = sext i32 8 to i64
+  %t1389 = sub i64 %t1388, 1
+  %t1390 = sext i32 31 to i64
+  %t1391 = mul i64 1, %t1390
+  %t1392 = mul i64 %t1389, %t1391
+  %t1393 = add i64 %t1387, %t1392
+  %t1394 = sext i32 2 to i64
   %t1395 = sub i64 %t1394, 1
   %t1396 = sext i32 31 to i64
   %t1397 = mul i64 1, %t1396
-  %t1398 = mul i64 %t1395, %t1397
-  %t1399 = add i64 %t1393, %t1398
-  %t1400 = sext i32 1 to i64
-  %t1401 = sub i64 %t1400, 1
-  %t1402 = sext i32 31 to i64
-  %t1403 = mul i64 1, %t1402
-  %t1404 = sext i32 10 to i64
-  %t1405 = mul i64 %t1403, %t1404
-  %t1406 = mul i64 %t1401, %t1405
-  %t1407 = add i64 %t1399, %t1406
-  %t1408 = getelementptr i32, ptr %t1, i64 %t1407
-  %t1409 = load i32, ptr %t1408
-  %t1410 = load i32, ptr %t18
-  %t1411 = sext i32 %t1410 to i64
-  %t1412 = sub i64 %t1411, 1
-  %t1413 = mul i64 %t1412, 1
-  %t1414 = add i64 0, %t1413
-  %t1415 = sext i32 8 to i64
-  %t1416 = sub i64 %t1415, 1
-  %t1417 = sext i32 31 to i64
-  %t1418 = mul i64 1, %t1417
-  %t1419 = mul i64 %t1416, %t1418
-  %t1420 = add i64 %t1414, %t1419
-  %t1421 = sext i32 2 to i64
-  %t1422 = sub i64 %t1421, 1
-  %t1423 = sext i32 31 to i64
-  %t1424 = mul i64 1, %t1423
-  %t1425 = sext i32 10 to i64
-  %t1426 = mul i64 %t1424, %t1425
-  %t1427 = mul i64 %t1422, %t1426
-  %t1428 = add i64 %t1420, %t1427
-  %t1429 = getelementptr i32, ptr %t1, i64 %t1428
-  %t1430 = load i32, ptr %t18
-  %t1431 = sext i32 %t1430 to i64
-  %t1432 = sub i64 %t1431, 1
-  %t1433 = mul i64 %t1432, 1
-  %t1434 = add i64 0, %t1433
-  %t1435 = sext i32 8 to i64
+  %t1398 = sext i32 10 to i64
+  %t1399 = mul i64 %t1397, %t1398
+  %t1400 = mul i64 %t1395, %t1399
+  %t1401 = add i64 %t1393, %t1400
+  %t1402 = getelementptr i32, ptr %t1, i64 %t1401
+  %t1403 = load i32, ptr %t18
+  %t1404 = sext i32 %t1403 to i64
+  %t1405 = sub i64 %t1404, 1
+  %t1406 = mul i64 %t1405, 1
+  %t1407 = add i64 0, %t1406
+  %t1408 = sext i32 8 to i64
+  %t1409 = sub i64 %t1408, 1
+  %t1410 = sext i32 31 to i64
+  %t1411 = mul i64 1, %t1410
+  %t1412 = mul i64 %t1409, %t1411
+  %t1413 = add i64 %t1407, %t1412
+  %t1414 = sext i32 2 to i64
+  %t1415 = sub i64 %t1414, 1
+  %t1416 = sext i32 31 to i64
+  %t1417 = mul i64 1, %t1416
+  %t1418 = sext i32 10 to i64
+  %t1419 = mul i64 %t1417, %t1418
+  %t1420 = mul i64 %t1415, %t1419
+  %t1421 = add i64 %t1413, %t1420
+  %t1422 = getelementptr i32, ptr %t1, i64 %t1421
+  %t1423 = load i32, ptr %t1422
+  %t1424 = load i32, ptr %t18
+  %t1425 = sext i32 %t1424 to i64
+  %t1426 = sub i64 %t1425, 1
+  %t1427 = mul i64 %t1426, 1
+  %t1428 = add i64 0, %t1427
+  %t1429 = sext i32 9 to i64
+  %t1430 = sub i64 %t1429, 1
+  %t1431 = sext i32 31 to i64
+  %t1432 = mul i64 1, %t1431
+  %t1433 = mul i64 %t1430, %t1432
+  %t1434 = add i64 %t1428, %t1433
+  %t1435 = sext i32 1 to i64
   %t1436 = sub i64 %t1435, 1
   %t1437 = sext i32 31 to i64
   %t1438 = mul i64 1, %t1437
-  %t1439 = mul i64 %t1436, %t1438
-  %t1440 = add i64 %t1434, %t1439
-  %t1441 = sext i32 2 to i64
-  %t1442 = sub i64 %t1441, 1
-  %t1443 = sext i32 31 to i64
-  %t1444 = mul i64 1, %t1443
-  %t1445 = sext i32 10 to i64
-  %t1446 = mul i64 %t1444, %t1445
-  %t1447 = mul i64 %t1442, %t1446
-  %t1448 = add i64 %t1440, %t1447
-  %t1449 = getelementptr i32, ptr %t1, i64 %t1448
-  %t1450 = load i32, ptr %t1449
-  %t1451 = load i32, ptr %t18
-  %t1452 = sext i32 %t1451 to i64
-  %t1453 = sub i64 %t1452, 1
-  %t1454 = mul i64 %t1453, 1
-  %t1455 = add i64 0, %t1454
-  %t1456 = sext i32 9 to i64
-  %t1457 = sub i64 %t1456, 1
-  %t1458 = sext i32 31 to i64
-  %t1459 = mul i64 1, %t1458
-  %t1460 = mul i64 %t1457, %t1459
-  %t1461 = add i64 %t1455, %t1460
-  %t1462 = sext i32 1 to i64
-  %t1463 = sub i64 %t1462, 1
-  %t1464 = sext i32 31 to i64
-  %t1465 = mul i64 1, %t1464
-  %t1466 = sext i32 10 to i64
-  %t1467 = mul i64 %t1465, %t1466
-  %t1468 = mul i64 %t1463, %t1467
-  %t1469 = add i64 %t1461, %t1468
-  %t1470 = getelementptr i32, ptr %t1, i64 %t1469
-  %t1471 = load i32, ptr %t18
-  %t1472 = sext i32 %t1471 to i64
-  %t1473 = sub i64 %t1472, 1
-  %t1474 = mul i64 %t1473, 1
-  %t1475 = add i64 0, %t1474
-  %t1476 = sext i32 9 to i64
+  %t1439 = sext i32 10 to i64
+  %t1440 = mul i64 %t1438, %t1439
+  %t1441 = mul i64 %t1436, %t1440
+  %t1442 = add i64 %t1434, %t1441
+  %t1443 = getelementptr i32, ptr %t1, i64 %t1442
+  %t1444 = load i32, ptr %t18
+  %t1445 = sext i32 %t1444 to i64
+  %t1446 = sub i64 %t1445, 1
+  %t1447 = mul i64 %t1446, 1
+  %t1448 = add i64 0, %t1447
+  %t1449 = sext i32 9 to i64
+  %t1450 = sub i64 %t1449, 1
+  %t1451 = sext i32 31 to i64
+  %t1452 = mul i64 1, %t1451
+  %t1453 = mul i64 %t1450, %t1452
+  %t1454 = add i64 %t1448, %t1453
+  %t1455 = sext i32 1 to i64
+  %t1456 = sub i64 %t1455, 1
+  %t1457 = sext i32 31 to i64
+  %t1458 = mul i64 1, %t1457
+  %t1459 = sext i32 10 to i64
+  %t1460 = mul i64 %t1458, %t1459
+  %t1461 = mul i64 %t1456, %t1460
+  %t1462 = add i64 %t1454, %t1461
+  %t1463 = getelementptr i32, ptr %t1, i64 %t1462
+  %t1464 = load i32, ptr %t1463
+  %t1465 = load i32, ptr %t18
+  %t1466 = sext i32 %t1465 to i64
+  %t1467 = sub i64 %t1466, 1
+  %t1468 = mul i64 %t1467, 1
+  %t1469 = add i64 0, %t1468
+  %t1470 = sext i32 9 to i64
+  %t1471 = sub i64 %t1470, 1
+  %t1472 = sext i32 31 to i64
+  %t1473 = mul i64 1, %t1472
+  %t1474 = mul i64 %t1471, %t1473
+  %t1475 = add i64 %t1469, %t1474
+  %t1476 = sext i32 2 to i64
   %t1477 = sub i64 %t1476, 1
   %t1478 = sext i32 31 to i64
   %t1479 = mul i64 1, %t1478
-  %t1480 = mul i64 %t1477, %t1479
-  %t1481 = add i64 %t1475, %t1480
-  %t1482 = sext i32 1 to i64
-  %t1483 = sub i64 %t1482, 1
-  %t1484 = sext i32 31 to i64
-  %t1485 = mul i64 1, %t1484
-  %t1486 = sext i32 10 to i64
-  %t1487 = mul i64 %t1485, %t1486
-  %t1488 = mul i64 %t1483, %t1487
-  %t1489 = add i64 %t1481, %t1488
-  %t1490 = getelementptr i32, ptr %t1, i64 %t1489
-  %t1491 = load i32, ptr %t1490
-  %t1492 = load i32, ptr %t18
-  %t1493 = sext i32 %t1492 to i64
-  %t1494 = sub i64 %t1493, 1
-  %t1495 = mul i64 %t1494, 1
-  %t1496 = add i64 0, %t1495
-  %t1497 = sext i32 9 to i64
-  %t1498 = sub i64 %t1497, 1
-  %t1499 = sext i32 31 to i64
-  %t1500 = mul i64 1, %t1499
-  %t1501 = mul i64 %t1498, %t1500
-  %t1502 = add i64 %t1496, %t1501
-  %t1503 = sext i32 2 to i64
-  %t1504 = sub i64 %t1503, 1
-  %t1505 = sext i32 31 to i64
-  %t1506 = mul i64 1, %t1505
-  %t1507 = sext i32 10 to i64
-  %t1508 = mul i64 %t1506, %t1507
-  %t1509 = mul i64 %t1504, %t1508
-  %t1510 = add i64 %t1502, %t1509
-  %t1511 = getelementptr i32, ptr %t1, i64 %t1510
-  %t1512 = load i32, ptr %t18
-  %t1513 = sext i32 %t1512 to i64
-  %t1514 = sub i64 %t1513, 1
-  %t1515 = mul i64 %t1514, 1
-  %t1516 = add i64 0, %t1515
-  %t1517 = sext i32 9 to i64
+  %t1480 = sext i32 10 to i64
+  %t1481 = mul i64 %t1479, %t1480
+  %t1482 = mul i64 %t1477, %t1481
+  %t1483 = add i64 %t1475, %t1482
+  %t1484 = getelementptr i32, ptr %t1, i64 %t1483
+  %t1485 = load i32, ptr %t18
+  %t1486 = sext i32 %t1485 to i64
+  %t1487 = sub i64 %t1486, 1
+  %t1488 = mul i64 %t1487, 1
+  %t1489 = add i64 0, %t1488
+  %t1490 = sext i32 9 to i64
+  %t1491 = sub i64 %t1490, 1
+  %t1492 = sext i32 31 to i64
+  %t1493 = mul i64 1, %t1492
+  %t1494 = mul i64 %t1491, %t1493
+  %t1495 = add i64 %t1489, %t1494
+  %t1496 = sext i32 2 to i64
+  %t1497 = sub i64 %t1496, 1
+  %t1498 = sext i32 31 to i64
+  %t1499 = mul i64 1, %t1498
+  %t1500 = sext i32 10 to i64
+  %t1501 = mul i64 %t1499, %t1500
+  %t1502 = mul i64 %t1497, %t1501
+  %t1503 = add i64 %t1495, %t1502
+  %t1504 = getelementptr i32, ptr %t1, i64 %t1503
+  %t1505 = load i32, ptr %t1504
+  %t1506 = load i32, ptr %t18
+  %t1507 = sext i32 %t1506 to i64
+  %t1508 = sub i64 %t1507, 1
+  %t1509 = mul i64 %t1508, 1
+  %t1510 = add i64 0, %t1509
+  %t1511 = sext i32 10 to i64
+  %t1512 = sub i64 %t1511, 1
+  %t1513 = sext i32 31 to i64
+  %t1514 = mul i64 1, %t1513
+  %t1515 = mul i64 %t1512, %t1514
+  %t1516 = add i64 %t1510, %t1515
+  %t1517 = sext i32 1 to i64
   %t1518 = sub i64 %t1517, 1
   %t1519 = sext i32 31 to i64
   %t1520 = mul i64 1, %t1519
-  %t1521 = mul i64 %t1518, %t1520
-  %t1522 = add i64 %t1516, %t1521
-  %t1523 = sext i32 2 to i64
-  %t1524 = sub i64 %t1523, 1
-  %t1525 = sext i32 31 to i64
-  %t1526 = mul i64 1, %t1525
-  %t1527 = sext i32 10 to i64
-  %t1528 = mul i64 %t1526, %t1527
-  %t1529 = mul i64 %t1524, %t1528
-  %t1530 = add i64 %t1522, %t1529
-  %t1531 = getelementptr i32, ptr %t1, i64 %t1530
-  %t1532 = load i32, ptr %t1531
-  %t1533 = load i32, ptr %t18
-  %t1534 = sext i32 %t1533 to i64
-  %t1535 = sub i64 %t1534, 1
-  %t1536 = mul i64 %t1535, 1
-  %t1537 = add i64 0, %t1536
-  %t1538 = sext i32 10 to i64
-  %t1539 = sub i64 %t1538, 1
-  %t1540 = sext i32 31 to i64
-  %t1541 = mul i64 1, %t1540
-  %t1542 = mul i64 %t1539, %t1541
-  %t1543 = add i64 %t1537, %t1542
-  %t1544 = sext i32 1 to i64
-  %t1545 = sub i64 %t1544, 1
-  %t1546 = sext i32 31 to i64
-  %t1547 = mul i64 1, %t1546
-  %t1548 = sext i32 10 to i64
-  %t1549 = mul i64 %t1547, %t1548
-  %t1550 = mul i64 %t1545, %t1549
-  %t1551 = add i64 %t1543, %t1550
-  %t1552 = getelementptr i32, ptr %t1, i64 %t1551
-  %t1553 = load i32, ptr %t18
-  %t1554 = sext i32 %t1553 to i64
-  %t1555 = sub i64 %t1554, 1
-  %t1556 = mul i64 %t1555, 1
-  %t1557 = add i64 0, %t1556
-  %t1558 = sext i32 10 to i64
+  %t1521 = sext i32 10 to i64
+  %t1522 = mul i64 %t1520, %t1521
+  %t1523 = mul i64 %t1518, %t1522
+  %t1524 = add i64 %t1516, %t1523
+  %t1525 = getelementptr i32, ptr %t1, i64 %t1524
+  %t1526 = load i32, ptr %t18
+  %t1527 = sext i32 %t1526 to i64
+  %t1528 = sub i64 %t1527, 1
+  %t1529 = mul i64 %t1528, 1
+  %t1530 = add i64 0, %t1529
+  %t1531 = sext i32 10 to i64
+  %t1532 = sub i64 %t1531, 1
+  %t1533 = sext i32 31 to i64
+  %t1534 = mul i64 1, %t1533
+  %t1535 = mul i64 %t1532, %t1534
+  %t1536 = add i64 %t1530, %t1535
+  %t1537 = sext i32 1 to i64
+  %t1538 = sub i64 %t1537, 1
+  %t1539 = sext i32 31 to i64
+  %t1540 = mul i64 1, %t1539
+  %t1541 = sext i32 10 to i64
+  %t1542 = mul i64 %t1540, %t1541
+  %t1543 = mul i64 %t1538, %t1542
+  %t1544 = add i64 %t1536, %t1543
+  %t1545 = getelementptr i32, ptr %t1, i64 %t1544
+  %t1546 = load i32, ptr %t1545
+  %t1547 = load i32, ptr %t18
+  %t1548 = sext i32 %t1547 to i64
+  %t1549 = sub i64 %t1548, 1
+  %t1550 = mul i64 %t1549, 1
+  %t1551 = add i64 0, %t1550
+  %t1552 = sext i32 10 to i64
+  %t1553 = sub i64 %t1552, 1
+  %t1554 = sext i32 31 to i64
+  %t1555 = mul i64 1, %t1554
+  %t1556 = mul i64 %t1553, %t1555
+  %t1557 = add i64 %t1551, %t1556
+  %t1558 = sext i32 2 to i64
   %t1559 = sub i64 %t1558, 1
   %t1560 = sext i32 31 to i64
   %t1561 = mul i64 1, %t1560
-  %t1562 = mul i64 %t1559, %t1561
-  %t1563 = add i64 %t1557, %t1562
-  %t1564 = sext i32 1 to i64
-  %t1565 = sub i64 %t1564, 1
-  %t1566 = sext i32 31 to i64
-  %t1567 = mul i64 1, %t1566
-  %t1568 = sext i32 10 to i64
-  %t1569 = mul i64 %t1567, %t1568
-  %t1570 = mul i64 %t1565, %t1569
-  %t1571 = add i64 %t1563, %t1570
-  %t1572 = getelementptr i32, ptr %t1, i64 %t1571
-  %t1573 = load i32, ptr %t1572
-  %t1574 = load i32, ptr %t18
-  %t1575 = sext i32 %t1574 to i64
-  %t1576 = sub i64 %t1575, 1
-  %t1577 = mul i64 %t1576, 1
-  %t1578 = add i64 0, %t1577
-  %t1579 = sext i32 10 to i64
-  %t1580 = sub i64 %t1579, 1
-  %t1581 = sext i32 31 to i64
-  %t1582 = mul i64 1, %t1581
-  %t1583 = mul i64 %t1580, %t1582
-  %t1584 = add i64 %t1578, %t1583
-  %t1585 = sext i32 2 to i64
-  %t1586 = sub i64 %t1585, 1
-  %t1587 = sext i32 31 to i64
-  %t1588 = mul i64 1, %t1587
-  %t1589 = sext i32 10 to i64
-  %t1590 = mul i64 %t1588, %t1589
-  %t1591 = mul i64 %t1586, %t1590
-  %t1592 = add i64 %t1584, %t1591
-  %t1593 = getelementptr i32, ptr %t1, i64 %t1592
-  %t1594 = load i32, ptr %t18
-  %t1595 = sext i32 %t1594 to i64
-  %t1596 = sub i64 %t1595, 1
-  %t1597 = mul i64 %t1596, 1
-  %t1598 = add i64 0, %t1597
-  %t1599 = sext i32 10 to i64
-  %t1600 = sub i64 %t1599, 1
-  %t1601 = sext i32 31 to i64
-  %t1602 = mul i64 1, %t1601
-  %t1603 = mul i64 %t1600, %t1602
-  %t1604 = add i64 %t1598, %t1603
-  %t1605 = sext i32 2 to i64
-  %t1606 = sub i64 %t1605, 1
-  %t1607 = sext i32 31 to i64
-  %t1608 = mul i64 1, %t1607
-  %t1609 = sext i32 10 to i64
-  %t1610 = mul i64 %t1608, %t1609
-  %t1611 = mul i64 %t1606, %t1610
-  %t1612 = add i64 %t1604, %t1611
-  %t1613 = getelementptr i32, ptr %t1, i64 %t1612
-  %t1614 = load i32, ptr %t1613
-  %t1615 = getelementptr [89 x i8], ptr @str10, i32 0, i32 0
-  %t1616 = alloca i32, i32 27
-  %t1617 = getelementptr i32, ptr %t1616, i32 0
-  store i32 %t788, ptr %t1617
-  %t1618 = getelementptr i32, ptr %t1616, i32 1
-  store i32 %t789, ptr %t1618
-  %t1619 = getelementptr i32, ptr %t1616, i32 2
-  store i32 %t790, ptr %t1619
-  %t1620 = getelementptr i32, ptr %t1616, i32 3
-  store i32 %t791, ptr %t1620
-  %t1621 = getelementptr i32, ptr %t1616, i32 4
-  store i32 %t792, ptr %t1621
-  %t1622 = getelementptr i32, ptr %t1616, i32 5
-  store i32 %t793, ptr %t1622
-  %t1623 = getelementptr i32, ptr %t1616, i32 6
-  store i32 %t794, ptr %t1623
-  %t1624 = getelementptr i32, ptr %t1616, i32 7
-  store i32 %t835, ptr %t1624
-  %t1625 = getelementptr i32, ptr %t1616, i32 8
-  store i32 %t876, ptr %t1625
-  %t1626 = getelementptr i32, ptr %t1616, i32 9
-  store i32 %t917, ptr %t1626
-  %t1627 = getelementptr i32, ptr %t1616, i32 10
-  store i32 %t958, ptr %t1627
-  %t1628 = getelementptr i32, ptr %t1616, i32 11
-  store i32 %t999, ptr %t1628
-  %t1629 = getelementptr i32, ptr %t1616, i32 12
-  store i32 %t1040, ptr %t1629
-  %t1630 = getelementptr i32, ptr %t1616, i32 13
-  store i32 %t1081, ptr %t1630
-  %t1631 = getelementptr i32, ptr %t1616, i32 14
-  store i32 %t1122, ptr %t1631
-  %t1632 = getelementptr i32, ptr %t1616, i32 15
-  store i32 %t1163, ptr %t1632
-  %t1633 = getelementptr i32, ptr %t1616, i32 16
-  store i32 %t1204, ptr %t1633
-  %t1634 = getelementptr i32, ptr %t1616, i32 17
-  store i32 %t1245, ptr %t1634
-  %t1635 = getelementptr i32, ptr %t1616, i32 18
-  store i32 %t1286, ptr %t1635
-  %t1636 = getelementptr i32, ptr %t1616, i32 19
-  store i32 %t1327, ptr %t1636
-  %t1637 = getelementptr i32, ptr %t1616, i32 20
-  store i32 %t1368, ptr %t1637
-  %t1638 = getelementptr i32, ptr %t1616, i32 21
-  store i32 %t1409, ptr %t1638
-  %t1639 = getelementptr i32, ptr %t1616, i32 22
-  store i32 %t1450, ptr %t1639
-  %t1640 = getelementptr i32, ptr %t1616, i32 23
-  store i32 %t1491, ptr %t1640
-  %t1641 = getelementptr i32, ptr %t1616, i32 24
-  store i32 %t1532, ptr %t1641
-  %t1642 = getelementptr i32, ptr %t1616, i32 25
-  store i32 %t1573, ptr %t1642
-  %t1643 = getelementptr i32, ptr %t1616, i32 26
-  store i32 %t1614, ptr %t1643
-  %t1644 = alloca ptr, i32 27
-  %t1645 = getelementptr ptr, ptr %t1644, i32 0
-  store ptr %t1617, ptr %t1645
-  %t1646 = getelementptr ptr, ptr %t1644, i32 1
-  store ptr %t1618, ptr %t1646
-  %t1647 = getelementptr ptr, ptr %t1644, i32 2
-  store ptr %t1619, ptr %t1647
-  %t1648 = getelementptr ptr, ptr %t1644, i32 3
-  store ptr %t1620, ptr %t1648
-  %t1649 = getelementptr ptr, ptr %t1644, i32 4
-  store ptr %t1621, ptr %t1649
-  %t1650 = getelementptr ptr, ptr %t1644, i32 5
-  store ptr %t1622, ptr %t1650
-  %t1651 = getelementptr ptr, ptr %t1644, i32 6
-  store ptr %t1623, ptr %t1651
-  %t1652 = getelementptr ptr, ptr %t1644, i32 7
-  store ptr %t1624, ptr %t1652
-  %t1653 = getelementptr ptr, ptr %t1644, i32 8
-  store ptr %t1625, ptr %t1653
-  %t1654 = getelementptr ptr, ptr %t1644, i32 9
-  store ptr %t1626, ptr %t1654
-  %t1655 = getelementptr ptr, ptr %t1644, i32 10
-  store ptr %t1627, ptr %t1655
-  %t1656 = getelementptr ptr, ptr %t1644, i32 11
-  store ptr %t1628, ptr %t1656
-  %t1657 = getelementptr ptr, ptr %t1644, i32 12
-  store ptr %t1629, ptr %t1657
-  %t1658 = getelementptr ptr, ptr %t1644, i32 13
-  store ptr %t1630, ptr %t1658
-  %t1659 = getelementptr ptr, ptr %t1644, i32 14
-  store ptr %t1631, ptr %t1659
-  %t1660 = getelementptr ptr, ptr %t1644, i32 15
-  store ptr %t1632, ptr %t1660
-  %t1661 = getelementptr ptr, ptr %t1644, i32 16
-  store ptr %t1633, ptr %t1661
-  %t1662 = getelementptr ptr, ptr %t1644, i32 17
-  store ptr %t1634, ptr %t1662
-  %t1663 = getelementptr ptr, ptr %t1644, i32 18
-  store ptr %t1635, ptr %t1663
-  %t1664 = getelementptr ptr, ptr %t1644, i32 19
-  store ptr %t1636, ptr %t1664
-  %t1665 = getelementptr ptr, ptr %t1644, i32 20
-  store ptr %t1637, ptr %t1665
-  %t1666 = getelementptr ptr, ptr %t1644, i32 21
-  store ptr %t1638, ptr %t1666
-  %t1667 = getelementptr ptr, ptr %t1644, i32 22
-  store ptr %t1639, ptr %t1667
-  %t1668 = getelementptr ptr, ptr %t1644, i32 23
-  store ptr %t1640, ptr %t1668
-  %t1669 = getelementptr ptr, ptr %t1644, i32 24
-  store ptr %t1641, ptr %t1669
-  %t1670 = getelementptr ptr, ptr %t1644, i32 25
-  store ptr %t1642, ptr %t1670
-  %t1671 = getelementptr ptr, ptr %t1644, i32 26
-  store ptr %t1643, ptr %t1671
-  %t1672 = getelementptr [28 x i8], ptr @str9, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t787, ptr %t1615, ptr %t1644, ptr %t1672, i32 27, i32 0)
+  %t1562 = sext i32 10 to i64
+  %t1563 = mul i64 %t1561, %t1562
+  %t1564 = mul i64 %t1559, %t1563
+  %t1565 = add i64 %t1557, %t1564
+  %t1566 = getelementptr i32, ptr %t1, i64 %t1565
+  %t1567 = load i32, ptr %t18
+  %t1568 = sext i32 %t1567 to i64
+  %t1569 = sub i64 %t1568, 1
+  %t1570 = mul i64 %t1569, 1
+  %t1571 = add i64 0, %t1570
+  %t1572 = sext i32 10 to i64
+  %t1573 = sub i64 %t1572, 1
+  %t1574 = sext i32 31 to i64
+  %t1575 = mul i64 1, %t1574
+  %t1576 = mul i64 %t1573, %t1575
+  %t1577 = add i64 %t1571, %t1576
+  %t1578 = sext i32 2 to i64
+  %t1579 = sub i64 %t1578, 1
+  %t1580 = sext i32 31 to i64
+  %t1581 = mul i64 1, %t1580
+  %t1582 = sext i32 10 to i64
+  %t1583 = mul i64 %t1581, %t1582
+  %t1584 = mul i64 %t1579, %t1583
+  %t1585 = add i64 %t1577, %t1584
+  %t1586 = getelementptr i32, ptr %t1, i64 %t1585
+  %t1587 = load i32, ptr %t1586
+  %t1588 = getelementptr [89 x i8], ptr @str11, i32 0, i32 0
+  %t1589 = alloca i32, i32 27
+  %t1590 = getelementptr i32, ptr %t1589, i32 0
+  store i32 %t761, ptr %t1590
+  %t1591 = getelementptr i32, ptr %t1589, i32 1
+  store i32 %t762, ptr %t1591
+  %t1592 = getelementptr i32, ptr %t1589, i32 2
+  store i32 %t763, ptr %t1592
+  %t1593 = getelementptr i32, ptr %t1589, i32 3
+  store i32 %t764, ptr %t1593
+  %t1594 = getelementptr i32, ptr %t1589, i32 4
+  store i32 %t765, ptr %t1594
+  %t1595 = getelementptr i32, ptr %t1589, i32 5
+  store i32 %t766, ptr %t1595
+  %t1596 = getelementptr i32, ptr %t1589, i32 6
+  store i32 %t767, ptr %t1596
+  %t1597 = getelementptr i32, ptr %t1589, i32 7
+  store i32 %t808, ptr %t1597
+  %t1598 = getelementptr i32, ptr %t1589, i32 8
+  store i32 %t849, ptr %t1598
+  %t1599 = getelementptr i32, ptr %t1589, i32 9
+  store i32 %t890, ptr %t1599
+  %t1600 = getelementptr i32, ptr %t1589, i32 10
+  store i32 %t931, ptr %t1600
+  %t1601 = getelementptr i32, ptr %t1589, i32 11
+  store i32 %t972, ptr %t1601
+  %t1602 = getelementptr i32, ptr %t1589, i32 12
+  store i32 %t1013, ptr %t1602
+  %t1603 = getelementptr i32, ptr %t1589, i32 13
+  store i32 %t1054, ptr %t1603
+  %t1604 = getelementptr i32, ptr %t1589, i32 14
+  store i32 %t1095, ptr %t1604
+  %t1605 = getelementptr i32, ptr %t1589, i32 15
+  store i32 %t1136, ptr %t1605
+  %t1606 = getelementptr i32, ptr %t1589, i32 16
+  store i32 %t1177, ptr %t1606
+  %t1607 = getelementptr i32, ptr %t1589, i32 17
+  store i32 %t1218, ptr %t1607
+  %t1608 = getelementptr i32, ptr %t1589, i32 18
+  store i32 %t1259, ptr %t1608
+  %t1609 = getelementptr i32, ptr %t1589, i32 19
+  store i32 %t1300, ptr %t1609
+  %t1610 = getelementptr i32, ptr %t1589, i32 20
+  store i32 %t1341, ptr %t1610
+  %t1611 = getelementptr i32, ptr %t1589, i32 21
+  store i32 %t1382, ptr %t1611
+  %t1612 = getelementptr i32, ptr %t1589, i32 22
+  store i32 %t1423, ptr %t1612
+  %t1613 = getelementptr i32, ptr %t1589, i32 23
+  store i32 %t1464, ptr %t1613
+  %t1614 = getelementptr i32, ptr %t1589, i32 24
+  store i32 %t1505, ptr %t1614
+  %t1615 = getelementptr i32, ptr %t1589, i32 25
+  store i32 %t1546, ptr %t1615
+  %t1616 = getelementptr i32, ptr %t1589, i32 26
+  store i32 %t1587, ptr %t1616
+  %t1617 = alloca ptr, i32 27
+  %t1618 = getelementptr ptr, ptr %t1617, i32 0
+  store ptr %t1590, ptr %t1618
+  %t1619 = getelementptr ptr, ptr %t1617, i32 1
+  store ptr %t1591, ptr %t1619
+  %t1620 = getelementptr ptr, ptr %t1617, i32 2
+  store ptr %t1592, ptr %t1620
+  %t1621 = getelementptr ptr, ptr %t1617, i32 3
+  store ptr %t1593, ptr %t1621
+  %t1622 = getelementptr ptr, ptr %t1617, i32 4
+  store ptr %t1594, ptr %t1622
+  %t1623 = getelementptr ptr, ptr %t1617, i32 5
+  store ptr %t1595, ptr %t1623
+  %t1624 = getelementptr ptr, ptr %t1617, i32 6
+  store ptr %t1596, ptr %t1624
+  %t1625 = getelementptr ptr, ptr %t1617, i32 7
+  store ptr %t1597, ptr %t1625
+  %t1626 = getelementptr ptr, ptr %t1617, i32 8
+  store ptr %t1598, ptr %t1626
+  %t1627 = getelementptr ptr, ptr %t1617, i32 9
+  store ptr %t1599, ptr %t1627
+  %t1628 = getelementptr ptr, ptr %t1617, i32 10
+  store ptr %t1600, ptr %t1628
+  %t1629 = getelementptr ptr, ptr %t1617, i32 11
+  store ptr %t1601, ptr %t1629
+  %t1630 = getelementptr ptr, ptr %t1617, i32 12
+  store ptr %t1602, ptr %t1630
+  %t1631 = getelementptr ptr, ptr %t1617, i32 13
+  store ptr %t1603, ptr %t1631
+  %t1632 = getelementptr ptr, ptr %t1617, i32 14
+  store ptr %t1604, ptr %t1632
+  %t1633 = getelementptr ptr, ptr %t1617, i32 15
+  store ptr %t1605, ptr %t1633
+  %t1634 = getelementptr ptr, ptr %t1617, i32 16
+  store ptr %t1606, ptr %t1634
+  %t1635 = getelementptr ptr, ptr %t1617, i32 17
+  store ptr %t1607, ptr %t1635
+  %t1636 = getelementptr ptr, ptr %t1617, i32 18
+  store ptr %t1608, ptr %t1636
+  %t1637 = getelementptr ptr, ptr %t1617, i32 19
+  store ptr %t1609, ptr %t1637
+  %t1638 = getelementptr ptr, ptr %t1617, i32 20
+  store ptr %t1610, ptr %t1638
+  %t1639 = getelementptr ptr, ptr %t1617, i32 21
+  store ptr %t1611, ptr %t1639
+  %t1640 = getelementptr ptr, ptr %t1617, i32 22
+  store ptr %t1612, ptr %t1640
+  %t1641 = getelementptr ptr, ptr %t1617, i32 23
+  store ptr %t1613, ptr %t1641
+  %t1642 = getelementptr ptr, ptr %t1617, i32 24
+  store ptr %t1614, ptr %t1642
+  %t1643 = getelementptr ptr, ptr %t1617, i32 25
+  store ptr %t1615, ptr %t1643
+  %t1644 = getelementptr ptr, ptr %t1617, i32 26
+  store ptr %t1616, ptr %t1644
+  %t1645 = getelementptr [28 x i8], ptr @str10, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t760, ptr %t1588, ptr %t1617, ptr %t1645, i32 27, i32 0)
   br label %bb57
 bb57:
   store i32 1, ptr %t21
   br label %L1149
 L1149:
-  br label %do_inc35
-do_inc35:
-  %t1673 = load i32, ptr %t18
-  %t1674 = load i32, ptr %t202
-  %t1675 = add i32 %t1673, %t1674
-  store i32 %t1675, ptr %t18
-  %t1676 = load i64, ptr %t204
-  %t1677 = add i64 %t1676, 1
-  store i64 %t1677, ptr %t204
-  br label %do_test34
+  br label %do_inc53
+do_inc53:
+  %t1646 = load i32, ptr %t18
+  %t1647 = add i32 %t1646, 1
+  store i32 %t1647, ptr %t18
+  %t186 = add i64 %t185, 1
+  br label %do_test52
 bb59:
-  %t1678 = load i32, ptr %t6
-  %t1679 = getelementptr [56 x i8], ptr @str11, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t1678, ptr %t1679, ptr null, ptr null, i32 0, i32 0)
+  %t1648 = load i32, ptr %t6
+  %t1649 = getelementptr [56 x i8], ptr @str12, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t1648, ptr %t1649, ptr null, ptr null, i32 0, i32 0)
   br label %bb60
 bb60:
-  %t1680 = load i32, ptr %t11
-  %t1681 = call i32 @col6forge_rewind(i32 %t1680)
+  %t1650 = load i32, ptr %t11
+  %t1651 = call i32 @col6forge_rewind(i32 %t1650)
   br label %bb61
 bb61:
   store i32 114, ptr %t22
   store i32 1, ptr %t18
-  %t1682 = load i32, ptr %t11
-  %t1683 = getelementptr [6 x i8], ptr @str12, i32 0, i32 0
-  call void @col6forge_set_runtime_source_context(ptr %t1683, i32 199, i32 7)
-  %t1684 = getelementptr i32, ptr %t2, i32 0
-  %t1685 = getelementptr i32, ptr %t2, i32 1
-  %t1686 = getelementptr i32, ptr %t2, i32 2
-  %t1687 = getelementptr i32, ptr %t2, i32 3
-  %t1688 = getelementptr i32, ptr %t2, i32 4
-  %t1689 = getelementptr i32, ptr %t2, i32 5
-  %t1690 = getelementptr i32, ptr %t2, i32 6
-  %t1691 = getelementptr i32, ptr %t2, i32 7
-  %t1692 = getelementptr i32, ptr %t2, i32 8
-  %t1693 = getelementptr i32, ptr %t2, i32 9
-  %t1694 = getelementptr i32, ptr %t2, i32 10
-  %t1695 = getelementptr i32, ptr %t2, i32 11
-  %t1696 = getelementptr i32, ptr %t2, i32 12
-  %t1697 = getelementptr i32, ptr %t2, i32 13
-  %t1698 = getelementptr i32, ptr %t2, i32 14
-  %t1699 = getelementptr i32, ptr %t2, i32 15
-  %t1700 = getelementptr i32, ptr %t2, i32 16
-  %t1701 = getelementptr i32, ptr %t2, i32 17
-  %t1702 = getelementptr i32, ptr %t2, i32 18
-  %t1703 = getelementptr i32, ptr %t2, i32 19
-  %t1704 = getelementptr i32, ptr %t2, i32 20
-  %t1705 = getelementptr i32, ptr %t2, i32 21
-  %t1706 = getelementptr i32, ptr %t2, i32 22
-  %t1707 = getelementptr i32, ptr %t2, i32 23
-  %t1708 = getelementptr i32, ptr %t2, i32 24
-  %t1709 = getelementptr i32, ptr %t2, i32 25
-  %t1710 = getelementptr i32, ptr %t2, i32 26
-  %t1711 = getelementptr [83 x i8], ptr @str13, i32 0, i32 0
-  %t1712 = alloca ptr, i32 27
-  %t1713 = getelementptr ptr, ptr %t1712, i32 0
-  store ptr %t1684, ptr %t1713
-  %t1714 = getelementptr ptr, ptr %t1712, i32 1
-  store ptr %t1685, ptr %t1714
-  %t1715 = getelementptr ptr, ptr %t1712, i32 2
-  store ptr %t1686, ptr %t1715
-  %t1716 = getelementptr ptr, ptr %t1712, i32 3
-  store ptr %t1687, ptr %t1716
-  %t1717 = getelementptr ptr, ptr %t1712, i32 4
-  store ptr %t1688, ptr %t1717
-  %t1718 = getelementptr ptr, ptr %t1712, i32 5
-  store ptr %t1689, ptr %t1718
-  %t1719 = getelementptr ptr, ptr %t1712, i32 6
-  store ptr %t1690, ptr %t1719
-  %t1720 = getelementptr ptr, ptr %t1712, i32 7
-  store ptr %t1691, ptr %t1720
-  %t1721 = getelementptr ptr, ptr %t1712, i32 8
-  store ptr %t1692, ptr %t1721
-  %t1722 = getelementptr ptr, ptr %t1712, i32 9
-  store ptr %t1693, ptr %t1722
-  %t1723 = getelementptr ptr, ptr %t1712, i32 10
-  store ptr %t1694, ptr %t1723
-  %t1724 = getelementptr ptr, ptr %t1712, i32 11
-  store ptr %t1695, ptr %t1724
-  %t1725 = getelementptr ptr, ptr %t1712, i32 12
-  store ptr %t1696, ptr %t1725
-  %t1726 = getelementptr ptr, ptr %t1712, i32 13
-  store ptr %t1697, ptr %t1726
-  %t1727 = getelementptr ptr, ptr %t1712, i32 14
-  store ptr %t1698, ptr %t1727
-  %t1728 = getelementptr ptr, ptr %t1712, i32 15
-  store ptr %t1699, ptr %t1728
-  %t1729 = getelementptr ptr, ptr %t1712, i32 16
-  store ptr %t1700, ptr %t1729
-  %t1730 = getelementptr ptr, ptr %t1712, i32 17
-  store ptr %t1701, ptr %t1730
-  %t1731 = getelementptr ptr, ptr %t1712, i32 18
-  store ptr %t1702, ptr %t1731
-  %t1732 = getelementptr ptr, ptr %t1712, i32 19
-  store ptr %t1703, ptr %t1732
-  %t1733 = getelementptr ptr, ptr %t1712, i32 20
-  store ptr %t1704, ptr %t1733
-  %t1734 = getelementptr ptr, ptr %t1712, i32 21
-  store ptr %t1705, ptr %t1734
-  %t1735 = getelementptr ptr, ptr %t1712, i32 22
-  store ptr %t1706, ptr %t1735
-  %t1736 = getelementptr ptr, ptr %t1712, i32 23
-  store ptr %t1707, ptr %t1736
-  %t1737 = getelementptr ptr, ptr %t1712, i32 24
-  store ptr %t1708, ptr %t1737
-  %t1738 = getelementptr ptr, ptr %t1712, i32 25
-  store ptr %t1709, ptr %t1738
-  %t1739 = getelementptr ptr, ptr %t1712, i32 26
-  store ptr %t1710, ptr %t1739
-  %t1740 = getelementptr [28 x i8], ptr @str14, i32 0, i32 0
-  call i32 @col6forge_formatted_read_core(i32 %t1682, ptr %t1711, ptr %t1712, ptr %t1740, i32 27, i32 0)
+  %t1652 = load i32, ptr %t11
+  %t1653 = getelementptr [6 x i8], ptr @str13, i32 0, i32 0
+  call void @col6forge_set_runtime_source_context(ptr %t1653, i32 199, i32 7)
+  %t1654 = getelementptr i32, ptr %t2, i32 0
+  %t1655 = getelementptr i32, ptr %t2, i32 1
+  %t1656 = getelementptr i32, ptr %t2, i32 2
+  %t1657 = getelementptr i32, ptr %t2, i32 3
+  %t1658 = getelementptr i32, ptr %t2, i32 4
+  %t1659 = getelementptr i32, ptr %t2, i32 5
+  %t1660 = getelementptr i32, ptr %t2, i32 6
+  %t1661 = getelementptr i32, ptr %t2, i32 7
+  %t1662 = getelementptr i32, ptr %t2, i32 8
+  %t1663 = getelementptr i32, ptr %t2, i32 9
+  %t1664 = getelementptr i32, ptr %t2, i32 10
+  %t1665 = getelementptr i32, ptr %t2, i32 11
+  %t1666 = getelementptr i32, ptr %t2, i32 12
+  %t1667 = getelementptr i32, ptr %t2, i32 13
+  %t1668 = getelementptr i32, ptr %t2, i32 14
+  %t1669 = getelementptr i32, ptr %t2, i32 15
+  %t1670 = getelementptr i32, ptr %t2, i32 16
+  %t1671 = getelementptr i32, ptr %t2, i32 17
+  %t1672 = getelementptr i32, ptr %t2, i32 18
+  %t1673 = getelementptr i32, ptr %t2, i32 19
+  %t1674 = getelementptr i32, ptr %t2, i32 20
+  %t1675 = getelementptr i32, ptr %t2, i32 21
+  %t1676 = getelementptr i32, ptr %t2, i32 22
+  %t1677 = getelementptr i32, ptr %t2, i32 23
+  %t1678 = getelementptr i32, ptr %t2, i32 24
+  %t1679 = getelementptr i32, ptr %t2, i32 25
+  %t1680 = getelementptr i32, ptr %t2, i32 26
+  %t1681 = getelementptr [83 x i8], ptr @str14, i32 0, i32 0
+  %t1682 = alloca ptr, i32 27
+  %t1683 = getelementptr ptr, ptr %t1682, i32 0
+  store ptr %t1654, ptr %t1683
+  %t1684 = getelementptr ptr, ptr %t1682, i32 1
+  store ptr %t1655, ptr %t1684
+  %t1685 = getelementptr ptr, ptr %t1682, i32 2
+  store ptr %t1656, ptr %t1685
+  %t1686 = getelementptr ptr, ptr %t1682, i32 3
+  store ptr %t1657, ptr %t1686
+  %t1687 = getelementptr ptr, ptr %t1682, i32 4
+  store ptr %t1658, ptr %t1687
+  %t1688 = getelementptr ptr, ptr %t1682, i32 5
+  store ptr %t1659, ptr %t1688
+  %t1689 = getelementptr ptr, ptr %t1682, i32 6
+  store ptr %t1660, ptr %t1689
+  %t1690 = getelementptr ptr, ptr %t1682, i32 7
+  store ptr %t1661, ptr %t1690
+  %t1691 = getelementptr ptr, ptr %t1682, i32 8
+  store ptr %t1662, ptr %t1691
+  %t1692 = getelementptr ptr, ptr %t1682, i32 9
+  store ptr %t1663, ptr %t1692
+  %t1693 = getelementptr ptr, ptr %t1682, i32 10
+  store ptr %t1664, ptr %t1693
+  %t1694 = getelementptr ptr, ptr %t1682, i32 11
+  store ptr %t1665, ptr %t1694
+  %t1695 = getelementptr ptr, ptr %t1682, i32 12
+  store ptr %t1666, ptr %t1695
+  %t1696 = getelementptr ptr, ptr %t1682, i32 13
+  store ptr %t1667, ptr %t1696
+  %t1697 = getelementptr ptr, ptr %t1682, i32 14
+  store ptr %t1668, ptr %t1697
+  %t1698 = getelementptr ptr, ptr %t1682, i32 15
+  store ptr %t1669, ptr %t1698
+  %t1699 = getelementptr ptr, ptr %t1682, i32 16
+  store ptr %t1670, ptr %t1699
+  %t1700 = getelementptr ptr, ptr %t1682, i32 17
+  store ptr %t1671, ptr %t1700
+  %t1701 = getelementptr ptr, ptr %t1682, i32 18
+  store ptr %t1672, ptr %t1701
+  %t1702 = getelementptr ptr, ptr %t1682, i32 19
+  store ptr %t1673, ptr %t1702
+  %t1703 = getelementptr ptr, ptr %t1682, i32 20
+  store ptr %t1674, ptr %t1703
+  %t1704 = getelementptr ptr, ptr %t1682, i32 21
+  store ptr %t1675, ptr %t1704
+  %t1705 = getelementptr ptr, ptr %t1682, i32 22
+  store ptr %t1676, ptr %t1705
+  %t1706 = getelementptr ptr, ptr %t1682, i32 23
+  store ptr %t1677, ptr %t1706
+  %t1707 = getelementptr ptr, ptr %t1682, i32 24
+  store ptr %t1678, ptr %t1707
+  %t1708 = getelementptr ptr, ptr %t1682, i32 25
+  store ptr %t1679, ptr %t1708
+  %t1709 = getelementptr ptr, ptr %t1682, i32 26
+  store ptr %t1680, ptr %t1709
+  %t1710 = getelementptr [28 x i8], ptr @str15, i32 0, i32 0
+  call i32 @col6forge_formatted_read_core(i32 %t1652, ptr %t1681, ptr %t1682, ptr %t1710, i32 27, i32 0)
   call void @col6forge_clear_runtime_source_context()
   br label %bb64
 bb64:
-  %t1741 = alloca i32
-  %t1742 = alloca i64
-  %t1743 = alloca i64
+  br label %do_prelude56
+do_prelude56:
   store i32 1, ptr %t23
-  store i32 1, ptr %t1741
-  %t1744 = icmp sle i32 1, 8
-  %t1745 = icmp ne i32 1, 0
-  %t1746 = and i1 %t1744, %t1745
-  br i1 %t1746, label %do_trip_calc38, label %do_trip_zero39
-do_trip_calc38:
-  %t1747 = sub i32 8, 1
-  %t1748 = add i32 %t1747, 1
-  %t1749 = sdiv i32 %t1748, 1
-  %t1750 = sext i32 %t1749 to i64
-  store i64 %t1750, ptr %t1742
-  br label %do_trip_done40
-do_trip_zero39:
-  store i64 0, ptr %t1742
-  br label %do_trip_done40
-do_trip_done40:
-  store i64 0, ptr %t1743
-  br label %do_test41
-do_test41:
-  %t1751 = load i64, ptr %t1743
-  %t1752 = load i64, ptr %t1742
-  %t1753 = icmp slt i64 %t1751, %t1752
-  br i1 %t1753, label %bb65, label %bb86
+  %t1711 = icmp sle i32 1, 8
+  %t1712 = icmp ne i32 1, 0
+  br i1 %t1712, label %do_trip_range59, label %do_trip_zero_step60
+do_trip_zero_step60:
+  %t1713 = getelementptr [5 x i8], ptr @str8, i32 0, i32 0
+  call void @col6forge_report_runtime_check_failure(ptr %t1713)
+  call void @llvm.trap()
+  unreachable
+do_trip_range59:
+  br i1 %t1711, label %do_trip_calc57, label %do_trip_empty58
+do_trip_calc57:
+  %t1714 = sub i32 8, 1
+  %t1715 = add i32 %t1714, 1
+  %t1716 = sdiv i32 %t1715, 1
+  %t1717 = sext i32 %t1716 to i64
+  br label %do_trip_done61
+do_trip_empty58:
+  br label %do_trip_done61
+do_trip_done61:
+  %t1718 = phi i64 [ %t1717, %do_trip_calc57 ], [ 0, %do_trip_empty58 ]
+  br label %do_test62
+do_test62:
+  %t1719 = phi i64 [ 0, %do_trip_done61 ], [ %t1720, %do_inc63 ]
+  %t1721 = icmp slt i64 %t1719, %t1718
+  br i1 %t1721, label %bb65, label %bb86
 bb65:
   store i32 0, ptr %t24
-  %t1754 = sext i32 4 to i64
+  %t1722 = sext i32 4 to i64
+  %t1723 = sub i64 %t1722, 1
+  %t1724 = mul i64 %t1723, 1
+  %t1725 = add i64 0, %t1724
+  %t1726 = getelementptr i32, ptr %t2, i64 %t1725
+  %t1727 = load i32, ptr %t1726
+  %t1728 = load i32, ptr %t18
+  %t1729 = icmp eq i32 %t1727, %t1728
+  br i1 %t1729, label %if_then64, label %bb67
+if_then64:
+  %t1730 = load i32, ptr %t24
+  %t1731 = add i32 %t1730, 1
+  store i32 %t1731, ptr %t24
+  br label %bb67
+bb67:
+  %t1732 = sext i32 8 to i64
+  %t1733 = sub i64 %t1732, 1
+  %t1734 = mul i64 %t1733, 1
+  %t1735 = add i64 0, %t1734
+  %t1736 = getelementptr i32, ptr %t2, i64 %t1735
+  %t1737 = load i32, ptr %t1736
+  %t1738 = load i32, ptr %t18
+  %t1739 = sext i32 %t1738 to i64
+  %t1740 = sub i64 %t1739, 1
+  %t1741 = mul i64 %t1740, 1
+  %t1742 = add i64 0, %t1741
+  %t1743 = sext i32 1 to i64
+  %t1744 = sub i64 %t1743, 1
+  %t1745 = sext i32 31 to i64
+  %t1746 = mul i64 1, %t1745
+  %t1747 = mul i64 %t1744, %t1746
+  %t1748 = add i64 %t1742, %t1747
+  %t1749 = getelementptr i32, ptr %t0, i64 %t1748
+  %t1750 = load i32, ptr %t1749
+  %t1751 = icmp eq i32 %t1737, %t1750
+  br i1 %t1751, label %if_then65, label %bb68
+if_then65:
+  %t1752 = load i32, ptr %t24
+  %t1753 = add i32 %t1752, 1
+  store i32 %t1753, ptr %t24
+  br label %bb68
+bb68:
+  %t1754 = sext i32 12 to i64
   %t1755 = sub i64 %t1754, 1
   %t1756 = mul i64 %t1755, 1
   %t1757 = add i64 0, %t1756
   %t1758 = getelementptr i32, ptr %t2, i64 %t1757
   %t1759 = load i32, ptr %t1758
   %t1760 = load i32, ptr %t18
-  %t1761 = icmp eq i32 %t1759, %t1760
-  br i1 %t1761, label %if_then43, label %bb67
-if_then43:
-  %t1762 = load i32, ptr %t24
-  %t1763 = add i32 %t1762, 1
-  store i32 %t1763, ptr %t24
-  br label %bb67
-bb67:
-  %t1764 = sext i32 8 to i64
-  %t1765 = sub i64 %t1764, 1
-  %t1766 = mul i64 %t1765, 1
-  %t1767 = add i64 0, %t1766
-  %t1768 = getelementptr i32, ptr %t2, i64 %t1767
-  %t1769 = load i32, ptr %t1768
-  %t1770 = load i32, ptr %t18
-  %t1771 = sext i32 %t1770 to i64
-  %t1772 = sub i64 %t1771, 1
-  %t1773 = mul i64 %t1772, 1
-  %t1774 = add i64 0, %t1773
-  %t1775 = sext i32 1 to i64
-  %t1776 = sub i64 %t1775, 1
-  %t1777 = sext i32 31 to i64
-  %t1778 = mul i64 1, %t1777
-  %t1779 = mul i64 %t1776, %t1778
-  %t1780 = add i64 %t1774, %t1779
-  %t1781 = getelementptr i32, ptr %t0, i64 %t1780
-  %t1782 = load i32, ptr %t1781
-  %t1783 = icmp eq i32 %t1769, %t1782
-  br i1 %t1783, label %if_then44, label %bb68
-if_then44:
-  %t1784 = load i32, ptr %t24
-  %t1785 = add i32 %t1784, 1
-  store i32 %t1785, ptr %t24
-  br label %bb68
-bb68:
-  %t1786 = sext i32 12 to i64
-  %t1787 = sub i64 %t1786, 1
-  %t1788 = mul i64 %t1787, 1
-  %t1789 = add i64 0, %t1788
-  %t1790 = getelementptr i32, ptr %t2, i64 %t1789
-  %t1791 = load i32, ptr %t1790
-  %t1792 = load i32, ptr %t18
-  %t1793 = sext i32 %t1792 to i64
-  %t1794 = sub i64 %t1793, 1
-  %t1795 = mul i64 %t1794, 1
-  %t1796 = add i64 0, %t1795
-  %t1797 = sext i32 5 to i64
-  %t1798 = sub i64 %t1797, 1
-  %t1799 = sext i32 31 to i64
-  %t1800 = mul i64 1, %t1799
-  %t1801 = mul i64 %t1798, %t1800
-  %t1802 = add i64 %t1796, %t1801
-  %t1803 = getelementptr i32, ptr %t0, i64 %t1802
-  %t1804 = load i32, ptr %t1803
-  %t1805 = icmp eq i32 %t1791, %t1804
-  br i1 %t1805, label %if_then45, label %bb69
-if_then45:
-  %t1806 = load i32, ptr %t24
-  %t1807 = add i32 %t1806, 1
-  store i32 %t1807, ptr %t24
+  %t1761 = sext i32 %t1760 to i64
+  %t1762 = sub i64 %t1761, 1
+  %t1763 = mul i64 %t1762, 1
+  %t1764 = add i64 0, %t1763
+  %t1765 = sext i32 5 to i64
+  %t1766 = sub i64 %t1765, 1
+  %t1767 = sext i32 31 to i64
+  %t1768 = mul i64 1, %t1767
+  %t1769 = mul i64 %t1766, %t1768
+  %t1770 = add i64 %t1764, %t1769
+  %t1771 = getelementptr i32, ptr %t0, i64 %t1770
+  %t1772 = load i32, ptr %t1771
+  %t1773 = icmp eq i32 %t1759, %t1772
+  br i1 %t1773, label %if_then66, label %bb69
+if_then66:
+  %t1774 = load i32, ptr %t24
+  %t1775 = add i32 %t1774, 1
+  store i32 %t1775, ptr %t24
   br label %bb69
 bb69:
-  %t1808 = sext i32 16 to i64
-  %t1809 = sub i64 %t1808, 1
-  %t1810 = mul i64 %t1809, 1
-  %t1811 = add i64 0, %t1810
-  %t1812 = getelementptr i32, ptr %t2, i64 %t1811
-  %t1813 = load i32, ptr %t1812
-  %t1814 = load i32, ptr %t18
-  %t1815 = sext i32 %t1814 to i64
-  %t1816 = sub i64 %t1815, 1
-  %t1817 = mul i64 %t1816, 1
-  %t1818 = add i64 0, %t1817
-  %t1819 = sext i32 9 to i64
-  %t1820 = sub i64 %t1819, 1
-  %t1821 = sext i32 31 to i64
-  %t1822 = mul i64 1, %t1821
-  %t1823 = mul i64 %t1820, %t1822
-  %t1824 = add i64 %t1818, %t1823
-  %t1825 = getelementptr i32, ptr %t0, i64 %t1824
-  %t1826 = load i32, ptr %t1825
-  %t1827 = icmp eq i32 %t1813, %t1826
-  br i1 %t1827, label %if_then46, label %bb70
-if_then46:
-  %t1828 = load i32, ptr %t24
-  %t1829 = add i32 %t1828, 1
-  store i32 %t1829, ptr %t24
+  %t1776 = sext i32 16 to i64
+  %t1777 = sub i64 %t1776, 1
+  %t1778 = mul i64 %t1777, 1
+  %t1779 = add i64 0, %t1778
+  %t1780 = getelementptr i32, ptr %t2, i64 %t1779
+  %t1781 = load i32, ptr %t1780
+  %t1782 = load i32, ptr %t18
+  %t1783 = sext i32 %t1782 to i64
+  %t1784 = sub i64 %t1783, 1
+  %t1785 = mul i64 %t1784, 1
+  %t1786 = add i64 0, %t1785
+  %t1787 = sext i32 9 to i64
+  %t1788 = sub i64 %t1787, 1
+  %t1789 = sext i32 31 to i64
+  %t1790 = mul i64 1, %t1789
+  %t1791 = mul i64 %t1788, %t1790
+  %t1792 = add i64 %t1786, %t1791
+  %t1793 = getelementptr i32, ptr %t0, i64 %t1792
+  %t1794 = load i32, ptr %t1793
+  %t1795 = icmp eq i32 %t1781, %t1794
+  br i1 %t1795, label %if_then67, label %bb70
+if_then67:
+  %t1796 = load i32, ptr %t24
+  %t1797 = add i32 %t1796, 1
+  store i32 %t1797, ptr %t24
   br label %bb70
 bb70:
-  %t1830 = sext i32 20 to i64
-  %t1831 = sub i64 %t1830, 1
-  %t1832 = mul i64 %t1831, 1
-  %t1833 = add i64 0, %t1832
-  %t1834 = getelementptr i32, ptr %t2, i64 %t1833
-  %t1835 = load i32, ptr %t1834
-  %t1836 = load i32, ptr %t18
-  %t1837 = sext i32 %t1836 to i64
-  %t1838 = sub i64 %t1837, 1
-  %t1839 = mul i64 %t1838, 1
-  %t1840 = add i64 0, %t1839
-  %t1841 = sext i32 13 to i64
-  %t1842 = sub i64 %t1841, 1
-  %t1843 = sext i32 31 to i64
-  %t1844 = mul i64 1, %t1843
-  %t1845 = mul i64 %t1842, %t1844
-  %t1846 = add i64 %t1840, %t1845
-  %t1847 = getelementptr i32, ptr %t0, i64 %t1846
-  %t1848 = load i32, ptr %t1847
-  %t1849 = icmp eq i32 %t1835, %t1848
-  br i1 %t1849, label %if_then47, label %bb71
-if_then47:
-  %t1850 = load i32, ptr %t24
-  %t1851 = add i32 %t1850, 1
-  store i32 %t1851, ptr %t24
+  %t1798 = sext i32 20 to i64
+  %t1799 = sub i64 %t1798, 1
+  %t1800 = mul i64 %t1799, 1
+  %t1801 = add i64 0, %t1800
+  %t1802 = getelementptr i32, ptr %t2, i64 %t1801
+  %t1803 = load i32, ptr %t1802
+  %t1804 = load i32, ptr %t18
+  %t1805 = sext i32 %t1804 to i64
+  %t1806 = sub i64 %t1805, 1
+  %t1807 = mul i64 %t1806, 1
+  %t1808 = add i64 0, %t1807
+  %t1809 = sext i32 13 to i64
+  %t1810 = sub i64 %t1809, 1
+  %t1811 = sext i32 31 to i64
+  %t1812 = mul i64 1, %t1811
+  %t1813 = mul i64 %t1810, %t1812
+  %t1814 = add i64 %t1808, %t1813
+  %t1815 = getelementptr i32, ptr %t0, i64 %t1814
+  %t1816 = load i32, ptr %t1815
+  %t1817 = icmp eq i32 %t1803, %t1816
+  br i1 %t1817, label %if_then68, label %bb71
+if_then68:
+  %t1818 = load i32, ptr %t24
+  %t1819 = add i32 %t1818, 1
+  store i32 %t1819, ptr %t24
   br label %bb71
 bb71:
-  %t1852 = sext i32 27 to i64
-  %t1853 = sub i64 %t1852, 1
-  %t1854 = mul i64 %t1853, 1
-  %t1855 = add i64 0, %t1854
-  %t1856 = getelementptr i32, ptr %t2, i64 %t1855
-  %t1857 = load i32, ptr %t1856
-  %t1858 = load i32, ptr %t18
-  %t1859 = sext i32 %t1858 to i64
-  %t1860 = sub i64 %t1859, 1
-  %t1861 = mul i64 %t1860, 1
-  %t1862 = add i64 0, %t1861
-  %t1863 = sext i32 20 to i64
-  %t1864 = sub i64 %t1863, 1
-  %t1865 = sext i32 31 to i64
-  %t1866 = mul i64 1, %t1865
-  %t1867 = mul i64 %t1864, %t1866
-  %t1868 = add i64 %t1862, %t1867
-  %t1869 = getelementptr i32, ptr %t0, i64 %t1868
-  %t1870 = load i32, ptr %t1869
-  %t1871 = icmp eq i32 %t1857, %t1870
-  br i1 %t1871, label %if_then48, label %L41200
-if_then48:
-  %t1872 = load i32, ptr %t24
-  %t1873 = add i32 %t1872, 1
-  store i32 %t1873, ptr %t24
+  %t1820 = sext i32 27 to i64
+  %t1821 = sub i64 %t1820, 1
+  %t1822 = mul i64 %t1821, 1
+  %t1823 = add i64 0, %t1822
+  %t1824 = getelementptr i32, ptr %t2, i64 %t1823
+  %t1825 = load i32, ptr %t1824
+  %t1826 = load i32, ptr %t18
+  %t1827 = sext i32 %t1826 to i64
+  %t1828 = sub i64 %t1827, 1
+  %t1829 = mul i64 %t1828, 1
+  %t1830 = add i64 0, %t1829
+  %t1831 = sext i32 20 to i64
+  %t1832 = sub i64 %t1831, 1
+  %t1833 = sext i32 31 to i64
+  %t1834 = mul i64 1, %t1833
+  %t1835 = mul i64 %t1832, %t1834
+  %t1836 = add i64 %t1830, %t1835
+  %t1837 = getelementptr i32, ptr %t0, i64 %t1836
+  %t1838 = load i32, ptr %t1837
+  %t1839 = icmp eq i32 %t1825, %t1838
+  br i1 %t1839, label %if_then69, label %L41200
+if_then69:
+  %t1840 = load i32, ptr %t24
+  %t1841 = add i32 %t1840, 1
+  store i32 %t1841, ptr %t24
   br label %L41200
 L41200:
-  %t1874 = load i32, ptr %t24
-  %t1875 = sub i32 %t1874, 6
-  %t1876 = icmp slt i32 %t1875, 0
-  br i1 %t1876, label %L21200, label %arith_if_zero49
-arith_if_zero49:
-  %t1877 = icmp eq i32 %t1875, 0
-  br i1 %t1877, label %L11200, label %L21200
+  %t1842 = load i32, ptr %t24
+  %t1843 = sub i32 %t1842, 6
+  %t1844 = icmp slt i32 %t1843, 0
+  br i1 %t1844, label %L21200, label %arith_if_zero70
+arith_if_zero70:
+  %t1845 = icmp eq i32 %t1843, 0
+  br i1 %t1845, label %L11200, label %L21200
 L11200:
-  %t1878 = load i32, ptr %t7
-  %t1879 = add i32 %t1878, 1
-  store i32 %t1879, ptr %t7
+  %t1846 = load i32, ptr %t7
+  %t1847 = add i32 %t1846, 1
+  store i32 %t1847, ptr %t7
   br label %bb74
 bb74:
-  %t1880 = load i32, ptr %t6
-  %t1881 = load i32, ptr %t22
-  %t1882 = getelementptr [21 x i8], ptr @str15, i32 0, i32 0
-  %t1883 = alloca i32, i32 1
-  %t1884 = getelementptr i32, ptr %t1883, i32 0
-  store i32 %t1881, ptr %t1884
-  %t1885 = alloca ptr, i32 1
-  %t1886 = getelementptr ptr, ptr %t1885, i32 0
-  store ptr %t1884, ptr %t1886
-  %t1887 = getelementptr [2 x i8], ptr @str16, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t1880, ptr %t1882, ptr %t1885, ptr %t1887, i32 1, i32 0)
+  %t1848 = load i32, ptr %t6
+  %t1849 = load i32, ptr %t22
+  %t1850 = getelementptr [21 x i8], ptr @str16, i32 0, i32 0
+  %t1851 = alloca i32, i32 1
+  %t1852 = getelementptr i32, ptr %t1851, i32 0
+  store i32 %t1849, ptr %t1852
+  %t1853 = alloca ptr, i32 1
+  %t1854 = getelementptr ptr, ptr %t1853, i32 0
+  store ptr %t1852, ptr %t1854
+  %t1855 = getelementptr [2 x i8], ptr @str17, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t1848, ptr %t1850, ptr %t1853, ptr %t1855, i32 1, i32 0)
   br label %bb75
 bb75:
   br label %L1210
 L21200:
-  %t1888 = load i32, ptr %t8
-  %t1889 = add i32 %t1888, 1
-  store i32 %t1889, ptr %t8
+  %t1856 = load i32, ptr %t8
+  %t1857 = add i32 %t1856, 1
+  store i32 %t1857, ptr %t8
   br label %bb77
 bb77:
-  %t1890 = load i32, ptr %t24
-  store i32 %t1890, ptr %t25
+  %t1858 = load i32, ptr %t24
+  store i32 %t1858, ptr %t25
   store i32 6, ptr %t26
-  %t1891 = load i32, ptr %t6
-  %t1892 = load i32, ptr %t22
-  %t1893 = load i32, ptr %t25
-  %t1894 = load i32, ptr %t26
-  %t1895 = getelementptr [46 x i8], ptr @str17, i32 0, i32 0
-  %t1896 = alloca i32, i32 3
-  %t1897 = getelementptr i32, ptr %t1896, i32 0
-  store i32 %t1892, ptr %t1897
-  %t1898 = getelementptr i32, ptr %t1896, i32 1
-  store i32 %t1893, ptr %t1898
-  %t1899 = getelementptr i32, ptr %t1896, i32 2
-  store i32 %t1894, ptr %t1899
-  %t1900 = alloca ptr, i32 3
-  %t1901 = getelementptr ptr, ptr %t1900, i32 0
-  store ptr %t1897, ptr %t1901
-  %t1902 = getelementptr ptr, ptr %t1900, i32 1
-  store ptr %t1898, ptr %t1902
-  %t1903 = getelementptr ptr, ptr %t1900, i32 2
-  store ptr %t1899, ptr %t1903
-  %t1904 = getelementptr [4 x i8], ptr @str18, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t1891, ptr %t1895, ptr %t1900, ptr %t1904, i32 3, i32 0)
+  %t1859 = load i32, ptr %t6
+  %t1860 = load i32, ptr %t22
+  %t1861 = load i32, ptr %t25
+  %t1862 = load i32, ptr %t26
+  %t1863 = getelementptr [46 x i8], ptr @str18, i32 0, i32 0
+  %t1864 = alloca i32, i32 3
+  %t1865 = getelementptr i32, ptr %t1864, i32 0
+  store i32 %t1860, ptr %t1865
+  %t1866 = getelementptr i32, ptr %t1864, i32 1
+  store i32 %t1861, ptr %t1866
+  %t1867 = getelementptr i32, ptr %t1864, i32 2
+  store i32 %t1862, ptr %t1867
+  %t1868 = alloca ptr, i32 3
+  %t1869 = getelementptr ptr, ptr %t1868, i32 0
+  store ptr %t1865, ptr %t1869
+  %t1870 = getelementptr ptr, ptr %t1868, i32 1
+  store ptr %t1866, ptr %t1870
+  %t1871 = getelementptr ptr, ptr %t1868, i32 2
+  store ptr %t1867, ptr %t1871
+  %t1872 = getelementptr [4 x i8], ptr @str19, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t1859, ptr %t1863, ptr %t1868, ptr %t1872, i32 3, i32 0)
   br label %L1210
 L1210:
   br label %bb81
 bb81:
-  %t1905 = load i32, ptr %t22
-  %t1906 = add i32 %t1905, 1
-  store i32 %t1906, ptr %t22
-  %t1907 = load i32, ptr %t23
-  %t1908 = icmp eq i32 %t1907, 8
-  br i1 %t1908, label %if_then50, label %bb83
-if_then50:
+  %t1873 = load i32, ptr %t22
+  %t1874 = add i32 %t1873, 1
+  store i32 %t1874, ptr %t22
+  %t1875 = load i32, ptr %t23
+  %t1876 = icmp eq i32 %t1875, 8
+  br i1 %t1876, label %if_then71, label %bb83
+if_then71:
   br label %L1221
 bb83:
-  %t1909 = load i32, ptr %t11
-  %t1910 = getelementptr [6 x i8], ptr @str12, i32 0, i32 0
-  call void @col6forge_set_runtime_source_context(ptr %t1910, i32 236, i32 7)
-  %t1911 = getelementptr i32, ptr %t2, i32 0
-  %t1912 = getelementptr i32, ptr %t2, i32 1
-  %t1913 = getelementptr i32, ptr %t2, i32 2
-  %t1914 = getelementptr i32, ptr %t2, i32 3
-  %t1915 = getelementptr i32, ptr %t2, i32 4
-  %t1916 = getelementptr i32, ptr %t2, i32 5
-  %t1917 = getelementptr i32, ptr %t2, i32 6
-  %t1918 = getelementptr i32, ptr %t2, i32 7
-  %t1919 = getelementptr i32, ptr %t2, i32 8
-  %t1920 = getelementptr i32, ptr %t2, i32 9
-  %t1921 = getelementptr i32, ptr %t2, i32 10
-  %t1922 = getelementptr i32, ptr %t2, i32 11
-  %t1923 = getelementptr i32, ptr %t2, i32 12
-  %t1924 = getelementptr i32, ptr %t2, i32 13
-  %t1925 = getelementptr i32, ptr %t2, i32 14
-  %t1926 = getelementptr i32, ptr %t2, i32 15
-  %t1927 = getelementptr i32, ptr %t2, i32 16
-  %t1928 = getelementptr i32, ptr %t2, i32 17
-  %t1929 = getelementptr i32, ptr %t2, i32 18
-  %t1930 = getelementptr i32, ptr %t2, i32 19
-  %t1931 = getelementptr i32, ptr %t2, i32 20
-  %t1932 = getelementptr i32, ptr %t2, i32 21
-  %t1933 = getelementptr i32, ptr %t2, i32 22
-  %t1934 = getelementptr i32, ptr %t2, i32 23
-  %t1935 = getelementptr i32, ptr %t2, i32 24
-  %t1936 = getelementptr i32, ptr %t2, i32 25
-  %t1937 = getelementptr i32, ptr %t2, i32 26
-  %t1938 = getelementptr [99 x i8], ptr @str19, i32 0, i32 0
-  %t1939 = alloca ptr, i32 27
-  %t1940 = getelementptr ptr, ptr %t1939, i32 0
-  store ptr %t1911, ptr %t1940
-  %t1941 = getelementptr ptr, ptr %t1939, i32 1
-  store ptr %t1912, ptr %t1941
-  %t1942 = getelementptr ptr, ptr %t1939, i32 2
-  store ptr %t1913, ptr %t1942
-  %t1943 = getelementptr ptr, ptr %t1939, i32 3
-  store ptr %t1914, ptr %t1943
-  %t1944 = getelementptr ptr, ptr %t1939, i32 4
-  store ptr %t1915, ptr %t1944
-  %t1945 = getelementptr ptr, ptr %t1939, i32 5
-  store ptr %t1916, ptr %t1945
-  %t1946 = getelementptr ptr, ptr %t1939, i32 6
-  store ptr %t1917, ptr %t1946
-  %t1947 = getelementptr ptr, ptr %t1939, i32 7
-  store ptr %t1918, ptr %t1947
-  %t1948 = getelementptr ptr, ptr %t1939, i32 8
-  store ptr %t1919, ptr %t1948
-  %t1949 = getelementptr ptr, ptr %t1939, i32 9
-  store ptr %t1920, ptr %t1949
-  %t1950 = getelementptr ptr, ptr %t1939, i32 10
-  store ptr %t1921, ptr %t1950
-  %t1951 = getelementptr ptr, ptr %t1939, i32 11
-  store ptr %t1922, ptr %t1951
-  %t1952 = getelementptr ptr, ptr %t1939, i32 12
-  store ptr %t1923, ptr %t1952
-  %t1953 = getelementptr ptr, ptr %t1939, i32 13
-  store ptr %t1924, ptr %t1953
-  %t1954 = getelementptr ptr, ptr %t1939, i32 14
-  store ptr %t1925, ptr %t1954
-  %t1955 = getelementptr ptr, ptr %t1939, i32 15
-  store ptr %t1926, ptr %t1955
-  %t1956 = getelementptr ptr, ptr %t1939, i32 16
-  store ptr %t1927, ptr %t1956
-  %t1957 = getelementptr ptr, ptr %t1939, i32 17
-  store ptr %t1928, ptr %t1957
-  %t1958 = getelementptr ptr, ptr %t1939, i32 18
-  store ptr %t1929, ptr %t1958
-  %t1959 = getelementptr ptr, ptr %t1939, i32 19
-  store ptr %t1930, ptr %t1959
-  %t1960 = getelementptr ptr, ptr %t1939, i32 20
-  store ptr %t1931, ptr %t1960
-  %t1961 = getelementptr ptr, ptr %t1939, i32 21
-  store ptr %t1932, ptr %t1961
-  %t1962 = getelementptr ptr, ptr %t1939, i32 22
-  store ptr %t1933, ptr %t1962
-  %t1963 = getelementptr ptr, ptr %t1939, i32 23
-  store ptr %t1934, ptr %t1963
-  %t1964 = getelementptr ptr, ptr %t1939, i32 24
-  store ptr %t1935, ptr %t1964
-  %t1965 = getelementptr ptr, ptr %t1939, i32 25
-  store ptr %t1936, ptr %t1965
-  %t1966 = getelementptr ptr, ptr %t1939, i32 26
-  store ptr %t1937, ptr %t1966
-  %t1967 = getelementptr [28 x i8], ptr @str14, i32 0, i32 0
-  call i32 @col6forge_formatted_read_core(i32 %t1909, ptr %t1938, ptr %t1939, ptr %t1967, i32 27, i32 0)
+  %t1877 = load i32, ptr %t11
+  %t1878 = getelementptr [6 x i8], ptr @str13, i32 0, i32 0
+  call void @col6forge_set_runtime_source_context(ptr %t1878, i32 236, i32 7)
+  %t1879 = getelementptr i32, ptr %t2, i32 0
+  %t1880 = getelementptr i32, ptr %t2, i32 1
+  %t1881 = getelementptr i32, ptr %t2, i32 2
+  %t1882 = getelementptr i32, ptr %t2, i32 3
+  %t1883 = getelementptr i32, ptr %t2, i32 4
+  %t1884 = getelementptr i32, ptr %t2, i32 5
+  %t1885 = getelementptr i32, ptr %t2, i32 6
+  %t1886 = getelementptr i32, ptr %t2, i32 7
+  %t1887 = getelementptr i32, ptr %t2, i32 8
+  %t1888 = getelementptr i32, ptr %t2, i32 9
+  %t1889 = getelementptr i32, ptr %t2, i32 10
+  %t1890 = getelementptr i32, ptr %t2, i32 11
+  %t1891 = getelementptr i32, ptr %t2, i32 12
+  %t1892 = getelementptr i32, ptr %t2, i32 13
+  %t1893 = getelementptr i32, ptr %t2, i32 14
+  %t1894 = getelementptr i32, ptr %t2, i32 15
+  %t1895 = getelementptr i32, ptr %t2, i32 16
+  %t1896 = getelementptr i32, ptr %t2, i32 17
+  %t1897 = getelementptr i32, ptr %t2, i32 18
+  %t1898 = getelementptr i32, ptr %t2, i32 19
+  %t1899 = getelementptr i32, ptr %t2, i32 20
+  %t1900 = getelementptr i32, ptr %t2, i32 21
+  %t1901 = getelementptr i32, ptr %t2, i32 22
+  %t1902 = getelementptr i32, ptr %t2, i32 23
+  %t1903 = getelementptr i32, ptr %t2, i32 24
+  %t1904 = getelementptr i32, ptr %t2, i32 25
+  %t1905 = getelementptr i32, ptr %t2, i32 26
+  %t1906 = getelementptr [99 x i8], ptr @str20, i32 0, i32 0
+  %t1907 = alloca ptr, i32 27
+  %t1908 = getelementptr ptr, ptr %t1907, i32 0
+  store ptr %t1879, ptr %t1908
+  %t1909 = getelementptr ptr, ptr %t1907, i32 1
+  store ptr %t1880, ptr %t1909
+  %t1910 = getelementptr ptr, ptr %t1907, i32 2
+  store ptr %t1881, ptr %t1910
+  %t1911 = getelementptr ptr, ptr %t1907, i32 3
+  store ptr %t1882, ptr %t1911
+  %t1912 = getelementptr ptr, ptr %t1907, i32 4
+  store ptr %t1883, ptr %t1912
+  %t1913 = getelementptr ptr, ptr %t1907, i32 5
+  store ptr %t1884, ptr %t1913
+  %t1914 = getelementptr ptr, ptr %t1907, i32 6
+  store ptr %t1885, ptr %t1914
+  %t1915 = getelementptr ptr, ptr %t1907, i32 7
+  store ptr %t1886, ptr %t1915
+  %t1916 = getelementptr ptr, ptr %t1907, i32 8
+  store ptr %t1887, ptr %t1916
+  %t1917 = getelementptr ptr, ptr %t1907, i32 9
+  store ptr %t1888, ptr %t1917
+  %t1918 = getelementptr ptr, ptr %t1907, i32 10
+  store ptr %t1889, ptr %t1918
+  %t1919 = getelementptr ptr, ptr %t1907, i32 11
+  store ptr %t1890, ptr %t1919
+  %t1920 = getelementptr ptr, ptr %t1907, i32 12
+  store ptr %t1891, ptr %t1920
+  %t1921 = getelementptr ptr, ptr %t1907, i32 13
+  store ptr %t1892, ptr %t1921
+  %t1922 = getelementptr ptr, ptr %t1907, i32 14
+  store ptr %t1893, ptr %t1922
+  %t1923 = getelementptr ptr, ptr %t1907, i32 15
+  store ptr %t1894, ptr %t1923
+  %t1924 = getelementptr ptr, ptr %t1907, i32 16
+  store ptr %t1895, ptr %t1924
+  %t1925 = getelementptr ptr, ptr %t1907, i32 17
+  store ptr %t1896, ptr %t1925
+  %t1926 = getelementptr ptr, ptr %t1907, i32 18
+  store ptr %t1897, ptr %t1926
+  %t1927 = getelementptr ptr, ptr %t1907, i32 19
+  store ptr %t1898, ptr %t1927
+  %t1928 = getelementptr ptr, ptr %t1907, i32 20
+  store ptr %t1899, ptr %t1928
+  %t1929 = getelementptr ptr, ptr %t1907, i32 21
+  store ptr %t1900, ptr %t1929
+  %t1930 = getelementptr ptr, ptr %t1907, i32 22
+  store ptr %t1901, ptr %t1930
+  %t1931 = getelementptr ptr, ptr %t1907, i32 23
+  store ptr %t1902, ptr %t1931
+  %t1932 = getelementptr ptr, ptr %t1907, i32 24
+  store ptr %t1903, ptr %t1932
+  %t1933 = getelementptr ptr, ptr %t1907, i32 25
+  store ptr %t1904, ptr %t1933
+  %t1934 = getelementptr ptr, ptr %t1907, i32 26
+  store ptr %t1905, ptr %t1934
+  %t1935 = getelementptr [28 x i8], ptr @str15, i32 0, i32 0
+  call i32 @col6forge_formatted_read_core(i32 %t1877, ptr %t1906, ptr %t1907, ptr %t1935, i32 27, i32 0)
   call void @col6forge_clear_runtime_source_context()
   br label %bb84
 bb84:
-  %t1968 = load i32, ptr %t18
-  %t1969 = add i32 %t1968, 4
-  store i32 %t1969, ptr %t18
+  %t1936 = load i32, ptr %t18
+  %t1937 = add i32 %t1936, 4
+  store i32 %t1937, ptr %t18
   br label %L1212
 L1212:
-  br label %do_inc42
-do_inc42:
-  %t1970 = load i32, ptr %t23
-  %t1971 = load i32, ptr %t1741
-  %t1972 = add i32 %t1970, %t1971
-  store i32 %t1972, ptr %t23
-  %t1973 = load i64, ptr %t1743
-  %t1974 = add i64 %t1973, 1
-  store i64 %t1974, ptr %t1743
-  br label %do_test41
+  br label %do_inc63
+do_inc63:
+  %t1938 = load i32, ptr %t23
+  %t1939 = add i32 %t1938, 1
+  store i32 %t1939, ptr %t23
+  %t1720 = add i64 %t1719, 1
+  br label %do_test62
 bb86:
-  %t1975 = load i32, ptr %t10
-  %t1976 = icmp slt i32 %t1975, 0
-  br i1 %t1976, label %L31200, label %arith_if_zero51
-arith_if_zero51:
-  %t1977 = icmp eq i32 %t1975, 0
-  br i1 %t1977, label %L1221, label %L31200
+  %t1940 = load i32, ptr %t10
+  %t1941 = icmp slt i32 %t1940, 0
+  br i1 %t1941, label %L31200, label %arith_if_zero72
+arith_if_zero72:
+  %t1942 = icmp eq i32 %t1940, 0
+  br i1 %t1942, label %L1221, label %L31200
 L31200:
-  %t1978 = load i32, ptr %t9
-  %t1979 = add i32 %t1978, 1
-  store i32 %t1979, ptr %t9
+  %t1943 = load i32, ptr %t9
+  %t1944 = add i32 %t1943, 1
+  store i32 %t1944, ptr %t9
   br label %bb88
 bb88:
-  %t1980 = load i32, ptr %t6
-  %t1981 = load i32, ptr %t22
-  %t1982 = getelementptr [24 x i8], ptr @str20, i32 0, i32 0
-  %t1983 = alloca i32, i32 1
-  %t1984 = getelementptr i32, ptr %t1983, i32 0
-  store i32 %t1981, ptr %t1984
-  %t1985 = alloca ptr, i32 1
-  %t1986 = getelementptr ptr, ptr %t1985, i32 0
-  store ptr %t1984, ptr %t1986
-  %t1987 = getelementptr [2 x i8], ptr @str16, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t1980, ptr %t1982, ptr %t1985, ptr %t1987, i32 1, i32 0)
+  %t1945 = load i32, ptr %t6
+  %t1946 = load i32, ptr %t22
+  %t1947 = getelementptr [24 x i8], ptr @str21, i32 0, i32 0
+  %t1948 = alloca i32, i32 1
+  %t1949 = getelementptr i32, ptr %t1948, i32 0
+  store i32 %t1946, ptr %t1949
+  %t1950 = alloca ptr, i32 1
+  %t1951 = getelementptr ptr, ptr %t1950, i32 0
+  store ptr %t1949, ptr %t1951
+  %t1952 = getelementptr [2 x i8], ptr @str17, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t1945, ptr %t1947, ptr %t1950, ptr %t1952, i32 1, i32 0)
   br label %L1221
 L1221:
   br label %bb90
 bb90:
   store i32 122, ptr %t22
-  %t1988 = load i32, ptr %t10
-  %t1989 = icmp slt i32 %t1988, 0
-  br i1 %t1989, label %L31220, label %arith_if_zero52
-arith_if_zero52:
-  %t1990 = icmp eq i32 %t1988, 0
-  br i1 %t1990, label %L1220, label %L31220
+  %t1953 = load i32, ptr %t10
+  %t1954 = icmp slt i32 %t1953, 0
+  br i1 %t1954, label %L31220, label %arith_if_zero73
+arith_if_zero73:
+  %t1955 = icmp eq i32 %t1953, 0
+  br i1 %t1955, label %L1220, label %L31220
 L1220:
   br label %bb93
 bb93:
-  %t1991 = load i32, ptr %t11
-  %t1992 = getelementptr [6 x i8], ptr @str12, i32 0, i32 0
-  call void @col6forge_set_runtime_source_context(ptr %t1992, i32 254, i32 7)
-  %t1993 = getelementptr i32, ptr %t2, i32 0
-  %t1994 = getelementptr i32, ptr %t2, i32 1
-  %t1995 = getelementptr i32, ptr %t2, i32 2
-  %t1996 = getelementptr i32, ptr %t2, i32 3
-  %t1997 = getelementptr i32, ptr %t2, i32 4
-  %t1998 = getelementptr i32, ptr %t2, i32 5
-  %t1999 = getelementptr i32, ptr %t2, i32 6
-  %t2000 = getelementptr i32, ptr %t2, i32 7
-  %t2001 = getelementptr i32, ptr %t2, i32 8
-  %t2002 = getelementptr i32, ptr %t2, i32 9
-  %t2003 = getelementptr i32, ptr %t2, i32 10
-  %t2004 = getelementptr i32, ptr %t2, i32 11
-  %t2005 = getelementptr i32, ptr %t2, i32 12
-  %t2006 = getelementptr i32, ptr %t2, i32 13
-  %t2007 = getelementptr i32, ptr %t2, i32 14
-  %t2008 = getelementptr i32, ptr %t2, i32 15
-  %t2009 = getelementptr i32, ptr %t2, i32 16
-  %t2010 = getelementptr i32, ptr %t2, i32 17
-  %t2011 = getelementptr i32, ptr %t2, i32 18
-  %t2012 = getelementptr i32, ptr %t2, i32 19
-  %t2013 = getelementptr i32, ptr %t2, i32 20
-  %t2014 = getelementptr i32, ptr %t2, i32 21
-  %t2015 = getelementptr i32, ptr %t2, i32 22
-  %t2016 = getelementptr i32, ptr %t2, i32 23
-  %t2017 = getelementptr i32, ptr %t2, i32 24
-  %t2018 = getelementptr i32, ptr %t2, i32 25
-  %t2019 = getelementptr i32, ptr %t2, i32 26
-  %t2020 = getelementptr [88 x i8], ptr @str21, i32 0, i32 0
-  %t2021 = alloca ptr, i32 27
-  %t2022 = getelementptr ptr, ptr %t2021, i32 0
-  store ptr %t1993, ptr %t2022
-  %t2023 = getelementptr ptr, ptr %t2021, i32 1
-  store ptr %t1994, ptr %t2023
-  %t2024 = getelementptr ptr, ptr %t2021, i32 2
-  store ptr %t1995, ptr %t2024
-  %t2025 = getelementptr ptr, ptr %t2021, i32 3
-  store ptr %t1996, ptr %t2025
-  %t2026 = getelementptr ptr, ptr %t2021, i32 4
-  store ptr %t1997, ptr %t2026
-  %t2027 = getelementptr ptr, ptr %t2021, i32 5
-  store ptr %t1998, ptr %t2027
-  %t2028 = getelementptr ptr, ptr %t2021, i32 6
-  store ptr %t1999, ptr %t2028
-  %t2029 = getelementptr ptr, ptr %t2021, i32 7
-  store ptr %t2000, ptr %t2029
-  %t2030 = getelementptr ptr, ptr %t2021, i32 8
-  store ptr %t2001, ptr %t2030
-  %t2031 = getelementptr ptr, ptr %t2021, i32 9
-  store ptr %t2002, ptr %t2031
-  %t2032 = getelementptr ptr, ptr %t2021, i32 10
-  store ptr %t2003, ptr %t2032
-  %t2033 = getelementptr ptr, ptr %t2021, i32 11
-  store ptr %t2004, ptr %t2033
-  %t2034 = getelementptr ptr, ptr %t2021, i32 12
-  store ptr %t2005, ptr %t2034
-  %t2035 = getelementptr ptr, ptr %t2021, i32 13
-  store ptr %t2006, ptr %t2035
-  %t2036 = getelementptr ptr, ptr %t2021, i32 14
-  store ptr %t2007, ptr %t2036
-  %t2037 = getelementptr ptr, ptr %t2021, i32 15
-  store ptr %t2008, ptr %t2037
-  %t2038 = getelementptr ptr, ptr %t2021, i32 16
-  store ptr %t2009, ptr %t2038
-  %t2039 = getelementptr ptr, ptr %t2021, i32 17
-  store ptr %t2010, ptr %t2039
-  %t2040 = getelementptr ptr, ptr %t2021, i32 18
-  store ptr %t2011, ptr %t2040
-  %t2041 = getelementptr ptr, ptr %t2021, i32 19
-  store ptr %t2012, ptr %t2041
-  %t2042 = getelementptr ptr, ptr %t2021, i32 20
-  store ptr %t2013, ptr %t2042
-  %t2043 = getelementptr ptr, ptr %t2021, i32 21
-  store ptr %t2014, ptr %t2043
-  %t2044 = getelementptr ptr, ptr %t2021, i32 22
-  store ptr %t2015, ptr %t2044
-  %t2045 = getelementptr ptr, ptr %t2021, i32 23
-  store ptr %t2016, ptr %t2045
-  %t2046 = getelementptr ptr, ptr %t2021, i32 24
-  store ptr %t2017, ptr %t2046
-  %t2047 = getelementptr ptr, ptr %t2021, i32 25
-  store ptr %t2018, ptr %t2047
-  %t2048 = getelementptr ptr, ptr %t2021, i32 26
-  store ptr %t2019, ptr %t2048
-  %t2049 = getelementptr [28 x i8], ptr @str14, i32 0, i32 0
-  call i32 @col6forge_formatted_read_core(i32 %t1991, ptr %t2020, ptr %t2021, ptr %t2049, i32 27, i32 0)
+  %t1956 = load i32, ptr %t11
+  %t1957 = getelementptr [6 x i8], ptr @str13, i32 0, i32 0
+  call void @col6forge_set_runtime_source_context(ptr %t1957, i32 254, i32 7)
+  %t1958 = getelementptr i32, ptr %t2, i32 0
+  %t1959 = getelementptr i32, ptr %t2, i32 1
+  %t1960 = getelementptr i32, ptr %t2, i32 2
+  %t1961 = getelementptr i32, ptr %t2, i32 3
+  %t1962 = getelementptr i32, ptr %t2, i32 4
+  %t1963 = getelementptr i32, ptr %t2, i32 5
+  %t1964 = getelementptr i32, ptr %t2, i32 6
+  %t1965 = getelementptr i32, ptr %t2, i32 7
+  %t1966 = getelementptr i32, ptr %t2, i32 8
+  %t1967 = getelementptr i32, ptr %t2, i32 9
+  %t1968 = getelementptr i32, ptr %t2, i32 10
+  %t1969 = getelementptr i32, ptr %t2, i32 11
+  %t1970 = getelementptr i32, ptr %t2, i32 12
+  %t1971 = getelementptr i32, ptr %t2, i32 13
+  %t1972 = getelementptr i32, ptr %t2, i32 14
+  %t1973 = getelementptr i32, ptr %t2, i32 15
+  %t1974 = getelementptr i32, ptr %t2, i32 16
+  %t1975 = getelementptr i32, ptr %t2, i32 17
+  %t1976 = getelementptr i32, ptr %t2, i32 18
+  %t1977 = getelementptr i32, ptr %t2, i32 19
+  %t1978 = getelementptr i32, ptr %t2, i32 20
+  %t1979 = getelementptr i32, ptr %t2, i32 21
+  %t1980 = getelementptr i32, ptr %t2, i32 22
+  %t1981 = getelementptr i32, ptr %t2, i32 23
+  %t1982 = getelementptr i32, ptr %t2, i32 24
+  %t1983 = getelementptr i32, ptr %t2, i32 25
+  %t1984 = getelementptr i32, ptr %t2, i32 26
+  %t1985 = getelementptr [88 x i8], ptr @str22, i32 0, i32 0
+  %t1986 = alloca ptr, i32 27
+  %t1987 = getelementptr ptr, ptr %t1986, i32 0
+  store ptr %t1958, ptr %t1987
+  %t1988 = getelementptr ptr, ptr %t1986, i32 1
+  store ptr %t1959, ptr %t1988
+  %t1989 = getelementptr ptr, ptr %t1986, i32 2
+  store ptr %t1960, ptr %t1989
+  %t1990 = getelementptr ptr, ptr %t1986, i32 3
+  store ptr %t1961, ptr %t1990
+  %t1991 = getelementptr ptr, ptr %t1986, i32 4
+  store ptr %t1962, ptr %t1991
+  %t1992 = getelementptr ptr, ptr %t1986, i32 5
+  store ptr %t1963, ptr %t1992
+  %t1993 = getelementptr ptr, ptr %t1986, i32 6
+  store ptr %t1964, ptr %t1993
+  %t1994 = getelementptr ptr, ptr %t1986, i32 7
+  store ptr %t1965, ptr %t1994
+  %t1995 = getelementptr ptr, ptr %t1986, i32 8
+  store ptr %t1966, ptr %t1995
+  %t1996 = getelementptr ptr, ptr %t1986, i32 9
+  store ptr %t1967, ptr %t1996
+  %t1997 = getelementptr ptr, ptr %t1986, i32 10
+  store ptr %t1968, ptr %t1997
+  %t1998 = getelementptr ptr, ptr %t1986, i32 11
+  store ptr %t1969, ptr %t1998
+  %t1999 = getelementptr ptr, ptr %t1986, i32 12
+  store ptr %t1970, ptr %t1999
+  %t2000 = getelementptr ptr, ptr %t1986, i32 13
+  store ptr %t1971, ptr %t2000
+  %t2001 = getelementptr ptr, ptr %t1986, i32 14
+  store ptr %t1972, ptr %t2001
+  %t2002 = getelementptr ptr, ptr %t1986, i32 15
+  store ptr %t1973, ptr %t2002
+  %t2003 = getelementptr ptr, ptr %t1986, i32 16
+  store ptr %t1974, ptr %t2003
+  %t2004 = getelementptr ptr, ptr %t1986, i32 17
+  store ptr %t1975, ptr %t2004
+  %t2005 = getelementptr ptr, ptr %t1986, i32 18
+  store ptr %t1976, ptr %t2005
+  %t2006 = getelementptr ptr, ptr %t1986, i32 19
+  store ptr %t1977, ptr %t2006
+  %t2007 = getelementptr ptr, ptr %t1986, i32 20
+  store ptr %t1978, ptr %t2007
+  %t2008 = getelementptr ptr, ptr %t1986, i32 21
+  store ptr %t1979, ptr %t2008
+  %t2009 = getelementptr ptr, ptr %t1986, i32 22
+  store ptr %t1980, ptr %t2009
+  %t2010 = getelementptr ptr, ptr %t1986, i32 23
+  store ptr %t1981, ptr %t2010
+  %t2011 = getelementptr ptr, ptr %t1986, i32 24
+  store ptr %t1982, ptr %t2011
+  %t2012 = getelementptr ptr, ptr %t1986, i32 25
+  store ptr %t1983, ptr %t2012
+  %t2013 = getelementptr ptr, ptr %t1986, i32 26
+  store ptr %t1984, ptr %t2013
+  %t2014 = getelementptr [28 x i8], ptr @str15, i32 0, i32 0
+  call i32 @col6forge_formatted_read_core(i32 %t1956, ptr %t1985, ptr %t1986, ptr %t2014, i32 27, i32 0)
   call void @col6forge_clear_runtime_source_context()
   br label %bb94
 bb94:
-  %t2050 = sext i32 27 to i64
-  %t2051 = sub i64 %t2050, 1
-  %t2052 = mul i64 %t2051, 1
-  %t2053 = add i64 0, %t2052
-  %t2054 = getelementptr i32, ptr %t2, i64 %t2053
-  %t2055 = load i32, ptr %t2054
-  store i32 %t2055, ptr %t25
+  %t2015 = sext i32 27 to i64
+  %t2016 = sub i64 %t2015, 1
+  %t2017 = mul i64 %t2016, 1
+  %t2018 = add i64 0, %t2017
+  %t2019 = getelementptr i32, ptr %t2, i64 %t2018
+  %t2020 = load i32, ptr %t2019
+  store i32 %t2020, ptr %t25
   br label %L41220
 L31220:
-  %t2056 = load i32, ptr %t9
-  %t2057 = add i32 %t2056, 1
-  store i32 %t2057, ptr %t9
+  %t2021 = load i32, ptr %t9
+  %t2022 = add i32 %t2021, 1
+  store i32 %t2022, ptr %t9
   br label %bb97
 bb97:
-  %t2058 = load i32, ptr %t6
-  %t2059 = load i32, ptr %t22
-  %t2060 = getelementptr [24 x i8], ptr @str20, i32 0, i32 0
-  %t2061 = alloca i32, i32 1
-  %t2062 = getelementptr i32, ptr %t2061, i32 0
-  store i32 %t2059, ptr %t2062
-  %t2063 = alloca ptr, i32 1
-  %t2064 = getelementptr ptr, ptr %t2063, i32 0
-  store ptr %t2062, ptr %t2064
-  %t2065 = getelementptr [2 x i8], ptr @str16, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2058, ptr %t2060, ptr %t2063, ptr %t2065, i32 1, i32 0)
+  %t2023 = load i32, ptr %t6
+  %t2024 = load i32, ptr %t22
+  %t2025 = getelementptr [24 x i8], ptr @str21, i32 0, i32 0
+  %t2026 = alloca i32, i32 1
+  %t2027 = getelementptr i32, ptr %t2026, i32 0
+  store i32 %t2024, ptr %t2027
+  %t2028 = alloca ptr, i32 1
+  %t2029 = getelementptr ptr, ptr %t2028, i32 0
+  store ptr %t2027, ptr %t2029
+  %t2030 = getelementptr [2 x i8], ptr @str17, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2023, ptr %t2025, ptr %t2028, ptr %t2030, i32 1, i32 0)
   br label %bb98
 bb98:
-  %t2066 = load i32, ptr %t10
-  %t2067 = icmp slt i32 %t2066, 0
-  br i1 %t2067, label %L41220, label %arith_if_zero53
-arith_if_zero53:
-  %t2068 = icmp eq i32 %t2066, 0
-  br i1 %t2068, label %L1231, label %L41220
+  %t2031 = load i32, ptr %t10
+  %t2032 = icmp slt i32 %t2031, 0
+  br i1 %t2032, label %L41220, label %arith_if_zero74
+arith_if_zero74:
+  %t2033 = icmp eq i32 %t2031, 0
+  br i1 %t2033, label %L1231, label %L41220
 L41220:
-  %t2069 = load i32, ptr %t25
-  %t2070 = sub i32 %t2069, 340
-  %t2071 = icmp slt i32 %t2070, 0
-  br i1 %t2071, label %L21220, label %arith_if_zero54
-arith_if_zero54:
-  %t2072 = icmp eq i32 %t2070, 0
-  br i1 %t2072, label %L11220, label %L21220
+  %t2034 = load i32, ptr %t25
+  %t2035 = sub i32 %t2034, 340
+  %t2036 = icmp slt i32 %t2035, 0
+  br i1 %t2036, label %L21220, label %arith_if_zero75
+arith_if_zero75:
+  %t2037 = icmp eq i32 %t2035, 0
+  br i1 %t2037, label %L11220, label %L21220
 L11220:
-  %t2073 = load i32, ptr %t7
-  %t2074 = add i32 %t2073, 1
-  store i32 %t2074, ptr %t7
+  %t2038 = load i32, ptr %t7
+  %t2039 = add i32 %t2038, 1
+  store i32 %t2039, ptr %t7
   br label %bb101
 bb101:
-  %t2075 = load i32, ptr %t6
-  %t2076 = load i32, ptr %t22
-  %t2077 = getelementptr [21 x i8], ptr @str15, i32 0, i32 0
-  %t2078 = alloca i32, i32 1
-  %t2079 = getelementptr i32, ptr %t2078, i32 0
-  store i32 %t2076, ptr %t2079
-  %t2080 = alloca ptr, i32 1
-  %t2081 = getelementptr ptr, ptr %t2080, i32 0
-  store ptr %t2079, ptr %t2081
-  %t2082 = getelementptr [2 x i8], ptr @str16, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2075, ptr %t2077, ptr %t2080, ptr %t2082, i32 1, i32 0)
+  %t2040 = load i32, ptr %t6
+  %t2041 = load i32, ptr %t22
+  %t2042 = getelementptr [21 x i8], ptr @str16, i32 0, i32 0
+  %t2043 = alloca i32, i32 1
+  %t2044 = getelementptr i32, ptr %t2043, i32 0
+  store i32 %t2041, ptr %t2044
+  %t2045 = alloca ptr, i32 1
+  %t2046 = getelementptr ptr, ptr %t2045, i32 0
+  store ptr %t2044, ptr %t2046
+  %t2047 = getelementptr [2 x i8], ptr @str17, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2040, ptr %t2042, ptr %t2045, ptr %t2047, i32 1, i32 0)
   br label %bb102
 bb102:
   br label %L1231
 L21220:
-  %t2083 = load i32, ptr %t8
-  %t2084 = add i32 %t2083, 1
-  store i32 %t2084, ptr %t8
+  %t2048 = load i32, ptr %t8
+  %t2049 = add i32 %t2048, 1
+  store i32 %t2049, ptr %t8
   br label %bb104
 bb104:
   store i32 340, ptr %t26
-  %t2085 = load i32, ptr %t6
-  %t2086 = load i32, ptr %t22
-  %t2087 = load i32, ptr %t25
-  %t2088 = load i32, ptr %t26
-  %t2089 = getelementptr [46 x i8], ptr @str17, i32 0, i32 0
-  %t2090 = alloca i32, i32 3
-  %t2091 = getelementptr i32, ptr %t2090, i32 0
-  store i32 %t2086, ptr %t2091
-  %t2092 = getelementptr i32, ptr %t2090, i32 1
-  store i32 %t2087, ptr %t2092
-  %t2093 = getelementptr i32, ptr %t2090, i32 2
-  store i32 %t2088, ptr %t2093
-  %t2094 = alloca ptr, i32 3
-  %t2095 = getelementptr ptr, ptr %t2094, i32 0
-  store ptr %t2091, ptr %t2095
-  %t2096 = getelementptr ptr, ptr %t2094, i32 1
-  store ptr %t2092, ptr %t2096
-  %t2097 = getelementptr ptr, ptr %t2094, i32 2
-  store ptr %t2093, ptr %t2097
-  %t2098 = getelementptr [4 x i8], ptr @str18, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2085, ptr %t2089, ptr %t2094, ptr %t2098, i32 3, i32 0)
+  %t2050 = load i32, ptr %t6
+  %t2051 = load i32, ptr %t22
+  %t2052 = load i32, ptr %t25
+  %t2053 = load i32, ptr %t26
+  %t2054 = getelementptr [46 x i8], ptr @str18, i32 0, i32 0
+  %t2055 = alloca i32, i32 3
+  %t2056 = getelementptr i32, ptr %t2055, i32 0
+  store i32 %t2051, ptr %t2056
+  %t2057 = getelementptr i32, ptr %t2055, i32 1
+  store i32 %t2052, ptr %t2057
+  %t2058 = getelementptr i32, ptr %t2055, i32 2
+  store i32 %t2053, ptr %t2058
+  %t2059 = alloca ptr, i32 3
+  %t2060 = getelementptr ptr, ptr %t2059, i32 0
+  store ptr %t2056, ptr %t2060
+  %t2061 = getelementptr ptr, ptr %t2059, i32 1
+  store ptr %t2057, ptr %t2061
+  %t2062 = getelementptr ptr, ptr %t2059, i32 2
+  store ptr %t2058, ptr %t2062
+  %t2063 = getelementptr [4 x i8], ptr @str19, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2050, ptr %t2054, ptr %t2059, ptr %t2063, i32 3, i32 0)
   br label %L1231
 L1231:
   br label %bb107
 bb107:
   store i32 123, ptr %t22
-  %t2099 = load i32, ptr %t10
-  %t2100 = icmp slt i32 %t2099, 0
-  br i1 %t2100, label %L31230, label %arith_if_zero55
-arith_if_zero55:
-  %t2101 = icmp eq i32 %t2099, 0
-  br i1 %t2101, label %L1230, label %L31230
+  %t2064 = load i32, ptr %t10
+  %t2065 = icmp slt i32 %t2064, 0
+  br i1 %t2065, label %L31230, label %arith_if_zero76
+arith_if_zero76:
+  %t2066 = icmp eq i32 %t2064, 0
+  br i1 %t2066, label %L1230, label %L31230
 L1230:
   br label %bb110
 bb110:
-  %t2102 = load i32, ptr %t11
-  %t2103 = getelementptr [6 x i8], ptr @str12, i32 0, i32 0
-  call void @col6forge_set_runtime_source_context(ptr %t2103, i32 277, i32 7)
-  %t2104 = getelementptr i32, ptr %t2, i32 0
-  %t2105 = getelementptr i32, ptr %t2, i32 1
-  %t2106 = getelementptr i32, ptr %t2, i32 2
-  %t2107 = getelementptr i32, ptr %t2, i32 3
-  %t2108 = getelementptr i32, ptr %t2, i32 4
-  %t2109 = getelementptr i32, ptr %t2, i32 5
-  %t2110 = getelementptr i32, ptr %t2, i32 6
-  %t2111 = getelementptr i32, ptr %t2, i32 7
-  %t2112 = getelementptr i32, ptr %t2, i32 8
-  %t2113 = getelementptr i32, ptr %t2, i32 9
-  %t2114 = getelementptr i32, ptr %t2, i32 10
-  %t2115 = getelementptr i32, ptr %t2, i32 11
-  %t2116 = getelementptr i32, ptr %t2, i32 12
-  %t2117 = getelementptr i32, ptr %t2, i32 13
-  %t2118 = getelementptr i32, ptr %t2, i32 14
-  %t2119 = getelementptr i32, ptr %t2, i32 15
-  %t2120 = getelementptr i32, ptr %t2, i32 16
-  %t2121 = getelementptr i32, ptr %t2, i32 17
-  %t2122 = getelementptr i32, ptr %t2, i32 18
-  %t2123 = getelementptr i32, ptr %t2, i32 19
-  %t2124 = getelementptr i32, ptr %t2, i32 20
-  %t2125 = getelementptr i32, ptr %t2, i32 21
-  %t2126 = getelementptr i32, ptr %t2, i32 22
-  %t2127 = getelementptr i32, ptr %t2, i32 23
-  %t2128 = getelementptr i32, ptr %t2, i32 24
-  %t2129 = getelementptr i32, ptr %t2, i32 25
-  %t2130 = getelementptr i32, ptr %t2, i32 26
-  %t2131 = getelementptr [83 x i8], ptr @str13, i32 0, i32 0
-  %t2132 = alloca ptr, i32 27
-  %t2133 = getelementptr ptr, ptr %t2132, i32 0
-  store ptr %t2104, ptr %t2133
-  %t2134 = getelementptr ptr, ptr %t2132, i32 1
-  store ptr %t2105, ptr %t2134
-  %t2135 = getelementptr ptr, ptr %t2132, i32 2
-  store ptr %t2106, ptr %t2135
-  %t2136 = getelementptr ptr, ptr %t2132, i32 3
-  store ptr %t2107, ptr %t2136
-  %t2137 = getelementptr ptr, ptr %t2132, i32 4
-  store ptr %t2108, ptr %t2137
-  %t2138 = getelementptr ptr, ptr %t2132, i32 5
-  store ptr %t2109, ptr %t2138
-  %t2139 = getelementptr ptr, ptr %t2132, i32 6
-  store ptr %t2110, ptr %t2139
-  %t2140 = getelementptr ptr, ptr %t2132, i32 7
-  store ptr %t2111, ptr %t2140
-  %t2141 = getelementptr ptr, ptr %t2132, i32 8
-  store ptr %t2112, ptr %t2141
-  %t2142 = getelementptr ptr, ptr %t2132, i32 9
-  store ptr %t2113, ptr %t2142
-  %t2143 = getelementptr ptr, ptr %t2132, i32 10
-  store ptr %t2114, ptr %t2143
-  %t2144 = getelementptr ptr, ptr %t2132, i32 11
-  store ptr %t2115, ptr %t2144
-  %t2145 = getelementptr ptr, ptr %t2132, i32 12
-  store ptr %t2116, ptr %t2145
-  %t2146 = getelementptr ptr, ptr %t2132, i32 13
-  store ptr %t2117, ptr %t2146
-  %t2147 = getelementptr ptr, ptr %t2132, i32 14
-  store ptr %t2118, ptr %t2147
-  %t2148 = getelementptr ptr, ptr %t2132, i32 15
-  store ptr %t2119, ptr %t2148
-  %t2149 = getelementptr ptr, ptr %t2132, i32 16
-  store ptr %t2120, ptr %t2149
-  %t2150 = getelementptr ptr, ptr %t2132, i32 17
-  store ptr %t2121, ptr %t2150
-  %t2151 = getelementptr ptr, ptr %t2132, i32 18
-  store ptr %t2122, ptr %t2151
-  %t2152 = getelementptr ptr, ptr %t2132, i32 19
-  store ptr %t2123, ptr %t2152
-  %t2153 = getelementptr ptr, ptr %t2132, i32 20
-  store ptr %t2124, ptr %t2153
-  %t2154 = getelementptr ptr, ptr %t2132, i32 21
-  store ptr %t2125, ptr %t2154
-  %t2155 = getelementptr ptr, ptr %t2132, i32 22
-  store ptr %t2126, ptr %t2155
-  %t2156 = getelementptr ptr, ptr %t2132, i32 23
-  store ptr %t2127, ptr %t2156
-  %t2157 = getelementptr ptr, ptr %t2132, i32 24
-  store ptr %t2128, ptr %t2157
-  %t2158 = getelementptr ptr, ptr %t2132, i32 25
-  store ptr %t2129, ptr %t2158
-  %t2159 = getelementptr ptr, ptr %t2132, i32 26
-  store ptr %t2130, ptr %t2159
-  %t2160 = getelementptr [28 x i8], ptr @str14, i32 0, i32 0
-  call i32 @col6forge_formatted_read_core(i32 %t2102, ptr %t2131, ptr %t2132, ptr %t2160, i32 27, i32 0)
+  %t2067 = load i32, ptr %t11
+  %t2068 = getelementptr [6 x i8], ptr @str13, i32 0, i32 0
+  call void @col6forge_set_runtime_source_context(ptr %t2068, i32 277, i32 7)
+  %t2069 = getelementptr i32, ptr %t2, i32 0
+  %t2070 = getelementptr i32, ptr %t2, i32 1
+  %t2071 = getelementptr i32, ptr %t2, i32 2
+  %t2072 = getelementptr i32, ptr %t2, i32 3
+  %t2073 = getelementptr i32, ptr %t2, i32 4
+  %t2074 = getelementptr i32, ptr %t2, i32 5
+  %t2075 = getelementptr i32, ptr %t2, i32 6
+  %t2076 = getelementptr i32, ptr %t2, i32 7
+  %t2077 = getelementptr i32, ptr %t2, i32 8
+  %t2078 = getelementptr i32, ptr %t2, i32 9
+  %t2079 = getelementptr i32, ptr %t2, i32 10
+  %t2080 = getelementptr i32, ptr %t2, i32 11
+  %t2081 = getelementptr i32, ptr %t2, i32 12
+  %t2082 = getelementptr i32, ptr %t2, i32 13
+  %t2083 = getelementptr i32, ptr %t2, i32 14
+  %t2084 = getelementptr i32, ptr %t2, i32 15
+  %t2085 = getelementptr i32, ptr %t2, i32 16
+  %t2086 = getelementptr i32, ptr %t2, i32 17
+  %t2087 = getelementptr i32, ptr %t2, i32 18
+  %t2088 = getelementptr i32, ptr %t2, i32 19
+  %t2089 = getelementptr i32, ptr %t2, i32 20
+  %t2090 = getelementptr i32, ptr %t2, i32 21
+  %t2091 = getelementptr i32, ptr %t2, i32 22
+  %t2092 = getelementptr i32, ptr %t2, i32 23
+  %t2093 = getelementptr i32, ptr %t2, i32 24
+  %t2094 = getelementptr i32, ptr %t2, i32 25
+  %t2095 = getelementptr i32, ptr %t2, i32 26
+  %t2096 = getelementptr [83 x i8], ptr @str14, i32 0, i32 0
+  %t2097 = alloca ptr, i32 27
+  %t2098 = getelementptr ptr, ptr %t2097, i32 0
+  store ptr %t2069, ptr %t2098
+  %t2099 = getelementptr ptr, ptr %t2097, i32 1
+  store ptr %t2070, ptr %t2099
+  %t2100 = getelementptr ptr, ptr %t2097, i32 2
+  store ptr %t2071, ptr %t2100
+  %t2101 = getelementptr ptr, ptr %t2097, i32 3
+  store ptr %t2072, ptr %t2101
+  %t2102 = getelementptr ptr, ptr %t2097, i32 4
+  store ptr %t2073, ptr %t2102
+  %t2103 = getelementptr ptr, ptr %t2097, i32 5
+  store ptr %t2074, ptr %t2103
+  %t2104 = getelementptr ptr, ptr %t2097, i32 6
+  store ptr %t2075, ptr %t2104
+  %t2105 = getelementptr ptr, ptr %t2097, i32 7
+  store ptr %t2076, ptr %t2105
+  %t2106 = getelementptr ptr, ptr %t2097, i32 8
+  store ptr %t2077, ptr %t2106
+  %t2107 = getelementptr ptr, ptr %t2097, i32 9
+  store ptr %t2078, ptr %t2107
+  %t2108 = getelementptr ptr, ptr %t2097, i32 10
+  store ptr %t2079, ptr %t2108
+  %t2109 = getelementptr ptr, ptr %t2097, i32 11
+  store ptr %t2080, ptr %t2109
+  %t2110 = getelementptr ptr, ptr %t2097, i32 12
+  store ptr %t2081, ptr %t2110
+  %t2111 = getelementptr ptr, ptr %t2097, i32 13
+  store ptr %t2082, ptr %t2111
+  %t2112 = getelementptr ptr, ptr %t2097, i32 14
+  store ptr %t2083, ptr %t2112
+  %t2113 = getelementptr ptr, ptr %t2097, i32 15
+  store ptr %t2084, ptr %t2113
+  %t2114 = getelementptr ptr, ptr %t2097, i32 16
+  store ptr %t2085, ptr %t2114
+  %t2115 = getelementptr ptr, ptr %t2097, i32 17
+  store ptr %t2086, ptr %t2115
+  %t2116 = getelementptr ptr, ptr %t2097, i32 18
+  store ptr %t2087, ptr %t2116
+  %t2117 = getelementptr ptr, ptr %t2097, i32 19
+  store ptr %t2088, ptr %t2117
+  %t2118 = getelementptr ptr, ptr %t2097, i32 20
+  store ptr %t2089, ptr %t2118
+  %t2119 = getelementptr ptr, ptr %t2097, i32 21
+  store ptr %t2090, ptr %t2119
+  %t2120 = getelementptr ptr, ptr %t2097, i32 22
+  store ptr %t2091, ptr %t2120
+  %t2121 = getelementptr ptr, ptr %t2097, i32 23
+  store ptr %t2092, ptr %t2121
+  %t2122 = getelementptr ptr, ptr %t2097, i32 24
+  store ptr %t2093, ptr %t2122
+  %t2123 = getelementptr ptr, ptr %t2097, i32 25
+  store ptr %t2094, ptr %t2123
+  %t2124 = getelementptr ptr, ptr %t2097, i32 26
+  store ptr %t2095, ptr %t2124
+  %t2125 = getelementptr [28 x i8], ptr @str15, i32 0, i32 0
+  call i32 @col6forge_formatted_read_core(i32 %t2067, ptr %t2096, ptr %t2097, ptr %t2125, i32 27, i32 0)
   call void @col6forge_clear_runtime_source_context()
   br label %bb111
 bb111:
-  %t2161 = sext i32 27 to i64
-  %t2162 = sub i64 %t2161, 1
-  %t2163 = mul i64 %t2162, 1
-  %t2164 = add i64 0, %t2163
-  %t2165 = getelementptr i32, ptr %t2, i64 %t2164
-  %t2166 = load i32, ptr %t2165
-  store i32 %t2166, ptr %t25
+  %t2126 = sext i32 27 to i64
+  %t2127 = sub i64 %t2126, 1
+  %t2128 = mul i64 %t2127, 1
+  %t2129 = add i64 0, %t2128
+  %t2130 = getelementptr i32, ptr %t2, i64 %t2129
+  %t2131 = load i32, ptr %t2130
+  store i32 %t2131, ptr %t25
   br label %L41230
 L31230:
-  %t2167 = load i32, ptr %t9
-  %t2168 = add i32 %t2167, 1
-  store i32 %t2168, ptr %t9
+  %t2132 = load i32, ptr %t9
+  %t2133 = add i32 %t2132, 1
+  store i32 %t2133, ptr %t9
   br label %bb114
 bb114:
-  %t2169 = load i32, ptr %t6
-  %t2170 = load i32, ptr %t22
-  %t2171 = getelementptr [24 x i8], ptr @str20, i32 0, i32 0
-  %t2172 = alloca i32, i32 1
-  %t2173 = getelementptr i32, ptr %t2172, i32 0
-  store i32 %t2170, ptr %t2173
-  %t2174 = alloca ptr, i32 1
-  %t2175 = getelementptr ptr, ptr %t2174, i32 0
-  store ptr %t2173, ptr %t2175
-  %t2176 = getelementptr [2 x i8], ptr @str16, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2169, ptr %t2171, ptr %t2174, ptr %t2176, i32 1, i32 0)
+  %t2134 = load i32, ptr %t6
+  %t2135 = load i32, ptr %t22
+  %t2136 = getelementptr [24 x i8], ptr @str21, i32 0, i32 0
+  %t2137 = alloca i32, i32 1
+  %t2138 = getelementptr i32, ptr %t2137, i32 0
+  store i32 %t2135, ptr %t2138
+  %t2139 = alloca ptr, i32 1
+  %t2140 = getelementptr ptr, ptr %t2139, i32 0
+  store ptr %t2138, ptr %t2140
+  %t2141 = getelementptr [2 x i8], ptr @str17, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2134, ptr %t2136, ptr %t2139, ptr %t2141, i32 1, i32 0)
   br label %bb115
 bb115:
-  %t2177 = load i32, ptr %t10
-  %t2178 = icmp slt i32 %t2177, 0
-  br i1 %t2178, label %L41230, label %arith_if_zero56
-arith_if_zero56:
-  %t2179 = icmp eq i32 %t2177, 0
-  br i1 %t2179, label %L1241, label %L41230
+  %t2142 = load i32, ptr %t10
+  %t2143 = icmp slt i32 %t2142, 0
+  br i1 %t2143, label %L41230, label %arith_if_zero77
+arith_if_zero77:
+  %t2144 = icmp eq i32 %t2142, 0
+  br i1 %t2144, label %L1241, label %L41230
 L41230:
-  %t2180 = load i32, ptr %t25
-  %t2181 = sub i32 %t2180, 150
-  %t2182 = icmp slt i32 %t2181, 0
-  br i1 %t2182, label %L21230, label %arith_if_zero57
-arith_if_zero57:
-  %t2183 = icmp eq i32 %t2181, 0
-  br i1 %t2183, label %L11230, label %L21230
+  %t2145 = load i32, ptr %t25
+  %t2146 = sub i32 %t2145, 150
+  %t2147 = icmp slt i32 %t2146, 0
+  br i1 %t2147, label %L21230, label %arith_if_zero78
+arith_if_zero78:
+  %t2148 = icmp eq i32 %t2146, 0
+  br i1 %t2148, label %L11230, label %L21230
 L11230:
-  %t2184 = load i32, ptr %t7
-  %t2185 = add i32 %t2184, 1
-  store i32 %t2185, ptr %t7
+  %t2149 = load i32, ptr %t7
+  %t2150 = add i32 %t2149, 1
+  store i32 %t2150, ptr %t7
   br label %bb118
 bb118:
+  %t2151 = load i32, ptr %t6
+  %t2152 = load i32, ptr %t22
+  %t2153 = getelementptr [21 x i8], ptr @str16, i32 0, i32 0
+  %t2154 = alloca i32, i32 1
+  %t2155 = getelementptr i32, ptr %t2154, i32 0
+  store i32 %t2152, ptr %t2155
+  %t2156 = alloca ptr, i32 1
+  %t2157 = getelementptr ptr, ptr %t2156, i32 0
+  store ptr %t2155, ptr %t2157
+  %t2158 = getelementptr [2 x i8], ptr @str17, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2151, ptr %t2153, ptr %t2156, ptr %t2158, i32 1, i32 0)
+  br label %bb119
+bb119:
+  br label %L1241
+L21230:
+  %t2159 = load i32, ptr %t8
+  %t2160 = add i32 %t2159, 1
+  store i32 %t2160, ptr %t8
+  br label %bb121
+bb121:
+  store i32 150, ptr %t26
+  %t2161 = load i32, ptr %t6
+  %t2162 = load i32, ptr %t22
+  %t2163 = load i32, ptr %t25
+  %t2164 = load i32, ptr %t26
+  %t2165 = getelementptr [46 x i8], ptr @str18, i32 0, i32 0
+  %t2166 = alloca i32, i32 3
+  %t2167 = getelementptr i32, ptr %t2166, i32 0
+  store i32 %t2162, ptr %t2167
+  %t2168 = getelementptr i32, ptr %t2166, i32 1
+  store i32 %t2163, ptr %t2168
+  %t2169 = getelementptr i32, ptr %t2166, i32 2
+  store i32 %t2164, ptr %t2169
+  %t2170 = alloca ptr, i32 3
+  %t2171 = getelementptr ptr, ptr %t2170, i32 0
+  store ptr %t2167, ptr %t2171
+  %t2172 = getelementptr ptr, ptr %t2170, i32 1
+  store ptr %t2168, ptr %t2172
+  %t2173 = getelementptr ptr, ptr %t2170, i32 2
+  store ptr %t2169, ptr %t2173
+  %t2174 = getelementptr [4 x i8], ptr @str19, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2161, ptr %t2165, ptr %t2170, ptr %t2174, i32 3, i32 0)
+  br label %L1241
+L1241:
+  br label %bb124
+bb124:
+  store i32 124, ptr %t22
+  %t2175 = load i32, ptr %t10
+  %t2176 = icmp slt i32 %t2175, 0
+  br i1 %t2176, label %L31240, label %arith_if_zero79
+arith_if_zero79:
+  %t2177 = icmp eq i32 %t2175, 0
+  br i1 %t2177, label %L1240, label %L31240
+L1240:
+  br label %bb127
+bb127:
+  %t2178 = sext i32 7 to i64
+  %t2179 = sub i64 %t2178, 1
+  %t2180 = mul i64 %t2179, 1
+  %t2181 = add i64 0, %t2180
+  %t2182 = getelementptr i32, ptr %t2, i64 %t2181
+  %t2183 = load i32, ptr %t2182
+  store i32 %t2183, ptr %t25
+  br label %L41240
+L31240:
+  %t2184 = load i32, ptr %t9
+  %t2185 = add i32 %t2184, 1
+  store i32 %t2185, ptr %t9
+  br label %bb130
+bb130:
   %t2186 = load i32, ptr %t6
   %t2187 = load i32, ptr %t22
-  %t2188 = getelementptr [21 x i8], ptr @str15, i32 0, i32 0
+  %t2188 = getelementptr [24 x i8], ptr @str21, i32 0, i32 0
   %t2189 = alloca i32, i32 1
   %t2190 = getelementptr i32, ptr %t2189, i32 0
   store i32 %t2187, ptr %t2190
   %t2191 = alloca ptr, i32 1
   %t2192 = getelementptr ptr, ptr %t2191, i32 0
   store ptr %t2190, ptr %t2192
-  %t2193 = getelementptr [2 x i8], ptr @str16, i32 0, i32 0
+  %t2193 = getelementptr [2 x i8], ptr @str17, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t2186, ptr %t2188, ptr %t2191, ptr %t2193, i32 1, i32 0)
-  br label %bb119
-bb119:
-  br label %L1241
-L21230:
-  %t2194 = load i32, ptr %t8
-  %t2195 = add i32 %t2194, 1
-  store i32 %t2195, ptr %t8
-  br label %bb121
-bb121:
-  store i32 150, ptr %t26
-  %t2196 = load i32, ptr %t6
-  %t2197 = load i32, ptr %t22
-  %t2198 = load i32, ptr %t25
-  %t2199 = load i32, ptr %t26
-  %t2200 = getelementptr [46 x i8], ptr @str17, i32 0, i32 0
-  %t2201 = alloca i32, i32 3
-  %t2202 = getelementptr i32, ptr %t2201, i32 0
-  store i32 %t2197, ptr %t2202
-  %t2203 = getelementptr i32, ptr %t2201, i32 1
-  store i32 %t2198, ptr %t2203
-  %t2204 = getelementptr i32, ptr %t2201, i32 2
-  store i32 %t2199, ptr %t2204
-  %t2205 = alloca ptr, i32 3
-  %t2206 = getelementptr ptr, ptr %t2205, i32 0
-  store ptr %t2202, ptr %t2206
-  %t2207 = getelementptr ptr, ptr %t2205, i32 1
-  store ptr %t2203, ptr %t2207
-  %t2208 = getelementptr ptr, ptr %t2205, i32 2
-  store ptr %t2204, ptr %t2208
-  %t2209 = getelementptr [4 x i8], ptr @str18, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2196, ptr %t2200, ptr %t2205, ptr %t2209, i32 3, i32 0)
-  br label %L1241
-L1241:
-  br label %bb124
-bb124:
-  store i32 124, ptr %t22
-  %t2210 = load i32, ptr %t10
-  %t2211 = icmp slt i32 %t2210, 0
-  br i1 %t2211, label %L31240, label %arith_if_zero58
-arith_if_zero58:
-  %t2212 = icmp eq i32 %t2210, 0
-  br i1 %t2212, label %L1240, label %L31240
-L1240:
-  br label %bb127
-bb127:
-  %t2213 = sext i32 7 to i64
-  %t2214 = sub i64 %t2213, 1
-  %t2215 = mul i64 %t2214, 1
-  %t2216 = add i64 0, %t2215
-  %t2217 = getelementptr i32, ptr %t2, i64 %t2216
-  %t2218 = load i32, ptr %t2217
-  store i32 %t2218, ptr %t25
-  br label %L41240
-L31240:
-  %t2219 = load i32, ptr %t9
-  %t2220 = add i32 %t2219, 1
-  store i32 %t2220, ptr %t9
-  br label %bb130
-bb130:
-  %t2221 = load i32, ptr %t6
-  %t2222 = load i32, ptr %t22
-  %t2223 = getelementptr [24 x i8], ptr @str20, i32 0, i32 0
-  %t2224 = alloca i32, i32 1
-  %t2225 = getelementptr i32, ptr %t2224, i32 0
-  store i32 %t2222, ptr %t2225
-  %t2226 = alloca ptr, i32 1
-  %t2227 = getelementptr ptr, ptr %t2226, i32 0
-  store ptr %t2225, ptr %t2227
-  %t2228 = getelementptr [2 x i8], ptr @str16, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2221, ptr %t2223, ptr %t2226, ptr %t2228, i32 1, i32 0)
   br label %bb131
 bb131:
-  %t2229 = load i32, ptr %t10
-  %t2230 = icmp slt i32 %t2229, 0
-  br i1 %t2230, label %L41240, label %arith_if_zero59
-arith_if_zero59:
-  %t2231 = icmp eq i32 %t2229, 0
-  br i1 %t2231, label %L1251, label %L41240
+  %t2194 = load i32, ptr %t10
+  %t2195 = icmp slt i32 %t2194, 0
+  br i1 %t2195, label %L41240, label %arith_if_zero80
+arith_if_zero80:
+  %t2196 = icmp eq i32 %t2194, 0
+  br i1 %t2196, label %L1251, label %L41240
 L41240:
-  %t2232 = load i32, ptr %t25
-  %t2233 = sub i32 %t2232, 9999
-  %t2234 = icmp slt i32 %t2233, 0
-  br i1 %t2234, label %L21240, label %arith_if_zero60
-arith_if_zero60:
-  %t2235 = icmp eq i32 %t2233, 0
-  br i1 %t2235, label %L11240, label %L21240
+  %t2197 = load i32, ptr %t25
+  %t2198 = sub i32 %t2197, 9999
+  %t2199 = icmp slt i32 %t2198, 0
+  br i1 %t2199, label %L21240, label %arith_if_zero81
+arith_if_zero81:
+  %t2200 = icmp eq i32 %t2198, 0
+  br i1 %t2200, label %L11240, label %L21240
 L11240:
-  %t2236 = load i32, ptr %t7
-  %t2237 = add i32 %t2236, 1
-  store i32 %t2237, ptr %t7
+  %t2201 = load i32, ptr %t7
+  %t2202 = add i32 %t2201, 1
+  store i32 %t2202, ptr %t7
   br label %bb134
 bb134:
-  %t2238 = load i32, ptr %t6
-  %t2239 = load i32, ptr %t22
-  %t2240 = getelementptr [21 x i8], ptr @str15, i32 0, i32 0
-  %t2241 = alloca i32, i32 1
-  %t2242 = getelementptr i32, ptr %t2241, i32 0
-  store i32 %t2239, ptr %t2242
-  %t2243 = alloca ptr, i32 1
-  %t2244 = getelementptr ptr, ptr %t2243, i32 0
-  store ptr %t2242, ptr %t2244
-  %t2245 = getelementptr [2 x i8], ptr @str16, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2238, ptr %t2240, ptr %t2243, ptr %t2245, i32 1, i32 0)
+  %t2203 = load i32, ptr %t6
+  %t2204 = load i32, ptr %t22
+  %t2205 = getelementptr [21 x i8], ptr @str16, i32 0, i32 0
+  %t2206 = alloca i32, i32 1
+  %t2207 = getelementptr i32, ptr %t2206, i32 0
+  store i32 %t2204, ptr %t2207
+  %t2208 = alloca ptr, i32 1
+  %t2209 = getelementptr ptr, ptr %t2208, i32 0
+  store ptr %t2207, ptr %t2209
+  %t2210 = getelementptr [2 x i8], ptr @str17, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2203, ptr %t2205, ptr %t2208, ptr %t2210, i32 1, i32 0)
   br label %bb135
 bb135:
   br label %L1251
 L21240:
-  %t2246 = load i32, ptr %t8
-  %t2247 = add i32 %t2246, 1
-  store i32 %t2247, ptr %t8
+  %t2211 = load i32, ptr %t8
+  %t2212 = add i32 %t2211, 1
+  store i32 %t2212, ptr %t8
   br label %bb137
 bb137:
   store i32 9999, ptr %t26
-  %t2248 = load i32, ptr %t6
-  %t2249 = load i32, ptr %t22
-  %t2250 = load i32, ptr %t25
-  %t2251 = load i32, ptr %t26
-  %t2252 = getelementptr [46 x i8], ptr @str17, i32 0, i32 0
-  %t2253 = alloca i32, i32 3
-  %t2254 = getelementptr i32, ptr %t2253, i32 0
-  store i32 %t2249, ptr %t2254
-  %t2255 = getelementptr i32, ptr %t2253, i32 1
-  store i32 %t2250, ptr %t2255
-  %t2256 = getelementptr i32, ptr %t2253, i32 2
-  store i32 %t2251, ptr %t2256
-  %t2257 = alloca ptr, i32 3
-  %t2258 = getelementptr ptr, ptr %t2257, i32 0
-  store ptr %t2254, ptr %t2258
-  %t2259 = getelementptr ptr, ptr %t2257, i32 1
-  store ptr %t2255, ptr %t2259
-  %t2260 = getelementptr ptr, ptr %t2257, i32 2
-  store ptr %t2256, ptr %t2260
-  %t2261 = getelementptr [4 x i8], ptr @str18, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2248, ptr %t2252, ptr %t2257, ptr %t2261, i32 3, i32 0)
+  %t2213 = load i32, ptr %t6
+  %t2214 = load i32, ptr %t22
+  %t2215 = load i32, ptr %t25
+  %t2216 = load i32, ptr %t26
+  %t2217 = getelementptr [46 x i8], ptr @str18, i32 0, i32 0
+  %t2218 = alloca i32, i32 3
+  %t2219 = getelementptr i32, ptr %t2218, i32 0
+  store i32 %t2214, ptr %t2219
+  %t2220 = getelementptr i32, ptr %t2218, i32 1
+  store i32 %t2215, ptr %t2220
+  %t2221 = getelementptr i32, ptr %t2218, i32 2
+  store i32 %t2216, ptr %t2221
+  %t2222 = alloca ptr, i32 3
+  %t2223 = getelementptr ptr, ptr %t2222, i32 0
+  store ptr %t2219, ptr %t2223
+  %t2224 = getelementptr ptr, ptr %t2222, i32 1
+  store ptr %t2220, ptr %t2224
+  %t2225 = getelementptr ptr, ptr %t2222, i32 2
+  store ptr %t2221, ptr %t2225
+  %t2226 = getelementptr [4 x i8], ptr @str19, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2213, ptr %t2217, ptr %t2222, ptr %t2226, i32 3, i32 0)
   br label %L1251
 L1251:
   br label %L99999
 L99999:
   br label %bb141
 bb141:
-  %t2262 = load i32, ptr %t6
-  %t2263 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2262, ptr %t2263, ptr null, ptr null, i32 0, i32 0)
+  %t2227 = load i32, ptr %t6
+  %t2228 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2227, ptr %t2228, ptr null, ptr null, i32 0, i32 0)
   br label %bb142
 bb142:
-  %t2264 = load i32, ptr %t6
-  %t2265 = getelementptr [54 x i8], ptr @str7, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2264, ptr %t2265, ptr null, ptr null, i32 0, i32 0)
+  %t2229 = load i32, ptr %t6
+  %t2230 = getelementptr [54 x i8], ptr @str7, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2229, ptr %t2230, ptr null, ptr null, i32 0, i32 0)
   br label %bb143
 bb143:
-  %t2266 = load i32, ptr %t6
-  %t2267 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2266, ptr %t2267, ptr null, ptr null, i32 0, i32 0)
+  %t2231 = load i32, ptr %t6
+  %t2232 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2231, ptr %t2232, ptr null, ptr null, i32 0, i32 0)
   br label %bb144
 bb144:
-  %t2268 = load i32, ptr %t6
-  %t2269 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2268, ptr %t2269, ptr null, ptr null, i32 0, i32 0)
+  %t2233 = load i32, ptr %t6
+  %t2234 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2233, ptr %t2234, ptr null, ptr null, i32 0, i32 0)
   br label %bb145
 bb145:
-  %t2270 = load i32, ptr %t6
-  %t2271 = getelementptr [43 x i8], ptr @str22, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2270, ptr %t2271, ptr null, ptr null, i32 0, i32 0)
+  %t2235 = load i32, ptr %t6
+  %t2236 = getelementptr [43 x i8], ptr @str23, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2235, ptr %t2236, ptr null, ptr null, i32 0, i32 0)
   br label %bb146
 bb146:
-  %t2272 = load i32, ptr %t6
-  %t2273 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2272, ptr %t2273, ptr null, ptr null, i32 0, i32 0)
+  %t2237 = load i32, ptr %t6
+  %t2238 = getelementptr [3 x i8], ptr @str2, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2237, ptr %t2238, ptr null, ptr null, i32 0, i32 0)
   br label %bb147
 bb147:
-  %t2274 = load i32, ptr %t6
-  %t2275 = load i32, ptr %t8
-  %t2276 = getelementptr [40 x i8], ptr @str23, i32 0, i32 0
-  %t2277 = alloca i32, i32 1
-  %t2278 = getelementptr i32, ptr %t2277, i32 0
-  store i32 %t2275, ptr %t2278
-  %t2279 = alloca ptr, i32 1
-  %t2280 = getelementptr ptr, ptr %t2279, i32 0
-  store ptr %t2278, ptr %t2280
-  %t2281 = getelementptr [2 x i8], ptr @str16, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2274, ptr %t2276, ptr %t2279, ptr %t2281, i32 1, i32 0)
+  %t2239 = load i32, ptr %t6
+  %t2240 = load i32, ptr %t8
+  %t2241 = getelementptr [40 x i8], ptr @str24, i32 0, i32 0
+  %t2242 = alloca i32, i32 1
+  %t2243 = getelementptr i32, ptr %t2242, i32 0
+  store i32 %t2240, ptr %t2243
+  %t2244 = alloca ptr, i32 1
+  %t2245 = getelementptr ptr, ptr %t2244, i32 0
+  store ptr %t2243, ptr %t2245
+  %t2246 = getelementptr [2 x i8], ptr @str17, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2239, ptr %t2241, ptr %t2244, ptr %t2246, i32 1, i32 0)
   br label %bb148
 bb148:
-  %t2282 = load i32, ptr %t6
-  %t2283 = load i32, ptr %t7
-  %t2284 = getelementptr [34 x i8], ptr @str24, i32 0, i32 0
-  %t2285 = alloca i32, i32 1
-  %t2286 = getelementptr i32, ptr %t2285, i32 0
-  store i32 %t2283, ptr %t2286
-  %t2287 = alloca ptr, i32 1
-  %t2288 = getelementptr ptr, ptr %t2287, i32 0
-  store ptr %t2286, ptr %t2288
-  %t2289 = getelementptr [2 x i8], ptr @str16, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2282, ptr %t2284, ptr %t2287, ptr %t2289, i32 1, i32 0)
+  %t2247 = load i32, ptr %t6
+  %t2248 = load i32, ptr %t7
+  %t2249 = getelementptr [34 x i8], ptr @str25, i32 0, i32 0
+  %t2250 = alloca i32, i32 1
+  %t2251 = getelementptr i32, ptr %t2250, i32 0
+  store i32 %t2248, ptr %t2251
+  %t2252 = alloca ptr, i32 1
+  %t2253 = getelementptr ptr, ptr %t2252, i32 0
+  store ptr %t2251, ptr %t2253
+  %t2254 = getelementptr [2 x i8], ptr @str17, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2247, ptr %t2249, ptr %t2252, ptr %t2254, i32 1, i32 0)
   br label %bb149
 bb149:
-  %t2290 = load i32, ptr %t6
-  %t2291 = load i32, ptr %t9
-  %t2292 = getelementptr [35 x i8], ptr @str25, i32 0, i32 0
-  %t2293 = alloca i32, i32 1
-  %t2294 = getelementptr i32, ptr %t2293, i32 0
-  store i32 %t2291, ptr %t2294
-  %t2295 = alloca ptr, i32 1
-  %t2296 = getelementptr ptr, ptr %t2295, i32 0
-  store ptr %t2294, ptr %t2296
-  %t2297 = getelementptr [2 x i8], ptr @str16, i32 0, i32 0
-  call i32 @col6forge_write_v(i32 %t2290, ptr %t2292, ptr %t2295, ptr %t2297, i32 1, i32 0)
+  %t2255 = load i32, ptr %t6
+  %t2256 = load i32, ptr %t9
+  %t2257 = getelementptr [35 x i8], ptr @str26, i32 0, i32 0
+  %t2258 = alloca i32, i32 1
+  %t2259 = getelementptr i32, ptr %t2258, i32 0
+  store i32 %t2256, ptr %t2259
+  %t2260 = alloca ptr, i32 1
+  %t2261 = getelementptr ptr, ptr %t2260, i32 0
+  store ptr %t2259, ptr %t2261
+  %t2262 = getelementptr [2 x i8], ptr @str17, i32 0, i32 0
+  call i32 @col6forge_write_v(i32 %t2255, ptr %t2257, ptr %t2260, ptr %t2262, i32 1, i32 0)
   br label %bb150
 bb150:
   ret void
@@ -3155,24 +3141,25 @@ exit:
 @str5 = private unnamed_addr constant [38 x i8] c"                   SUBSET LEVEL TEST\0A\00", align 1
 @str6 = private unnamed_addr constant [54 x i8] c"      TEST     PASS/FAIL     COMPUTED        CORRECT\0A\00", align 1
 @str7 = private unnamed_addr constant [54 x i8] c"      ----------------------------------------------\0A\00", align 1
-@str8 = private unnamed_addr constant [84 x i8] c"%3d%2d%2d%3d%3d%3d%4d%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\0A%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\0A\00", align 1
-@str9 = private unnamed_addr constant [28 x i8] c"iiiiiiiiiiiiiiiiiiiiiiiiiii\00", align 1
-@str10 = private unnamed_addr constant [89 x i8] c"%3d%2d%2d%3d%3d%3d%4d%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d\0A\00", align 1
-@str11 = private unnamed_addr constant [56 x i8] c"          FILE I06 CREATED WITH 137 SEQUENTIAL RECORDS\0A\00", align 1
-@str12 = private unnamed_addr constant [45 x i8] c"tests/NIST_F78_test_suite/fcvs21_f95/FM107.f\00", align 1
-@str13 = private unnamed_addr constant [83 x i8] c"%3d%2d%2d%3d%3d%3d%4d%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\0A%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\00", align 1
-@str14 = private unnamed_addr constant [28 x i8] c"ddddddddddddddddddddddddddd\00", align 1
-@str15 = private unnamed_addr constant [21 x i8] c"     %5d       PASS\0A\00", align 1
-@str16 = private unnamed_addr constant [2 x i8] c"i\00", align 1
-@str17 = private unnamed_addr constant [46 x i8] c"     %5d       FAIL          %6d         %6d\0A\00", align 1
-@str18 = private unnamed_addr constant [4 x i8] c"iii\00", align 1
-@str19 = private unnamed_addr constant [99 x i8] c"\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A%3d%2d%2d%3d%3d%3d%4d%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\0A%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\00", align 1
-@str20 = private unnamed_addr constant [24 x i8] c"     %5d       DELETED\0A\00", align 1
-@str21 = private unnamed_addr constant [88 x i8] c"%3d%2d%2d%3d%3d%3d%4d%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d\00", align 1
-@str22 = private unnamed_addr constant [43 x i8] c"                     END OF PROGRAM FM107\0A\00", align 1
-@str23 = private unnamed_addr constant [40 x i8] c"                %5d ERRORS ENCOUNTERED\0A\00", align 1
-@str24 = private unnamed_addr constant [34 x i8] c"                %5d TESTS PASSED\0A\00", align 1
-@str25 = private unnamed_addr constant [35 x i8] c"                %5d TESTS DELETED\0A\00", align 1
+@str8 = private unnamed_addr constant [18 x i8] c"zero DO loop step\00", align 1
+@str9 = private unnamed_addr constant [84 x i8] c"%3d%2d%2d%3d%3d%3d%4d%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\0A%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\0A\00", align 1
+@str10 = private unnamed_addr constant [28 x i8] c"iiiiiiiiiiiiiiiiiiiiiiiiiii\00", align 1
+@str11 = private unnamed_addr constant [89 x i8] c"%3d%2d%2d%3d%3d%3d%4d%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d\0A\00", align 1
+@str12 = private unnamed_addr constant [56 x i8] c"          FILE I06 CREATED WITH 137 SEQUENTIAL RECORDS\0A\00", align 1
+@str13 = private unnamed_addr constant [45 x i8] c"tests/NIST_F78_test_suite/fcvs21_f95/FM107.f\00", align 1
+@str14 = private unnamed_addr constant [83 x i8] c"%3d%2d%2d%3d%3d%3d%4d%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\0A%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\00", align 1
+@str15 = private unnamed_addr constant [28 x i8] c"ddddddddddddddddddddddddddd\00", align 1
+@str16 = private unnamed_addr constant [21 x i8] c"     %5d       PASS\0A\00", align 1
+@str17 = private unnamed_addr constant [2 x i8] c"i\00", align 1
+@str18 = private unnamed_addr constant [46 x i8] c"     %5d       FAIL          %6d         %6d\0A\00", align 1
+@str19 = private unnamed_addr constant [4 x i8] c"iii\00", align 1
+@str20 = private unnamed_addr constant [99 x i8] c"\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A\0A%3d%2d%2d%3d%3d%3d%4d%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\0A%3d%3d%3d%3d%3d%3d%3d%3d%3d%3d\00", align 1
+@str21 = private unnamed_addr constant [24 x i8] c"     %5d       DELETED\0A\00", align 1
+@str22 = private unnamed_addr constant [88 x i8] c"%3d%2d%2d%3d%3d%3d%4d%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d%3d\0A%3d%3d\00", align 1
+@str23 = private unnamed_addr constant [43 x i8] c"                     END OF PROGRAM FM107\0A\00", align 1
+@str24 = private unnamed_addr constant [40 x i8] c"                %5d ERRORS ENCOUNTERED\0A\00", align 1
+@str25 = private unnamed_addr constant [34 x i8] c"                %5d TESTS PASSED\0A\00", align 1
+@str26 = private unnamed_addr constant [35 x i8] c"                %5d TESTS DELETED\0A\00", align 1
 define i32 @main() {
 entry:
   call void @fm107_()
@@ -3180,6 +3167,8 @@ entry:
 }
 declare i32 @col6forge_write_v(i32, ptr, ptr, ptr, i32, i32)
 declare void @col6forge_set_runtime_source_context(ptr, i32, i32)
-declare void @col6forge_clear_runtime_source_context()
 declare i32 @col6forge_formatted_read_core(i32, ptr, ptr, ptr, i32, i32)
+declare void @llvm.trap()
+declare void @col6forge_clear_runtime_source_context()
+declare void @col6forge_report_runtime_check_failure(ptr)
 declare i32 @col6forge_rewind(i32)
