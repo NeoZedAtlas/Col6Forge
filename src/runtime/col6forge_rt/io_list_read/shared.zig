@@ -494,7 +494,14 @@ fn readRawListItem(file: *FILE, first_ch: c_int, out: []u8) ReadTokenResult {
             }
         } else {
             switch (@as(u8, @intCast(ch))) {
-                '\'', '"' => quote = @intCast(ch),
+                '\'', '"' => {
+                    const prefix = out[0 .. used - 1];
+                    var idx: usize = 0;
+                    while (idx < prefix.len and std.ascii.isDigit(prefix[idx])) : (idx += 1) {}
+                    if (prefix.len == 0 or (idx > 0 and idx + 1 == prefix.len and prefix[idx] == '*')) {
+                        quote = @intCast(ch);
+                    }
+                },
                 '(' => paren_depth += 1,
                 ')' => {
                     if (paren_depth > 0) paren_depth -= 1;

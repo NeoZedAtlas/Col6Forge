@@ -21,6 +21,7 @@ const col6forge_list_read_stream_finish = exports.col6forge_list_read_stream_fin
 const col6forge_read_list_v = exports.col6forge_read_list_v;
 const initListReadCursor = shared.initListReadCursor;
 const col6forgeReadListItem = shared.col6forgeReadListItem;
+const col6forgeReadListItemForKind = shared.col6forgeReadListItemForKind;
 const applyListItemToArg = shared.applyListItemToArg;
 
 extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*shared.FILE;
@@ -163,4 +164,81 @@ test "list item reader handles nulls, repeats, and complex items" {
     try std.testing.expectEqual(shared.ListReadItemResult.null, col6forgeReadListItem(file, &cursor, token[0..]));
     try std.testing.expect(applyListItemToArg('d', @ptrCast(&cvd), 0, .null, token[0..]));
     try std.testing.expectEqual(@as(f64, 9.0), cvd);
+}
+
+test "list reader keeps trailing quote literal across records for character items" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "input.txt",
+        .data =
+            "'ABCDEF'                                                                    'UVW\n" ++
+            "XYZ'\n" ++
+            "'CAN''T, AND/OR   WON''T'\n" ++
+            "'1234567890' '12345678' '1234567890123'\n",
+    });
+    const path = try tmp.dir.realpathAlloc(std.testing.allocator, "input.txt");
+    defer std.testing.allocator.free(path);
+
+    const path_z = try std.testing.allocator.dupeZ(u8, path);
+    defer std.testing.allocator.free(path_z);
+    const file = fopen(path_z, "rb") orelse return error.TestUnexpectedResult;
+    defer _ = fclose(file);
+
+    var cursor = initListReadCursor();
+    var token: [shared.COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** shared.COL6FORGE_LIST_TOKEN_MAX;
+    try std.testing.expectEqual(shared.ListReadItemResult.value, col6forgeReadListItem(file, &cursor, token[0..]));
+    shared.col6forgeDiscardToRecordEnd(file);
+
+    cursor = initListReadCursor();
+    var a15: [15]u8 = [_]u8{' '} ** 15;
+    try std.testing.expectEqual(shared.ListReadItemResult.value, col6forgeReadListItemForKind(file, &cursor, token[0..], 's'));
+    try std.testing.expect(applyListItemToArg('s', @ptrCast(&a15[0]), a15.len, .value, token[0..]));
+    try std.testing.expectEqualStrings("XYZ'           ", a15[0..]);
+
+    var a8: [8]u8 = [_]u8{' '} ** 8;
+    try std.testing.expectEqual(shared.ListReadItemResult.value, col6forgeReadListItemForKind(file, &cursor, token[0..], 's'));
+    try std.testing.expect(applyListItemToArg('s', @ptrCast(&a8[0]), a8.len, .value, token[0..]));
+    try std.testing.expectEqualStrings("CAN'T, A", a8[0..]);
+
+    var a9: [9]u8 = [_]u8{' '} ** 9;
+    try std.testing.expectEqual(shared.ListReadItemResult.value, col6forgeReadListItemForKind(file, &cursor, token[0..], 's'));
+    try std.testing.expect(applyListItemToArg('s', @ptrCast(&a9[0]), a9.len, .value, token[0..]));
+    try std.testing.expectEqualStrings("123456789", a9[0..]);
+}
+
+test "list reader preserves quoted character payload after repeat prefix" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "input.txt",
+        .data = "2*'A,B',Z\n",
+    });
+    const path = try tmp.dir.realpathAlloc(std.testing.allocator, "input.txt");
+    defer std.testing.allocator.free(path);
+
+    const path_z = try std.testing.allocator.dupeZ(u8, path);
+    defer std.testing.allocator.free(path_z);
+    const file = fopen(path_z, "rb") orelse return error.TestUnexpectedResult;
+    defer _ = fclose(file);
+
+    var cursor = initListReadCursor();
+    var token: [shared.COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** shared.COL6FORGE_LIST_TOKEN_MAX;
+
+    var first: [3]u8 = [_]u8{' '} ** 3;
+    try std.testing.expectEqual(shared.ListReadItemResult.value, col6forgeReadListItemForKind(file, &cursor, token[0..], 's'));
+    try std.testing.expect(applyListItemToArg('s', @ptrCast(&first[0]), first.len, .value, token[0..]));
+    try std.testing.expectEqualStrings("A,B", first[0..]);
+
+    var second: [3]u8 = [_]u8{' '} ** 3;
+    try std.testing.expectEqual(shared.ListReadItemResult.value, col6forgeReadListItemForKind(file, &cursor, token[0..], 's'));
+    try std.testing.expect(applyListItemToArg('s', @ptrCast(&second[0]), second.len, .value, token[0..]));
+    try std.testing.expectEqualStrings("A,B", second[0..]);
+
+    var third: [1]u8 = [_]u8{' '} ** 1;
+    try std.testing.expectEqual(shared.ListReadItemResult.value, col6forgeReadListItemForKind(file, &cursor, token[0..], 's'));
+    try std.testing.expect(applyListItemToArg('s', @ptrCast(&third[0]), third.len, .value, token[0..]));
+    try std.testing.expectEqualStrings("Z", third[0..]);
 }
