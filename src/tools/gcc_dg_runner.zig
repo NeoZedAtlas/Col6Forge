@@ -1177,49 +1177,36 @@ fn formatPipelineFailureText(
     log_output: bool,
 ) ![]const u8 {
     if (diag_bag.has()) {
-        var rendered: std.ArrayList(u8) = .empty;
-        errdefer rendered.deinit(allocator);
+        var out: std.Io.Writer.Allocating = .init(allocator);
+        defer out.deinit();
 
         while (diag_bag.take()) |d| {
             defer diag_bag.release(d);
-            try rendered.writer(allocator).print("{s}:{d}:{d}: error[{s}]: {s}\n", .{
-                d.file_path,
-                d.line,
-                d.column,
-                d.code,
-                d.message,
-            });
-            if (d.line_text.len != 0) {
-                try rendered.writer(allocator).print("{s}\n", .{d.line_text});
-                const caret_col = if (d.column == 0) 1 else d.column;
-                var i: usize = 1;
-                while (i < caret_col) : (i += 1) try rendered.append(allocator, ' ');
-                try rendered.appendSlice(allocator, "^\n");
-            }
+            try Col6Forge.writeDiagnostic(&out.writer, d);
         }
-        const text = try rendered.toOwnedSlice(allocator);
+        try out.writer.flush();
+        const text = try allocator.dupe(u8, out.writer.buffered());
         if (log_output) log_state.stderr("{s}", .{text});
         return text;
     }
 
     if (Col6Forge.takeLastPipelineDiagnostic()) |d| {
-        if (log_output) {
-            log_state.stderr("{s}:{d}:{d}: error[{s}]: {s}\n", .{ d.file_path, d.line, d.column, d.code, d.message });
-            if (d.line_text.len > 0) {
-                log_state.stderr("{s}\n", .{d.line_text});
-                const caret_col = if (d.column == 0) 1 else d.column;
-                var i: usize = 1;
-                while (i < caret_col) : (i += 1) {
-                    log_state.stderr(" ", .{});
-                }
-                log_state.stderr("^\n", .{});
-            }
-        }
+        var out: std.Io.Writer.Allocating = .init(allocator);
+        defer out.deinit();
+        try Col6Forge.writeDiagnostic(&out.writer, d);
+        try out.writer.flush();
+        if (log_output) log_state.stderr("{s}", .{out.writer.buffered()});
         return std.fmt.allocPrint(allocator, "{s}", .{d.message});
     }
 
     const fallback = try std.fmt.allocPrint(allocator, "pipeline error: {s}", .{@errorName(err)});
-    if (log_output) log_state.stderr("{s}:1:1: error[{s}]: {s}\n", .{ input_path, Col6Forge.error_catalog.pipeline.generic.code, fallback });
+    if (log_output) {
+        var out: std.Io.Writer.Allocating = .init(allocator);
+        defer out.deinit();
+        try Col6Forge.writePipelineErrorDiagnostic(&out.writer, input_path, err);
+        try out.writer.flush();
+        log_state.stderr("{s}", .{out.writer.buffered()});
+    }
     return fallback;
 }
 

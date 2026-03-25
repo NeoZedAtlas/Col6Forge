@@ -1,4 +1,7 @@
-tests/diagnostic_golden_cc/semantic_expr_operands.f:3:13: error[CF3119]: invalid operand type for expression operator
-help: see docs/errors.md#CF3119
-      I='A'+1
-            ^
+error[CF3119]: invalid operand type for expression operator
+  --> tests/diagnostic_golden_cc/semantic_expr_operands.f:3:13
+   = stage: semantic
+   = help: see docs/errors.md#CF3119
+  |
+3 |       I='A'+1
+  |             ^

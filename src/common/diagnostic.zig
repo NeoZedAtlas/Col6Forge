@@ -1,8 +1,51 @@
 const std = @import("std");
-const error_catalog = @import("error_catalog.zig");
 
-const docs_dir = "docs";
-const docs_file = "errors.md";
+pub const DiagnosticStage = enum {
+    unknown,
+    pipeline,
+    lexer,
+    parser,
+    semantic,
+    codegen,
+    runtime,
+
+    pub fn label(self: DiagnosticStage) []const u8 {
+        return switch (self) {
+            .unknown => "unknown",
+            .pipeline => "pipeline",
+            .lexer => "lexer",
+            .parser => "parser",
+            .semantic => "semantic",
+            .codegen => "codegen",
+            .runtime => "runtime",
+        };
+    }
+};
+
+pub const DiagnosticSeverity = enum {
+    @"error",
+    warning,
+    note,
+
+    pub fn label(self: DiagnosticSeverity) []const u8 {
+        return switch (self) {
+            .@"error" => "error",
+            .warning => "warning",
+            .note => "note",
+        };
+    }
+};
+
+pub const DiagnosticMessage = struct {
+    text: []const u8,
+};
+
+pub const AddOptions = struct {
+    severity: DiagnosticSeverity = .@"error",
+    stage: ?DiagnosticStage = null,
+    notes: []const DiagnosticMessage = &.{},
+    helps: []const DiagnosticMessage = &.{},
+};
 
 pub const Diagnostic = struct {
     file_path: []const u8,
@@ -11,6 +54,10 @@ pub const Diagnostic = struct {
     code: []const u8,
     message: []const u8,
     line_text: []const u8,
+    severity: DiagnosticSeverity = .@"error",
+    stage: DiagnosticStage = .unknown,
+    notes: []const DiagnosticMessage = &.{},
+    helps: []const DiagnosticMessage = &.{},
 };
 
 pub const Bag = struct {
@@ -47,8 +94,23 @@ pub const Bag = struct {
         message: []const u8,
         line_text: []const u8,
     ) void {
-        const owned = self.makeOwned(file_path, line, column, code, message, line_text) catch return;
-        self.items.append(owned) catch {};
+        self.addDetailed(file_path, line, column, code, message, line_text, .{});
+    }
+
+    pub fn addDetailed(
+        self: *Bag,
+        file_path: []const u8,
+        line: usize,
+        column: usize,
+        code: []const u8,
+        message: []const u8,
+        line_text: []const u8,
+        options: AddOptions,
+    ) void {
+        const owned = self.makeOwned(file_path, line, column, code, message, line_text, options) catch return;
+        self.items.append(owned) catch {
+            self.freeOwned(owned);
+        };
     }
 
     pub fn latest(self: *const Bag) ?Diagnostic {
@@ -73,7 +135,14 @@ pub const Bag = struct {
         code: []const u8,
         message: []const u8,
         line_text: []const u8,
+        options: AddOptions,
     ) !Diagnostic {
+        const owned_notes = try self.dupeMessages(options.notes);
+        errdefer self.freeMessages(owned_notes);
+
+        const owned_helps = try self.dupeMessages(options.helps);
+        errdefer self.freeMessages(owned_helps);
+
         return .{
             .file_path = try self.allocator.dupe(u8, file_path),
             .line = if (line == 0) 1 else line,
@@ -81,6 +150,10 @@ pub const Bag = struct {
             .code = try self.allocator.dupe(u8, code),
             .message = try self.allocator.dupe(u8, message),
             .line_text = try self.allocator.dupe(u8, line_text),
+            .severity = options.severity,
+            .stage = options.stage orelse inferStageFromCode(code),
+            .notes = owned_notes,
+            .helps = owned_helps,
         };
     }
 
@@ -89,54 +162,67 @@ pub const Bag = struct {
         self.allocator.free(diag.code);
         self.allocator.free(diag.message);
         self.allocator.free(diag.line_text);
+        self.freeMessages(diag.notes);
+        self.freeMessages(diag.helps);
+    }
+
+    fn dupeMessages(self: *Bag, messages: []const DiagnosticMessage) ![]DiagnosticMessage {
+        if (messages.len == 0) return &.{};
+
+        const owned = try self.allocator.alloc(DiagnosticMessage, messages.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (owned[0..initialized]) |message| self.allocator.free(message.text);
+            self.allocator.free(owned);
+        }
+
+        for (messages) |message| {
+            owned[initialized] = .{
+                .text = try self.allocator.dupe(u8, message.text),
+            };
+            initialized += 1;
+        }
+        return owned;
+    }
+
+    fn freeMessages(self: *Bag, messages: []const DiagnosticMessage) void {
+        if (messages.len == 0) return;
+        for (messages) |message| self.allocator.free(message.text);
+        self.allocator.free(messages);
     }
 };
 
-pub fn writeDiagnostic(writer: *std.Io.Writer, diag: Diagnostic) !void {
-    try writer.print("{s}:{d}:{d}: error[{s}]: {s}\n", .{
-        diag.file_path,
-        diag.line,
-        diag.column,
-        diag.code,
-        diag.message,
-    });
-    if (diag.code.len != 0) {
-        try writer.print("help: see {s}/{s}#{s}\n", .{ docs_dir, docs_file, diag.code });
-    }
-    if (diag.line_text.len == 0) return;
-    try writer.print("{s}\n", .{diag.line_text});
-    const caret_col = if (diag.column == 0) 1 else diag.column;
-    var i: usize = 1;
-    while (i < caret_col) : (i += 1) {
-        try writer.writeByte(' ');
-    }
-    try writer.writeByte('^');
-    try writer.writeByte('\n');
+pub fn inferStageFromCode(code: []const u8) DiagnosticStage {
+    if (!std.mem.startsWith(u8, code, "CF") or code.len < 3) return .unknown;
+    return switch (code[2]) {
+        '0' => .pipeline,
+        '1' => .lexer,
+        '2' => .parser,
+        '3' => .semantic,
+        '4' => .codegen,
+        '5' => .runtime,
+        else => .unknown,
+    };
 }
 
-test "writeDiagnostic keeps docs help line ahead of source context" {
+test "diagnostic bag infers stage and keeps extra messages" {
     const testing = std.testing;
-    var out: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer out.deinit();
-    const info = error_catalog.semantic.invalid_char_len;
-    const expected = try std.fmt.allocPrint(testing.allocator,
-        "demo.f:2:7: error[{s}]: {s}\n" ++
-            "help: see {s}/{s}#{s}\n" ++
-            "      CHARACTER*(*) A\n" ++
-            "      ^\n",
-        .{ info.code, info.message, docs_dir, docs_file, info.code },
-    );
-    defer testing.allocator.free(expected);
 
-    try writeDiagnostic(&out.writer, .{
-        .file_path = "demo.f",
-        .line = 2,
-        .column = 7,
-        .code = info.code,
-        .message = info.message,
-        .line_text = "      CHARACTER*(*) A",
+    var bag = Bag.init(testing.allocator);
+    defer bag.deinit();
+
+    bag.addDetailed("demo.f", 2, 7, "CF3119", "invalid operand", "      I='A'+1", .{
+        .notes = &.{.{ .text = "semantic note" }},
+        .helps = &.{.{ .text = "semantic help" }},
     });
-    try out.writer.flush();
 
-    try testing.expectEqualStrings(expected, out.writer.buffered());
+    const diag = bag.take() orelse return error.TestExpectedEqual;
+    defer bag.release(diag);
+
+    try testing.expectEqual(DiagnosticStage.semantic, diag.stage);
+    try testing.expectEqual(DiagnosticSeverity.@"error", diag.severity);
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqualStrings("semantic note", diag.notes[0].text);
+    try testing.expectEqualStrings("semantic help", diag.helps[0].text);
 }

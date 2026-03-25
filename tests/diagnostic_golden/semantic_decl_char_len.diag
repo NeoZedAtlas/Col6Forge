@@ -1,4 +1,7 @@
-tests/diagnostic_golden/semantic_decl_char_len.f:2:7: error[CF3103]: invalid CHARACTER length specification
-help: see docs/errors.md#CF3103
-      CHARACTER*(*) A
-      ^
+error[CF3103]: invalid CHARACTER length specification
+  --> tests/diagnostic_golden/semantic_decl_char_len.f:2:7
+   = stage: semantic
+   = help: see docs/errors.md#CF3103
+  |
+2 |       CHARACTER*(*) A
+  |       ^

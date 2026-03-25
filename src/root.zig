@@ -1,5 +1,6 @@
 //! By convention, root.zig is the root source file when making a library.
 pub const diag = @import("common/diagnostic.zig");
+pub const diagnostic_render = @import("common/diagnostic_render.zig");
 pub const error_catalog = @import("common/error_catalog.zig");
 pub const ast = @import("ast/mod.zig");
 pub const frontend = @import("frontend/mod.zig");
@@ -21,7 +22,7 @@ pub const TokenKind = frontend.TokenKind;
 pub const Program = ast.Program;
 pub const SemanticProgram = sema.SemanticProgram;
 
-pub const writeDiagnostic = diag.writeDiagnostic;
+pub const writeDiagnostic = diagnostic_render.writeDiagnostic;
 pub const runPipeline = pipeline.runPipeline;
 pub const runPipelineToWriter = pipeline.runPipelineToWriter;
 pub const runPipelineWithOptions = pipeline.runPipelineWithOptions;

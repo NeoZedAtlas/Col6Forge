@@ -1,4 +1,7 @@
-tests/diagnostic_golden/fixed_parse_continuation.f:3:8: error[CF2004]: missing required identifier
-help: see docs/errors.md#CF2004
-     1 )
-       ^
+error[CF2004]: missing required identifier
+  --> tests/diagnostic_golden/fixed_parse_continuation.f:3:8
+   = stage: parser
+   = help: see docs/errors.md#CF2004
+  |
+3 |      1 )
+  |        ^
