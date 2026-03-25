@@ -199,12 +199,24 @@ pub export fn col6forge_fmt_i(width: c_int, min_digits: c_int, sign_plus: c_int,
     var tmp: [128]u8 = [_]u8{0} ** 128;
     var digits: [128]u8 = [_]u8{0} ** 128;
     const out = nextFmtBuffer();
+    const explicit_zero_min_digits = min_digits < 0;
+    const effective_min_digits: c_int = if (explicit_zero_min_digits) 0 else min_digits;
+    if (explicit_zero_min_digits and value == 0) {
+        if (width <= 0) {
+            out[0] = 0;
+            return asConstCStr(out);
+        }
+        const usable: usize = @min(@as(usize, @intCast(width)), out.len - 1);
+        @memset(out[0..usable], ' ');
+        out[usable] = 0;
+        return asConstCStr(out);
+    }
     const v: c_uint = if (value < 0) @intCast(-@as(i64, value)) else @intCast(value);
 
-    if (min_digits <= 0) {
+    if (effective_min_digits <= 0) {
         _ = snprintf(&digits[0], digits.len, "%u", v);
     } else {
-        _ = snprintf(&digits[0], digits.len, "%0*u", min_digits, v);
+        _ = snprintf(&digits[0], digits.len, "%0*u", effective_min_digits, v);
     }
     if (value < 0) {
         _ = snprintf(&tmp[0], tmp.len, "-%s", asConstCStr(&digits));
@@ -215,7 +227,11 @@ pub export fn col6forge_fmt_i(width: c_int, min_digits: c_int, sign_plus: c_int,
     }
 
     const len = cstrlenRaw(tmp[0..]);
-    if (width <= 0 or @as(usize, @intCast(width)) <= len) {
+    if (width > 0 and len > @as(usize, @intCast(width))) {
+        fillStars(out, width);
+        return asConstCStr(out);
+    }
+    if (width <= 0 or @as(usize, @intCast(width)) == len) {
         _ = snprintf(&out[0], out.len, "%s", asConstCStr(&tmp));
         return asConstCStr(out);
     }
@@ -239,15 +255,27 @@ pub export fn col6forge_fmt_i64(width: c_int, min_digits: c_int, sign_plus: c_in
     var tmp: [160]u8 = [_]u8{0} ** 160;
     var digits: [160]u8 = [_]u8{0} ** 160;
     const out = nextFmtBuffer();
+    const explicit_zero_min_digits = min_digits < 0;
+    const effective_min_digits: c_int = if (explicit_zero_min_digits) 0 else min_digits;
+    if (explicit_zero_min_digits and value == 0) {
+        if (width <= 0) {
+            out[0] = 0;
+            return asConstCStr(out);
+        }
+        const usable: usize = @min(@as(usize, @intCast(width)), out.len - 1);
+        @memset(out[0..usable], ' ');
+        out[usable] = 0;
+        return asConstCStr(out);
+    }
     const abs_u: u64 = if (value < 0)
         @intCast(-@as(i128, value))
     else
         @intCast(value);
 
-    if (min_digits <= 0) {
+    if (effective_min_digits <= 0) {
         _ = snprintf(&digits[0], digits.len, "%llu", @as(c_ulonglong, @intCast(abs_u)));
     } else {
-        _ = snprintf(&digits[0], digits.len, "%0*llu", min_digits, @as(c_ulonglong, @intCast(abs_u)));
+        _ = snprintf(&digits[0], digits.len, "%0*llu", effective_min_digits, @as(c_ulonglong, @intCast(abs_u)));
     }
     if (value < 0) {
         _ = snprintf(&tmp[0], tmp.len, "-%s", asConstCStr(&digits));
@@ -258,7 +286,11 @@ pub export fn col6forge_fmt_i64(width: c_int, min_digits: c_int, sign_plus: c_in
     }
 
     const len = cstrlenRaw(tmp[0..]);
-    if (width <= 0 or @as(usize, @intCast(width)) <= len) {
+    if (width > 0 and len > @as(usize, @intCast(width))) {
+        fillStars(out, width);
+        return asConstCStr(out);
+    }
+    if (width <= 0 or @as(usize, @intCast(width)) == len) {
         _ = snprintf(&out[0], out.len, "%s", asConstCStr(&tmp));
         return asConstCStr(out);
     }
@@ -289,39 +321,87 @@ pub export fn col6forge_fmt_list_g(precision: c_int, exp_width: c_int, value: f6
     return asConstCStr(out);
 }
 
+test "col6forge_fmt_i overflows signed width with stars" {
+    try std.testing.expectEqualStrings("*****", std.mem.span(col6forge_fmt_i(5, 5, 0, -12)));
+}
+
+test "col6forge_fmt_i blanks zero when m is zero regardless of sign control" {
+    try std.testing.expectEqualStrings("     ", std.mem.span(col6forge_fmt_i(5, -1, 0, 0)));
+    try std.testing.expectEqualStrings("     ", std.mem.span(col6forge_fmt_i(5, -1, 1, 0)));
+}
+
+test "col6forge_fmt_i keeps zero for plain Iw" {
+    try std.testing.expectEqualStrings("    0", std.mem.span(col6forge_fmt_i(5, 0, 0, 0)));
+}
+
+test "col6forge_fmt_e overflows when zero-precision mantissa still needs decimal point" {
+    const out = col6forge_fmt_e(6, 1, 2, 2, 0, 12.345);
+    try std.testing.expectEqualStrings("******", std.mem.sliceTo(out, 0));
+}
+
 pub export fn col6forge_fmt_f(width: c_int, precision: c_int, sign_plus: c_int, value: f64) callconv(.c) [*:0]const u8 {
     var tmp: [128]u8 = [_]u8{0} ** 128;
+    var tmp2: [128]u8 = [_]u8{0} ** 128;
     const out = nextFmtBuffer();
     var p = precision;
     if (p < 0) p = 0;
 
-    if (width <= 0) {
-        if (sign_plus != 0) {
-            _ = snprintf(&out[0], out.len, "%+#.*f", p, value);
-        } else {
-            _ = snprintf(&out[0], out.len, "%#.*f", p, value);
-        }
+    if (formatSpecialFloat(out, width, sign_plus, value)) {
         return asConstCStr(out);
     }
 
     if (sign_plus != 0) {
-        _ = snprintf(&tmp[0], tmp.len, "%+#*.*f", width, p, value);
+        _ = snprintf(&tmp[0], tmp.len, "%+#.*f", p, value);
     } else {
-        _ = snprintf(&tmp[0], tmp.len, "%#*.*f", width, p, value);
+        _ = snprintf(&tmp[0], tmp.len, "%#.*f", p, value);
     }
 
     const len = cstrlenRaw(tmp[0..]);
-    if (@as(c_int, @intCast(len)) > width) {
+    if (width <= 0) {
+        const copy_len = @min(len, out.len - 1);
+        var i: usize = 0;
+        while (i < copy_len) : (i += 1) {
+            out[i] = tmp[i];
+        }
+        out[copy_len] = 0;
+        return asConstCStr(out);
+    }
+
+    var render: [*:0]const u8 = asConstCStr(&tmp);
+    var render_len = len;
+    if (@as(c_int, @intCast(render_len)) > width) {
+        var rewrote = false;
+        if (render_len >= 2 and tmp[0] == '0' and tmp[1] == '.') {
+            _ = snprintf(&tmp2[0], tmp2.len, ".%s", @as([*:0]const u8, @ptrCast(&tmp[2])));
+            render = asConstCStr(&tmp2);
+            rewrote = true;
+        } else if (render_len >= 3 and (tmp[0] == '+' or tmp[0] == '-') and tmp[1] == '0' and tmp[2] == '.') {
+            _ = snprintf(&tmp2[0], tmp2.len, "%c.%s", tmp[0], @as([*:0]const u8, @ptrCast(&tmp[3])));
+            render = asConstCStr(&tmp2);
+            rewrote = true;
+        }
+        if (rewrote) {
+            render_len = cstrlenRaw(tmp2[0..]);
+        }
+    }
+
+    if (@as(c_int, @intCast(render_len)) > width) {
         fillStars(out, width);
         return asConstCStr(out);
     }
 
-    const copy_len = @min(len, out.len - 1);
+    var pad: usize = @as(usize, @intCast(width)) - render_len;
+    if (pad >= out.len) pad = out.len - 1;
     var i: usize = 0;
-    while (i < copy_len) : (i += 1) {
-        out[i] = tmp[i];
+    while (i < pad) : (i += 1) {
+        out[i] = ' ';
     }
-    out[copy_len] = 0;
+    const copy_len = @min(render_len, (out.len - 1) - pad);
+    i = 0;
+    while (i < copy_len) : (i += 1) {
+        out[pad + i] = render[i];
+    }
+    out[pad + copy_len] = 0;
     return asConstCStr(out);
 }
 
@@ -354,9 +434,9 @@ pub export fn col6forge_fmt_e(width: c_int, precision: c_int, exp_width: c_int, 
         if (eff_prec < 0) eff_prec = 0;
     }
     if (sign_plus != 0) {
-        _ = snprintf(&tmp[0], tmp.len, "%+.*f", eff_prec, mantissa);
+        _ = snprintf(&tmp[0], tmp.len, "%+#.*f", eff_prec, mantissa);
     } else {
-        _ = snprintf(&tmp[0], tmp.len, "%.*f", eff_prec, mantissa);
+        _ = snprintf(&tmp[0], tmp.len, "%#.*f", eff_prec, mantissa);
     }
     if (scale_factor == 0 and mantissa != 0.0) {
         const tmp_len_before = cstrlenRaw(tmp[0..]);
@@ -366,9 +446,9 @@ pub export fn col6forge_fmt_e(width: c_int, precision: c_int, exp_width: c_int, 
             mantissa = if (abs_rounded >= 1.0) rounded / 10.0 else rounded * 10.0;
             exp_out += if (abs_rounded >= 1.0) 1 else -1;
             if (sign_plus != 0) {
-                _ = snprintf(&tmp[0], tmp.len, "%+.*f", eff_prec, mantissa);
+                _ = snprintf(&tmp[0], tmp.len, "%+#.*f", eff_prec, mantissa);
             } else {
-                _ = snprintf(&tmp[0], tmp.len, "%.*f", eff_prec, mantissa);
+                _ = snprintf(&tmp[0], tmp.len, "%#.*f", eff_prec, mantissa);
             }
         }
     }
@@ -469,11 +549,6 @@ pub export fn col6forge_fmt_g(width: c_int, precision: c_int, exp_width: c_int, 
     var frac = p - digits_before;
     if (frac < 0) frac = 0;
 
-    var scaled = value;
-    if (scale_factor != 0) {
-        scaled = value * std.math.pow(f64, 10.0, @as(f64, @floatFromInt(scale_factor)));
-    }
-
     var width_f = width;
     const exp_pad = if (exp_width > 0) (exp_width + 2) else 4;
     if (width > exp_pad) {
@@ -482,9 +557,9 @@ pub export fn col6forge_fmt_g(width: c_int, precision: c_int, exp_width: c_int, 
 
     var tmp: [128]u8 = [_]u8{0} ** 128;
     if (sign_plus != 0) {
-        _ = snprintf(&tmp[0], tmp.len, "%+.*f", frac, scaled);
+        _ = snprintf(&tmp[0], tmp.len, "%+.*f", frac, value);
     } else {
-        _ = snprintf(&tmp[0], tmp.len, "%.*f", frac, scaled);
+        _ = snprintf(&tmp[0], tmp.len, "%.*f", frac, value);
     }
     if (width_f > 0 and frac == 0 and findByte(tmp[0..], '.') == null) {
         const tmp_len = cstrlenRaw(tmp[0..]);
@@ -583,4 +658,14 @@ test "col6forge_fmt_d uses Fortran mantissa form for -1" {
 test "col6forge_fmt_d normalizes near-1 rounding boundary" {
     const out = col6forge_fmt_d(0, 7, 0, 0, 0, -0.9999999999999999);
     try std.testing.expectEqualStrings("-0.1000000D+01", std.mem.sliceTo(out, 0));
+}
+
+test "col6forge_fmt_f elides leading zero to fit narrow field" {
+    const out = col6forge_fmt_f(2, 1, 0, 0.0);
+    try std.testing.expectEqualStrings(".0", std.mem.sliceTo(out, 0));
+}
+
+test "col6forge_fmt_g ignores scale factor when fixed form is selected" {
+    const out = col6forge_fmt_g(16, 4, 0, 2, 0, 9876.54);
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.sliceTo(out, 0), "9877.") != null);
 }

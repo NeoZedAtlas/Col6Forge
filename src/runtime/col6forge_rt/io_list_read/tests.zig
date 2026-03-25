@@ -19,6 +19,12 @@ const col6forge_read_list_stream_typed = exports.col6forge_read_list_stream_type
 const col6forge_read_list_stream_n = exports.col6forge_read_list_stream_n;
 const col6forge_list_read_stream_finish = exports.col6forge_list_read_stream_finish;
 const col6forge_read_list_v = exports.col6forge_read_list_v;
+const initListReadCursor = shared.initListReadCursor;
+const col6forgeReadListItem = shared.col6forgeReadListItem;
+const applyListItemToArg = shared.applyListItemToArg;
+
+extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*shared.FILE;
+extern fn fclose(stream: *shared.FILE) c_int;
 
 test "list index helpers detect arithmetic overflow" {
     try std.testing.expectEqual(@as(usize, 12), offsetIndex(3, 4).?);
@@ -107,4 +113,54 @@ test "graceful list stdin EOF only applies to stdin EOF" {
     try std.testing.expect(shouldGracefullyExitOnListReadEof(true, -1));
     try std.testing.expect(!shouldGracefullyExitOnListReadEof(false, -1));
     try std.testing.expect(!shouldGracefullyExitOnListReadEof(true, 1));
+}
+
+test "list item reader handles nulls, repeats, and complex items" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "input.txt", .data = ", (2.0, 3.0),,6.0D0, 2*,\n" });
+    const path = try tmp.dir.realpathAlloc(std.testing.allocator, "input.txt");
+    defer std.testing.allocator.free(path);
+
+    const path_z = try std.testing.allocator.dupeZ(u8, path);
+    defer std.testing.allocator.free(path_z);
+    const file = fopen(path_z, "rb") orelse return error.TestUnexpectedResult;
+    defer _ = fclose(file);
+
+    var cursor = initListReadCursor();
+    var token: [shared.COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** shared.COL6FORGE_LIST_TOKEN_MAX;
+
+    var avd: f64 = 1.0;
+    try std.testing.expectEqual(shared.ListReadItemResult.null, col6forgeReadListItem(file, &cursor, token[0..]));
+    try std.testing.expect(applyListItemToArg('d', @ptrCast(&avd), 0, .null, token[0..]));
+    try std.testing.expectEqual(@as(f64, 1.0), avd);
+
+    var avc: [2]f32 = .{ 0.0, 0.0 };
+    try std.testing.expectEqual(shared.ListReadItemResult.value, col6forgeReadListItem(file, &cursor, token[0..]));
+    try std.testing.expect(applyListItemToArg('c', @ptrCast(&avc[0]), 0, .value, token[0..]));
+    try std.testing.expectEqual(@as(f32, 2.0), avc[0]);
+    try std.testing.expectEqual(@as(f32, 3.0), avc[1]);
+
+    var bvc: [2]f32 = .{ 4.0, 5.0 };
+    try std.testing.expectEqual(shared.ListReadItemResult.null, col6forgeReadListItem(file, &cursor, token[0..]));
+    try std.testing.expect(applyListItemToArg('c', @ptrCast(&bvc[0]), 0, .null, token[0..]));
+    try std.testing.expectEqual(@as(f32, 4.0), bvc[0]);
+    try std.testing.expectEqual(@as(f32, 5.0), bvc[1]);
+
+    var bvd: f64 = 0.0;
+    try std.testing.expectEqual(shared.ListReadItemResult.value, col6forgeReadListItem(file, &cursor, token[0..]));
+    try std.testing.expect(applyListItemToArg('d', @ptrCast(&bvd), 0, .value, token[0..]));
+    try std.testing.expectEqual(@as(f64, 6.0), bvd);
+
+    var cvc: [2]f32 = .{ 7.0, 8.0 };
+    try std.testing.expectEqual(shared.ListReadItemResult.null, col6forgeReadListItem(file, &cursor, token[0..]));
+    try std.testing.expect(applyListItemToArg('c', @ptrCast(&cvc[0]), 0, .null, token[0..]));
+    try std.testing.expectEqual(@as(f32, 7.0), cvc[0]);
+    try std.testing.expectEqual(@as(f32, 8.0), cvc[1]);
+
+    var cvd: f64 = 9.0;
+    try std.testing.expectEqual(shared.ListReadItemResult.null, col6forgeReadListItem(file, &cursor, token[0..]));
+    try std.testing.expect(applyListItemToArg('d', @ptrCast(&cvd), 0, .null, token[0..]));
+    try std.testing.expectEqual(@as(f64, 9.0), cvd);
 }

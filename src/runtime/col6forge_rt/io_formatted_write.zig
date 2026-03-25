@@ -190,6 +190,114 @@ fn expectByte(fmt: []const u8, pos: *usize, expected: u8) bool {
     return true;
 }
 
+const TabMarker = struct {
+    next: usize,
+    kind: u8,
+    value: usize,
+};
+
+fn parseTabMarker(src: []const u8, start: usize) ?TabMarker {
+    if (start >= src.len or src[start] != 0x01) return null;
+    if (start + 3 > src.len) return null;
+
+    const kind = src[start + 1];
+    if (kind != 'T' and kind != 'R' and kind != 'L') return null;
+
+    var i: usize = start + 2;
+    var value: usize = 0;
+    var saw_digit = false;
+    while (i < src.len and src[i] != 0x02) : (i += 1) {
+        const ch = src[i];
+        if (ch < '0' or ch > '9') return null;
+        saw_digit = true;
+        const mul_value = @mulWithOverflow(value, 10);
+        if (mul_value[1] != 0) return null;
+        const digit = @as(usize, ch - '0');
+        const next_value = @addWithOverflow(mul_value[0], digit);
+        if (next_value[1] != 0) return null;
+        value = next_value[0];
+    }
+
+    if (!saw_digit or i >= src.len or src[i] != 0x02) return null;
+    return .{ .next = i + 1, .kind = kind, .value = value };
+}
+
+fn updateMarkedColumn(col: *usize, marker: TabMarker) bool {
+    switch (marker.kind) {
+        'T' => col.* = if (marker.value > 0) marker.value - 1 else 0,
+        'R' => col.* = std.math.add(usize, col.*, marker.value) catch return false,
+        'L' => col.* = if (col.* > marker.value) col.* - marker.value else 0,
+        else => return false,
+    }
+    return true;
+}
+
+fn markedLineWidth(src: []const u8) ?usize {
+    var i: usize = 0;
+    var col: usize = 0;
+    var width: usize = 0;
+    while (i < src.len) {
+        if (src[i] == 0x01) {
+            if (parseTabMarker(src, i)) |marker| {
+                if (!updateMarkedColumn(&col, marker)) return null;
+                if (col > width) width = col;
+                i = marker.next;
+                continue;
+            }
+        }
+        col = std.math.add(usize, col, 1) catch return null;
+        if (col > width) width = col;
+        i += 1;
+    }
+    return width;
+}
+
+fn appendFlattenedMarkedLine(out: *RenderBuffer, src: []const u8) bool {
+    const width = markedLineWidth(src) orelse return false;
+    const start = out.len;
+    if (!out.ensure(width)) return false;
+    @memset(out.data.?[start .. start + width], ' ');
+    out.len += width;
+
+    var i: usize = 0;
+    var col: usize = 0;
+    while (i < src.len) {
+        if (src[i] == 0x01) {
+            if (parseTabMarker(src, i)) |marker| {
+                if (!updateMarkedColumn(&col, marker)) return false;
+                i = marker.next;
+                continue;
+            }
+        }
+
+        if (col < width) {
+            const dst_idx = start + col;
+            if (src[i] != ' ' or out.data.?[dst_idx] == ' ') {
+                out.data.?[dst_idx] = src[i];
+            }
+        }
+        col += 1;
+        i += 1;
+    }
+    return true;
+}
+
+fn flattenMarkedText(out: *RenderBuffer, src: []const u8) bool {
+    if (src.len == 0) return true;
+
+    var line_start: usize = 0;
+    var i: usize = 0;
+    while (true) : (i += 1) {
+        if (i == src.len) {
+            return appendFlattenedMarkedLine(out, src[line_start..i]);
+        }
+        if (src[i] != '\n') continue;
+        if (!appendFlattenedMarkedLine(out, src[line_start..i])) return false;
+        if (!out.appendByte('\n')) return false;
+        line_start = i + 1;
+    }
+}
+
 fn appendDescriptor(state: *FormattedWriteStreamState, conv: u8, arg: *anyopaque, kind: u8, arg_len: c_int, pos: *usize) c_int {
     switch (conv) {
         'I' => {
@@ -294,12 +402,50 @@ fn consumeWriteArg(state: *FormattedWriteStreamState, arg: *anyopaque, kind: u8,
     }
 }
 
+fn flushRemainingFormat(state: *FormattedWriteStreamState) c_int {
+    if (state.status != 0) return state.status;
+    while (state.fmt_pos < state.fmt.len and state.fmt[state.fmt_pos] != 0) {
+        const ch = state.fmt[state.fmt_pos];
+        if (ch == 0x03) {
+            state.fmt_pos += 1;
+            continue;
+        }
+        if (ch != '%') {
+            if (!state.out.appendByte(ch)) return failStream(state, 1);
+            state.fmt_pos += 1;
+            continue;
+        }
+
+        const next = state.fmt_pos + 1;
+        if (next < state.fmt.len and state.fmt[next] == '%') {
+            if (!state.out.appendByte('%')) return failStream(state, 1);
+            state.fmt_pos = next + 1;
+            continue;
+        }
+
+        // Stop before the next data descriptor once the I/O list is exhausted.
+        break;
+    }
+    return state.status;
+}
+
 fn finishWrite(state: *FormattedWriteStreamState) c_int {
     if (state.status != 0) return state.status;
+    if (flushRemainingFormat(state) != 0) return state.status;
     if (!state.out.terminate()) return failStream(state, 1);
     defer col6forge_fmt_release_all();
     return switch (state.dest) {
-        .external => |dest| col6forge_write_rendered_line_n(dest.unit, @ptrCast(state.out.data.?), @intCast(state.out.len), dest.strict_status),
+        .external => |dest| blk: {
+            var flattened: RenderBuffer = .{};
+            defer flattened.deinit();
+            if (!flattenMarkedText(&flattened, state.out.data.?[0..state.out.len])) break :blk 1;
+            const empty = [_]u8{0};
+            const rendered_ptr: [*]const u8 = if (flattened.len == 0)
+                &empty
+            else
+                flattened.data.?;
+            break :blk col6forge_write_rendered_line_n(dest.unit, @ptrCast(rendered_ptr), @intCast(flattened.len), dest.strict_status);
+        },
         .internal => |dest| blk: {
             if (dest.buf == null or dest.len <= 0 or dest.count <= 0) break :blk 1;
             if (dest.count > 1) {
@@ -333,7 +479,7 @@ pub export fn col6forge_formatted_write_stream_begin_dynamic(
     fmt_len: c_int,
     strict_status: c_int,
 ) callconv(.c) ?*anyopaque {
-    const lowered = dynamic_format.lowerFormat(.write_external, fmt_ptr, fmt_len, null, 0) catch return null;
+    const lowered = dynamic_format.lowerFormat(.write_stream_external, fmt_ptr, fmt_len, null, 0) catch return null;
     const state = std.heap.page_allocator.create(FormattedWriteStreamState) catch {
         if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
         return null;
@@ -370,7 +516,7 @@ pub export fn col6forge_write_internal_stream_begin_dynamic(
     fmt_ptr: ?[*]const u8,
     fmt_len: c_int,
 ) callconv(.c) ?*anyopaque {
-    const lowered = dynamic_format.lowerFormat(.write_internal, fmt_ptr, fmt_len, null, 0) catch return null;
+    const lowered = dynamic_format.lowerFormat(.write_stream_internal, fmt_ptr, fmt_len, null, 0) catch return null;
     const state = std.heap.page_allocator.create(FormattedWriteStreamState) catch {
         if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
         return null;
@@ -434,4 +580,48 @@ test "formatted write stream lowers runtime format expr for internal unit" {
     try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_write_stream_finish(state_any));
 
     try std.testing.expectEqualStrings("TEST:   7", buf[0..8]);
+}
+
+test "formatted write stream flattens external tab markers into final column order" {
+    var out: RenderBuffer = .{};
+    defer out.deinit();
+
+    const marked =
+        "                          123.40 567.80\x01T25\x02  12.34506.78 120.34 506.78";
+    try std.testing.expect(flattenMarkedText(&out, marked));
+    try std.testing.expectEqualStrings(
+        "                         12.34506.78 120.34 506.78 123.40 567.80",
+        out.data.?[0..out.len],
+    );
+}
+
+test "formatted write stream flushes literal-only tabbed format before finish" {
+    var state = FormattedWriteStreamState{
+        .dest = .{ .internal = .{ .buf = null, .len = 0, .count = 0 } },
+        .fmt = "                         \x01R26\x02 123.40 567.80\x01T25\x02  12.34506.78 120.34 506.78",
+    };
+    defer state.out.deinit();
+
+    try std.testing.expectEqual(@as(c_int, 0), flushRemainingFormat(&state));
+
+    var flattened: RenderBuffer = .{};
+    defer flattened.deinit();
+    try std.testing.expect(flattenMarkedText(&flattened, state.out.data.?[0..state.out.len]));
+    try std.testing.expectEqualStrings(
+        "                         12.34506.78 120.34 506.78 123.40 567.80",
+        flattened.data.?[0..flattened.len],
+    );
+}
+
+test "formatted write stream flattens multi-line literal tab markers" {
+    var out: RenderBuffer = .{};
+    defer out.deinit();
+
+    const marked =
+        "                           +3.0   4.0  +12345  +25.25   5.5\n\x01T40\x02 12345   25.25   5.5";
+    try std.testing.expect(flattenMarkedText(&out, marked));
+    try std.testing.expectEqualStrings(
+        "                           +3.0   4.0  +12345  +25.25   5.5\n                                       12345   25.25   5.5",
+        out.data.?[0..out.len],
+    );
 }

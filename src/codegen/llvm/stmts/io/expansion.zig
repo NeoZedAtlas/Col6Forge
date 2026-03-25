@@ -27,6 +27,8 @@ pub const ExpandedReadTargets = struct {
     types: std.array_list.Managed(llvm_types.IRType),
     char_lens: std.array_list.Managed(usize),
     complex_fixups: std.array_list.Managed(ComplexFixup),
+    implied_finals: []const ImpliedDoFinalState = &.{},
+    owns_implied_finals: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) ExpandedReadTargets {
         return .{
@@ -42,12 +44,15 @@ pub const ExpandedReadTargets = struct {
         self.types.deinit();
         self.char_lens.deinit();
         self.complex_fixups.deinit();
+        if (self.owns_implied_finals) self.ptrs.allocator.free(self.implied_finals);
     }
 };
 pub const ExpandedWriteValues = struct {
     values: std.array_list.Managed(ValueRef),
     char_lens: std.array_list.Managed(usize),
     source_ptrs: std.array_list.Managed(?ValueRef),
+    implied_finals: []const ImpliedDoFinalState = &.{},
+    owns_implied_finals: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) ExpandedWriteValues {
         return .{
@@ -61,6 +66,7 @@ pub const ExpandedWriteValues = struct {
         self.values.deinit();
         self.char_lens.deinit();
         self.source_ptrs.deinit();
+        if (self.owns_implied_finals) self.values.allocator.free(self.implied_finals);
     }
 };
 
@@ -72,12 +78,17 @@ fn appendWriteValue(expanded: *ExpandedWriteValues, value: ValueRef, char_len: u
 
 pub const ExpandedIoArgs = struct {
     items: []*ast.Expr,
+    implied_finals: []const ImpliedDoFinalState = &.{},
     clone_arena: ?std.heap.ArenaAllocator = null,
     owns_items: bool = false,
+    owns_implied_finals: bool = false,
 
     pub fn deinit(self: *ExpandedIoArgs, allocator: std.mem.Allocator) void {
         if (self.owns_items) {
             allocator.free(self.items);
+        }
+        if (self.owns_implied_finals) {
+            allocator.free(self.implied_finals);
         }
         if (self.clone_arena) |*arena| {
             arena.deinit();
@@ -85,10 +96,18 @@ pub const ExpandedIoArgs = struct {
     }
 };
 
+pub const ImpliedDoFinalState = struct {
+    var_name: []const u8,
+    value: i64,
+};
+
 pub fn expandReadTargets(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitError!ExpandedReadTargets {
     var expanded = ExpandedReadTargets.init(ctx.allocator);
     var flat_args = try expandIoArgs(ctx, args);
     defer flat_args.deinit(ctx.allocator);
+    expanded.implied_finals = flat_args.implied_finals;
+    expanded.owns_implied_finals = flat_args.owns_implied_finals;
+    flat_args.owns_implied_finals = false;
     for (flat_args.items) |arg| {
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
@@ -206,27 +225,32 @@ pub fn expandIoArgs(ctx: *Context, args: []*ast.Expr) EmitError!ExpandedIoArgs {
 
     var expanded = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
     errdefer expanded.deinit();
+    var implied_finals = std.array_list.Managed(ImpliedDoFinalState).init(ctx.allocator);
+    errdefer implied_finals.deinit();
     const clone_allocator = clone_arena.allocator();
 
     for (args) |arg| {
-        try appendExpandedIoArg(ctx, clone_allocator, &expanded, arg);
+        try appendExpandedIoArg(ctx, clone_allocator, &expanded, &implied_finals, arg);
     }
 
     return .{
         .items = try expanded.toOwnedSlice(),
+        .implied_finals = try implied_finals.toOwnedSlice(),
         .clone_arena = clone_arena,
         .owns_items = true,
+        .owns_implied_finals = true,
     };
 }
 fn appendExpandedIoArg(
     ctx: *Context,
     clone_allocator: std.mem.Allocator,
     expanded: *std.array_list.Managed(*ast.Expr),
+    implied_finals: *std.array_list.Managed(ImpliedDoFinalState),
     arg: *ast.Expr,
 ) EmitError!void {
     if (try flattenIoArrayValuedExpr(ctx, clone_allocator, arg)) |items| {
         for (items) |item| {
-            try appendExpandedIoArg(ctx, clone_allocator, expanded, item);
+            try appendExpandedIoArg(ctx, clone_allocator, expanded, implied_finals, item);
         }
         return;
     }
@@ -234,18 +258,26 @@ fn appendExpandedIoArg(
         const implied_expanded = try expandImpliedDo(ctx, clone_allocator, arg.implied_do);
         defer ctx.allocator.free(implied_expanded);
         for (implied_expanded) |item| {
-            try appendExpandedIoArg(ctx, clone_allocator, expanded, item);
+            try appendExpandedIoArg(ctx, clone_allocator, expanded, implied_finals, item.expr);
         }
+        try implied_finals.append(.{
+            .var_name = arg.implied_do.var_name,
+            .value = try impliedFinalValue(ctx, arg.implied_do),
+        });
         return;
     }
     if (arg.* == .array_constructor) {
         for (arg.array_constructor.items) |item| {
-            try appendExpandedIoArg(ctx, clone_allocator, expanded, item);
+            try appendExpandedIoArg(ctx, clone_allocator, expanded, implied_finals, item);
         }
         return;
     }
     try expanded.append(arg);
 }
+
+const ExpandedImpliedItem = struct {
+    expr: *ast.Expr,
+};
 
 fn flattenIoArrayValuedExpr(
     ctx: *Context,
@@ -377,7 +409,7 @@ fn flattenVectorSubscriptItems(
     return items;
 }
 
-fn expandImpliedDo(ctx: *Context, clone_allocator: std.mem.Allocator, implied: ast.ImpliedDo) EmitError![]*ast.Expr {
+fn expandImpliedDo(ctx: *Context, clone_allocator: std.mem.Allocator, implied: ast.ImpliedDo) EmitError![]ExpandedImpliedItem {
     const start_val_opt = try evalImpliedDoBound(ctx, implied.start);
     const end_val_opt = try evalImpliedDoBound(ctx, implied.end);
     const step_val_opt = if (implied.step) |step| try evalImpliedDoBound(ctx, step) else 1;
@@ -398,7 +430,7 @@ fn expandImpliedDo(ctx: *Context, clone_allocator: std.mem.Allocator, implied: a
     const expanded_len = std.math.mul(usize, iter_count, implied.items.len) catch return error.ImpliedDoExpansionTooLarge;
     if (expanded_len > max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
 
-    var expanded = std.array_list.Managed(*ast.Expr).init(ctx.allocator);
+    var expanded = std.array_list.Managed(ExpandedImpliedItem).init(ctx.allocator);
     errdefer expanded.deinit();
     try expanded.ensureTotalCapacity(expanded_len);
 
@@ -415,7 +447,7 @@ fn expandImpliedDo(ctx: *Context, clone_allocator: std.mem.Allocator, implied: a
             for (implied.items) |item| {
                 if (emitted >= max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
                 const clone = try cloneExprWithSubst(ctx, clone_allocator, item, implied.var_name, &iter_expr);
-                try expanded.append(clone);
+                try expanded.append(.{ .expr = clone });
                 emitted += 1;
             }
         }
@@ -430,13 +462,30 @@ fn expandImpliedDo(ctx: *Context, clone_allocator: std.mem.Allocator, implied: a
             for (implied.items) |item| {
                 if (emitted >= max_implied_do_expansion) return error.ImpliedDoExpansionTooLarge;
                 const clone = try cloneExprWithSubst(ctx, clone_allocator, item, implied.var_name, &iter_expr);
-                try expanded.append(clone);
+                try expanded.append(.{ .expr = clone });
                 emitted += 1;
             }
         }
     }
 
     return expanded.toOwnedSlice();
+}
+
+fn impliedFinalValue(ctx: *Context, implied: ast.ImpliedDo) EmitError!i64 {
+    const start_val = (try evalImpliedDoBound(ctx, implied.start)) orelse 1;
+    const step_val = if (implied.step) |step|
+        (try evalImpliedDoBound(ctx, step)) orelse 1
+    else
+        1;
+    if (step_val == 0) return error.UnsupportedImpliedDo;
+    var end_val = (try evalImpliedDoBound(ctx, implied.end));
+    if (end_val == null) {
+        end_val = inferImpliedDoEndFromItems(ctx, implied);
+    }
+    const end_val_final = end_val orelse start_val;
+    const iter_count = try impliedDoIterationCount(start_val, end_val_final, step_val);
+    if (iter_count == 0) return start_val;
+    return start_val + (step_val * @as(i64, @intCast(iter_count)));
 }
 
 fn impliedDoIterationCount(start_val: i64, end_val: i64, step_val: i64) EmitError!usize {
@@ -795,6 +844,9 @@ pub fn expandWriteArgs(ctx: *Context, builder: anytype, args: []*ast.Expr) EmitE
     var expanded = ExpandedWriteValues.init(ctx.allocator);
     var flat_args = try expandIoArgs(ctx, args);
     defer flat_args.deinit(ctx.allocator);
+    expanded.implied_finals = flat_args.implied_finals;
+    expanded.owns_implied_finals = flat_args.owns_implied_finals;
+    flat_args.owns_implied_finals = false;
     for (flat_args.items) |arg| {
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
@@ -889,6 +941,9 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
     var expanded = ExpandedWriteValues.init(ctx.allocator);
     var flat_args = try expandIoArgs(ctx, args);
     defer flat_args.deinit(ctx.allocator);
+    expanded.implied_finals = flat_args.implied_finals;
+    expanded.owns_implied_finals = flat_args.owns_implied_finals;
+    flat_args.owns_implied_finals = false;
     for (flat_args.items) |arg| {
         if (arg.* == .identifier) {
             const sym = ctx.findSymbol(arg.identifier) orelse return error.UnknownSymbol;
@@ -944,4 +999,25 @@ pub fn expandWriteArgsList(ctx: *Context, builder: anytype, args: []*ast.Expr) E
         try appendWriteValue(&expanded, value, len, source_ptr);
     }
     return expanded;
+}
+
+pub fn emitImpliedDoFinalStores(
+    ctx: *Context,
+    builder: anytype,
+    finals: []const ImpliedDoFinalState,
+) EmitError!void {
+    for (finals) |final_state| {
+        const sym = ctx.findSymbol(final_state.var_name) orelse return error.UnknownSymbol;
+        const ptr = try ctx.getPointer(final_state.var_name);
+        const ty = ctx.typeFromKind(sym.loweredKind());
+        var value = ValueRef{
+            .name = try ctx.intLiteral(final_state.value),
+            .ty = .i32,
+            .is_ptr = false,
+        };
+        if (ty != .i32) {
+            value = try expr.coerce(ctx, builder, value, ty);
+        }
+        try builder.store(value, ptr);
+    }
 }

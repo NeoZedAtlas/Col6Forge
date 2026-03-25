@@ -3,10 +3,14 @@ const shared = @import("shared.zig");
 
 const COL6FORGE_LIST_TOKEN_MAX = shared.COL6FORGE_LIST_TOKEN_MAX;
 const ListInput = shared.ListInput;
+const ListReadCursor = shared.ListReadCursor;
+const ListReadItemResult = shared.ListReadItemResult;
+const initListReadCursor = shared.initListReadCursor;
 const col6forgeOpenListInput = shared.col6forgeOpenListInput;
 const col6forgeCloseListInput = shared.col6forgeCloseListInput;
 const col6forgeDiscardToRecordEnd = shared.col6forgeDiscardToRecordEnd;
-const col6forgeReadListTokenStream = shared.col6forgeReadListTokenStream;
+const col6forgeReadListItemForKind = shared.col6forgeReadListItemForKind;
+const applyListItemToArg = shared.applyListItemToArg;
 const col6forge_io_should_abort = shared.col6forge_io_should_abort;
 const col6forge_report_runtime_io_fatal = shared.col6forge_report_runtime_io_fatal;
 const exit = shared.exit;
@@ -14,26 +18,20 @@ const runtimeArgCount = shared.runtimeArgCount;
 const runtimeArgPtrAt = shared.runtimeArgPtrAt;
 const runtimeArgKindAt = shared.runtimeArgKindAt;
 const runtimeArgLenAt = shared.runtimeArgLenAt;
-const parseIntegerToken = shared.parseIntegerToken;
-const parseInteger64Token = shared.parseInteger64Token;
-const parseFloat32Token = shared.parseFloat32Token;
-const parseFloat64Token = shared.parseFloat64Token;
 const shouldGracefullyExitOnListReadEof = shared.shouldGracefullyExitOnListReadEof;
-const cstrlenRaw = shared.cstrlenRaw;
 const checkedMulI64 = shared.checkedMulI64;
 const offsetBytes = shared.offsetBytes;
-const asConstCStr = shared.asConstCStr;
-const col6forge_parse_logical_field = shared.col6forge_parse_logical_field;
-const ReadTokenResult = shared.ReadTokenResult;
 
 pub const ListReadStreamState = struct {
     unit: c_int,
     input: ?ListInput,
     input_opened: bool,
     commit_pos: bool,
+    terminated: bool,
     status_mode: c_int,
     status: c_int,
     token: [COL6FORGE_LIST_TOKEN_MAX]u8,
+    cursor: ListReadCursor,
 };
 
 fn allocListReadStreamState(unit: c_int, input: ?ListInput, status_mode: c_int, status: c_int) ?*ListReadStreamState {
@@ -43,9 +41,11 @@ fn allocListReadStreamState(unit: c_int, input: ?ListInput, status_mode: c_int, 
         .input = input,
         .input_opened = input != null,
         .commit_pos = false,
+        .terminated = false,
         .status_mode = status_mode,
         .status = status,
         .token = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX,
+        .cursor = initListReadCursor(),
     };
     return state;
 }
@@ -97,89 +97,47 @@ fn listReadStreamFail(stream: *ListReadStreamState, code: c_int) c_int {
     return stream.status;
 }
 
-fn listReadStreamReadToken(stream: *ListReadStreamState) ?[]u8 {
-    if (stream.status != 0) return null;
+fn listReadStreamReadItem(stream: *ListReadStreamState, requested_kind: u8) ListReadItemResult {
+    if (stream.status != 0) return .overflow;
+    if (stream.terminated) return .end;
     const input = stream.input orelse {
         _ = listReadStreamFail(stream, 1);
-        return null;
+        return .overflow;
     };
-    switch (col6forgeReadListTokenStream(input.file, stream.token[0..])) {
-        .ok => return stream.token[0..],
+    switch (col6forgeReadListItemForKind(input.file, &stream.cursor, stream.token[0..], requested_kind)) {
+        .value => return .value,
+        .null => return .null,
+        .end => {
+            stream.terminated = true;
+            return .end;
+        },
         .eof => {
             _ = listReadStreamFail(stream, -1);
-            return null;
+            return .eof;
         },
         .overflow => {
             _ = listReadStreamFail(stream, 1);
-            return null;
+            return .overflow;
         },
     }
 }
 
 fn listReadStreamReadTypedArg(stream: *ListReadStreamState, kind: u8, arg: ?*anyopaque, len_raw: c_int) c_int {
-    const ptr = arg orelse return listReadStreamFail(stream, 1);
-    switch (kind) {
-        'i' => {
-            const token = listReadStreamReadToken(stream) orelse return stream.status;
-            const out: *c_int = @ptrCast(@alignCast(ptr));
-            out.* = parseIntegerToken(token) orelse return listReadStreamFail(stream, 1);
+    const item_kind = listReadStreamReadItem(stream, kind);
+    switch (item_kind) {
+        .value, .null => {
+            if (!applyListItemToArg(kind, arg, len_raw, item_kind, stream.token[0..])) {
+                return listReadStreamFail(stream, 1);
+            }
         },
-        'j' => {
-            const token = listReadStreamReadToken(stream) orelse return stream.status;
-            const out: *i64 = @ptrCast(@alignCast(ptr));
-            out.* = parseInteger64Token(token) orelse return listReadStreamFail(stream, 1);
-        },
-        'f' => {
-            const token = listReadStreamReadToken(stream) orelse return stream.status;
-            const out: *f32 = @ptrCast(@alignCast(ptr));
-            out.* = parseFloat32Token(token) orelse return listReadStreamFail(stream, 1);
-        },
-        'd' => {
-            const token = listReadStreamReadToken(stream) orelse return stream.status;
-            const out: *f64 = @ptrCast(@alignCast(ptr));
-            out.* = parseFloat64Token(token) orelse return listReadStreamFail(stream, 1);
-        },
-        'l' => {
-            const token = listReadStreamReadToken(stream) orelse return stream.status;
-            const out: *u8 = @ptrCast(@alignCast(ptr));
-            out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&stream.token), @intCast(cstrlenRaw(token))));
-        },
-        's' => {
-            const token = listReadStreamReadToken(stream) orelse return stream.status;
-            const out: [*]u8 = @ptrCast(ptr);
-            const len: usize = @intCast(@max(len_raw, 0));
-            var idx: usize = 0;
-            while (idx < len) : (idx += 1) out[idx] = ' ';
-            const token_len = cstrlenRaw(token);
-            const copy_len = @min(token_len, len);
-            idx = 0;
-            while (idx < copy_len) : (idx += 1) out[idx] = token[idx];
-        },
-        'c' => {
-            const real_token = listReadStreamReadToken(stream) orelse return stream.status;
-            const real = parseFloat32Token(real_token) orelse return listReadStreamFail(stream, 1);
-            const imag_token = listReadStreamReadToken(stream) orelse return stream.status;
-            const imag = parseFloat32Token(imag_token) orelse return listReadStreamFail(stream, 1);
-            const out: [*]f32 = @ptrCast(@alignCast(ptr));
-            out[0] = real;
-            out[1] = imag;
-        },
-        'z' => {
-            const real_token = listReadStreamReadToken(stream) orelse return stream.status;
-            const real = parseFloat64Token(real_token) orelse return listReadStreamFail(stream, 1);
-            const imag_token = listReadStreamReadToken(stream) orelse return stream.status;
-            const imag = parseFloat64Token(imag_token) orelse return listReadStreamFail(stream, 1);
-            const out: [*]f64 = @ptrCast(@alignCast(ptr));
-            out[0] = real;
-            out[1] = imag;
-        },
-        else => return listReadStreamFail(stream, 1),
+        .end => return stream.status,
+        .eof, .overflow => return stream.status,
     }
     return stream.status;
 }
 
 fn listReadStreamReadBlock(stream: *ListReadStreamState, kind_u8: u8, count: usize, stride: c_int, base_any: ?*anyopaque) c_int {
-    if (stream.status != 0 or count == 0) return stream.status;
+    if (stream.status != 0 or stream.terminated or count == 0) return stream.status;
     if (stride == 0) return listReadStreamFail(stream, 1);
     const base = base_any orelse return listReadStreamFail(stream, 1);
 
@@ -189,11 +147,12 @@ fn listReadStreamReadBlock(stream: *ListReadStreamState, kind_u8: u8, count: usi
             const byte_stride = checkedMulI64(stride, @sizeOf(c_int)) orelse return listReadStreamFail(stream, 1);
             var idx: usize = 0;
             while (idx < count) : (idx += 1) {
-                const token = listReadStreamReadToken(stream) orelse return stream.status;
+                const item_kind = listReadStreamReadItem(stream, 'i');
+                if (item_kind == .end) return stream.status;
+                if (item_kind == .eof or item_kind == .overflow) return stream.status;
                 const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
                 const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
-                const dst: *c_int = @ptrCast(@alignCast(ptr));
-                dst.* = parseIntegerToken(token) orelse return listReadStreamFail(stream, 1);
+                if (!applyListItemToArg('i', ptr, 0, item_kind, stream.token[0..])) return listReadStreamFail(stream, 1);
             }
         },
         'j' => {
@@ -201,11 +160,12 @@ fn listReadStreamReadBlock(stream: *ListReadStreamState, kind_u8: u8, count: usi
             const byte_stride = checkedMulI64(stride, @sizeOf(i64)) orelse return listReadStreamFail(stream, 1);
             var idx: usize = 0;
             while (idx < count) : (idx += 1) {
-                const token = listReadStreamReadToken(stream) orelse return stream.status;
+                const item_kind = listReadStreamReadItem(stream, 'j');
+                if (item_kind == .end) return stream.status;
+                if (item_kind == .eof or item_kind == .overflow) return stream.status;
                 const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
                 const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
-                const dst: *i64 = @ptrCast(@alignCast(ptr));
-                dst.* = parseInteger64Token(token) orelse return listReadStreamFail(stream, 1);
+                if (!applyListItemToArg('j', ptr, 0, item_kind, stream.token[0..])) return listReadStreamFail(stream, 1);
             }
         },
         'f' => {
@@ -213,11 +173,12 @@ fn listReadStreamReadBlock(stream: *ListReadStreamState, kind_u8: u8, count: usi
             const byte_stride = checkedMulI64(stride, @sizeOf(f32)) orelse return listReadStreamFail(stream, 1);
             var idx: usize = 0;
             while (idx < count) : (idx += 1) {
-                const token = listReadStreamReadToken(stream) orelse return stream.status;
+                const item_kind = listReadStreamReadItem(stream, 'f');
+                if (item_kind == .end) return stream.status;
+                if (item_kind == .eof or item_kind == .overflow) return stream.status;
                 const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
                 const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
-                const dst: *f32 = @ptrCast(@alignCast(ptr));
-                dst.* = parseFloat32Token(token) orelse return listReadStreamFail(stream, 1);
+                if (!applyListItemToArg('f', ptr, 0, item_kind, stream.token[0..])) return listReadStreamFail(stream, 1);
             }
         },
         'd' => {
@@ -225,21 +186,24 @@ fn listReadStreamReadBlock(stream: *ListReadStreamState, kind_u8: u8, count: usi
             const byte_stride = checkedMulI64(stride, @sizeOf(f64)) orelse return listReadStreamFail(stream, 1);
             var idx: usize = 0;
             while (idx < count) : (idx += 1) {
-                const token = listReadStreamReadToken(stream) orelse return stream.status;
+                const item_kind = listReadStreamReadItem(stream, 'd');
+                if (item_kind == .end) return stream.status;
+                if (item_kind == .eof or item_kind == .overflow) return stream.status;
                 const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
                 const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
-                const dst: *f64 = @ptrCast(@alignCast(ptr));
-                dst.* = parseFloat64Token(token) orelse return listReadStreamFail(stream, 1);
+                if (!applyListItemToArg('d', ptr, 0, item_kind, stream.token[0..])) return listReadStreamFail(stream, 1);
             }
         },
         'l' => {
             const raw: [*]u8 = @ptrCast(base);
             var idx: usize = 0;
             while (idx < count) : (idx += 1) {
-                const token = listReadStreamReadToken(stream) orelse return stream.status;
+                const item_kind = listReadStreamReadItem(stream, 'l');
+                if (item_kind == .end) return stream.status;
+                if (item_kind == .eof or item_kind == .overflow) return stream.status;
                 const off = checkedMulI64(@intCast(idx), stride) orelse return listReadStreamFail(stream, 1);
                 const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
-                ptr[0] = @intCast(col6forge_parse_logical_field(asConstCStr(&stream.token), @intCast(cstrlenRaw(token))));
+                if (!applyListItemToArg('l', ptr, 0, item_kind, stream.token[0..])) return listReadStreamFail(stream, 1);
             }
         },
         'c' => {
@@ -247,15 +211,12 @@ fn listReadStreamReadBlock(stream: *ListReadStreamState, kind_u8: u8, count: usi
             const byte_stride = checkedMulI64(stride, 2 * @sizeOf(f32)) orelse return listReadStreamFail(stream, 1);
             var idx: usize = 0;
             while (idx < count) : (idx += 1) {
-                const real_token = listReadStreamReadToken(stream) orelse return stream.status;
-                const real = parseFloat32Token(real_token) orelse return listReadStreamFail(stream, 1);
-                const imag_token = listReadStreamReadToken(stream) orelse return stream.status;
-                const imag = parseFloat32Token(imag_token) orelse return listReadStreamFail(stream, 1);
+                const item_kind = listReadStreamReadItem(stream, 'c');
+                if (item_kind == .end) return stream.status;
+                if (item_kind == .eof or item_kind == .overflow) return stream.status;
                 const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
                 const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
-                const dst: [*]f32 = @ptrCast(@alignCast(ptr));
-                dst[0] = real;
-                dst[1] = imag;
+                if (!applyListItemToArg('c', ptr, 0, item_kind, stream.token[0..])) return listReadStreamFail(stream, 1);
             }
         },
         'z' => {
@@ -263,15 +224,12 @@ fn listReadStreamReadBlock(stream: *ListReadStreamState, kind_u8: u8, count: usi
             const byte_stride = checkedMulI64(stride, 2 * @sizeOf(f64)) orelse return listReadStreamFail(stream, 1);
             var idx: usize = 0;
             while (idx < count) : (idx += 1) {
-                const real_token = listReadStreamReadToken(stream) orelse return stream.status;
-                const real = parseFloat64Token(real_token) orelse return listReadStreamFail(stream, 1);
-                const imag_token = listReadStreamReadToken(stream) orelse return stream.status;
-                const imag = parseFloat64Token(imag_token) orelse return listReadStreamFail(stream, 1);
+                const item_kind = listReadStreamReadItem(stream, 'z');
+                if (item_kind == .end) return stream.status;
+                if (item_kind == .eof or item_kind == .overflow) return stream.status;
                 const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadStreamFail(stream, 1);
                 const ptr = offsetBytes(raw, off) orelse return listReadStreamFail(stream, 1);
-                const dst: [*]f64 = @ptrCast(@alignCast(ptr));
-                dst[0] = real;
-                dst[1] = imag;
+                if (!applyListItemToArg('z', ptr, 0, item_kind, stream.token[0..])) return listReadStreamFail(stream, 1);
             }
         },
         else => return listReadStreamFail(stream, 1),
@@ -287,7 +245,7 @@ pub fn listReadStreamTransferTyped(
     arg_count: c_int,
 ) c_int {
     const stream = state orelse return 1;
-    if (stream.status != 0) return stream.status;
+    if (stream.status != 0 or stream.terminated) return stream.status;
 
     const total = runtimeArgCount(arg_count);
     var idx: usize = 0;

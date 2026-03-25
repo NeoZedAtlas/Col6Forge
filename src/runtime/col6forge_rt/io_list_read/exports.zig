@@ -2,26 +2,23 @@ const shared = @import("shared.zig");
 const stream = @import("stream.zig");
 
 const COL6FORGE_LIST_TOKEN_MAX = shared.COL6FORGE_LIST_TOKEN_MAX;
+const ListReadCursor = shared.ListReadCursor;
+const ListReadItemResult = shared.ListReadItemResult;
 const runtimeArgCount = shared.runtimeArgCount;
 const runtimeArgPtrAt = shared.runtimeArgPtrAt;
 const runtimeArgKindAt = shared.runtimeArgKindAt;
 const runtimeArgLenAt = shared.runtimeArgLenAt;
 const checkedMulI64 = shared.checkedMulI64;
 const offsetBytes = shared.offsetBytes;
-const cstrlenRaw = shared.cstrlenRaw;
-const parseIntegerToken = shared.parseIntegerToken;
-const parseInteger64Token = shared.parseInteger64Token;
-const parseFloat32Token = shared.parseFloat32Token;
-const parseFloat64Token = shared.parseFloat64Token;
-const asConstCStr = shared.asConstCStr;
+const initListReadCursor = shared.initListReadCursor;
+const applyListItemToArg = shared.applyListItemToArg;
 const col6forgeOpenListInput = shared.col6forgeOpenListInput;
 const col6forgeCloseListInput = shared.col6forgeCloseListInput;
-const col6forgeReadListTokenStream = shared.col6forgeReadListTokenStream;
+const col6forgeReadListItemForKind = shared.col6forgeReadListItemForKind;
 const col6forgeDiscardToRecordEnd = shared.col6forgeDiscardToRecordEnd;
 const listReadFailWithContext = shared.listReadFailWithContext;
 const col6forge_io_should_abort = shared.col6forge_io_should_abort;
 const col6forge_report_runtime_io_fatal = shared.col6forge_report_runtime_io_fatal;
-const col6forge_parse_logical_field = shared.col6forge_parse_logical_field;
 const exit = shared.exit;
 const beginListReadStream = stream.beginListReadStream;
 const listReadStreamStateFromOpaque = stream.listReadStreamStateFromOpaque;
@@ -65,173 +62,106 @@ pub export fn col6forge_list_read_stream_finish(state_any: ?*anyopaque) callconv
     return list_stream.status;
 }
 
-pub export fn col6forge_read_list_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
-    if (base == null or count <= 0 or stride == 0) return 0;
+fn readListItemOrFinish(
+    file: *shared.FILE,
+    cursor: *ListReadCursor,
+    token: []u8,
+    commit_pos: *bool,
+    requested_kind: u8,
+) ListReadItemResult {
+    switch (col6forgeReadListItemForKind(file, cursor, token, requested_kind)) {
+        .end => {
+            col6forgeDiscardToRecordEnd(file);
+            commit_pos.* = true;
+            return .end;
+        },
+        else => |res| return res,
+    }
+}
+
+fn readListBlock(
+    unit: c_int,
+    count: c_int,
+    byte_stride: i64,
+    base: ?*anyopaque,
+    kind: u8,
+) c_int {
+    if (base == null or count <= 0 or byte_stride == 0) return 0;
 
     const input = col6forgeOpenListInput(unit) orelse return -1;
     var commit_pos = false;
     defer col6forgeCloseListInput(unit, input, commit_pos);
     const file = input.file;
 
-    const out: [*]u8 = @ptrCast(base.?);
-    const byte_stride = checkedMulI64(stride, @sizeOf(c_int)) orelse return -1;
     var token: [COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX;
-    var i: c_int = 0;
-    while (i < count) : (i += 1) {
-        if (col6forgeReadListTokenStream(file, token[0..]) != .ok) return -1;
-        const off = checkedMulI64(i, byte_stride) orelse return -1;
-        const ptr = offsetBytes(out, off) orelse return -1;
-        const dst: *c_int = @ptrCast(@alignCast(ptr));
-        dst.* = parseIntegerToken(token[0..]) orelse return -1;
+    var cursor = initListReadCursor();
+    const raw: [*]u8 = @ptrCast(base.?);
+
+    var idx: c_int = 0;
+    while (idx < count) : (idx += 1) {
+        const item_kind = readListItemOrFinish(file, &cursor, token[0..], &commit_pos, kind);
+        switch (item_kind) {
+            .value, .null => {},
+            .end => return 0,
+            .eof, .overflow => return -1,
+        }
+
+        const off = checkedMulI64(idx, byte_stride) orelse return -1;
+        const ptr = offsetBytes(raw, off) orelse return -1;
+        if (!applyListItemToArg(kind, ptr, 0, item_kind, token[0..])) return -1;
     }
+
     col6forgeDiscardToRecordEnd(file);
     commit_pos = true;
     return 0;
+}
+
+pub export fn col6forge_read_list_i32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]c_int) callconv(.c) c_int {
+    return readListBlock(unit, count, checkedMulI64(stride, @sizeOf(c_int)) orelse return -1, if (base) |ptr| @ptrCast(ptr) else null, 'i');
 }
 
 pub export fn col6forge_read_list_i64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]i64) callconv(.c) c_int {
-    if (base == null or count <= 0 or stride == 0) return 0;
-
-    const input = col6forgeOpenListInput(unit) orelse return -1;
-    var commit_pos = false;
-    defer col6forgeCloseListInput(unit, input, commit_pos);
-    const file = input.file;
-
-    const out: [*]u8 = @ptrCast(base.?);
-    const byte_stride = checkedMulI64(stride, @sizeOf(i64)) orelse return -1;
-    var token: [COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX;
-    var i: c_int = 0;
-    while (i < count) : (i += 1) {
-        if (col6forgeReadListTokenStream(file, token[0..]) != .ok) return -1;
-        const off = checkedMulI64(i, byte_stride) orelse return -1;
-        const ptr = offsetBytes(out, off) orelse return -1;
-        const dst: *i64 = @ptrCast(@alignCast(ptr));
-        dst.* = parseInteger64Token(token[0..]) orelse return -1;
-    }
-    col6forgeDiscardToRecordEnd(file);
-    commit_pos = true;
-    return 0;
+    return readListBlock(unit, count, checkedMulI64(stride, @sizeOf(i64)) orelse return -1, if (base) |ptr| @ptrCast(ptr) else null, 'j');
 }
 
 pub export fn col6forge_read_list_f32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
-    if (base == null or count <= 0 or stride == 0) return 0;
-
-    const input = col6forgeOpenListInput(unit) orelse return -1;
-    var commit_pos = false;
-    defer col6forgeCloseListInput(unit, input, commit_pos);
-    const file = input.file;
-
-    const out: [*]u8 = @ptrCast(base.?);
-    const byte_stride = checkedMulI64(stride, @sizeOf(f32)) orelse return -1;
-    var token: [COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX;
-    var i: c_int = 0;
-    while (i < count) : (i += 1) {
-        if (col6forgeReadListTokenStream(file, token[0..]) != .ok) return -1;
-        const off = checkedMulI64(i, byte_stride) orelse return -1;
-        const ptr = offsetBytes(out, off) orelse return -1;
-        const dst: *f32 = @ptrCast(@alignCast(ptr));
-        dst.* = parseFloat32Token(token[0..]) orelse return -1;
-    }
-    col6forgeDiscardToRecordEnd(file);
-    commit_pos = true;
-    return 0;
+    return readListBlock(unit, count, checkedMulI64(stride, @sizeOf(f32)) orelse return -1, if (base) |ptr| @ptrCast(ptr) else null, 'f');
 }
 
 pub export fn col6forge_read_list_f64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
-    if (base == null or count <= 0 or stride == 0) return 0;
-
-    const input = col6forgeOpenListInput(unit) orelse return -1;
-    var commit_pos = false;
-    defer col6forgeCloseListInput(unit, input, commit_pos);
-    const file = input.file;
-
-    const out: [*]u8 = @ptrCast(base.?);
-    const byte_stride = checkedMulI64(stride, @sizeOf(f64)) orelse return -1;
-    var token: [COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX;
-    var i: c_int = 0;
-    while (i < count) : (i += 1) {
-        if (col6forgeReadListTokenStream(file, token[0..]) != .ok) return -1;
-        const off = checkedMulI64(i, byte_stride) orelse return -1;
-        const ptr = offsetBytes(out, off) orelse return -1;
-        const dst: *f64 = @ptrCast(@alignCast(ptr));
-        dst.* = parseFloat64Token(token[0..]) orelse return -1;
-    }
-    col6forgeDiscardToRecordEnd(file);
-    commit_pos = true;
-    return 0;
+    return readListBlock(unit, count, checkedMulI64(stride, @sizeOf(f64)) orelse return -1, if (base) |ptr| @ptrCast(ptr) else null, 'd');
 }
 
 pub export fn col6forge_read_list_c32_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f32) callconv(.c) c_int {
-    if (base == null or count <= 0 or stride == 0) return 0;
-
-    const input = col6forgeOpenListInput(unit) orelse return -1;
-    var commit_pos = false;
-    defer col6forgeCloseListInput(unit, input, commit_pos);
-    const file = input.file;
-
-    const out: [*]u8 = @ptrCast(base.?);
-    const byte_stride = checkedMulI64(stride, 2 * @sizeOf(f32)) orelse return -1;
-    var token: [COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX;
-    var i: c_int = 0;
-    while (i < count) : (i += 1) {
-        if (col6forgeReadListTokenStream(file, token[0..]) != .ok) return -1;
-        const off = checkedMulI64(i, byte_stride) orelse return -1;
-        const ptr = offsetBytes(out, off) orelse return -1;
-        const dst: [*]f32 = @ptrCast(@alignCast(ptr));
-        dst[0] = parseFloat32Token(token[0..]) orelse return -1;
-        dst[1] = 0.0;
-    }
-    col6forgeDiscardToRecordEnd(file);
-    commit_pos = true;
-    return 0;
+    return readListBlock(unit, count, checkedMulI64(stride, 2 * @sizeOf(f32)) orelse return -1, if (base) |ptr| @ptrCast(ptr) else null, 'c');
 }
 
 pub export fn col6forge_read_list_c64_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]f64) callconv(.c) c_int {
-    if (base == null or count <= 0 or stride == 0) return 0;
-
-    const input = col6forgeOpenListInput(unit) orelse return -1;
-    var commit_pos = false;
-    defer col6forgeCloseListInput(unit, input, commit_pos);
-    const file = input.file;
-
-    const out: [*]u8 = @ptrCast(base.?);
-    const byte_stride = checkedMulI64(stride, 2 * @sizeOf(f64)) orelse return -1;
-    var token: [COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX;
-    var i: c_int = 0;
-    while (i < count) : (i += 1) {
-        if (col6forgeReadListTokenStream(file, token[0..]) != .ok) return -1;
-        const off = checkedMulI64(i, byte_stride) orelse return -1;
-        const ptr = offsetBytes(out, off) orelse return -1;
-        const dst: [*]f64 = @ptrCast(@alignCast(ptr));
-        dst[0] = parseFloat64Token(token[0..]) orelse return -1;
-        dst[1] = 0.0;
-    }
-    col6forgeDiscardToRecordEnd(file);
-    commit_pos = true;
-    return 0;
+    return readListBlock(unit, count, checkedMulI64(stride, 2 * @sizeOf(f64)) orelse return -1, if (base) |ptr| @ptrCast(ptr) else null, 'z');
 }
 
 pub export fn col6forge_read_list_l_n(unit: c_int, count: c_int, stride: c_int, base: ?[*]u8) callconv(.c) c_int {
-    if (base == null or count <= 0 or stride == 0) return 0;
+    return readListBlock(unit, count, stride, if (base) |ptr| @ptrCast(ptr) else null, 'l');
+}
 
-    const input = col6forgeOpenListInput(unit) orelse return -1;
-    var commit_pos = false;
-    defer col6forgeCloseListInput(unit, input, commit_pos);
-    const file = input.file;
-
-    const out: [*]u8 = @ptrCast(base.?);
-    var token: [COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX;
-    var i: c_int = 0;
-    while (i < count) : (i += 1) {
-        if (col6forgeReadListTokenStream(file, token[0..]) != .ok) return -1;
-        const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
-        const off = checkedMulI64(i, stride) orelse return -1;
-        const ptr = offsetBytes(out, off) orelse return -1;
-        ptr[0] = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
-    }
-    col6forgeDiscardToRecordEnd(file);
-    commit_pos = true;
-    return 0;
+fn handleReadItemStatus(
+    unit: c_int,
+    status_mode: c_int,
+    item_kind: ListReadItemResult,
+    input: *const shared.ListInput,
+    input_closed: *bool,
+    commit_pos: *bool,
+) ?c_int {
+    return switch (item_kind) {
+        .value, .null => null,
+        .end => blk: {
+            col6forgeDiscardToRecordEnd(input.file);
+            commit_pos.* = true;
+            break :blk 0;
+        },
+        .eof => listReadFailWithContext(unit, status_mode, -1, input, input_closed, commit_pos.*),
+        .overflow => listReadFailWithContext(unit, status_mode, 1, input, input_closed, commit_pos.*),
+    };
 }
 
 pub export fn col6forge_read_list_v(
@@ -259,126 +189,97 @@ pub export fn col6forge_read_list_v(
             input_closed = true;
         }
     }
-    const file = input.file;
 
     if (total == 0) {
-        col6forgeDiscardToRecordEnd(file);
+        col6forgeDiscardToRecordEnd(input.file);
         commit_pos = true;
         return 0;
     }
 
     var token: [COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX;
-    var i: usize = 0;
-    while (i < total) : (i += 1) {
-        const kind = runtimeArgKindAt(arg_kinds, i, total);
-        const arg = runtimeArgPtrAt(arg_ptrs, i, total) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-        switch (kind) {
-            'i' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *c_int = @ptrCast(@alignCast(arg));
-                out.* = parseIntegerToken(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'j' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *i64 = @ptrCast(@alignCast(arg));
-                out.* = parseInteger64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'f' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *f32 = @ptrCast(@alignCast(arg));
-                out.* = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'd' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *f64 = @ptrCast(@alignCast(arg));
-                out.* = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'l' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
-                const out: *u8 = @ptrCast(@alignCast(arg));
-                out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
-            },
-            's' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: [*]u8 = @ptrCast(arg);
-                const len_raw = runtimeArgLenAt(arg_lens, i, total);
-                const len: usize = @intCast(@max(len_raw, 0));
-                var j: usize = 0;
-                while (j < len) : (j += 1) {
-                    out[j] = ' ';
-                }
-                const token_len = cstrlenRaw(token[0..]);
-                const copy_len = @min(token_len, len);
-                j = 0;
-                while (j < copy_len) : (j += 1) {
-                    out[j] = token[j];
-                }
-            },
-            'c' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const real = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const imag = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                const out: [*]f32 = @ptrCast(@alignCast(arg));
-                out[0] = real;
-                out[1] = imag;
-            },
-            'z' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const real = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const imag = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                const out: [*]f64 = @ptrCast(@alignCast(arg));
-                out[0] = real;
-                out[1] = imag;
-            },
-            else => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
+    var cursor = initListReadCursor();
+    var idx: usize = 0;
+    while (idx < total) : (idx += 1) {
+        const item_kind = col6forgeReadListItemForKind(input.file, &cursor, token[0..], runtimeArgKindAt(arg_kinds, idx, total));
+        if (handleReadItemStatus(unit, status_mode, item_kind, &input, &input_closed, &commit_pos)) |status| return status;
+
+        const arg = runtimeArgPtrAt(arg_ptrs, idx, total) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
+        if (!applyListItemToArg(runtimeArgKindAt(arg_kinds, idx, total), arg, runtimeArgLenAt(arg_lens, idx, total), item_kind, token[0..])) {
+            return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
         }
     }
 
-    col6forgeDiscardToRecordEnd(file);
+    col6forgeDiscardToRecordEnd(input.file);
     commit_pos = true;
+    return 0;
+}
+
+fn readMixedScalarSlice(
+    unit: c_int,
+    status_mode: c_int,
+    input: *const shared.ListInput,
+    input_closed: *bool,
+    commit_pos: *bool,
+    cursor: *ListReadCursor,
+    token: []u8,
+    ptrs: ?[*]?*anyopaque,
+    kinds: ?[*]const u8,
+    lens: ?[*]const c_int,
+    total: usize,
+) c_int {
+    var idx: usize = 0;
+    while (idx < total) : (idx += 1) {
+        const requested_kind = runtimeArgKindAt(kinds, idx, total);
+        const item_kind = col6forgeReadListItemForKind(input.file, cursor, token, requested_kind);
+        if (handleReadItemStatus(unit, status_mode, item_kind, input, input_closed, commit_pos)) |status| return status;
+
+        const arg = runtimeArgPtrAt(ptrs, idx, total) orelse return listReadFailWithContext(unit, status_mode, 1, input, input_closed, commit_pos.*);
+        if (!applyListItemToArg(requested_kind, arg, runtimeArgLenAt(lens, idx, total), item_kind, token)) {
+            return listReadFailWithContext(unit, status_mode, 1, input, input_closed, commit_pos.*);
+        }
+    }
+    return 0;
+}
+
+fn readMixedBlockSlice(
+    unit: c_int,
+    status_mode: c_int,
+    input: *const shared.ListInput,
+    input_closed: *bool,
+    commit_pos: *bool,
+    cursor: *ListReadCursor,
+    token: []u8,
+    kind: u8,
+    count: usize,
+    stride: c_int,
+    base_any: ?*anyopaque,
+) c_int {
+    if (count == 0) return 0;
+    if (base_any == null or stride == 0) return listReadFailWithContext(unit, status_mode, 1, input, input_closed, commit_pos.*);
+
+    const base: [*]u8 = @ptrCast(base_any.?);
+    const byte_stride = switch (kind) {
+        'i' => checkedMulI64(stride, @sizeOf(c_int)),
+        'j' => checkedMulI64(stride, @sizeOf(i64)),
+        'f' => checkedMulI64(stride, @sizeOf(f32)),
+        'd' => checkedMulI64(stride, @sizeOf(f64)),
+        'l' => @as(?i64, stride),
+        'c' => checkedMulI64(stride, 2 * @sizeOf(f32)),
+        'z' => checkedMulI64(stride, 2 * @sizeOf(f64)),
+        else => null,
+    } orelse return listReadFailWithContext(unit, status_mode, 1, input, input_closed, commit_pos.*);
+
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        const item_kind = col6forgeReadListItemForKind(input.file, cursor, token, kind);
+        if (handleReadItemStatus(unit, status_mode, item_kind, input, input_closed, commit_pos)) |status| return status;
+
+        const off = checkedMulI64(@intCast(idx), byte_stride) orelse return listReadFailWithContext(unit, status_mode, 1, input, input_closed, commit_pos.*);
+        const ptr = offsetBytes(base, off) orelse return listReadFailWithContext(unit, status_mode, 1, input, input_closed, commit_pos.*);
+        if (!applyListItemToArg(kind, ptr, 0, item_kind, token)) {
+            return listReadFailWithContext(unit, status_mode, 1, input, input_closed, commit_pos.*);
+        }
+    }
     return 0;
 }
 
@@ -398,11 +299,6 @@ pub export fn col6forge_read_list_mix_v_n(
     post_count: c_int,
     status_mode: c_int,
 ) callconv(.c) c_int {
-    const pre_total = runtimeArgCount(pre_count);
-    const post_total = runtimeArgCount(post_count);
-    const mid_n: usize = @intCast(@max(mid_count, 0));
-    const stride = mid_stride;
-
     const input = col6forgeOpenListInput(unit) orelse {
         if (status_mode != 0) return 1;
         if (col6forge_io_should_abort() != 0) {
@@ -419,359 +315,24 @@ pub export fn col6forge_read_list_mix_v_n(
             input_closed = true;
         }
     }
-    const file = input.file;
-
-    if (mid_n > 0 and (mid_base == null or stride == 0)) {
-        return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-    }
 
     var token: [COL6FORGE_LIST_TOKEN_MAX]u8 = [_]u8{0} ** COL6FORGE_LIST_TOKEN_MAX;
+    var cursor = initListReadCursor();
 
-    var i: usize = 0;
-    while (i < pre_total) : (i += 1) {
-        const kind = runtimeArgKindAt(pre_kinds, i, pre_total);
-        const arg = runtimeArgPtrAt(pre_ptrs, i, pre_total) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-        switch (kind) {
-            'i' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *c_int = @ptrCast(@alignCast(arg));
-                out.* = parseIntegerToken(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'j' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *i64 = @ptrCast(@alignCast(arg));
-                out.* = parseInteger64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'f' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *f32 = @ptrCast(@alignCast(arg));
-                out.* = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'd' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *f64 = @ptrCast(@alignCast(arg));
-                out.* = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'l' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
-                const out: *u8 = @ptrCast(@alignCast(arg));
-                out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
-            },
-            's' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: [*]u8 = @ptrCast(arg);
-                const len_raw = runtimeArgLenAt(pre_lens, i, pre_total);
-                const len: usize = @intCast(@max(len_raw, 0));
-                var j: usize = 0;
-                while (j < len) : (j += 1) out[j] = ' ';
-                const token_len = cstrlenRaw(token[0..]);
-                const copy_len = @min(token_len, len);
-                j = 0;
-                while (j < copy_len) : (j += 1) out[j] = token[j];
-            },
-            'c' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const real = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const imag = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                const out: [*]f32 = @ptrCast(@alignCast(arg));
-                out[0] = real;
-                out[1] = imag;
-            },
-            'z' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const real = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const imag = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                const out: [*]f64 = @ptrCast(@alignCast(arg));
-                out[0] = real;
-                out[1] = imag;
-            },
-            else => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-        }
-    }
+    const pre_total = runtimeArgCount(pre_count);
+    const post_total = runtimeArgCount(post_count);
+    const mid_total: usize = @intCast(@max(mid_count, 0));
 
-    if (mid_n > 0) {
-        const kind_u8: u8 = @intCast(mid_kind);
-        switch (kind_u8) {
-            'i' => {
-                const base: [*]u8 = @ptrCast(mid_base.?);
-                const byte_stride = checkedMulI64(stride, @sizeOf(c_int)) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                var j: usize = 0;
-                while (j < mid_n) : (j += 1) {
-                    switch (col6forgeReadListTokenStream(file, token[0..])) {
-                        .ok => {},
-                        .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                        .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                    }
-                    const off = checkedMulI64(@intCast(j), byte_stride) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const ptr = offsetBytes(base, off) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const dst: *c_int = @ptrCast(@alignCast(ptr));
-                    dst.* = parseIntegerToken(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                }
-            },
-            'j' => {
-                const base: [*]u8 = @ptrCast(mid_base.?);
-                const byte_stride = checkedMulI64(stride, @sizeOf(i64)) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                var j: usize = 0;
-                while (j < mid_n) : (j += 1) {
-                    switch (col6forgeReadListTokenStream(file, token[0..])) {
-                        .ok => {},
-                        .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                        .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                    }
-                    const off = checkedMulI64(@intCast(j), byte_stride) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const ptr = offsetBytes(base, off) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const dst: *i64 = @ptrCast(@alignCast(ptr));
-                    dst.* = parseInteger64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                }
-            },
-            'f' => {
-                const base: [*]u8 = @ptrCast(mid_base.?);
-                const byte_stride = checkedMulI64(stride, @sizeOf(f32)) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                var j: usize = 0;
-                while (j < mid_n) : (j += 1) {
-                    switch (col6forgeReadListTokenStream(file, token[0..])) {
-                        .ok => {},
-                        .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                        .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                    }
-                    const off = checkedMulI64(@intCast(j), byte_stride) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const ptr = offsetBytes(base, off) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const dst: *f32 = @ptrCast(@alignCast(ptr));
-                    dst.* = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                }
-            },
-            'd' => {
-                const base: [*]u8 = @ptrCast(mid_base.?);
-                const byte_stride = checkedMulI64(stride, @sizeOf(f64)) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                var j: usize = 0;
-                while (j < mid_n) : (j += 1) {
-                    switch (col6forgeReadListTokenStream(file, token[0..])) {
-                        .ok => {},
-                        .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                        .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                    }
-                    const off = checkedMulI64(@intCast(j), byte_stride) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const ptr = offsetBytes(base, off) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const dst: *f64 = @ptrCast(@alignCast(ptr));
-                    dst.* = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                }
-            },
-            'l' => {
-                const base: [*]u8 = @ptrCast(mid_base.?);
-                var j: usize = 0;
-                while (j < mid_n) : (j += 1) {
-                    switch (col6forgeReadListTokenStream(file, token[0..])) {
-                        .ok => {},
-                        .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                        .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                    }
-                    const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
-                    const off = checkedMulI64(@intCast(j), stride) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const ptr = offsetBytes(base, off) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    ptr[0] = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
-                }
-            },
-            'c' => {
-                const base: [*]u8 = @ptrCast(mid_base.?);
-                const byte_stride = checkedMulI64(stride, 2 * @sizeOf(f32)) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                var j: usize = 0;
-                while (j < mid_n) : (j += 1) {
-                    switch (col6forgeReadListTokenStream(file, token[0..])) {
-                        .ok => {},
-                        .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                        .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                    }
-                    const real = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    switch (col6forgeReadListTokenStream(file, token[0..])) {
-                        .ok => {},
-                        .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                        .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                    }
-                    const imag = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const off = checkedMulI64(@intCast(j), byte_stride) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const ptr = offsetBytes(base, off) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const dst: [*]f32 = @ptrCast(@alignCast(ptr));
-                    dst[0] = real;
-                    dst[1] = imag;
-                }
-            },
-            'z' => {
-                const base: [*]u8 = @ptrCast(mid_base.?);
-                const byte_stride = checkedMulI64(stride, 2 * @sizeOf(f64)) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                var j: usize = 0;
-                while (j < mid_n) : (j += 1) {
-                    switch (col6forgeReadListTokenStream(file, token[0..])) {
-                        .ok => {},
-                        .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                        .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                    }
-                    const real = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    switch (col6forgeReadListTokenStream(file, token[0..])) {
-                        .ok => {},
-                        .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                        .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                    }
-                    const imag = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const off = checkedMulI64(@intCast(j), byte_stride) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const ptr = offsetBytes(base, off) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                    const dst: [*]f64 = @ptrCast(@alignCast(ptr));
-                    dst[0] = real;
-                    dst[1] = imag;
-                }
-            },
-            else => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-        }
-    }
+    const pre_status = readMixedScalarSlice(unit, status_mode, &input, &input_closed, &commit_pos, &cursor, token[0..], pre_ptrs, pre_kinds, pre_lens, pre_total);
+    if (pre_status != 0) return pre_status;
 
-    i = 0;
-    while (i < post_total) : (i += 1) {
-        const kind = runtimeArgKindAt(post_kinds, i, post_total);
-        const arg = runtimeArgPtrAt(post_ptrs, i, post_total) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-        switch (kind) {
-            'i' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *c_int = @ptrCast(@alignCast(arg));
-                out.* = parseIntegerToken(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'j' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *i64 = @ptrCast(@alignCast(arg));
-                out.* = parseInteger64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'f' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *f32 = @ptrCast(@alignCast(arg));
-                out.* = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'd' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: *f64 = @ptrCast(@alignCast(arg));
-                out.* = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-            },
-            'l' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const token_len: c_int = @intCast(cstrlenRaw(token[0..]));
-                const out: *u8 = @ptrCast(@alignCast(arg));
-                out.* = @intCast(col6forge_parse_logical_field(asConstCStr(&token), token_len));
-            },
-            's' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const out: [*]u8 = @ptrCast(arg);
-                const len_raw = runtimeArgLenAt(post_lens, i, post_total);
-                const len: usize = @intCast(@max(len_raw, 0));
-                var j: usize = 0;
-                while (j < len) : (j += 1) out[j] = ' ';
-                const token_len = cstrlenRaw(token[0..]);
-                const copy_len = @min(token_len, len);
-                j = 0;
-                while (j < copy_len) : (j += 1) out[j] = token[j];
-            },
-            'c' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const real = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const imag = parseFloat32Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                const out: [*]f32 = @ptrCast(@alignCast(arg));
-                out[0] = real;
-                out[1] = imag;
-            },
-            'z' => {
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const real = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                switch (col6forgeReadListTokenStream(file, token[0..])) {
-                    .ok => {},
-                    .eof => return listReadFailWithContext(unit, status_mode, -1, &input, &input_closed, commit_pos),
-                    .overflow => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-                }
-                const imag = parseFloat64Token(token[0..]) orelse return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos);
-                const out: [*]f64 = @ptrCast(@alignCast(arg));
-                out[0] = real;
-                out[1] = imag;
-            },
-            else => return listReadFailWithContext(unit, status_mode, 1, &input, &input_closed, commit_pos),
-        }
-    }
+    const mid_status = readMixedBlockSlice(unit, status_mode, &input, &input_closed, &commit_pos, &cursor, token[0..], @intCast(mid_kind), mid_total, mid_stride, mid_base);
+    if (mid_status != 0) return mid_status;
 
-    col6forgeDiscardToRecordEnd(file);
+    const post_status = readMixedScalarSlice(unit, status_mode, &input, &input_closed, &commit_pos, &cursor, token[0..], post_ptrs, post_kinds, post_lens, post_total);
+    if (post_status != 0) return post_status;
+
+    col6forgeDiscardToRecordEnd(input.file);
     commit_pos = true;
     return 0;
 }

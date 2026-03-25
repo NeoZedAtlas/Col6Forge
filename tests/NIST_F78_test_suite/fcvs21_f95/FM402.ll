@@ -5625,6 +5625,7 @@ bb194:
   store ptr %t2749, ptr %t2814
   %t2815 = getelementptr [37 x i8], ptr @str38, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t2643, ptr %t2750, ptr %t2778, ptr %t2815, i32 36, i32 0)
+  store i32 11, ptr %t26
   br label %bb196
 bb196:
   %t2816 = load i32, ptr %t23
@@ -5866,6 +5867,7 @@ bb196:
   store ptr %t2924, ptr %t2989
   %t2990 = getelementptr [37 x i8], ptr @str38, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t2818, ptr %t2925, ptr %t2953, ptr %t2990, i32 36, i32 0)
+  store i32 21, ptr %t26
   br label %bb198
 bb198:
   %t2991 = load i32, ptr %t23
@@ -6107,6 +6109,7 @@ bb198:
   store ptr %t3099, ptr %t3164
   %t3165 = getelementptr [37 x i8], ptr @str38, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t2993, ptr %t3100, ptr %t3128, ptr %t3165, i32 36, i32 0)
+  store i32 31, ptr %t26
   br label %bb200
 bb200:
   %t3166 = load i32, ptr %t23
@@ -6348,6 +6351,7 @@ bb200:
   store ptr %t3274, ptr %t3339
   %t3340 = getelementptr [37 x i8], ptr @str38, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t3168, ptr %t3275, ptr %t3303, ptr %t3340, i32 36, i32 0)
+  store i32 41, ptr %t26
   br label %bb202
 bb202:
   %t3341 = load i32, ptr %t23
@@ -6509,6 +6513,7 @@ bb202:
   store ptr %t3409, ptr %t3454
   %t3455 = getelementptr [25 x i8], ptr @str40, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t3343, ptr %t3410, ptr %t3430, ptr %t3455, i32 24, i32 0)
+  store i32 47, ptr %t26
   br label %L4023
 L4023:
   br label %do_inc700
@@ -6892,6 +6897,7 @@ bb225:
   store ptr %t3625, ptr %t3690
   %t3691 = getelementptr [37 x i8], ptr @str38, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t3519, ptr %t3626, ptr %t3654, ptr %t3691, i32 36, i32 0)
+  store i32 11, ptr %t26
   br label %bb227
 bb227:
   %t3692 = load i32, ptr %t23
@@ -7133,6 +7139,7 @@ bb227:
   store ptr %t3800, ptr %t3865
   %t3866 = getelementptr [37 x i8], ptr @str38, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t3694, ptr %t3801, ptr %t3829, ptr %t3866, i32 36, i32 0)
+  store i32 21, ptr %t26
   br label %bb229
 bb229:
   %t3867 = load i32, ptr %t23
@@ -7374,6 +7381,7 @@ bb229:
   store ptr %t3975, ptr %t4040
   %t4041 = getelementptr [37 x i8], ptr @str38, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t3869, ptr %t3976, ptr %t4004, ptr %t4041, i32 36, i32 0)
+  store i32 31, ptr %t26
   br label %bb231
 bb231:
   %t4042 = load i32, ptr %t23
@@ -7615,6 +7623,7 @@ bb231:
   store ptr %t4150, ptr %t4215
   %t4216 = getelementptr [37 x i8], ptr @str38, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t4044, ptr %t4151, ptr %t4179, ptr %t4216, i32 36, i32 0)
+  store i32 41, ptr %t26
   br label %bb233
 bb233:
   %t4217 = load i32, ptr %t23
@@ -7776,6 +7785,7 @@ bb233:
   store ptr %t4285, ptr %t4330
   %t4331 = getelementptr [25 x i8], ptr @str40, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t4219, ptr %t4286, ptr %t4306, ptr %t4331, i32 24, i32 0)
+  store i32 47, ptr %t26
   br label %L4024
 L4024:
   br label %do_inc711
@@ -8608,6 +8618,7 @@ bb335:
   store ptr %t4749, ptr %t4761
   %t4762 = getelementptr [11 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t4698, ptr %t4750, ptr %t4751, ptr %t4762, i32 10, i32 0)
+  store i32 11, ptr %t26
   call void @col6forge_clear_runtime_source_context()
   br label %bb336
 bb336:
@@ -8845,6 +8856,7 @@ bb355:
   store ptr %t4889, ptr %t4901
   %t4902 = getelementptr [11 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t4838, ptr %t4890, ptr %t4891, ptr %t4902, i32 10, i32 0)
+  store i32 21, ptr %t26
   call void @col6forge_clear_runtime_source_context()
   br label %bb356
 bb356:
@@ -9082,6 +9094,7 @@ bb375:
   store ptr %t5029, ptr %t5041
   %t5042 = getelementptr [11 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t4978, ptr %t5030, ptr %t5031, ptr %t5042, i32 10, i32 0)
+  store i32 31, ptr %t26
   call void @col6forge_clear_runtime_source_context()
   br label %bb376
 bb376:
@@ -9319,6 +9332,7 @@ bb395:
   store ptr %t5169, ptr %t5181
   %t5182 = getelementptr [11 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t5118, ptr %t5170, ptr %t5171, ptr %t5182, i32 10, i32 0)
+  store i32 41, ptr %t26
   call void @col6forge_clear_runtime_source_context()
   br label %bb396
 bb396:
@@ -9528,6 +9542,7 @@ bb415:
   store ptr %t5289, ptr %t5297
   %t5298 = getelementptr [7 x i8], ptr @str57, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t5258, ptr %t5290, ptr %t5291, ptr %t5298, i32 6, i32 0)
+  store i32 47, ptr %t26
   call void @col6forge_clear_runtime_source_context()
   br label %bb416
 bb416:
@@ -9928,6 +9943,7 @@ bb451:
   store ptr %t5489, ptr %t5501
   %t5502 = getelementptr [11 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t5438, ptr %t5490, ptr %t5491, ptr %t5502, i32 10, i32 0)
+  store i32 11, ptr %t26
   call void @col6forge_clear_runtime_source_context()
   br label %bb452
 bb452:
@@ -10165,6 +10181,7 @@ bb471:
   store ptr %t5629, ptr %t5641
   %t5642 = getelementptr [11 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t5578, ptr %t5630, ptr %t5631, ptr %t5642, i32 10, i32 0)
+  store i32 21, ptr %t26
   call void @col6forge_clear_runtime_source_context()
   br label %bb472
 bb472:
@@ -10402,6 +10419,7 @@ bb491:
   store ptr %t5769, ptr %t5781
   %t5782 = getelementptr [11 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t5718, ptr %t5770, ptr %t5771, ptr %t5782, i32 10, i32 0)
+  store i32 31, ptr %t26
   call void @col6forge_clear_runtime_source_context()
   br label %bb492
 bb492:
@@ -10639,6 +10657,7 @@ bb511:
   store ptr %t5909, ptr %t5921
   %t5922 = getelementptr [11 x i8], ptr @str55, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t5858, ptr %t5910, ptr %t5911, ptr %t5922, i32 10, i32 0)
+  store i32 41, ptr %t26
   call void @col6forge_clear_runtime_source_context()
   br label %bb512
 bb512:
@@ -10848,6 +10867,7 @@ bb531:
   store ptr %t6029, ptr %t6037
   %t6038 = getelementptr [7 x i8], ptr @str57, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t5998, ptr %t6030, ptr %t6031, ptr %t6038, i32 6, i32 0)
+  store i32 47, ptr %t26
   call void @col6forge_clear_runtime_source_context()
   br label %bb532
 bb532:

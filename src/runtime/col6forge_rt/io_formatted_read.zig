@@ -1,8 +1,25 @@
 const std = @import("std");
 const dynamic_format = @import("io_dynamic_format.zig");
+const io_common = @import("io_common.zig");
+const io_control = @import("io_control.zig");
+
+const c_begin_stream = @extern(
+    *const fn (unit: c_int, fmt: ?[*:0]const u8, status_mode: c_int) callconv(.c) ?*anyopaque,
+    .{ .name = "col6forge_formatted_read_stream_begin" },
+);
+const c_next_stream = @extern(
+    *const fn (state_any: ?*anyopaque, arg_ptr: ?*anyopaque, arg_kind: c_int, arg_len: c_int) callconv(.c) c_int,
+    .{ .name = "col6forge_formatted_read_stream_next" },
+);
+const c_finish_stream = @extern(
+    *const fn (state_any: ?*anyopaque) callconv(.c) c_int,
+    .{ .name = "col6forge_formatted_read_stream_finish" },
+);
 
 const FILE = opaque {};
 extern fn fgetc(stream: *FILE) c_int;
+extern fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) ?*FILE;
+extern fn fclose(stream: *FILE) c_int;
 extern fn exit(status: c_int) noreturn;
 
 extern fn col6forge_rt_stdin() ?*FILE;
@@ -112,15 +129,14 @@ fn trimAsciiSpace(text: []const u8) []const u8 {
     return text[start..end];
 }
 
-fn parseFloatField(field: []const u8) ?f64 {
-    const trimmed = trimAsciiSpace(field);
-    if (trimmed.len == 0) return 0.0;
-    return std.fmt.parseFloat(f64, trimmed) catch null;
+fn parseFloatField(field: []const u8, precision: c_int) ?f64 {
+    return io_common.parseFortranRealField(field, precision);
 }
 
 fn parseIntegerField(field: []const u8) ?c_int {
     const trimmed = trimAsciiSpace(field);
     if (trimmed.len == 0) return 0;
+    if (std.mem.eql(u8, trimmed, "+") or std.mem.eql(u8, trimmed, "-")) return 0;
     const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return null;
     if (parsed < std.math.minInt(c_int) or parsed > std.math.maxInt(c_int)) return null;
     return @intCast(parsed);
@@ -129,6 +145,7 @@ fn parseIntegerField(field: []const u8) ?c_int {
 fn parseInteger64Field(field: []const u8) ?i64 {
     const trimmed = trimAsciiSpace(field);
     if (trimmed.len == 0) return 0;
+    if (std.mem.eql(u8, trimmed, "+") or std.mem.eql(u8, trimmed, "-")) return 0;
     return std.fmt.parseInt(i64, trimmed, 10) catch null;
 }
 
@@ -431,7 +448,8 @@ fn streamStoreCharacter(arg: *anyopaque, target_len: usize, field_width: usize, 
     }
 }
 
-fn streamApplyScale(value: f64, scale_factor: i32) f64 {
+fn streamApplyScale(value: f64, scale_factor: i32, explicit_exponent: bool) f64 {
+    if (explicit_exponent) return value;
     if (scale_factor == 0) return value;
     return value * std.math.pow(f64, 10.0, @as(f64, @floatFromInt(-scale_factor)));
 }
@@ -440,6 +458,7 @@ fn streamConsumeValue(
     state: *FormattedReadStreamState,
     conv: u8,
     width: c_int,
+    precision: c_int,
     is_long: bool,
     arg: *anyopaque,
     kind: u8,
@@ -448,10 +467,10 @@ fn streamConsumeValue(
     var field: [4096]u8 = [_]u8{0} ** 4096;
     var used: c_int = 0;
     if (streamReadField(state, width, &field, &used) != 0) return state.status;
-    const view = field[0..@intCast(@max(used, 0))];
 
     if (conv == 'd' and kind == 'd') {
         col6forge_apply_blank_mode(asCStr(&field), &used, state.blank_mode);
+        const view = field[0..@intCast(@max(used, 0))];
         const out: *c_int = @ptrCast(@alignCast(arg));
         if (parseIntegerField(view)) |parsed| {
             out.* = parsed;
@@ -465,6 +484,7 @@ fn streamConsumeValue(
     }
     if (conv == 'd' and kind == 'j') {
         col6forge_apply_blank_mode(asCStr(&field), &used, state.blank_mode);
+        const view = field[0..@intCast(@max(used, 0))];
         const out: *i64 = @ptrCast(@alignCast(arg));
         if (parseInteger64Field(view)) |parsed| {
             out.* = parsed;
@@ -479,9 +499,10 @@ fn streamConsumeValue(
     if (conv == 'f' and (kind == 'D' or is_long)) {
         col6forge_apply_blank_mode(asCStr(&field), &used, state.blank_mode);
         col6forge_normalize_exponent(asCStr(&field));
+        const view = field[0..@intCast(@max(used, 0))];
         const out: *f64 = @ptrCast(@alignCast(arg));
-        if (parseFloatField(view)) |parsed| {
-            out.* = streamApplyScale(parsed, state.scale_factor);
+        if (io_common.parseFortranRealFieldDetailed(view, precision)) |parsed| {
+            out.* = streamApplyScale(parsed.value, state.scale_factor, parsed.explicit_exponent);
             return 0;
         }
         if (isAllAsterisksField(view)) {
@@ -493,9 +514,10 @@ fn streamConsumeValue(
     if (conv == 'f' and kind == 'f') {
         col6forge_apply_blank_mode(asCStr(&field), &used, state.blank_mode);
         col6forge_normalize_exponent(asCStr(&field));
+        const view = field[0..@intCast(@max(used, 0))];
         const out: *f32 = @ptrCast(@alignCast(arg));
-        if (parseFloatField(view)) |parsed| {
-            out.* = @floatCast(streamApplyScale(parsed, state.scale_factor));
+        if (io_common.parseFortranRealFieldDetailed(view, precision)) |parsed| {
+            out.* = @floatCast(streamApplyScale(parsed.value, state.scale_factor, parsed.explicit_exponent));
             return 0;
         }
         if (isAllAsterisksField(view)) {
@@ -522,8 +544,15 @@ fn stepPastLiteral(state: *FormattedReadStreamState, ch: u8) c_int {
     return 0;
 }
 
-fn parseDirective(state: *FormattedReadStreamState, width_out: *c_int, is_long_out: *bool, conv_out: *u8) bool {
+fn parseDirective(
+    state: *FormattedReadStreamState,
+    width_out: *c_int,
+    precision_out: *c_int,
+    is_long_out: *bool,
+    conv_out: *u8,
+) bool {
     width_out.* = 0;
+    precision_out.* = 0;
     is_long_out.* = false;
     var pos = state.fmt_pos + 1;
     var sign: c_int = 1;
@@ -535,6 +564,12 @@ fn parseDirective(state: *FormattedReadStreamState, width_out: *c_int, is_long_o
         width_out.* = (width_out.* * 10) + @as(c_int, @intCast(state.fmt[pos] - '0'));
     }
     if (sign < 0) width_out.* = -width_out.*;
+    if (state.fmt[pos] == '.') {
+        pos += 1;
+        while (state.fmt[pos] >= '0' and state.fmt[pos] <= '9') : (pos += 1) {
+            precision_out.* = (precision_out.* * 10) + @as(c_int, @intCast(state.fmt[pos] - '0'));
+        }
+    }
     if (state.fmt[pos] == 'l') {
         is_long_out.* = true;
         pos += 1;
@@ -562,6 +597,10 @@ fn consumeFormattedReadStreamArg(state: *FormattedReadStreamState, arg: *anyopaq
             continue;
         }
         if (ch != '%') {
+            if (ch == '\n' and (state.fmt_pos + 1 >= state.fmt.len or state.fmt[state.fmt_pos + 1] == 0)) {
+                state.fmt_pos += 1;
+                continue;
+            }
             state.fmt_pos += 1;
             if (stepPastLiteral(state, ch) != 0) return state.status;
             continue;
@@ -573,9 +612,10 @@ fn consumeFormattedReadStreamArg(state: *FormattedReadStreamState, arg: *anyopaq
         }
 
         var width: c_int = 0;
+        var precision: c_int = 0;
         var is_long = false;
         var conv: u8 = 0;
-        if (!parseDirective(state, &width, &is_long, &conv)) return failStream(state, 1);
+        if (!parseDirective(state, &width, &precision, &is_long, &conv)) return failStream(state, 1);
 
         switch (conv) {
             'N' => {
@@ -609,7 +649,7 @@ fn consumeFormattedReadStreamArg(state: *FormattedReadStreamState, arg: *anyopaq
                 state.scale_factor = width;
                 continue;
             },
-            'd', 'f', 'c', 'L' => return streamConsumeValue(state, conv, width, is_long, arg, kind, arg_len),
+            'd', 'f', 'c', 'L' => return streamConsumeValue(state, conv, width, precision, is_long, arg, kind, arg_len),
             else => return failStream(state, 1),
         }
     }
@@ -632,7 +672,7 @@ pub export fn col6forge_formatted_read_stream_begin_dynamic(
     fmt_len: c_int,
     status_mode: c_int,
 ) callconv(.c) ?*anyopaque {
-    const lowered = lowerDynamicReadFormat(fmt_ptr, fmt_len) orelse return null;
+    const lowered = dynamic_format.lowerFormat(.read_stream, fmt_ptr, fmt_len, null, 0) catch return null;
     const state = initExternalStreamState(std.heap.page_allocator, unit, lowered.bytes[0 .. lowered.bytes.len - 1], lowered.heap_owned, status_mode) orelse {
         if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
         return null;
@@ -659,7 +699,7 @@ pub export fn col6forge_read_internal_stream_begin_dynamic(
     fmt_ptr: ?[*]const u8,
     fmt_len: c_int,
 ) callconv(.c) ?*anyopaque {
-    const lowered = lowerDynamicReadFormat(fmt_ptr, fmt_len) orelse return null;
+    const lowered = dynamic_format.lowerFormat(.read_stream, fmt_ptr, fmt_len, null, 0) catch return null;
     const state = initInternalStreamState(std.heap.page_allocator, buf, len, count, lowered.bytes[0 .. lowered.bytes.len - 1], lowered.heap_owned) orelse {
         if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
         return null;
@@ -733,6 +773,7 @@ pub export fn col6forge_formatted_read_core(
     }
 
     var blank_mode: c_int = if (col6forge_open_unit_blank_code(unit) == 2) 1 else 0;
+    var scale_factor: i32 = 0;
 
     var p: usize = 0;
     var idx: usize = 0;
@@ -741,6 +782,10 @@ pub export fn col6forge_formatted_read_core(
     while (fmt_c[p] != 0) {
         if (fmt_c[p] != '%') {
             if (fmt_c[p] == '\n') {
+                if (fmt_c[p + 1] == 0) {
+                    p += 1;
+                    continue;
+                }
                 if (!readRecordLine(stream, &record, &record_len)) break;
                 idx = 0;
                 p += 1;
@@ -753,10 +798,23 @@ pub export fn col6forge_formatted_read_core(
 
         p += 1;
         var width: c_int = 0;
+        var sign: c_int = 1;
+        if (fmt_c[p] == '-' or fmt_c[p] == '+') {
+            sign = if (fmt_c[p] == '-') -1 else 1;
+            p += 1;
+        }
         while (fmt_c[p] >= '0' and fmt_c[p] <= '9') : (p += 1) {
             width = (width * 10) + @as(c_int, @intCast(fmt_c[p] - '0'));
         }
+        width *= sign;
+        var precision: c_int = 0;
         var is_long = false;
+        if (fmt_c[p] == '.') {
+            p += 1;
+            while (fmt_c[p] >= '0' and fmt_c[p] <= '9') : (p += 1) {
+                precision = (precision * 10) + @as(c_int, @intCast(fmt_c[p] - '0'));
+            }
+        }
         if (fmt_c[p] == 'l') {
             is_long = true;
             p += 1;
@@ -790,6 +848,10 @@ pub export fn col6forge_formatted_read_core(
                     idx = 0;
                 }
             }
+            continue;
+        }
+        if (conv == 'P') {
+            scale_factor = width;
             continue;
         }
 
@@ -877,8 +939,8 @@ pub export fn col6forge_formatted_read_core(
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f64 = @ptrCast(@alignCast(arg));
             const view = field[0..@intCast(@max(used, 0))];
-            if (parseFloatField(view)) |parsed| {
-                out.* = parsed;
+            if (io_common.parseFortranRealFieldDetailed(view, precision)) |parsed| {
+                out.* = streamApplyScale(parsed.value, scale_factor, parsed.explicit_exponent);
             } else if (isAllAsterisksField(view)) {
                 out.* = 0.0;
             } else {
@@ -890,8 +952,8 @@ pub export fn col6forge_formatted_read_core(
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f32 = @ptrCast(@alignCast(arg));
             const view = field[0..@intCast(@max(used, 0))];
-            if (parseFloatField(view)) |parsed| {
-                out.* = @floatCast(parsed);
+            if (io_common.parseFortranRealFieldDetailed(view, precision)) |parsed| {
+                out.* = @floatCast(streamApplyScale(parsed.value, scale_factor, parsed.explicit_exponent));
             } else if (isAllAsterisksField(view)) {
                 out.* = 0.0;
             } else {
@@ -1000,6 +1062,224 @@ test "dynamic formatted read stream consumes runtime implied-do sequence" {
     try std.testing.expectEqual(@as(c_int, 33), a3);
 }
 
+test "dynamic formatted read stream handles FM903 fixed-width implied-do record" {
+    var record = [_]u8{
+        ' ', ' ', ' ', ' ', '5',
+        '-', '1', '1', '1', '1',
+        ' ', '3', '3', '3', '3',
+        '-', '5', '5', '5', '5',
+        ' ', '7', '7', '7', '7',
+        '-', '9', '9', '9', '9',
+    };
+    const fmt = "(I5, 6(I5))";
+    const state_any = col6forge_read_internal_stream_begin_dynamic(&record, record.len, 1, fmt.ptr, fmt.len) orelse return error.TestUnexpectedResult;
+
+    var count: c_int = 0;
+    var values: [5]c_int = [_]c_int{0} ** 5;
+
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(&count), 'd', 0));
+    for (&values) |*value| {
+        try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(value), 'd', 0));
+    }
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_finish(state_any));
+
+    try std.testing.expectEqual(@as(c_int, 5), count);
+    try std.testing.expectEqualSlices(c_int, &.{ -1111, 3333, -5555, 7777, -9999 }, &values);
+}
+
+test "formatted read stream handles external file FM903 record" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(.{
+        .sub_path = "fm903.dat",
+        .data = "    5-1111 3333-5555 7777-9999                                                  \n",
+    });
+
+    const abs_path = try tmp.dir.realpathAlloc(std.testing.allocator, "fm903.dat");
+    defer std.testing.allocator.free(abs_path);
+    const c_path = try std.testing.allocator.dupeZ(u8, abs_path);
+    defer std.testing.allocator.free(c_path);
+    const mode = try std.testing.allocator.dupeZ(u8, "rb");
+    defer std.testing.allocator.free(mode);
+
+    const stream = fopen(c_path, mode) orelse return error.TestUnexpectedResult;
+    defer _ = fclose(stream);
+
+    const fmt = "(I5, 6(I5))";
+    const lowered = try dynamic_format.lowerFormat(.read_stream, fmt.ptr, @intCast(fmt.len), null, 0);
+    defer if (lowered.heap_owned) std.heap.page_allocator.free(lowered.bytes);
+
+    var state = FormattedReadStreamState{
+        .source = .{ .external = .{
+            .unit = 7,
+            .is_stdin = false,
+            .managed_read_stream = false,
+            .stream = stream,
+            .start_pos = 0,
+        } },
+        .fmt = lowered.bytes[0 .. lowered.bytes.len - 1],
+        .fmt_heap_owned = false,
+        .reversion_pos = primeReversionPos(lowered.bytes[0 .. lowered.bytes.len - 1]),
+        .blank_mode = 0,
+        .status_mode = 1,
+    };
+    try std.testing.expect(loadNextStreamRecord(&state));
+
+    var count: c_int = 0;
+    var values: [5]c_int = [_]c_int{0} ** 5;
+    try std.testing.expectEqual(@as(c_int, 0), consumeFormattedReadStreamArg(&state, @ptrCast(&count), 'd', 0));
+    for (&values) |*value| {
+        try std.testing.expectEqual(@as(c_int, 0), consumeFormattedReadStreamArg(&state, @ptrCast(value), 'd', 0));
+    }
+
+    try std.testing.expectEqual(@as(c_int, 5), count);
+    try std.testing.expectEqualSlices(c_int, &.{ -1111, 3333, -5555, 7777, -9999 }, &values);
+}
+
+test "formatted read stream via unit manager handles FM903 external record" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(.{
+        .sub_path = "fm903.dat",
+        .data = "    5-1111 3333-5555 7777-9999                                                  \n",
+    });
+
+    const abs_path = try tmp.dir.realpathAlloc(std.testing.allocator, "fm903.dat");
+    defer std.testing.allocator.free(abs_path);
+
+    io_control.col6forge_open(7, abs_path.ptr, @intCast(abs_path.len), 0, 0, 0, 0);
+    defer io_control.col6forge_close(7, 0);
+
+    const fmt = "(I5, 6(I5))";
+    const state_any = col6forge_formatted_read_stream_begin_dynamic(7, fmt.ptr, @intCast(fmt.len), 1) orelse return error.TestUnexpectedResult;
+
+    var count: c_int = 0;
+    var values: [5]c_int = [_]c_int{0} ** 5;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(&count), 'd', 0));
+    for (&values) |*value| {
+        try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(value), 'd', 0));
+    }
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_finish(state_any));
+
+    try std.testing.expectEqual(@as(c_int, 5), count);
+    try std.testing.expectEqualSlices(c_int, &.{ -1111, 3333, -5555, 7777, -9999 }, &values);
+}
+
+test "formatted read stream via unit manager handles FM903 lowered static format" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(.{
+        .sub_path = "fm903.dat",
+        .data = "    5-1111 3333-5555 7777-9999                                                  \n",
+    });
+
+    const abs_path = try tmp.dir.realpathAlloc(std.testing.allocator, "fm903.dat");
+    defer std.testing.allocator.free(abs_path);
+
+    io_control.col6forge_open(7, abs_path.ptr, @intCast(abs_path.len), 0, 0, 0, 0);
+    defer io_control.col6forge_close(7, 0);
+
+    const lowered_fmt = "%5d\x03%5d%5d%5d%5d%5d%5d";
+    const state_any = col6forge_formatted_read_stream_begin(7, lowered_fmt, 1) orelse return error.TestUnexpectedResult;
+
+    var count: c_int = 0;
+    var values: [5]c_int = [_]c_int{0} ** 5;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(&count), 'd', 0));
+    for (&values) |*value| {
+        try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(value), 'd', 0));
+    }
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_finish(state_any));
+
+    try std.testing.expectEqual(@as(c_int, 5), count);
+    try std.testing.expectEqualSlices(c_int, &.{ -1111, 3333, -5555, 7777, -9999 }, &values);
+}
+
+test "formatted read stream via unit manager handles FM903 relative path" {
+    const rel_path = "scratch/fm903_relative_unit_test.dat";
+    try std.fs.cwd().writeFile(.{
+        .sub_path = rel_path,
+        .data = "    5-1111 3333-5555 7777-9999                                                  \n",
+    });
+    defer std.fs.cwd().deleteFile(rel_path) catch {};
+
+    io_control.col6forge_open(7, rel_path.ptr, @intCast(rel_path.len), 0, 0, 0, 0);
+    defer io_control.col6forge_close(7, 0);
+
+    const lowered_fmt = "%5d\x03%5d%5d%5d%5d%5d%5d";
+    const state_any = col6forge_formatted_read_stream_begin(7, lowered_fmt, 1) orelse return error.TestUnexpectedResult;
+
+    var count: c_int = 0;
+    var values: [5]c_int = [_]c_int{0} ** 5;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(&count), 'd', 0));
+    for (&values) |*value| {
+        try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(value), 'd', 0));
+    }
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_finish(state_any));
+
+    try std.testing.expectEqual(@as(c_int, 5), count);
+    try std.testing.expectEqualSlices(c_int, &.{ -1111, 3333, -5555, 7777, -9999 }, &values);
+}
+
+test "formatted read stream via unit manager handles FM903 relative path through open_ex" {
+    const rel_path = "scratch/fm903_relative_open_ex_test.dat";
+    try std.fs.cwd().writeFile(.{
+        .sub_path = rel_path,
+        .data = "    5-1111 3333-5555 7777-9999                                                  \n",
+    });
+    defer std.fs.cwd().deleteFile(rel_path) catch {};
+
+    const old = "OLD";
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        io_control.col6forge_open_ex(7, rel_path.ptr, @intCast(rel_path.len), null, 0, null, 0, null, 0, old.ptr, @intCast(old.len), 0, 0),
+    );
+    defer io_control.col6forge_close(7, 0);
+
+    const lowered_fmt = "%5d\x03%5d%5d%5d%5d%5d%5d";
+    const state_any = col6forge_formatted_read_stream_begin(7, lowered_fmt, 1) orelse return error.TestUnexpectedResult;
+
+    var count: c_int = 0;
+    var values: [5]c_int = [_]c_int{0} ** 5;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(&count), 'd', 0));
+    for (&values) |*value| {
+        try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(value), 'd', 0));
+    }
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_finish(state_any));
+
+    try std.testing.expectEqual(@as(c_int, 5), count);
+    try std.testing.expectEqualSlices(c_int, &.{ -1111, 3333, -5555, 7777, -9999 }, &values);
+}
+
+test "formatted read stream via C ABI handles FM903 relative path" {
+    const rel_path = "scratch/fm903_cabi_unit_test.dat";
+    try std.fs.cwd().writeFile(.{
+        .sub_path = rel_path,
+        .data = "    5-1111 3333-5555 7777-9999                                                  \n",
+    });
+    defer std.fs.cwd().deleteFile(rel_path) catch {};
+
+    const old = "OLD";
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        io_control.col6forge_open_ex(7, rel_path.ptr, @intCast(rel_path.len), null, 0, null, 0, null, 0, old.ptr, @intCast(old.len), 0, 0),
+    );
+    defer io_control.col6forge_close(7, 0);
+
+    const lowered_fmt = "%5d\x03%5d%5d%5d%5d%5d%5d";
+    const state_any = c_begin_stream(7, lowered_fmt, 1) orelse return error.TestUnexpectedResult;
+
+    var count: c_int = 0;
+    var values: [5]c_int = [_]c_int{0} ** 5;
+    try std.testing.expectEqual(@as(c_int, 0), c_next_stream(state_any, @ptrCast(&count), 'd', 0));
+    for (&values) |*value| {
+        try std.testing.expectEqual(@as(c_int, 0), c_next_stream(state_any, @ptrCast(value), 'd', 0));
+    }
+    try std.testing.expectEqual(@as(c_int, 0), c_finish_stream(state_any));
+
+    try std.testing.expectEqual(@as(c_int, 5), count);
+    try std.testing.expectEqualSlices(c_int, &.{ -1111, 3333, -5555, 7777, -9999 }, &values);
+}
+
 test "formatted read stream treats blank fixed-width integer fields as zero" {
     var record = [_]u8{
         '4', '4', ' ', ' ', ' ', ' ', ' ',
@@ -1021,6 +1301,28 @@ test "formatted read stream treats blank fixed-width integer fields as zero" {
     for (values[3..]) |value| {
         try std.testing.expectEqual(@as(c_int, 0), value);
     }
+}
+
+test "formatted read stream applies descriptor precision to fixed real fields" {
+    var record = [_]u8{ '1', '2', '4', '5', ' ' };
+    const fmt = "%5.2f";
+    const state_any = col6forge_read_internal_stream_begin_dynamic(&record, record.len, 1, fmt.ptr, fmt.len) orelse return error.TestUnexpectedResult;
+    defer _ = col6forge_formatted_read_stream_finish(state_any);
+
+    var value: f32 = 0.0;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(&value), 'f', 0));
+    try std.testing.expectEqual(@as(f32, 12.45), value);
+}
+
+test "formatted read stream accepts implicit exponent sign in real fields" {
+    var record = [_]u8{ ' ', '+', '0', '.', '9', '8', '7', '+', '1', ' ' };
+    const fmt = "%10.3f";
+    const state_any = col6forge_read_internal_stream_begin_dynamic(&record, record.len, 1, fmt.ptr, fmt.len) orelse return error.TestUnexpectedResult;
+    defer _ = col6forge_formatted_read_stream_finish(state_any);
+
+    var value: f32 = 0.0;
+    try std.testing.expectEqual(@as(c_int, 0), col6forge_formatted_read_stream_next(state_any, @ptrCast(&value), 'f', 0));
+    try std.testing.expectEqual(@as(f32, 9.87), value);
 }
 
 test "graceful stdin EOF only applies to stdin EOF" {

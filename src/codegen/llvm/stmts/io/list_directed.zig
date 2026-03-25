@@ -3,6 +3,7 @@ const ast = @import("../../../input.zig");
 const common = @import("../../codegen/common.zig");
 const context = @import("../../codegen/context/mod.zig");
 const expr = @import("../../codegen/expression/mod.zig");
+const complex = @import("../../codegen/expression/complex.zig");
 const utils = @import("../../codegen/utils.zig");
 
 const Context = context.Context;
@@ -37,11 +38,23 @@ const PackedWriteArgs = struct {
     arg_count: ValueRef,
 };
 
+const PackedComplexReadCopy = struct {
+    pair_ptr: ValueRef,
+    real_ptr: ValueRef,
+    imag_ptr: ValueRef,
+    elem_ty: utils.IRType,
+};
+
 const PackedReadArgs = struct {
     ptr_array: ValueRef,
     kinds_ptr: ValueRef,
     lens_array: ValueRef,
     arg_count: ValueRef,
+    complex_copies: std.array_list.Managed(PackedComplexReadCopy),
+
+    fn deinit(self: *PackedReadArgs) void {
+        self.complex_copies.deinit();
+    }
 };
 
 fn packWriteArgs(ctx: *Context, builder: anytype, expanded_values: *const expansion.ExpandedWriteValues) EmitError!PackedWriteArgs {
@@ -89,48 +102,118 @@ fn packWriteArgs(ctx: *Context, builder: anytype, expanded_values: *const expans
 }
 
 fn packReadTargets(ctx: *Context, builder: anytype, expanded: *const expansion.ExpandedReadTargets) EmitError!PackedReadArgs {
+    var ptr_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer ptr_args.deinit();
     var arg_kinds = std.array_list.Managed(u8).init(ctx.allocator);
     defer arg_kinds.deinit();
     var arg_lens = std.array_list.Managed(i32).init(ctx.allocator);
     defer arg_lens.deinit();
+    var complex_copies = std.array_list.Managed(PackedComplexReadCopy).init(ctx.allocator);
+    errdefer complex_copies.deinit();
 
-    for (expanded.types.items, 0..) |ty, idx| {
+    var idx: usize = 0;
+    while (idx < expanded.types.items.len) {
+        const ty = expanded.types.items[idx];
+        var matched_fixup: ?io_utils.ComplexFixup = null;
+        if (idx + 1 < expanded.ptrs.items.len) {
+            for (expanded.complex_fixups.items) |fixup| {
+                if (std.mem.eql(u8, fixup.real_ptr.name, expanded.ptrs.items[idx].name) and
+                    std.mem.eql(u8, fixup.imag_ptr.name, expanded.ptrs.items[idx + 1].name))
+                {
+                    matched_fixup = fixup;
+                    break;
+                }
+            }
+        }
+        if (matched_fixup) |fixup| {
+            const pair_tmp = try ctx.nextTemp();
+            try builder.allocaArray(pair_tmp, fixup.elem_ty, 2);
+            const pair_ptr = ValueRef{ .name = pair_tmp, .ty = .ptr, .is_ptr = true };
+            const complex_ty: utils.IRType = if (fixup.elem_ty == .f64) .complex_f64 else .complex_f32;
+            const complex_tmp = try ctx.nextTemp();
+            try builder.load(complex_tmp, complex_ty, fixup.target_ptr);
+            const complex_val = ValueRef{ .name = complex_tmp, .ty = complex_ty, .is_ptr = false };
+            const real_val = try complex.extractComplex(ctx, builder, complex_val, 0);
+            const imag_val = try complex.extractComplex(ctx, builder, complex_val, 1);
+            const real_gep = try ctx.nextTemp();
+            try builder.gep(real_gep, fixup.elem_ty, pair_ptr, try ctx.constI32(0));
+            try builder.store(real_val, .{ .name = real_gep, .ty = .ptr, .is_ptr = true });
+            const imag_gep = try ctx.nextTemp();
+            try builder.gep(imag_gep, fixup.elem_ty, pair_ptr, try ctx.constI32(1));
+            try builder.store(imag_val, .{ .name = imag_gep, .ty = .ptr, .is_ptr = true });
+            try ptr_args.append(pair_ptr);
+            try arg_kinds.append(if (fixup.elem_ty == .f64) 'z' else 'c');
+            try arg_lens.append(0);
+            try complex_copies.append(.{
+                .pair_ptr = pair_ptr,
+                .real_ptr = fixup.real_ptr,
+                .imag_ptr = fixup.imag_ptr,
+                .elem_ty = fixup.elem_ty,
+            });
+            idx += 2;
+            continue;
+        }
         switch (ty) {
             .i32, .i64 => {
+                try ptr_args.append(expanded.ptrs.items[idx]);
                 try arg_kinds.append(try scalarRuntimeKind(ctx, ty));
                 try arg_lens.append(0);
             },
             .f32 => {
+                try ptr_args.append(expanded.ptrs.items[idx]);
                 try arg_kinds.append('f');
                 try arg_lens.append(0);
             },
             .f64 => {
+                try ptr_args.append(expanded.ptrs.items[idx]);
                 try arg_kinds.append('d');
                 try arg_lens.append(0);
             },
             .i1 => {
+                try ptr_args.append(expanded.ptrs.items[idx]);
                 try arg_kinds.append('l');
                 try arg_lens.append(0);
             },
             .ptr => {
                 const len = expanded.char_lens.items[idx];
                 if (len > std.math.maxInt(i32)) return error.IntegerOverflow;
+                try ptr_args.append(expanded.ptrs.items[idx]);
                 try arg_kinds.append('s');
                 try arg_lens.append(@intCast(len));
             },
             else => return error.UnsupportedIntrinsicType,
         }
+        idx += 1;
     }
 
-    const ptr_array = try emitStackPointerArrayFromValues(ctx, builder, expanded.ptrs.items);
+    const ptr_array = try emitStackPointerArrayFromValues(ctx, builder, ptr_args.items);
     const kinds_ptr = try emitKindArray(ctx, builder, arg_kinds.items);
     const lens_array = try emitStackI32Array(ctx, builder, arg_lens.items);
     return .{
         .ptr_array = ptr_array,
         .kinds_ptr = kinds_ptr,
         .lens_array = lens_array,
-        .arg_count = try ctx.constI32(@intCast(expanded.ptrs.items.len)),
+        .arg_count = try ctx.constI32(@intCast(ptr_args.items.len)),
+        .complex_copies = complex_copies,
     };
+}
+
+fn emitPackedReadComplexCopies(ctx: *Context, builder: anytype, packed_args: *const PackedReadArgs) EmitError!void {
+    for (packed_args.complex_copies.items) |copy| {
+        const real_gep = try ctx.nextTemp();
+        try builder.gep(real_gep, copy.elem_ty, copy.pair_ptr, try ctx.constI32(0));
+        const real_ptr = ValueRef{ .name = real_gep, .ty = .ptr, .is_ptr = true };
+        const real_tmp = try ctx.nextTemp();
+        try builder.load(real_tmp, copy.elem_ty, real_ptr);
+        try builder.store(.{ .name = real_tmp, .ty = copy.elem_ty, .is_ptr = false }, copy.real_ptr);
+
+        const imag_gep = try ctx.nextTemp();
+        try builder.gep(imag_gep, copy.elem_ty, copy.pair_ptr, try ctx.constI32(1));
+        const imag_ptr = ValueRef{ .name = imag_gep, .ty = .ptr, .is_ptr = true };
+        const imag_tmp = try ctx.nextTemp();
+        try builder.load(imag_tmp, copy.elem_ty, imag_ptr);
+        try builder.store(.{ .name = imag_tmp, .ty = copy.elem_ty, .is_ptr = false }, copy.imag_ptr);
+    }
 }
 
 fn emitArrayElemCountI32(ctx: *Context, builder: anytype, sym: anytype) EmitError!ValueRef {
@@ -267,9 +350,11 @@ fn emitListReadTypedSlice(ctx: *Context, builder: anytype, state: ValueRef, args
     if (args.len == 0) return;
     var expanded = try expandReadTargets(ctx, builder, args);
     defer expanded.deinit();
-    const packed_args = try packReadTargets(ctx, builder, &expanded);
+    var packed_args = try packReadTargets(ctx, builder, &expanded);
+    defer packed_args.deinit();
     const decl = try ctx.ensureDeclRaw("col6forge_read_list_stream_typed", .i32, &[_]utils.IRType{ .ptr, .ptr, .ptr, .ptr, .i32 }, false);
     try builder.callTyped(null, .i32, decl, &.{ state, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_array, packed_args.arg_count });
+    try emitPackedReadComplexCopies(ctx, builder, &packed_args);
     try applyComplexFixups(ctx, builder, &expanded);
 }
 
@@ -490,7 +575,8 @@ fn emitListDirectedReadExternal(ctx: *Context, builder: anytype, read: ast.ReadS
     var expanded = try expandReadTargets(ctx, builder, read.args);
     defer expanded.deinit();
 
-    const packed_args = try packReadTargets(ctx, builder, &expanded);
+    var packed_args = try packReadTargets(ctx, builder, &expanded);
+    defer packed_args.deinit();
     const mode_val = ValueRef{ .name = if (status_mode) "1" else "0", .ty = .i32, .is_ptr = false };
     const read_name = try ctx.ensureDeclRaw("col6forge_read_list_v", .i32, &[_]utils.IRType{ .i32, .ptr, .ptr, .ptr, .i32, .i32 }, false);
     var status_val = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
@@ -502,6 +588,7 @@ fn emitListDirectedReadExternal(ctx: *Context, builder: anytype, read: ast.ReadS
         try builder.callTyped(null, .i32, read_name, &.{ unit_i32, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_array, packed_args.arg_count, mode_val });
     }
 
+    try emitPackedReadComplexCopies(ctx, builder, &packed_args);
     try applyComplexFixups(ctx, builder, &expanded);
     return status_val;
 }
@@ -518,7 +605,8 @@ fn emitListDirectedReadInternal(
     var expanded = try expandReadTargets(ctx, builder, read.args);
     defer expanded.deinit();
 
-    const packed_args = try packReadTargets(ctx, builder, &expanded);
+    var packed_args = try packReadTargets(ctx, builder, &expanded);
+    defer packed_args.deinit();
     const len_val = try ctx.constI32(@intCast(unit_char_len));
     const count_val: usize = if (unit_record_count) |count| if (count > 1) count else 1 else 1;
     const count_ref = try ctx.constI32(@intCast(count_val));
@@ -533,6 +621,7 @@ fn emitListDirectedReadInternal(
         try builder.callTyped(null, .i32, read_name, &.{ unit_value, len_val, count_ref, packed_args.ptr_array, packed_args.kinds_ptr, packed_args.lens_array, packed_args.arg_count, mode_val });
     }
 
+    try emitPackedReadComplexCopies(ctx, builder, &packed_args);
     try applyComplexFixups(ctx, builder, &expanded);
     return status_val;
 }
@@ -761,8 +850,10 @@ fn emitDynamicImpliedDoListRead(
     var post_expanded = try expandReadTargets(ctx, builder, read.args[implied_idx + 1 ..]);
     defer post_expanded.deinit();
 
-    const pre_packed = packReadTargets(ctx, builder, &pre_expanded) catch return null;
-    const post_packed = packReadTargets(ctx, builder, &post_expanded) catch return null;
+    var pre_packed = packReadTargets(ctx, builder, &pre_expanded) catch return null;
+    defer pre_packed.deinit();
+    var post_packed = packReadTargets(ctx, builder, &post_expanded) catch return null;
+    defer post_packed.deinit();
 
     const mid_kind_val: i64 = switch (sym.loweredKind()) {
         .integer => defaultIntegerKind(ctx),
@@ -807,6 +898,8 @@ fn emitDynamicImpliedDoListRead(
         ValueRef{ .name = "1", .ty = .i32, .is_ptr = false },
     });
 
+    try emitPackedReadComplexCopies(ctx, builder, &pre_packed);
+    try emitPackedReadComplexCopies(ctx, builder, &post_packed);
     try applyComplexFixups(ctx, builder, &pre_expanded);
     try applyComplexFixups(ctx, builder, &post_expanded);
     return .{ .name = status_tmp, .ty = .i32, .is_ptr = false };

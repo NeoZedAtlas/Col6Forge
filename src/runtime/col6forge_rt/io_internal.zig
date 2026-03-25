@@ -1,4 +1,5 @@
 const std = @import("std");
+const io_common = @import("io_common.zig");
 
 fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
@@ -45,15 +46,14 @@ fn trimAsciiSpace(text: []const u8) []const u8 {
     return text[start..end];
 }
 
-fn parseFloatSlice(text: []const u8) ?f64 {
-    const trimmed = trimAsciiSpace(text);
-    if (trimmed.len == 0) return 0.0;
-    return std.fmt.parseFloat(f64, trimmed) catch null;
+fn parseFloatSlice(text: []const u8, precision: c_int) ?f64 {
+    return io_common.parseFortranRealField(text, precision);
 }
 
 fn parseIntegerSlice(text: []const u8) ?c_int {
     const trimmed = trimAsciiSpace(text);
     if (trimmed.len == 0) return 0;
+    if (std.mem.eql(u8, trimmed, "+") or std.mem.eql(u8, trimmed, "-")) return 0;
     const parsed = std.fmt.parseInt(i64, trimmed, 10) catch return null;
     if (parsed < std.math.minInt(c_int) or parsed > std.math.maxInt(c_int)) return null;
     return @intCast(parsed);
@@ -62,12 +62,13 @@ fn parseIntegerSlice(text: []const u8) ?c_int {
 fn parseInteger64Slice(text: []const u8) ?i64 {
     const trimmed = trimAsciiSpace(text);
     if (trimmed.len == 0) return 0;
+    if (std.mem.eql(u8, trimmed, "+") or std.mem.eql(u8, trimmed, "-")) return 0;
     return std.fmt.parseInt(i64, trimmed, 10) catch null;
 }
 
-fn parseFloatCString(text: []const u8) ?f64 {
+fn parseFloatCString(text: []const u8, precision: c_int) ?f64 {
     const n = cstrlenRaw(text);
-    return parseFloatSlice(text[0..n]);
+    return parseFloatSlice(text[0..n], precision);
 }
 
 fn parseIntegerCString(text: []const u8) ?c_int {
@@ -401,7 +402,7 @@ pub export fn col6forge_read_internal_list_v(
                 }
                 col6forge_normalize_exponent(asCStr(&token));
                 const out: *f32 = @ptrCast(@alignCast(arg));
-                out.* = @floatCast(parseFloatCString(token[0..]) orelse 0.0);
+                out.* = @floatCast(parseFloatCString(token[0..], 0) orelse 0.0);
             },
             'd' => {
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
@@ -409,7 +410,7 @@ pub export fn col6forge_read_internal_list_v(
                 }
                 col6forge_normalize_exponent(asCStr(&token));
                 const out: *f64 = @ptrCast(@alignCast(arg));
-                out.* = parseFloatCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
+                out.* = parseFloatCString(token[0..], 0) orelse return if (status_mode != 0) 1 else 0;
             },
             'l' => {
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
@@ -442,13 +443,13 @@ pub export fn col6forge_read_internal_list_v(
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const real_val = parseFloatCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
+                const real_val = parseFloatCString(token[0..], 0) orelse return if (status_mode != 0) 1 else 0;
                 const real = @as(f32, @floatCast(real_val));
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const imag_val = parseFloatCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
+                const imag_val = parseFloatCString(token[0..], 0) orelse return if (status_mode != 0) 1 else 0;
                 const imag = @as(f32, @floatCast(imag_val));
                 const out: [*]f32 = @ptrCast(@alignCast(arg));
                 out[0] = real;
@@ -459,12 +460,12 @@ pub export fn col6forge_read_internal_list_v(
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const real = parseFloatCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
+                const real = parseFloatCString(token[0..], 0) orelse return if (status_mode != 0) 1 else 0;
                 if (!nextInternalListToken(&record, rec_len, src, rec_stride, record_count, &rec_index, &idx, token[0..])) {
                     return if (status_mode != 0) -1 else 0;
                 }
                 col6forge_normalize_exponent(asCStr(&token));
-                const imag = parseFloatCString(token[0..]) orelse return if (status_mode != 0) 1 else 0;
+                const imag = parseFloatCString(token[0..], 0) orelse return if (status_mode != 0) 1 else 0;
                 const out: [*]f64 = @ptrCast(@alignCast(arg));
                 out[0] = real;
                 out[1] = imag;
@@ -528,12 +529,17 @@ fn readInternalCoreWithProvider(
     var idx: usize = 0;
     var assigned: c_int = 0;
     var blank_mode: c_int = 0;
+    var scale_factor: i32 = 0;
     var arg_index: usize = 0;
     var rec_index: usize = 0;
 
     while (fmt_c[fmt_i] != 0) {
         if (fmt_c[fmt_i] != '%') {
             if (fmt_c[fmt_i] == '\n') {
+                if (fmt_c[fmt_i + 1] == 0) {
+                    fmt_i += 1;
+                    continue;
+                }
                 rec_index += 1;
                 if (rec_index >= rec_count) break;
                 if (!loadRecordForProvider(provider, rec_index, rec_count, rec_len, &record)) return null;
@@ -548,8 +554,21 @@ fn readInternalCoreWithProvider(
 
         fmt_i += 1;
         var width: c_int = 0;
+        var sign: c_int = 1;
+        if (fmt_c[fmt_i] == '-' or fmt_c[fmt_i] == '+') {
+            sign = if (fmt_c[fmt_i] == '-') -1 else 1;
+            fmt_i += 1;
+        }
         while (fmt_c[fmt_i] >= '0' and fmt_c[fmt_i] <= '9') : (fmt_i += 1) {
             width = (width * 10) + @as(c_int, @intCast(fmt_c[fmt_i] - '0'));
+        }
+        width *= sign;
+        var precision: c_int = 0;
+        if (fmt_c[fmt_i] == '.') {
+            fmt_i += 1;
+            while (fmt_c[fmt_i] >= '0' and fmt_c[fmt_i] <= '9') : (fmt_i += 1) {
+                precision = (precision * 10) + @as(c_int, @intCast(fmt_c[fmt_i] - '0'));
+            }
         }
         var is_long = false;
         if (fmt_c[fmt_i] == 'l') {
@@ -585,6 +604,10 @@ fn readInternalCoreWithProvider(
                     idx = 0;
                 }
             }
+            continue;
+        }
+        if (conv == 'P') {
+            scale_factor = width;
             continue;
         }
 
@@ -652,8 +675,11 @@ fn readInternalCoreWithProvider(
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f64 = @ptrCast(@alignCast(arg_any));
             const view = field[0..@intCast(@max(used, 0))];
-            if (parseFloatSlice(view)) |parsed| {
-                out.* = parsed;
+            if (io_common.parseFortranRealFieldDetailed(view, precision)) |parsed| {
+                out.* = if (parsed.explicit_exponent or scale_factor == 0)
+                    parsed.value
+                else
+                    parsed.value * std.math.pow(f64, 10.0, @as(f64, @floatFromInt(-scale_factor)));
             } else if (isAllAsterisksSlice(view)) {
                 out.* = 0.0;
             } else {
@@ -665,8 +691,12 @@ fn readInternalCoreWithProvider(
             col6forge_normalize_exponent(asCStr(&field));
             const out: *f32 = @ptrCast(@alignCast(arg_any));
             const view = field[0..@intCast(@max(used, 0))];
-            if (parseFloatSlice(view)) |parsed| {
-                out.* = @floatCast(parsed);
+            if (io_common.parseFortranRealFieldDetailed(view, precision)) |parsed| {
+                const value = if (parsed.explicit_exponent or scale_factor == 0)
+                    parsed.value
+                else
+                    parsed.value * std.math.pow(f64, 10.0, @as(f64, @floatFromInt(-scale_factor)));
+                out.* = @floatCast(value);
             } else if (isAllAsterisksSlice(view)) {
                 out.* = 0.0;
             } else {

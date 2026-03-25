@@ -16,6 +16,7 @@ const io_utils = @import("../utils.zig");
 
 const expandWriteArgs = expansion.expandWriteArgs;
 const expandReadTargets = expansion.expandReadTargets;
+const emitImpliedDoFinalStores = expansion.emitImpliedDoFinalStores;
 const PreparedExecutionFormatPlan = formatted_context.PreparedExecutionFormatPlan;
 const PreparedFormatContext = formatted_context.PreparedFormatContext;
 const emitWriteRuntimeFormatExprPrepared = format_expr.emitWriteRuntimeFormatExprPrepared;
@@ -47,7 +48,7 @@ pub fn prepareExecutor(
     has_runtime_implied_do: bool,
 ) EmitError!PreparedExecutor {
     return .{
-        .mode = if (has_runtime_implied_do) .stream else .classic,
+        .mode = if (has_runtime_implied_do or planHasStreamOnlyPositioning(plan)) .stream else .classic,
         .plan = plan,
     };
 }
@@ -75,7 +76,7 @@ pub fn emitPreparedWrite(
                 }
                 var expanded_values = try expandWriteArgs(ctx, builder, write.args);
                 defer expanded_values.deinit();
-                return emitWriteFormattedLowered(
+                try emitWriteFormattedLowered(
                     ctx,
                     builder,
                     write,
@@ -88,10 +89,12 @@ pub fn emitPreparedWrite(
                     &expanded_values,
                     null,
                 );
+                return emitImpliedDoFinalStores(ctx, builder, expanded_values.implied_finals);
             }
             var expanded_values = try expandWriteArgs(ctx, builder, write.args);
             defer expanded_values.deinit();
-            return emitClassicPreparedWrite(ctx, builder, write, prepared, executor.plan, &expanded_values);
+            try emitClassicPreparedWrite(ctx, builder, write, prepared, executor.plan, &expanded_values);
+            return emitImpliedDoFinalStores(ctx, builder, expanded_values.implied_finals);
         },
         .stream => return emitStreamPreparedWrite(ctx, builder, write, prepared, executor.plan),
     }
@@ -196,7 +199,7 @@ fn emitClassicPreparedRead(
     switch (plan) {
         .dynamic_label => |prepared_dynamic| {
             if (needs_status) {
-                return dynamic_mod.emitReadDynamicFormatPreparedStatus(
+                const status = try dynamic_mod.emitReadDynamicFormatPreparedStatus(
                     ctx,
                     builder,
                     read,
@@ -208,6 +211,8 @@ fn emitClassicPreparedRead(
                     prepared_dynamic,
                     expanded,
                 );
+                try emitImpliedDoFinalStores(ctx, builder, expanded.implied_finals);
+                return status;
             }
             try dynamic_mod.emitReadDynamicFormatPrepared(
                 ctx,
@@ -221,10 +226,11 @@ fn emitClassicPreparedRead(
                 prepared_dynamic,
                 expanded,
             );
+            try emitImpliedDoFinalStores(ctx, builder, expanded.implied_finals);
         },
         .static_ops => |ops| {
-            if (needs_status) {
-                return emitReadFormattedLowered(
+                if (needs_status) {
+                const status = try emitReadFormattedLowered(
                     ctx,
                     builder,
                     read,
@@ -238,6 +244,8 @@ fn emitClassicPreparedRead(
                     true,
                     null,
                 );
+                try emitImpliedDoFinalStores(ctx, builder, expanded.implied_finals);
+                return status;
             }
             _ = try emitReadFormattedLowered(
                 ctx,
@@ -253,10 +261,11 @@ fn emitClassicPreparedRead(
                 false,
                 null,
             );
+            try emitImpliedDoFinalStores(ctx, builder, expanded.implied_finals);
         },
         .runtime_char_expr => |runtime_fmt_expr| {
             if (needs_status) {
-                return emitReadRuntimeFormatExprPreparedStatus(
+                const status = try emitReadRuntimeFormatExprPreparedStatus(
                     ctx,
                     builder,
                     runtime_fmt_expr,
@@ -267,6 +276,8 @@ fn emitClassicPreparedRead(
                     prepared.unit.unit_i32,
                     expanded,
                 );
+                try emitImpliedDoFinalStores(ctx, builder, expanded.implied_finals);
+                return status;
             }
             try emitReadRuntimeFormatExprPrepared(
                 ctx,
@@ -279,6 +290,7 @@ fn emitClassicPreparedRead(
                 prepared.unit.unit_i32,
                 expanded,
             );
+            try emitImpliedDoFinalStores(ctx, builder, expanded.implied_finals);
         },
     }
     return .{ .name = "0", .ty = .i32, .is_ptr = false };
@@ -341,6 +353,18 @@ fn hasRuntimeImpliedDoArgs(ctx: *Context, args: []*ast.Expr) bool {
         if (hasRuntimeImpliedDoExpr(ctx, arg)) return true;
     }
     return false;
+}
+
+fn planHasStreamOnlyPositioning(plan: PreparedExecutionFormatPlan) bool {
+    return switch (plan) {
+        .static_ops => |ops| blk: {
+            for (ops) |op| {
+                if (op == .tab) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
 }
 
 fn hasRuntimeImpliedDoExpr(ctx: *Context, node: *ast.Expr) bool {

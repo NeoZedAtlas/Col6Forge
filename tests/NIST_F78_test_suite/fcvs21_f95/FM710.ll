@@ -2388,6 +2388,7 @@ bb57:
   store ptr %t1565, ptr %t1570
   %t1571 = getelementptr [5 x i8], ptr @str18, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t1499, ptr %t1560, ptr %t1566, ptr %t1571, i32 4, i32 0)
+  store i32 9, ptr %t31
   br label %L70030
 L70030:
   br label %bb59

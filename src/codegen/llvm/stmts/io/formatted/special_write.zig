@@ -657,7 +657,7 @@ fn parseDynamicIntegerImpliedFormat(ctx: *Context, fmt_items: []const format_ir.
                     seen_char = true;
                 },
                 .int => |spec| {
-                    if (!seen_char or spec.min_digits != 0 or spec.width == 0) return null;
+                    if (!seen_char or spec.explicit_min_digits or spec.width == 0) return null;
                     if (!seen_descriptor) {
                         width = spec.width;
                         seen_descriptor = true;
@@ -692,7 +692,7 @@ fn parseDynamicIntegerImpliedFormat(ctx: *Context, fmt_items: []const format_ir.
             },
             .descriptor => |descriptor| switch (descriptor) {
                 .int => |spec| {
-                    if (spec.min_digits != 0 or spec.width == 0) return null;
+                    if (spec.explicit_min_digits or spec.width == 0) return null;
                     if (!seen_descriptor) {
                         width = spec.width;
                         seen_descriptor = true;

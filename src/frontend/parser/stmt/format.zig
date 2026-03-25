@@ -505,6 +505,12 @@ fn parseFormatSequence(
         return error.UnexpectedToken;
     }
 
+    if (stop_on_paren and has_descriptor) {
+        // FORMAT reversion is anchored to the current parenthesized group, not
+        // recursively drilled into the deepest descriptor-bearing child.
+        reversion_offset = 0;
+    }
+
     return .{
         .items = try items.toOwnedSlice(),
         .has_descriptor = has_descriptor,
@@ -563,12 +569,14 @@ fn appendItemFlat(items: *std.array_list.Managed(FormatItem), item: FormatItem, 
 fn parseIntFormat(text: []const u8, index: *usize) !IntFormat {
     const width = parseUnsigned(text, index) orelse return error.UnexpectedToken;
     var min_digits: usize = 0;
+    var explicit_min_digits = false;
     // Support Fortran integer edit descriptor with minimum digits: Iw.m.
     if (index.* < text.len and text[index.*] == '.') {
+        explicit_min_digits = true;
         index.* += 1;
         min_digits = parseUnsigned(text, index) orelse return error.UnexpectedToken;
     }
-    return .{ .width = width, .min_digits = min_digits };
+    return .{ .width = width, .min_digits = min_digits, .explicit_min_digits = explicit_min_digits };
 }
 
 fn parseRealFormat(text: []const u8, index: *usize, kind: ast.RealFormatKind) !RealFormat {
@@ -641,6 +649,7 @@ test "parseFormatItems accepts unlimited repeat group after slash" {
     try testing.expect(has_repeat_group);
 }
 
+
 test "parseFormatItems accepts unlimited repeat group without comma" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -657,6 +666,40 @@ test "parseFormatItems accepts unlimited repeat group without comma" {
     }
     try testing.expect(has_reversion_offset);
     try testing.expect(has_repeat_group);
+}
+
+test "parseFormatItems anchors reversion at enclosing slash group start" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const items = try parseFormatItems(allocator, "(F7.1, (/2(E10.3), 2(E10.3)), E10.3)");
+
+    var reversion_offset: ?usize = null;
+    for (items) |item| {
+        if (item == .reversion_offset) {
+            reversion_offset = item.reversion_offset;
+            break;
+        }
+    }
+
+    try testing.expectEqual(@as(?usize, 1), reversion_offset);
+}
+
+test "parseFormatItems anchors reversion at repeated subgroup start" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const items = try parseFormatItems(allocator, "(I4, (F6.3), E11.4)");
+
+    var reversion_offset: ?usize = null;
+    for (items) |item| {
+        if (item == .reversion_offset) {
+            reversion_offset = item.reversion_offset;
+            break;
+        }
+    }
+
+    try testing.expectEqual(@as(?usize, 1), reversion_offset);
 }
 
 test "parseFormatItems rejects missing comma between descriptors" {

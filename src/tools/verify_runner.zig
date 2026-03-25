@@ -1188,13 +1188,37 @@ fn runProcessCapture(
     cwd: ?[]const u8,
     timeout_ms: ?u64,
 ) !ProcessResult {
+    return runProcessCaptureWithInput(allocator, argv, cwd, timeout_ms, null);
+}
+
+fn runProcessCaptureWithInput(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    cwd: ?[]const u8,
+    timeout_ms: ?u64,
+    stdin_path: ?[]const u8,
+) !ProcessResult {
     var child = std.process.Child.init(argv, allocator);
     child.cwd = cwd;
-    child.stdin_behavior = .Ignore;
+    child.stdin_behavior = if (stdin_path == null) .Ignore else .Pipe;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
     try child.spawn();
+
+    if (stdin_path) |path| {
+        const input_file = try std.fs.openFileAbsolute(path, .{});
+        defer input_file.close();
+
+        const stdin_bytes = try input_file.readToEndAlloc(allocator, 64 * 1024 * 1024);
+        defer allocator.free(stdin_bytes);
+
+        if (child.stdin) |*stdin_file| {
+            try stdin_file.writeAll(stdin_bytes);
+            stdin_file.close();
+            child.stdin = null;
+        }
+    }
 
     var done = std.atomic.Value(bool).init(false);
     var timed_out = std.atomic.Value(bool).init(false);
@@ -1274,6 +1298,28 @@ fn copyCaseSupportFiles(allocator: std.mem.Allocator, case_dir: []const u8, work
         defer allocator.free(dst_path);
         try copyFileAbsolute(src_path, dst_path);
     }
+}
+
+fn findCompanionInputPath(
+    allocator: std.mem.Allocator,
+    case_dir: []const u8,
+    input_path: []const u8,
+) !?[]u8 {
+    const source_name = std.fs.path.basename(input_path);
+    const source_stem = std.fs.path.stem(source_name);
+    const dat_name = try std.fmt.allocPrint(allocator, "{s}.DAT", .{source_stem});
+    defer allocator.free(dat_name);
+
+    var dir = try std.fs.openDirAbsolute(case_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.ascii.eqlIgnoreCase(entry.name, dat_name)) continue;
+        return try std.fs.path.join(allocator, &.{ case_dir, entry.name });
+    }
+    return null;
 }
 
 fn isFortranSourceArtifact(name: []const u8) bool {
@@ -1606,6 +1652,44 @@ test "sanitizeWorkName keeps extension distinctions to avoid workdir collisions"
     try testing.expect(std.mem.indexOfScalar(u8, for_name, '.') == null);
 }
 
+test "findCompanionInputPath prefers normalized DAT companion" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "FM923.DAT", .data = "normalized\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "FM923.DAT.ORIG", .data = "original\n" });
+
+    const case_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(case_dir);
+
+    const input_path = try findCompanionInputPath(allocator, case_dir, "tests/NIST_F78_test_suite/FCSV78/FM923.FOR");
+    defer if (input_path) |path| allocator.free(path);
+
+    try testing.expect(input_path != null);
+    try testing.expect(std.ascii.endsWithIgnoreCase(input_path.?, "FM923.DAT"));
+}
+
+test "findCompanionInputPath returns null without DAT companion" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "FM923.DAT.ORIG", .data = "original\n" });
+
+    const case_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(case_dir);
+
+    const input_path = try findCompanionInputPath(allocator, case_dir, "tests/NIST_F78_test_suite/FCSV78/FM923.FOR");
+    defer if (input_path) |path| allocator.free(path);
+
+    try testing.expect(input_path == null);
+}
+
 fn processCase(
     allocator: std.mem.Allocator,
     root_path: []const u8,
@@ -1875,6 +1959,8 @@ fn processCase(
         log_state.stderr("failed to copy support files: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
         return false;
     };
+    const stdin_input_path = try findCompanionInputPath(allocator, work_dir, case.input_path);
+    defer if (stdin_input_path) |path| allocator.free(path);
 
     if (options.incremental) {
         var link_cache_lock: ?*std.Thread.Mutex = null;
@@ -1949,11 +2035,12 @@ fn processCase(
     }
 
     try cleanupFortranScratchFiles(work_dir);
-    const ref_run = runProcessCapture(
+    const ref_run = runProcessCaptureWithInput(
         allocator,
         &.{ref_exe},
         work_dir,
         ref_run_timeout,
+        stdin_input_path,
     ) catch |err| {
         log_state.stderr("reference run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
         return false;
@@ -1973,11 +2060,12 @@ fn processCase(
     }
 
     try cleanupFortranScratchFiles(work_dir);
-    const test_run = runProcessCapture(
+    const test_run = runProcessCaptureWithInput(
         allocator,
         &.{test_exe},
         work_dir,
         test_run_timeout,
+        stdin_input_path,
     ) catch |err| {
         log_state.stderr("translated run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
         return false;

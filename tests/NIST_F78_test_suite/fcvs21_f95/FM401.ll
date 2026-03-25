@@ -3581,6 +3581,7 @@ bb496:
   store ptr %t1749, ptr %t1756
   %t1757 = getelementptr [6 x i8], ptr @str61, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t1723, ptr %t1750, ptr %t1751, ptr %t1757, i32 5, i32 0)
+  store i32 6, ptr %t20
   call void @col6forge_clear_runtime_source_context()
   br label %bb497
 bb497:
@@ -3818,6 +3819,7 @@ bb522:
   store ptr %t1896, ptr %t1902
   %t1903 = getelementptr [5 x i8], ptr @str63, i32 0, i32 0
   call i32 @col6forge_formatted_read_core(i32 %t1875, ptr %t1897, ptr %t1898, ptr %t1903, i32 4, i32 0)
+  store i32 5, ptr %t20
   call void @col6forge_clear_runtime_source_context()
   br label %bb523
 bb523:

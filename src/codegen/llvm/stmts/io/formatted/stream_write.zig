@@ -36,9 +36,18 @@ fn appendEscapedLiteral(buf: *std.array_list.Managed(u8), text: []const u8) !voi
     }
 }
 
-fn appendIntDescriptor(buf: *std.array_list.Managed(u8), width: usize, min_digits: usize, sign_plus: bool) !void {
+fn appendIntDescriptor(
+    buf: *std.array_list.Managed(u8),
+    width: usize,
+    min_digits: usize,
+    explicit_min_digits: bool,
+    sign_plus: bool,
+) !void {
     const sign: u8 = if (sign_plus) 1 else 0;
-    try buf.writer().print("%I{d},{d},{d};", .{ width, min_digits, sign });
+    try buf.writer().print(
+        "%I{d},{d},{d};",
+        .{ width, if (explicit_min_digits and min_digits == 0) @as(i32, -1) else @as(i32, @intCast(min_digits)), sign },
+    );
 }
 
 fn appendFixedDescriptor(buf: *std.array_list.Managed(u8), width: usize, precision: usize, sign_plus: bool) !void {
@@ -57,6 +66,7 @@ fn lowerStaticWriteStreamFormatWithBuilder(
     fmt_ops: []const format_ir.StreamOp,
     is_internal: bool,
 ) EmitError!ValueRef {
+    _ = is_internal;
     var fmt_buf = std.array_list.Managed(u8).init(ctx.allocator);
     defer fmt_buf.deinit();
 
@@ -70,27 +80,17 @@ fn lowerStaticWriteStreamFormatWithBuilder(
                 while (i < count) : (i += 1) try fmt_buf.append(' ');
             },
             .tab => |tab| {
-                if (is_internal) {
-                    try fmt_buf.append(0x01);
-                    try fmt_buf.append(switch (tab.kind) {
-                        .absolute => 'T',
-                        .relative_right => 'R',
-                        .relative_left => 'L',
-                    });
-                    try fmt_buf.writer().print("{d}", .{tab.count});
-                    try fmt_buf.append(0x02);
-                } else {
-                    switch (tab.kind) {
-                        .absolute, .relative_right => {
-                            var i: usize = 0;
-                            while (i < tab.count) : (i += 1) try fmt_buf.append(' ');
-                        },
-                        .relative_left => {},
-                    }
-                }
+                try fmt_buf.append(0x01);
+                try fmt_buf.append(switch (tab.kind) {
+                    .absolute => 'T',
+                    .relative_right => 'R',
+                    .relative_left => 'L',
+                });
+                try fmt_buf.writer().print("{d}", .{tab.count});
+                try fmt_buf.append(0x02);
             },
             .descriptor => |descriptor| switch (descriptor) {
-                .int => |spec| try appendIntDescriptor(&fmt_buf, spec.width, spec.min_digits, sign_plus),
+                .int => |spec| try appendIntDescriptor(&fmt_buf, spec.width, spec.min_digits, spec.explicit_min_digits, sign_plus),
                 .real_fixed => |spec| try appendFixedDescriptor(&fmt_buf, spec.width, spec.precision, sign_plus),
                 .real => |spec| try appendRealDescriptor(
                     &fmt_buf,

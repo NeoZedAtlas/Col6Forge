@@ -14,6 +14,138 @@ fn isSpace(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == '\x0B' or ch == '\x0C';
 }
 
+pub const RealFieldParseResult = struct {
+    value: f64,
+    explicit_exponent: bool,
+};
+
+pub fn parseFortranRealField(field: []const u8, precision: c_int) ?f64 {
+    return if (parseFortranRealFieldDetailed(field, precision)) |parsed| parsed.value else null;
+}
+
+pub fn parseFortranRealFieldDetailed(field: []const u8, precision: c_int) ?RealFieldParseResult {
+    const trimmed = std.mem.trim(u8, field, " \t\r\n\x0B\x0C");
+    if (trimmed.len == 0) return .{ .value = 0.0, .explicit_exponent = false };
+
+    var i: usize = 0;
+    var negative = false;
+    if (trimmed[i] == '+' or trimmed[i] == '-') {
+        negative = trimmed[i] == '-';
+        i += 1;
+        if (i >= trimmed.len) {
+            return .{
+                .value = if (negative) -0.0 else 0.0,
+                .explicit_exponent = false,
+            };
+        }
+    }
+
+    var digits: [256]u8 = undefined;
+    var digits_len: usize = 0;
+    var saw_dot = false;
+    var frac_digits: i32 = 0;
+    while (i < trimmed.len) {
+        const ch = trimmed[i];
+        if (std.ascii.isDigit(ch)) {
+            if (digits_len >= digits.len) return null;
+            digits[digits_len] = ch;
+            digits_len += 1;
+            if (saw_dot) frac_digits += 1;
+            i += 1;
+            continue;
+        }
+        if (ch == '.' and !saw_dot) {
+            saw_dot = true;
+            i += 1;
+            continue;
+        }
+        break;
+    }
+
+    var exponent: i32 = 0;
+    var explicit_exponent = false;
+    if (i < trimmed.len) {
+        var exp_sign: i32 = 1;
+        if (trimmed[i] == 'E' or trimmed[i] == 'e' or trimmed[i] == 'D' or trimmed[i] == 'd') {
+            explicit_exponent = true;
+            i += 1;
+            if (i < trimmed.len and (trimmed[i] == '+' or trimmed[i] == '-')) {
+                exp_sign = if (trimmed[i] == '-') -1 else 1;
+                i += 1;
+            }
+        } else if ((trimmed[i] == '+' or trimmed[i] == '-') and i + 1 < trimmed.len and std.ascii.isDigit(trimmed[i + 1])) {
+            explicit_exponent = true;
+            exp_sign = if (trimmed[i] == '-') -1 else 1;
+            i += 1;
+        } else {
+            return null;
+        }
+
+        const exp_start = i;
+        while (i < trimmed.len and std.ascii.isDigit(trimmed[i])) : (i += 1) {}
+        if (i == exp_start) return null;
+
+        var exp_value: i32 = 0;
+        for (trimmed[exp_start..i]) |ch| {
+            const mul = @mulWithOverflow(exp_value, @as(i32, 10));
+            if (mul[1] != 0) return null;
+            const add = @addWithOverflow(mul[0], @as(i32, ch - '0'));
+            if (add[1] != 0) return null;
+            exp_value = add[0];
+        }
+        exponent = exp_sign * exp_value;
+    }
+
+    if (i != trimmed.len) return null;
+    if (digits_len == 0) {
+        return .{
+            .value = if (negative) -0.0 else 0.0,
+            .explicit_exponent = explicit_exponent,
+        };
+    }
+
+    var has_non_zero = false;
+    for (digits[0..digits_len]) |ch| {
+        if (ch != '0') {
+            has_non_zero = true;
+            break;
+        }
+    }
+    if (!has_non_zero) {
+        return .{
+            .value = if (negative) -0.0 else 0.0,
+            .explicit_exponent = explicit_exponent,
+        };
+    }
+
+    const implied_frac_digits: i32 = if (saw_dot) frac_digits else @max(precision, 0);
+    const scientific_exponent = exponent - implied_frac_digits + @as(i32, @intCast(digits_len)) - 1;
+
+    var normalized: [320]u8 = undefined;
+    var out_i: usize = 0;
+    if (negative) {
+        normalized[out_i] = '-';
+        out_i += 1;
+    }
+    normalized[out_i] = digits[0];
+    out_i += 1;
+    if (digits_len > 1) {
+        normalized[out_i] = '.';
+        out_i += 1;
+        @memcpy(normalized[out_i .. out_i + (digits_len - 1)], digits[1..digits_len]);
+        out_i += digits_len - 1;
+    }
+    normalized[out_i] = 'e';
+    out_i += 1;
+    const exp_text = std.fmt.bufPrint(normalized[out_i..], "{d}", .{scientific_exponent}) catch return null;
+    out_i += exp_text.len;
+    const value = std.fmt.parseFloat(f64, normalized[0..out_i]) catch return null;
+    return .{
+        .value = value,
+        .explicit_exponent = explicit_exponent,
+    };
+}
+
 fn asCStr(buf: anytype) [*:0]u8 {
     return @ptrCast(buf);
 }
@@ -137,6 +269,30 @@ test "blank mode ZERO keeps leading blanks and converts interior blanks" {
 
     try std.testing.expectEqualSlices(u8, "  -1020", buf[0..7]);
     try std.testing.expectEqual(@as(c_int, 7), used);
+}
+
+test "parseFortranRealField applies descriptor precision without explicit decimal" {
+    try std.testing.expectEqual(@as(?f64, 12.45), parseFortranRealField("1245", 2));
+}
+
+test "parseFortranRealField accepts implicit exponent sign" {
+    try std.testing.expectEqual(@as(?f64, 9.87), parseFortranRealField("+0.987+1", 3));
+}
+
+test "parseFortranRealField accepts dot-only and sign-only zero fields" {
+    try std.testing.expectEqual(@as(?f64, 0.0), parseFortranRealField(".", 1));
+    try std.testing.expectEqual(@as(?f64, 0.0), parseFortranRealField("+.D+00", 8));
+    try std.testing.expectEqual(@as(?f64, 0.0), parseFortranRealField("+", 0));
+}
+
+test "parseFortranRealFieldDetailed reports explicit exponent" {
+    const explicit = parseFortranRealFieldDetailed("98.7654E2", 4).?;
+    try std.testing.expectEqual(@as(f64, 9876.54), explicit.value);
+    try std.testing.expect(explicit.explicit_exponent);
+
+    const implied = parseFortranRealFieldDetailed("1245", 2).?;
+    try std.testing.expectEqual(@as(f64, 12.45), implied.value);
+    try std.testing.expect(!implied.explicit_exponent);
 }
 
 test "store char copies text and pads with spaces" {

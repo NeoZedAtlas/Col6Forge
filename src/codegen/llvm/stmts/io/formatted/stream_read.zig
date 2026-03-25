@@ -106,9 +106,9 @@ fn lowerStaticReadStreamFormatWithBuilder(ctx: *Context, builder: anytype, fmt_o
                     try fmt_buf.appendSlice("%d");
                 },
                 .real, .real_fixed => |spec| if (spec.width > 0) {
-                    try fmt_buf.writer().print("%{d}f", .{spec.width});
+                    try fmt_buf.writer().print("%{d}.{d}f", .{ spec.width, spec.precision });
                 } else {
-                    try fmt_buf.appendSlice("%f");
+                    try fmt_buf.writer().print("%.{d}f", .{spec.precision});
                 },
                 .char => |spec| {
                     const width = if (spec.width > 0) spec.width else 1;

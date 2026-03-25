@@ -1000,7 +1000,7 @@ bb58:
   %t484 = load i32, ptr %t13
   %t485 = getelementptr [6 x i8], ptr @str13, i32 0, i32 0
   call void @col6forge_set_runtime_source_context(ptr %t485, i32 204, i32 7)
-  %t486 = getelementptr [75 x i8], ptr @str14, i32 0, i32 0
+  %t486 = getelementptr [77 x i8], ptr @str14, i32 0, i32 0
   %t487 = alloca ptr, i32 7
   %t488 = getelementptr ptr, ptr %t487, i32 0
   store ptr %t28, ptr %t488
@@ -1166,7 +1166,7 @@ bb76:
   %t573 = load i32, ptr %t13
   %t574 = getelementptr [6 x i8], ptr @str13, i32 0, i32 0
   call void @col6forge_set_runtime_source_context(ptr %t574, i32 229, i32 7)
-  %t575 = getelementptr [74 x i8], ptr @str20, i32 0, i32 0
+  %t575 = getelementptr [76 x i8], ptr @str20, i32 0, i32 0
   %t576 = alloca ptr, i32 7
   %t577 = getelementptr ptr, ptr %t576, i32 0
   store ptr %t28, ptr %t577
@@ -1270,7 +1270,7 @@ bb88:
   %t617 = load i32, ptr %t13
   %t618 = getelementptr [6 x i8], ptr @str13, i32 0, i32 0
   call void @col6forge_set_runtime_source_context(ptr %t618, i32 253, i32 7)
-  %t619 = getelementptr [74 x i8], ptr @str20, i32 0, i32 0
+  %t619 = getelementptr [76 x i8], ptr @str20, i32 0, i32 0
   %t620 = alloca ptr, i32 7
   %t621 = getelementptr ptr, ptr %t620, i32 0
   store ptr %t28, ptr %t621
@@ -1609,13 +1609,13 @@ exit:
 @str11 = private unnamed_addr constant [94 x i8] c"%3d%2d%2d%3d%3d%3d%4d%6d    %s    %*.*s%*.*s%*.*s%*.*s%*.*s     %6d    %s    %*.*s%*.*s%*.*s\0A\00", align 1
 @str12 = private unnamed_addr constant [55 x i8] c"          FILE I08 CREATED WITH 31 SEQUENTIAL RECORDS\0A\00", align 1
 @str13 = private unnamed_addr constant [45 x i8] c"tests/NIST_F78_test_suite/fcvs21_f95/FM108.f\00", align 1
-@str14 = private unnamed_addr constant [75 x i8] c"       %3d      %4d    %6d               %1c        %6d    %6f         %1c\00", align 1
+@str14 = private unnamed_addr constant [77 x i8] c"       %3d      %4d    %6d               %1c        %6d    %6.4f         %1c\00", align 1
 @str15 = private unnamed_addr constant [8 x i8] c"dddcdfc\00", align 1
 @str16 = private unnamed_addr constant [21 x i8] c"     %5d       PASS\0A\00", align 1
 @str17 = private unnamed_addr constant [2 x i8] c"i\00", align 1
 @str18 = private unnamed_addr constant [46 x i8] c"     %5d       FAIL          %6d         %6d\0A\00", align 1
 @str19 = private unnamed_addr constant [4 x i8] c"iii\00", align 1
-@str20 = private unnamed_addr constant [74 x i8] c"       %3d      %4d%6d              %1c         %6d    %6f       %2c     \00", align 1
+@str20 = private unnamed_addr constant [76 x i8] c"       %3d      %4d%6d              %1c         %6d    %6.4f       %2c     \00", align 1
 @str21 = private unnamed_addr constant [24 x i8] c"     %5d       DELETED\0A\00", align 1
 @str22 = private unnamed_addr constant [43 x i8] c"                     END OF PROGRAM FM108\0A\00", align 1
 @str23 = private unnamed_addr constant [40 x i8] c"                %5d ERRORS ENCOUNTERED\0A\00", align 1

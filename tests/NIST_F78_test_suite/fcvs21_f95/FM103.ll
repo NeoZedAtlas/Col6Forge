@@ -1000,7 +1000,7 @@ L552:
   %t481 = load i32, ptr %t13
   %t482 = getelementptr [6 x i8], ptr @str13, i32 0, i32 0
   call void @col6forge_set_runtime_source_context(ptr %t482, i32 196, i32 7)
-  %t483 = getelementptr [78 x i8], ptr @str14, i32 0, i32 0
+  %t483 = getelementptr [80 x i8], ptr @str14, i32 0, i32 0
   %t484 = alloca ptr, i32 7
   %t485 = getelementptr ptr, ptr %t484, i32 0
   store ptr %t28, ptr %t485
@@ -1027,7 +1027,7 @@ L553:
   %t493 = load i32, ptr %t13
   %t494 = getelementptr [6 x i8], ptr @str13, i32 0, i32 0
   call void @col6forge_set_runtime_source_context(ptr %t494, i32 199, i32 7)
-  %t495 = getelementptr [73 x i8], ptr @str16, i32 0, i32 0
+  %t495 = getelementptr [75 x i8], ptr @str16, i32 0, i32 0
   %t496 = alloca ptr, i32 7
   %t497 = getelementptr ptr, ptr %t496, i32 0
   store ptr %t28, ptr %t497
@@ -1446,9 +1446,9 @@ exit:
 @str11 = private unnamed_addr constant [98 x i8] c"%3d%2d%2d%3d%3d%3d%4d%5d     %s     %*.*s%*.*s%*.*s%*.*s%*.*s     %5d     %s     %*.*s%*.*s%*.*s\0A\00", align 1
 @str12 = private unnamed_addr constant [55 x i8] c"          FILE I09 CREATED WITH 31 SEQUENTIAL RECORDS\0A\00", align 1
 @str13 = private unnamed_addr constant [45 x i8] c"tests/NIST_F78_test_suite/fcvs21_f95/FM103.f\00", align 1
-@str14 = private unnamed_addr constant [78 x i8] c"       %3d      %4d     %5d               %1c         %5d     %5f         %1c\00", align 1
+@str14 = private unnamed_addr constant [80 x i8] c"       %3d      %4d     %5d               %1c         %5d     %5.4f         %1c\00", align 1
 @str15 = private unnamed_addr constant [8 x i8] c"dddcdfc\00", align 1
-@str16 = private unnamed_addr constant [73 x i8] c"       %3d      %4d%5d               %1c         %5d     %5f         %1c\00", align 1
+@str16 = private unnamed_addr constant [75 x i8] c"       %3d      %4d%5d               %1c         %5d     %5.4f         %1c\00", align 1
 @str17 = private unnamed_addr constant [21 x i8] c"     %5d       PASS\0A\00", align 1
 @str18 = private unnamed_addr constant [2 x i8] c"i\00", align 1
 @str19 = private unnamed_addr constant [46 x i8] c"     %5d       FAIL          %6d         %6d\0A\00", align 1

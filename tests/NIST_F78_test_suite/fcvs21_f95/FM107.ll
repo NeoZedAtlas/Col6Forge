@@ -1091,6 +1091,7 @@ L1147:
   store ptr %t730, ptr %t758
   %t759 = getelementptr [28 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t194, ptr %t702, ptr %t731, ptr %t759, i32 27, i32 0)
+  store i32 21, ptr %t19
   br label %bb54
 bb54:
   store i32 2, ptr %t21
@@ -2037,6 +2038,17 @@ L1148:
   store ptr %t1616, ptr %t1644
   %t1645 = getelementptr [28 x i8], ptr @str10, i32 0, i32 0
   call i32 @col6forge_write_v(i32 %t760, ptr %t1588, ptr %t1617, ptr %t1645, i32 27, i32 0)
+  store i32 3, ptr %t20
+  store i32 3, ptr %t20
+  store i32 3, ptr %t20
+  store i32 3, ptr %t20
+  store i32 3, ptr %t20
+  store i32 3, ptr %t20
+  store i32 3, ptr %t20
+  store i32 3, ptr %t20
+  store i32 3, ptr %t20
+  store i32 3, ptr %t20
+  store i32 11, ptr %t19
   br label %bb57
 bb57:
   store i32 1, ptr %t21

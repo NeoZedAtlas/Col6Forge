@@ -2440,7 +2440,7 @@ bb127:
   call void @col6forge_set_runtime_source_context(ptr %t1229, i32 270, i32 7)
   %t1230 = load i32, ptr %t56
   %t1231 = load i32, ptr %t59
-  %t1232 = getelementptr [29 x i8], ptr @str31, i32 0, i32 0
+  %t1232 = getelementptr [35 x i8], ptr @str31, i32 0, i32 0
   %t1233 = alloca ptr, i32 7
   %t1234 = getelementptr ptr, ptr %t1233, i32 0
   store ptr %t60, ptr %t1234
@@ -2507,7 +2507,7 @@ bb135:
   %t1261 = load i32, ptr %t56
   %t1262 = load i32, ptr %t59
   %t1263 = call ptr @malloc(i64 25)
-  %t1264 = getelementptr [28 x i8], ptr @str33, i32 0, i32 0
+  %t1264 = getelementptr [34 x i8], ptr @str33, i32 0, i32 0
   %t1265 = alloca ptr, i32 7
   %t1266 = getelementptr ptr, ptr %t1265, i32 0
   store ptr %t62, ptr %t1266
@@ -2576,7 +2576,7 @@ bb143:
   call void @col6forge_set_runtime_source_context(ptr %t1293, i32 296, i32 7)
   %t1294 = load i32, ptr %t56
   %t1295 = load i32, ptr %t59
-  %t1296 = getelementptr [29 x i8], ptr @str31, i32 0, i32 0
+  %t1296 = getelementptr [35 x i8], ptr @str31, i32 0, i32 0
   %t1297 = alloca ptr, i32 7
   %t1298 = getelementptr ptr, ptr %t1297, i32 0
   store ptr %t64, ptr %t1298
@@ -2640,7 +2640,7 @@ bb150:
   call void @col6forge_set_runtime_source_context(ptr %t1324, i32 308, i32 7)
   %t1325 = load i32, ptr %t56
   %t1326 = load i32, ptr %t59
-  %t1327 = getelementptr [29 x i8], ptr @str35, i32 0, i32 0
+  %t1327 = getelementptr [35 x i8], ptr @str35, i32 0, i32 0
   %t1328 = alloca ptr, i32 7
   %t1329 = getelementptr ptr, ptr %t1328, i32 0
   store ptr %t67, ptr %t1329
@@ -2708,7 +2708,7 @@ bb158:
   %t1356 = load i32, ptr %t56
   %t1357 = load i32, ptr %t59
   %t1358 = call ptr @malloc(i64 25)
-  %t1359 = getelementptr [28 x i8], ptr @str37, i32 0, i32 0
+  %t1359 = getelementptr [34 x i8], ptr @str37, i32 0, i32 0
   %t1360 = alloca ptr, i32 7
   %t1361 = getelementptr ptr, ptr %t1360, i32 0
   store ptr %t62, ptr %t1361
@@ -3114,7 +3114,7 @@ bb196:
   call void @col6forge_set_runtime_source_context(ptr %t1599, i32 379, i32 7)
   %t1600 = load i32, ptr %t56
   %t1601 = load i32, ptr %t59
-  %t1602 = getelementptr [29 x i8], ptr @str35, i32 0, i32 0
+  %t1602 = getelementptr [35 x i8], ptr @str35, i32 0, i32 0
   %t1603 = alloca ptr, i32 7
   %t1604 = getelementptr ptr, ptr %t1603, i32 0
   store ptr %t67, ptr %t1604
@@ -3178,7 +3178,7 @@ bb204:
   call void @col6forge_set_runtime_source_context(ptr %t1630, i32 391, i32 7)
   %t1631 = load i32, ptr %t56
   %t1632 = load i32, ptr %t59
-  %t1633 = getelementptr [29 x i8], ptr @str44, i32 0, i32 0
+  %t1633 = getelementptr [35 x i8], ptr @str44, i32 0, i32 0
   %t1634 = alloca ptr, i32 7
   %t1635 = getelementptr ptr, ptr %t1634, i32 0
   store ptr %t61, ptr %t1635
@@ -3494,7 +3494,7 @@ bb221:
   %t1830 = load i32, ptr %t56
   %t1831 = load i32, ptr %t59
   %t1832 = call ptr @malloc(i64 25)
-  %t1833 = getelementptr [28 x i8], ptr @str33, i32 0, i32 0
+  %t1833 = getelementptr [34 x i8], ptr @str33, i32 0, i32 0
   %t1834 = alloca ptr, i32 7
   %t1835 = getelementptr ptr, ptr %t1834, i32 0
   store ptr %t62, ptr %t1835
@@ -3560,7 +3560,7 @@ bb228:
   %t1862 = getelementptr [6 x i8], ptr @str30, i32 0, i32 0
   call void @col6forge_set_runtime_source_context(ptr %t1862, i32 426, i32 7)
   %t1863 = load i32, ptr %t56
-  %t1864 = getelementptr [29 x i8], ptr @str46, i32 0, i32 0
+  %t1864 = getelementptr [35 x i8], ptr @str46, i32 0, i32 0
   %t1865 = alloca ptr, i32 7
   %t1866 = getelementptr ptr, ptr %t1865, i32 0
   store ptr %t60, ptr %t1866
@@ -3875,7 +3875,7 @@ bb245:
   call void @col6forge_set_runtime_source_context(ptr %t2060, i32 450, i32 7)
   %t2061 = load i32, ptr %t56
   %t2062 = load i32, ptr %t59
-  %t2063 = getelementptr [29 x i8], ptr @str31, i32 0, i32 0
+  %t2063 = getelementptr [35 x i8], ptr @str31, i32 0, i32 0
   %t2064 = alloca ptr, i32 7
   %t2065 = getelementptr ptr, ptr %t2064, i32 0
   store ptr %t60, ptr %t2065
@@ -4372,7 +4372,7 @@ bb292:
   call void @col6forge_set_runtime_source_context(ptr %t2355, i32 523, i32 7)
   %t2356 = load i32, ptr %t56
   %t2357 = load i32, ptr %t59
-  %t2358 = getelementptr [23 x i8], ptr @str54, i32 0, i32 0
+  %t2358 = getelementptr [25 x i8], ptr @str54, i32 0, i32 0
   %t2359 = alloca ptr, i32 6
   %t2360 = getelementptr ptr, ptr %t2359, i32 0
   store ptr %t28, ptr %t2360
@@ -4565,7 +4565,7 @@ bb306:
   call void @col6forge_set_runtime_source_context(ptr %t2475, i32 543, i32 7)
   %t2476 = load i32, ptr %t56
   %t2477 = load i32, ptr %t59
-  %t2478 = getelementptr [24 x i8], ptr @str56, i32 0, i32 0
+  %t2478 = getelementptr [30 x i8], ptr @str56, i32 0, i32 0
   %t2479 = alloca ptr, i32 6
   %t2480 = getelementptr ptr, ptr %t2479, i32 0
   store ptr %t60, ptr %t2480
@@ -4861,7 +4861,7 @@ bb330:
   %t2655 = sub i64 %t2651, %t2650
   %t2656 = sext i32 1 to i64
   %t2657 = add i64 %t2655, %t2656
-  %t2658 = getelementptr [19 x i8], ptr @str60, i32 0, i32 0
+  %t2658 = getelementptr [21 x i8], ptr @str60, i32 0, i32 0
   %t2659 = alloca ptr, i32 4
   %t2660 = getelementptr ptr, ptr %t2659, i32 0
   store ptr %t2654, ptr %t2660
@@ -8487,22 +8487,22 @@ exit:
 @str28 = private unnamed_addr constant [17 x i8] c"issiiissssiisiis\00", align 1
 @str29 = private unnamed_addr constant [55 x i8] c"           CORRECT:   RECL=   120     NEXTREC=     6\0A\0A\00", align 1
 @str30 = private unnamed_addr constant [45 x i8] c"tests/NIST_F78_test_suite/fcvs21_f95/FM912.f\00", align 1
-@str31 = private unnamed_addr constant [29 x i8] c"%5d%10f%14f%14lf%10L%20c%47c\00", align 1
+@str31 = private unnamed_addr constant [35 x i8] c"%5d%10.5f%14.6f%14.8lf%10L%20c%47c\00", align 1
 @str32 = private unnamed_addr constant [8 x i8] c"dffDLcc\00", align 1
-@str33 = private unnamed_addr constant [28 x i8] c"%12f%15lf%4d%11f%2L%25c%51c\00", align 1
+@str33 = private unnamed_addr constant [34 x i8] c"%12.6f%15.7lf%4d%11.5f%2L%25c%51c\00", align 1
 @str34 = private unnamed_addr constant [8 x i8] c"fDdfLcc\00", align 1
-@str35 = private unnamed_addr constant [29 x i8] c"%5d%10f%14lf%10L%20c%14f%47c\00", align 1
+@str35 = private unnamed_addr constant [35 x i8] c"%5d%10.5f%14.8lf%10L%20c%14.6f%47c\00", align 1
 @str36 = private unnamed_addr constant [8 x i8] c"dfDLcfc\00", align 1
-@str37 = private unnamed_addr constant [28 x i8] c"%12f%15lf%2L%4d%11f%25c%51c\00", align 1
+@str37 = private unnamed_addr constant [34 x i8] c"%12.6f%15.7lf%2L%4d%11.5f%25c%51c\00", align 1
 @str38 = private unnamed_addr constant [8 x i8] c"fDLdfcc\00", align 1
 @str39 = private unnamed_addr constant [66 x i8] c"%5d%s%s%s%*.*s%10c                                   NEW  RECORD \00", align 1
 @str40 = private unnamed_addr constant [9 x i8] c"isssiisi\00", align 1
 @str41 = private unnamed_addr constant [66 x i8] c"%s%5d%*.*s%s%s%10c                                   STOP  RECORD\00", align 1
 @str42 = private unnamed_addr constant [9 x i8] c"siiisssi\00", align 1
 @str43 = private unnamed_addr constant [4 x i8] c"OLD\00", align 1
-@str44 = private unnamed_addr constant [29 x i8] c"%10f%5d%20c%14lf%14f%10L%47c\00", align 1
+@str44 = private unnamed_addr constant [35 x i8] c"%10.5f%5d%20c%14.8lf%14.6f%10L%47c\00", align 1
 @str45 = private unnamed_addr constant [8 x i8] c"fdcDfLc\00", align 1
-@str46 = private unnamed_addr constant [29 x i8] c"%5d%11f%13f%14lf%20c%10L%47c\00", align 1
+@str46 = private unnamed_addr constant [35 x i8] c"%5d%11.5f%13.6f%14.8lf%20c%10L%47c\00", align 1
 @str47 = private unnamed_addr constant [8 x i8] c"dffDcLc\00", align 1
 @str48 = private unnamed_addr constant [14 x i8] c"%5d%s%s%s%s%s\00", align 1
 @str49 = private unnamed_addr constant [7 x i8] c"isssss\00", align 1
@@ -8510,13 +8510,13 @@ exit:
 @str51 = private unnamed_addr constant [10 x i8] c"ssiiisiis\00", align 1
 @str52 = private unnamed_addr constant [12 x i8] c"%+5d%s%5d%s\00", align 1
 @str53 = private unnamed_addr constant [5 x i8] c"isis\00", align 1
-@str54 = private unnamed_addr constant [23 x i8] c"%14lf%20c%2L%1c%4c%12c\00", align 1
+@str54 = private unnamed_addr constant [25 x i8] c"%14.8lf%20c%2L%1c%4c%12c\00", align 1
 @str55 = private unnamed_addr constant [7 x i8] c"DcLccc\00", align 1
-@str56 = private unnamed_addr constant [24 x i8] c"%5d%5c%10f%14f%20c%14lf\00", align 1
+@str56 = private unnamed_addr constant [30 x i8] c"%5d%5c%10.5f%14.6f%20c%14.8lf\00", align 1
 @str57 = private unnamed_addr constant [7 x i8] c"dcffcD\00", align 1
 @str58 = private unnamed_addr constant [6 x i8] c"%120c\00", align 1
 @str59 = private unnamed_addr constant [2 x i8] c"c\00", align 1
-@str60 = private unnamed_addr constant [19 x i8] c"%5c%10f%Z%5c%N%20c\00", align 1
+@str60 = private unnamed_addr constant [21 x i8] c"%5c%10.5f%Z%5c%N%20c\00", align 1
 @str61 = private unnamed_addr constant [5 x i8] c"cfcc\00", align 1
 @str62 = private unnamed_addr constant [7 x i8] c"DELETE\00", align 1
 @str63 = private unnamed_addr constant [74 x i8] c" TEST %3d  FAIL                                  RECORD%2d - ON I FORMAT\0A\00", align 1

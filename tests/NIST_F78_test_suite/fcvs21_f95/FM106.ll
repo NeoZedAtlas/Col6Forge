@@ -449,7 +449,7 @@ bb61:
   %t236 = getelementptr float, ptr %t1, i32 17
   %t237 = getelementptr float, ptr %t1, i32 18
   %t238 = getelementptr float, ptr %t1, i32 19
-  %t239 = getelementptr [170 x i8], ptr @str13, i32 0, i32 0
+  %t239 = getelementptr [210 x i8], ptr @str13, i32 0, i32 0
   %t240 = alloca ptr, i32 27
   %t241 = getelementptr ptr, ptr %t240, i32 0
   store ptr %t212, ptr %t241
@@ -794,7 +794,7 @@ bb84:
   %t447 = getelementptr float, ptr %t1, i32 17
   %t448 = getelementptr float, ptr %t1, i32 18
   %t449 = getelementptr float, ptr %t1, i32 19
-  %t450 = getelementptr [170 x i8], ptr @str13, i32 0, i32 0
+  %t450 = getelementptr [210 x i8], ptr @str13, i32 0, i32 0
   %t451 = alloca ptr, i32 27
   %t452 = getelementptr ptr, ptr %t451, i32 0
   store ptr %t423, ptr %t452
@@ -943,7 +943,7 @@ bb95:
   %t528 = getelementptr float, ptr %t1, i32 17
   %t529 = getelementptr float, ptr %t1, i32 18
   %t530 = getelementptr float, ptr %t1, i32 19
-  %t531 = getelementptr [170 x i8], ptr @str13, i32 0, i32 0
+  %t531 = getelementptr [210 x i8], ptr @str13, i32 0, i32 0
   %t532 = alloca ptr, i32 27
   %t533 = getelementptr ptr, ptr %t532, i32 0
   store ptr %t504, ptr %t533
@@ -1137,7 +1137,7 @@ bb112:
   %t639 = getelementptr float, ptr %t1, i32 17
   %t640 = getelementptr float, ptr %t1, i32 18
   %t641 = getelementptr float, ptr %t1, i32 19
-  %t642 = getelementptr [170 x i8], ptr @str13, i32 0, i32 0
+  %t642 = getelementptr [210 x i8], ptr @str13, i32 0, i32 0
   %t643 = alloca ptr, i32 27
   %t644 = getelementptr ptr, ptr %t643, i32 0
   store ptr %t615, ptr %t644
@@ -1516,7 +1516,7 @@ exit:
 @str10 = private unnamed_addr constant [28 x i8] c"iiiiiiissssssssssssssssssss\00", align 1
 @str11 = private unnamed_addr constant [56 x i8] c"          FILE I09 CREATED WITH 124 SEQUENTIAL RECORDS\0A\00", align 1
 @str12 = private unnamed_addr constant [45 x i8] c"tests/NIST_F78_test_suite/fcvs21_f95/FM106.f\00", align 1
-@str13 = private unnamed_addr constant [170 x i8] c"%3d%2d%2d%3d%3d%3d%4d   %8f%8f  %9f%9f%9f  %10f\0A                        %10f%10f%10f    %11f%11f\0A %11f%11f%11f  %12f%12f\0A                          %12f%12f%12f%12f      \00", align 1
+@str13 = private unnamed_addr constant [210 x i8] c"%3d%2d%2d%3d%3d%3d%4d   %8.1f%8.1f  %9.2f%9.2f%9.2f  %10.3f\0A                        %10.3f%10.3f%10.3f    %11.4f%11.4f\0A %11.4f%11.4f%11.4f  %12.5f%12.5f\0A                          %12.5f%12.5f%12.5f%12.5f      \00", align 1
 @str14 = private unnamed_addr constant [28 x i8] c"dddddddffffffffffffffffffff\00", align 1
 @str15 = private unnamed_addr constant [21 x i8] c"     %5d       PASS\0A\00", align 1
 @str16 = private unnamed_addr constant [2 x i8] c"i\00", align 1

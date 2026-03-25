@@ -63,6 +63,7 @@ pub const FormatItem = union(enum) {
 pub const IntFormat = struct {
     width: usize,
     min_digits: usize,
+    explicit_min_digits: bool = false,
 };
 
 pub const RealFormat = struct {

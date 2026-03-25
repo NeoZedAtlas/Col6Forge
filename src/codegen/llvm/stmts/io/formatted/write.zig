@@ -331,7 +331,6 @@ fn emitWriteDescriptorPasses(
         }
 
         pub fn beginPass(self: *@This(), _: *Context, _: anytype, _: usize, _: usize) EmitError!void {
-            self.scale_factor = 0;
             self.sign_plus = false;
             self.column = 1;
         }
@@ -402,7 +401,7 @@ fn emitWriteDescriptorPasses(
                         const value = self.expanded_values.values.items[self.arg_index];
                         const int_ty = ctx_inner.defaultIntegerIRType();
                         const coerced = try expr.coerce(ctx_inner, builder_inner, value, int_ty);
-                        if (spec.min_digits == 0) {
+                        if (!spec.explicit_min_digits) {
                             try appendIntFormat(self.fmt_buf, spec.width, self.sign_plus);
                             try self.args.append(.{ .ty = int_ty, .name = coerced.name });
                         } else {
@@ -414,7 +413,7 @@ fn emitWriteDescriptorPasses(
                             );
                             const tmp = try ctx_inner.nextTemp();
                             const width_val = try ctx_inner.constI32(@intCast(spec.width));
-                            const min_val = try ctx_inner.constI32(@intCast(spec.min_digits));
+                            const min_val = try ctx_inner.constI32(if (spec.min_digits == 0) @as(i32, -1) else @as(i32, @intCast(spec.min_digits)));
                             const sign_val = ValueRef{ .name = if (self.sign_plus) "1" else "0", .ty = .i32, .is_ptr = false };
                             try builder_inner.callTyped(tmp, .ptr, fmt_i_name, &.{ width_val, min_val, sign_val, coerced });
                             try self.fmt_buf.appendSlice("%s");

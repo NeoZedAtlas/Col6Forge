@@ -2,7 +2,6 @@ const std = @import("std");
 const ast = @import("../../../../input.zig");
 const llvm_types = @import("../../../types.zig");
 const context = @import("../../../codegen/context/mod.zig");
-const utils = @import("../../../codegen/utils.zig");
 const format_ir = @import("../../../../../format/stream_ir.zig");
 
 const Context = context.Context;
@@ -37,13 +36,6 @@ const CharFixup = struct {
     temp_ptr: ?ValueRef,
 };
 
-const ScaleFixup = struct {
-    target_ptr: ValueRef,
-    temp_ptr: ValueRef,
-    ty: llvm_types.IRType,
-    scale_factor: i32,
-};
-
 fn constI32(ctx: *Context, value: usize) EmitError!ValueRef {
     return ctx.constI32(@intCast(value));
 }
@@ -75,8 +67,6 @@ pub fn emitReadFormattedLowered(
     var char_fixups = std.array_list.Managed(CharFixup).init(ctx.allocator);
     defer char_fixups.deinit();
 
-    var scale_fixups = std.array_list.Managed(ScaleFixup).init(ctx.allocator);
-    defer scale_fixups.deinit();
     var heap_allocs = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer heap_allocs.deinit();
 
@@ -108,7 +98,7 @@ pub fn emitReadFormattedLowered(
             }
         }
     } else {
-        try emitReadDescriptorPasses(ctx, builder, fmt_ops, expanded, &fmt_buf, &arg_ptrs, &arg_kinds, &char_fixups, &scale_fixups, &heap_allocs);
+        try emitReadDescriptorPasses(ctx, builder, fmt_ops, expanded, &fmt_buf, &arg_ptrs, &arg_kinds, &char_fixups, &heap_allocs);
     }
 
     const fmt_global = try ctx.string_pool.intern(fmt_buf.items);
@@ -150,17 +140,6 @@ pub fn emitReadFormattedLowered(
         } else {
             try builder.callTyped(null, .i32, read_name, &.{ unit_i32, fmt_ptr, ptr_array, kinds_ptr, arg_count_val, mode_val });
         }
-    }
-
-    for (scale_fixups.items) |fixup| {
-        const tmp_val = try ctx.nextTemp();
-        try builder.load(tmp_val, fixup.ty, fixup.temp_ptr);
-        const scale = std.math.pow(f64, 10.0, @as(f64, @floatFromInt(-fixup.scale_factor)));
-        const scale_text = utils.formatFloatValue(ctx.allocator, scale, if (fixup.ty == .f64) .f64 else .f32);
-        const scale_val = ValueRef{ .name = scale_text, .ty = fixup.ty, .is_ptr = false };
-        const scaled_tmp = try ctx.nextTemp();
-        try builder.binary(scaled_tmp, "fmul", fixup.ty, .{ .name = tmp_val, .ty = fixup.ty, .is_ptr = false }, scale_val);
-        try builder.store(.{ .name = scaled_tmp, .ty = fixup.ty, .is_ptr = false }, fixup.target_ptr);
     }
 
     try applyComplexFixups(ctx, builder, expanded);
@@ -206,7 +185,6 @@ fn emitReadDescriptorPasses(
     arg_ptrs: *std.array_list.Managed([]const u8),
     arg_kinds: *std.array_list.Managed(u8),
     char_fixups: *std.array_list.Managed(CharFixup),
-    scale_fixups: *std.array_list.Managed(ScaleFixup),
     heap_allocs: *std.array_list.Managed(ValueRef),
 ) EmitError!void {
     const State = struct {
@@ -215,10 +193,8 @@ fn emitReadDescriptorPasses(
         arg_ptrs: *std.array_list.Managed([]const u8),
         arg_kinds: *std.array_list.Managed(u8),
         char_fixups: *std.array_list.Managed(CharFixup),
-        scale_fixups: *std.array_list.Managed(ScaleFixup),
         heap_allocs: *std.array_list.Managed(ValueRef),
         arg_index: usize = 0,
-        scale_factor: i32 = 0,
 
         pub fn hasRemaining(self: *@This()) bool {
             return self.arg_index < self.expanded.ptrs.items.len;
@@ -228,9 +204,7 @@ fn emitReadDescriptorPasses(
             try self.fmt_buf.append('\n');
         }
 
-        pub fn beginPass(self: *@This(), _: *Context, _: anytype, _: usize, _: usize) EmitError!void {
-            self.scale_factor = 0;
-        }
+        pub fn beginPass(_: *@This(), _: *Context, _: anytype, _: usize, _: usize) EmitError!void {}
 
         pub fn handleItem(self: *@This(), ctx_inner: *Context, builder_inner: anytype, item: format_ir.StreamOp) EmitError!bool {
             switch (item) {
@@ -264,30 +238,12 @@ fn emitReadDescriptorPasses(
                         const width = if (spec.width > 0) spec.width else 0;
                         const fmt_spec = if (ty == .f64) "lf" else "f";
                         if (width > 0) {
-                            try self.fmt_buf.writer().print("%{d}{s}", .{ width, fmt_spec });
+                            try self.fmt_buf.writer().print("%{d}.{d}{s}", .{ width, spec.precision, fmt_spec });
                         } else {
-                            try self.fmt_buf.writer().print("%{s}", .{fmt_spec});
+                            try self.fmt_buf.writer().print("%.{d}{s}", .{ spec.precision, fmt_spec });
                         }
-                        if (self.scale_factor != 0) {
-                            const bytes: usize = switch (ty) {
-                                .f32 => 4,
-                                .f64 => 8,
-                                else => return error.UnsupportedIntrinsicType,
-                            };
-                            const tmp_ptr = try emitHeapBytes(ctx_inner, builder_inner, bytes);
-                            try self.heap_allocs.append(tmp_ptr);
-                            try self.arg_ptrs.append(tmp_ptr.name);
-                            try self.arg_kinds.append(if (ty == .f64) 'D' else 'f');
-                            try self.scale_fixups.append(.{
-                                .target_ptr = self.expanded.ptrs.items[self.arg_index],
-                                .temp_ptr = tmp_ptr,
-                                .ty = ty,
-                                .scale_factor = self.scale_factor,
-                            });
-                        } else {
-                            try self.arg_ptrs.append(self.expanded.ptrs.items[self.arg_index].name);
-                            try self.arg_kinds.append(if (ty == .f64) 'D' else 'f');
-                        }
+                        try self.arg_ptrs.append(self.expanded.ptrs.items[self.arg_index].name);
+                        try self.arg_kinds.append(if (ty == .f64) 'D' else 'f');
                         self.arg_index += 1;
                     },
                     .char => |spec| {
@@ -334,7 +290,7 @@ fn emitReadDescriptorPasses(
                         self.arg_index += 1;
                     },
                 },
-                .scale => |value| self.scale_factor = value,
+                .scale => |value| try self.fmt_buf.writer().print("%{d}P", .{value}),
                 .blank_control => |ctrl| {
                     const directive: u8 = if (ctrl == .nulls) 'N' else 'Z';
                     try self.fmt_buf.writer().print("%{c}", .{directive});
@@ -352,7 +308,6 @@ fn emitReadDescriptorPasses(
         .arg_ptrs = arg_ptrs,
         .arg_kinds = arg_kinds,
         .char_fixups = char_fixups,
-        .scale_fixups = scale_fixups,
         .heap_allocs = heap_allocs,
     };
     try classic_common.emitDescriptorPasses(ctx, builder, fmt_ops, &state);

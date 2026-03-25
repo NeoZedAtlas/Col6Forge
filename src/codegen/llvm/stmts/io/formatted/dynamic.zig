@@ -89,6 +89,13 @@ fn emitMissingDynamicFormatTrap(ctx: *Context, builder: anytype) EmitError!void 
     try builder.emitUnreachable();
 }
 
+fn formatOpsNeedExternalStreamWrite(ops: []const format_ir.StreamOp) bool {
+    for (ops) |op| {
+        if (op == .tab) return true;
+    }
+    return false;
+}
+
 pub fn prepareDynamicFormat(
     ctx: *Context,
     builder: anytype,
@@ -237,6 +244,19 @@ fn emitWriteDynamicFormatCore(
         expanded_values: *ExpandedWriteValues,
 
         fn emitMatched(self: @This(), ctx_inner: *Context, builder_inner: anytype, fmt: NumericFormat) EmitError!void {
+            if (!self.is_internal and formatOpsNeedExternalStreamWrite(fmt.ops)) {
+                return emitWriteFormattedStream(
+                    ctx_inner,
+                    builder_inner,
+                    self.write,
+                    self.unit_value,
+                    self.unit_char_len,
+                    self.unit_record_count,
+                    self.is_internal,
+                    self.unit_i32,
+                    .{ .static_ops = fmt.ops },
+                );
+            }
             try emitWriteFormattedLowered(
                 ctx_inner,
                 builder_inner,
