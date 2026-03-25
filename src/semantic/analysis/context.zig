@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const common_diag = @import("../../common/diagnostic.zig");
 const catalog = @import("../../common/error_catalog.zig");
 const diag = @import("../diagnostic.zig");
 const symbols = @import("../symbol/mod.zig");
@@ -325,11 +326,24 @@ pub const Context = struct {
     }
 
     pub fn setDiagnostic(self: *Context, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
+        self.setDiagnosticDetailed(line, column, code, message, line_text, &.{}, &.{});
+    }
+
+    pub fn setDiagnosticDetailed(
+        self: *Context,
+        line: usize,
+        column: usize,
+        code: []const u8,
+        message: []const u8,
+        line_text: []const u8,
+        notes: []const common_diag.DiagnosticMessage,
+        helps: []const common_diag.DiagnosticMessage,
+    ) void {
         if (self.diag_bag) |bag| {
-            bag.set(line, column, code, message, line_text);
+            bag.setDetailed(line, column, code, message, line_text, notes, helps);
             return;
         }
-        diag.set(line, column, code, message, line_text);
+        diag.setDetailed(line, column, code, message, line_text, notes, helps);
     }
 
     pub fn noteFallbackSource(self: *Context, line: usize, column: usize, line_text: []const u8) void {
@@ -350,27 +364,51 @@ pub const Context = struct {
         if (!self.usesExplicitDiagnosticBag() and self.hasDiagnostic()) return;
 
         const info = catalog.semanticInfoFor(err);
+        const advice = semanticAdviceFor(err);
         if (self.current_source) |source| {
             const line = if (source.line == 0) 1 else source.line;
             const col = if (source.column == 0) 1 else source.column;
-            self.setDiagnostic(line, col, info.code, info.message, source.text);
+            self.setDiagnosticDetailed(line, col, info.code, info.message, source.text, advice.notes, advice.helps);
             return;
         }
         if (self.current_decl_source) |decl_src| {
             const line = if (decl_src.line == 0) 1 else decl_src.line;
             const col = if (decl_src.column == 0) 1 else decl_src.column;
-            self.setDiagnostic(line, col, info.code, info.message, decl_src.text);
+            self.setDiagnosticDetailed(line, col, info.code, info.message, decl_src.text, advice.notes, advice.helps);
             return;
         }
         if (self.current_stmt) |stmt| {
             const line = if (stmt.source_line == 0) 1 else stmt.source_line;
             const col = if (stmt.source_column == 0) 1 else stmt.source_column;
-            self.setDiagnostic(line, col, info.code, info.message, stmt.source_text);
+            self.setDiagnosticDetailed(line, col, info.code, info.message, stmt.source_text, advice.notes, advice.helps);
             return;
         }
         if (self.fallbackSource()) |source| {
-            self.setDiagnostic(source.line, source.column, info.code, info.message, source.line_text);
+            self.setDiagnosticDetailed(source.line, source.column, info.code, info.message, source.line_text, advice.notes, advice.helps);
         }
+    }
+
+    const Advice = struct {
+        notes: []const common_diag.DiagnosticMessage = &.{},
+        helps: []const common_diag.DiagnosticMessage = &.{},
+    };
+
+    fn semanticAdviceFor(err: anyerror) Advice {
+        return switch (err) {
+            error.InvalidCharLen => .{
+                .notes = &.{.{ .text = "CHARACTER length must be constant unless the entity is a dummy argument, function result, POINTER, or ALLOCATABLE." }},
+                .helps = &.{.{ .text = "Use a positive constant length here, or move the assumed/deferred length onto a supported entity kind." }},
+            },
+            error.InvalidArithmeticOperands => .{
+                .notes = &.{.{ .text = "Arithmetic operators require operands from compatible intrinsic categories." }},
+                .helps = &.{.{ .text = "Convert CHARACTER or LOGICAL operands before using arithmetic operators." }},
+            },
+            error.InvalidArgumentCount => .{
+                .notes = &.{.{ .text = "The semantic call checker matched this against one visible procedure shape or explicit interface." }},
+                .helps = &.{.{ .text = "Check the callee's interface and the actual argument list together." }},
+            },
+            else => .{},
+        };
     }
 
     fn latestDiagnosticMatchesActiveSource(self: *const Context) bool {

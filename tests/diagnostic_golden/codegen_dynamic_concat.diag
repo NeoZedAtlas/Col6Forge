@@ -5,3 +5,5 @@ error[CF3119]: invalid operand type for expression operator
   |
 4 |       C = A // I
   |                ^
+   = note: Arithmetic operators require operands from compatible intrinsic categories.
+   = help: Convert CHARACTER or LOGICAL operands before using arithmetic operators.

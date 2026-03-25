@@ -5,3 +5,5 @@ error[CF3103]: invalid CHARACTER length specification
   |
 2 |       CHARACTER*(*) A
   |       ^
+   = note: CHARACTER length must be constant unless the entity is a dummy argument, function result, POINTER, or ALLOCATABLE.
+   = help: Use a positive constant length here, or move the assumed/deferred length onto a supported entity kind.

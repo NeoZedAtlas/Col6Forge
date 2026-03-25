@@ -16,12 +16,16 @@ const DiagStorage = struct {
     code: ?[]u8 = null,
     message: ?[]u8 = null,
     line_text: ?[]u8 = null,
+    notes: []diag.DiagnosticMessage = &.{},
+    helps: []diag.DiagnosticMessage = &.{},
 
     fn clear(self: *DiagStorage) void {
         if (self.file_path) |buf| compat_allocator.free(buf);
         if (self.code) |buf| compat_allocator.free(buf);
         if (self.message) |buf| compat_allocator.free(buf);
         if (self.line_text) |buf| compat_allocator.free(buf);
+        freeCompatMessages(self.notes);
+        freeCompatMessages(self.helps);
         self.* = .{};
     }
 };
@@ -39,6 +43,8 @@ pub fn takeLastDiagnostic() ?diag.Diagnostic {
         .code = diag_storage.code orelse "",
         .message = diag_storage.message orelse "",
         .line_text = diag_storage.line_text orelse "",
+        .notes = diag_storage.notes,
+        .helps = diag_storage.helps,
     };
 }
 
@@ -129,7 +135,11 @@ pub fn appendParserDiagnostics(diag_bag: *diag.Bag, parse_diag_bag: *parser.diag
         defer parse_diag_bag.release(parse_info);
         const raw_line = sourceLineAt(contents, parse_info.line);
         const line_text = if (raw_line.len > 0) raw_line else parse_info.line_text;
-        diag_bag.add(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text);
+        diag_bag.addDetailed(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text, .{
+            .stage = .parser,
+            .notes = parse_info.notes,
+            .helps = parse_info.helps,
+        });
         appended = true;
     }
     return appended;
@@ -141,7 +151,11 @@ pub fn appendSemanticDiagnostics(diag_bag: *diag.Bag, semantic_diag_bag: *semant
         defer semantic_diag_bag.release(sem_info);
         const raw_line = sourceLineAt(contents, sem_info.line);
         const line_text = if (raw_line.len > 0) raw_line else sem_info.line_text;
-        diag_bag.add(input_path, sem_info.line, sem_info.column, sem_info.code, sem_info.message, line_text);
+        diag_bag.addDetailed(input_path, sem_info.line, sem_info.column, sem_info.code, sem_info.message, line_text, .{
+            .stage = .semantic,
+            .notes = sem_info.notes,
+            .helps = sem_info.helps,
+        });
         appended = true;
     }
     return appended;
@@ -153,7 +167,11 @@ pub fn appendCodegenDiagnostics(diag_bag: *diag.Bag, codegen_diag_bag: *codegen.
         defer codegen_diag_bag.release(cg_info);
         const raw_line = sourceLineAt(contents, cg_info.line);
         const line_text = if (raw_line.len > 0) raw_line else cg_info.line_text;
-        diag_bag.add(input_path, cg_info.line, cg_info.column, cg_info.code, cg_info.message, line_text);
+        diag_bag.addDetailed(input_path, cg_info.line, cg_info.column, cg_info.code, cg_info.message, line_text, .{
+            .stage = .codegen,
+            .notes = cg_info.notes,
+            .helps = cg_info.helps,
+        });
         appended = true;
     }
     return appended;
@@ -184,6 +202,8 @@ pub fn publishCompatFromBag(diag_bag: *diag.Bag) void {
             pipeline_diag.code,
             pipeline_diag.message,
             pipeline_diag.line_text,
+            pipeline_diag.notes,
+            pipeline_diag.helps,
         );
     }
 }
@@ -200,8 +220,10 @@ pub fn setLastDiagnostic(
     code: []const u8,
     message: []const u8,
     line_text: []const u8,
+    notes: []const diag.DiagnosticMessage,
+    helps: []const diag.DiagnosticMessage,
 ) void {
-    const next = makeCompatDiagnostic(input_path, line, column, code, message, line_text) catch return;
+    const next = makeCompatDiagnostic(input_path, line, column, code, message, line_text, notes, helps) catch return;
     diag_storage.clear();
     diag_storage = next;
     has_diag = true;
@@ -214,6 +236,8 @@ fn makeCompatDiagnostic(
     code: []const u8,
     message: []const u8,
     line_text: []const u8,
+    notes: []const diag.DiagnosticMessage,
+    helps: []const diag.DiagnosticMessage,
 ) !DiagStorage {
     var next: DiagStorage = .{
         .line = if (line == 0) 1 else line,
@@ -224,7 +248,30 @@ fn makeCompatDiagnostic(
     next.code = try compat_allocator.dupe(u8, code);
     next.message = try compat_allocator.dupe(u8, message);
     next.line_text = try compat_allocator.dupe(u8, line_text);
+    next.notes = try dupeCompatMessages(notes);
+    next.helps = try dupeCompatMessages(helps);
     return next;
+}
+
+fn dupeCompatMessages(messages: []const diag.DiagnosticMessage) ![]diag.DiagnosticMessage {
+    if (messages.len == 0) return &.{};
+    const owned = try compat_allocator.alloc(diag.DiagnosticMessage, messages.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (owned[0..initialized]) |message| compat_allocator.free(message.text);
+        compat_allocator.free(owned);
+    }
+    for (messages) |message| {
+        owned[initialized] = .{ .text = try compat_allocator.dupe(u8, message.text) };
+        initialized += 1;
+    }
+    return owned;
+}
+
+fn freeCompatMessages(messages: []const diag.DiagnosticMessage) void {
+    if (messages.len == 0) return;
+    for (messages) |message| compat_allocator.free(message.text);
+    compat_allocator.free(messages);
 }
 
 pub fn sourceLineAt(contents: []const u8, line_no: usize) []const u8 {

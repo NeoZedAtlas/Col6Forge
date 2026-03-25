@@ -1,4 +1,5 @@
 const std = @import("std");
+const common_diag = @import("../common/diagnostic.zig");
 const compat = @import("../common/compat_diagnostic_storage.zig");
 
 pub const SemanticDiagnostic = struct {
@@ -7,6 +8,8 @@ pub const SemanticDiagnostic = struct {
     code: []const u8,
     message: []const u8,
     line_text: []const u8,
+    notes: []const common_diag.DiagnosticMessage = &.{},
+    helps: []const common_diag.DiagnosticMessage = &.{},
 };
 
 pub const FallbackSource = struct {
@@ -48,7 +51,20 @@ pub const Bag = struct {
     }
 
     pub fn set(self: *Bag, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
-        const owned = self.makeOwned(line, column, code, message, line_text) catch return;
+        self.setDetailed(line, column, code, message, line_text, &.{}, &.{});
+    }
+
+    pub fn setDetailed(
+        self: *Bag,
+        line: usize,
+        column: usize,
+        code: []const u8,
+        message: []const u8,
+        line_text: []const u8,
+        notes: []const common_diag.DiagnosticMessage,
+        helps: []const common_diag.DiagnosticMessage,
+    ) void {
+        const owned = self.makeOwned(line, column, code, message, line_text, notes, helps) catch return;
         self.items.append(owned) catch {};
     }
 
@@ -85,13 +101,28 @@ pub const Bag = struct {
         return source;
     }
 
-    fn makeOwned(self: *Bag, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) !SemanticDiagnostic {
+    fn makeOwned(
+        self: *Bag,
+        line: usize,
+        column: usize,
+        code: []const u8,
+        message: []const u8,
+        line_text: []const u8,
+        notes: []const common_diag.DiagnosticMessage,
+        helps: []const common_diag.DiagnosticMessage,
+    ) !SemanticDiagnostic {
+        const owned_notes = try dupeMessages(self.allocator, notes);
+        errdefer freeMessages(self.allocator, owned_notes);
+        const owned_helps = try dupeMessages(self.allocator, helps);
+        errdefer freeMessages(self.allocator, owned_helps);
         return .{
             .line = if (line == 0) 1 else line,
             .column = if (column == 0) 1 else column,
             .code = try self.allocator.dupe(u8, code),
             .message = try self.allocator.dupe(u8, message),
             .line_text = try self.allocator.dupe(u8, line_text),
+            .notes = owned_notes,
+            .helps = owned_helps,
         };
     }
 
@@ -99,12 +130,35 @@ pub const Bag = struct {
         self.allocator.free(diag.code);
         self.allocator.free(diag.message);
         self.allocator.free(diag.line_text);
+        freeMessages(self.allocator, diag.notes);
+        freeMessages(self.allocator, diag.helps);
     }
 
     fn clearFallback(self: *Bag) void {
         if (self.fallback) |source| self.allocator.free(source.line_text);
     }
 };
+
+fn dupeMessages(allocator: std.mem.Allocator, messages: []const common_diag.DiagnosticMessage) ![]common_diag.DiagnosticMessage {
+    if (messages.len == 0) return &.{};
+    const owned = try allocator.alloc(common_diag.DiagnosticMessage, messages.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (owned[0..initialized]) |message| allocator.free(message.text);
+        allocator.free(owned);
+    }
+    for (messages) |message| {
+        owned[initialized] = .{ .text = try allocator.dupe(u8, message.text) };
+        initialized += 1;
+    }
+    return owned;
+}
+
+fn freeMessages(allocator: std.mem.Allocator, messages: []const common_diag.DiagnosticMessage) void {
+    if (messages.len == 0) return;
+    for (messages) |message| allocator.free(message.text);
+    allocator.free(messages);
+}
 
 threadlocal var storage: compat.Storage = .{};
 threadlocal var has_diag: bool = false;
@@ -138,6 +192,18 @@ pub fn set(line: usize, column: usize, code: []const u8, message: []const u8, li
     storage.clear();
     storage = next;
     has_diag = true;
+}
+
+pub fn setDetailed(
+    line: usize,
+    column: usize,
+    code: []const u8,
+    message: []const u8,
+    line_text: []const u8,
+    _: []const common_diag.DiagnosticMessage,
+    _: []const common_diag.DiagnosticMessage,
+) void {
+    set(line, column, code, message, line_text);
 }
 
 pub fn take() ?SemanticDiagnostic {

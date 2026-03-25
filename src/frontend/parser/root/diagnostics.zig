@@ -1,4 +1,5 @@
 const ast = @import("../../../ast/nodes.zig");
+const common_diag = @import("../../../common/diagnostic.zig");
 const catalog = @import("../../../common/error_catalog.zig");
 const logical_line = @import("../../logical_line.zig");
 const lexer = @import("../../lexer.zig");
@@ -63,7 +64,23 @@ pub fn setParseDiagnosticForLine(
     err: anyerror,
 ) void {
     const info = catalog.parserInfoFor(err);
-    diag_bag.set(line_no, column, info.code, info.message, line.text);
+    const advice = parserAdviceFor(err);
+    diag_bag.setDetailed(line_no, column, info.code, info.message, line.text, advice.notes, advice.helps);
+}
+
+const Advice = struct {
+    notes: []const common_diag.DiagnosticMessage = &.{},
+    helps: []const common_diag.DiagnosticMessage = &.{},
+};
+
+fn parserAdviceFor(err: anyerror) Advice {
+    return switch (err) {
+        error.MissingName => .{
+            .notes = &.{.{ .text = "The parser reached a position where an identifier is required to continue the declaration or statement." }},
+            .helps = &.{.{ .text = "Check trailing commas and continuation lines near this position." }},
+        },
+        else => .{},
+    };
 }
 
 pub fn stampStmtSource(stmt_node: *ast.Stmt, line: logical_line.LogicalLine) void {

@@ -162,12 +162,14 @@ fn validateConcreteAbstractTypeUse(self: *context.Context, type_spec: symbols.Ty
 fn emitCharacterLenTypingDiagnostic(self: *context.Context, expr: *ast.Expr) bool {
     if (!exprHasIdentifier(expr)) return false;
     const decl_source = self.current_decl_source orelse ast.DeclSource{};
-    self.setDiagnostic(
+    self.setDiagnosticDetailed(
         if (decl_source.line == 0) 1 else decl_source.line,
         if (decl_source.column == 0) 1 else decl_source.column,
         catalog.semantic.invalid_char_len.code,
         "used before it is typed",
         decl_source.text,
+        &.{.{ .text = "This CHARACTER length expression depends on an identifier whose type/constant value is not ready at this declaration point." }},
+        &.{.{ .text = "Declare or type the length parameter before using it in a CHARACTER length expression." }},
     );
     return true;
 }

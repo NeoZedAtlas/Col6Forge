@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const common_diag = @import("../../../common/diagnostic.zig");
 const catalog = @import("../../../common/error_catalog.zig");
 const symbols = @import("../../symbol/mod.zig");
 const context = @import("../context.zig");
@@ -309,22 +310,25 @@ pub fn emitNamedProcedureDiagnostic(
     err: anyerror,
     message: []const u8,
 ) CheckError {
+    const advice = invalidArgumentAdvice();
     if (self.current_source) |src| {
         const line = if (src.line == 0) 1 else src.line;
         const column = if (src.column == 0) 1 else src.column;
-        self.setDiagnostic(line, column, catalog.semantic.invalid_argument_count.code, message, src.text);
+        self.setDiagnosticDetailed(line, column, catalog.semantic.invalid_argument_count.code, message, src.text, advice.notes, advice.helps);
         return err;
     }
     if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
         const sym = self.symbols.items[idx];
         const line_text = self.current_stmt orelse return err;
         _ = sym;
-        self.setDiagnostic(
+        self.setDiagnosticDetailed(
             if (line_text.source_line == 0) 1 else line_text.source_line,
             if (line_text.source_column == 0) 1 else line_text.source_column,
             catalog.semantic.invalid_argument_count.code,
             message,
             line_text.source_text,
+            advice.notes,
+            advice.helps,
         );
     }
     return err;
@@ -966,13 +970,26 @@ fn emitProcedureActualDiagnostic(
     message: []const u8,
 ) CheckError {
     const source = self.sourceForExpr(expr);
+    const advice = invalidArgumentAdvice();
     if (source) |src| {
         const line = if (src.line == 0) 1 else src.line;
         const column = if (src.column == 0) 1 else src.column;
-        self.setDiagnostic(line, column, catalog.semantic.invalid_argument_count.code, message, src.text);
+        self.setDiagnosticDetailed(line, column, catalog.semantic.invalid_argument_count.code, message, src.text, advice.notes, advice.helps);
         self.setCurrentSource(src);
     }
     return err;
+}
+
+const Advice = struct {
+    notes: []const common_diag.DiagnosticMessage = &.{},
+    helps: []const common_diag.DiagnosticMessage = &.{},
+};
+
+fn invalidArgumentAdvice() Advice {
+    return .{
+        .notes = &.{.{ .text = "This diagnostic comes from the semantic procedure-call matcher, not from parser recovery." }},
+        .helps = &.{.{ .text = "Compare the visible procedure interface against the actual argument list and procedure kind." }},
+    };
 }
 
 fn emitVariableDefinitionContextDiagnostic(

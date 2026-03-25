@@ -66,6 +66,14 @@ test "runPipeline reports semantic declaration diagnostics against the original 
     try testing.expectEqual(@as(usize, 7), diag_info.column);
     try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag_info.code);
     try testing.expectEqualStrings("      CHARACTER*(*) A", diag_info.line_text);
+    try testing.expectEqual(@as(usize, 1), diag_info.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag_info.helps.len);
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    try @import("../../root.zig").writeDiagnostic(&out.writer, diag_info);
+    try out.writer.flush();
+    try testing.expect(std.mem.indexOf(u8, out.writer.buffered(), "CHARACTER length must be constant") != null);
 }
 
 test "runPipeline compat diagnostic preserves long source lines without truncation" {
@@ -175,6 +183,8 @@ test "runPipelineWithOptionsAndDiagnostics keeps diagnostics in explicit bag" {
     try testing.expectEqual(@as(usize, 7), diag_info.column);
     try testing.expectEqualStrings(catalog.semantic.invalid_char_len.code, diag_info.code);
     try testing.expectEqualStrings("      CHARACTER*(*) A", diag_info.line_text);
+    try testing.expectEqual(@as(usize, 1), diag_info.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag_info.helps.len);
     try testing.expect(takeLastDiagnostic() == null);
 }
 
@@ -902,11 +912,30 @@ test "releaseLastDiagnostic clears compat storage after take" {
     const testing = std.testing;
 
     clearLastDiagnostic();
-    setLastDiagnostic("x.f", 2, 3, catalog.pipeline.generic.code, "msg", "line");
+    setLastDiagnostic("x.f", 2, 3, catalog.pipeline.generic.code, "msg", "line", &.{.{ .text = "note" }}, &.{.{ .text = "help" }});
     const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expectEqualStrings("x.f", diag_info.file_path);
+    try testing.expectEqual(@as(usize, 1), diag_info.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag_info.helps.len);
     releaseLastDiagnostic(diag_info);
     try testing.expect(takeLastDiagnostic() == null);
+}
+
+test "repository semantic decl char len golden input keeps compat notes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    clearLastDiagnostic();
+    try testing.expectError(
+        error.InvalidCharLen,
+        runPipelineWithOptions(allocator, "tests/diagnostic_golden/semantic_decl_char_len.f", .llvm, .{
+            .target = "x86_64-linux-gnu",
+        }),
+    );
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqual(@as(usize, 1), diag_info.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag_info.helps.len);
 }
 
 test "runPipelineWithOptionsAndDiagnostics compiles ENTRY function alternate result body without leaking into primary unit" {

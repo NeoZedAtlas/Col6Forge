@@ -359,18 +359,25 @@ fn normalizeDisplayPath(allocator: std.mem.Allocator, path: []const u8) ![]const
     return out;
 }
 
-fn renderDiagnosticText(allocator: std.mem.Allocator, display_path: []const u8, err: anyerror) ![]u8 {
+fn renderDiagnosticText(
+    allocator: std.mem.Allocator,
+    display_path: []const u8,
+    diag_bag: *Col6Forge.diag.Bag,
+    err: anyerror,
+) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
-    if (Col6Forge.takeLastPipelineDiagnostic()) |diag| {
-        try Col6Forge.writeDiagnostic(&out.writer, .{
-            .file_path = display_path,
-            .line = diag.line,
-            .column = diag.column,
-            .code = diag.code,
-            .message = diag.message,
-            .line_text = diag.line_text,
-        });
+    if (diag_bag.has()) {
+        while (diag_bag.take()) |diag| {
+            defer diag_bag.release(diag);
+            var display_diag = diag;
+            display_diag.file_path = display_path;
+            try Col6Forge.writeDiagnostic(&out.writer, display_diag);
+        }
+    } else if (Col6Forge.takeLastPipelineDiagnostic()) |diag| {
+        var display_diag = diag;
+        display_diag.file_path = display_path;
+        try Col6Forge.writeDiagnostic(&out.writer, display_diag);
     } else {
         try Col6Forge.writePipelineErrorDiagnostic(&out.writer, display_path, err);
     }
@@ -396,11 +403,13 @@ fn processCase(
     log_state: *LogState,
 ) !CaseResult {
     var timer = try std.time.Timer.start();
+    var diag_bag = Col6Forge.diag.Bag.init(allocator);
+    defer diag_bag.deinit();
     const result = switch (options.mode) {
-        .pipeline => Col6Forge.runPipelineWithOptions(allocator, case.input_path, .llvm, .{
+        .pipeline => Col6Forge.runPipelineWithOptionsAndDiagnostics(allocator, case.input_path, .llvm, .{
             .target = "x86_64-linux-gnu",
-        }),
-        .cc_translate => runCcTranslateDiagnosticPipeline(allocator, case.input_path),
+        }, &diag_bag),
+        .cc_translate => runCcTranslateDiagnosticPipeline(allocator, case.input_path, &diag_bag),
     };
     if (result) |success| {
         defer allocator.free(success.output);
@@ -409,7 +418,7 @@ fn processCase(
     } else |err| {
         const display_path = try normalizeDisplayPath(allocator, case.input_path);
         defer allocator.free(display_path);
-        const actual = try renderDiagnosticText(allocator, display_path, err);
+        const actual = try renderDiagnosticText(allocator, display_path, &diag_bag, err);
         defer allocator.free(actual);
 
         if (isTimedOut(options.timeout_ms, &timer)) {
@@ -448,10 +457,14 @@ fn processCase(
     }
 }
 
-fn runCcTranslateDiagnosticPipeline(allocator: std.mem.Allocator, input_path: []const u8) !Col6Forge.PipelineResult {
+fn runCcTranslateDiagnosticPipeline(
+    allocator: std.mem.Allocator,
+    input_path: []const u8,
+    diag_bag: *Col6Forge.diag.Bag,
+) !Col6Forge.PipelineResult {
     var out: std.Io.Writer.Allocating = .init(allocator);
     defer out.deinit();
-    try Col6Forge.runPipelineToWriterWithOptions(
+    try Col6Forge.runPipelineToWriterWithOptionsAndDiagnostics(
         allocator,
         input_path,
         .llvm,
@@ -461,6 +474,7 @@ fn runCcTranslateDiagnosticPipeline(allocator: std.mem.Allocator, input_path: []
             .target = "x86_64-linux-gnu",
             .coarse_source_map = false,
         },
+        diag_bag,
     );
     try out.writer.flush();
     return .{ .output = try allocator.dupe(u8, out.writer.buffered()) };

@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const input = @import("../../../input.zig");
 const ast = @import("../../../../ast/nodes.zig");
+const common_diag = @import("../../../../common/diagnostic.zig");
 const evaluator = @import("../../../../semantic/evaluator.zig");
 const diag = @import("../../../diagnostic.zig");
 const ir = @import("../../../ir.zig");
@@ -202,11 +203,24 @@ pub const Context = struct {
     }
 
     pub fn setDiagnostic(self: *Context, line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
+        self.setDiagnosticDetailed(line, column, code, message, line_text, &.{}, &.{});
+    }
+
+    pub fn setDiagnosticDetailed(
+        self: *Context,
+        line: usize,
+        column: usize,
+        code: []const u8,
+        message: []const u8,
+        line_text: []const u8,
+        notes: []const common_diag.DiagnosticMessage,
+        helps: []const common_diag.DiagnosticMessage,
+    ) void {
         if (self.diag_bag) |bag| {
-            bag.set(line, column, code, message, line_text);
+            bag.setDetailed(line, column, code, message, line_text, notes, helps);
             return;
         }
-        diag.set(line, column, code, message, line_text);
+        diag.setDetailed(line, column, code, message, line_text, notes, helps);
     }
 
     pub fn noteFallback(self: *Context, line: usize, column: usize, line_text: []const u8) void {

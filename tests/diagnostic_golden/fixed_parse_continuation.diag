@@ -5,3 +5,5 @@ error[CF2004]: missing required identifier
   |
 3 |      1 )
   |        ^
+   = note: The parser reached a position where an identifier is required to continue the declaration or statement.
+   = help: Check trailing commas and continuation lines near this position.
