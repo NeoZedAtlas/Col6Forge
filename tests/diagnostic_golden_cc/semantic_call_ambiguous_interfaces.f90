@@ -1,0 +1,13 @@
+subroutine s()
+  interface foo
+    subroutine ext1(x)
+      integer x
+    end subroutine
+  end interface
+  interface foo
+    subroutine ext2(y)
+      integer y
+    end subroutine
+  end interface
+  call foo(1)
+end subroutine

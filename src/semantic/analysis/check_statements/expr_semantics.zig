@@ -269,7 +269,7 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
         },
         .call_or_subscript => |call| {
             if (procedure_calls.hasAmbiguousVisibleGenericInterface(self, call.name)) {
-                return procedure_calls.emitNamedProcedureDiagnostic(self, call.name, error.DuplicateDeclaration, "Ambiguous interfaces");
+                return procedure_calls.emitAmbiguousVisibleGenericDiagnostic(self, call.name, error.DuplicateDeclaration);
             }
             if (procedure_calls.preludeSpecificInterfaceProcedureCount(self, call.name) > 1) {
                 procedure_calls.emitAmbiguousReferenceDiagnostic(self, call.name);

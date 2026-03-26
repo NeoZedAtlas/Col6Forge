@@ -167,7 +167,7 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 });
             }
             if (!procedure_interfaces.callHasDerivedActuals(self, call.args) and procedure_calls.hasAmbiguousVisibleGenericInterface(self, call.name)) {
-                return procedure_calls.emitNamedProcedureDiagnostic(self, call.name, error.DuplicateDeclaration, "Ambiguous interfaces");
+                return procedure_calls.emitAmbiguousVisibleGenericDiagnostic(self, call.name, error.DuplicateDeclaration);
             }
             if (std.ascii.eqlIgnoreCase(call.name, self.unit.name) and procedure_calls.currentUnitConflictsWithPreludeProcedure(self, call.name)) {
                 procedure_calls.emitAmbiguousReferenceDiagnostic(self, call.name);

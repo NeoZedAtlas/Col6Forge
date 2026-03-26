@@ -278,6 +278,45 @@ test "semantic reports ambiguous reference with related location" {
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "conflicting visible procedure here"));
 }
 
+test "semantic reports call-site ambiguous interfaces with related location" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine s()\n" ++
+        "  interface foo\n" ++
+        "    subroutine ext1(x)\n" ++
+        "      integer x\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "  interface foo\n" ++
+        "    subroutine ext2(y)\n" ++
+        "      integer y\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "  call foo(1)\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.message, "Ambiguous interfaces"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "  call foo(1)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "call site conflicts here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "    subroutine ext1(x)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "conflicting visible generic specific here"));
+}
+
 test "semantic reports CF3116 for duplicate declaration" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -275,6 +275,43 @@ test "runPipeline reports ambiguous reference with related source" {
     try testing.expectEqualStrings("conflicting visible procedure here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports call-site ambiguous interfaces with related source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "subroutine s()\n" ++
+        "  interface foo\n" ++
+        "    subroutine ext1(x)\n" ++
+        "      integer x\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "  interface foo\n" ++
+        "    subroutine ext2(y)\n" ++
+        "      integer y\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "  call foo(1)\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_call_ambiguous_interfaces.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("  call foo(1)", diag_info.line_text);
+    try testing.expectEqualStrings("call site conflicts here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("    subroutine ext1(x)", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("conflicting visible generic specific here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports COMMON mismatch with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;

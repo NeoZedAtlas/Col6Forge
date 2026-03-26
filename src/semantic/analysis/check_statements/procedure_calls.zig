@@ -389,6 +389,50 @@ pub fn emitAmbiguousReferenceDiagnostic(self: *context.Context, name: []const u8
     );
 }
 
+pub fn emitAmbiguousVisibleGenericDiagnostic(
+    self: *context.Context,
+    name: []const u8,
+    err: anyerror,
+) CheckError {
+    const primary = currentProcedureDiagnosticSource(self) orelse return err;
+    const advice = ambiguousVisibleGenericAdvice();
+    if (procedure_interfaces.findAmbiguousVisibleGenericSpecificSource(self, name)) |decl_source| {
+        const related = [_]common_diag.DiagnosticSpan{.{
+            .file_path = "",
+            .line = if (decl_source.line == 0) 1 else decl_source.line,
+            .column = if (decl_source.column == 0) 1 else decl_source.column,
+            .end_column = @max(
+                (if (decl_source.column == 0) 1 else decl_source.column) + 1,
+                decl_source.text.len + 1,
+            ),
+            .line_text = decl_source.text,
+            .label = "conflicting visible generic specific here",
+        }};
+        self.setDiagnosticStructured(
+            primary.line,
+            primary.column,
+            catalog.semantic.duplicate_declaration.code,
+            "Ambiguous interfaces",
+            primary.text,
+            "call site conflicts here",
+            advice.notes,
+            advice.helps,
+            related[0..],
+        );
+        return err;
+    }
+    self.setDiagnosticDetailed(
+        primary.line,
+        primary.column,
+        catalog.semantic.duplicate_declaration.code,
+        "Ambiguous interfaces",
+        primary.text,
+        advice.notes,
+        advice.helps,
+    );
+    return err;
+}
+
 const DiagnosticSource = struct {
     line: usize,
     column: usize,
@@ -423,6 +467,20 @@ fn ambiguousReferenceAdvice() struct {
         },
         .helps = &[_]common_diag.DiagnosticMessage{
             .{ .text = "rename one declaration or avoid importing conflicting unnamed interfaces into the same scope" },
+        },
+    };
+}
+
+fn ambiguousVisibleGenericAdvice() struct {
+    notes: []const common_diag.DiagnosticMessage,
+    helps: []const common_diag.DiagnosticMessage,
+} {
+    return .{
+        .notes = &[_]common_diag.DiagnosticMessage{
+            .{ .text = "visible generic interface specifics are indistinguishable for this call" },
+        },
+        .helps = &[_]common_diag.DiagnosticMessage{
+            .{ .text = "make one specific distinguishable by required dummy arguments or avoid importing conflicting generic interfaces" },
         },
     };
 }
