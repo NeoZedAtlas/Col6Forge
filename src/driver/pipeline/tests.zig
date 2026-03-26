@@ -312,6 +312,38 @@ test "runPipeline reports call-site ambiguous interfaces with related source" {
     try testing.expectEqualStrings("conflicting visible generic specific here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports procedure actual mismatch with related interface source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "subroutine s()\n" ++
+        "  interface\n" ++
+        "    subroutine foo(x)\n" ++
+        "      integer x\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "  call foo(1.0)\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_actual_type_mismatch.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
+    try testing.expectEqualStrings("  call foo(1.0)", diag_info.line_text);
+    try testing.expectEqualStrings("actual argument conflicts here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("    subroutine foo(x)", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("visible interface here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports COMMON mismatch with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;

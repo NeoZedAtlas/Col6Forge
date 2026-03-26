@@ -317,6 +317,40 @@ test "semantic reports call-site ambiguous interfaces with related location" {
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "conflicting visible generic specific here"));
 }
 
+test "semantic reports procedure actual mismatch with related interface location" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine s()\n" ++
+        "  interface\n" ++
+        "    subroutine foo(x)\n" ++
+        "      integer x\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "  call foo(1.0)\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
+    try testing.expect(std.mem.eql(u8, diag.message, "Type mismatch in argument"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "  call foo(1.0)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "actual argument conflicts here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "    subroutine foo(x)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible interface here"));
+}
+
 test "semantic reports CF3116 for duplicate declaration" {
     const testing = std.testing;
     const allocator = testing.allocator;
