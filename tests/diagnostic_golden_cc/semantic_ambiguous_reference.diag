@@ -9,5 +9,9 @@ error[CF3116]: ambiguous reference
    |
 10 |     function my_fun(a)
    |     ~~~~~~~~~~~~~~ conflicting visible procedure here
+  ::: tests/diagnostic_golden_cc\semantic_ambiguous_reference.f90:3:5
+  |
+3 |     function my_fun(a)
+  |     ~~~~~~~~~~~~~~ conflicting visible procedure here
    = note: this reference resolves to more than one visible procedure with the same name
    = help: rename one declaration or avoid importing conflicting unnamed interfaces into the same scope

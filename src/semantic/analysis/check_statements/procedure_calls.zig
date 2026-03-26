@@ -353,18 +353,13 @@ pub fn emitNamedProcedureDiagnostic(
 pub fn emitAmbiguousReferenceDiagnostic(self: *context.Context, name: []const u8) void {
     const primary = currentProcedureDiagnosticSource(self) orelse return;
     const advice = ambiguousReferenceAdvice();
-    if (findPreludeSpecificInterfaceSource(self, name)) |decl_source| {
-        const related = [_]common_diag.DiagnosticSpan{.{
-            .file_path = "",
-            .line = if (decl_source.line == 0) 1 else decl_source.line,
-            .column = if (decl_source.column == 0) 1 else decl_source.column,
-            .end_column = @max(
-                (if (decl_source.column == 0) 1 else decl_source.column) + 1,
-                decl_source.text.len + 1,
-            ),
-            .line_text = decl_source.text,
-            .label = "conflicting visible procedure here",
-        }};
+    var sources = std.array_list.Managed(ast.DeclSource).init(self.arena);
+    appendPreludeSpecificInterfaceSources(self, &sources, name) catch {};
+    if (sources.items.len != 0) {
+        const related = self.arena.alloc(common_diag.DiagnosticSpan, sources.items.len) catch return;
+        for (sources.items, 0..) |decl_source, idx| {
+            related[idx] = diagnosticSpanFromSource(decl_source, "conflicting visible procedure here");
+        }
         self.setDiagnosticStructured(
             primary.line,
             primary.column,
@@ -374,7 +369,7 @@ pub fn emitAmbiguousReferenceDiagnostic(self: *context.Context, name: []const u8
             "ambiguous reference here",
             advice.notes,
             advice.helps,
-            related[0..],
+            related,
         );
         return;
     }
@@ -396,18 +391,13 @@ pub fn emitAmbiguousVisibleGenericDiagnostic(
 ) CheckError {
     const primary = currentProcedureDiagnosticSource(self) orelse return err;
     const advice = ambiguousVisibleGenericAdvice();
-    if (procedure_interfaces.findAmbiguousVisibleGenericSpecificSource(self, name)) |decl_source| {
-        const related = [_]common_diag.DiagnosticSpan{.{
-            .file_path = "",
-            .line = if (decl_source.line == 0) 1 else decl_source.line,
-            .column = if (decl_source.column == 0) 1 else decl_source.column,
-            .end_column = @max(
-                (if (decl_source.column == 0) 1 else decl_source.column) + 1,
-                decl_source.text.len + 1,
-            ),
-            .line_text = decl_source.text,
-            .label = "conflicting visible generic specific here",
-        }};
+    var sources = std.array_list.Managed(ast.DeclSource).init(self.arena);
+    procedure_interfaces.appendAmbiguousVisibleGenericSpecificSources(self, &sources, name) catch {};
+    if (sources.items.len != 0) {
+        const related = self.arena.alloc(common_diag.DiagnosticSpan, sources.items.len) catch return err;
+        for (sources.items, 0..) |decl_source, idx| {
+            related[idx] = diagnosticSpanFromSource(decl_source, "conflicting visible generic specific here");
+        }
         self.setDiagnosticStructured(
             primary.line,
             primary.column,
@@ -417,7 +407,7 @@ pub fn emitAmbiguousVisibleGenericDiagnostic(
             "call site conflicts here",
             advice.notes,
             advice.helps,
-            related[0..],
+            related,
         );
         return err;
     }
@@ -585,28 +575,40 @@ pub fn preludeSpecificInterfaceProcedureCount(self: *context.Context, name: []co
 }
 
 pub fn findPreludeSpecificInterfaceSource(self: *context.Context, name: []const u8) ?ast.DeclSource {
-    if (self.unit.is_module_procedure and std.ascii.eqlIgnoreCase(name, self.unit.name)) return null;
+    var sources = std.array_list.Managed(ast.DeclSource).init(self.arena);
+    appendPreludeSpecificInterfaceSources(self, &sources, name) catch return null;
+    return if (sources.items.len != 0) sources.items[0] else null;
+}
+
+pub fn appendPreludeSpecificInterfaceSources(
+    self: *context.Context,
+    out: *std.array_list.Managed(ast.DeclSource),
+    name: []const u8,
+) !void {
+    if (self.unit.is_module_procedure and std.ascii.eqlIgnoreCase(name, self.unit.name)) return;
     var decl_idx: usize = 0;
     while (decl_idx < self.unit.prelude_decl_count and decl_idx < self.unit.decls.len) : (decl_idx += 1) {
         const decl = self.unit.decls[decl_idx];
         if (decl != .interface_block) continue;
         if (decl.interface_block.name != null) continue;
         for (decl.interface_block.procedure_headers) |proc_header| {
-            if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return proc_header.source;
+            if (!std.ascii.eqlIgnoreCase(proc_header.name, name)) continue;
+            try appendUniqueDeclSource(out, proc_header.source);
         }
         for (decl.interface_block.procedures, 0..) |proc_name, idx| {
             if (procedure_interfaces.interfaceBlockHasProcedureHeader(decl.interface_block, proc_name)) continue;
             if (!std.ascii.eqlIgnoreCase(proc_name, name)) continue;
-            if (idx < decl.interface_block.procedure_sources.len) return decl.interface_block.procedure_sources[idx];
-            break;
+            if (idx < decl.interface_block.procedure_sources.len) {
+                try appendUniqueDeclSource(out, decl.interface_block.procedure_sources[idx]);
+            }
         }
         for (decl.interface_block.specific_procedures, 0..) |proc_name, idx| {
             if (!std.ascii.eqlIgnoreCase(proc_name, name)) continue;
-            if (idx < decl.interface_block.specific_procedure_sources.len) return decl.interface_block.specific_procedure_sources[idx];
-            break;
+            if (idx < decl.interface_block.specific_procedure_sources.len) {
+                try appendUniqueDeclSource(out, decl.interface_block.specific_procedure_sources[idx]);
+            }
         }
     }
-    return null;
 }
 
 pub fn currentUnitConflictsWithPreludeProcedure(self: *context.Context, name: []const u8) bool {
@@ -1202,6 +1204,31 @@ fn invalidArgumentAdvice() Advice {
         .notes = &.{.{ .text = "This diagnostic comes from the semantic procedure-call matcher, not from parser recovery." }},
         .helps = &.{.{ .text = "Compare the visible procedure interface against the actual argument list and procedure kind." }},
     };
+}
+
+fn diagnosticSpanFromSource(source: ast.DeclSource, label: []const u8) common_diag.DiagnosticSpan {
+    const line = if (source.line == 0) 1 else source.line;
+    const column = if (source.column == 0) 1 else source.column;
+    return .{
+        .file_path = "",
+        .line = line,
+        .column = column,
+        .end_column = @max(column + 1, source.text.len + 1),
+        .line_text = source.text,
+        .label = label,
+    };
+}
+
+fn appendUniqueDeclSource(out: *std.array_list.Managed(ast.DeclSource), source: ast.DeclSource) !void {
+    for (out.items) |existing| {
+        if (existing.line == source.line and
+            existing.column == source.column and
+            std.mem.eql(u8, existing.text, source.text))
+        {
+            return;
+        }
+    }
+    try out.append(source);
 }
 
 fn emitVariableDefinitionContextDiagnostic(

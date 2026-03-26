@@ -272,10 +272,13 @@ test "semantic reports ambiguous reference with related location" {
     try testing.expect(std.mem.eql(u8, diag.primary_label, "ambiguous reference here"));
     try testing.expectEqual(@as(usize, 1), diag.notes.len);
     try testing.expectEqual(@as(usize, 1), diag.helps.len);
-    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
-    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expectEqual(@as(usize, 2), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 10), diag.secondary_spans[0].line);
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "    function my_fun(a)"));
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "conflicting visible procedure here"));
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[1].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[1].line_text, "    function my_fun(a)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[1].label, "conflicting visible procedure here"));
 }
 
 test "semantic reports call-site ambiguous interfaces with related location" {
@@ -311,10 +314,13 @@ test "semantic reports call-site ambiguous interfaces with related location" {
     try testing.expect(std.mem.eql(u8, diag.primary_label, "call site conflicts here"));
     try testing.expectEqual(@as(usize, 1), diag.notes.len);
     try testing.expectEqual(@as(usize, 1), diag.helps.len);
-    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag.secondary_spans.len);
     try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "    subroutine ext1(x)"));
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "conflicting visible generic specific here"));
+    try testing.expectEqual(@as(usize, 8), diag.secondary_spans[1].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[1].line_text, "    subroutine ext2(y)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[1].label, "conflicting visible generic specific here"));
 }
 
 test "semantic reports procedure actual mismatch with related interface location" {

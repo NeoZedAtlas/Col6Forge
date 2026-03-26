@@ -9,5 +9,9 @@ error[CF3116]: Ambiguous interfaces
   |
 3 |     subroutine ext1(x)
   |     ~~~~~~~~~~~~~~ conflicting visible generic specific here
+  ::: tests/diagnostic_golden\semantic_call_ambiguous_interfaces.f90:8:5
+  |
+8 |     subroutine ext2(y)
+  |     ~~~~~~~~~~~~~~ conflicting visible generic specific here
    = note: visible generic interface specifics are indistinguishable for this call
    = help: make one specific distinguishable by required dummy arguments or avoid importing conflicting generic interfaces

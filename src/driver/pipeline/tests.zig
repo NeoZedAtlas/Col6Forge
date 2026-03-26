@@ -268,11 +268,15 @@ test "runPipeline reports ambiguous reference with related source" {
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("  print *, my_fun(a)", diag_info.line_text);
     try testing.expectEqualStrings("ambiguous reference here", diag_info.primary_label);
-    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
-    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqual(@as(usize, 2), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 10), diag_info.secondary_spans[0].line);
     try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
     try testing.expectEqualStrings("    function my_fun(a)", diag_info.secondary_spans[0].line_text);
     try testing.expectEqualStrings("conflicting visible procedure here", diag_info.secondary_spans[0].label);
+    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[1].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[1].file_path);
+    try testing.expectEqualStrings("    function my_fun(a)", diag_info.secondary_spans[1].line_text);
+    try testing.expectEqualStrings("conflicting visible procedure here", diag_info.secondary_spans[1].label);
 }
 
 test "runPipeline reports call-site ambiguous interfaces with related source" {
@@ -305,11 +309,15 @@ test "runPipeline reports call-site ambiguous interfaces with related source" {
     try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
     try testing.expectEqualStrings("  call foo(1)", diag_info.line_text);
     try testing.expectEqualStrings("call site conflicts here", diag_info.primary_label);
-    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag_info.secondary_spans.len);
     try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
     try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
     try testing.expectEqualStrings("    subroutine ext1(x)", diag_info.secondary_spans[0].line_text);
     try testing.expectEqualStrings("conflicting visible generic specific here", diag_info.secondary_spans[0].label);
+    try testing.expectEqual(@as(usize, 8), diag_info.secondary_spans[1].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[1].file_path);
+    try testing.expectEqualStrings("    subroutine ext2(y)", diag_info.secondary_spans[1].line_text);
+    try testing.expectEqualStrings("conflicting visible generic specific here", diag_info.secondary_spans[1].label);
 }
 
 test "runPipeline reports procedure actual mismatch with related interface source" {

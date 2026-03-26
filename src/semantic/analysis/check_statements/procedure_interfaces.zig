@@ -85,23 +85,33 @@ pub fn visibleSingleTargetGenericSig(self: *context.Context, name: []const u8) ?
 }
 
 pub fn findAmbiguousVisibleGenericSpecificSource(self: *context.Context, name: []const u8) ?ast.DeclSource {
+    var sources = std.array_list.Managed(ast.DeclSource).init(self.arena);
+    appendAmbiguousVisibleGenericSpecificSources(self, &sources, name) catch return null;
+    return if (sources.items.len != 0) sources.items[0] else null;
+}
+
+pub fn appendAmbiguousVisibleGenericSpecificSources(
+    self: *context.Context,
+    out: *std.array_list.Managed(ast.DeclSource),
+    name: []const u8,
+) !void {
     var specifics = std.array_list.Managed(VisibleGenericSpecific).init(self.arena);
     for (self.unit.decls) |decl| {
         if (decl != .interface_block) continue;
         const interface_name = decl.interface_block.name orelse continue;
         if (!std.ascii.eqlIgnoreCase(interface_name, name)) continue;
-        appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block) catch return null;
+        try appendGenericInterfaceSpecifics(self, &specifics, decl.interface_block);
     }
     var i: usize = 0;
     while (i < specifics.items.len) : (i += 1) {
         var j: usize = i + 1;
         while (j < specifics.items.len) : (j += 1) {
             if (genericProcedureSigAmbiguous(specifics.items[i].sig, specifics.items[j].sig)) {
-                return specifics.items[i].source;
+                try appendUniqueSource(out, specifics.items[i].source);
+                try appendUniqueSource(out, specifics.items[j].source);
             }
         }
     }
-    return null;
 }
 
 pub fn genericProcedureSigAmbiguous(a: context.Context.ProcedureSig, b: context.Context.ProcedureSig) bool {
@@ -283,6 +293,18 @@ fn namesContainName(names: []const []const u8, name: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(item_name, name)) return true;
     }
     return false;
+}
+
+fn appendUniqueSource(out: *std.array_list.Managed(ast.DeclSource), source: ast.DeclSource) !void {
+    for (out.items) |existing| {
+        if (existing.line == source.line and
+            existing.column == source.column and
+            std.mem.eql(u8, existing.text, source.text))
+        {
+            return;
+        }
+    }
+    try out.append(source);
 }
 
 fn singleTargetGenericInterfaceSig(
