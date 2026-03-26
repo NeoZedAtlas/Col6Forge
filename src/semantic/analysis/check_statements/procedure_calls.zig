@@ -708,13 +708,13 @@ fn checkProcedureActualArg(
         .component => |comp| {
             if (comp.has_parens) {
                 if (formal.procedure_kind) |expected_kind| {
-                    return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(expected_kind));
+                    return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(expected_kind));
                 }
                 return;
             }
             const actual_sig = procedurePointerExprSig(self, actual_expr) orelse {
                 if (formal.procedure_kind == .function) {
-                    return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+                    return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
                 }
                 return;
             };
@@ -728,15 +728,15 @@ fn checkProcedureActualArg(
 
             if (leaf_helpers.lookupIntrinsicArity(self, name)) |arity| {
                 if (formal.procedure_kind != null and formal.procedure_kind.? != .function) {
-                    return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(formal.procedure_kind.?));
+                    return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(formal.procedure_kind.?));
                 }
                 if (!formal.procedure_has_explicit_interface) return;
                 if (formal.procedure_arg_count < arity.min) {
-                    return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
+                    return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
                 }
                 if (arity.max) |max| {
                     if (formal.procedure_arg_count > max) {
-                        return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
+                        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
                     }
                 }
                 return;
@@ -748,25 +748,25 @@ fn checkProcedureActualArg(
                     switch (expected_kind) {
                         .function => {
                             if (sym.kind == .subroutine) {
-                                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "Passing global subroutine");
+                                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Passing global subroutine");
                             }
                             if (formal.procedure_arg_count != 0 or formal.procedure_alt_return_count != 0) {
-                                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+                                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
                             }
                             if (formal.procedure_result_type_spec) |expected_result| {
                                 if (functionResultTypeMismatchMessage(self, expected_result, sym.type_spec, deps)) |message| {
-                                    return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, message);
+                                    return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, message);
                                 }
                             }
                             if (formal.procedure_result_rank != sym.dims.len) {
-                                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in function result");
+                                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in function result");
                             }
                             if (sym.kind == .variable) sym.kind = .function;
                             return;
                         },
                         .subroutine => {
                             if (sym.kind == .function or sym.type_explicit) {
-                                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "Passing global function");
+                                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Passing global function");
                             }
                             if (sym.kind == .variable) sym.kind = .subroutine;
                             return;
@@ -777,12 +777,12 @@ fn checkProcedureActualArg(
             }
 
             if (formal.procedure_kind == .function) {
-                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
+                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "actual argument is not a function");
             }
         },
         else => {
             if (formal.procedure_kind) |expected_kind| {
-                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(expected_kind));
+                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, procedureKindMismatchMessage(expected_kind));
             }
         },
     }
@@ -798,7 +798,7 @@ fn checkProcedureActualSigCompatibility(
 ) CheckError!void {
     if (formal.procedure_kind) |expected_kind| {
         if (sig.kind != expected_kind) {
-            return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, passingGlobalProcedureMessage(sig.kind));
+            return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, passingGlobalProcedureMessage(sig.kind));
         }
     }
     if (formal.procedure_result_type_spec) |expected_result| {
@@ -806,33 +806,33 @@ fn checkProcedureActualSigCompatibility(
             const actual_result = actualSigResultType(sig);
             if (actual_result) |actual_result_spec| {
                 if (functionResultTypeMismatchMessage(self, expected_result, actual_result_spec, deps)) |message| {
-                    return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, message);
+                    return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, message);
                 }
             }
         }
     }
     if (formal.procedure_result_rank != sig.result_rank) {
-        return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in function result");
+        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in function result");
     }
     if (shapeSignatureMismatch(formal.procedure_result_shape_signature, sig.result_shape_signature)) {
-        return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "Shape mismatch in function result");
+        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Shape mismatch in function result");
     }
     if (formal.procedure_result_procedure_pointer != sig.result_procedure_pointer) {
-        return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "PROCEDURE POINTER mismatch in function result");
+        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "PROCEDURE POINTER mismatch in function result");
     }
     if (formal.procedure_result_pointer != sig.is_pointer) {
-        return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "POINTER attribute mismatch in function result");
+        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "POINTER attribute mismatch in function result");
     }
     if (formal.procedure_result_allocatable != sig.result_allocatable) {
-        return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "ALLOCATABLE attribute mismatch in function result");
+        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "ALLOCATABLE attribute mismatch in function result");
     }
     if (formal.procedure_result_contiguous != sig.result_contiguous) {
-        return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "CONTIGUOUS attribute mismatch in function result");
+        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "CONTIGUOUS attribute mismatch in function result");
     }
     if (formal.procedure_has_explicit_interface and
         (formal.procedure_arg_count != sig.arg_count or formal.procedure_alt_return_count != sig.alt_return_count))
     {
-        return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
+        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
     }
     if (formal.procedure_has_explicit_interface) {
         try checkProcedureDummyCompatibility(self, callee_name, formal, sig, actual_expr, deps);
@@ -879,7 +879,7 @@ fn checkDataActualArgCompatibility(
     const actual_rank = resolve_expr.exprRank(self, actual_expr);
     const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
     if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual_spec)) {
-        return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
     }
     if (formal.rank == actual_rank) {
         try checkExplicitShapeElementSufficiency(self, formal, actual_expr);
@@ -895,7 +895,7 @@ fn checkDataActualArgCompatibility(
             return;
         }
     }
-    return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in argument");
+    return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in argument");
 }
 
 fn checkProcedureDummyCompatibility(
@@ -912,54 +912,54 @@ fn checkProcedureDummyCompatibility(
         const formal_arg = formal.procedure_dummy_sigs[idx];
         const actual_arg = actual_sig.args[idx];
         if (formal_arg.is_procedure != actual_arg.is_procedure) {
-            return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+            return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
         }
         if (formal_arg.optional != actual_arg.optional) {
-            return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "OPTIONAL mismatch in argument");
+            return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "OPTIONAL mismatch in argument");
         }
         if (formal_arg.intent != null and actual_arg.intent != null and formal_arg.intent.? != actual_arg.intent.?) {
-            return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "INTENT mismatch in argument");
+            return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "INTENT mismatch in argument");
         }
         if (formal_arg.is_procedure) {
             if (formal_arg.procedure_kind != null and actual_arg.procedure_kind != null and formal_arg.procedure_kind.? != actual_arg.procedure_kind.?) {
-                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
             }
             if (formal_arg.procedure_result_type_spec) |expected_result| {
                 if (actual_arg.procedure_result_type_spec) |actual_result| {
                     if (functionResultTypeMismatchMessage(self, expected_result, actual_result, deps)) |message| {
-                        return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, message);
+                        return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, message);
                     }
                 }
             }
             if (formal_arg.procedure_result_rank != actual_arg.procedure_result_rank) {
-                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in function result");
+                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Rank mismatch in function result");
             }
             if (shapeSignatureMismatch(formal_arg.procedure_result_shape_signature, actual_arg.procedure_result_shape_signature)) {
-                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "Shape mismatch in function result");
+                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "Shape mismatch in function result");
             }
             if (formal_arg.procedure_result_procedure_pointer != actual_arg.procedure_result_procedure_pointer) {
-                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "PROCEDURE POINTER mismatch in function result");
+                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "PROCEDURE POINTER mismatch in function result");
             }
             if (formal_arg.procedure_result_pointer != actual_arg.procedure_result_pointer) {
-                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "POINTER attribute mismatch in function result");
+                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "POINTER attribute mismatch in function result");
             }
             if (formal_arg.procedure_result_allocatable != actual_arg.procedure_result_allocatable) {
-                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "ALLOCATABLE attribute mismatch in function result");
+                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "ALLOCATABLE attribute mismatch in function result");
             }
             if (formal_arg.procedure_result_contiguous != actual_arg.procedure_result_contiguous) {
-                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "CONTIGUOUS attribute mismatch in function result");
+                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "CONTIGUOUS attribute mismatch in function result");
             }
             if (formal_arg.procedure_has_explicit_interface and actual_arg.procedure_has_explicit_interface) {
                 if (formal_arg.procedure_arg_count != actual_arg.procedure_arg_count or
                     formal_arg.procedure_alt_return_count != actual_arg.procedure_alt_return_count)
                 {
-                    return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
+                    return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, "wrong number of arguments");
                 }
                 try checkNestedProcedureDummyCompatibility(self, formal_arg, actual_arg, actual_expr, deps);
             }
         } else {
             if (procedureDummyDataArgMismatchMessage(self, formal_arg, actual_arg, deps)) |message| {
-                return emitProcedureActualCallDiagnostic(self, callee_name, actual_expr, error.InvalidArgumentCount, message);
+                return emitProcedureActualCallDiagnostic(self, callee_name, formal.name, actual_expr, error.InvalidArgumentCount, message);
             }
         }
     }
@@ -1139,6 +1139,7 @@ fn emitProcedureActualDiagnostic(
 fn emitProcedureActualCallDiagnostic(
     self: *context.Context,
     callee_name: ?[]const u8,
+    formal_name: ?[]const u8,
     expr: *ast.Expr,
     err: anyerror,
     message: []const u8,
@@ -1149,7 +1150,16 @@ fn emitProcedureActualCallDiagnostic(
         const line = if (src.line == 0) 1 else src.line;
         const column = if (src.column == 0) 1 else src.column;
         if (callee_name) |name| {
-            if (procedure_interfaces.findVisibleProcedureSource(self, name)) |decl_source| {
+            const formal_source = if (formal_name) |dummy_name|
+                procedure_interfaces.findVisibleProcedureFormalSource(self, name, dummy_name)
+            else
+                null;
+            const related_source = formal_source orelse procedure_interfaces.findVisibleProcedureSource(self, name);
+            if (related_source) |decl_source| {
+                const label = if (formal_source != null)
+                    "visible dummy declaration here"
+                else
+                    "visible interface here";
                 const related = [_]common_diag.DiagnosticSpan{.{
                     .file_path = "",
                     .line = if (decl_source.line == 0) 1 else decl_source.line,
@@ -1159,7 +1169,7 @@ fn emitProcedureActualCallDiagnostic(
                         decl_source.text.len + 1,
                     ),
                     .line_text = decl_source.text,
-                    .label = "visible interface here",
+                    .label = label,
                 }};
                 self.setDiagnosticStructured(
                     line,

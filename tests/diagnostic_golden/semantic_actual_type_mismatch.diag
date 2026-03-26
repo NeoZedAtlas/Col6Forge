@@ -5,9 +5,9 @@ error[CF3110]: Type mismatch in argument
   |
 7 |   call foo(1.0)
   |            ^ actual argument conflicts here
-  ::: tests/diagnostic_golden\semantic_actual_type_mismatch.f90:3:5
+  ::: tests/diagnostic_golden\semantic_actual_type_mismatch.f90:4:7
   |
-3 |     subroutine foo(x)
-  |     ~~~~~~~~~~~~~ visible interface here
+4 |       integer x
+  |       ~~~ visible dummy declaration here
    = note: This diagnostic comes from the semantic procedure-call matcher, not from parser recovery.
    = help: Compare the visible procedure interface against the actual argument list and procedure kind.

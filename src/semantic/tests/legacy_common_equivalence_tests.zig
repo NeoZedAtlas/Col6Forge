@@ -346,9 +346,9 @@ test "semantic reports procedure actual mismatch with related interface location
     try testing.expectEqual(@as(usize, 1), diag.notes.len);
     try testing.expectEqual(@as(usize, 1), diag.helps.len);
     try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
-    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
-    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "    subroutine foo(x)"));
-    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible interface here"));
+    try testing.expectEqual(@as(usize, 4), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "      integer x"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible dummy declaration here"));
 }
 
 test "semantic reports CF3116 for duplicate declaration" {

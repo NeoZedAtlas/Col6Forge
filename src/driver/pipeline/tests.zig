@@ -338,10 +338,10 @@ test "runPipeline reports procedure actual mismatch with related interface sourc
     try testing.expectEqualStrings("  call foo(1.0)", diag_info.line_text);
     try testing.expectEqualStrings("actual argument conflicts here", diag_info.primary_label);
     try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
-    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqual(@as(usize, 4), diag_info.secondary_spans[0].line);
     try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
-    try testing.expectEqualStrings("    subroutine foo(x)", diag_info.secondary_spans[0].line_text);
-    try testing.expectEqualStrings("visible interface here", diag_info.secondary_spans[0].label);
+    try testing.expectEqualStrings("      integer x", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("visible dummy declaration here", diag_info.secondary_spans[0].label);
 }
 
 test "runPipeline reports COMMON mismatch with related source" {

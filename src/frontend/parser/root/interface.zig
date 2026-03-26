@@ -37,6 +37,7 @@ pub fn interfaceProcedureFromUnit(
         .alt_return_dummy_count = unit.alt_return_dummy_count,
         .type_spec = declaredProcedureResultTypeSpec(unit),
         .decls = unit.decls,
+        .decl_sources = unit.decl_sources,
     };
 }
 

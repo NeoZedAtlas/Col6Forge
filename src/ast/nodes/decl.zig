@@ -88,6 +88,7 @@ pub const InterfaceProcedure = struct {
     alt_return_dummy_count: usize = 0,
     type_spec: ?ProcedureTypeSpec = null,
     decls: []const Decl = &.{},
+    decl_sources: []const @import("program.zig").DeclSource = &.{},
 };
 
 pub const DerivedTypeDef = struct {

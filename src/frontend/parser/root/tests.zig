@@ -1877,6 +1877,35 @@ test "parseProgram keeps interface procedure result type after non-result declar
     try testing.expectEqual(ast.TypeKind.real, proc_header.type_spec.?.type_kind);
 }
 
+test "parseProgram preserves interface procedure declaration sources" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module mod\n" ++
+        "  interface\n" ++
+        "    subroutine foo(x)\n" ++
+        "      integer :: x\n" ++
+        "    end subroutine foo\n" ++
+        "  end interface\n" ++
+        "end module mod\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const interface_block = program.units[0].decls[0].interface_block;
+    try testing.expectEqual(@as(usize, 1), interface_block.procedure_headers.len);
+    const proc_header = interface_block.procedure_headers[0];
+    try testing.expectEqual(proc_header.decls.len, proc_header.decl_sources.len);
+    try testing.expectEqual(@as(usize, 1), proc_header.decl_sources.len);
+    try testing.expectEqual(@as(usize, 4), proc_header.decl_sources[0].line);
+    try testing.expectEqualStrings("      integer :: x", proc_header.decl_sources[0].text);
+}
+
 test "parseProgramWithDiagnostics recovers malformed submodule header and rejects orphan module procedure" {
     const testing = std.testing;
     const allocator = testing.allocator;

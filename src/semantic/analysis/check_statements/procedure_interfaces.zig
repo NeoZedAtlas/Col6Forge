@@ -176,6 +176,22 @@ pub fn findVisibleProcedureSource(self: *context.Context, name: []const u8) ?ast
     return null;
 }
 
+pub fn findVisibleProcedureFormalSource(
+    self: *context.Context,
+    procedure_name: []const u8,
+    formal_name: []const u8,
+) ?ast.DeclSource {
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_block = decl.interface_block;
+        for (interface_block.procedure_headers) |proc_header| {
+            if (!std.ascii.eqlIgnoreCase(proc_header.name, procedure_name)) continue;
+            return findInterfaceProcedureDeclSource(proc_header, formal_name);
+        }
+    }
+    return null;
+}
+
 pub fn calleeRequiresExplicitInterface(self: *context.Context, name: []const u8) bool {
     const sig = resolve_symbols.lookupKnownProcedureSig(self, name) orelse return false;
     return procedureSigRequiresExplicitInterface(sig);
@@ -226,6 +242,45 @@ pub fn isAbstractInterfaceProcedure(self: *context.Context, name: []const u8) bo
 pub fn interfaceBlockHasProcedureHeader(interface_block: ast.InterfaceBlock, name: []const u8) bool {
     for (interface_block.procedure_headers) |proc_header| {
         if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
+    }
+    return false;
+}
+
+fn findInterfaceProcedureDeclSource(
+    proc_header: ast.InterfaceProcedure,
+    formal_name: []const u8,
+) ?ast.DeclSource {
+    const count = @min(proc_header.decls.len, proc_header.decl_sources.len);
+    var idx: usize = 0;
+    while (idx < count) : (idx += 1) {
+        if (!declMentionsName(proc_header.decls[idx], formal_name)) continue;
+        return proc_header.decl_sources[idx];
+    }
+    return null;
+}
+
+fn declMentionsName(decl: ast.Decl, name: []const u8) bool {
+    return switch (decl) {
+        .type_decl => |type_decl| declaratorsContainName(type_decl.items, name),
+        .procedure => |procedure_decl| declaratorsContainName(procedure_decl.items, name),
+        .dimension => |dimension_decl| declaratorsContainName(dimension_decl.items, name),
+        .intent => |intent_decl| namesContainName(intent_decl.names, name),
+        .optional => |optional_decl| namesContainName(optional_decl.names, name),
+        .external => |external_decl| namesContainName(external_decl.names, name),
+        else => false,
+    };
+}
+
+fn declaratorsContainName(items: []const ast.Declarator, name: []const u8) bool {
+    for (items) |item| {
+        if (std.ascii.eqlIgnoreCase(item.name, name)) return true;
+    }
+    return false;
+}
+
+fn namesContainName(names: []const []const u8, name: []const u8) bool {
+    for (names) |item_name| {
+        if (std.ascii.eqlIgnoreCase(item_name, name)) return true;
     }
     return false;
 }
