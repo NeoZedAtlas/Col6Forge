@@ -1,0 +1,9 @@
+      PROGRAM P
+      INTERFACE
+      INTEGER FUNCTION F(A,B)
+      INTEGER A,B
+      END FUNCTION
+      END INTERFACE
+      INTEGER X
+      X=F(1)
+      END

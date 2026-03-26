@@ -311,27 +311,67 @@ pub fn emitNamedProcedureDiagnostic(
     message: []const u8,
 ) CheckError {
     const advice = invalidArgumentAdvice();
-    if (self.current_source) |src| {
-        const line = if (src.line == 0) 1 else src.line;
-        const column = if (src.column == 0) 1 else src.column;
-        self.setDiagnosticDetailed(line, column, catalog.semantic.invalid_argument_count.code, message, src.text, advice.notes, advice.helps);
-        return err;
-    }
-    if (resolve_symbols.findSymbolIndex(self, name)) |idx| {
-        const sym = self.symbols.items[idx];
-        const line_text = self.current_stmt orelse return err;
-        _ = sym;
-        self.setDiagnosticDetailed(
-            if (line_text.source_line == 0) 1 else line_text.source_line,
-            if (line_text.source_column == 0) 1 else line_text.source_column,
+    const primary = currentProcedureDiagnosticSource(self) orelse return err;
+    const related_source = procedure_interfaces.findVisibleProcedureSource(self, name);
+    if (related_source) |decl_source| {
+        const related = [_]common_diag.DiagnosticSpan{.{
+            .file_path = "",
+            .line = if (decl_source.line == 0) 1 else decl_source.line,
+            .column = if (decl_source.column == 0) 1 else decl_source.column,
+            .end_column = @max(
+                (if (decl_source.column == 0) 1 else decl_source.column) + 1,
+                decl_source.text.len + 1,
+            ),
+            .line_text = decl_source.text,
+            .label = "visible interface here",
+        }};
+        self.setDiagnosticStructured(
+            primary.line,
+            primary.column,
             catalog.semantic.invalid_argument_count.code,
             message,
-            line_text.source_text,
+            primary.text,
+            "call site conflicts here",
             advice.notes,
             advice.helps,
+            related[0..],
         );
+        return err;
     }
+    self.setDiagnosticDetailed(
+        primary.line,
+        primary.column,
+        catalog.semantic.invalid_argument_count.code,
+        message,
+        primary.text,
+        advice.notes,
+        advice.helps,
+    );
     return err;
+}
+
+const DiagnosticSource = struct {
+    line: usize,
+    column: usize,
+    text: []const u8,
+};
+
+fn currentProcedureDiagnosticSource(self: *context.Context) ?DiagnosticSource {
+    if (self.current_source) |src| {
+        return .{
+            .line = if (src.line == 0) 1 else src.line,
+            .column = if (src.column == 0) 1 else src.column,
+            .text = src.text,
+        };
+    }
+    if (self.current_stmt) |stmt| {
+        return .{
+            .line = if (stmt.source_line == 0) 1 else stmt.source_line,
+            .column = if (stmt.source_column == 0) 1 else stmt.source_column,
+            .text = stmt.source_text,
+        };
+    }
+    return null;
 }
 
 pub fn checkExplicitInterfaceRequirementForCallArgs(

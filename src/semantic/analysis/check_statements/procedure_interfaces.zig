@@ -94,6 +94,36 @@ pub fn calleeHasVisibleExplicitInterface(self: *context.Context, name: []const u
     return false;
 }
 
+pub fn findVisibleProcedureSource(self: *context.Context, name: []const u8) ?ast.DeclSource {
+    for (self.unit.decls) |decl| {
+        if (decl != .interface_block) continue;
+        const interface_block = decl.interface_block;
+        for (interface_block.procedure_headers) |proc_header| {
+            if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return proc_header.source;
+        }
+        for (interface_block.specific_procedures, 0..) |proc_name, idx| {
+            if (!std.ascii.eqlIgnoreCase(proc_name, name)) continue;
+            if (idx < interface_block.specific_procedure_sources.len) return interface_block.specific_procedure_sources[idx];
+            break;
+        }
+        for (interface_block.module_procedures, 0..) |proc_name, idx| {
+            if (!std.ascii.eqlIgnoreCase(proc_name, name)) continue;
+            if (idx < interface_block.module_procedure_sources.len) return interface_block.module_procedure_sources[idx];
+            break;
+        }
+        for (interface_block.procedures, 0..) |proc_name, idx| {
+            if (!std.ascii.eqlIgnoreCase(proc_name, name)) continue;
+            if (idx < interface_block.procedure_sources.len) return interface_block.procedure_sources[idx];
+            break;
+        }
+    }
+    var it = self.known_host_interface_sources.iterator();
+    while (it.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+    }
+    return null;
+}
+
 pub fn calleeRequiresExplicitInterface(self: *context.Context, name: []const u8) bool {
     const sig = resolve_symbols.lookupKnownProcedureSig(self, name) orelse return false;
     return procedureSigRequiresExplicitInterface(sig);

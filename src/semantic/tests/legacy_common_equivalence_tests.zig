@@ -160,6 +160,38 @@ test "semantic reports CF3110 for function argument count mismatch" {
     try testing.expect(std.mem.eql(u8, diag.line_text, "X=F(1)"));
 }
 
+test "semantic reports CF3110 with explicit interface related location" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTERFACE\n" ++
+        "      INTEGER FUNCTION F(A,B)\n" ++
+        "      INTEGER A,B\n" ++
+        "      END FUNCTION\n" ++
+        "      END INTERFACE\n" ++
+        "      INTEGER X\n" ++
+        "      X=F(1)\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "X=F(1)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "call site conflicts here"));
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "INTEGER FUNCTION F(A,B)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible interface here"));
+}
+
 test "semantic reports CF3116 for duplicate declaration" {
     const testing = std.testing;
     const allocator = testing.allocator;
