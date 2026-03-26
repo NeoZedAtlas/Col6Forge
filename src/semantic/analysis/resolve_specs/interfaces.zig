@@ -229,7 +229,7 @@ fn validateInterfaceProcedureDerivedTypes(self: *context.Context, proc_header: a
         if (type_spec.type_kind == .derived) {
             const derived_name = type_spec.derived_type_name orelse return error.UnexpectedTypeDecl;
             if (!interfaceProcedureCanUseDerivedType(self, proc_header, derived_name)) {
-                setSourceDiagnostic(self, proc_header.source, "is being used before it is defined");
+                setInterfaceProcedureDerivedTypeDiagnostic(self, proc_header, derived_name);
                 return error.UnexpectedTypeDecl;
             }
         }
@@ -240,7 +240,7 @@ fn validateInterfaceProcedureDerivedTypes(self: *context.Context, proc_header: a
                 if (type_decl.type_kind != .derived) continue;
                 const derived_name = type_decl.derived_type_name orelse return error.UnexpectedTypeDecl;
                 if (interfaceProcedureCanUseDerivedType(self, proc_header, derived_name)) continue;
-                setSourceDiagnostic(self, proc_header.source, "is being used before it is defined");
+                setInterfaceProcedureDerivedTypeDiagnostic(self, proc_header, derived_name);
                 return error.UnexpectedTypeDecl;
             },
             .procedure => |procedure_decl| {
@@ -249,7 +249,7 @@ fn validateInterfaceProcedureDerivedTypes(self: *context.Context, proc_header: a
                         if (proc_type.type_kind != .derived) continue;
                         const derived_name = proc_type.derived_type_name orelse return error.UnexpectedTypeDecl;
                         if (interfaceProcedureCanUseDerivedType(self, proc_header, derived_name)) continue;
-                        setSourceDiagnostic(self, proc_header.source, "is being used before it is defined");
+                        setInterfaceProcedureDerivedTypeDiagnostic(self, proc_header, derived_name);
                         return error.UnexpectedTypeDecl;
                     },
                     else => {},
@@ -259,6 +259,60 @@ fn validateInterfaceProcedureDerivedTypes(self: *context.Context, proc_header: a
         }
     }
     return null;
+}
+
+fn setInterfaceProcedureDerivedTypeDiagnostic(
+    self: *context.Context,
+    proc_header: ast.InterfaceProcedure,
+    derived_name: []const u8,
+) void {
+    var note_buf: [256]u8 = undefined;
+    const note_text = std.fmt.bufPrint(
+        &note_buf,
+        "derived type '{s}' is referenced from the INTERFACE body before it becomes visible there",
+        .{derived_name},
+    ) catch "derived type is referenced from the INTERFACE body before it becomes visible there";
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "define the derived type before the host INTERFACE uses it, or import a type that is already visible" },
+    };
+    if (findUnitDerivedTypeDeclSource(self, derived_name)) |decl_source| {
+        if (!declSourceSame(decl_source, proc_header.source)) {
+            const secondary_spans = [_]common_diag.DiagnosticSpan{.{
+                .file_path = "",
+                .line = if (decl_source.line == 0) 1 else decl_source.line,
+                .column = if (decl_source.column == 0) 1 else decl_source.column,
+                .line_text = decl_source.text,
+                .label = "derived type declared later here",
+            }};
+            const notes = [_]common_diag.DiagnosticMessage{.{ .text = note_text }};
+            self.setCurrentDeclSource(proc_header.source);
+            self.setDiagnosticStructured(
+                if (proc_header.source.line == 0) 1 else proc_header.source.line,
+                if (proc_header.source.column == 0) 1 else proc_header.source.column,
+                catalog.semantic.duplicate_declaration.code,
+                "is being used before it is defined",
+                proc_header.source.text,
+                "uses derived type before definition here",
+                notes[0..],
+                helps[0..],
+                secondary_spans[0..],
+            );
+            return;
+        }
+    }
+    const notes = [_]common_diag.DiagnosticMessage{.{ .text = note_text }};
+    self.setCurrentDeclSource(proc_header.source);
+    self.setDiagnosticStructured(
+        if (proc_header.source.line == 0) 1 else proc_header.source.line,
+        if (proc_header.source.column == 0) 1 else proc_header.source.column,
+        catalog.semantic.duplicate_declaration.code,
+        "is being used before it is defined",
+        proc_header.source.text,
+        "uses derived type before definition here",
+        notes[0..],
+        helps[0..],
+        &.{},
+    );
 }
 
 fn interfaceProcedureCanUseDerivedType(
@@ -602,6 +656,16 @@ fn findVisibleNonProcedureDeclSource(self: *context.Context, target_name: []cons
             },
             else => {},
         }
+    }
+    return null;
+}
+
+fn findUnitDerivedTypeDeclSource(self: *context.Context, target_name: []const u8) ?ast.DeclSource {
+    for (self.unit.decls, 0..) |decl, decl_idx| {
+        if (decl != .derived_type_def) continue;
+        if (!std.ascii.eqlIgnoreCase(decl.derived_type_def.name, target_name)) continue;
+        if (decl_idx < self.unit.decl_sources.len) return self.unit.decl_sources[decl_idx];
+        return null;
     }
     return null;
 }

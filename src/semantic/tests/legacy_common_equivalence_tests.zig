@@ -512,6 +512,43 @@ test "semantic reports known procedure result type mismatch with related visible
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible known procedure here"));
 }
 
+test "semantic reports interface derived type use before later host definition" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine s()\n" ++
+        "  interface\n" ++
+        "    subroutine foo(x)\n" ++
+        "      import :: t\n" ++
+        "      type(t) :: x\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "  type :: t\n" ++
+        "    integer :: i\n" ++
+        "  end type t\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.UnexpectedTypeDecl, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.message, "is being used before it is defined"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "    subroutine foo(x)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "uses derived type before definition here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 8), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "  type :: t"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "derived type declared later here"));
+}
+
 test "semantic reports call-site ambiguous interfaces with related location" {
     const testing = std.testing;
     const allocator = testing.allocator;

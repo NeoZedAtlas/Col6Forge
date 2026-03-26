@@ -499,6 +499,41 @@ test "runPipeline reports known procedure result type mismatch with related visi
     try testing.expectEqualStrings("visible known procedure here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports interface derived type use before later host definition" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "subroutine s()\n" ++
+        "  interface\n" ++
+        "    subroutine foo(x)\n" ++
+        "      import :: t\n" ++
+        "      type(t) :: x\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "  type :: t\n" ++
+        "    integer :: i\n" ++
+        "  end type t\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_interface_late_derived_type.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.UnexpectedTypeDecl, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("    subroutine foo(x)", diag_info.line_text);
+    try testing.expectEqualStrings("uses derived type before definition here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 8), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("  type :: t", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("derived type declared later here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports call-site ambiguous interfaces with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;
