@@ -748,6 +748,48 @@ test "semantic reports variable definition context with related interface locati
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible dummy declaration here"));
 }
 
+test "semantic reports abstract passed-object actual with related type location" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  type, abstract :: abstract_t\n" ++
+        "  contains\n" ++
+        "    procedure :: p => abs_p\n" ++
+        "  end type\n" ++
+        "  type, extends(abstract_t) :: concrete_t\n" ++
+        "  end type\n" ++
+        "contains\n" ++
+        "  subroutine abs_p(self)\n" ++
+        "    class(abstract_t), intent(inout) :: self\n" ++
+        "  end subroutine\n" ++
+        "  subroutine test()\n" ++
+        "    type(concrete_t) :: obj\n" ++
+        "    call obj%abstract_t%p()\n" ++
+        "  end subroutine\n" ++
+        "end module\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
+    try testing.expect(std.mem.indexOf(u8, diag.message, "is of the ABSTRACT type") != null);
+    try testing.expect(std.mem.eql(u8, diag.line_text, "    call obj%abstract_t%p()"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "abstract passed-object actual here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "  type, abstract :: abstract_t"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "abstract type declared here"));
+}
+
 test "semantic reports CF3116 for duplicate declaration" {
     const testing = std.testing;
     const allocator = testing.allocator;

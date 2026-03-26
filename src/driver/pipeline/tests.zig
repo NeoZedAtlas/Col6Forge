@@ -719,6 +719,47 @@ test "runPipeline reports variable definition context with related interface sou
     try testing.expectEqualStrings("visible dummy declaration here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports abstract passed-object actual with related type source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "module m\n" ++
+        "  type, abstract :: abstract_t\n" ++
+        "  contains\n" ++
+        "    procedure :: p => abs_p\n" ++
+        "  end type\n" ++
+        "  type, extends(abstract_t) :: concrete_t\n" ++
+        "  end type\n" ++
+        "contains\n" ++
+        "  subroutine abs_p(self)\n" ++
+        "    class(abstract_t), intent(inout) :: self\n" ++
+        "  end subroutine\n" ++
+        "  subroutine test()\n" ++
+        "    type(concrete_t) :: obj\n" ++
+        "    call obj%abstract_t%p()\n" ++
+        "  end subroutine\n" ++
+        "end module\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_abstract_passed_object.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
+    try testing.expect(std.mem.indexOf(u8, diag_info.message, "is of the ABSTRACT type") != null);
+    try testing.expectEqualStrings("    call obj%abstract_t%p()", diag_info.line_text);
+    try testing.expectEqualStrings("abstract passed-object actual here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("  type, abstract :: abstract_t", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("abstract type declared here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports COMMON mismatch with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;

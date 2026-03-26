@@ -1114,7 +1114,17 @@ fn emitProcedureActualDiagnostic(
     if (source) |src| {
         const line = if (src.line == 0) 1 else src.line;
         const column = if (src.column == 0) 1 else src.column;
-        self.setDiagnosticDetailed(line, column, catalog.semantic.invalid_argument_count.code, message, src.text, advice.notes, advice.helps);
+        self.setDiagnosticStructured(
+            line,
+            column,
+            catalog.semantic.invalid_argument_count.code,
+            message,
+            src.text,
+            "actual procedure argument conflicts here",
+            advice.notes,
+            advice.helps,
+            &.{},
+        );
         self.setCurrentSource(src);
     }
     return err;
@@ -1663,15 +1673,54 @@ fn emitAbstractPassedObjectDiagnostic(
 ) CheckError {
     const source = self.sourceForExpr(expr) orelse ast.SourceRef{};
     const message = std.fmt.allocPrint(self.arena, "is of the ABSTRACT type '{s}'", .{derived_name}) catch "is of the ABSTRACT type";
-    self.setDiagnostic(
-        if (source.line == 0) 1 else source.line,
-        if (source.column == 0) 1 else source.column,
-        catalog.semantic.invalid_argument_count.code,
-        message,
-        source.text,
-    );
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "a passed-object actual must be a concrete definable dynamic instance, not a nonpolymorphic abstract parent subobject" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "call the binding through a concrete or polymorphic object, rather than through an abstract parent component view" },
+    };
+    if (findUnitDerivedTypeDeclSource(self, derived_name)) |decl_source| {
+        const related = [_]ast.DeclSource{decl_source};
+        emitStructuredProcedureDiagnostic(
+            self,
+            .{
+                .line = if (source.line == 0) 1 else source.line,
+                .column = if (source.column == 0) 1 else source.column,
+                .text = source.text,
+            },
+            catalog.semantic.invalid_argument_count.code,
+            message,
+            "abstract passed-object actual here",
+            notes[0..],
+            helps[0..],
+            related[0..],
+            "abstract type declared here",
+        );
+    } else {
+        self.setDiagnosticStructured(
+            if (source.line == 0) 1 else source.line,
+            if (source.column == 0) 1 else source.column,
+            catalog.semantic.invalid_argument_count.code,
+            message,
+            source.text,
+            "abstract passed-object actual here",
+            notes[0..],
+            helps[0..],
+            &.{},
+        );
+    }
     self.setCurrentSource(source);
     return err;
+}
+
+fn findUnitDerivedTypeDeclSource(self: *context.Context, target_name: []const u8) ?ast.DeclSource {
+    for (self.unit.decls, 0..) |decl, decl_idx| {
+        if (decl != .derived_type_def) continue;
+        if (!std.ascii.eqlIgnoreCase(decl.derived_type_def.name, target_name)) continue;
+        if (decl_idx < self.unit.decl_sources.len) return self.unit.decl_sources[decl_idx];
+        return null;
+    }
+    return null;
 }
 
 fn hasProcedureActualCallArg(self: *context.Context, args: []const ast.CallArg) bool {

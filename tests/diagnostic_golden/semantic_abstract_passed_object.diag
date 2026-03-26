@@ -1,0 +1,13 @@
+error[CF3110]: is of the ABSTRACT type 'abstract_t'
+  --> tests/diagnostic_golden/semantic_abstract_passed_object.f90:14:10
+   = stage: semantic
+   = help: see docs/errors.md#CF3110
+   |
+14 |     call obj%abstract_t%p()
+   |          ^ abstract passed-object actual here
+  ::: tests/diagnostic_golden\semantic_abstract_passed_object.f90:2:3
+  |
+2 |   type, abstract :: abstract_t
+  |   ~~~~~~~~~~~~~~~~~~~~~~~~~~ abstract type declared here
+   = note: a passed-object actual must be a concrete definable dynamic instance, not a nonpolymorphic abstract parent subobject
+   = help: call the binding through a concrete or polymorphic object, rather than through an abstract parent component view
