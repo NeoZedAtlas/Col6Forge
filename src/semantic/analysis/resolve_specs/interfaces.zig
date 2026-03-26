@@ -309,15 +309,28 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
         }
     }
 
-    var i: usize = 0;
-    while (i < specifics.items.len) : (i += 1) {
-        var j: usize = i + 1;
-        while (j < specifics.items.len) : (j += 1) {
-            if (genericSpecificSourceSame(specifics.items[i].source, specifics.items[j].source)) continue;
-            if (!genericSpecificAmbiguous(specifics.items[i].sig, specifics.items[j].sig)) continue;
-            setAmbiguousGenericSpecificDiagnostic(self, specifics.items[j].source, specifics.items[i].source);
-            return error.DuplicateDeclaration;
+    var best_current: ?GenericSpecificSource = null;
+    var best_conflicting: []const GenericSpecificSource = &.{};
+
+    var current_idx: usize = 0;
+    while (current_idx < specifics.items.len) : (current_idx += 1) {
+        var conflicting = std.array_list.Managed(GenericSpecificSource).init(self.arena);
+        var previous_idx: usize = 0;
+        while (previous_idx < current_idx) : (previous_idx += 1) {
+            if (genericSpecificSourceSame(specifics.items[previous_idx].source, specifics.items[current_idx].source)) continue;
+            if (!genericSpecificAmbiguous(specifics.items[previous_idx].sig, specifics.items[current_idx].sig)) continue;
+            appendUniqueGenericSpecificSource(&conflicting, specifics.items[previous_idx].source) catch return error.OutOfMemory;
         }
+        if (conflicting.items.len == 0) continue;
+        if (best_current == null or conflicting.items.len >= best_conflicting.len) {
+            best_current = specifics.items[current_idx].source;
+            best_conflicting = self.arena.dupe(GenericSpecificSource, conflicting.items) catch return error.OutOfMemory;
+        }
+    }
+
+    if (best_current) |current| {
+        setAmbiguousGenericSpecificDiagnostic(self, current, best_conflicting);
+        return error.DuplicateDeclaration;
     }
 
     return null;
@@ -326,25 +339,26 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
 fn setAmbiguousGenericSpecificDiagnostic(
     self: *context.Context,
     current: GenericSpecificSource,
-    previous: GenericSpecificSource,
+    conflicting: []const GenericSpecificSource,
 ) void {
     const current_source = genericSpecificDeclSource(current);
-    const previous_source = genericSpecificDeclSource(previous);
     const notes = [_]common_diag.DiagnosticMessage{
         .{ .text = "generic interface specifics must be distinguishable by their required dummy arguments" },
     };
     const helps = [_]common_diag.DiagnosticMessage{
         .{ .text = "change one specific's required dummy argument characteristics or split the generic interface" },
     };
-    const secondary_spans = [_]common_diag.DiagnosticSpan{
-        .{
+    const secondary_spans = self.arena.alloc(common_diag.DiagnosticSpan, conflicting.len) catch return;
+    for (conflicting, 0..) |source, idx| {
+        const decl_source = genericSpecificDeclSource(source);
+        secondary_spans[idx] = .{
             .file_path = "",
-            .line = if (previous_source.line == 0) 1 else previous_source.line,
-            .column = if (previous_source.column == 0) 1 else previous_source.column,
-            .line_text = previous_source.text,
+            .line = if (decl_source.line == 0) 1 else decl_source.line,
+            .column = if (decl_source.column == 0) 1 else decl_source.column,
+            .line_text = decl_source.text,
             .label = "conflicting specific here",
-        },
-    };
+        };
+    }
     self.setCurrentDeclSource(current_source);
     self.setDiagnosticStructured(
         if (current_source.line == 0) 1 else current_source.line,
@@ -355,7 +369,7 @@ fn setAmbiguousGenericSpecificDiagnostic(
         "ambiguous specific here",
         notes[0..],
         helps[0..],
-        secondary_spans[0..],
+        secondary_spans,
     );
 }
 
@@ -372,6 +386,16 @@ fn genericSpecificSourceSame(a: GenericSpecificSource, b: GenericSpecificSource)
     return a_source.line == b_source.line and
         a_source.column == b_source.column and
         std.mem.eql(u8, a_source.text, b_source.text);
+}
+
+fn appendUniqueGenericSpecificSource(
+    out: *std.array_list.Managed(GenericSpecificSource),
+    source: GenericSpecificSource,
+) !void {
+    for (out.items) |existing| {
+        if (genericSpecificSourceSame(existing, source)) return;
+    }
+    try out.append(source);
 }
 
 fn genericSpecificAmbiguous(a: context.Context.ProcedureSig, b: context.Context.ProcedureSig) bool {

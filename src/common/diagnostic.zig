@@ -121,6 +121,10 @@ pub const Bag = struct {
         options: AddOptions,
     ) void {
         const owned = self.makeOwned(file_path, line, column, code, message, line_text, options) catch return;
+        if (self.items.items.len != 0 and diagnosticEqual(self.items.items[self.items.items.len - 1], owned)) {
+            self.freeOwned(owned);
+            return;
+        }
         self.items.append(owned) catch {
             self.freeOwned(owned);
         };
@@ -261,6 +265,49 @@ pub fn inferStageFromCode(code: []const u8) DiagnosticStage {
         '5' => .runtime,
         else => .unknown,
     };
+}
+
+fn diagnosticEqual(a: Diagnostic, b: Diagnostic) bool {
+    return a.line == b.line and
+        a.column == b.column and
+        a.severity == b.severity and
+        a.stage == b.stage and
+        std.mem.eql(u8, a.file_path, b.file_path) and
+        std.mem.eql(u8, a.code, b.code) and
+        std.mem.eql(u8, a.message, b.message) and
+        std.mem.eql(u8, a.line_text, b.line_text) and
+        std.mem.eql(u8, a.primary_label, b.primary_label) and
+        diagnosticMessagesEqual(a.notes, b.notes) and
+        diagnosticMessagesEqual(a.helps, b.helps) and
+        diagnosticSpansEqual(a.secondary_spans, b.secondary_spans);
+}
+
+fn diagnosticMessagesEqual(a: []const DiagnosticMessage, b: []const DiagnosticMessage) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |message, idx| {
+        if (!std.mem.eql(u8, message.text, b[idx].text)) return false;
+    }
+    return true;
+}
+
+fn diagnosticSpansEqual(a: []const DiagnosticSpan, b: []const DiagnosticSpan) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |span, idx| {
+        const other = b[idx];
+        if (span.line != other.line or
+            span.column != other.column or
+            span.end_column != other.end_column)
+        {
+            return false;
+        }
+        if (!std.mem.eql(u8, span.file_path, other.file_path) or
+            !std.mem.eql(u8, span.line_text, other.line_text) or
+            !std.mem.eql(u8, span.label, other.label))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 test "diagnostic bag infers stage and keeps extra messages" {

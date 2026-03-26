@@ -82,6 +82,10 @@ pub const Bag = struct {
         secondary_spans: []const common_diag.DiagnosticSpan,
     ) void {
         const owned = self.makeOwned(line, column, code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
+        if (self.items.items.len != 0 and semanticDiagnosticEqual(self.items.items[self.items.items.len - 1], owned)) {
+            self.freeOwned(owned);
+            return;
+        }
         self.items.append(owned) catch {};
     }
 
@@ -219,6 +223,46 @@ fn freeSpans(allocator: std.mem.Allocator, spans: []const common_diag.Diagnostic
         allocator.free(span.label);
     }
     allocator.free(spans);
+}
+
+fn semanticDiagnosticEqual(a: SemanticDiagnostic, b: SemanticDiagnostic) bool {
+    return a.line == b.line and
+        a.column == b.column and
+        std.mem.eql(u8, a.code, b.code) and
+        std.mem.eql(u8, a.message, b.message) and
+        std.mem.eql(u8, a.line_text, b.line_text) and
+        std.mem.eql(u8, a.primary_label, b.primary_label) and
+        diagnosticMessagesEqual(a.notes, b.notes) and
+        diagnosticMessagesEqual(a.helps, b.helps) and
+        diagnosticSpansEqual(a.secondary_spans, b.secondary_spans);
+}
+
+fn diagnosticMessagesEqual(a: []const common_diag.DiagnosticMessage, b: []const common_diag.DiagnosticMessage) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |message, idx| {
+        if (!std.mem.eql(u8, message.text, b[idx].text)) return false;
+    }
+    return true;
+}
+
+fn diagnosticSpansEqual(a: []const common_diag.DiagnosticSpan, b: []const common_diag.DiagnosticSpan) bool {
+    if (a.len != b.len) return false;
+    for (a, 0..) |span, idx| {
+        const other = b[idx];
+        if (span.line != other.line or
+            span.column != other.column or
+            span.end_column != other.end_column)
+        {
+            return false;
+        }
+        if (!std.mem.eql(u8, span.file_path, other.file_path) or
+            !std.mem.eql(u8, span.line_text, other.line_text) or
+            !std.mem.eql(u8, span.label, other.label))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 const CompatStorage = struct {
