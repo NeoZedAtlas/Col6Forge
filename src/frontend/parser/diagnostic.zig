@@ -9,8 +9,10 @@ pub const ParseDiagnostic = struct {
     code: []const u8,
     message: []const u8,
     line_text: []const u8,
+    primary_label: []const u8 = "",
     notes: []const common_diag.DiagnosticMessage = &.{},
     helps: []const common_diag.DiagnosticMessage = &.{},
+    secondary_spans: []const common_diag.DiagnosticSpan = &.{},
 };
 
 pub const FallbackSource = struct {
@@ -61,7 +63,23 @@ pub const Bag = struct {
         notes: []const common_diag.DiagnosticMessage,
         helps: []const common_diag.DiagnosticMessage,
     ) void {
-        const owned = self.makeOwned(line, column, code, message, line_text, notes, helps) catch return;
+        const owned = self.makeOwned(line, column, code, message, line_text, "", notes, helps, &.{}) catch return;
+        self.items.append(owned) catch {};
+    }
+
+    pub fn setStructured(
+        self: *Bag,
+        line: usize,
+        column: usize,
+        code: []const u8,
+        message: []const u8,
+        line_text: []const u8,
+        primary_label: []const u8,
+        notes: []const common_diag.DiagnosticMessage,
+        helps: []const common_diag.DiagnosticMessage,
+        secondary_spans: []const common_diag.DiagnosticSpan,
+    ) void {
+        const owned = self.makeOwned(line, column, code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
         self.items.append(owned) catch {};
     }
 
@@ -105,21 +123,27 @@ pub const Bag = struct {
         code: []const u8,
         message: []const u8,
         line_text: []const u8,
+        primary_label: []const u8,
         notes: []const common_diag.DiagnosticMessage,
         helps: []const common_diag.DiagnosticMessage,
+        secondary_spans: []const common_diag.DiagnosticSpan,
     ) !ParseDiagnostic {
         const owned_notes = try dupeMessages(self.allocator, notes);
         errdefer freeMessages(self.allocator, owned_notes);
         const owned_helps = try dupeMessages(self.allocator, helps);
         errdefer freeMessages(self.allocator, owned_helps);
+        const owned_spans = try dupeSpans(self.allocator, secondary_spans);
+        errdefer freeSpans(self.allocator, owned_spans);
         return .{
             .line = if (line == 0) 1 else line,
             .column = if (column == 0) 1 else column,
             .code = try self.allocator.dupe(u8, code),
             .message = try self.allocator.dupe(u8, message),
             .line_text = try self.allocator.dupe(u8, line_text),
+            .primary_label = try self.allocator.dupe(u8, primary_label),
             .notes = owned_notes,
             .helps = owned_helps,
+            .secondary_spans = owned_spans,
         };
     }
 
@@ -127,8 +151,10 @@ pub const Bag = struct {
         self.allocator.free(diag.code);
         self.allocator.free(diag.message);
         self.allocator.free(diag.line_text);
+        self.allocator.free(diag.primary_label);
         freeMessages(self.allocator, diag.notes);
         freeMessages(self.allocator, diag.helps);
+        freeSpans(self.allocator, diag.secondary_spans);
     }
 
     fn clearFallback(self: *Bag) void {
@@ -155,6 +181,42 @@ fn freeMessages(allocator: std.mem.Allocator, messages: []const common_diag.Diag
     if (messages.len == 0) return;
     for (messages) |message| allocator.free(message.text);
     allocator.free(messages);
+}
+
+fn dupeSpans(allocator: std.mem.Allocator, spans: []const common_diag.DiagnosticSpan) ![]common_diag.DiagnosticSpan {
+    if (spans.len == 0) return &.{};
+    const owned = try allocator.alloc(common_diag.DiagnosticSpan, spans.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (owned[0..initialized]) |span| {
+            allocator.free(span.file_path);
+            allocator.free(span.line_text);
+            allocator.free(span.label);
+        }
+        allocator.free(owned);
+    }
+    for (spans) |span| {
+        owned[initialized] = .{
+            .file_path = try allocator.dupe(u8, span.file_path),
+            .line = span.line,
+            .column = span.column,
+            .end_column = span.end_column,
+            .line_text = try allocator.dupe(u8, span.line_text),
+            .label = try allocator.dupe(u8, span.label),
+        };
+        initialized += 1;
+    }
+    return owned;
+}
+
+fn freeSpans(allocator: std.mem.Allocator, spans: []const common_diag.DiagnosticSpan) void {
+    if (spans.len == 0) return;
+    for (spans) |span| {
+        allocator.free(span.file_path);
+        allocator.free(span.line_text);
+        allocator.free(span.label);
+    }
+    allocator.free(spans);
 }
 
 threadlocal var storage: compat.Storage = .{};
@@ -212,6 +274,7 @@ pub fn take() ?ParseDiagnostic {
         .code = storage.code orelse "",
         .message = storage.message orelse "",
         .line_text = storage.line_text orelse "",
+        .primary_label = "",
     };
 }
 

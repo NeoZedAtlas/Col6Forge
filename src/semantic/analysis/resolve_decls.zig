@@ -240,13 +240,32 @@ fn validateConcreteAbstractTypeUse(self: *context.Context, type_spec: symbols.Ty
     const line = if (decl_source.line == 0) 1 else decl_source.line;
     const column = if (decl_source.column == 0) 1 else decl_source.column;
     const message = std.fmt.allocPrint(self.arena, "is of the ABSTRACT type '{s}'", .{derived_name}) catch "is of the ABSTRACT type";
-    self.setDiagnostic(
-        line,
-        column,
-        catalog.semantic.unexpected_type_decl.code,
-        message,
-        decl_source.text,
-    );
+    if (derived_info.source.line != 0 or derived_info.source.column != 0) {
+        const related = [_]common_diag.DiagnosticSpan{
+            declSourceToSecondarySpan(derived_info.source, "abstract type declared here"),
+        };
+        self.setDiagnosticStructured(
+            line,
+            column,
+            catalog.semantic.unexpected_type_decl.code,
+            message,
+            decl_source.text,
+            "concrete abstract-type entity here",
+            &.{.{ .text = "A nonpolymorphic entity may not have an ABSTRACT derived type." }},
+            &.{.{ .text = "Declare this entity as CLASS(...), POINTER, or ALLOCATABLE, or use a concrete extension type instead." }},
+            related[0..],
+        );
+    } else {
+        self.setDiagnosticDetailed(
+            line,
+            column,
+            catalog.semantic.unexpected_type_decl.code,
+            message,
+            decl_source.text,
+            &.{.{ .text = "A nonpolymorphic entity may not have an ABSTRACT derived type." }},
+            &.{.{ .text = "Declare this entity as CLASS(...), POINTER, or ALLOCATABLE, or use a concrete extension type instead." }},
+        );
+    }
     return error.UnexpectedTypeDecl;
 }
 
@@ -323,13 +342,34 @@ fn validateKnownFunctionResultDeclaration(
     const known_spec = symbols_mod.lookupKnownFunctionResolvedSpec(self, sym.name) orelse return;
     const message = functionResultMismatchMessage(sym.type_spec, known_spec, prefer_length_message) orelse return;
     const decl_source = self.current_decl_source orelse ast.DeclSource{};
-    self.setDiagnostic(
-        if (decl_source.line == 0) 1 else decl_source.line,
-        if (decl_source.column == 0) 1 else decl_source.column,
-        catalog.semantic.invalid_argument_count.code,
-        message,
-        decl_source.text,
-    );
+    const line = if (decl_source.line == 0) 1 else decl_source.line;
+    const column = if (decl_source.column == 0) 1 else decl_source.column;
+    if (procedure_interfaces.findVisibleProcedureSource(self, sym.name)) |known_source| {
+        const related = [_]common_diag.DiagnosticSpan{
+            declSourceToSecondarySpan(known_source, "visible known function here"),
+        };
+        self.setDiagnosticStructured(
+            line,
+            column,
+            catalog.semantic.invalid_argument_count.code,
+            message,
+            decl_source.text,
+            "function result declaration conflicts here",
+            &.{.{ .text = "The local declaration disagrees with the visible known function result type." }},
+            &.{.{ .text = "Make the function result declaration match the visible function definition or interface." }},
+            related[0..],
+        );
+    } else {
+        self.setDiagnosticDetailed(
+            line,
+            column,
+            catalog.semantic.invalid_argument_count.code,
+            message,
+            decl_source.text,
+            &.{.{ .text = "The local declaration disagrees with the visible known function result type." }},
+            &.{.{ .text = "Make the function result declaration match the visible function definition or interface." }},
+        );
+    }
     return error.InvalidArgumentCount;
 }
 
@@ -438,13 +478,33 @@ pub fn resolvedDeclTypeSpec(
     switch (kind_selector.?.*) {
         .call_or_subscript => |call| {
             if (!symbols_mod.isIntrinsicName(call.name) and symbols_mod.lookupKnownProcedureSig(self, call.name) != null) {
-                self.setDiagnostic(
-                    if (self.current_decl_source) |src| if (src.line == 0) 1 else src.line else 1,
-                    if (self.current_decl_source) |src| if (src.column == 0) 1 else src.column else 1,
-                    catalog.semantic.unexpected_type_decl.code,
-                    "must be an intrinsic",
-                    if (self.current_decl_source) |src| src.text else "",
-                );
+                const current_source = self.current_decl_source orelse ast.DeclSource{};
+                if (procedure_interfaces.findVisibleProcedureSource(self, call.name)) |proc_source| {
+                    const related = [_]common_diag.DiagnosticSpan{
+                        declSourceToSecondarySpan(proc_source, "visible procedure selected here"),
+                    };
+                    self.setDiagnosticStructured(
+                        if (current_source.line == 0) 1 else current_source.line,
+                        if (current_source.column == 0) 1 else current_source.column,
+                        catalog.semantic.unexpected_type_decl.code,
+                        "must be an intrinsic",
+                        current_source.text,
+                        "invalid kind selector here",
+                        &.{.{ .text = "Type kind selectors that look like procedure references must resolve to intrinsic kind selector procedures." }},
+                        &.{.{ .text = "Use an intrinsic kind selector or replace this procedure reference with a constant kind value." }},
+                        related[0..],
+                    );
+                } else {
+                    self.setDiagnosticDetailed(
+                        if (current_source.line == 0) 1 else current_source.line,
+                        if (current_source.column == 0) 1 else current_source.column,
+                        catalog.semantic.unexpected_type_decl.code,
+                        "must be an intrinsic",
+                        current_source.text,
+                        &.{.{ .text = "Type kind selectors that look like procedure references must resolve to intrinsic kind selector procedures." }},
+                        &.{.{ .text = "Use an intrinsic kind selector or replace this procedure reference with a constant kind value." }},
+                    );
+                }
                 return error.UnexpectedTypeDecl;
             }
         },

@@ -1,9 +1,9 @@
-error[CF3103]: invalid CHARACTER length specification
+error[CF3103]: assumed character length is only valid for dummy arguments or function results
   --> tests/diagnostic_golden_cc/semantic_decl_char_len.f:2:7
    = stage: semantic
    = help: see docs/errors.md#CF3103
   |
 2 |       CHARACTER*(*) A
   |       ^
-   = note: CHARACTER length must be constant unless the entity is a dummy argument, function result, POINTER, or ALLOCATABLE.
-   = help: Use a positive constant length here, or move the assumed/deferred length onto a supported entity kind.
+   = note: An assumed CHARACTER length declaration outside a dummy argument or function result is not semantically valid.
+   = help: Use a constant CHARACTER length, or make the entity a dummy argument, POINTER, ALLOCATABLE, or function result.

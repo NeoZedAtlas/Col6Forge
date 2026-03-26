@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const common_diag = @import("../../common/diagnostic.zig");
 const catalog = @import("../../common/error_catalog.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
@@ -43,6 +44,7 @@ pub const Resolver = struct {
                 ctx.setCurrentDeclSource(decl_source);
                 try symbols_mod.registerDerivedType(ctx, .{
                     .name = decl.derived_type_def.name,
+                    .source = decl_source,
                     .parent_name = decl.derived_type_def.parent_name,
                     .abstract = decl.derived_type_def.abstract,
                     .sequence = decl.derived_type_def.sequence,
@@ -109,12 +111,16 @@ pub const Resolver = struct {
                     ctx.setCurrentDeclSource(decl_source);
                     const has_custom_diag = ctx.unit.owner_kind == .module and !ctx.unit.is_module_procedure;
                     if (ctx.unit.owner_kind == .module and !ctx.unit.is_module_procedure) {
-                        ctx.setDiagnostic(
+                        ctx.setDiagnosticStructured(
                             if (decl_source.line == 0) 1 else decl_source.line,
                             if (decl_source.column == 0) 1 else decl_source.column,
                             catalog.semantic.has_explicit_interface.code,
                             "procedure defined in interface body; PROCEDURE attribute conflicts with PROCEDURE attribute",
                             decl_source.text,
+                            "explicit interface definition conflicts here",
+                            &.{.{ .text = "A procedure body nested in an INTERFACE block already provides the explicit interface for that name." }},
+                            &.{.{ .text = "Remove the separate PROCEDURE-style declaration or move the implementation out of the INTERFACE body." }},
+                            &.{},
                         );
                     }
                     if (!ctx.usesExplicitDiagnosticBag()) return error.HasExplicitInterface;
@@ -181,7 +187,20 @@ fn validateAssumedCharacterLengths(ctx: *context.Context) !void {
         if (sym.storage == .dummy) continue;
         if (sym.kind == .parameter) continue;
         if (sym.kind == .function) continue;
-        ctx.setCurrentDeclSource(findTypeDeclSource(ctx, sym.name));
+        if (findTypeDeclSource(ctx, sym.name)) |decl_source| {
+            ctx.setCurrentDeclSource(decl_source);
+            ctx.setDiagnosticDetailed(
+                if (decl_source.line == 0) 1 else decl_source.line,
+                if (decl_source.column == 0) 1 else decl_source.column,
+                catalog.semantic.invalid_char_len.code,
+                "assumed character length is only valid for dummy arguments or function results",
+                decl_source.text,
+                &.{.{ .text = "An assumed CHARACTER length declaration outside a dummy argument or function result is not semantically valid." }},
+                &.{.{ .text = "Use a constant CHARACTER length, or make the entity a dummy argument, POINTER, ALLOCATABLE, or function result." }},
+            );
+        } else {
+            ctx.setCurrentDeclSource(findTypeDeclSource(ctx, sym.name));
+        }
         return error.InvalidCharLen;
     }
 }
@@ -239,20 +258,36 @@ fn maybeSetFunctionTypeDeclDiagnostic(ctx: *context.Context, type_decl: ast.Type
         const decl_source = ctx.current_decl_source orelse return;
         const line = if (decl_source.line == 0) 1 else decl_source.line;
         const column = if (decl_source.column == 0) 1 else decl_source.column;
-        ctx.setDiagnostic(
-            line,
-            column,
-            catalog.semantic.unexpected_type_decl.code,
-            "invalid type for function result",
-            decl_source.text,
-        );
-        if (type_decl.type_kind == .derived) {
-            ctx.setDiagnostic(
+        const related_source = findExplicitInterfaceDeclSource(ctx, ctx.unit.name);
+        if (related_source) |source| {
+            const related = [_]common_diag.DiagnosticSpan{.{
+                .file_path = "",
+                .line = if (source.line == 0) 1 else source.line,
+                .column = if (source.column == 0) 1 else source.column,
+                .end_column = @max((if (source.column == 0) 1 else source.column) + 1, source.text.len + 1),
+                .line_text = source.text,
+                .label = "visible explicit interface here",
+            }};
+            ctx.setDiagnosticStructured(
                 line,
                 column,
-                catalog.semantic.invalid_argument_count.code,
-                "Type mismatch",
+                catalog.semantic.unexpected_type_decl.code,
+                "invalid type for function result",
                 decl_source.text,
+                "function result declaration conflicts here",
+                &.{.{ .text = "The local function result declaration does not match the visible explicit interface." }},
+                &.{.{ .text = "Make the function result declaration agree with the explicit interface, or remove the conflicting declaration." }},
+                related[0..],
+            );
+        } else {
+            ctx.setDiagnosticDetailed(
+                line,
+                column,
+                catalog.semantic.unexpected_type_decl.code,
+                "invalid type for function result",
+                decl_source.text,
+                &.{.{ .text = "The local function result declaration does not match the visible explicit interface." }},
+                &.{.{ .text = "Make the function result declaration agree with the explicit interface, or remove the conflicting declaration." }},
             );
         }
         return;
@@ -307,6 +342,7 @@ fn buildDerivedComponentInfo(
             }
             try components.append(.{
                 .name = item.name,
+                .source = component_source orelse ast.DeclSource{},
                 .type_spec = spec,
                 .dims = item.dims,
                 .pointer = type_decl.pointer,
@@ -517,12 +553,14 @@ fn lookupUnitParameterInitializer(ctx: *context.Context, target_name: []const u8
 
 fn emitDerivedComponentSpecExprDiagnostic(ctx: *context.Context) void {
     const decl_source = ctx.current_decl_source orelse return;
-    ctx.setDiagnostic(
+    ctx.setDiagnosticDetailed(
         if (decl_source.line == 0) 1 else decl_source.line,
         if (decl_source.column == 0) 1 else decl_source.column,
         catalog.semantic.invalid_char_len.code,
         "non-constant object in the expression; a specification expression is required",
         decl_source.text,
+        &.{.{ .text = "Derived type component bounds and lengths must be specification expressions." }},
+        &.{.{ .text = "Replace the runtime-dependent expression with a constant or specification expression visible at the type definition." }},
     );
 }
 
@@ -537,6 +575,7 @@ fn buildDerivedBindingInfo(
     for (derived.bindings) |binding| {
         try bindings.append(.{
             .name = binding.name,
+            .source = binding.source,
             .owner_name = binding.owner_name orelse owner_name,
             .owner_kind = binding.owner_kind orelse owner_kind,
             .is_generic = binding.is_generic,

@@ -894,6 +894,40 @@ test "semantic reports abstract passed-object actual with related type location"
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "abstract type declared here"));
 }
 
+test "semantic reports concrete abstract-type declaration with related type source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  type, abstract :: base_t\n" ++
+        "  end type\n" ++
+        "contains\n" ++
+        "  subroutine s()\n" ++
+        "    type(base_t) :: x\n" ++
+        "  end subroutine\n" ++
+        "end module\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.UnexpectedTypeDecl, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3107"));
+    try testing.expect(std.mem.indexOf(u8, diag.message, "is of the ABSTRACT type") != null);
+    try testing.expect(std.mem.eql(u8, diag.line_text, "    type(base_t) :: x"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "concrete abstract-type entity here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "  type, abstract :: base_t"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "abstract type declared here"));
+}
+
 test "semantic reports CF3116 for duplicate declaration" {
     const testing = std.testing;
     const allocator = testing.allocator;

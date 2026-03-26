@@ -60,17 +60,31 @@ pub fn hasCurrentUnitExplicitInterfaceProcedure(self: *context.Context, target_n
 
 pub fn setAttributeConflictDiagnostic(self: *context.Context, message: []const u8) void {
     const loc = currentDeclLocation(self);
-    self.setDiagnostic(loc.line, loc.column, catalog.semantic.duplicate_declaration.code, message, loc.text);
+    self.setDiagnosticStructured(
+        loc.line,
+        loc.column,
+        catalog.semantic.duplicate_declaration.code,
+        message,
+        loc.text,
+        "conflicting declaration here",
+        &.{},
+        &.{},
+        &.{},
+    );
 }
 
 pub fn setSourceDiagnostic(self: *context.Context, source: ast.DeclSource, message: []const u8) void {
     self.setCurrentDeclSource(source);
-    self.setDiagnostic(
+    self.setDiagnosticStructured(
         if (source.line == 0) 1 else source.line,
         if (source.column == 0) 1 else source.column,
         catalog.semantic.duplicate_declaration.code,
         message,
         source.text,
+        "conflicting declaration here",
+        &.{},
+        &.{},
+        &.{},
     );
 }
 

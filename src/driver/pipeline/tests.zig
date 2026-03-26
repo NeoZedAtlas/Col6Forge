@@ -861,6 +861,39 @@ test "runPipeline reports abstract passed-object actual with related type source
     try testing.expectEqualStrings("abstract type declared here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports concrete abstract-type declaration with related type source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "module m\n" ++
+        "  type, abstract :: base_t\n" ++
+        "  end type\n" ++
+        "contains\n" ++
+        "  subroutine s()\n" ++
+        "    type(base_t) :: x\n" ++
+        "  end subroutine\n" ++
+        "end module\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_concrete_abstract_type_decl.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.UnexpectedTypeDecl, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.unexpected_type_decl.code, diag_info.code);
+    try testing.expect(std.mem.indexOf(u8, diag_info.message, "is of the ABSTRACT type") != null);
+    try testing.expectEqualStrings("    type(base_t) :: x", diag_info.line_text);
+    try testing.expectEqualStrings("concrete abstract-type entity here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("  type, abstract :: base_t", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("abstract type declared here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports COMMON mismatch with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;

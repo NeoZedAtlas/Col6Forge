@@ -1,0 +1,13 @@
+error[CF3107]: is of the ABSTRACT type 'base_t'
+  --> tests/diagnostic_golden_cc/semantic_concrete_abstract_type_decl.f90:6:5
+   = stage: semantic
+   = help: see docs/errors.md#CF3107
+  |
+6 |     type(base_t) :: x
+  |     ^ concrete abstract-type entity here
+  ::: tests/diagnostic_golden_cc\semantic_concrete_abstract_type_decl.f90:2:3
+  |
+2 |   type, abstract :: base_t
+  |   ~~~~~~~~~~~~~~~~~~~~~~ abstract type declared here
+   = note: A nonpolymorphic entity may not have an ABSTRACT derived type.
+   = help: Declare this entity as CLASS(...), POINTER, or ALLOCATABLE, or use a concrete extension type instead.

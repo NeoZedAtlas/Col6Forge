@@ -418,7 +418,17 @@ fn validateDerivedTypeDef(self: *context.Context, derived: ast.DerivedTypeDef) !
             derived.component_sources[component_idx]
         else
             self.current_decl_source orelse ast.DeclSource{};
-        setSourceDiagnostic(self, component_source, "has not been declared");
+        if (findUnitDerivedTypeDeclSource(self, derived_name)) |decl_source| {
+            setSourceDiagnosticWithRelated(
+                self,
+                component_source,
+                "has not been declared",
+                &.{decl_source},
+                "derived type declared later here",
+            );
+        } else {
+            setSourceDiagnostic(self, component_source, "has not been declared");
+        }
         if (first_error == null) first_error = error.UnexpectedTypeDecl;
     }
 
@@ -458,20 +468,32 @@ fn validateDerivedMemberNameCollisions(
         else
             self.current_decl_source orelse ast.DeclSource{};
         for (type_decl.items) |item| {
-            if (findParsedBindingByName(derived.bindings, item.name) != null) {
-                setSourceDiagnostic(self, component_source, "same name as a component");
+            if (findParsedBindingByName(derived.bindings, item.name)) |binding| {
+                setSourceDiagnosticWithRelated(
+                    self,
+                    component_source,
+                    "same name as a component",
+                    &.{binding.source},
+                    "conflicting binding here",
+                );
                 return error.DuplicateDeclaration;
             }
-            if (derivedAncestorHasMemberName(self, derived.parent_name, item.name)) {
-                setSourceDiagnostic(self, component_source, "same name");
+            if (findAncestorMemberSource(self, derived.parent_name, item.name)) |prior_source| {
+                setSourceDiagnosticWithRelated(
+                    self,
+                    component_source,
+                    "same name",
+                    &.{prior_source},
+                    "inherited member here",
+                );
                 return error.DuplicateDeclaration;
             }
         }
     }
 
     for (derived.bindings) |binding| {
-        if (derivedAncestorHasComponentName(self, derived.parent_name, binding.name)) {
-            setBindingDiagnostic(self, binding, "same name as an inherited component");
+        if (findAncestorComponentSource(self, derived.parent_name, binding.name)) |prior_source| {
+            setBindingDiagnosticWithRelated(self, binding, "same name as an inherited component", &.{prior_source}, "inherited component here");
             return error.DuplicateDeclaration;
         }
     }
@@ -497,6 +519,25 @@ fn derivedAncestorHasMemberName(
     return false;
 }
 
+fn findAncestorMemberSource(
+    self: *context.Context,
+    parent_name: ?[]const u8,
+    target_name: []const u8,
+) ?ast.DeclSource {
+    var current_name = parent_name;
+    while (current_name) |name| {
+        const parent = symbols_mod.lookupDerivedType(self, name) orelse return null;
+        for (parent.components) |component| {
+            if (std.ascii.eqlIgnoreCase(component.name, target_name)) return component.source;
+        }
+        for (parent.bindings) |binding| {
+            if (std.ascii.eqlIgnoreCase(binding.name, target_name)) return binding.source;
+        }
+        current_name = parent.parent_name;
+    }
+    return null;
+}
+
 fn derivedAncestorHasComponentName(
     self: *context.Context,
     parent_name: ?[]const u8,
@@ -511,6 +552,22 @@ fn derivedAncestorHasComponentName(
         current_name = parent.parent_name;
     }
     return false;
+}
+
+fn findAncestorComponentSource(
+    self: *context.Context,
+    parent_name: ?[]const u8,
+    target_name: []const u8,
+) ?ast.DeclSource {
+    var current_name = parent_name;
+    while (current_name) |name| {
+        const parent = symbols_mod.lookupDerivedType(self, name) orelse return null;
+        for (parent.components) |component| {
+            if (std.ascii.eqlIgnoreCase(component.name, target_name)) return component.source;
+        }
+        current_name = parent.parent_name;
+    }
+    return null;
 }
 
 fn validateDerivedBinding(
@@ -750,7 +807,7 @@ fn validateGenericBindingKinds(
             continue;
         }
         if (baseline_kind.? == sig.kind) continue;
-        setBindingDiagnostic(self, current_family[0], "mixed FUNCTION/SUBROUTINE");
+        setBindingDiagnosticWithRelated(self, current_family[0], "mixed FUNCTION/SUBROUTINE", &.{target.source}, "generic family first established here");
         return error.DuplicateDeclaration;
     }
     return null;
@@ -782,7 +839,8 @@ fn validateGenericBindingAmbiguity(
         var j: usize = i + 1;
         while (j < specifics.items.len) : (j += 1) {
             if (!genericBindingSpecificAmbiguous(specifics.items[i], specifics.items[j])) continue;
-            setBindingDiagnostic(self, current_family[0], "are ambiguous");
+            const related = [_]ast.DeclSource{ specifics.items[i].source, specifics.items[j].source };
+            setBindingDiagnosticWithRelated(self, current_family[0], "are ambiguous", related[0..], "conflicting generic binding specific here");
             return error.DuplicateDeclaration;
         }
     }
@@ -958,45 +1016,46 @@ fn validateBindingOverrideCompatibility(
     const parent_binding = findOverriddenParentBinding(self, derived, binding.name) orelse return null;
     const child_sig = bindingReferenceSig(self, binding) orelse return null;
     const parent_sig = bindingInfoReferenceSig(self, parent_binding) orelse return null;
+    const parent_related = [_]ast.DeclSource{parent_binding.source};
 
     if (parent_sig.pure and !child_sig.pure) {
-        setBindingDiagnostic(self, binding, "must also be PURE");
+        setBindingDiagnosticWithRelated(self, binding, "must also be PURE", parent_related[0..], "overridden parent binding here");
         return error.DuplicateDeclaration;
     }
     if (parent_sig.elemental and !child_sig.elemental) {
-        setBindingDiagnostic(self, binding, "must also be ELEMENTAL");
+        setBindingDiagnosticWithRelated(self, binding, "must also be ELEMENTAL", parent_related[0..], "overridden parent binding here");
         return error.DuplicateDeclaration;
     }
     if (!parent_sig.elemental and child_sig.elemental) {
-        setBindingDiagnostic(self, binding, "must not be ELEMENTAL");
+        setBindingDiagnosticWithRelated(self, binding, "must not be ELEMENTAL", parent_related[0..], "overridden parent binding here");
         return error.DuplicateDeclaration;
     }
     if (parent_sig.arg_count != child_sig.arg_count) {
-        setBindingDiagnostic(self, binding, "same number of formal arguments");
+        setBindingDiagnosticWithRelated(self, binding, "same number of formal arguments", parent_related[0..], "overridden parent binding here");
         return error.DuplicateDeclaration;
     }
     if (parent_sig.kind == .subroutine and child_sig.kind != .subroutine) {
-        setBindingDiagnostic(self, binding, "must also be a SUBROUTINE");
+        setBindingDiagnosticWithRelated(self, binding, "must also be a SUBROUTINE", parent_related[0..], "overridden parent binding here");
         return error.DuplicateDeclaration;
     }
     if (parent_sig.kind == .function and child_sig.kind != .function) {
-        setBindingDiagnostic(self, binding, "must also be a FUNCTION");
+        setBindingDiagnosticWithRelated(self, binding, "must also be a FUNCTION", parent_related[0..], "overridden parent binding here");
         return error.DuplicateDeclaration;
     }
     if (parent_sig.kind == .function and child_sig.kind == .function and !bindingFunctionResultsMatch(parent_sig, child_sig)) {
-        setBindingDiagnostic(self, binding, "Type mismatch in function result");
+        setBindingDiagnosticWithRelated(self, binding, "Type mismatch in function result", parent_related[0..], "overridden parent binding here");
         return error.DuplicateDeclaration;
     }
     if (!parent_binding.private and binding.private) {
-        setBindingDiagnostic(self, binding, "must not be PRIVATE");
+        setBindingDiagnosticWithRelated(self, binding, "must not be PRIVATE", parent_related[0..], "overridden parent binding here");
         return error.DuplicateDeclaration;
     }
     if (parent_binding.nopass and !binding.nopass) {
-        setBindingDiagnostic(self, binding, "must also be NOPASS");
+        setBindingDiagnosticWithRelated(self, binding, "must also be NOPASS", parent_related[0..], "overridden parent binding here");
         return error.DuplicateDeclaration;
     }
     if (!parent_binding.nopass and binding.nopass) {
-        setBindingDiagnostic(self, binding, "must also be PASS");
+        setBindingDiagnosticWithRelated(self, binding, "must also be PASS", parent_related[0..], "overridden parent binding here");
         return error.DuplicateDeclaration;
     }
 
@@ -1004,7 +1063,7 @@ fn validateBindingOverrideCompatibility(
         const parent_pass_idx = bindingPassArgIndex(parent_sig, parent_binding.pass_name) orelse return null;
         const child_pass_idx = bindingPassArgIndex(child_sig, binding.pass_name) orelse return null;
         if (parent_pass_idx != child_pass_idx) {
-            setBindingDiagnostic(self, binding, "same position");
+            setBindingDiagnosticWithRelated(self, binding, "same position", parent_related[0..], "overridden parent binding here");
             return error.DuplicateDeclaration;
         }
         if (validateOverridingDummyArguments(self, binding, parent_sig, child_sig, child_pass_idx)) |err| {
@@ -1146,6 +1205,71 @@ fn setBindingDiagnostic(
     setSourceDiagnostic(self, binding.source, message);
 }
 
+fn declSourceToSpan(source: ast.DeclSource, label: []const u8) common_diag.DiagnosticSpan {
+    const line = if (source.line == 0) 1 else source.line;
+    const column = if (source.column == 0) 1 else source.column;
+    return .{
+        .file_path = "",
+        .line = line,
+        .column = column,
+        .end_column = @max(column + 1, source.text.len + 1),
+        .line_text = source.text,
+        .label = label,
+    };
+}
+
+fn setSourceDiagnosticWithRelated(
+    self: *context.Context,
+    source: ast.DeclSource,
+    message: []const u8,
+    related_sources: []const ast.DeclSource,
+    related_label: []const u8,
+) void {
+    self.setCurrentDeclSource(source);
+    if (related_sources.len == 0) {
+        setSourceDiagnostic(self, source, message);
+        return;
+    }
+    const spans = self.arena.alloc(common_diag.DiagnosticSpan, related_sources.len) catch {
+        setSourceDiagnostic(self, source, message);
+        return;
+    };
+    for (related_sources, 0..) |related_source, idx| {
+        spans[idx] = declSourceToSpan(related_source, related_label);
+    }
+    self.setDiagnosticStructured(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        catalog.semantic.duplicate_declaration.code,
+        message,
+        source.text,
+        "conflicting declaration here",
+        &.{},
+        &.{},
+        spans,
+    );
+}
+
+fn setBindingDiagnosticWithRelated(
+    self: *context.Context,
+    binding: ast.TypeBoundProcedureBinding,
+    message: []const u8,
+    related_sources: []const ast.DeclSource,
+    related_label: []const u8,
+) void {
+    setSourceDiagnosticWithRelated(self, binding.source, message, related_sources, related_label);
+}
+
+fn findUnitDerivedTypeDeclSource(self: *context.Context, target_name: []const u8) ?ast.DeclSource {
+    for (self.unit.decls, 0..) |decl, decl_idx| {
+        if (decl != .derived_type_def) continue;
+        if (!std.ascii.eqlIgnoreCase(decl.derived_type_def.name, target_name)) continue;
+        if (decl_idx < self.unit.decl_sources.len) return self.unit.decl_sources[decl_idx];
+        return null;
+    }
+    return null;
+}
+
 fn bindingReferenceSig(
     self: *context.Context,
     binding: ast.TypeBoundProcedureBinding,
@@ -1162,6 +1286,7 @@ fn bindingReferenceSig(
 const GenericBindingSpecific = struct {
     sig: context.Context.ProcedureSig,
     pass_idx: ?usize,
+    source: ast.DeclSource,
 };
 
 fn genericBindingTargetSpecific(
@@ -1176,6 +1301,7 @@ fn genericBindingTargetSpecific(
         return .{
             .sig = sig,
             .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+            .source = target.source,
         };
     }
     if (findAncestorBindingByName(self, derived.parent_name, target_name)) |target| {
@@ -1184,6 +1310,7 @@ fn genericBindingTargetSpecific(
         return .{
             .sig = sig,
             .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+            .source = target.source,
         };
     }
     return null;
@@ -1201,6 +1328,7 @@ fn genericBindingInfoTargetSpecific(
         return .{
             .sig = sig,
             .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+            .source = target.source,
         };
     }
     if (findAncestorBindingByName(self, derived.parent_name, target_name)) |target| {
@@ -1209,6 +1337,7 @@ fn genericBindingInfoTargetSpecific(
         return .{
             .sig = sig,
             .pass_idx = if (target.nopass) null else bindingPassArgIndex(sig, target.pass_name),
+            .source = target.source,
         };
     }
     return null;

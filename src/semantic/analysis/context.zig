@@ -16,6 +16,7 @@ pub const Context = struct {
     pub const DerivedTypeInfo = struct {
         pub const ComponentInfo = struct {
             name: []const u8,
+            source: ast.DeclSource = .{},
             type_spec: symbols.TypeSpec,
             dims: []*ast.Expr = &.{},
             pointer: bool = false,
@@ -30,6 +31,7 @@ pub const Context = struct {
 
         pub const BindingInfo = struct {
             name: []const u8,
+            source: ast.DeclSource = .{},
             owner_name: ?[]const u8 = null,
             owner_kind: ?ast.LexicalOwnerKind = null,
             is_generic: bool = false,
@@ -43,6 +45,7 @@ pub const Context = struct {
         };
 
         name: []const u8,
+        source: ast.DeclSource = .{},
         parent_name: ?[]const u8 = null,
         abstract: bool = false,
         sequence: bool = false,

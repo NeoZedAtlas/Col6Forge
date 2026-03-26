@@ -149,19 +149,17 @@ pub fn appendParserDiagnostics(
         const raw_line = sourceLineAt(contents, parse_info.line);
         const line_text = if (raw_line.len > 0) raw_line else parse_info.line_text;
         const layout = parserAddOptionsFor(input_path, contents, logical_lines, parse_info.line, parse_info.code, err);
-        if (layout.secondary_span) |secondary_span| {
-            const spans = [_]diag.DiagnosticSpan{secondary_span};
-            diag_bag.addDetailed(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text, .{
-                .stage = .parser,
-                .primary_label = layout.primary_label,
-                .secondary_spans = spans[0..],
-            });
-        } else {
-            diag_bag.addDetailed(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text, .{
-                .stage = .parser,
-                .primary_label = layout.primary_label,
-            });
-        }
+        var combined_spans = std.array_list.Managed(diag.DiagnosticSpan).init(diag_bag.allocator);
+        defer combined_spans.deinit();
+        for (parse_info.secondary_spans) |span| combined_spans.append(span) catch {};
+        if (layout.secondary_span) |secondary_span| combined_spans.append(secondary_span) catch {};
+        diag_bag.addDetailed(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text, .{
+            .stage = .parser,
+            .primary_label = if (parse_info.primary_label.len != 0) parse_info.primary_label else layout.primary_label,
+            .notes = parse_info.notes,
+            .helps = parse_info.helps,
+            .secondary_spans = combined_spans.items,
+        });
         appended = true;
     }
     return appended;
@@ -251,8 +249,10 @@ pub fn appendCodegenDiagnostics(diag_bag: *diag.Bag, codegen_diag_bag: *codegen.
         const line_text = if (raw_line.len > 0) raw_line else cg_info.line_text;
         diag_bag.addDetailed(input_path, cg_info.line, cg_info.column, cg_info.code, cg_info.message, line_text, .{
             .stage = .codegen,
+            .primary_label = cg_info.primary_label,
             .notes = cg_info.notes,
             .helps = cg_info.helps,
+            .secondary_spans = cg_info.secondary_spans,
         });
         appended = true;
     }
