@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
 const fixed_form = @import("../../frontend/fixed_form.zig");
+const free_form = @import("../../frontend/free_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const symbols = @import("../symbol/mod.zig");
 
@@ -190,6 +191,45 @@ test "semantic reports CF3110 with explicit interface related location" {
     try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "INTEGER FUNCTION F(A,B)"));
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible interface here"));
+}
+
+test "semantic reports ambiguous interfaces with related location" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  interface iface\n" ++
+        "    module procedure sub_a\n" ++
+        "    module procedure sub_b\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine sub_a(x)\n" ++
+        "    integer, intent(in) :: x\n" ++
+        "  end subroutine\n" ++
+        "  subroutine sub_b(y)\n" ++
+        "    integer, intent(in) :: y\n" ++
+        "  end subroutine\n" ++
+        "end module\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.message, "Ambiguous interfaces"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "    module procedure sub_b"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "ambiguous specific here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "    module procedure sub_a"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "conflicting specific here"));
 }
 
 test "semantic reports CF3116 for duplicate declaration" {

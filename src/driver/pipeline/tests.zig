@@ -194,6 +194,43 @@ test "runPipeline reports explicit interface arity mismatch with related source"
     try testing.expectEqualStrings("visible interface here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports ambiguous interfaces with related source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "module m\n" ++
+        "  interface iface\n" ++
+        "    module procedure sub_a\n" ++
+        "    module procedure sub_b\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine sub_a(x)\n" ++
+        "    integer, intent(in) :: x\n" ++
+        "  end subroutine\n" ++
+        "  subroutine sub_b(y)\n" ++
+        "    integer, intent(in) :: y\n" ++
+        "  end subroutine\n" ++
+        "end module\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_ambiguous_interfaces.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("    module procedure sub_b", diag_info.line_text);
+    try testing.expectEqualStrings("ambiguous specific here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("    module procedure sub_a", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("conflicting specific here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports COMMON mismatch with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;

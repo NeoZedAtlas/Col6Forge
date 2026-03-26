@@ -1,5 +1,7 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const common_diag = @import("../../../common/diagnostic.zig");
+const catalog = @import("../../../common/error_catalog.zig");
 const context = @import("../context.zig");
 const symbols = @import("../../symbol/mod.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
@@ -313,10 +315,7 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
         while (j < specifics.items.len) : (j += 1) {
             if (genericSpecificSourceSame(specifics.items[i].source, specifics.items[j].source)) continue;
             if (!genericSpecificAmbiguous(specifics.items[i].sig, specifics.items[j].sig)) continue;
-            switch (specifics.items[j].source) {
-                .header => |proc_header| setSourceDiagnostic(self, proc_header.source, "Ambiguous interfaces"),
-                .source => |source| setSourceDiagnostic(self, source, "Ambiguous interfaces"),
-            }
+            setAmbiguousGenericSpecificDiagnostic(self, specifics.items[j].source, specifics.items[i].source);
             return error.DuplicateDeclaration;
         }
     }
@@ -324,15 +323,52 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
     return null;
 }
 
+fn setAmbiguousGenericSpecificDiagnostic(
+    self: *context.Context,
+    current: GenericSpecificSource,
+    previous: GenericSpecificSource,
+) void {
+    const current_source = genericSpecificDeclSource(current);
+    const previous_source = genericSpecificDeclSource(previous);
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "generic interface specifics must be distinguishable by their required dummy arguments" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "change one specific's required dummy argument characteristics or split the generic interface" },
+    };
+    const secondary_spans = [_]common_diag.DiagnosticSpan{
+        .{
+            .file_path = "",
+            .line = if (previous_source.line == 0) 1 else previous_source.line,
+            .column = if (previous_source.column == 0) 1 else previous_source.column,
+            .line_text = previous_source.text,
+            .label = "conflicting specific here",
+        },
+    };
+    self.setCurrentDeclSource(current_source);
+    self.setDiagnosticStructured(
+        if (current_source.line == 0) 1 else current_source.line,
+        if (current_source.column == 0) 1 else current_source.column,
+        catalog.semantic.duplicate_declaration.code,
+        "Ambiguous interfaces",
+        current_source.text,
+        "ambiguous specific here",
+        notes[0..],
+        helps[0..],
+        secondary_spans[0..],
+    );
+}
+
+fn genericSpecificDeclSource(source: GenericSpecificSource) ast.DeclSource {
+    return switch (source) {
+        .header => |proc_header| proc_header.source,
+        .source => |decl_source| decl_source,
+    };
+}
+
 fn genericSpecificSourceSame(a: GenericSpecificSource, b: GenericSpecificSource) bool {
-    const a_source = switch (a) {
-        .header => |proc_header| proc_header.source,
-        .source => |source| source,
-    };
-    const b_source = switch (b) {
-        .header => |proc_header| proc_header.source,
-        .source => |source| source,
-    };
+    const a_source = genericSpecificDeclSource(a);
+    const b_source = genericSpecificDeclSource(b);
     return a_source.line == b_source.line and
         a_source.column == b_source.column and
         std.mem.eql(u8, a_source.text, b_source.text);
