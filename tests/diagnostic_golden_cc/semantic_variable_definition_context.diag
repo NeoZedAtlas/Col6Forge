@@ -1,0 +1,13 @@
+error[CF3108]: in variable definition context
+  --> tests/diagnostic_golden_cc/semantic_variable_definition_context.f90:7:12
+   = stage: semantic
+   = help: see docs/errors.md#CF3108
+  |
+7 |   call foo(1)
+  |            ^ non-definable actual argument here
+  ::: tests/diagnostic_golden_cc\semantic_variable_definition_context.f90:4:7
+  |
+4 |       integer, intent(out) :: x
+  |       ~~~~~~~~~~~~~~~~~~~ visible dummy declaration here
+   = note: an actual argument associated with INTENT(OUT) or INTENT(INOUT) must be definable at the call site
+   = help: pass a variable, array element, substring, or component that the callee can legally define

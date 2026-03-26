@@ -858,7 +858,7 @@ fn checkDataActualArgCompatibility(
 ) CheckError!void {
     try resolve_expr.resolveExpr(self, actual_expr);
     if ((formal.intent == .out or formal.intent == .inout) and !exprIsVariableDefinitionActual(self, actual_expr)) {
-        return emitVariableDefinitionContextDiagnostic(self, actual_expr);
+        return emitVariableDefinitionContextDiagnostic(self, callee_name, formal.name, actual_expr);
     }
     const actual_rank = resolve_expr.exprRank(self, actual_expr);
     const actual_spec = try resolve_expr.exprTypeSpec(self, actual_expr);
@@ -1243,15 +1243,53 @@ fn appendUniqueDeclSource(out: *std.array_list.Managed(ast.DeclSource), source: 
 
 fn emitVariableDefinitionContextDiagnostic(
     self: *context.Context,
+    callee_name: ?[]const u8,
+    formal_name: ?[]const u8,
     expr: *ast.Expr,
 ) CheckError {
     const source = self.sourceForExpr(expr) orelse ast.SourceRef{};
-    self.setDiagnostic(
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "an actual argument associated with INTENT(OUT) or INTENT(INOUT) must be definable at the call site" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "pass a variable, array element, substring, or component that the callee can legally define" },
+    };
+    if (callee_name) |name| {
+        const formal_source = if (formal_name) |dummy_name|
+            procedure_interfaces.findVisibleProcedureFormalSource(self, name, dummy_name)
+        else
+            null;
+        const related_source = formal_source orelse procedure_interfaces.findVisibleProcedureSource(self, name);
+        if (related_source) |decl_source| {
+            const related = [_]ast.DeclSource{decl_source};
+            emitStructuredProcedureDiagnostic(
+                self,
+                .{
+                    .line = if (source.line == 0) 1 else source.line,
+                    .column = if (source.column == 0) 1 else source.column,
+                    .text = source.text,
+                },
+                catalog.semantic.assignment_type_mismatch.code,
+                "in variable definition context",
+                "non-definable actual argument here",
+                notes[0..],
+                helps[0..],
+                related[0..],
+                if (formal_source != null) "visible dummy declaration here" else "visible interface here",
+            );
+            return error.AssignmentTypeMismatch;
+        }
+    }
+    self.setDiagnosticStructured(
         if (source.line == 0) 1 else source.line,
         if (source.column == 0) 1 else source.column,
         catalog.semantic.assignment_type_mismatch.code,
         "in variable definition context",
         source.text,
+        "non-definable actual argument here",
+        notes[0..],
+        helps[0..],
+        &.{},
     );
     return error.AssignmentTypeMismatch;
 }
