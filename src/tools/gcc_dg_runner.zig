@@ -1181,8 +1181,9 @@ fn formatPipelineFailureText(
         defer out.deinit();
 
         while (diag_bag.take()) |d| {
-            defer diag_bag.release(d);
+            errdefer diag_bag.release(d);
             try Col6Forge.writeDiagnostic(&out.writer, d);
+            diag_bag.release(d);
         }
         try out.writer.flush();
         const text = try allocator.dupe(u8, out.writer.buffered());

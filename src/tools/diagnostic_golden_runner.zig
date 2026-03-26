@@ -7,11 +7,7 @@ const std = @import("std");
 const Col6Forge = @import("Col6Forge");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    var thread_safe = std.heap.ThreadSafeAllocator{ .child_allocator = gpa.allocator() };
-    const allocator = thread_safe.allocator();
-
+    const allocator = std.heap.page_allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
@@ -232,7 +228,7 @@ fn printUsage(file: std.fs.File) !void {
         \\  --filter <text>    Only run tests whose relative path contains this text
         \\  --update           Overwrite golden .diag files with current diagnostics
         \\  --timeout <ms>     Per-test timeout in milliseconds (default: 30000)
-        \\  --jobs <n>, -j <n> Parallel job count (default: CPU cores)
+        \\  --jobs <n>, -j <n> Parallel job count (default: 1; use explicit override if needed)
         \\  -h, --help         Show this help
         \\
     );
@@ -369,10 +365,11 @@ fn renderDiagnosticText(
     defer out.deinit();
     if (diag_bag.has()) {
         while (diag_bag.take()) |diag| {
-            defer diag_bag.release(diag);
+            errdefer diag_bag.release(diag);
             var display_diag = diag;
             display_diag.file_path = display_path;
             try Col6Forge.writeDiagnostic(&out.writer, display_diag);
+            diag_bag.release(diag);
         }
     } else if (Col6Forge.takeLastPipelineDiagnostic()) |diag| {
         var display_diag = diag;
@@ -560,5 +557,5 @@ fn logProgress(log_state: *LogState, progress: *Progress, input_path: []const u8
 }
 
 fn defaultJobs() usize {
-    return std.Thread.getCpuCount() catch 1;
+    return 1;
 }

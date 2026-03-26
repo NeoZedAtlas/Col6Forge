@@ -16,16 +16,20 @@ const DiagStorage = struct {
     code: ?[]u8 = null,
     message: ?[]u8 = null,
     line_text: ?[]u8 = null,
+    primary_label: ?[]u8 = null,
     notes: []diag.DiagnosticMessage = &.{},
     helps: []diag.DiagnosticMessage = &.{},
+    secondary_spans: []diag.DiagnosticSpan = &.{},
 
     fn clear(self: *DiagStorage) void {
         if (self.file_path) |buf| compat_allocator.free(buf);
         if (self.code) |buf| compat_allocator.free(buf);
         if (self.message) |buf| compat_allocator.free(buf);
         if (self.line_text) |buf| compat_allocator.free(buf);
+        if (self.primary_label) |buf| compat_allocator.free(buf);
         freeCompatMessages(self.notes);
         freeCompatMessages(self.helps);
+        freeCompatSpans(self.secondary_spans);
         self.* = .{};
     }
 };
@@ -43,8 +47,10 @@ pub fn takeLastDiagnostic() ?diag.Diagnostic {
         .code = diag_storage.code orelse "",
         .message = diag_storage.message orelse "",
         .line_text = diag_storage.line_text orelse "",
+        .primary_label = diag_storage.primary_label orelse "",
         .notes = diag_storage.notes,
         .helps = diag_storage.helps,
+        .secondary_spans = diag_storage.secondary_spans,
     };
 }
 
@@ -89,7 +95,7 @@ pub fn setParseDiagnostic(
     logical_lines: []logical_line.LogicalLine,
     err: anyerror,
 ) void {
-    if (appendParserDiagnostics(diag_bag, parse_diag_bag, input_path, contents)) return;
+    if (appendParserDiagnostics(diag_bag, parse_diag_bag, input_path, contents, logical_lines, err)) return;
     if (parse_diag_bag.fallbackSource()) |fallback| {
         const raw_line = sourceLineAt(contents, fallback.line);
         const line_text = if (raw_line.len > 0) raw_line else fallback.line_text;
@@ -129,20 +135,70 @@ pub fn setDefaultDiagnostic(diag_bag: *diag.Bag, input_path: []const u8, content
     setDefaultDiagnosticAt(diag_bag, input_path, 1, 1, sourceLineAt(contents, 1), code, base_message, err);
 }
 
-pub fn appendParserDiagnostics(diag_bag: *diag.Bag, parse_diag_bag: *parser.diagnostic.Bag, input_path: []const u8, contents: []const u8) bool {
+pub fn appendParserDiagnostics(
+    diag_bag: *diag.Bag,
+    parse_diag_bag: *parser.diagnostic.Bag,
+    input_path: []const u8,
+    contents: []const u8,
+    logical_lines: []logical_line.LogicalLine,
+    err: anyerror,
+) bool {
     var appended = false;
     while (parse_diag_bag.take()) |parse_info| {
         defer parse_diag_bag.release(parse_info);
         const raw_line = sourceLineAt(contents, parse_info.line);
         const line_text = if (raw_line.len > 0) raw_line else parse_info.line_text;
-        diag_bag.addDetailed(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text, .{
-            .stage = .parser,
-            .notes = parse_info.notes,
-            .helps = parse_info.helps,
-        });
+        const layout = parserAddOptionsFor(input_path, contents, logical_lines, parse_info.line, parse_info.code, err);
+        if (layout.secondary_span) |secondary_span| {
+            const spans = [_]diag.DiagnosticSpan{secondary_span};
+            diag_bag.addDetailed(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text, .{
+                .stage = .parser,
+                .primary_label = layout.primary_label,
+                .secondary_spans = spans[0..],
+            });
+        } else {
+            diag_bag.addDetailed(input_path, parse_info.line, parse_info.column, parse_info.code, parse_info.message, line_text, .{
+                .stage = .parser,
+                .primary_label = layout.primary_label,
+            });
+        }
         appended = true;
     }
     return appended;
+}
+
+const ParserDiagnosticLayout = struct {
+    primary_label: []const u8 = "",
+    secondary_span: ?diag.DiagnosticSpan = null,
+};
+
+fn parserAddOptionsFor(
+    input_path: []const u8,
+    contents: []const u8,
+    logical_lines: []logical_line.LogicalLine,
+    line: usize,
+    code: []const u8,
+    err: anyerror,
+) ParserDiagnosticLayout {
+    var layout = ParserDiagnosticLayout{};
+    if (std.mem.eql(u8, code, catalog.parser.missing_name.code) or err == error.MissingName) {
+        layout.primary_label = "identifier required here";
+        if (findLogicalLineForPhysicalLine(logical_lines, line)) |logical| {
+            if (logical.segments.len > 1) {
+                const first_segment = logical.segments[0];
+                const physical_text = sourceLineAt(contents, first_segment.line);
+                layout.secondary_span = .{
+                    .file_path = input_path,
+                    .line = first_segment.line,
+                    .column = first_segment.column,
+                    .end_column = first_segment.column + first_segment.length,
+                    .line_text = physical_text,
+                    .label = "continuation started here",
+                };
+            }
+        }
+    }
+    return layout;
 }
 
 pub fn appendSemanticDiagnostics(diag_bag: *diag.Bag, semantic_diag_bag: *semantic.diagnostic.Bag, input_path: []const u8, contents: []const u8) bool {
@@ -195,15 +251,17 @@ pub fn setDefaultDiagnosticAt(
 pub fn publishCompatFromBag(diag_bag: *diag.Bag) void {
     clearLastDiagnostic();
     if (diag_bag.latest()) |pipeline_diag| {
-        setLastDiagnostic(
+        setLastDiagnosticDetailed(
             pipeline_diag.file_path,
             pipeline_diag.line,
             pipeline_diag.column,
             pipeline_diag.code,
             pipeline_diag.message,
             pipeline_diag.line_text,
+            pipeline_diag.primary_label,
             pipeline_diag.notes,
             pipeline_diag.helps,
+            pipeline_diag.secondary_spans,
         );
     }
 }
@@ -220,10 +278,23 @@ pub fn setLastDiagnostic(
     code: []const u8,
     message: []const u8,
     line_text: []const u8,
+) void {
+    setLastDiagnosticDetailed(input_path, line, column, code, message, line_text, "", &.{}, &.{}, &.{});
+}
+
+pub fn setLastDiagnosticDetailed(
+    input_path: []const u8,
+    line: usize,
+    column: usize,
+    code: []const u8,
+    message: []const u8,
+    line_text: []const u8,
+    primary_label: []const u8,
     notes: []const diag.DiagnosticMessage,
     helps: []const diag.DiagnosticMessage,
+    secondary_spans: []const diag.DiagnosticSpan,
 ) void {
-    const next = makeCompatDiagnostic(input_path, line, column, code, message, line_text, notes, helps) catch return;
+    const next = makeCompatDiagnostic(input_path, line, column, code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
     diag_storage.clear();
     diag_storage = next;
     has_diag = true;
@@ -236,8 +307,10 @@ fn makeCompatDiagnostic(
     code: []const u8,
     message: []const u8,
     line_text: []const u8,
+    primary_label: []const u8,
     notes: []const diag.DiagnosticMessage,
     helps: []const diag.DiagnosticMessage,
+    secondary_spans: []const diag.DiagnosticSpan,
 ) !DiagStorage {
     var next: DiagStorage = .{
         .line = if (line == 0) 1 else line,
@@ -248,8 +321,10 @@ fn makeCompatDiagnostic(
     next.code = try compat_allocator.dupe(u8, code);
     next.message = try compat_allocator.dupe(u8, message);
     next.line_text = try compat_allocator.dupe(u8, line_text);
+    next.primary_label = try compat_allocator.dupe(u8, primary_label);
     next.notes = try dupeCompatMessages(notes);
     next.helps = try dupeCompatMessages(helps);
+    next.secondary_spans = try dupeCompatSpans(secondary_spans);
     return next;
 }
 
@@ -272,6 +347,50 @@ fn freeCompatMessages(messages: []const diag.DiagnosticMessage) void {
     if (messages.len == 0) return;
     for (messages) |message| compat_allocator.free(message.text);
     compat_allocator.free(messages);
+}
+
+fn dupeCompatSpans(spans: []const diag.DiagnosticSpan) ![]diag.DiagnosticSpan {
+    if (spans.len == 0) return &.{};
+    const owned = try compat_allocator.alloc(diag.DiagnosticSpan, spans.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (owned[0..initialized]) |span| {
+            compat_allocator.free(span.file_path);
+            compat_allocator.free(span.line_text);
+            compat_allocator.free(span.label);
+        }
+        compat_allocator.free(owned);
+    }
+    for (spans) |span| {
+        owned[initialized] = .{
+            .file_path = try compat_allocator.dupe(u8, span.file_path),
+            .line = span.line,
+            .column = span.column,
+            .end_column = span.end_column,
+            .line_text = try compat_allocator.dupe(u8, span.line_text),
+            .label = try compat_allocator.dupe(u8, span.label),
+        };
+        initialized += 1;
+    }
+    return owned;
+}
+
+fn freeCompatSpans(spans: []const diag.DiagnosticSpan) void {
+    if (spans.len == 0) return;
+    for (spans) |span| {
+        compat_allocator.free(span.file_path);
+        compat_allocator.free(span.line_text);
+        compat_allocator.free(span.label);
+    }
+    compat_allocator.free(spans);
+}
+
+fn findLogicalLineForPhysicalLine(lines: []logical_line.LogicalLine, line: usize) ?logical_line.LogicalLine {
+    for (lines) |logical| {
+        if (line < logical.span.start_line or line > logical.span.end_line) continue;
+        return logical;
+    }
+    return null;
 }
 
 pub fn sourceLineAt(contents: []const u8, line_no: usize) []const u8 {

@@ -63,7 +63,7 @@ pub fn emitLlvmModule(
         return err;
     };
     if (profile) |p| p.parse_ns = profile_mod.elapsedNs(parse_start);
-    const parse_had_diagnostics = diagnostics.appendParserDiagnostics(diag_bag, &parse_diag_bag, input_path, contents);
+    const parse_had_diagnostics = diagnostics.appendParserDiagnostics(diag_bag, &parse_diag_bag, input_path, contents, logical_lines, error.UnexpectedToken);
     if (parse_had_diagnostics) {
         if (profile) |p| p.markFailure(.parse);
     }
@@ -185,7 +185,7 @@ pub fn emitLlvmModuleToWriter(
         return err;
     };
     if (profile) |p| p.parse_ns = profile_mod.elapsedNs(parse_start);
-    const parse_had_diagnostics = diagnostics.appendParserDiagnostics(diag_bag, &parse_diag_bag, input_path, contents);
+    const parse_had_diagnostics = diagnostics.appendParserDiagnostics(diag_bag, &parse_diag_bag, input_path, contents, logical_lines, error.UnexpectedToken);
     if (parse_had_diagnostics) {
         if (profile) |p| p.markFailure(.parse);
     }

@@ -4,6 +4,8 @@ error[CF2004]: missing required identifier
    = help: see docs/errors.md#CF2004
   |
 3 |      1 )
-  |        ^
-   = note: The parser reached a position where an identifier is required to continue the declaration or statement.
-   = help: Check trailing commas and continuation lines near this position.
+  |        ^ identifier required here
+  ::: tests/diagnostic_golden\fixed_parse_continuation.f:2:7
+  |
+2 |       INTEGER A,
+  |       ~~~~~~~~~~ continuation started here

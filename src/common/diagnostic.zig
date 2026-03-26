@@ -40,11 +40,22 @@ pub const DiagnosticMessage = struct {
     text: []const u8,
 };
 
+pub const DiagnosticSpan = struct {
+    file_path: []const u8,
+    line: usize,
+    column: usize,
+    end_column: usize = 0,
+    line_text: []const u8,
+    label: []const u8 = "",
+};
+
 pub const AddOptions = struct {
     severity: DiagnosticSeverity = .@"error",
     stage: ?DiagnosticStage = null,
+    primary_label: []const u8 = "",
     notes: []const DiagnosticMessage = &.{},
     helps: []const DiagnosticMessage = &.{},
+    secondary_spans: []const DiagnosticSpan = &.{},
 };
 
 pub const Diagnostic = struct {
@@ -56,8 +67,10 @@ pub const Diagnostic = struct {
     line_text: []const u8,
     severity: DiagnosticSeverity = .@"error",
     stage: DiagnosticStage = .unknown,
+    primary_label: []const u8 = "",
     notes: []const DiagnosticMessage = &.{},
     helps: []const DiagnosticMessage = &.{},
+    secondary_spans: []const DiagnosticSpan = &.{},
 };
 
 pub const Bag = struct {
@@ -143,6 +156,9 @@ pub const Bag = struct {
         const owned_helps = try self.dupeMessages(options.helps);
         errdefer self.freeMessages(owned_helps);
 
+        const owned_spans = try self.dupeSpans(options.secondary_spans);
+        errdefer self.freeSpans(owned_spans);
+
         return .{
             .file_path = try self.allocator.dupe(u8, file_path),
             .line = if (line == 0) 1 else line,
@@ -152,8 +168,10 @@ pub const Bag = struct {
             .line_text = try self.allocator.dupe(u8, line_text),
             .severity = options.severity,
             .stage = options.stage orelse inferStageFromCode(code),
+            .primary_label = try self.allocator.dupe(u8, options.primary_label),
             .notes = owned_notes,
             .helps = owned_helps,
+            .secondary_spans = owned_spans,
         };
     }
 
@@ -162,8 +180,10 @@ pub const Bag = struct {
         self.allocator.free(diag.code);
         self.allocator.free(diag.message);
         self.allocator.free(diag.line_text);
+        self.allocator.free(diag.primary_label);
         self.freeMessages(diag.notes);
         self.freeMessages(diag.helps);
+        self.freeSpans(diag.secondary_spans);
     }
 
     fn dupeMessages(self: *Bag, messages: []const DiagnosticMessage) ![]DiagnosticMessage {
@@ -190,6 +210,44 @@ pub const Bag = struct {
         for (messages) |message| self.allocator.free(message.text);
         self.allocator.free(messages);
     }
+
+    fn dupeSpans(self: *Bag, spans: []const DiagnosticSpan) ![]DiagnosticSpan {
+        if (spans.len == 0) return &.{};
+
+        const owned = try self.allocator.alloc(DiagnosticSpan, spans.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (owned[0..initialized]) |span| {
+                self.allocator.free(span.file_path);
+                self.allocator.free(span.line_text);
+                self.allocator.free(span.label);
+            }
+            self.allocator.free(owned);
+        }
+
+        for (spans) |span| {
+            owned[initialized] = .{
+                .file_path = try self.allocator.dupe(u8, span.file_path),
+                .line = if (span.line == 0) 1 else span.line,
+                .column = if (span.column == 0) 1 else span.column,
+                .end_column = if (span.end_column == 0) 0 else span.end_column,
+                .line_text = try self.allocator.dupe(u8, span.line_text),
+                .label = try self.allocator.dupe(u8, span.label),
+            };
+            initialized += 1;
+        }
+        return owned;
+    }
+
+    fn freeSpans(self: *Bag, spans: []const DiagnosticSpan) void {
+        if (spans.len == 0) return;
+        for (spans) |span| {
+            self.allocator.free(span.file_path);
+            self.allocator.free(span.line_text);
+            self.allocator.free(span.label);
+        }
+        self.allocator.free(spans);
+    }
 };
 
 pub fn inferStageFromCode(code: []const u8) DiagnosticStage {
@@ -212,8 +270,17 @@ test "diagnostic bag infers stage and keeps extra messages" {
     defer bag.deinit();
 
     bag.addDetailed("demo.f", 2, 7, "CF3119", "invalid operand", "      I='A'+1", .{
+        .primary_label = "operator mismatch here",
         .notes = &.{.{ .text = "semantic note" }},
         .helps = &.{.{ .text = "semantic help" }},
+        .secondary_spans = &.{.{
+            .file_path = "demo.f",
+            .line = 1,
+            .column = 7,
+            .end_column = 10,
+            .line_text = "      INTEGER I",
+            .label = "declaration site",
+        }},
     });
 
     const diag = bag.take() orelse return error.TestExpectedEqual;
@@ -221,8 +288,11 @@ test "diagnostic bag infers stage and keeps extra messages" {
 
     try testing.expectEqual(DiagnosticStage.semantic, diag.stage);
     try testing.expectEqual(DiagnosticSeverity.@"error", diag.severity);
+    try testing.expectEqualStrings("operator mismatch here", diag.primary_label);
     try testing.expectEqual(@as(usize, 1), diag.notes.len);
     try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
     try testing.expectEqualStrings("semantic note", diag.notes[0].text);
     try testing.expectEqualStrings("semantic help", diag.helps[0].text);
+    try testing.expectEqualStrings("declaration site", diag.secondary_spans[0].label);
 }

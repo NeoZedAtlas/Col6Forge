@@ -10,6 +10,7 @@ const takeLastDiagnostic = pipeline.takeLastDiagnostic;
 const releaseLastDiagnostic = pipeline.releaseLastDiagnostic;
 const clearLastDiagnostic = diagnostics.clearLastDiagnostic;
 const setLastDiagnostic = diagnostics.setLastDiagnostic;
+const setLastDiagnosticDetailed = diagnostics.setLastDiagnosticDetailed;
 
 fn writeTempSourceFile(tmp: *std.testing.TmpDir, allocator: std.mem.Allocator, file_name: []const u8, source: []const u8) ![]u8 {
     var file = try tmp.dir.createFile(file_name, .{ .truncate = true });
@@ -43,6 +44,7 @@ test "runPipeline reports parse diagnostics against the original continued sourc
     try testing.expectEqual(@as(usize, 8), diag_info.column);
     try testing.expectEqualStrings(catalog.parser.unexpected_token.code, diag_info.code);
     try testing.expectEqualStrings("     1 )", diag_info.line_text);
+    try testing.expectEqual(@as(usize, 0), diag_info.secondary_spans.len);
 }
 
 test "runPipeline reports semantic declaration diagnostics against the original source line" {
@@ -921,6 +923,50 @@ test "releaseLastDiagnostic clears compat storage after take" {
     try testing.expect(takeLastDiagnostic() == null);
 }
 
+test "runPipeline reports continuation-related secondary span for missing identifier" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      PROGRAM P\n" ++
+        "      INTEGER A,\n" ++
+        "     1 )\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "continued_missing_name.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.MissingName, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.parser.missing_name.code, diag_info.code);
+    try testing.expectEqualStrings("identifier required here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings("continuation started here", diag_info.secondary_spans[0].label);
+}
+
+test "setLastDiagnosticDetailed preserves secondary spans in compat storage" {
+    const testing = std.testing;
+
+    clearLastDiagnostic();
+    setLastDiagnosticDetailed("x.f", 2, 3, catalog.pipeline.generic.code, "msg", "line", "label", &.{}, &.{}, &.{.{
+        .file_path = "x.f",
+        .line = 1,
+        .column = 5,
+        .end_column = 8,
+        .line_text = "abc",
+        .label = "origin",
+    }});
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings("label", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqualStrings("origin", diag_info.secondary_spans[0].label);
+}
+
 test "repository semantic decl char len golden input keeps compat notes" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -936,6 +982,29 @@ test "repository semantic decl char len golden input keeps compat notes" {
     defer releaseLastDiagnostic(diag_info);
     try testing.expectEqual(@as(usize, 1), diag_info.notes.len);
     try testing.expectEqual(@as(usize, 1), diag_info.helps.len);
+}
+
+test "repository fixed parse continuation golden input keeps explicit parse diagnostic" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var diag_bag = diag.Bag.init(allocator);
+    defer diag_bag.deinit();
+
+    try testing.expectError(
+        error.MissingName,
+        runPipelineWithOptionsAndDiagnostics(
+            allocator,
+            "tests/diagnostic_golden/fixed_parse_continuation.f",
+            .llvm,
+            .{ .target = "x86_64-linux-gnu" },
+            &diag_bag,
+        ),
+    );
+    const diag_info = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(diag_info);
+    try testing.expectEqualStrings(catalog.parser.missing_name.code, diag_info.code);
+    try testing.expectEqualStrings("identifier required here", diag_info.primary_label);
 }
 
 test "runPipelineWithOptionsAndDiagnostics compiles ENTRY function alternate result body without leaking into primary unit" {
