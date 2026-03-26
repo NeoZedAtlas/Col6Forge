@@ -272,7 +272,8 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
                 return procedure_calls.emitNamedProcedureDiagnostic(self, call.name, error.DuplicateDeclaration, "Ambiguous interfaces");
             }
             if (procedure_calls.preludeSpecificInterfaceProcedureCount(self, call.name) > 1) {
-                return procedure_calls.emitNamedProcedureDiagnostic(self, call.name, error.DuplicateDeclaration, "ambiguous reference");
+                procedure_calls.emitAmbiguousReferenceDiagnostic(self, call.name);
+                return error.DuplicateDeclaration;
             }
             const idx = symbolIndexForResolvedCall(self, expr) orelse
                 (resolve_symbols.findSymbolIndex(self, call.name) orelse return error.MissingScope);

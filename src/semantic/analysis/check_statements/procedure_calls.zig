@@ -350,6 +350,45 @@ pub fn emitNamedProcedureDiagnostic(
     return err;
 }
 
+pub fn emitAmbiguousReferenceDiagnostic(self: *context.Context, name: []const u8) void {
+    const primary = currentProcedureDiagnosticSource(self) orelse return;
+    const advice = ambiguousReferenceAdvice();
+    if (findPreludeSpecificInterfaceSource(self, name)) |decl_source| {
+        const related = [_]common_diag.DiagnosticSpan{.{
+            .file_path = "",
+            .line = if (decl_source.line == 0) 1 else decl_source.line,
+            .column = if (decl_source.column == 0) 1 else decl_source.column,
+            .end_column = @max(
+                (if (decl_source.column == 0) 1 else decl_source.column) + 1,
+                decl_source.text.len + 1,
+            ),
+            .line_text = decl_source.text,
+            .label = "conflicting visible procedure here",
+        }};
+        self.setDiagnosticStructured(
+            primary.line,
+            primary.column,
+            catalog.semantic.duplicate_declaration.code,
+            "ambiguous reference",
+            primary.text,
+            "ambiguous reference here",
+            advice.notes,
+            advice.helps,
+            related[0..],
+        );
+        return;
+    }
+    self.setDiagnosticDetailed(
+        primary.line,
+        primary.column,
+        catalog.semantic.duplicate_declaration.code,
+        "ambiguous reference",
+        primary.text,
+        advice.notes,
+        advice.helps,
+    );
+}
+
 const DiagnosticSource = struct {
     line: usize,
     column: usize,
@@ -372,6 +411,20 @@ fn currentProcedureDiagnosticSource(self: *context.Context) ?DiagnosticSource {
         };
     }
     return null;
+}
+
+fn ambiguousReferenceAdvice() struct {
+    notes: []const common_diag.DiagnosticMessage,
+    helps: []const common_diag.DiagnosticMessage,
+} {
+    return .{
+        .notes = &[_]common_diag.DiagnosticMessage{
+            .{ .text = "this reference resolves to more than one visible procedure with the same name" },
+        },
+        .helps = &[_]common_diag.DiagnosticMessage{
+            .{ .text = "rename one declaration or avoid importing conflicting unnamed interfaces into the same scope" },
+        },
+    };
 }
 
 pub fn checkExplicitInterfaceRequirementForCallArgs(
@@ -473,25 +526,33 @@ pub fn preludeSpecificInterfaceProcedureCount(self: *context.Context, name: []co
     return count;
 }
 
-pub fn currentUnitConflictsWithPreludeProcedure(self: *context.Context, name: []const u8) bool {
-    if (self.unit.is_module_procedure and std.ascii.eqlIgnoreCase(name, self.unit.name)) return false;
+pub fn findPreludeSpecificInterfaceSource(self: *context.Context, name: []const u8) ?ast.DeclSource {
+    if (self.unit.is_module_procedure and std.ascii.eqlIgnoreCase(name, self.unit.name)) return null;
     var decl_idx: usize = 0;
     while (decl_idx < self.unit.prelude_decl_count and decl_idx < self.unit.decls.len) : (decl_idx += 1) {
         const decl = self.unit.decls[decl_idx];
         if (decl != .interface_block) continue;
         if (decl.interface_block.name != null) continue;
         for (decl.interface_block.procedure_headers) |proc_header| {
-            if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return true;
+            if (std.ascii.eqlIgnoreCase(proc_header.name, name)) return proc_header.source;
         }
-        for (decl.interface_block.procedures) |proc_name| {
+        for (decl.interface_block.procedures, 0..) |proc_name, idx| {
             if (procedure_interfaces.interfaceBlockHasProcedureHeader(decl.interface_block, proc_name)) continue;
-            if (std.ascii.eqlIgnoreCase(proc_name, name)) return true;
+            if (!std.ascii.eqlIgnoreCase(proc_name, name)) continue;
+            if (idx < decl.interface_block.procedure_sources.len) return decl.interface_block.procedure_sources[idx];
+            break;
         }
-        for (decl.interface_block.specific_procedures) |proc_name| {
-            if (std.ascii.eqlIgnoreCase(proc_name, name)) return true;
+        for (decl.interface_block.specific_procedures, 0..) |proc_name, idx| {
+            if (!std.ascii.eqlIgnoreCase(proc_name, name)) continue;
+            if (idx < decl.interface_block.specific_procedure_sources.len) return decl.interface_block.specific_procedure_sources[idx];
+            break;
         }
     }
-    return false;
+    return null;
+}
+
+pub fn currentUnitConflictsWithPreludeProcedure(self: *context.Context, name: []const u8) bool {
+    return findPreludeSpecificInterfaceSource(self, name) != null;
 }
 
 pub fn isCurrentUnitAmbiguousResultRef(self: *context.Context, expr: *ast.Expr) bool {
@@ -501,14 +562,7 @@ pub fn isCurrentUnitAmbiguousResultRef(self: *context.Context, expr: *ast.Expr) 
     };
     if (!std.ascii.eqlIgnoreCase(name, self.unit.name)) return false;
     if (!currentUnitConflictsWithPreludeProcedure(self, name)) return false;
-    const stmt = self.current_stmt orelse return false;
-    self.setDiagnostic(
-        if (stmt.source_line == 0) 1 else stmt.source_line,
-        if (stmt.source_column == 0) 1 else stmt.source_column,
-        catalog.semantic.duplicate_declaration.code,
-        "ambiguous reference",
-        stmt.source_text,
-    );
+    emitAmbiguousReferenceDiagnostic(self, name);
     return true;
 }
 

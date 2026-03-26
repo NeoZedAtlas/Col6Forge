@@ -232,6 +232,52 @@ test "semantic reports ambiguous interfaces with related location" {
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "conflicting specific here"));
 }
 
+test "semantic reports ambiguous reference with related location" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  interface\n" ++
+        "    function my_fun(a)\n" ++
+        "      real a, my_fun\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module\n" ++
+        "module m2\n" ++
+        "  interface\n" ++
+        "    function my_fun(a)\n" ++
+        "      real a, my_fun\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module\n" ++
+        "subroutine s(a)\n" ++
+        "  use m1\n" ++
+        "  use m2\n" ++
+        "  real a\n" ++
+        "  print *, my_fun(a)\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.message, "ambiguous reference"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "  print *, my_fun(a)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "ambiguous reference here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "    function my_fun(a)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "conflicting visible procedure here"));
+}
+
 test "semantic reports CF3116 for duplicate declaration" {
     const testing = std.testing;
     const allocator = testing.allocator;

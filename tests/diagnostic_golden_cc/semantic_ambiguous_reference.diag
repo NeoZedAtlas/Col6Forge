@@ -1,0 +1,13 @@
+error[CF3116]: ambiguous reference
+  --> tests/diagnostic_golden_cc/semantic_ambiguous_reference.f90:19:3
+   = stage: semantic
+   = help: see docs/errors.md#CF3116
+   |
+19 |   print *, my_fun(a)
+   |   ^ ambiguous reference here
+  ::: tests/diagnostic_golden_cc\semantic_ambiguous_reference.f90:10:5
+   |
+10 |     function my_fun(a)
+   |     ~~~~~~~~~~~~~~ conflicting visible procedure here
+   = note: this reference resolves to more than one visible procedure with the same name
+   = help: rename one declaration or avoid importing conflicting unnamed interfaces into the same scope

@@ -170,7 +170,8 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
                 return procedure_calls.emitNamedProcedureDiagnostic(self, call.name, error.DuplicateDeclaration, "Ambiguous interfaces");
             }
             if (std.ascii.eqlIgnoreCase(call.name, self.unit.name) and procedure_calls.currentUnitConflictsWithPreludeProcedure(self, call.name)) {
-                return procedure_calls.emitNamedProcedureDiagnostic(self, call.name, error.DuplicateDeclaration, "ambiguous reference");
+                procedure_calls.emitAmbiguousReferenceDiagnostic(self, call.name);
+                return error.DuplicateDeclaration;
             }
             if (procedure_interfaces.isAbstractInterfaceProcedure(self, call.name)) {
                 return procedure_calls.emitNamedProcedureDiagnostic(self, call.name, error.InvalidArgumentCount, "must not be referenced");

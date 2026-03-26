@@ -231,6 +231,50 @@ test "runPipeline reports ambiguous interfaces with related source" {
     try testing.expectEqualStrings("conflicting specific here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports ambiguous reference with related source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "module m1\n" ++
+        "  interface\n" ++
+        "    function my_fun(a)\n" ++
+        "      real a, my_fun\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module\n" ++
+        "module m2\n" ++
+        "  interface\n" ++
+        "    function my_fun(a)\n" ++
+        "      real a, my_fun\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module\n" ++
+        "subroutine s(a)\n" ++
+        "  use m1\n" ++
+        "  use m2\n" ++
+        "  real a\n" ++
+        "  print *, my_fun(a)\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_ambiguous_reference.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("  print *, my_fun(a)", diag_info.line_text);
+    try testing.expectEqualStrings("ambiguous reference here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("    function my_fun(a)", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("conflicting visible procedure here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports COMMON mismatch with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;
