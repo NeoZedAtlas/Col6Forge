@@ -1,5 +1,6 @@
 const std = @import("std");
 const diagnostic = @import("diagnostic.zig");
+const catalog = @import("error_catalog.zig");
 
 const docs_dir = "docs";
 const docs_file = "errors.md";
@@ -362,8 +363,8 @@ test "writeDiagnostic renders structured plain text with grouped related spans" 
         .file_path = "demo.f",
         .line = 2,
         .column = 7,
-        .code = "CF3103",
-        .message = "invalid CHARACTER length specification",
+        .code = catalog.semantic.invalid_char_len.code,
+        .message = catalog.semantic.invalid_char_len.message,
         .line_text = "      CHARACTER*(*) A",
         .primary_label = "reported here",
         .notes = &.{.{ .text = "CHARACTER*(*) is only valid in dummy/result contexts" }},
@@ -389,10 +390,10 @@ test "writeDiagnostic renders structured plain text with grouped related spans" 
     try out.writer.flush();
 
     const expected =
-        "error[CF3103]: invalid CHARACTER length specification\n" ++
+        "error[" ++ catalog.semantic.invalid_char_len.code ++ "]: " ++ catalog.semantic.invalid_char_len.message ++ "\n" ++
         "  --> demo.f:2:7\n" ++
         "   = stage: semantic\n" ++
-        "   = help: see docs/errors.md#CF3103\n" ++
+        "   = help: see " ++ docs_dir ++ "/" ++ docs_file ++ "#" ++ catalog.semantic.invalid_char_len.code ++ "\n" ++
         "  |\n" ++
         "2 |       CHARACTER*(*) A\n" ++
         "  |       ^ reported here\n" ++
@@ -417,7 +418,7 @@ test "writeDiagnosticWithOptions truncates long lines and emits ANSI styles" {
         .file_path = "demo.f90",
         .line = 14,
         .column = 31,
-        .code = "CF3110",
+        .code = catalog.semantic.invalid_argument_count.code,
         .message = "Type mismatch in argument",
         .line_text = "  call this_is_a_very_long_procedure_name_with_many_arguments(argument_one, argument_two, argument_three)",
         .primary_label = "actual argument conflicts here",

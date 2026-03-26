@@ -1,4 +1,5 @@
 const std = @import("std");
+const catalog = @import("error_catalog.zig");
 
 pub const DiagnosticStage = enum {
     unknown,
@@ -316,7 +317,7 @@ test "diagnostic bag infers stage and keeps extra messages" {
     var bag = Bag.init(testing.allocator);
     defer bag.deinit();
 
-    bag.addDetailed("demo.f", 2, 7, "CF3119", "invalid operand", "      I='A'+1", .{
+    bag.addDetailed("demo.f", 2, 7, catalog.semantic.invalid_arithmetic_operands.code, "invalid operand", "      I='A'+1", .{
         .primary_label = "operator mismatch here",
         .notes = &.{.{ .text = "semantic note" }},
         .helps = &.{.{ .text = "semantic help" }},
