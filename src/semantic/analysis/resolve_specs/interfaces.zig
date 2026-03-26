@@ -23,18 +23,18 @@ pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: a
     else
         false;
     if (interface_block.abstract and interface_block.name != null) {
-        setAttributeConflictDiagnostic(self, "Syntax error in ABSTRACT INTERFACE statement");
+        setAbstractInterfaceNamedDiagnostic(self);
         return error.UnexpectedToken;
     }
     if (interface_block.abstract and interface_block.module_procedures.len != 0) {
         const source = interface_block.module_procedure_sources[0];
-        setSourceDiagnostic(self, source, "must be in a generic module interface");
+        setAbstractInterfaceModuleProcedureDiagnostic(self, source);
         return error.DuplicateDeclaration;
     }
     var first_error: ?anyerror = null;
     for (interface_block.procedure_headers) |proc_header| {
         if (!imported_prelude_decl and self.unit.owner_name == null and self.unit.kind != .module and std.ascii.eqlIgnoreCase(proc_header.name, self.unit.name)) {
-            setSourceDiagnostic(self, proc_header.source, "enclosing procedure");
+            setEnclosingProcedureDiagnostic(self, proc_header.source);
             if (first_error == null) first_error = error.DuplicateDeclaration;
             continue;
         }
@@ -44,7 +44,7 @@ pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: a
             continue;
         }
         if (interfaceBlockProcedureUsesIntrinsicTypeName(proc_header)) {
-            setSourceDiagnostic(self, proc_header.source, "cannot be the same as an intrinsic type");
+            setIntrinsicTypeNameConflictDiagnostic(self, proc_header.source);
             if (first_error == null) first_error = error.DuplicateDeclaration;
             continue;
         }
@@ -66,7 +66,7 @@ pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: a
         if (symbols_mod.findSymbolIndex(self, proc_header.name)) |idx| {
             const sym = self.symbols.items[idx];
             if (sym.dims.len != 0 or sym.is_allocatable) {
-                setAttributeConflictDiagnostic(self, "function result declared outside its INTERFACE body");
+                setFunctionResultDeclaredOutsideInterfaceDiagnostic(self, proc_header.source);
                 if (!self.usesExplicitDiagnosticBag()) return error.DuplicateDeclaration;
                 if (first_error == null) first_error = error.DuplicateDeclaration;
                 continue;
@@ -74,7 +74,7 @@ pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: a
         }
         const attrs = interfaceProcedureResultAttrs(proc_header);
         if (attrs.has_deferred_shape and !attrs.allocatable and !attrs.pointer) {
-            setAttributeConflictDiagnostic(self, "function result cannot have a deferred shape");
+            setFunctionResultDeferredShapeDiagnostic(self, proc_header.source);
             if (!self.usesExplicitDiagnosticBag()) return error.DuplicateDeclaration;
             if (first_error == null) first_error = error.DuplicateDeclaration;
         }
@@ -88,6 +88,101 @@ pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: a
         if (first_error == null) first_error = err;
     }
     if (first_error) |err| return err;
+}
+
+fn setAbstractInterfaceModuleProcedureDiagnostic(self: *context.Context, source: ast.DeclSource) void {
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "MODULE PROCEDURE is only valid inside a named generic interface, not inside ABSTRACT INTERFACE" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "change this block to a concrete generic INTERFACE, or remove MODULE PROCEDURE from the ABSTRACT INTERFACE" },
+    };
+    setStructuredSourceDiagnostic(
+        self,
+        source,
+        catalog.semantic.duplicate_declaration.code,
+        "must be in a generic module interface",
+        "invalid MODULE PROCEDURE here",
+        notes[0..],
+        helps[0..],
+        &.{},
+    );
+}
+
+fn setEnclosingProcedureDiagnostic(self: *context.Context, source: ast.DeclSource) void {
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "a local explicit INTERFACE body may not declare a procedure with the same name as its enclosing procedure" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "rename the explicit interface procedure, or move the interface to a scope where the enclosing procedure name does not conflict" },
+    };
+    setStructuredSourceDiagnostic(
+        self,
+        source,
+        catalog.semantic.duplicate_declaration.code,
+        "enclosing procedure",
+        "conflicts with enclosing procedure here",
+        notes[0..],
+        helps[0..],
+        &.{},
+    );
+}
+
+fn setIntrinsicTypeNameConflictDiagnostic(self: *context.Context, source: ast.DeclSource) void {
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "an explicit INTERFACE procedure name may not shadow an intrinsic type keyword" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "rename the procedure so it no longer collides with the intrinsic type name" },
+    };
+    setStructuredSourceDiagnostic(
+        self,
+        source,
+        catalog.semantic.duplicate_declaration.code,
+        "cannot be the same as an intrinsic type",
+        "intrinsic type-name conflict here",
+        notes[0..],
+        helps[0..],
+        &.{},
+    );
+}
+
+fn setFunctionResultDeclaredOutsideInterfaceDiagnostic(self: *context.Context, source: ast.DeclSource) void {
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "the function result symbol must be fully characterized inside the INTERFACE body itself" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "move the function result declaration into the INTERFACE body, or remove the conflicting outer declaration" },
+    };
+    setStructuredSourceDiagnostic(
+        self,
+        source,
+        catalog.semantic.duplicate_declaration.code,
+        "function result declared outside its INTERFACE body",
+        "outer result declaration conflicts here",
+        notes[0..],
+        helps[0..],
+        &.{},
+    );
+}
+
+fn setFunctionResultDeferredShapeDiagnostic(self: *context.Context, source: ast.DeclSource) void {
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "an explicit interface function result may not have deferred shape unless it is POINTER or ALLOCATABLE" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "remove the deferred-shape result, or mark the result POINTER/ALLOCATABLE if that is the intended interface" },
+    };
+    setStructuredSourceDiagnostic(
+        self,
+        source,
+        catalog.semantic.duplicate_declaration.code,
+        "function result cannot have a deferred shape",
+        "invalid deferred-shape result here",
+        notes[0..],
+        helps[0..],
+        &.{},
+    );
 }
 
 fn validateVisiblePreludeGenericSpecificReuse(self: *context.Context, interface_block: ast.InterfaceBlock) ?anyerror {
@@ -384,7 +479,7 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
     for (interface_block.specific_procedures, 0..) |procedure_name, idx| {
         const sig = symbols_mod.lookupKnownProcedureSig(self, procedure_name) orelse {
             if (!setNonProcedureSpecificDiagnostic(self, interface_block.specific_procedure_sources[idx], procedure_name)) {
-                setSourceDiagnostic(self, interface_block.specific_procedure_sources[idx], "neither function nor subroutine");
+                setUnknownSpecificProcedureDiagnostic(self, interface_block.specific_procedure_sources[idx]);
             }
             return error.UnknownSymbol;
         };
@@ -393,7 +488,7 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
             .function => .function,
             else => {
                 if (!setNonProcedureSpecificDiagnostic(self, interface_block.specific_procedure_sources[idx], procedure_name)) {
-                    setSourceDiagnostic(self, interface_block.specific_procedure_sources[idx], "neither function nor subroutine");
+                    setUnknownSpecificProcedureDiagnostic(self, interface_block.specific_procedure_sources[idx]);
                 }
                 return error.UnknownSymbol;
             },
@@ -434,7 +529,7 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
     for (interface_block.procedures, 0..) |procedure_name, idx| {
         const sig = symbols_mod.lookupKnownProcedureSig(self, procedure_name) orelse {
             if (!setNonProcedureSpecificDiagnostic(self, interface_block.procedure_sources[idx], procedure_name)) {
-                setSourceDiagnostic(self, interface_block.procedure_sources[idx], "neither function nor subroutine");
+                setUnknownSpecificProcedureDiagnostic(self, interface_block.procedure_sources[idx]);
             }
             return error.UnknownSymbol;
         };
@@ -443,7 +538,7 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
             .function => .function,
             else => {
                 if (!setNonProcedureSpecificDiagnostic(self, interface_block.procedure_sources[idx], procedure_name)) {
-                    setSourceDiagnostic(self, interface_block.procedure_sources[idx], "neither function nor subroutine");
+                    setUnknownSpecificProcedureDiagnostic(self, interface_block.procedure_sources[idx]);
                 }
                 return error.UnknownSymbol;
             },
@@ -486,6 +581,26 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
     }
 
     return null;
+}
+
+fn setAbstractInterfaceNamedDiagnostic(self: *context.Context) void {
+    const source = self.current_decl_source orelse ast.DeclSource{};
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "ABSTRACT INTERFACE blocks describe procedure characteristics only; they do not define named generic interfaces" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "drop the generic name from ABSTRACT INTERFACE, or use a concrete INTERFACE block if a named generic interface is intended" },
+    };
+    setStructuredSourceDiagnostic(
+        self,
+        source,
+        catalog.semantic.duplicate_declaration.code,
+        "Syntax error in ABSTRACT INTERFACE statement",
+        "invalid named ABSTRACT INTERFACE here",
+        notes[0..],
+        helps[0..],
+        &.{},
+    );
 }
 
 fn setAmbiguousGenericSpecificDiagnostic(
@@ -591,6 +706,25 @@ fn setNonProcedureSpecificDiagnostic(
         secondary_spans[0..],
     );
     return true;
+}
+
+fn setUnknownSpecificProcedureDiagnostic(self: *context.Context, current_source: ast.DeclSource) void {
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "generic interface PROCEDURE entries must name a visible function or subroutine" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "declare or import the target procedure before the generic interface refers to it" },
+    };
+    setStructuredSourceDiagnostic(
+        self,
+        current_source,
+        catalog.semantic.duplicate_declaration.code,
+        "neither function nor subroutine",
+        "unknown procedure entry here",
+        notes[0..],
+        helps[0..],
+        &.{},
+    );
 }
 
 fn genericSpecificDeclSource(source: GenericSpecificSource) ast.DeclSource {
@@ -725,12 +859,78 @@ fn kindSelectorMustBeIntrinsic(self: *context.Context, kind_selector: ?*ast.Expr
         .call_or_subscript => |call| {
             if (symbols_mod.isIntrinsicName(call.name)) return;
             if (symbols_mod.lookupKnownProcedureSig(self, call.name) != null) {
-                setAttributeConflictDiagnostic(self, "must be an intrinsic");
+                setKindSelectorMustBeIntrinsicDiagnostic(self, call.name);
                 return error.UnexpectedTypeDecl;
             }
         },
         else => {},
     }
+}
+
+fn setKindSelectorMustBeIntrinsicDiagnostic(self: *context.Context, name: []const u8) void {
+    const current_source = self.current_decl_source orelse ast.DeclSource{};
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "kind selectors in declaration contexts must resolve through intrinsic inquiry semantics, not through visible procedures" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "use an intrinsic kind selector expression here, or rename the visible procedure so the selector is unambiguous" },
+    };
+    if (procedure_interfaces.findVisibleProcedureSource(self, name)) |source| {
+        if (!declSourceSame(source, current_source)) {
+            const secondary_spans = [_]common_diag.DiagnosticSpan{.{
+                .file_path = "",
+                .line = if (source.line == 0) 1 else source.line,
+                .column = if (source.column == 0) 1 else source.column,
+                .line_text = source.text,
+                .label = "visible procedure selected here",
+            }};
+            setStructuredSourceDiagnostic(
+                self,
+                current_source,
+                catalog.semantic.duplicate_declaration.code,
+                "must be an intrinsic",
+                "non-intrinsic kind selector here",
+                notes[0..],
+                helps[0..],
+                secondary_spans[0..],
+            );
+            return;
+        }
+    }
+    setStructuredSourceDiagnostic(
+        self,
+        current_source,
+        catalog.semantic.duplicate_declaration.code,
+        "must be an intrinsic",
+        "non-intrinsic kind selector here",
+        notes[0..],
+        helps[0..],
+        &.{},
+    );
+}
+
+fn setStructuredSourceDiagnostic(
+    self: *context.Context,
+    source: ast.DeclSource,
+    code: []const u8,
+    message: []const u8,
+    primary_label: []const u8,
+    notes: []const common_diag.DiagnosticMessage,
+    helps: []const common_diag.DiagnosticMessage,
+    secondary_spans: []const common_diag.DiagnosticSpan,
+) void {
+    self.setCurrentDeclSource(source);
+    self.setDiagnosticStructured(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        code,
+        message,
+        source.text,
+        primary_label,
+        notes,
+        helps,
+        secondary_spans,
+    );
 }
 
 fn validateKnownProcedureCompatibility(self: *context.Context, proc_header: ast.InterfaceProcedure) ?anyerror {

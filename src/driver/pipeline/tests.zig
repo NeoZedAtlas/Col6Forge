@@ -430,6 +430,31 @@ test "runPipeline reports non-procedure generic specific with related declaratio
     try testing.expectEqualStrings("non-procedure declaration here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports unknown generic specific procedure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "program p\n" ++
+        "  interface assignment(=)\n" ++
+        "    procedure missing_proc\n" ++
+        "  end interface\n" ++
+        "end program p\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_unknown_specific_procedure.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.UnknownSymbol, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("    procedure missing_proc", diag_info.line_text);
+    try testing.expectEqualStrings("unknown procedure entry here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 0), diag_info.secondary_spans.len);
+}
+
 test "runPipeline reports ABSTRACT INTERFACE bind-name misuse with related end source" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -458,6 +483,61 @@ test "runPipeline reports ABSTRACT INTERFACE bind-name misuse with related end s
     try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
     try testing.expectEqualStrings("    end subroutine", diag_info.secondary_spans[0].line_text);
     try testing.expectEqualStrings("END INTERFACE expected here", diag_info.secondary_spans[0].label);
+}
+
+test "runPipeline reports ABSTRACT INTERFACE module procedure misuse" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "module m\n" ++
+        "  abstract interface\n" ++
+        "    module procedure foo\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine foo()\n" ++
+        "  end subroutine\n" ++
+        "end module\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_abstract_module_procedure.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("    module procedure foo", diag_info.line_text);
+    try testing.expectEqualStrings("invalid MODULE PROCEDURE here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 0), diag_info.secondary_spans.len);
+}
+
+test "runPipeline reports deferred-shape interface function result" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "subroutine s()\n" ++
+        "  interface\n" ++
+        "    function foo() result(r)\n" ++
+        "      integer :: r(:)\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_deferred_result_shape.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("    function foo() result(r)", diag_info.line_text);
+    try testing.expectEqualStrings("invalid deferred-shape result here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 0), diag_info.secondary_spans.len);
 }
 
 test "runPipeline reports known procedure result type mismatch with related visible source" {

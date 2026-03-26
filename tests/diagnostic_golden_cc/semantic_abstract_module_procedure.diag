@@ -1,0 +1,9 @@
+error[CF3116]: must be in a generic module interface
+  --> tests/diagnostic_golden_cc/semantic_abstract_module_procedure.f90:3:1
+   = stage: semantic
+   = help: see docs/errors.md#CF3116
+  |
+3 |     module procedure foo
+  | ^ invalid MODULE PROCEDURE here
+   = note: MODULE PROCEDURE is only valid inside a named generic interface, not inside ABSTRACT INTERFACE
+   = help: change this block to a concrete generic INTERFACE, or remove MODULE PROCEDURE from the ABSTRACT INTERFACE

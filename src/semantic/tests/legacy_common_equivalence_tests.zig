@@ -439,6 +439,34 @@ test "semantic reports non-procedure generic specific with related declaration" 
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "non-procedure declaration here"));
 }
 
+test "semantic reports unknown generic specific procedure" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  interface assignment(=)\n" ++
+        "    procedure missing_proc\n" ++
+        "  end interface\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.UnknownSymbol, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.message, "neither function nor subroutine"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "    procedure missing_proc"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "unknown procedure entry here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 0), diag.secondary_spans.len);
+}
+
 test "semantic reports ABSTRACT INTERFACE bind-name misuse with related end location" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -469,6 +497,67 @@ test "semantic reports ABSTRACT INTERFACE bind-name misuse with related end loca
     try testing.expectEqual(@as(usize, 4), diag.secondary_spans[0].line);
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "    end subroutine"));
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "END INTERFACE expected here"));
+}
+
+test "semantic reports ABSTRACT INTERFACE module procedure misuse" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  abstract interface\n" ++
+        "    module procedure foo\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine foo()\n" ++
+        "  end subroutine\n" ++
+        "end module\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.message, "must be in a generic module interface"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "    module procedure foo"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "invalid MODULE PROCEDURE here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 0), diag.secondary_spans.len);
+}
+
+test "semantic reports deferred-shape interface function result" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine s()\n" ++
+        "  interface\n" ++
+        "    function foo() result(r)\n" ++
+        "      integer :: r(:)\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.message, "function result cannot have a deferred shape"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "    function foo() result(r)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "invalid deferred-shape result here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 0), diag.secondary_spans.len);
 }
 
 test "semantic reports known procedure result type mismatch with related visible source" {

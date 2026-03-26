@@ -1,0 +1,9 @@
+error[CF3116]: neither function nor subroutine
+  --> tests/diagnostic_golden_cc/semantic_unknown_specific_procedure.f90:3:1
+   = stage: semantic
+   = help: see docs/errors.md#CF3116
+  |
+3 |     procedure missing_proc
+  | ^ unknown procedure entry here
+   = note: generic interface PROCEDURE entries must name a visible function or subroutine
+   = help: declare or import the target procedure before the generic interface refers to it
