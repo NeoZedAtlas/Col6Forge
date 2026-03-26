@@ -430,6 +430,36 @@ test "runPipeline reports non-procedure generic specific with related declaratio
     try testing.expectEqualStrings("non-procedure declaration here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports ABSTRACT INTERFACE bind-name misuse with related end source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "subroutine s()\n" ++
+        "  abstract interface\n" ++
+        "    subroutine foo() bind(c, name=\"bar\")\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_abstract_bind_name.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("    subroutine foo() bind(c, name=\"bar\")", diag_info.line_text);
+    try testing.expectEqualStrings("invalid BIND(C) NAME here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 4), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("    end subroutine", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("END INTERFACE expected here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports call-site ambiguous interfaces with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;

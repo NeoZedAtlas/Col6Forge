@@ -1,0 +1,13 @@
+error[CF3116]: NAME not allowed on BIND.C. for ABSTRACT INTERFACE
+  --> tests/diagnostic_golden/semantic_abstract_bind_name.f90:3:5
+   = stage: semantic
+   = help: see docs/errors.md#CF3116
+  |
+3 |     subroutine foo() bind(c, name="bar")
+  |     ^ invalid BIND(C) NAME here
+  ::: tests/diagnostic_golden\semantic_abstract_bind_name.f90:4:1
+  |
+4 |     end subroutine
+  | ~ END INTERFACE expected here
+   = note: ABSTRACT INTERFACE procedure headers may use BIND(C), but they may not specify an explicit NAME= binding label
+   = help: remove NAME= from the ABSTRACT INTERFACE header, or make this a concrete interface if a binding label is required

@@ -38,8 +38,7 @@ pub fn validateExplicitInterfaceBlock(self: *context.Context, interface_block: a
             continue;
         }
         if (interface_block.abstract and proc_header.bind_name != null) {
-            setSourceDiagnostic(self, proc_header.source, "NAME not allowed on BIND.C. for ABSTRACT INTERFACE");
-            setSourceDiagnostic(self, proc_header.end_source, "Expecting END INTERFACE statement");
+            setAbstractInterfaceBindNameDiagnostic(self, proc_header);
             if (first_error == null) first_error = error.DuplicateDeclaration;
             continue;
         }
@@ -189,6 +188,37 @@ fn setVisiblePreludeGenericSpecificReuseDiagnostic(
         notes[0..],
         helps[0..],
         secondary_spans,
+    );
+}
+
+fn setAbstractInterfaceBindNameDiagnostic(
+    self: *context.Context,
+    proc_header: ast.InterfaceProcedure,
+) void {
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "ABSTRACT INTERFACE procedure headers may use BIND(C), but they may not specify an explicit NAME= binding label" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "remove NAME= from the ABSTRACT INTERFACE header, or make this a concrete interface if a binding label is required" },
+    };
+    const secondary_spans = [_]common_diag.DiagnosticSpan{.{
+        .file_path = "",
+        .line = if (proc_header.end_source.line == 0) 1 else proc_header.end_source.line,
+        .column = if (proc_header.end_source.column == 0) 1 else proc_header.end_source.column,
+        .line_text = proc_header.end_source.text,
+        .label = "END INTERFACE expected here",
+    }};
+    self.setCurrentDeclSource(proc_header.source);
+    self.setDiagnosticStructured(
+        if (proc_header.source.line == 0) 1 else proc_header.source.line,
+        if (proc_header.source.column == 0) 1 else proc_header.source.column,
+        catalog.semantic.duplicate_declaration.code,
+        "NAME not allowed on BIND.C. for ABSTRACT INTERFACE",
+        proc_header.source.text,
+        "invalid BIND(C) NAME here",
+        notes[0..],
+        helps[0..],
+        secondary_spans[0..],
     );
 }
 
