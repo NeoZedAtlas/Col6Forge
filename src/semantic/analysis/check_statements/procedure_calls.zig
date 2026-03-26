@@ -314,27 +314,17 @@ pub fn emitNamedProcedureDiagnostic(
     const primary = currentProcedureDiagnosticSource(self) orelse return err;
     const related_source = procedure_interfaces.findVisibleProcedureSource(self, name);
     if (related_source) |decl_source| {
-        const related = [_]common_diag.DiagnosticSpan{.{
-            .file_path = "",
-            .line = if (decl_source.line == 0) 1 else decl_source.line,
-            .column = if (decl_source.column == 0) 1 else decl_source.column,
-            .end_column = @max(
-                (if (decl_source.column == 0) 1 else decl_source.column) + 1,
-                decl_source.text.len + 1,
-            ),
-            .line_text = decl_source.text,
-            .label = "visible interface here",
-        }};
-        self.setDiagnosticStructured(
-            primary.line,
-            primary.column,
+        const related = [_]ast.DeclSource{decl_source};
+        emitStructuredProcedureDiagnostic(
+            self,
+            primary,
             catalog.semantic.invalid_argument_count.code,
             message,
-            primary.text,
             "call site conflicts here",
             advice.notes,
             advice.helps,
             related[0..],
+            "visible interface here",
         );
         return err;
     }
@@ -356,20 +346,16 @@ pub fn emitAmbiguousReferenceDiagnostic(self: *context.Context, name: []const u8
     var sources = std.array_list.Managed(ast.DeclSource).init(self.arena);
     appendPreludeSpecificInterfaceSources(self, &sources, name) catch {};
     if (sources.items.len != 0) {
-        const related = self.arena.alloc(common_diag.DiagnosticSpan, sources.items.len) catch return;
-        for (sources.items, 0..) |decl_source, idx| {
-            related[idx] = diagnosticSpanFromSource(decl_source, "conflicting visible procedure here");
-        }
-        self.setDiagnosticStructured(
-            primary.line,
-            primary.column,
+        emitStructuredProcedureDiagnostic(
+            self,
+            primary,
             catalog.semantic.duplicate_declaration.code,
             "ambiguous reference",
-            primary.text,
             "ambiguous reference here",
             advice.notes,
             advice.helps,
-            related,
+            sources.items,
+            "conflicting visible procedure here",
         );
         return;
     }
@@ -394,20 +380,16 @@ pub fn emitAmbiguousVisibleGenericDiagnostic(
     var sources = std.array_list.Managed(ast.DeclSource).init(self.arena);
     procedure_interfaces.appendAmbiguousVisibleGenericSpecificSources(self, &sources, name) catch {};
     if (sources.items.len != 0) {
-        const related = self.arena.alloc(common_diag.DiagnosticSpan, sources.items.len) catch return err;
-        for (sources.items, 0..) |decl_source, idx| {
-            related[idx] = diagnosticSpanFromSource(decl_source, "conflicting visible generic specific here");
-        }
-        self.setDiagnosticStructured(
-            primary.line,
-            primary.column,
+        emitStructuredProcedureDiagnostic(
+            self,
+            primary,
             catalog.semantic.duplicate_declaration.code,
             "Ambiguous interfaces",
-            primary.text,
             "call site conflicts here",
             advice.notes,
             advice.helps,
-            related,
+            sources.items,
+            "conflicting visible generic specific here",
         );
         return err;
     }
@@ -1217,6 +1199,34 @@ fn diagnosticSpanFromSource(source: ast.DeclSource, label: []const u8) common_di
         .line_text = source.text,
         .label = label,
     };
+}
+
+fn emitStructuredProcedureDiagnostic(
+    self: *context.Context,
+    primary: DiagnosticSource,
+    code: []const u8,
+    message: []const u8,
+    primary_label: []const u8,
+    notes: []const common_diag.DiagnosticMessage,
+    helps: []const common_diag.DiagnosticMessage,
+    related_sources: []const ast.DeclSource,
+    related_label: []const u8,
+) void {
+    const related = self.arena.alloc(common_diag.DiagnosticSpan, related_sources.len) catch return;
+    for (related_sources, 0..) |decl_source, idx| {
+        related[idx] = diagnosticSpanFromSource(decl_source, related_label);
+    }
+    self.setDiagnosticStructured(
+        primary.line,
+        primary.column,
+        code,
+        message,
+        primary.text,
+        primary_label,
+        notes,
+        helps,
+        related,
+    );
 }
 
 fn appendUniqueDeclSource(out: *std.array_list.Managed(ast.DeclSource), source: ast.DeclSource) !void {
