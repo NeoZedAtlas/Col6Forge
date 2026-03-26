@@ -327,6 +327,49 @@ test "semantic reports declaration-side ambiguous interfaces with multiple relat
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[1].label, "conflicting specific here"));
 }
 
+test "semantic reports visible prelude generic specific reuse with related location" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  interface foo\n" ++
+        "    module procedure bar\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine bar(x)\n" ++
+        "    integer, intent(in) :: x\n" ++
+        "  end subroutine\n" ++
+        "end module\n" ++
+        "subroutine s()\n" ++
+        "  use m\n" ++
+        "  interface foo\n" ++
+        "    subroutine bar(x)\n" ++
+        "      integer x\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.message, "is already present in the interface"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "    subroutine bar(x)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "duplicate specific here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "    module procedure bar"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible prelude specific here"));
+}
+
 test "semantic reports call-site ambiguous interfaces with related location" {
     const testing = std.testing;
     const allocator = testing.allocator;

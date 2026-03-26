@@ -99,47 +99,97 @@ fn validateVisiblePreludeGenericSpecificReuse(self: *context.Context, interface_
     if (interface_block.name == null) return null;
 
     for (interface_block.procedure_headers) |proc_header| {
-        if (!preludeHasInterfaceProcedure(self, proc_header.name)) continue;
-        setSourceDiagnostic(self, proc_header.source, "is already present in the interface");
+        var conflicting = std.array_list.Managed(ast.DeclSource).init(self.arena);
+        appendPreludeInterfaceProcedureSources(self, &conflicting, proc_header.name) catch return error.OutOfMemory;
+        if (conflicting.items.len == 0) continue;
+        setVisiblePreludeGenericSpecificReuseDiagnostic(self, proc_header.source, conflicting.items);
         return error.DuplicateDeclaration;
     }
     for (interface_block.specific_procedures, 0..) |procedure_name, idx| {
-        if (!preludeHasInterfaceProcedure(self, procedure_name)) continue;
-        setSourceDiagnostic(self, interface_block.specific_procedure_sources[idx], "is already present in the interface");
+        var conflicting = std.array_list.Managed(ast.DeclSource).init(self.arena);
+        appendPreludeInterfaceProcedureSources(self, &conflicting, procedure_name) catch return error.OutOfMemory;
+        if (conflicting.items.len == 0) continue;
+        setVisiblePreludeGenericSpecificReuseDiagnostic(self, interface_block.specific_procedure_sources[idx], conflicting.items);
         return error.DuplicateDeclaration;
     }
     for (interface_block.module_procedures, 0..) |procedure_name, idx| {
-        if (!preludeHasInterfaceProcedure(self, procedure_name)) continue;
-        setSourceDiagnostic(self, interface_block.module_procedure_sources[idx], "is already present in the interface");
+        var conflicting = std.array_list.Managed(ast.DeclSource).init(self.arena);
+        appendPreludeInterfaceProcedureSources(self, &conflicting, procedure_name) catch return error.OutOfMemory;
+        if (conflicting.items.len == 0) continue;
+        setVisiblePreludeGenericSpecificReuseDiagnostic(self, interface_block.module_procedure_sources[idx], conflicting.items);
         return error.DuplicateDeclaration;
     }
     for (interface_block.procedures, 0..) |procedure_name, idx| {
-        if (!preludeHasInterfaceProcedure(self, procedure_name)) continue;
-        setSourceDiagnostic(self, interface_block.procedure_sources[idx], "is already present in the interface");
+        var conflicting = std.array_list.Managed(ast.DeclSource).init(self.arena);
+        appendPreludeInterfaceProcedureSources(self, &conflicting, procedure_name) catch return error.OutOfMemory;
+        if (conflicting.items.len == 0) continue;
+        setVisiblePreludeGenericSpecificReuseDiagnostic(self, interface_block.procedure_sources[idx], conflicting.items);
         return error.DuplicateDeclaration;
     }
     return null;
 }
 
-fn preludeHasInterfaceProcedure(self: *context.Context, procedure_name: []const u8) bool {
+fn appendPreludeInterfaceProcedureSources(
+    self: *context.Context,
+    out: *std.array_list.Managed(ast.DeclSource),
+    procedure_name: []const u8,
+) !void {
     var decl_idx: usize = 0;
     while (decl_idx < self.unit.prelude_decl_count and decl_idx < self.unit.decls.len) : (decl_idx += 1) {
         const decl = self.unit.decls[decl_idx];
         if (decl != .interface_block) continue;
         for (decl.interface_block.procedure_headers) |proc_header| {
-            if (std.ascii.eqlIgnoreCase(proc_header.name, procedure_name)) return true;
+            if (!std.ascii.eqlIgnoreCase(proc_header.name, procedure_name)) continue;
+            try appendUniqueDeclSource(out, proc_header.source);
         }
-        for (decl.interface_block.specific_procedures) |proc_name| {
-            if (std.ascii.eqlIgnoreCase(proc_name, procedure_name)) return true;
+        for (decl.interface_block.specific_procedures, 0..) |proc_name, idx| {
+            if (!std.ascii.eqlIgnoreCase(proc_name, procedure_name)) continue;
+            try appendUniqueDeclSource(out, decl.interface_block.specific_procedure_sources[idx]);
         }
-        for (decl.interface_block.module_procedures) |proc_name| {
-            if (std.ascii.eqlIgnoreCase(proc_name, procedure_name)) return true;
+        for (decl.interface_block.module_procedures, 0..) |proc_name, idx| {
+            if (!std.ascii.eqlIgnoreCase(proc_name, procedure_name)) continue;
+            try appendUniqueDeclSource(out, decl.interface_block.module_procedure_sources[idx]);
         }
-        for (decl.interface_block.procedures) |proc_name| {
-            if (std.ascii.eqlIgnoreCase(proc_name, procedure_name)) return true;
+        for (decl.interface_block.procedures, 0..) |proc_name, idx| {
+            if (!std.ascii.eqlIgnoreCase(proc_name, procedure_name)) continue;
+            try appendUniqueDeclSource(out, decl.interface_block.procedure_sources[idx]);
         }
     }
-    return false;
+}
+
+fn setVisiblePreludeGenericSpecificReuseDiagnostic(
+    self: *context.Context,
+    current_source: ast.DeclSource,
+    conflicting: []const ast.DeclSource,
+) void {
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "a specific already made visible through USE is being introduced again in this INTERFACE block" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "remove the duplicate specific from the local INTERFACE block or rename the visible imported entry" },
+    };
+    const secondary_spans = self.arena.alloc(common_diag.DiagnosticSpan, conflicting.len) catch return;
+    for (conflicting, 0..) |source, idx| {
+        secondary_spans[idx] = .{
+            .file_path = "",
+            .line = if (source.line == 0) 1 else source.line,
+            .column = if (source.column == 0) 1 else source.column,
+            .line_text = source.text,
+            .label = "visible prelude specific here",
+        };
+    }
+    self.setCurrentDeclSource(current_source);
+    self.setDiagnosticStructured(
+        if (current_source.line == 0) 1 else current_source.line,
+        if (current_source.column == 0) 1 else current_source.column,
+        catalog.semantic.duplicate_declaration.code,
+        "is already present in the interface",
+        current_source.text,
+        "duplicate specific here",
+        notes[0..],
+        helps[0..],
+        secondary_spans,
+    );
 }
 
 fn validateInterfaceProcedureDerivedTypes(self: *context.Context, proc_header: ast.InterfaceProcedure) ?anyerror {
@@ -394,6 +444,18 @@ fn appendUniqueGenericSpecificSource(
 ) !void {
     for (out.items) |existing| {
         if (genericSpecificSourceSame(existing, source)) return;
+    }
+    try out.append(source);
+}
+
+fn appendUniqueDeclSource(out: *std.array_list.Managed(ast.DeclSource), source: ast.DeclSource) !void {
+    for (out.items) |existing| {
+        if (existing.line == source.line and
+            existing.column == source.column and
+            std.mem.eql(u8, existing.text, source.text))
+        {
+            return;
+        }
     }
     try out.append(source);
 }

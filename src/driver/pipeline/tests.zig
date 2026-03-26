@@ -324,6 +324,47 @@ test "runPipeline reports declaration-side ambiguous interfaces with multiple re
     try testing.expectEqualStrings("conflicting specific here", diag_info.secondary_spans[1].label);
 }
 
+test "runPipeline reports visible prelude generic specific reuse with related source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "module m\n" ++
+        "  interface foo\n" ++
+        "    module procedure bar\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  subroutine bar(x)\n" ++
+        "    integer, intent(in) :: x\n" ++
+        "  end subroutine\n" ++
+        "end module\n" ++
+        "subroutine s()\n" ++
+        "  use m\n" ++
+        "  interface foo\n" ++
+        "    subroutine bar(x)\n" ++
+        "      integer x\n" ++
+        "    end subroutine\n" ++
+        "  end interface\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_prelude_interface_reuse.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("    subroutine bar(x)", diag_info.line_text);
+    try testing.expectEqualStrings("duplicate specific here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("    module procedure bar", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("visible prelude specific here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports call-site ambiguous interfaces with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;

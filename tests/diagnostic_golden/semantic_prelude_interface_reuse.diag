@@ -1,0 +1,13 @@
+error[CF3116]: is already present in the interface
+  --> tests/diagnostic_golden/semantic_prelude_interface_reuse.f90:13:5
+   = stage: semantic
+   = help: see docs/errors.md#CF3116
+   |
+13 |     subroutine bar(x)
+   |     ^ duplicate specific here
+  ::: tests/diagnostic_golden\semantic_prelude_interface_reuse.f90:3:1
+  |
+3 |     module procedure bar
+  | ~ visible prelude specific here
+   = note: a specific already made visible through USE is being introduced again in this INTERFACE block
+   = help: remove the duplicate specific from the local INTERFACE block or rename the visible imported entry
