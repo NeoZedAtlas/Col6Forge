@@ -5,7 +5,7 @@ error[CF2004]: missing required identifier
   |
 3 |   )
   |   ^ identifier required here
-  ::: tests/diagnostic_golden_cc\free_parse_continuation.f90:2:1
+  ::: tests/diagnostic_golden_cc\free_parse_continuation.f90
   |
 2 | integer :: a, &
   | ~~~~~~~~~~~~~ continuation started here

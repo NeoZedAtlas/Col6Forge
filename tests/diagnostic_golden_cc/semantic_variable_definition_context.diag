@@ -5,7 +5,7 @@ error[CF3108]: in variable definition context
   |
 7 |   call foo(1)
   |            ^ non-definable actual argument here
-  ::: tests/diagnostic_golden_cc\semantic_variable_definition_context.f90:4:7
+  ::: tests/diagnostic_golden_cc\semantic_variable_definition_context.f90
   |
 4 |       integer, intent(out) :: x
   |       ~~~~~~~~~~~~~~~~~~~ visible dummy declaration here

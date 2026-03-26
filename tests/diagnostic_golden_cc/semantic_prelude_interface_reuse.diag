@@ -5,7 +5,7 @@ error[CF3116]: is already present in the interface
    |
 13 |     subroutine bar(x)
    |     ^ duplicate specific here
-  ::: tests/diagnostic_golden_cc\semantic_prelude_interface_reuse.f90:3:1
+  ::: tests/diagnostic_golden_cc\semantic_prelude_interface_reuse.f90
   |
 3 |     module procedure bar
   | ~ visible prelude specific here

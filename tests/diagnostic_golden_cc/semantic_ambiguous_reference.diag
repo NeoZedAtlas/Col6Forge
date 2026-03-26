@@ -5,11 +5,10 @@ error[CF3116]: ambiguous reference
    |
 19 |   print *, my_fun(a)
    |   ^ ambiguous reference here
-  ::: tests/diagnostic_golden_cc\semantic_ambiguous_reference.f90:10:5
+  ::: tests/diagnostic_golden_cc\semantic_ambiguous_reference.f90
    |
 10 |     function my_fun(a)
    |     ~~~~~~~~~~~~~~ conflicting visible procedure here
-  ::: tests/diagnostic_golden_cc\semantic_ambiguous_reference.f90:3:5
   |
 3 |     function my_fun(a)
   |     ~~~~~~~~~~~~~~ conflicting visible procedure here

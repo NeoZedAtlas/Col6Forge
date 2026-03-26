@@ -59,32 +59,41 @@ pub fn releaseLastDiagnostic(_: diag.Diagnostic) void {
 }
 
 pub fn writePipelineErrorDiagnostic(writer: *std.Io.Writer, input_path: []const u8, err: anyerror) !void {
+    return writePipelineErrorDiagnosticWithOptions(writer, input_path, err, .{});
+}
+
+pub fn writePipelineErrorDiagnosticWithOptions(
+    writer: *std.Io.Writer,
+    input_path: []const u8,
+    err: anyerror,
+    options: diagnostic_render.RenderOptions,
+) !void {
     if (takeLastDiagnostic()) |pipeline_diag| {
         defer releaseLastDiagnostic(pipeline_diag);
-        return diagnostic_render.writeDiagnostic(writer, pipeline_diag);
+        return diagnostic_render.writeDiagnosticWithOptions(writer, pipeline_diag, options);
     }
 
     if (err == error.FileNotFound) {
-        return diagnostic_render.writeDiagnostic(writer, .{
+        return diagnostic_render.writeDiagnosticWithOptions(writer, .{
             .file_path = input_path,
             .line = 1,
             .column = 1,
             .code = catalog.pipeline.input_not_found.code,
             .message = catalog.pipeline.input_not_found.message,
             .line_text = "",
-        });
+        }, options);
     }
 
     const message = std.fmt.allocPrint(compat_allocator, "pipeline error: {s}", .{@errorName(err)}) catch null;
     defer if (message) |buf| compat_allocator.free(buf);
-    return diagnostic_render.writeDiagnostic(writer, .{
+    return diagnostic_render.writeDiagnosticWithOptions(writer, .{
         .file_path = input_path,
         .line = 1,
         .column = 1,
         .code = catalog.pipeline.generic.code,
         .message = if (message) |buf| buf else "pipeline error",
         .line_text = "",
-    });
+    }, options);
 }
 
 pub fn setParseDiagnostic(

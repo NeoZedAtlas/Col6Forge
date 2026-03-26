@@ -5,7 +5,7 @@ error[CF3110]: Type mismatch in argument
   |
 7 |   call foo(1.0)
   |            ^ actual argument conflicts here
-  ::: tests/diagnostic_golden_cc\semantic_actual_type_mismatch.f90:4:7
+  ::: tests/diagnostic_golden_cc\semantic_actual_type_mismatch.f90
   |
 4 |       integer x
   |       ~~~ visible dummy declaration here

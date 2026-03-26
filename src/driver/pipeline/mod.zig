@@ -64,6 +64,7 @@ pub const takeLastDiagnostic = diagnostics.takeLastDiagnostic;
 pub const releaseLastDiagnostic = diagnostics.releaseLastDiagnostic;
 pub const takeLastProfileSample = profile_mod.takeLastProfileSample;
 pub const writePipelineErrorDiagnostic = diagnostics.writePipelineErrorDiagnostic;
+pub const writePipelineErrorDiagnosticWithOptions = diagnostics.writePipelineErrorDiagnosticWithOptions;
 
 test {
     _ = @import("tests.zig");

@@ -5,11 +5,10 @@ error[CF3110]: Type mismatch in function result
    |
 14 |   call outer(actual)
    |              ^ actual argument conflicts here
-  ::: tests/diagnostic_golden_cc\semantic_actual_procedure_result_mismatch.f90:3:5
+  ::: tests/diagnostic_golden_cc\semantic_actual_procedure_result_mismatch.f90
   |
 3 |     subroutine outer(p)
   |     ~~~~~~~~~~~~~~~ visible interface here
-  ::: tests/diagnostic_golden_cc\semantic_actual_procedure_result_mismatch.f90:10:5
    |
 10 |     real function actual(x)
    |     ~~~~~~~~~~~~~~~~~~~ actual procedure declared here

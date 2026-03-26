@@ -5,7 +5,7 @@ error[CF3116]: all SUBROUTINEs or all FUNCTIONs
   |
 6 |     function fun_b(y)
   |     ^ conflicting specific kind here
-  ::: tests/diagnostic_golden_cc\semantic_mixed_generic_kinds.f90:3:5
+  ::: tests/diagnostic_golden_cc\semantic_mixed_generic_kinds.f90
   |
 3 |     subroutine sub_a(x)
   |     ~ generic interface first established here

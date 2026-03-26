@@ -5,7 +5,7 @@ error[CF3110]: is of the ABSTRACT type 'abstract_t'
    |
 14 |     call obj%abstract_t%p()
    |          ^ abstract passed-object actual here
-  ::: tests/diagnostic_golden_cc\semantic_abstract_passed_object.f90:2:3
+  ::: tests/diagnostic_golden_cc\semantic_abstract_passed_object.f90
   |
 2 |   type, abstract :: abstract_t
   |   ~~~~~~~~~~~~~~~~~~~~~~~~~~ abstract type declared here

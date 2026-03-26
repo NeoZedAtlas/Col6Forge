@@ -5,7 +5,7 @@ error[CF3115]: COMMON block layout mismatch across program units
   |
 7 |       COMMON /BLK/ A
   |       ^ conflicting COMMON layout here
-  ::: tests/diagnostic_golden_cc\semantic_common_mismatch.f:3:7
+  ::: tests/diagnostic_golden_cc\semantic_common_mismatch.f
   |
 3 |       COMMON /BLK/ A
   |       ~~~~~~~~ previous COMMON layout here

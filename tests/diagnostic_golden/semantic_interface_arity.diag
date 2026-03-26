@@ -5,7 +5,7 @@ error[CF3110]: Missing actual argument
   |
 8 |       X=F(1)
   |       ^ call site conflicts here
-  ::: tests/diagnostic_golden\semantic_interface_arity.f:3:7
+  ::: tests/diagnostic_golden\semantic_interface_arity.f
   |
 3 |       INTEGER FUNCTION F(A,B)
   |       ~~~~~~~~~~~~~~~~~ visible interface here

@@ -5,7 +5,7 @@ error[CF3116]: duplicate declaration for the same symbol
   |
 3 |       REAL A
   |       ^ redeclared here
-  ::: tests/diagnostic_golden\semantic_duplicate_declaration.f:2:7
+  ::: tests/diagnostic_golden\semantic_duplicate_declaration.f
   |
 2 |       INTEGER A
   |       ~~~ first declaration here

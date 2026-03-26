@@ -23,6 +23,7 @@ pub const Program = ast.Program;
 pub const SemanticProgram = sema.SemanticProgram;
 
 pub const writeDiagnostic = diagnostic_render.writeDiagnostic;
+pub const writeDiagnosticWithOptions = diagnostic_render.writeDiagnosticWithOptions;
 pub const runPipeline = pipeline.runPipeline;
 pub const runPipelineToWriter = pipeline.runPipelineToWriter;
 pub const runPipelineWithOptions = pipeline.runPipelineWithOptions;
@@ -32,6 +33,7 @@ pub const runPipelineToWriterWithOptionsAndDiagnostics = pipeline.runPipelineToW
 pub const takeLastPipelineDiagnostic = pipeline.takeLastDiagnostic;
 pub const takeLastPipelineProfileSample = pipeline.takeLastProfileSample;
 pub const writePipelineErrorDiagnostic = pipeline.writePipelineErrorDiagnostic;
+pub const writePipelineErrorDiagnosticWithOptions = pipeline.writePipelineErrorDiagnosticWithOptions;
 pub const normalizeFixedForm = frontend.normalizeFixedForm;
 pub const freeLogicalLines = frontend.freeLogicalLines;
 pub const lexLogicalLine = frontend.lexLogicalLine;

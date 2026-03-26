@@ -5,11 +5,10 @@ error[CF3116]: Ambiguous interfaces
    |
 12 |   call foo(1)
    |        ^ call site conflicts here
-  ::: tests/diagnostic_golden_cc\semantic_call_ambiguous_interfaces.f90:3:5
+  ::: tests/diagnostic_golden_cc\semantic_call_ambiguous_interfaces.f90
   |
 3 |     subroutine ext1(x)
   |     ~~~~~~~~~~~~~~ conflicting visible generic specific here
-  ::: tests/diagnostic_golden_cc\semantic_call_ambiguous_interfaces.f90:8:5
   |
 8 |     subroutine ext2(y)
   |     ~~~~~~~~~~~~~~ conflicting visible generic specific here

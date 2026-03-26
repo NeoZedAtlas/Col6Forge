@@ -116,7 +116,11 @@ pub fn reportPipelineError(input_path: []const u8, err: anyerror) !void {
     var stderr = std.fs.File.stderr();
     var buffer: [4096]u8 = undefined;
     var writer = stderr.writer(&buffer);
-    try Col6Forge.writePipelineErrorDiagnostic(&writer.interface, input_path, err);
+    try Col6Forge.writePipelineErrorDiagnosticWithOptions(&writer.interface, input_path, err, .{
+        .ansi = stderr.isTty(),
+        .max_source_width = 100,
+        .group_related_spans = true,
+    });
     try writer.interface.flush();
 }
 

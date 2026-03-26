@@ -5,7 +5,7 @@ error[CF3116]: neither function nor subroutine
   |
 4 |     procedure x
   | ^ referenced non-procedure here
-  ::: tests/diagnostic_golden\semantic_non_procedure_specific.f90:2:3
+  ::: tests/diagnostic_golden\semantic_non_procedure_specific.f90
   |
 2 |   integer :: x
   |   ~ non-procedure declaration here

@@ -5,7 +5,7 @@ error[CF3116]: NAME not allowed on BIND.C. for ABSTRACT INTERFACE
   |
 3 |     subroutine foo() bind(c, name="bar")
   |     ^ invalid BIND(C) NAME here
-  ::: tests/diagnostic_golden\semantic_abstract_bind_name.f90:4:1
+  ::: tests/diagnostic_golden\semantic_abstract_bind_name.f90
   |
 4 |     end subroutine
   | ~ END INTERFACE expected here

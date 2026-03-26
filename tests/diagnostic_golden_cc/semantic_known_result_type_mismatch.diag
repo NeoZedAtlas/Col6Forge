@@ -5,7 +5,7 @@ error[CF3110]: Type mismatch in function result
    |
 11 |     real function f(x)
    |     ^ function result type conflicts here
-  ::: tests/diagnostic_golden_cc\semantic_known_result_type_mismatch.f90:3:5
+  ::: tests/diagnostic_golden_cc\semantic_known_result_type_mismatch.f90
   |
 3 |     integer function f(x)
   |     ~ visible known procedure here

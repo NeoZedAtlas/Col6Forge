@@ -5,7 +5,7 @@ error[CF3116]: Ambiguous interfaces
   |
 4 |     module procedure sub_b
   | ^ ambiguous specific here
-  ::: tests/diagnostic_golden\semantic_ambiguous_interfaces.f90:3:1
+  ::: tests/diagnostic_golden\semantic_ambiguous_interfaces.f90
   |
 3 |     module procedure sub_a
   | ~ conflicting specific here
