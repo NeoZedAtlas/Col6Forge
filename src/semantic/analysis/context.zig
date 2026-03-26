@@ -147,6 +147,7 @@ pub const Context = struct {
 
     pub const ImplicitCallSig = struct {
         args: []ImplicitCallArgSig,
+        call_source: ast.SourceRef = .{},
     };
 
     pub const BuiltinConstant = struct {

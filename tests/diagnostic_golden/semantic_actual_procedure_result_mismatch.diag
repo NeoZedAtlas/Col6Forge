@@ -1,0 +1,17 @@
+error[CF3110]: Type mismatch in function result
+  --> tests/diagnostic_golden/semantic_actual_procedure_result_mismatch.f90:14:14
+   = stage: semantic
+   = help: see docs/errors.md#CF3110
+   |
+14 |   call outer(actual)
+   |              ^ actual argument conflicts here
+  ::: tests/diagnostic_golden\semantic_actual_procedure_result_mismatch.f90:3:5
+  |
+3 |     subroutine outer(p)
+  |     ~~~~~~~~~~~~~~~ visible interface here
+  ::: tests/diagnostic_golden\semantic_actual_procedure_result_mismatch.f90:10:5
+   |
+10 |     real function actual(x)
+   |     ~~~~~~~~~~~~~~~~~~~ actual procedure declared here
+   = note: This diagnostic comes from the semantic procedure-call matcher, not from parser recovery.
+   = help: Compare the visible procedure interface against the actual argument list and procedure kind.

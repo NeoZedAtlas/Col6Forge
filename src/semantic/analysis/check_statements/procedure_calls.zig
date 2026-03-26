@@ -429,6 +429,18 @@ fn currentProcedureDiagnosticSource(self: *context.Context) ?DiagnosticSource {
     return null;
 }
 
+fn currentProcedureSourceRef(self: *context.Context) ast.SourceRef {
+    if (self.current_source) |src| return src;
+    if (self.current_stmt) |stmt| {
+        return .{
+            .line = stmt.source_line,
+            .column = stmt.source_column,
+            .text = stmt.source_text,
+        };
+    }
+    return .{};
+}
+
 fn ambiguousReferenceAdvice() struct {
     notes: []const common_diag.DiagnosticMessage,
     helps: []const common_diag.DiagnosticMessage,
@@ -1114,6 +1126,8 @@ fn emitProcedureActualDiagnostic(
     if (source) |src| {
         const line = if (src.line == 0) 1 else src.line;
         const column = if (src.column == 0) 1 else src.column;
+        var related = std.array_list.Managed(common_diag.DiagnosticSpan).init(self.arena);
+        appendActualProcedureExprRelatedSpans(self, &related, expr) catch {};
         self.setDiagnosticStructured(
             line,
             column,
@@ -1123,7 +1137,7 @@ fn emitProcedureActualDiagnostic(
             "actual procedure argument conflicts here",
             advice.notes,
             advice.helps,
-            &.{},
+            related.items,
         );
         self.setCurrentSource(src);
     }
@@ -1143,6 +1157,7 @@ fn emitProcedureActualCallDiagnostic(
     if (source) |src| {
         const line = if (src.line == 0) 1 else src.line;
         const column = if (src.column == 0) 1 else src.column;
+        var related = std.array_list.Managed(common_diag.DiagnosticSpan).init(self.arena);
         if (callee_name) |name| {
             const formal_source = if (formal_name) |dummy_name|
                 procedure_interfaces.findVisibleProcedureFormalSource(self, name, dummy_name)
@@ -1150,37 +1165,29 @@ fn emitProcedureActualCallDiagnostic(
                 null;
             const related_source = formal_source orelse procedure_interfaces.findVisibleProcedureSource(self, name);
             if (related_source) |decl_source| {
-                const label = if (formal_source != null)
-                    "visible dummy declaration here"
-                else
-                    "visible interface here";
-                const related = [_]common_diag.DiagnosticSpan{.{
-                    .file_path = "",
-                    .line = if (decl_source.line == 0) 1 else decl_source.line,
-                    .column = if (decl_source.column == 0) 1 else decl_source.column,
-                    .end_column = @max(
-                        (if (decl_source.column == 0) 1 else decl_source.column) + 1,
-                        decl_source.text.len + 1,
-                    ),
-                    .line_text = decl_source.text,
-                    .label = label,
-                }};
-                self.setDiagnosticStructured(
-                    line,
-                    column,
-                    catalog.semantic.invalid_argument_count.code,
-                    message,
-                    src.text,
-                    "actual argument conflicts here",
-                    advice.notes,
-                    advice.helps,
-                    related[0..],
-                );
-                self.setCurrentSource(src);
-                return err;
+                appendDiagnosticSpan(
+                    &related,
+                    decl_source,
+                    if (formal_source != null) "visible dummy declaration here" else "visible interface here",
+                ) catch {};
             }
         }
-        self.setDiagnosticDetailed(line, column, catalog.semantic.invalid_argument_count.code, message, src.text, advice.notes, advice.helps);
+        appendActualProcedureExprRelatedSpans(self, &related, expr) catch {};
+        if (related.items.len != 0) {
+            self.setDiagnosticStructured(
+                line,
+                column,
+                catalog.semantic.invalid_argument_count.code,
+                message,
+                src.text,
+                "actual argument conflicts here",
+                advice.notes,
+                advice.helps,
+                related.items,
+            );
+        } else {
+            self.setDiagnosticDetailed(line, column, catalog.semantic.invalid_argument_count.code, message, src.text, advice.notes, advice.helps);
+        }
         self.setCurrentSource(src);
     }
     return err;
@@ -1249,6 +1256,39 @@ fn appendUniqueDeclSource(out: *std.array_list.Managed(ast.DeclSource), source: 
         }
     }
     try out.append(source);
+}
+
+fn diagnosticSpanSame(a: common_diag.DiagnosticSpan, b: common_diag.DiagnosticSpan) bool {
+    return a.line == b.line and
+        a.column == b.column and
+        std.mem.eql(u8, a.line_text, b.line_text) and
+        std.mem.eql(u8, a.label, b.label);
+}
+
+fn appendDiagnosticSpan(
+    out: *std.array_list.Managed(common_diag.DiagnosticSpan),
+    source: ast.DeclSource,
+    label: []const u8,
+) !void {
+    const span = diagnosticSpanFromSource(source, label);
+    for (out.items) |existing| {
+        if (diagnosticSpanSame(existing, span)) return;
+    }
+    try out.append(span);
+}
+
+fn appendActualProcedureExprRelatedSpans(
+    self: *context.Context,
+    out: *std.array_list.Managed(common_diag.DiagnosticSpan),
+    expr: *ast.Expr,
+) !void {
+    switch (expr.*) {
+        .identifier => |name| {
+            const source = procedure_interfaces.findVisibleProcedureSource(self, name) orelse return;
+            try appendDiagnosticSpan(out, source, "actual procedure declared here");
+        },
+        else => {},
+    }
 }
 
 fn emitVariableDefinitionContextDiagnostic(
@@ -1343,7 +1383,7 @@ fn checkImplicitExternalCallConsistencyForCall(
         actuals[idx] = try implicitActualArgSig(self, arg.expr.value);
         idx += 1;
     }
-    try checkImplicitExternalCallConsistency(self, name, actuals);
+    try checkImplicitExternalCallConsistency(self, name, actuals, currentProcedureSourceRef(self));
 }
 
 fn checkImplicitExternalCallConsistencyForExpr(
@@ -1356,7 +1396,7 @@ fn checkImplicitExternalCallConsistencyForExpr(
     for (args, 0..) |arg, idx| {
         actuals[idx] = try implicitActualArgSig(self, arg);
     }
-    try checkImplicitExternalCallConsistency(self, name, actuals);
+    try checkImplicitExternalCallConsistency(self, name, actuals, currentProcedureSourceRef(self));
 }
 
 fn shouldTrackImplicitExternalCall(self: *context.Context, name: []const u8) bool {
@@ -1375,13 +1415,19 @@ fn checkImplicitExternalCallConsistency(
     self: *context.Context,
     name: []const u8,
     actuals: []const context.Context.ImplicitCallArgSig,
+    call_source: ast.SourceRef,
 ) CheckError!void {
     const observed = findImplicitCallSigPtr(self, name);
     if (observed == null) {
-        try recordImplicitCallSig(self, name, actuals);
+        try recordImplicitCallSig(self, name, actuals, call_source);
         return;
     }
     const existing = observed.?;
+    if (existing.args.len != actuals.len) {
+        if (self.allow_argument_mismatch) return;
+        emitImplicitObservedCallMismatch(self, call_source, existing.call_source, "wrong number of arguments");
+        return error.InvalidArgumentCount;
+    }
     const count = @min(existing.args.len, actuals.len);
     var idx: usize = 0;
     while (idx < count) : (idx += 1) {
@@ -1389,20 +1435,14 @@ fn checkImplicitExternalCallConsistency(
         const current = actuals[idx];
         if (previous.actual_class != current.actual_class) {
             if (self.allow_argument_mismatch) return;
-            if (!previous.mismatch_reported) {
-                emitImplicitObservedMismatch(self, previous.source, "Rank mismatch in argument");
-                previous.mismatch_reported = true;
-            }
-            emitImplicitObservedMismatch(self, current.source, "Rank mismatch in argument");
+            emitImplicitObservedArgumentMismatch(self, current.source, previous.source, "Rank mismatch in argument");
+            previous.mismatch_reported = true;
             return error.InvalidArgumentCount;
         }
         if (!implicitActualTypesCompatible(previous.type_spec, current.type_spec)) {
             if (self.allow_argument_mismatch) return;
-            if (!previous.mismatch_reported) {
-                emitImplicitObservedMismatch(self, previous.source, "Type mismatch in argument");
-                previous.mismatch_reported = true;
-            }
-            emitImplicitObservedMismatch(self, current.source, "Type mismatch in argument");
+            emitImplicitObservedArgumentMismatch(self, current.source, previous.source, "Type mismatch in argument");
+            previous.mismatch_reported = true;
             return error.InvalidArgumentCount;
         }
     }
@@ -1429,23 +1469,99 @@ fn recordImplicitCallSig(
     self: *context.Context,
     name: []const u8,
     actuals: []const context.Context.ImplicitCallArgSig,
+    call_source: ast.SourceRef,
 ) !void {
     const key = try leaf_helpers.lowerDup(self.arena, name);
     const owned = try self.arena.dupe(context.Context.ImplicitCallArgSig, actuals);
-    try self.implicit_call_sigs.put(key, .{ .args = owned });
+    try self.implicit_call_sigs.put(key, .{ .args = owned, .call_source = call_source });
 }
 
-fn emitImplicitObservedMismatch(
+fn implicitExternalCallAdvice() Advice {
+    return .{
+        .notes = &.{.{ .text = "calls to the same implicitly resolved external procedure must stay consistent across observed call sites" }},
+        .helps = &.{.{ .text = "add an explicit interface or keep the actual argument counts, ranks, and types consistent" }},
+    };
+}
+
+fn emitImplicitObservedArgumentMismatch(
     self: *context.Context,
-    source: ast.SourceRef,
+    current: ast.SourceRef,
+    previous: ast.SourceRef,
     message: []const u8,
 ) void {
-    self.setDiagnostic(
-        if (source.line == 0) 1 else source.line,
-        if (source.column == 0) 1 else source.column,
+    const advice = implicitExternalCallAdvice();
+    if (previous.line != 0 and previous.column != 0) {
+        const related = [_]ast.DeclSource{.{
+            .line = previous.line,
+            .column = previous.column,
+            .text = previous.text,
+        }};
+        emitStructuredProcedureDiagnostic(
+            self,
+            .{
+                .line = if (current.line == 0) 1 else current.line,
+                .column = if (current.column == 0) 1 else current.column,
+                .text = current.text,
+            },
+            catalog.semantic.invalid_argument_count.code,
+            message,
+            "implicit external actual conflicts here",
+            advice.notes,
+            advice.helps,
+            related[0..],
+            "previous implicit external actual here",
+        );
+        return;
+    }
+    self.setDiagnosticDetailed(
+        if (current.line == 0) 1 else current.line,
+        if (current.column == 0) 1 else current.column,
         catalog.semantic.invalid_argument_count.code,
         message,
-        source.text,
+        current.text,
+        advice.notes,
+        advice.helps,
+    );
+}
+
+fn emitImplicitObservedCallMismatch(
+    self: *context.Context,
+    current: ast.SourceRef,
+    previous: ast.SourceRef,
+    message: []const u8,
+) void {
+    const advice = implicitExternalCallAdvice();
+    if (previous.line != 0 and previous.column != 0) {
+        const related = [_]ast.DeclSource{.{
+            .line = previous.line,
+            .column = previous.column,
+            .text = previous.text,
+        }};
+        emitStructuredProcedureDiagnostic(
+            self,
+            .{
+                .line = if (current.line == 0) 1 else current.line,
+                .column = if (current.column == 0) 1 else current.column,
+                .text = current.text,
+            },
+            catalog.semantic.invalid_argument_count.code,
+            message,
+            "implicit external call conflicts here",
+            advice.notes,
+            advice.helps,
+            related[0..],
+            "previous implicit external call here",
+        );
+        return;
+    }
+    self.setDiagnosticDetailed(
+        if (current.line == 0) 1 else current.line,
+        if (current.column == 0) 1 else current.column,
+        catalog.semantic.invalid_argument_count.code,
+        message,
+        current.text,
+        advice.notes,
+        advice.helps,
     );
 }
 

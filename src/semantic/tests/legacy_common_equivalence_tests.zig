@@ -714,6 +714,110 @@ test "semantic reports procedure actual mismatch with related interface location
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible dummy declaration here"));
 }
 
+test "semantic reports implicit external type mismatch with related previous call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine s()\n" ++
+        "  real :: x\n" ++
+        "  x = foo(1)\n" ++
+        "  x = foo(1.0)\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
+    try testing.expect(std.mem.eql(u8, diag.message, "Type mismatch in argument"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "  x = foo(1.0)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "implicit external actual conflicts here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "  x = foo(1)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "previous implicit external actual here"));
+}
+
+test "semantic reports implicit external argument-count mismatch with related previous call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine s()\n" ++
+        "  real :: x\n" ++
+        "  x = foo(1)\n" ++
+        "  x = foo(1, 2)\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
+    try testing.expect(std.mem.eql(u8, diag.message, "wrong number of arguments"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "  x = foo(1, 2)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "implicit external call conflicts here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "  x = foo(1)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "previous implicit external call here"));
+}
+
+test "semantic reports procedure actual mismatch with actual procedure declaration source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "subroutine caller()\n" ++
+        "  interface\n" ++
+        "    subroutine outer(p)\n" ++
+        "      interface\n" ++
+        "        integer function p(x)\n" ++
+        "          integer x\n" ++
+        "        end function\n" ++
+        "      end interface\n" ++
+        "    end subroutine\n" ++
+        "    real function actual(x)\n" ++
+        "      integer x\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "  call outer(actual)\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
+    try testing.expect(std.mem.eql(u8, diag.message, "Type mismatch in function result"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "  call outer(actual)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "actual argument conflicts here"));
+    try testing.expectEqual(@as(usize, 2), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 5), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "        integer function p(x)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible dummy declaration here"));
+    try testing.expectEqual(@as(usize, 10), diag.secondary_spans[1].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[1].line_text, "    real function actual(x)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[1].label, "actual procedure declared here"));
+}
+
 test "semantic reports variable definition context with related interface location" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -687,6 +687,107 @@ test "runPipeline reports procedure actual mismatch with related interface sourc
     try testing.expectEqualStrings("visible dummy declaration here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports implicit external type mismatch with related previous call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "subroutine s()\n" ++
+        "  real :: x\n" ++
+        "  x = foo(1)\n" ++
+        "  x = foo(1.0)\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_implicit_external_type_mismatch.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
+    try testing.expectEqualStrings("  x = foo(1.0)", diag_info.line_text);
+    try testing.expectEqualStrings("implicit external actual conflicts here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("  x = foo(1)", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("previous implicit external actual here", diag_info.secondary_spans[0].label);
+}
+
+test "runPipeline reports implicit external argument-count mismatch with related previous call" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "subroutine s()\n" ++
+        "  real :: x\n" ++
+        "  x = foo(1)\n" ++
+        "  x = foo(1, 2)\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_implicit_external_arity_mismatch.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
+    try testing.expectEqualStrings("  x = foo(1, 2)", diag_info.line_text);
+    try testing.expectEqualStrings("implicit external call conflicts here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("  x = foo(1)", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("previous implicit external call here", diag_info.secondary_spans[0].label);
+}
+
+test "runPipeline reports procedure actual mismatch with actual procedure declaration source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "subroutine caller()\n" ++
+        "  interface\n" ++
+        "    subroutine outer(p)\n" ++
+        "      interface\n" ++
+        "        integer function p(x)\n" ++
+        "          integer x\n" ++
+        "        end function\n" ++
+        "      end interface\n" ++
+        "    end subroutine\n" ++
+        "    real function actual(x)\n" ++
+        "      integer x\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "  call outer(actual)\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_actual_procedure_result_mismatch.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
+    try testing.expectEqualStrings("  call outer(actual)", diag_info.line_text);
+    try testing.expectEqualStrings("actual argument conflicts here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 2), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 5), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("        integer function p(x)", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("visible dummy declaration here", diag_info.secondary_spans[0].label);
+    try testing.expectEqual(@as(usize, 10), diag_info.secondary_spans[1].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[1].file_path);
+    try testing.expectEqualStrings("    real function actual(x)", diag_info.secondary_spans[1].line_text);
+    try testing.expectEqualStrings("actual procedure declared here", diag_info.secondary_spans[1].label);
+}
+
 test "runPipeline reports variable definition context with related interface source" {
     const testing = std.testing;
     const allocator = testing.allocator;
