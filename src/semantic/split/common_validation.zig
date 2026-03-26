@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const common_diag = @import("../../common/diagnostic.zig");
 const catalog = @import("../../common/error_catalog.zig");
 const diagnostic = @import("../diagnostic.zig");
 const symbols = @import("../symbol/mod.zig");
@@ -16,6 +17,7 @@ pub const CommonItemSig = struct {
 const CommonBlockSig = struct {
     items: []CommonItemSig,
     total_size: usize,
+    source: ast.DeclSource,
 };
 
 const CommonLocalBlock = struct {
@@ -86,7 +88,7 @@ pub fn validateCommonBlocksWithDiagnostics(
             const block = entry.value_ptr;
             const items = block.items.items;
             const total_size = totalCommonSize(items) catch {
-                setCommonMismatchDiagnostic(diag_bag, block.source);
+                setCommonMismatchDiagnostic(diag_bag, block.source, null);
                 return error.CommonBlockMismatch;
             };
             if (key.len == 0) {
@@ -94,29 +96,33 @@ pub fn validateCommonBlocksWithDiagnostics(
                     if (total_size > prev.total_size) {
                         prev.items = try block.items.toOwnedSlice();
                         prev.total_size = total_size;
+                        prev.source = block.source;
                     }
                 } else {
                     try global.put("", .{
                         .items = try block.items.toOwnedSlice(),
                         .total_size = total_size,
+                        .source = block.source,
                     });
                 }
                 continue;
             }
             if (global.getPtr(key)) |prev| {
                 if (!commonSigsCompatible(prev.items, items)) {
-                    setCommonMismatchDiagnostic(diag_bag, block.source);
+                    setCommonMismatchDiagnostic(diag_bag, block.source, prev.source);
                     return error.CommonBlockMismatch;
                 }
                 if (total_size > prev.total_size) {
                     prev.items = try block.items.toOwnedSlice();
                     prev.total_size = total_size;
+                    prev.source = block.source;
                 }
             } else {
                 const owned_key = try arena.dupe(u8, key);
                 try global.put(owned_key, .{
                     .items = try block.items.toOwnedSlice(),
                     .total_size = total_size,
+                    .source = block.source,
                 });
             }
         }
@@ -167,8 +173,37 @@ pub fn totalCommonSize(items: []const CommonItemSig) !usize {
     return total;
 }
 
-pub fn setCommonMismatchDiagnostic(diag_bag: *diagnostic.Bag, source: ast.DeclSource) void {
+pub fn setCommonMismatchDiagnostic(
+    diag_bag: *diagnostic.Bag,
+    source: ast.DeclSource,
+    prior_source: ?ast.DeclSource,
+) void {
     const line = if (source.line == 0) 1 else source.line;
     const col = if (source.column == 0) 1 else source.column;
+    if (prior_source) |previous| {
+        const related = [_]common_diag.DiagnosticSpan{.{
+            .file_path = "",
+            .line = if (previous.line == 0) 1 else previous.line,
+            .column = if (previous.column == 0) 1 else previous.column,
+            .end_column = @max(
+                (if (previous.column == 0) 1 else previous.column) + 1,
+                previous.text.len + 1,
+            ),
+            .line_text = previous.text,
+            .label = "previous COMMON layout here",
+        }};
+        diag_bag.setStructured(
+            line,
+            col,
+            catalog.semantic.common_block_mismatch.code,
+            catalog.semantic.common_block_mismatch.message,
+            source.text,
+            "conflicting COMMON layout here",
+            &.{.{ .text = "Named COMMON blocks must agree on storage layout across program units." }},
+            &.{.{ .text = "Make the type, order, and size of each COMMON block member consistent in every unit." }},
+            related[0..],
+        );
+        return;
+    }
     diag_bag.set(line, col, catalog.semantic.common_block_mismatch.code, catalog.semantic.common_block_mismatch.message, source.text);
 }

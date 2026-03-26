@@ -119,6 +119,17 @@ test "semantic reports CF3115 for COMMON mismatch across units" {
     try testing.expectError(error.CommonBlockMismatch, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.eql(u8, diag.code, "CF3115"));
+    try testing.expectEqual(@as(usize, 7), diag.line);
+    try testing.expectEqual(@as(usize, 7), diag.column);
+    try testing.expect(std.mem.eql(u8, diag.line_text, "COMMON /BLK/ A"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "conflicting COMMON layout here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expectEqual(@as(usize, 7), diag.secondary_spans[0].column);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "COMMON /BLK/ A"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "previous COMMON layout here"));
 }
 
 test "semantic reports CF3110 for function argument count mismatch" {

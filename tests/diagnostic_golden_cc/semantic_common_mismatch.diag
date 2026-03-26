@@ -1,0 +1,13 @@
+error[CF3115]: COMMON block layout mismatch across program units
+  --> tests/diagnostic_golden_cc/semantic_common_mismatch.f:7:7
+   = stage: semantic
+   = help: see docs/errors.md#CF3115
+  |
+7 |       COMMON /BLK/ A
+  |       ^ conflicting COMMON layout here
+  ::: tests/diagnostic_golden_cc\semantic_common_mismatch.f:3:7
+  |
+3 |       COMMON /BLK/ A
+  |       ~~~~~~~~ previous COMMON layout here
+   = note: Named COMMON blocks must agree on storage layout across program units.
+   = help: Make the type, order, and size of each COMMON block member consistent in every unit.

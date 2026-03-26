@@ -161,6 +161,38 @@ test "runPipeline reports semantic duplicate declaration with related source" {
     try testing.expectEqualStrings("first declaration here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports COMMON mismatch with related source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      SUBROUTINE S1\n" ++
+        "      INTEGER A\n" ++
+        "      COMMON /BLK/ A\n" ++
+        "      END\n" ++
+        "      SUBROUTINE S2\n" ++
+        "      REAL A\n" ++
+        "      COMMON /BLK/ A\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_common_mismatch.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.CommonBlockMismatch, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.common_block_mismatch.code, diag_info.code);
+    try testing.expectEqualStrings("      COMMON /BLK/ A", diag_info.line_text);
+    try testing.expectEqualStrings("conflicting COMMON layout here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("      COMMON /BLK/ A", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("previous COMMON layout here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports free-form continued parse diagnostics against the original source line" {
     const testing = std.testing;
     const allocator = testing.allocator;

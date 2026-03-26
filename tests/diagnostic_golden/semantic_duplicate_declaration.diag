@@ -1,0 +1,13 @@
+error[CF3116]: duplicate declaration for the same symbol
+  --> tests/diagnostic_golden/semantic_duplicate_declaration.f:3:7
+   = stage: semantic
+   = help: see docs/errors.md#CF3116
+  |
+3 |       REAL A
+  |       ^ redeclared here
+  ::: tests/diagnostic_golden\semantic_duplicate_declaration.f:2:7
+  |
+2 |       INTEGER A
+  |       ~~~ first declaration here
+   = note: A symbol's type and shape must not be declared twice in the same scoping unit.
+   = help: Remove the duplicate declaration, or keep the type/shape information in a single declaration.
