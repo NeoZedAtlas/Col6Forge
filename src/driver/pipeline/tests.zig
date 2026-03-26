@@ -133,6 +133,34 @@ test "runPipeline reports semantic expression diagnostics against the original s
     try testing.expectEqualStrings("      I='A'+1", diag_info.line_text);
 }
 
+test "runPipeline reports semantic duplicate declaration with related source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "      SUBROUTINE S\n" ++
+        "      INTEGER A\n" ++
+        "      REAL A\n" ++
+        "      END\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_duplicate_decl.f", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("      REAL A", diag_info.line_text);
+    try testing.expectEqualStrings("redeclared here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("      INTEGER A", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("first declaration here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports free-form continued parse diagnostics against the original source line" {
     const testing = std.testing;
     const allocator = testing.allocator;

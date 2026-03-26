@@ -207,14 +207,40 @@ pub fn appendSemanticDiagnostics(diag_bag: *diag.Bag, semantic_diag_bag: *semant
         defer semantic_diag_bag.release(sem_info);
         const raw_line = sourceLineAt(contents, sem_info.line);
         const line_text = if (raw_line.len > 0) raw_line else sem_info.line_text;
+        const normalized_spans = normalizeSemanticSpans(diag_bag.allocator, sem_info.secondary_spans, input_path, contents) catch &.{};
+        defer if (normalized_spans.len > 0) diag_bag.allocator.free(normalized_spans);
         diag_bag.addDetailed(input_path, sem_info.line, sem_info.column, sem_info.code, sem_info.message, line_text, .{
             .stage = .semantic,
+            .primary_label = sem_info.primary_label,
             .notes = sem_info.notes,
             .helps = sem_info.helps,
+            .secondary_spans = normalized_spans,
         });
         appended = true;
     }
     return appended;
+}
+
+fn normalizeSemanticSpans(
+    allocator: std.mem.Allocator,
+    spans: []const diag.DiagnosticSpan,
+    input_path: []const u8,
+    contents: []const u8,
+) ![]diag.DiagnosticSpan {
+    if (spans.len == 0) return &.{};
+    const normalized = try allocator.alloc(diag.DiagnosticSpan, spans.len);
+    for (spans, 0..) |span, idx| {
+        const raw_line = sourceLineAt(contents, span.line);
+        normalized[idx] = .{
+            .file_path = if (span.file_path.len == 0) input_path else span.file_path,
+            .line = span.line,
+            .column = span.column,
+            .end_column = span.end_column,
+            .line_text = if (raw_line.len > 0) raw_line else span.line_text,
+            .label = span.label,
+        };
+    }
+    return normalized;
 }
 
 pub fn appendCodegenDiagnostics(diag_bag: *diag.Bag, codegen_diag_bag: *codegen.diagnostic.Bag, input_path: []const u8, contents: []const u8) bool {

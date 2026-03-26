@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../../ast/nodes.zig");
+const common_diag = @import("../../../common/diagnostic.zig");
 const catalog = @import("../../../common/error_catalog.zig");
 const context = @import("../context.zig");
 const symbols = @import("../../symbol/mod.zig");
@@ -111,6 +112,7 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
                 }
                 const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
                 if (item.dims.len > 0 and self.symbols.items[idx].dims.len > 0) {
+                    emitDuplicateDimensionDiagnostic(self, item.name);
                     return error.DuplicateDeclaration;
                 }
                 self.symbols.items[idx].dims = item.dims;
@@ -242,6 +244,33 @@ pub fn applySpec(self: *context.Context, decl: ast.Decl) !void {
         },
         .type_decl => return error.UnexpectedTypeDecl,
     }
+}
+
+fn emitDuplicateDimensionDiagnostic(self: *context.Context, target_name: []const u8) void {
+    const current_decl = self.current_decl_source orelse return;
+    const prior_decl = decls.findPriorDeclaratorSource(self, target_name, .dimensions) orelse return;
+    const secondary_spans = [_]common_diag.DiagnosticSpan{.{
+        .file_path = "",
+        .line = if (prior_decl.line == 0) 1 else prior_decl.line,
+        .column = if (prior_decl.column == 0) 1 else prior_decl.column,
+        .end_column = @max(
+            (if (prior_decl.column == 0) 1 else prior_decl.column) + 1,
+            prior_decl.text.len + 1,
+        ),
+        .line_text = prior_decl.text,
+        .label = "first declaration here",
+    }};
+    self.setDiagnosticStructured(
+        if (current_decl.line == 0) 1 else current_decl.line,
+        if (current_decl.column == 0) 1 else current_decl.column,
+        catalog.semantic.duplicate_declaration.code,
+        catalog.semantic.duplicate_declaration.message,
+        current_decl.text,
+        "redeclared here",
+        &.{.{ .text = "A symbol's shape must not be declared twice in the same scoping unit." }},
+        &.{.{ .text = "Keep the DIMENSION information on only one declaration of this symbol." }},
+        secondary_spans[0..],
+    );
 }
 
 fn emitImplicitCharLenTypingDiagnostics(self: *context.Context, expr: *ast.Expr) bool {

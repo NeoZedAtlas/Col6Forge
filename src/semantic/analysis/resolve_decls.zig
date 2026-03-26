@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("../../ast/nodes.zig");
+const common_diag = @import("../../common/diagnostic.zig");
 const catalog = @import("../../common/error_catalog.zig");
 const symbols = @import("../symbol/mod.zig");
 const context = @import("context.zig");
@@ -10,6 +11,11 @@ const procedure_interfaces = @import("check_statements/procedure_interfaces.zig"
 
 const StorageClass = symbols.StorageClass;
 const CharacterLengthKind = symbols.CharacterLengthKind;
+
+pub const DeclarationAspect = enum {
+    explicit_type,
+    dimensions,
+};
 
 pub fn applyTypeDecl(self: *context.Context, decl: ast.TypeDecl) !void {
     var resolved_type = try resolvedDeclTypeSpec(self, decl.type_kind, decl.derived_type_name, decl.kind_selector, decl.polymorphic);
@@ -57,6 +63,7 @@ pub fn applyDeclarator(
     const idx = try symbols_mod.ensureDeclaredSymbol(self, item.name);
     var sym = &self.symbols.items[idx];
     if (explicit_type and sym.type_explicit) {
+        emitDuplicateDeclaratorDiagnostic(self, item.name, .explicit_type);
         return error.DuplicateDeclaration;
     }
     if (explicit_type) {
@@ -68,6 +75,7 @@ pub fn applyDeclarator(
     if (item.dims.len > 0) {
         if (sym.dims.len > 0) {
             // Do not silently overwrite previously declared shape.
+            emitDuplicateDeclaratorDiagnostic(self, item.name, .dimensions);
             return error.DuplicateDeclaration;
         }
         sym.dims = item.dims;
@@ -137,6 +145,89 @@ pub fn applyDeclarator(
         }
     }
     sym.applyTypeSpec(sym.type_spec.withCharacterLength(.constant, length));
+}
+
+pub fn findPriorDeclaratorSource(
+    self: *context.Context,
+    target_name: []const u8,
+    aspect: DeclarationAspect,
+) ?ast.DeclSource {
+    const current_decl_idx = self.current_decl_index orelse return null;
+    var decl_idx: usize = 0;
+    while (decl_idx < current_decl_idx and decl_idx < self.unit.decls.len) : (decl_idx += 1) {
+        if (!declarationMatchesAspect(self.unit.decls[decl_idx], target_name, aspect)) continue;
+        if (decl_idx < self.unit.decl_sources.len) return self.unit.decl_sources[decl_idx];
+        return null;
+    }
+    return null;
+}
+
+fn emitDuplicateDeclaratorDiagnostic(
+    self: *context.Context,
+    target_name: []const u8,
+    aspect: DeclarationAspect,
+) void {
+    const current_decl = self.current_decl_source orelse return;
+    const prior_decl = findPriorDeclaratorSource(self, target_name, aspect) orelse return;
+    const secondary_spans = [_]common_diag.DiagnosticSpan{
+        declSourceToSecondarySpan(prior_decl, "first declaration here"),
+    };
+    self.setDiagnosticStructured(
+        if (current_decl.line == 0) 1 else current_decl.line,
+        if (current_decl.column == 0) 1 else current_decl.column,
+        catalog.semantic.duplicate_declaration.code,
+        catalog.semantic.duplicate_declaration.message,
+        current_decl.text,
+        "redeclared here",
+        &.{.{ .text = "A symbol's type and shape must not be declared twice in the same scoping unit." }},
+        &.{.{ .text = "Remove the duplicate declaration, or keep the type/shape information in a single declaration." }},
+        secondary_spans[0..],
+    );
+}
+
+fn declSourceToSecondarySpan(source: ast.DeclSource, label: []const u8) common_diag.DiagnosticSpan {
+    const line = if (source.line == 0) 1 else source.line;
+    const column = if (source.column == 0) 1 else source.column;
+    return .{
+        .file_path = "",
+        .line = line,
+        .column = column,
+        .end_column = @max(column + 1, source.text.len + 1),
+        .line_text = source.text,
+        .label = label,
+    };
+}
+
+fn declarationMatchesAspect(decl: ast.Decl, target_name: []const u8, aspect: DeclarationAspect) bool {
+    return switch (decl) {
+        .type_decl => |type_decl| declaratorsMatchAspect(type_decl.items, target_name, aspect),
+        .procedure => |procedure_decl| aspect == .dimensions and declaratorsMatchAspect(procedure_decl.items, target_name, aspect),
+        .dimension => |dim_decl| aspect == .dimensions and declaratorsMatchAspect(dim_decl.items, target_name, aspect),
+        .common => |common_decl| aspect == .dimensions and commonDeclMatchesAspect(common_decl, target_name),
+        else => false,
+    };
+}
+
+fn commonDeclMatchesAspect(common_decl: ast.CommonDecl, target_name: []const u8) bool {
+    for (common_decl.blocks) |block| {
+        if (declaratorsMatchAspect(block.items, target_name, .dimensions)) return true;
+    }
+    return false;
+}
+
+fn declaratorsMatchAspect(
+    items: []const ast.Declarator,
+    target_name: []const u8,
+    aspect: DeclarationAspect,
+) bool {
+    for (items) |item| {
+        if (!std.ascii.eqlIgnoreCase(item.name, target_name)) continue;
+        return switch (aspect) {
+            .explicit_type => true,
+            .dimensions => item.dims.len > 0,
+        };
+    }
+    return false;
 }
 
 fn validateConcreteAbstractTypeUse(self: *context.Context, type_spec: symbols.TypeSpec) !void {

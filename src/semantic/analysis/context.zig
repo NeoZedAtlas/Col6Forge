@@ -339,11 +339,26 @@ pub const Context = struct {
         notes: []const common_diag.DiagnosticMessage,
         helps: []const common_diag.DiagnosticMessage,
     ) void {
+        self.setDiagnosticStructured(line, column, code, message, line_text, "", notes, helps, &.{});
+    }
+
+    pub fn setDiagnosticStructured(
+        self: *Context,
+        line: usize,
+        column: usize,
+        code: []const u8,
+        message: []const u8,
+        line_text: []const u8,
+        primary_label: []const u8,
+        notes: []const common_diag.DiagnosticMessage,
+        helps: []const common_diag.DiagnosticMessage,
+        secondary_spans: []const common_diag.DiagnosticSpan,
+    ) void {
         if (self.diag_bag) |bag| {
-            bag.setDetailed(line, column, code, message, line_text, notes, helps);
+            bag.setStructured(line, column, code, message, line_text, primary_label, notes, helps, secondary_spans);
             return;
         }
-        diag.setDetailed(line, column, code, message, line_text, notes, helps);
+        diag.setStructured(line, column, code, message, line_text, primary_label, notes, helps, secondary_spans);
     }
 
     pub fn noteFallbackSource(self: *Context, line: usize, column: usize, line_text: []const u8) void {

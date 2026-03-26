@@ -171,6 +171,14 @@ test "semantic reports CF3116 for duplicate declaration" {
     try testing.expectEqual(@as(usize, 7), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "REAL A"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "redeclared here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag.secondary_spans[0].line);
+    try testing.expectEqual(@as(usize, 7), diag.secondary_spans[0].column);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "INTEGER A"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "first declaration here"));
 }
 
 test "semantic reports CF3116 for conflicting DIMENSION redeclaration" {
@@ -192,6 +200,12 @@ test "semantic reports CF3116 for conflicting DIMENSION redeclaration" {
     try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
     const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "redeclared here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "INTEGER A(10)"));
 }
 
 test "semantic reuses implicit symbol across repeated references" {
