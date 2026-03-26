@@ -370,6 +370,43 @@ test "semantic reports visible prelude generic specific reuse with related locat
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible prelude specific here"));
 }
 
+test "semantic reports mixed generic specific kinds with related location" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  interface foo\n" ++
+        "    subroutine sub_a(x)\n" ++
+        "      integer x\n" ++
+        "    end subroutine\n" ++
+        "    function fun_b(y)\n" ++
+        "      integer y\n" ++
+        "      integer fun_b\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.message, "all SUBROUTINEs or all FUNCTIONs"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "    function fun_b(y)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "conflicting specific kind here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "    subroutine sub_a(x)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "generic interface first established here"));
+}
+
 test "semantic reports call-site ambiguous interfaces with related location" {
     const testing = std.testing;
     const allocator = testing.allocator;

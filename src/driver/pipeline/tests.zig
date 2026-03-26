@@ -365,6 +365,41 @@ test "runPipeline reports visible prelude generic specific reuse with related so
     try testing.expectEqualStrings("visible prelude specific here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports mixed generic specific kinds with related source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "module m\n" ++
+        "  interface foo\n" ++
+        "    subroutine sub_a(x)\n" ++
+        "      integer x\n" ++
+        "    end subroutine\n" ++
+        "    function fun_b(y)\n" ++
+        "      integer y\n" ++
+        "      integer fun_b\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_mixed_generic_kinds.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.DuplicateDeclaration, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("    function fun_b(y)", diag_info.line_text);
+    try testing.expectEqualStrings("conflicting specific kind here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("    subroutine sub_a(x)", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("generic interface first established here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports call-site ambiguous interfaces with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;

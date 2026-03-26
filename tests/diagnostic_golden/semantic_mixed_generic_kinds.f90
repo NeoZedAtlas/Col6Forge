@@ -1,0 +1,11 @@
+module m
+  interface foo
+    subroutine sub_a(x)
+      integer x
+    end subroutine
+    function fun_b(y)
+      integer y
+      integer fun_b
+    end function
+  end interface
+end module

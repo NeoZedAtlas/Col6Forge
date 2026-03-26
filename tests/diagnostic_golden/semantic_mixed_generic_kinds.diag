@@ -1,0 +1,13 @@
+error[CF3116]: all SUBROUTINEs or all FUNCTIONs
+  --> tests/diagnostic_golden/semantic_mixed_generic_kinds.f90:6:5
+   = stage: semantic
+   = help: see docs/errors.md#CF3116
+  |
+6 |     function fun_b(y)
+  |     ^ conflicting specific kind here
+  ::: tests/diagnostic_golden\semantic_mixed_generic_kinds.f90:3:5
+  |
+3 |     subroutine sub_a(x)
+  |     ~ generic interface first established here
+   = note: a generic interface must contain only FUNCTION specifics or only SUBROUTINE specifics
+   = help: split the conflicting specifics into separate generic interfaces grouped by procedure kind

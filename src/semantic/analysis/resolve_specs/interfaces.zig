@@ -273,6 +273,7 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
     if (interface_block.name == null) return null;
 
     var generic_kind: ?GenericInterfaceKind = null;
+    var generic_kind_source: ?GenericSpecificSource = null;
     var specifics = std.array_list.Managed(GenericSpecific).init(self.arena);
 
     for (interface_block.procedure_headers) |proc_header| {
@@ -282,13 +283,15 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
             .function => .function,
             else => continue,
         };
-        specifics.append(.{ .source = .{ .header = proc_header }, .sig = sig }) catch return error.OutOfMemory;
+        const current_source: GenericSpecificSource = .{ .header = proc_header };
+        specifics.append(.{ .source = current_source, .sig = sig }) catch return error.OutOfMemory;
         if (generic_kind == null) {
             generic_kind = kind;
+            generic_kind_source = current_source;
             continue;
         }
         if (generic_kind.? != kind) {
-            setSourceDiagnostic(self, proc_header.source, "all SUBROUTINEs or all FUNCTIONs");
+            setMixedGenericSpecificKindDiagnostic(self, current_source, generic_kind_source.?);
             return error.DuplicateDeclaration;
         }
     }
@@ -306,13 +309,15 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
                 return error.UnknownSymbol;
             },
         };
-        specifics.append(.{ .source = .{ .source = interface_block.specific_procedure_sources[idx] }, .sig = sig }) catch return error.OutOfMemory;
+        const current_source: GenericSpecificSource = .{ .source = interface_block.specific_procedure_sources[idx] };
+        specifics.append(.{ .source = current_source, .sig = sig }) catch return error.OutOfMemory;
         if (generic_kind == null) {
             generic_kind = kind;
+            generic_kind_source = current_source;
             continue;
         }
         if (generic_kind.? != kind) {
-            setSourceDiagnostic(self, interface_block.specific_procedure_sources[idx], "all SUBROUTINEs or all FUNCTIONs");
+            setMixedGenericSpecificKindDiagnostic(self, current_source, generic_kind_source.?);
             return error.DuplicateDeclaration;
         }
     }
@@ -324,13 +329,15 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
             .function => .function,
             else => continue,
         };
-        specifics.append(.{ .source = .{ .source = interface_block.module_procedure_sources[idx] }, .sig = sig }) catch return error.OutOfMemory;
+        const current_source: GenericSpecificSource = .{ .source = interface_block.module_procedure_sources[idx] };
+        specifics.append(.{ .source = current_source, .sig = sig }) catch return error.OutOfMemory;
         if (generic_kind == null) {
             generic_kind = kind;
+            generic_kind_source = current_source;
             continue;
         }
         if (generic_kind.? != kind) {
-            setSourceDiagnostic(self, interface_block.module_procedure_sources[idx], "all SUBROUTINEs or all FUNCTIONs");
+            setMixedGenericSpecificKindDiagnostic(self, current_source, generic_kind_source.?);
             return error.DuplicateDeclaration;
         }
     }
@@ -348,13 +355,15 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
                 return error.UnknownSymbol;
             },
         };
-        specifics.append(.{ .source = .{ .source = interface_block.procedure_sources[idx] }, .sig = sig }) catch return error.OutOfMemory;
+        const current_source: GenericSpecificSource = .{ .source = interface_block.procedure_sources[idx] };
+        specifics.append(.{ .source = current_source, .sig = sig }) catch return error.OutOfMemory;
         if (generic_kind == null) {
             generic_kind = kind;
+            generic_kind_source = current_source;
             continue;
         }
         if (generic_kind.? != kind) {
-            setSourceDiagnostic(self, interface_block.procedure_sources[idx], "all SUBROUTINEs or all FUNCTIONs");
+            setMixedGenericSpecificKindDiagnostic(self, current_source, generic_kind_source.?);
             return error.DuplicateDeclaration;
         }
     }
@@ -420,6 +429,40 @@ fn setAmbiguousGenericSpecificDiagnostic(
         notes[0..],
         helps[0..],
         secondary_spans,
+    );
+}
+
+fn setMixedGenericSpecificKindDiagnostic(
+    self: *context.Context,
+    current: GenericSpecificSource,
+    previous: GenericSpecificSource,
+) void {
+    const current_source = genericSpecificDeclSource(current);
+    const previous_source = genericSpecificDeclSource(previous);
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "a generic interface must contain only FUNCTION specifics or only SUBROUTINE specifics" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "split the conflicting specifics into separate generic interfaces grouped by procedure kind" },
+    };
+    const secondary_spans = [_]common_diag.DiagnosticSpan{.{
+        .file_path = "",
+        .line = if (previous_source.line == 0) 1 else previous_source.line,
+        .column = if (previous_source.column == 0) 1 else previous_source.column,
+        .line_text = previous_source.text,
+        .label = "generic interface first established here",
+    }};
+    self.setCurrentDeclSource(current_source);
+    self.setDiagnosticStructured(
+        if (current_source.line == 0) 1 else current_source.line,
+        if (current_source.column == 0) 1 else current_source.column,
+        catalog.semantic.duplicate_declaration.code,
+        "all SUBROUTINEs or all FUNCTIONs",
+        current_source.text,
+        "conflicting specific kind here",
+        notes[0..],
+        helps[0..],
+        secondary_spans[0..],
     );
 }
 
