@@ -6,6 +6,7 @@ const context = @import("../context.zig");
 const symbols = @import("../../symbol/mod.zig");
 const symbols_mod = @import("../resolve_symbols.zig");
 const decls = @import("../resolve_decls.zig");
+const procedure_interfaces = @import("../check_statements/procedure_interfaces.zig");
 const split_api = @import("../../split/api/mod.zig");
 const type_kind_selector = @import("../../type_kind_selector.zig");
 const helpers = @import("helpers.zig");
@@ -565,14 +566,15 @@ fn appendUniqueGenericSpecificSource(
 
 fn appendUniqueDeclSource(out: *std.array_list.Managed(ast.DeclSource), source: ast.DeclSource) !void {
     for (out.items) |existing| {
-        if (existing.line == source.line and
-            existing.column == source.column and
-            std.mem.eql(u8, existing.text, source.text))
-        {
-            return;
-        }
+        if (declSourceSame(existing, source)) return;
     }
     try out.append(source);
+}
+
+fn declSourceSame(a: ast.DeclSource, b: ast.DeclSource) bool {
+    return a.line == b.line and
+        a.column == b.column and
+        std.mem.eql(u8, a.text, b.text);
 }
 
 fn findVisibleNonProcedureDeclSource(self: *context.Context, target_name: []const u8) ?ast.DeclSource {
@@ -670,32 +672,113 @@ fn kindSelectorMustBeIntrinsic(self: *context.Context, kind_selector: ?*ast.Expr
 fn validateKnownProcedureCompatibility(self: *context.Context, proc_header: ast.InterfaceProcedure) ?anyerror {
     const known_sig = symbols_mod.lookupKnownProcedureSig(self, proc_header.name) orelse return null;
     if (known_sig.kind != proc_header.kind) {
-        setAttributeConflictDiagnostic(self, "Interface mismatch in dummy procedure");
+        setKnownProcedureCompatibilityDiagnostic(
+            self,
+            proc_header,
+            "Interface mismatch in dummy procedure",
+            "explicit interface kind conflicts here",
+            "the explicit INTERFACE body disagrees with the visible known procedure kind",
+            "match the INTERFACE header to the visible procedure kind, or rename one of the procedures",
+        );
         return error.InvalidArgumentCount;
     }
     if (proc_header.kind != .function) return null;
 
     const expected_rank = split_api.interfaceProcedureResultRank(proc_header);
     if (known_sig.result_rank != expected_rank) {
-        setAttributeConflictDiagnostic(self, "Rank mismatch in function result");
+        setKnownProcedureCompatibilityDiagnostic(
+            self,
+            proc_header,
+            "Rank mismatch in function result",
+            "function result rank conflicts here",
+            "the explicit INTERFACE body disagrees with the visible known function result rank",
+            "match the function result rank between the INTERFACE body and the visible procedure",
+        );
         return error.InvalidArgumentCount;
     }
 
     const expected_type = interfaceProcedureResultTypeSpecForValidation(self, proc_header) orelse return null;
     const actual_type = symbols_mod.lookupKnownFunctionResolvedSpec(self, proc_header.name) orelse return null;
     if (expected_type.lowered_kind != actual_type.lowered_kind) {
-        setAttributeConflictDiagnostic(self, "Type mismatch in function result");
+        setKnownProcedureCompatibilityDiagnostic(
+            self,
+            proc_header,
+            "Type mismatch in function result",
+            "function result type conflicts here",
+            "the explicit INTERFACE body disagrees with the visible known function result type",
+            "match the function result type between the INTERFACE body and the visible procedure",
+        );
         return error.InvalidArgumentCount;
     }
     if (expected_type.lowered_kind == .derived) {
         if (expected_type.derived_type_name != null and actual_type.derived_type_name != null and
             !std.ascii.eqlIgnoreCase(expected_type.derived_type_name.?, actual_type.derived_type_name.?))
         {
-            setAttributeConflictDiagnostic(self, "Type mismatch in function result");
+            setKnownProcedureCompatibilityDiagnostic(
+                self,
+                proc_header,
+                "Type mismatch in function result",
+                "function result type conflicts here",
+                "the explicit INTERFACE body disagrees with the visible known function result type",
+                "match the function result type between the INTERFACE body and the visible procedure",
+            );
             return error.InvalidArgumentCount;
         }
     }
     return null;
+}
+
+fn setKnownProcedureCompatibilityDiagnostic(
+    self: *context.Context,
+    proc_header: ast.InterfaceProcedure,
+    message: []const u8,
+    primary_label: []const u8,
+    note_text: []const u8,
+    help_text: []const u8,
+) void {
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = note_text },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = help_text },
+    };
+    const related_source = procedure_interfaces.findVisibleProcedureSource(self, proc_header.name);
+    if (related_source) |source| {
+        if (!declSourceSame(source, proc_header.source)) {
+            const secondary_spans = [_]common_diag.DiagnosticSpan{.{
+                .file_path = "",
+                .line = if (source.line == 0) 1 else source.line,
+                .column = if (source.column == 0) 1 else source.column,
+                .line_text = source.text,
+                .label = "visible known procedure here",
+            }};
+            self.setCurrentDeclSource(proc_header.source);
+            self.setDiagnosticStructured(
+                if (proc_header.source.line == 0) 1 else proc_header.source.line,
+                if (proc_header.source.column == 0) 1 else proc_header.source.column,
+                catalog.semantic.invalid_argument_count.code,
+                message,
+                proc_header.source.text,
+                primary_label,
+                notes[0..],
+                helps[0..],
+                secondary_spans[0..],
+            );
+            return;
+        }
+    }
+    self.setCurrentDeclSource(proc_header.source);
+    self.setDiagnosticStructured(
+        if (proc_header.source.line == 0) 1 else proc_header.source.line,
+        if (proc_header.source.column == 0) 1 else proc_header.source.column,
+        catalog.semantic.invalid_argument_count.code,
+        message,
+        proc_header.source.text,
+        primary_label,
+        notes[0..],
+        helps[0..],
+        &.{},
+    );
 }
 
 fn interfaceProcedureResultTypeSpecForValidation(

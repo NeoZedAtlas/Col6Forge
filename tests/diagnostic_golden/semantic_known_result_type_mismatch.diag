@@ -1,0 +1,13 @@
+error[CF3110]: Type mismatch in function result
+  --> tests/diagnostic_golden/semantic_known_result_type_mismatch.f90:11:5
+   = stage: semantic
+   = help: see docs/errors.md#CF3110
+   |
+11 |     real function f(x)
+   |     ^ function result type conflicts here
+  ::: tests/diagnostic_golden\semantic_known_result_type_mismatch.f90:3:5
+  |
+3 |     integer function f(x)
+  |     ~ visible known procedure here
+   = note: the explicit INTERFACE body disagrees with the visible known function result type
+   = help: match the function result type between the INTERFACE body and the visible procedure

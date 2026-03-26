@@ -471,6 +471,47 @@ test "semantic reports ABSTRACT INTERFACE bind-name misuse with related end loca
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "END INTERFACE expected here"));
 }
 
+test "semantic reports known procedure result type mismatch with related visible source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  interface\n" ++
+        "    integer function f(x)\n" ++
+        "      integer x\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module\n" ++
+        "subroutine s()\n" ++
+        "  use m\n" ++
+        "  interface\n" ++
+        "    real function f(x)\n" ++
+        "      integer x\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end subroutine\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
+    try testing.expect(std.mem.eql(u8, diag.message, "Type mismatch in function result"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "    real function f(x)"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "function result type conflicts here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "    integer function f(x)"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "visible known procedure here"));
+}
+
 test "semantic reports call-site ambiguous interfaces with related location" {
     const testing = std.testing;
     const allocator = testing.allocator;

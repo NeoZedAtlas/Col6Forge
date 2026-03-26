@@ -460,6 +460,45 @@ test "runPipeline reports ABSTRACT INTERFACE bind-name misuse with related end s
     try testing.expectEqualStrings("END INTERFACE expected here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports known procedure result type mismatch with related visible source" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "module m\n" ++
+        "  interface\n" ++
+        "    integer function f(x)\n" ++
+        "      integer x\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end module\n" ++
+        "subroutine s()\n" ++
+        "  use m\n" ++
+        "  interface\n" ++
+        "    real function f(x)\n" ++
+        "      integer x\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "end subroutine\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_known_result_type_mismatch.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.InvalidArgumentCount, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag_info.code);
+    try testing.expectEqualStrings("    real function f(x)", diag_info.line_text);
+    try testing.expectEqualStrings("function result type conflicts here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 3), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("    integer function f(x)", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("visible known procedure here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports call-site ambiguous interfaces with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;
