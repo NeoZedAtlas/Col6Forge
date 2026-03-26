@@ -1,0 +1,13 @@
+error[CF3116]: neither function nor subroutine
+  --> tests/diagnostic_golden/semantic_non_procedure_specific.f90:4:1
+   = stage: semantic
+   = help: see docs/errors.md#CF3116
+  |
+4 |     procedure x
+  | ^ referenced non-procedure here
+  ::: tests/diagnostic_golden\semantic_non_procedure_specific.f90:2:3
+  |
+2 |   integer :: x
+  |   ~ non-procedure declaration here
+   = note: generic interface PROCEDURE entries must resolve to an explicit or known procedure
+   = help: declare a real procedure with this name, or remove the non-procedure symbol from the generic interface

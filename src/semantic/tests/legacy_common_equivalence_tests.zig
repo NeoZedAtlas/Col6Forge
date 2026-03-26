@@ -407,6 +407,38 @@ test "semantic reports mixed generic specific kinds with related location" {
     try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "generic interface first established here"));
 }
 
+test "semantic reports non-procedure generic specific with related declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  integer :: x\n" ++
+        "  interface assignment(=)\n" ++
+        "    procedure x\n" ++
+        "  end interface\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    try testing.expectError(error.UnknownSymbol, analyzeProgram(arena.allocator(), program));
+    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
+    try testing.expect(std.mem.eql(u8, diag.message, "neither function nor subroutine"));
+    try testing.expect(std.mem.eql(u8, diag.line_text, "    procedure x"));
+    try testing.expect(std.mem.eql(u8, diag.primary_label, "referenced non-procedure here"));
+    try testing.expectEqual(@as(usize, 1), diag.notes.len);
+    try testing.expectEqual(@as(usize, 1), diag.helps.len);
+    try testing.expectEqual(@as(usize, 1), diag.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag.secondary_spans[0].line);
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].line_text, "  integer :: x"));
+    try testing.expect(std.mem.eql(u8, diag.secondary_spans[0].label, "non-procedure declaration here"));
+}
+
 test "semantic reports call-site ambiguous interfaces with related location" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -400,6 +400,36 @@ test "runPipeline reports mixed generic specific kinds with related source" {
     try testing.expectEqualStrings("generic interface first established here", diag_info.secondary_spans[0].label);
 }
 
+test "runPipeline reports non-procedure generic specific with related declaration" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const source =
+        "program p\n" ++
+        "  integer :: x\n" ++
+        "  interface assignment(=)\n" ++
+        "    procedure x\n" ++
+        "  end interface\n" ++
+        "end program p\n";
+    const file_path = try writeTempSourceFile(&tmp, allocator, "semantic_non_procedure_specific.f90", source);
+    defer allocator.free(file_path);
+
+    try testing.expectError(error.UnknownSymbol, runPipelineWithOptions(allocator, file_path, .llvm, .{}));
+    const diag_info = takeLastDiagnostic() orelse return error.TestExpectedEqual;
+    defer releaseLastDiagnostic(diag_info);
+    try testing.expectEqualStrings(catalog.semantic.duplicate_declaration.code, diag_info.code);
+    try testing.expectEqualStrings("    procedure x", diag_info.line_text);
+    try testing.expectEqualStrings("referenced non-procedure here", diag_info.primary_label);
+    try testing.expectEqual(@as(usize, 1), diag_info.secondary_spans.len);
+    try testing.expectEqual(@as(usize, 2), diag_info.secondary_spans[0].line);
+    try testing.expectEqualStrings(file_path, diag_info.secondary_spans[0].file_path);
+    try testing.expectEqualStrings("  integer :: x", diag_info.secondary_spans[0].line_text);
+    try testing.expectEqualStrings("non-procedure declaration here", diag_info.secondary_spans[0].label);
+}
+
 test "runPipeline reports call-site ambiguous interfaces with related source" {
     const testing = std.testing;
     const allocator = testing.allocator;

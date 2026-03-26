@@ -298,14 +298,18 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
 
     for (interface_block.specific_procedures, 0..) |procedure_name, idx| {
         const sig = symbols_mod.lookupKnownProcedureSig(self, procedure_name) orelse {
-            setSourceDiagnostic(self, interface_block.specific_procedure_sources[idx], "neither function nor subroutine");
+            if (!setNonProcedureSpecificDiagnostic(self, interface_block.specific_procedure_sources[idx], procedure_name)) {
+                setSourceDiagnostic(self, interface_block.specific_procedure_sources[idx], "neither function nor subroutine");
+            }
             return error.UnknownSymbol;
         };
         const kind: GenericInterfaceKind = switch (sig.kind) {
             .subroutine => .subroutine,
             .function => .function,
             else => {
-                setSourceDiagnostic(self, interface_block.specific_procedure_sources[idx], "neither function nor subroutine");
+                if (!setNonProcedureSpecificDiagnostic(self, interface_block.specific_procedure_sources[idx], procedure_name)) {
+                    setSourceDiagnostic(self, interface_block.specific_procedure_sources[idx], "neither function nor subroutine");
+                }
                 return error.UnknownSymbol;
             },
         };
@@ -344,14 +348,18 @@ fn validateGenericInterfaceProcedures(self: *context.Context, interface_block: a
 
     for (interface_block.procedures, 0..) |procedure_name, idx| {
         const sig = symbols_mod.lookupKnownProcedureSig(self, procedure_name) orelse {
-            setSourceDiagnostic(self, interface_block.procedure_sources[idx], "neither function nor subroutine");
+            if (!setNonProcedureSpecificDiagnostic(self, interface_block.procedure_sources[idx], procedure_name)) {
+                setSourceDiagnostic(self, interface_block.procedure_sources[idx], "neither function nor subroutine");
+            }
             return error.UnknownSymbol;
         };
         const kind: GenericInterfaceKind = switch (sig.kind) {
             .subroutine => .subroutine,
             .function => .function,
             else => {
-                setSourceDiagnostic(self, interface_block.procedure_sources[idx], "neither function nor subroutine");
+                if (!setNonProcedureSpecificDiagnostic(self, interface_block.procedure_sources[idx], procedure_name)) {
+                    setSourceDiagnostic(self, interface_block.procedure_sources[idx], "neither function nor subroutine");
+                }
                 return error.UnknownSymbol;
             },
         };
@@ -466,6 +474,40 @@ fn setMixedGenericSpecificKindDiagnostic(
     );
 }
 
+fn setNonProcedureSpecificDiagnostic(
+    self: *context.Context,
+    current_source: ast.DeclSource,
+    target_name: []const u8,
+) bool {
+    const decl_source = findVisibleNonProcedureDeclSource(self, target_name) orelse return false;
+    const notes = [_]common_diag.DiagnosticMessage{
+        .{ .text = "generic interface PROCEDURE entries must resolve to an explicit or known procedure" },
+    };
+    const helps = [_]common_diag.DiagnosticMessage{
+        .{ .text = "declare a real procedure with this name, or remove the non-procedure symbol from the generic interface" },
+    };
+    const secondary_spans = [_]common_diag.DiagnosticSpan{.{
+        .file_path = "",
+        .line = if (decl_source.line == 0) 1 else decl_source.line,
+        .column = if (decl_source.column == 0) 1 else decl_source.column,
+        .line_text = decl_source.text,
+        .label = "non-procedure declaration here",
+    }};
+    self.setCurrentDeclSource(current_source);
+    self.setDiagnosticStructured(
+        if (current_source.line == 0) 1 else current_source.line,
+        if (current_source.column == 0) 1 else current_source.column,
+        catalog.semantic.duplicate_declaration.code,
+        "neither function nor subroutine",
+        current_source.text,
+        "referenced non-procedure here",
+        notes[0..],
+        helps[0..],
+        secondary_spans[0..],
+    );
+    return true;
+}
+
 fn genericSpecificDeclSource(source: GenericSpecificSource) ast.DeclSource {
     return switch (source) {
         .header => |proc_header| proc_header.source,
@@ -501,6 +543,35 @@ fn appendUniqueDeclSource(out: *std.array_list.Managed(ast.DeclSource), source: 
         }
     }
     try out.append(source);
+}
+
+fn findVisibleNonProcedureDeclSource(self: *context.Context, target_name: []const u8) ?ast.DeclSource {
+    const sym_idx = symbols_mod.findSymbolIndex(self, target_name) orelse return null;
+    const sym = self.symbols.items[sym_idx];
+    if (sym.kind == .function or sym.kind == .subroutine) return null;
+
+    for (self.unit.decls, 0..) |decl, decl_idx| {
+        const decl_source = if (decl_idx < self.unit.decl_sources.len) self.unit.decl_sources[decl_idx] else ast.DeclSource{};
+        switch (decl) {
+            .type_decl => |type_decl| {
+                for (type_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, target_name)) return decl_source;
+                }
+            },
+            .dimension => |dimension_decl| {
+                for (dimension_decl.items) |item| {
+                    if (std.ascii.eqlIgnoreCase(item.name, target_name)) return decl_source;
+                }
+            },
+            .parameter => |parameter_decl| {
+                for (parameter_decl.assigns) |assign| {
+                    if (std.ascii.eqlIgnoreCase(assign.name, target_name)) return decl_source;
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
 }
 
 fn genericSpecificAmbiguous(a: context.Context.ProcedureSig, b: context.Context.ProcedureSig) bool {
