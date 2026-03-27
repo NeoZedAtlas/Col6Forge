@@ -1083,15 +1083,20 @@ fn procedureDummyDataArgMismatchMessage(
     if (formal.value_attr != actual.value_attr) return "VALUE mismatch in argument";
     if (formal.volatile_attr != actual.volatile_attr) return "VOLATILE mismatch in argument";
     if (shapeSignatureMismatch(formal.shape_signature, actual.shape_signature)) return "Shape mismatch in dimension";
-    if (formal.rank != actual.rank) return "Type mismatch in argument";
-    if (formal.requires_descriptor != actual.requires_descriptor) return "Type mismatch in argument";
-    if (formal.pointer != actual.pointer) return "Type mismatch in argument";
-    if (formal.allocatable != actual.allocatable) return "Type mismatch in argument";
-    if (formal.type_spec.polymorphic != actual.type_spec.polymorphic) return "Type mismatch in argument";
+    if (formal.rank != actual.rank) return "Rank mismatch in argument";
+    if (formal.requires_descriptor != actual.requires_descriptor) return "Descriptor mismatch in argument";
+    if (formal.pointer != actual.pointer) return "POINTER attribute mismatch in argument";
+    if (formal.allocatable != actual.allocatable) return "ALLOCATABLE attribute mismatch in argument";
+    if (formal.type_spec.polymorphic != actual.type_spec.polymorphic) return "Polymorphic mismatch in argument";
+    if (formal.type_spec.lowered_kind == .character and actual.type_spec.lowered_kind == .character) {
+        if (formal.type_spec.char_len_kind != actual.type_spec.char_len_kind or formal.type_spec.char_len != actual.type_spec.char_len) {
+            return "Character length mismatch";
+        }
+    }
     if (formal.type_spec.lowered_kind == .derived or actual.type_spec.lowered_kind == .derived) {
         if (formal.type_spec.lowered_kind != actual.type_spec.lowered_kind) return "Type mismatch in argument";
-        if (formal.type_spec.derived_type_name == null or actual.type_spec.derived_type_name == null) return "Type mismatch in argument";
-        if (!std.ascii.eqlIgnoreCase(formal.type_spec.derived_type_name.?, actual.type_spec.derived_type_name.?)) return "Type mismatch in argument";
+        if (formal.type_spec.derived_type_name == null or actual.type_spec.derived_type_name == null) return "Derived type mismatch in argument";
+        if (!std.ascii.eqlIgnoreCase(formal.type_spec.derived_type_name.?, actual.type_spec.derived_type_name.?)) return "Derived type mismatch in argument";
     }
     if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual.type_spec)) return "Type mismatch in argument";
     return null;

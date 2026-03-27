@@ -143,6 +143,26 @@ Each diagnostic is identified by a stable `CFxxxx` code:
 - Stage: parser
 - Default message: unexpected token during statement recovery
 
+## CF2022
+
+- Stage: parser
+- Default message: invalid SUBMODULE statement syntax
+
+## CF2023
+
+- Stage: parser
+- Default message: module-only construct used outside of a module
+
+## CF2024
+
+- Stage: parser
+- Default message: unexpected assignment during statement recovery
+
+## CF2025
+
+- Stage: parser
+- Default message: expected END PROGRAM during statement recovery
+
 ## CF2099
 
 - Stage: parser
@@ -402,6 +422,71 @@ Each diagnostic is identified by a stable `CFxxxx` code:
 
 - Stage: semantic
 - Default message: ambiguous function or component reference in subscript context
+
+## CF3152
+
+- Stage: semantic
+- Default message: procedure argument character length mismatch
+
+## CF3153
+
+- Stage: semantic
+- Default message: procedure argument descriptor mismatch
+
+## CF3154
+
+- Stage: semantic
+- Default message: procedure argument POINTER attribute mismatch
+
+## CF3155
+
+- Stage: semantic
+- Default message: procedure argument ALLOCATABLE attribute mismatch
+
+## CF3156
+
+- Stage: semantic
+- Default message: procedure argument polymorphic mismatch
+
+## CF3157
+
+- Stage: semantic
+- Default message: procedure argument derived type mismatch
+
+## CF3158
+
+- Stage: semantic
+- Default message: dummy procedure OPTIONAL mismatch
+
+## CF3159
+
+- Stage: semantic
+- Default message: dummy procedure INTENT mismatch
+
+## CF3160
+
+- Stage: semantic
+- Default message: dummy procedure ASYNCHRONOUS mismatch
+
+## CF3161
+
+- Stage: semantic
+- Default message: dummy procedure CONTIGUOUS mismatch
+
+## CF3162
+
+- Stage: semantic
+- Default message: dummy procedure VALUE mismatch
+
+## CF3163
+
+- Stage: semantic
+- Default message: dummy procedure VOLATILE mismatch
+
+## CF3164
+
+- Stage: semantic
+- Default message: dummy procedure shape mismatch
 
 ## CF3199
 

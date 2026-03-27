@@ -45,6 +45,10 @@ pub const parser = struct {
     pub const unexpected_token_operator_decl = ErrorInfo{ .code = "CF2019", .message = "unexpected token in operator or assignment declaration" };
     pub const unexpected_token_component_decl = ErrorInfo{ .code = "CF2020", .message = "unexpected token in component declaration" };
     pub const unexpected_token_stmt_recovery = ErrorInfo{ .code = "CF2021", .message = "unexpected token during statement recovery" };
+    pub const invalid_submodule_stmt_syntax = ErrorInfo{ .code = "CF2022", .message = "invalid SUBMODULE statement syntax" };
+    pub const misplaced_module_only_construct = ErrorInfo{ .code = "CF2023", .message = "module-only construct used outside of a module" };
+    pub const unexpected_assignment_recovery = ErrorInfo{ .code = "CF2024", .message = "unexpected assignment during statement recovery" };
+    pub const expected_end_program_recovery = ErrorInfo{ .code = "CF2025", .message = "expected END PROGRAM during statement recovery" };
     pub const failed_to_understand = ErrorInfo{ .code = "CF2099", .message = "parser failed to understand source" };
 };
 
@@ -100,6 +104,19 @@ pub const semantic = struct {
     pub const invalid_subscript_section = ErrorInfo{ .code = "CF3149", .message = "invalid array section or triplet subscript" };
     pub const invalid_subscript_target = ErrorInfo{ .code = "CF3150", .message = "object is not subscriptable in this context" };
     pub const ambiguous_subscript_or_component_call = ErrorInfo{ .code = "CF3151", .message = "ambiguous function or component reference in subscript context" };
+    pub const invalid_argument_char_len = ErrorInfo{ .code = "CF3152", .message = "procedure argument character length mismatch" };
+    pub const invalid_argument_descriptor = ErrorInfo{ .code = "CF3153", .message = "procedure argument descriptor mismatch" };
+    pub const invalid_argument_pointer_attr = ErrorInfo{ .code = "CF3154", .message = "procedure argument POINTER attribute mismatch" };
+    pub const invalid_argument_allocatable_attr = ErrorInfo{ .code = "CF3155", .message = "procedure argument ALLOCATABLE attribute mismatch" };
+    pub const invalid_argument_polymorphic = ErrorInfo{ .code = "CF3156", .message = "procedure argument polymorphic mismatch" };
+    pub const invalid_argument_derived_type = ErrorInfo{ .code = "CF3157", .message = "procedure argument derived type mismatch" };
+    pub const invalid_dummy_optional = ErrorInfo{ .code = "CF3158", .message = "dummy procedure OPTIONAL mismatch" };
+    pub const invalid_dummy_intent = ErrorInfo{ .code = "CF3159", .message = "dummy procedure INTENT mismatch" };
+    pub const invalid_dummy_asynchronous = ErrorInfo{ .code = "CF3160", .message = "dummy procedure ASYNCHRONOUS mismatch" };
+    pub const invalid_dummy_contiguous = ErrorInfo{ .code = "CF3161", .message = "dummy procedure CONTIGUOUS mismatch" };
+    pub const invalid_dummy_value = ErrorInfo{ .code = "CF3162", .message = "dummy procedure VALUE mismatch" };
+    pub const invalid_dummy_volatile = ErrorInfo{ .code = "CF3163", .message = "dummy procedure VOLATILE mismatch" };
+    pub const invalid_dummy_shape_signature = ErrorInfo{ .code = "CF3164", .message = "dummy procedure shape mismatch" };
     pub const generic = ErrorInfo{ .code = "CF3199", .message = "semantic analysis failed" };
 };
 
@@ -279,6 +296,10 @@ pub const doc_entries = [_]DocEntry{
     doc(parser.unexpected_token_operator_decl, "parser"),
     doc(parser.unexpected_token_component_decl, "parser"),
     doc(parser.unexpected_token_stmt_recovery, "parser"),
+    doc(parser.invalid_submodule_stmt_syntax, "parser"),
+    doc(parser.misplaced_module_only_construct, "parser"),
+    doc(parser.unexpected_assignment_recovery, "parser"),
+    doc(parser.expected_end_program_recovery, "parser"),
     doc(parser.failed_to_understand, "parser"),
     doc(semantic.missing_unit_scope, "semantic"),
     doc(semantic.missing_scope, "semantic"),
@@ -331,6 +352,19 @@ pub const doc_entries = [_]DocEntry{
     doc(semantic.invalid_subscript_section, "semantic"),
     doc(semantic.invalid_subscript_target, "semantic"),
     doc(semantic.ambiguous_subscript_or_component_call, "semantic"),
+    doc(semantic.invalid_argument_char_len, "semantic"),
+    doc(semantic.invalid_argument_descriptor, "semantic"),
+    doc(semantic.invalid_argument_pointer_attr, "semantic"),
+    doc(semantic.invalid_argument_allocatable_attr, "semantic"),
+    doc(semantic.invalid_argument_polymorphic, "semantic"),
+    doc(semantic.invalid_argument_derived_type, "semantic"),
+    doc(semantic.invalid_dummy_optional, "semantic"),
+    doc(semantic.invalid_dummy_intent, "semantic"),
+    doc(semantic.invalid_dummy_asynchronous, "semantic"),
+    doc(semantic.invalid_dummy_contiguous, "semantic"),
+    doc(semantic.invalid_dummy_value, "semantic"),
+    doc(semantic.invalid_dummy_volatile, "semantic"),
+    doc(semantic.invalid_dummy_shape_signature, "semantic"),
     doc(semantic.generic, "semantic"),
     doc(codegen.multiple_program_units, "codegen"),
     doc(codegen.missing_semantic_unit, "codegen"),

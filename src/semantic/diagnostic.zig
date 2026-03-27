@@ -460,22 +460,21 @@ fn refineInvalidArgumentCode(message: []const u8) []const u8 {
     {
         return catalog.semantic.invalid_argument_procedure_kind.code;
     }
-    if (std.mem.indexOf(u8, message, "OPTIONAL mismatch") != null or
-        std.mem.indexOf(u8, message, "INTENT mismatch") != null or
-        std.mem.indexOf(u8, message, "ASYNCHRONOUS mismatch") != null or
-        std.mem.indexOf(u8, message, "CONTIGUOUS mismatch") != null or
-        std.mem.indexOf(u8, message, "VALUE mismatch") != null or
-        std.mem.indexOf(u8, message, "VOLATILE mismatch") != null or
-        std.mem.indexOf(u8, message, "Shape mismatch in dimension") != null)
-    {
-        return catalog.semantic.invalid_dummy_procedure_interface.code;
-    }
+    if (std.mem.indexOf(u8, message, "OPTIONAL mismatch") != null) return catalog.semantic.invalid_dummy_optional.code;
+    if (std.mem.indexOf(u8, message, "INTENT mismatch") != null) return catalog.semantic.invalid_dummy_intent.code;
+    if (std.mem.indexOf(u8, message, "ASYNCHRONOUS mismatch") != null) return catalog.semantic.invalid_dummy_asynchronous.code;
+    if (std.mem.indexOf(u8, message, "CONTIGUOUS mismatch") != null) return catalog.semantic.invalid_dummy_contiguous.code;
+    if (std.mem.indexOf(u8, message, "VALUE mismatch") != null) return catalog.semantic.invalid_dummy_value.code;
+    if (std.mem.indexOf(u8, message, "VOLATILE mismatch") != null) return catalog.semantic.invalid_dummy_volatile.code;
+    if (std.mem.indexOf(u8, message, "Shape mismatch in dimension") != null) return catalog.semantic.invalid_dummy_shape_signature.code;
     if (std.mem.indexOf(u8, message, "keyword") != null) return catalog.semantic.invalid_intrinsic_keyword_argument.code;
-    if (std.mem.indexOf(u8, message, "Type mismatch in argument") != null or
-        std.mem.indexOf(u8, message, "Character length mismatch") != null)
-    {
-        return catalog.semantic.invalid_argument_type.code;
-    }
+    if (std.mem.indexOf(u8, message, "Character length mismatch") != null) return catalog.semantic.invalid_argument_char_len.code;
+    if (std.mem.indexOf(u8, message, "Descriptor mismatch in argument") != null) return catalog.semantic.invalid_argument_descriptor.code;
+    if (std.mem.indexOf(u8, message, "POINTER attribute mismatch in argument") != null) return catalog.semantic.invalid_argument_pointer_attr.code;
+    if (std.mem.indexOf(u8, message, "ALLOCATABLE attribute mismatch in argument") != null) return catalog.semantic.invalid_argument_allocatable_attr.code;
+    if (std.mem.indexOf(u8, message, "Polymorphic mismatch in argument") != null) return catalog.semantic.invalid_argument_polymorphic.code;
+    if (std.mem.indexOf(u8, message, "Derived type mismatch in argument") != null) return catalog.semantic.invalid_argument_derived_type.code;
+    if (std.mem.indexOf(u8, message, "Type mismatch in argument") != null) return catalog.semantic.invalid_argument_type.code;
     return codeForFallback(catalog.semantic.invalid_argument_count.code);
 }
 
@@ -528,4 +527,37 @@ test "semantic diagnostic keeps fallback code for generic invalid argument count
     defer releaseTaken(diag);
 
     try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag.code);
+}
+
+test "semantic diagnostic refines character length mismatch in argument" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(9, 3, catalog.semantic.invalid_argument_count.code, "Character length mismatch", "      call s(str)", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_char_len.code, diag.code);
+}
+
+test "semantic diagnostic refines dummy procedure optional mismatch" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(10, 3, catalog.semantic.invalid_argument_count.code, "OPTIONAL mismatch in argument", "      call s(proc)", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_dummy_optional.code, diag.code);
+}
+
+test "semantic diagnostic refines descriptor mismatch in argument" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(11, 3, catalog.semantic.invalid_argument_count.code, "Descriptor mismatch in argument", "      call s(arr)", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_descriptor.code, diag.code);
 }

@@ -317,6 +317,10 @@ pub fn errorInfo(err: anyerror) catalog.ErrorInfo {
 
 fn refineParseCode(code: []const u8, message: []const u8, line_text: []const u8) []const u8 {
     if (!std.mem.eql(u8, code, catalog.parser.unexpected_token.code)) return code;
+    if (std.ascii.indexOfIgnoreCase(message, "Syntax error in SUBMODULE statement") != null) return catalog.parser.invalid_submodule_stmt_syntax.code;
+    if (std.ascii.indexOfIgnoreCase(message, "found outside of a module") != null) return catalog.parser.misplaced_module_only_construct.code;
+    if (std.ascii.indexOfIgnoreCase(message, "Unexpected assignment") != null) return catalog.parser.unexpected_assignment_recovery.code;
+    if (std.ascii.indexOfIgnoreCase(message, "Expecting END PROGRAM statement") != null) return catalog.parser.expected_end_program_recovery.code;
     if (isOperatorDeclLine(line_text, message)) return catalog.parser.unexpected_token_operator_decl.code;
     if (isProcedureHeadLine(line_text)) return catalog.parser.unexpected_token_proc_head.code;
     if (isComponentDeclLine(line_text, message)) return catalog.parser.unexpected_token_component_decl.code;
@@ -412,4 +416,26 @@ test "parser diagnostic refines procedure-head unexpected token" {
     defer releaseTaken(diag);
 
     try testing.expectEqualStrings(catalog.parser.unexpected_token_proc_head.code, diag.code);
+}
+
+test "parser diagnostic refines submodule statement recovery" {
+    const testing = std.testing;
+
+    clear();
+    set(5, 7, catalog.parser.unexpected_token.code, "Syntax error in SUBMODULE statement", "submodule (m) s");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_submodule_stmt_syntax.code, diag.code);
+}
+
+test "parser diagnostic refines end-program recovery" {
+    const testing = std.testing;
+
+    clear();
+    set(6, 7, catalog.parser.unexpected_token.code, "Expecting END PROGRAM statement", "end module");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.expected_end_program_recovery.code, diag.code);
 }
