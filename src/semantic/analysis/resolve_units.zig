@@ -358,8 +358,8 @@ fn buildDerivedComponentInfo(
             ctx.current_decl_source;
         ctx.setCurrentDeclSource(component_source);
         for (procedure_decl.items) |item| {
-            const sig = try resolveDerivedProcedureComponentSig(ctx, procedure_decl);
-            const spec = try resolveDerivedProcedureComponentTypeSpec(ctx, procedure_decl, item.name, sig);
+            const sig = try resolveDerivedProcedureComponentSig(ctx, derived.name, procedure_decl);
+            const spec = try resolveDerivedProcedureComponentTypeSpec(ctx, derived.name, procedure_decl, item.name, sig);
             try components.append(.{
                 .name = item.name,
                 .type_spec = spec,
@@ -372,6 +372,10 @@ fn buildDerivedComponentInfo(
                 .procedure_has_explicit_interface = derivedProcedureComponentHasExplicitInterface(procedure_decl, sig),
                 .procedure_nopass = procedure_decl.nopass,
                 .procedure_pass_name = procedure_decl.pass_name,
+                .interface_name = switch (procedure_decl.interface) {
+                    .name => |interface_name| interface_name,
+                    else => null,
+                },
             });
         }
         ctx.setCurrentDeclSource(prior_decl_source);
@@ -381,6 +385,7 @@ fn buildDerivedComponentInfo(
 
 fn resolveDerivedProcedureComponentSig(
     ctx: *context.Context,
+    enclosing_derived_name: []const u8,
     procedure_decl: ast.ProcedureDecl,
 ) !?context.Context.ProcedureSig {
     return switch (procedure_decl.interface) {
@@ -390,19 +395,14 @@ fn resolveDerivedProcedureComponentSig(
             .kind = .function,
             .arg_count = 0,
             .args = &.{},
-            .result_type_spec = try decls.resolvedDeclTypeSpec(
-                ctx,
-                type_spec.type_kind,
-                type_spec.derived_type_name,
-                type_spec.kind_selector,
-                type_spec.polymorphic,
-            ),
+            .result_type_spec = try resolveDerivedProcedureTypeSpec(ctx, enclosing_derived_name, type_spec),
         },
     };
 }
 
 fn resolveDerivedProcedureComponentTypeSpec(
     ctx: *context.Context,
+    enclosing_derived_name: []const u8,
     procedure_decl: ast.ProcedureDecl,
     item_name: []const u8,
     sig: ?context.Context.ProcedureSig,
@@ -411,15 +411,30 @@ fn resolveDerivedProcedureComponentTypeSpec(
         if (resolved_sig.result_type_spec) |result_spec| return result_spec;
     }
     return switch (procedure_decl.interface) {
-        .type_spec => |type_spec| try decls.resolvedDeclTypeSpec(
-            ctx,
-            type_spec.type_kind,
-            type_spec.derived_type_name,
-            type_spec.kind_selector,
-            type_spec.polymorphic,
-        ),
+        .type_spec => |type_spec| try resolveDerivedProcedureTypeSpec(ctx, enclosing_derived_name, type_spec),
         else => symbols_mod.implicitTypeSpec(ctx, item_name),
     };
+}
+
+fn resolveDerivedProcedureTypeSpec(
+    ctx: *context.Context,
+    enclosing_derived_name: []const u8,
+    type_spec: ast.ProcedureTypeSpec,
+) !symbols.TypeSpec {
+    if (type_spec.type_kind == .derived) {
+        if (type_spec.derived_type_name) |derived_name| {
+            if (std.ascii.eqlIgnoreCase(derived_name, enclosing_derived_name)) {
+                return symbols.TypeSpec.fromDerived(enclosing_derived_name).withPolymorphic(type_spec.polymorphic);
+            }
+        }
+    }
+    return decls.resolvedDeclTypeSpec(
+        ctx,
+        type_spec.type_kind,
+        type_spec.derived_type_name,
+        type_spec.kind_selector,
+        type_spec.polymorphic,
+    );
 }
 
 fn derivedProcedureComponentKind(

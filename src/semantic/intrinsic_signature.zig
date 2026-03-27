@@ -13,6 +13,7 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
     .{ "DCMPLX", .complex_double },
     .{ "DCONJG", .complex_double },
     .{ "ANY", .logical },
+    .{ "ALL", .logical },
     .{ "ALLOCATED", .logical },
     .{ "ASSOCIATED", .logical },
     .{ "LOGICAL", .logical },
@@ -34,6 +35,9 @@ const IntrinsicReturnTypeMap = std.StaticStringMap(ast.TypeKind).initComptime(.{
     .{ "ICHAR", .integer },
     .{ "IACHAR", .integer },
     .{ "LEN", .integer },
+    .{ "LBOUND", .integer },
+    .{ "UBOUND", .integer },
+    .{ "SHAPE", .integer },
     .{ "SIZE", .integer },
     .{ "ACHAR", .character },
     .{ "TRIM", .character },
@@ -267,4 +271,17 @@ test "inferResultType still rejects conflicting explicit kind values for homogen
         error.InvalidArithmeticOperands,
         inferResultType("MAX", fixedTypeSpec(.integer), &.{ int4, int8 }),
     );
+}
+
+test "inferResultType recognizes ALL and SHAPE intrinsic result kinds" {
+    const testing = std.testing;
+
+    const logical_arg = symbols.TypeSpec.fromResolvedKind(.logical, .logical, null);
+    const real_arg = symbols.TypeSpec.fromResolvedKind(.real, .real, 4);
+
+    const all_result = try inferResultType("ALL", fixedTypeSpec(.real), &.{logical_arg});
+    try testing.expectEqual(ast.TypeKind.logical, all_result.lowered_kind);
+
+    const shape_result = try inferResultType("SHAPE", fixedTypeSpec(.real), &.{real_arg});
+    try testing.expectEqual(ast.TypeKind.integer, shape_result.lowered_kind);
 }

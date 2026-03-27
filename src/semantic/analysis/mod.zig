@@ -1976,3 +1976,198 @@ test "typed procedure component call accepts actual args without explicit interf
     _ = try split_api.analyzeProgram(arena.allocator(), program);
     try testing.expect(diag.take() == null);
 }
+
+test "derived procedure component rejects generic interface references" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "interface gen\n" ++
+        "  procedure foo\n" ++
+        "end interface\n" ++
+        "type t\n" ++
+        "  procedure(gen), pointer, nopass :: p\n" ++
+        "end type t\n" ++
+        "contains\n" ++
+        "  subroutine foo()\n" ++
+        "  end subroutine foo\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "may not be generic") != null);
+}
+
+test "derived procedure component PASS requires explicit interface and polymorphic passed object" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  type :: t\n" ++
+        "    procedure(), pass(x), pointer :: f1\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "end module m\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "NOPASS or explicit interface required") != null);
+}
+
+test "write rejects derived type with procedure pointer component" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: rectangle\n" ++
+        "    procedure(real), pointer, nopass :: get_special_area\n" ++
+        "  end type rectangle\n" ++
+        "end module m\n" ++
+        "program p\n" ++
+        "  use m\n" ++
+        "  implicit none\n" ++
+        "  type(rectangle) :: rect\n" ++
+        "  write(*,*) rect\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "cannot have procedure pointer components") != null);
+}
+
+test "procedure pointer assignment rejects mismatched passed-object dummy interface" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type :: rectangle\n" ++
+        "    procedure(get_area), pointer :: get_special_area\n" ++
+        "  end type rectangle\n" ++
+        "  abstract interface\n" ++
+        "    real function get_area(this)\n" ++
+        "      import :: rectangle\n" ++
+        "      class(rectangle), intent(in) :: this\n" ++
+        "    end function get_area\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  real function get_my_area(this)\n" ++
+        "    type(rectangle), intent(in) :: this\n" ++
+        "    get_my_area = 3.0\n" ++
+        "  end function get_my_area\n" ++
+        "end module m\n" ++
+        "use m\n" ++
+        "type(rectangle) :: rect\n" ++
+        "rect%get_special_area => get_my_area\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "Interface mismatch in procedure pointer assignment") != null);
+}
+
+test "procedure component actual argument keeps imported explicit interface metadata" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "type :: parent\n" ++
+        "end type\n" ++
+        "type, extends(parent) :: extension\n" ++
+        "  procedure(extension_proc), pointer :: ppc\n" ++
+        "end type\n" ++
+        "class(extension), allocatable :: x\n" ++
+        "call some_proc(x%ppc)\n" ++
+        "contains\n" ++
+        "  subroutine parent_proc(arg)\n" ++
+        "    class(parent), intent(in) :: arg\n" ++
+        "  end subroutine\n" ++
+        "  subroutine extension_proc(arg)\n" ++
+        "    class(extension), intent(in) :: arg\n" ++
+        "  end subroutine\n" ++
+        "  subroutine some_proc(proc)\n" ++
+        "    procedure(parent_proc) :: proc\n" ++
+        "    type(parent) :: a\n" ++
+        "    call proc(a)\n" ++
+        "  end subroutine\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "Interface mismatch in dummy procedure") != null);
+}
+
+test "pure procedure rejects impure procedure component calls" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program prog\n" ++
+        "  interface\n" ++
+        "    integer function nf()\n" ++
+        "    end function\n" ++
+        "    pure integer function pf()\n" ++
+        "    end function\n" ++
+        "  end interface\n" ++
+        "  type :: t\n" ++
+        "    procedure(nf), nopass, pointer :: nf => null()\n" ++
+        "    procedure(pf), nopass, pointer :: pf => null()\n" ++
+        "  end type\n" ++
+        "contains\n" ++
+        "  pure integer function eval(a)\n" ++
+        "    type(t), intent(in) :: a\n" ++
+        "    eval = a%pf()\n" ++
+        "    eval = a%nf()\n" ++
+        "  end function eval\n" ++
+        "end program prog\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "Reference to impure function") != null);
+}

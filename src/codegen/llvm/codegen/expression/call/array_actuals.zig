@@ -305,6 +305,14 @@ pub fn analyzeAddressableArrayActual(ctx: *Context, builder: anytype, expr: *Exp
                 .contiguous = false,
             });
         },
+        .component => |comp| blk: {
+            if (!comp.has_parens) break :blk null;
+            const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse break :blk null;
+            const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse break :blk null;
+            if (!component.procedure) break :blk null;
+            if (try analyzeKnownArrayProcedureComponentActual(ctx, builder, comp, component)) |actual| break :blk actual;
+            break :blk null;
+        },
         else => null,
     };
 }
@@ -319,7 +327,7 @@ fn analyzeKnownArrayFunctionActual(
     const result_spec = sig.result_type_spec orelse return null;
     if (result_spec.lowered_kind == .character or result_spec.lowered_kind == .derived) return null;
 
-    const extents = try materializeKnownArrayResultExtents(ctx, sig) orelse return null;
+    const extents = try materializeKnownArrayResultExtents(ctx, builder, sig, call.args) orelse return null;
     const elem_ty = storageIRTypeForProcedureResult(ctx, result_spec);
     const elem_count = try emitExtentProductI64(ctx, builder, extents);
     const result_ptr = try emitHeapArrayTempPointer(ctx, builder, elem_ty, elem_count);
@@ -329,7 +337,7 @@ fn analyzeKnownArrayFunctionActual(
     var owned_heap_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
     defer owned_heap_args.deinit();
     try abi_args.append(result_ptr);
-    try appendKnownArrayFunctionCallArgs(ctx, builder, &abi_args, &owned_heap_args, call.args, sig);
+    try appendKnownArrayProcedureCallArgs(ctx, builder, &abi_args, &owned_heap_args, call.args, sig);
 
     const fn_name = try resolution.ensureExternalDeclForCall(ctx, call.name, .void, call.args, false);
     try builder.callTyped(null, .void, fn_name, abi_args.items);
@@ -347,7 +355,55 @@ fn analyzeKnownArrayFunctionActual(
     });
 }
 
-fn appendKnownArrayFunctionCallArgs(
+fn analyzeKnownArrayProcedureComponentActual(
+    ctx: *Context,
+    builder: anytype,
+    comp: ast.ComponentExpr,
+    component: context.DerivedComponentLayout,
+) !?ArrayActualPlan {
+    const proc_sig = component.procedure_sig orelse return null;
+    if (proc_sig.result_rank == 0) return null;
+    const result_spec = proc_sig.result_type_spec orelse return null;
+    if (result_spec.lowered_kind == .character or result_spec.lowered_kind == .derived) return null;
+
+    const actuals = try buildProcedureComponentArrayActuals(ctx, comp, component, proc_sig);
+    defer ctx.allocator.free(actuals);
+    const extents = try materializeKnownArrayResultExtents(ctx, builder, proc_sig, actuals) orelse return null;
+    const elem_ty = storageIRTypeForProcedureResult(ctx, result_spec);
+    const elem_count = try emitExtentProductI64(ctx, builder, extents);
+    const result_ptr = try emitHeapArrayTempPointer(ctx, builder, elem_ty, elem_count);
+
+    var abi_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer abi_args.deinit();
+    var owned_heap_args = std.array_list.Managed(ValueRef).init(ctx.allocator);
+    defer owned_heap_args.deinit();
+    try abi_args.append(result_ptr);
+    try appendKnownArrayProcedureCallArgs(ctx, builder, &abi_args, &owned_heap_args, actuals, proc_sig);
+
+    const slot_ptr = try memory.emitComponentStoragePtr(ctx, builder, .{
+        .base = comp.base,
+        .name = comp.name,
+        .args = &.{},
+        .has_parens = false,
+    });
+    const fn_ptr_name = try ctx.nextTemp();
+    try builder.load(fn_ptr_name, .ptr, slot_ptr);
+    try builder.callIndirectTyped(null, .void, fn_ptr_name, abi_args.items);
+    try emitOwnedHeapArgFrees(ctx, builder, owned_heap_args.items);
+
+    return try validatedArrayActual(.{
+        .base_ptr = result_ptr,
+        .elem_ty = elem_ty,
+        .extents = extents,
+        .multipliers = try emitContiguousMultipliers(ctx, builder, extents),
+        .address_scale = i64Const(ctx, 1),
+        .storage = .materialized_temp,
+        .owned_heap_ptr = result_ptr,
+        .contiguous = true,
+    });
+}
+
+fn appendKnownArrayProcedureCallArgs(
     ctx: *Context,
     builder: anytype,
     abi_args: *std.array_list.Managed(ValueRef),
@@ -409,15 +465,95 @@ fn emitKnownArrayFunctionArgPointer(
 
 fn materializeKnownArrayResultExtents(
     ctx: *Context,
+    builder: anytype,
     sig: ast.sema.KnownProcedureSig,
+    args: []*Expr,
 ) !?[]ValueRef {
     if (sig.result_shape_signature.len == 0) return null;
     const extents = try ctx.allocator.alloc(ValueRef, sig.result_shape_signature.len);
     for (sig.result_shape_signature, 0..) |shape, idx| {
-        const parsed = std.fmt.parseInt(i64, shape, 10) catch return null;
-        extents[idx] = i64Const(ctx, parsed);
+        if (std.fmt.parseInt(i64, shape, 10)) |parsed| {
+            extents[idx] = i64Const(ctx, parsed);
+            continue;
+        } else |_| {}
+
+        const size_ref = parseSizeShapeRef(shape) orelse return null;
+        const actual_idx = procedureArgIndex(sig, size_ref.name) orelse return null;
+        if (actual_idx >= args.len) return null;
+        extents[idx] = try emitKnownActualDimExtent(ctx, builder, args[actual_idx], size_ref.dim_index);
     }
     return extents;
+}
+
+const SizeShapeRef = struct {
+    name: []const u8,
+    dim_index: usize,
+};
+
+fn parseSizeShapeRef(shape: []const u8) ?SizeShapeRef {
+    const trimmed = std.mem.trim(u8, shape, " \t");
+    if (!std.ascii.startsWithIgnoreCase(trimmed, "size(") or trimmed.len < 8) return null;
+    if (trimmed[trimmed.len - 1] != ')') return null;
+    const inner = trimmed[5 .. trimmed.len - 1];
+    const comma = std.mem.lastIndexOfScalar(u8, inner, ',') orelse return null;
+    const name = std.mem.trim(u8, inner[0..comma], " \t");
+    const dim_text = std.mem.trim(u8, inner[comma + 1 ..], " \t");
+    const dim = std.fmt.parseInt(usize, dim_text, 10) catch return null;
+    if (name.len == 0 or dim == 0) return null;
+    return .{ .name = name, .dim_index = dim - 1 };
+}
+
+fn procedureArgIndex(sig: ast.sema.KnownProcedureSig, name: []const u8) ?usize {
+    for (sig.args, 0..) |arg, idx| {
+        if (std.ascii.eqlIgnoreCase(arg.name, name)) return idx;
+    }
+    return null;
+}
+
+fn emitKnownActualDimExtent(
+    ctx: *Context,
+    builder: anytype,
+    expr: *Expr,
+    dim_index: usize,
+) !ValueRef {
+    const actual = (try resolveArrayActual(ctx, builder, expr)) orelse return error.UnsupportedIntrinsicType;
+    try actual.validate();
+    if (dim_index >= actual.extents.len) return error.InvalidIntrinsicCall;
+    return actual.extents[dim_index];
+}
+
+fn buildProcedureComponentArrayActuals(
+    ctx: *Context,
+    comp: ast.ComponentExpr,
+    component: context.DerivedComponentLayout,
+    proc_sig: ast.sema.KnownProcedureSig,
+) ![]*Expr {
+    const extra: usize = if (component.procedure_nopass) 0 else 1;
+    const actuals = try ctx.allocator.alloc(*Expr, comp.args.len + extra);
+    const pass_idx = if (component.procedure_nopass) null else procedureComponentPassArgIndex(proc_sig, component.procedure_pass_name);
+    var actual_idx: usize = 0;
+    var comp_idx: usize = 0;
+    while (actual_idx < actuals.len) : (actual_idx += 1) {
+        if (pass_idx != null and actual_idx == pass_idx.?) {
+            actuals[actual_idx] = comp.base;
+            continue;
+        }
+        actuals[actual_idx] = comp.args[comp_idx];
+        comp_idx += 1;
+    }
+    return actuals;
+}
+
+fn procedureComponentPassArgIndex(
+    sig: ast.sema.KnownProcedureSig,
+    pass_name: ?[]const u8,
+) ?usize {
+    if (sig.args.len == 0) return null;
+    const target = pass_name orelse return 0;
+    for (sig.args, 0..) |arg, idx| {
+        if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
+    }
+    return null;
 }
 
 fn storageIRTypeForProcedureResult(ctx: *Context, spec: ast.TypeSpec) IRType {
@@ -448,6 +584,22 @@ pub fn resolveArrayActual(ctx: *Context, builder: anytype, expr: *Expr) anyerror
         return try validatedArrayActual(actual);
     }
     return null;
+}
+
+pub fn shapeSubjectExtents(ctx: *Context, builder: anytype, expr_node: *Expr) !?[]ValueRef {
+    const actual = switch (expr_node.*) {
+        .component => |comp| blk: {
+            if (!comp.has_parens) {
+                break :blk (try analyzeAddressableArrayActual(ctx, builder, expr_node)) orelse return null;
+            }
+            const base_name = ctx.derivedTypeNameForExpr(comp.base) orelse return null;
+            const component = ctx.lookupDerivedComponentLayout(base_name, comp.name) orelse return null;
+            break :blk (try analyzeKnownArrayProcedureComponentActual(ctx, builder, comp, component)) orelse return null;
+        },
+        else => (try analyzeAddressableArrayActual(ctx, builder, expr_node)) orelse return null,
+    };
+    try actual.validate();
+    return actual.extents;
 }
 
 fn analyzeStaticZeroSizedArrayConstructorActual(

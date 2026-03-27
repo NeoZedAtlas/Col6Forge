@@ -335,7 +335,6 @@ fn emitProcedureComponentCall(
 ) !ValueRef {
     const proc_sig = component.procedure_sig orelse return error.UnknownSymbol;
     if (proc_sig.kind != .function) return error.InvalidExpression;
-    if (proc_sig.result_rank != 0) return error.UnsupportedArrayActual;
 
     const actuals = try buildProcedureComponentActuals(ctx, comp, component, proc_sig);
     defer ctx.allocator.free(actuals);
@@ -357,7 +356,7 @@ fn emitProcedureComponentCall(
         return .{ .name = ptr.name, .ty = .ptr, .is_ptr = false };
     }
 
-    const ret_ty: ir.IRType = if (proc_sig.is_pointer)
+    const ret_ty: ir.IRType = if (proc_sig.is_pointer or proc_sig.result_rank != 0 or proc_sig.result_allocatable)
         .ptr
     else if (result_spec.lowered_kind == .derived)
         .ptr

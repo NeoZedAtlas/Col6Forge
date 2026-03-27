@@ -70,6 +70,7 @@ const emitIntrinsicNint = numeric.emitIntrinsicNint;
 const emitIntrinsicRemainder = numeric.emitIntrinsicRemainder;
 const emitIntrinsicConjg = numeric.emitIntrinsicConjg;
 const emitIntrinsicAny = arrays.emitIntrinsicAny;
+const emitIntrinsicAll = arrays.emitIntrinsicAll;
 const emitIntrinsicSum = arrays.emitIntrinsicSum;
 const emitIntrinsicSize = arrays.emitIntrinsicSize;
 const emitIntrinsicAllocated = arrays.emitIntrinsicAllocated;
@@ -159,6 +160,7 @@ const IntrinsicTag = enum {
     atan2,
     datan2,
     any,
+    all,
     sum_,
     internal_literal_substring,
     allocated,
@@ -260,6 +262,7 @@ const intrinsic_tag_map = std.StaticStringMap(IntrinsicTag).initComptime(.{
     .{ "atan2", .atan2 },
     .{ "datan2", .datan2 },
     .{ "any", .any },
+    .{ "all", .all },
     .{ "sum", .sum_ },
     .{ "__col6forge_substring", .internal_literal_substring },
     .{ "allocated", .allocated },
@@ -392,6 +395,7 @@ pub fn emitIntrinsicCall(ctx: *Context, builder: anytype, name: []const u8, args
         .atan2 => return emitAtan2(ctx, builder, args),
         .datan2 => return emitDoubleBinaryLibm(ctx, builder, "atan2", args),
         .any => return emitIntrinsicAny(ctx, builder, args),
+        .all => return emitIntrinsicAll(ctx, builder, args),
         .sum_ => return emitIntrinsicSum(ctx, builder, args),
         .internal_literal_substring => return emitIntrinsicInternalLiteralSubstring(ctx, builder, args),
         .allocated => return emitIntrinsicAllocated(args),

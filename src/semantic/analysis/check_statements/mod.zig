@@ -201,13 +201,19 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
         .write => |write| {
             try expr_semantics.checkExpr(self, write.unit, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
             if (write.rec) |rec| try expr_semantics.checkExpr(self, rec, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
-            for (write.args) |arg| try expr_semantics.checkExpr(self, arg, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
+            for (write.args) |arg| {
+                try expr_semantics.checkExpr(self, arg, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
+                try rejectProcedurePointerComponentIo(self, arg);
+            }
             if (write.iostat) |io| try expr_semantics.checkExpr(self, io, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
         },
         .read => |read| {
             try expr_semantics.checkExpr(self, read.unit, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
             if (read.rec) |rec| try expr_semantics.checkExpr(self, rec, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
-            for (read.args) |arg| try expr_semantics.checkExpr(self, arg, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
+            for (read.args) |arg| {
+                try expr_semantics.checkExpr(self, arg, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
+                try rejectProcedurePointerComponentIo(self, arg);
+            }
             if (read.iostat) |io| try expr_semantics.checkExpr(self, io, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible });
         },
         .rewind => |rewind| try expr_semantics.checkExpr(self, rewind.unit, .{ .dummyArgTypeCompatible = dummyArgTypeCompatible }),
@@ -410,4 +416,15 @@ fn emitExprConstraint(self: *context.Context, expr_node: *ast.Expr, message: []c
         source.text,
     );
     return error.AssignmentTypeMismatch;
+}
+
+fn rejectProcedurePointerComponentIo(self: *context.Context, expr_node: *ast.Expr) CheckError!void {
+    const spec = resolve_expr.exprTypeSpec(self, expr_node) catch return;
+    if (spec.lowered_kind != .derived) return;
+    const derived_name = spec.derived_type_name orelse return;
+    const derived = resolve_symbols.lookupDerivedType(self, derived_name) orelse return;
+    for (derived.components) |component| {
+        if (!component.procedure or !component.pointer) continue;
+        return emitExprConstraint(self, expr_node, "cannot have procedure pointer components");
+    }
 }

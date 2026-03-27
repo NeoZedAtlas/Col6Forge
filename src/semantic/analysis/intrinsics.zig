@@ -11,6 +11,7 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "ACHAR", Arity{ .min = 1, .max = 1 } },
     .{ "AIMAG", Arity{ .min = 1, .max = 1 } },
     .{ "AINT", Arity{ .min = 1, .max = 1 } },
+    .{ "ALL", Arity{ .min = 1, .max = 2 } },
     .{ "ALLOCATED", Arity{ .min = 1, .max = 1 } },
     .{ "ALOG", Arity{ .min = 1, .max = 1 } },
     .{ "ALOG10", Arity{ .min = 1, .max = 1 } },
@@ -81,6 +82,7 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "ISIGN", Arity{ .min = 2, .max = 2 } },
     .{ "KIND", Arity{ .min = 1, .max = 1 } },
     .{ "LEN", Arity{ .min = 1, .max = 1 } },
+    .{ "LBOUND", Arity{ .min = 1, .max = 2 } },
     .{ "LOGICAL", Arity{ .min = 1, .max = 2 } },
     .{ "TRIM", Arity{ .min = 1, .max = 1 } },
     .{ "LOG", Arity{ .min = 1, .max = 1 } },
@@ -96,6 +98,7 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "RAND", Arity{ .min = 0, .max = 1 } },
     .{ "REAL", Arity{ .min = 1, .max = 2 } },
     .{ "RESHAPE", Arity{ .min = 2, .max = 4 } },
+    .{ "SHAPE", Arity{ .min = 1, .max = 1 } },
     .{ "SIZE", Arity{ .min = 1, .max = 2 } },
     .{ "SIGN", Arity{ .min = 2, .max = 2 } },
     .{ "SIN", Arity{ .min = 1, .max = 1 } },
@@ -105,6 +108,7 @@ const IntrinsicArityMap = std.StaticStringMap(Arity).initComptime(.{
     .{ "SUM", Arity{ .min = 1, .max = 1 } },
     .{ "TAN", Arity{ .min = 1, .max = 1 } },
     .{ "TANH", Arity{ .min = 1, .max = 1 } },
+    .{ "UBOUND", Arity{ .min = 1, .max = 2 } },
 });
 
 pub fn arity(name: []const u8) ?Arity {
@@ -124,7 +128,11 @@ test "intrinsic lookup is case-insensitive" {
     const testing = std.testing;
     try testing.expect(isIntrinsicName("atan2"));
     try testing.expect(isIntrinsicName("DaTaN2"));
+    try testing.expect(isIntrinsicName("all"));
+    try testing.expect(isIntrinsicName("shape"));
     try testing.expectEqual(@as(?Arity, .{ .min = 2, .max = 2 }), arity("atan2"));
+    try testing.expectEqual(@as(?Arity, .{ .min = 1, .max = 2 }), arity("all"));
+    try testing.expectEqual(@as(?Arity, .{ .min = 1, .max = 1 }), arity("shape"));
     try testing.expectEqual(@as(?Arity, .{ .min = 1, .max = 2 }), arity("real"));
     try testing.expectEqual(@as(?Arity, .{ .min = 0, .max = 1 }), arity("rand"));
     try testing.expectEqual(@as(?Arity, null), arity("not_an_intrinsic"));

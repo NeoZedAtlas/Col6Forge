@@ -437,6 +437,11 @@ fn validateDerivedTypeDef(self: *context.Context, derived: ast.DerivedTypeDef) !
         if (first_error == null) first_error = err;
     }
 
+    if (validateDerivedProcedureComponents(self, derived)) |err| {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_error == null) first_error = err;
+    }
+
     for (derived.bindings, 0..) |binding, binding_idx| {
         if (validateDerivedBinding(self, derived, binding, binding_idx)) |err| {
             if (!self.usesExplicitDiagnosticBag()) return err;
@@ -456,6 +461,153 @@ fn validateDerivedTypeDef(self: *context.Context, derived: ast.DerivedTypeDef) !
     }
 
     if (first_error) |err| return err;
+}
+
+fn validateDerivedProcedureComponents(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+) ?anyerror {
+    var first_error: ?anyerror = null;
+
+    for (derived.procedure_components, 0..) |procedure_decl, component_idx| {
+        const component_source = if (component_idx < derived.procedure_component_sources.len)
+            derived.procedure_component_sources[component_idx]
+        else
+            self.current_decl_source orelse ast.DeclSource{};
+        if (validateDerivedProcedureComponent(self, derived, procedure_decl, component_source)) |err| {
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_error == null) first_error = err;
+        }
+    }
+
+    return first_error;
+}
+
+fn validateDerivedProcedureComponent(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    procedure_decl: ast.ProcedureDecl,
+    source: ast.DeclSource,
+) ?anyerror {
+    var first_error: ?anyerror = null;
+
+    if (!procedure_decl.pointer) {
+        setSourceDiagnostic(self, source, "POINTER attribute is required for procedure pointer component");
+        if (!self.usesExplicitDiagnosticBag()) return error.UnexpectedTypeDecl;
+        first_error = error.UnexpectedTypeDecl;
+    }
+
+    for (procedure_decl.items) |item| {
+        if (item.dims.len == 0) continue;
+        setSourceDiagnostic(self, source, "must be scalar");
+        if (!self.usesExplicitDiagnosticBag()) return error.UnexpectedTypeDecl;
+        if (first_error == null) first_error = error.UnexpectedTypeDecl;
+        break;
+    }
+
+    if (validateDerivedProcedureComponentInterface(self, procedure_decl, source)) |err| {
+        if (!self.usesExplicitDiagnosticBag()) return err;
+        if (first_error == null) first_error = err;
+    }
+
+    if (!procedure_decl.nopass) {
+        if (validateDerivedProcedureComponentPassConstraints(self, derived, procedure_decl, source)) |err| {
+            if (!self.usesExplicitDiagnosticBag()) return err;
+            if (first_error == null) first_error = err;
+        }
+    }
+
+    return first_error;
+}
+
+fn validateDerivedProcedureComponentInterface(
+    self: *context.Context,
+    procedure_decl: ast.ProcedureDecl,
+    source: ast.DeclSource,
+) ?anyerror {
+    const iface_name = switch (procedure_decl.interface) {
+        .name => |name| name,
+        else => return null,
+    };
+
+    if (bindingInterfaceIsGeneric(self, iface_name)) {
+        setSourceDiagnostic(self, source, "may not be generic");
+        return error.UnexpectedTypeDecl;
+    }
+    if (bindingInterfaceIsStatementFunction(self, iface_name)) {
+        setSourceDiagnostic(self, source, "may not be a statement function");
+        return error.UnexpectedTypeDecl;
+    }
+    if (symbols_mod.isIntrinsicName(iface_name)) {
+        setSourceDiagnostic(self, source, "Intrinsic procedure");
+        return error.UnexpectedTypeDecl;
+    }
+    if (symbols_mod.lookupKnownProcedureSig(self, iface_name) == null) {
+        setSourceDiagnostic(self, source, "must be explicit");
+        return error.UnexpectedTypeDecl;
+    }
+    return null;
+}
+
+fn validateDerivedProcedureComponentPassConstraints(
+    self: *context.Context,
+    derived: ast.DerivedTypeDef,
+    procedure_decl: ast.ProcedureDecl,
+    source: ast.DeclSource,
+) ?anyerror {
+    const sig = switch (procedure_decl.interface) {
+        .name => |iface_name| symbols_mod.lookupKnownProcedureSig(self, iface_name),
+        else => null,
+    } orelse {
+        setSourceDiagnostic(self, source, "NOPASS or explicit interface required");
+        return error.UnexpectedTypeDecl;
+    };
+
+    if (sig.args.len == 0) {
+        setSourceDiagnostic(self, source, "must have at least one argument");
+        return error.UnexpectedTypeDecl;
+    }
+
+    const pass_idx: ?usize = if (procedure_decl.pass_name) |pass_name|
+        bindingPassArgIndex(sig, pass_name)
+    else
+        0;
+
+    if (pass_idx == null) {
+        const message = if (procedure_decl.pass_name) |pass_name|
+            std.fmt.allocPrint(self.arena, "has no argument '{s}'", .{pass_name}) catch "has no argument"
+        else
+            "must have at least one argument";
+        setSourceDiagnostic(self, source, message);
+        return error.UnexpectedTypeDecl;
+    }
+
+    const pass_arg = sig.args[pass_idx.?];
+    if (pass_arg.rank != 0) {
+        setSourceDiagnostic(self, source, "must be scalar");
+        return error.UnexpectedTypeDecl;
+    }
+    if (pass_arg.pointer) {
+        setSourceDiagnostic(self, source, "may not have the POINTER attribute");
+        return error.UnexpectedTypeDecl;
+    }
+    if (pass_arg.allocatable) {
+        setSourceDiagnostic(self, source, "may not be ALLOCATABLE");
+        return error.UnexpectedTypeDecl;
+    }
+    if (pass_arg.type_spec.lowered_kind != .derived or
+        pass_arg.type_spec.derived_type_name == null or
+        !std.ascii.eqlIgnoreCase(pass_arg.type_spec.derived_type_name.?, derived.name))
+    {
+        setSourceDiagnostic(self, source, "must be of the derived type");
+        return error.UnexpectedTypeDecl;
+    }
+    if (!pass_arg.type_spec.polymorphic) {
+        setSourceDiagnostic(self, source, "Non-polymorphic passed-object dummy argument");
+        return error.UnexpectedTypeDecl;
+    }
+
+    return null;
 }
 
 fn validateDerivedMemberNameCollisions(

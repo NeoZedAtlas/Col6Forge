@@ -256,7 +256,17 @@ pub const Context = struct {
     }
 
     pub fn lookupKnownProcedureSig(self: *const Context, name: []const u8) ?input.sema.KnownProcedureSig {
-        return self.known_procedure_sigs.get(name);
+        if (self.known_procedure_sigs.get(name)) |sig| return sig;
+        var match: ?input.sema.KnownProcedureSig = null;
+        var it = self.known_procedure_sigs.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const sep = std.mem.lastIndexOf(u8, key, "::") orelse continue;
+            if (!std.ascii.eqlIgnoreCase(key[sep + 2 ..], name)) continue;
+            if (match != null) return null;
+            match = entry.value_ptr.*;
+        }
+        return match;
     }
 
     pub fn deinit(self: *Context) void {

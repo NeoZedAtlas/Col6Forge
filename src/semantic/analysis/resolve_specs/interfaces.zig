@@ -431,6 +431,7 @@ fn interfaceProcedureDefinesDerivedType(proc_header: ast.InterfaceProcedure, tar
 fn interfaceProcedureImportsName(proc_header: ast.InterfaceProcedure, target_name: []const u8) bool {
     for (proc_header.decls) |decl| {
         if (decl != .import) continue;
+        if (decl.import.names.len == 0) return true;
         for (decl.import.names) |name| {
             if (std.ascii.eqlIgnoreCase(name, target_name)) return true;
         }

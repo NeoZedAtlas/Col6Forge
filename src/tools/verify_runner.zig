@@ -866,6 +866,10 @@ fn copyFileAbsolute(src_path: []const u8, dst_path: []const u8) !void {
     }
 }
 
+fn deleteFileAbsoluteIfExists(path: []const u8) void {
+    std.fs.deleteFileAbsolute(path) catch {};
+}
+
 fn buildVerifyCachePath(
     allocator: std.mem.Allocator,
     cache_dir: []const u8,
@@ -1961,6 +1965,7 @@ fn processCase(
     };
     const stdin_input_path = try findCompanionInputPath(allocator, work_dir, case.input_path);
     defer if (stdin_input_path) |path| allocator.free(path);
+    var used_cached_test_exe = false;
 
     if (options.incremental) {
         var link_cache_lock: ?*std.Thread.Mutex = null;
@@ -1972,6 +1977,7 @@ fn processCase(
         if (fileExistsAbsolute(test_exe_cache_path.?)) {
             if (copyFileAbsolute(test_exe_cache_path.?, test_exe)) {
                 need_link = false;
+                used_cached_test_exe = true;
             } else |_| {}
         }
 
@@ -2060,15 +2066,58 @@ fn processCase(
     }
 
     try cleanupFortranScratchFiles(work_dir);
-    const test_run = runProcessCaptureWithInput(
-        allocator,
-        &.{test_exe},
-        work_dir,
-        test_run_timeout,
-        stdin_input_path,
-    ) catch |err| {
-        log_state.stderr("translated run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
-        return false;
+    const test_run = blk: {
+        break :blk runProcessCaptureWithInput(
+            allocator,
+            &.{test_exe},
+            work_dir,
+            test_run_timeout,
+            stdin_input_path,
+        ) catch |err| {
+            if (err == error.InvalidExe and options.incremental and used_cached_test_exe) {
+                log_state.stderr("cached translated exe invalid, rebuilding: {s}\n", .{abs_input_path});
+                deleteFileAbsoluteIfExists(test_exe_cache_path.?);
+                deleteFileAbsoluteIfExists(test_exe);
+
+                var compile_args: std.ArrayList([]const u8) = .empty;
+                defer compile_args.deinit(allocator);
+                try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, translated_obj_path });
+                try runtime_artifacts.appendToArgs(allocator, &compile_args);
+                const rebuilt = runProcessCapture(
+                    allocator,
+                    compile_args.items,
+                    work_dir,
+                    test_run_timeout,
+                ) catch |link_err| {
+                    log_state.stderr("zig cc link failed while rebuilding translated exe: {s} ({s})\n", .{ abs_input_path, @errorName(link_err) });
+                    return false;
+                };
+                defer rebuilt.deinit(allocator);
+                if (rebuilt.timed_out) {
+                    log_state.stderr("timeout: zig cc rebuild {s}\n", .{abs_input_path});
+                    cleanupWorkDir(work_dir_rel);
+                    return false;
+                }
+                if (!isZeroExit(rebuilt.term)) {
+                    log_state.stderr("zig cc rebuild failed: {s}\n{s}\n", .{ ll_path, rebuilt.stderr });
+                    return false;
+                }
+                copyFileAbsolute(test_exe, test_exe_cache_path.?) catch {};
+                try cleanupFortranScratchFiles(work_dir);
+                break :blk runProcessCaptureWithInput(
+                    allocator,
+                    &.{test_exe},
+                    work_dir,
+                    test_run_timeout,
+                    stdin_input_path,
+                ) catch |retry_err| {
+                    log_state.stderr("translated run failed after cache rebuild: {s} ({s})\n", .{ abs_input_path, @errorName(retry_err) });
+                    return false;
+                };
+            }
+            log_state.stderr("translated run failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
+            return false;
+        };
     };
     defer test_run.deinit(allocator);
     if (test_run.timed_out) {

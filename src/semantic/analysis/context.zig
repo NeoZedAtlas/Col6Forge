@@ -27,6 +27,7 @@ pub const Context = struct {
             procedure_has_explicit_interface: bool = false,
             procedure_nopass: bool = false,
             procedure_pass_name: ?[]const u8 = null,
+            interface_name: ?[]const u8 = null,
         };
 
         pub const BindingInfo = struct {

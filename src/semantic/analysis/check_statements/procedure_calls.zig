@@ -124,6 +124,12 @@ pub fn checkTypeBoundProcedureComponent(
         else
             emitProcedureActualDiagnostic(self, passed_object, error.InvalidSubscript, "should be a FUNCTION");
     };
+    if (self.unit.pure and !sig.pure) {
+        return if (is_call_stmt)
+            emitProcedureActualDiagnostic(self, passed_object, error.InvalidArgumentCount, "is not PURE")
+        else
+            emitProcedureActualDiagnostic(self, passed_object, error.InvalidSubscript, "Reference to impure function");
+    }
     if (is_call_stmt and sig.kind != .subroutine) {
         return emitProcedureActualDiagnostic(self, passed_object, error.InvalidArgumentCount, "should be a SUBROUTINE");
     }
@@ -162,13 +168,21 @@ pub fn checkProcedureComponent(
     is_call_stmt: bool,
     comptime deps: anytype,
 ) CheckError!void {
-    const sig = component.procedure_sig;
+    const sig = procedureComponentSig(self, component);
     const procedure_kind = if (sig) |resolved_sig| resolved_sig.kind else component.procedure_kind orelse {
         return if (is_call_stmt)
             emitProcedureActualDiagnostic(self, passed_object, error.InvalidArgumentCount, "should be a SUBROUTINE")
         else
             emitProcedureActualDiagnostic(self, passed_object, error.InvalidSubscript, "should be a FUNCTION");
     };
+    if (sig) |resolved_sig| {
+        if (self.unit.pure and !resolved_sig.pure) {
+            return if (is_call_stmt)
+                emitProcedureActualDiagnostic(self, passed_object, error.InvalidArgumentCount, "is not PURE")
+            else
+                emitProcedureActualDiagnostic(self, passed_object, error.InvalidSubscript, "Reference to impure function");
+        }
+    }
     if (is_call_stmt and procedure_kind != .subroutine) {
         return emitProcedureActualDiagnostic(self, passed_object, error.InvalidArgumentCount, "should be a SUBROUTINE");
     }
@@ -231,11 +245,17 @@ pub fn checkProcedurePointerAssignmentCompatibility(
     while (idx < count) : (idx += 1) {
         const expected = target_sig.args[idx];
         const actual = value_sig.args[idx];
+        if (expected.is_procedure != actual.is_procedure) {
+            return emitProcedureActualDiagnostic(self, value_expr, error.InvalidArgumentCount, "Interface mismatch in procedure pointer assignment");
+        }
         if (expected.optional != actual.optional) {
-            return emitProcedureActualDiagnostic(self, value_expr, error.InvalidArgumentCount, "OPTIONAL mismatch in argument");
+            return emitProcedureActualDiagnostic(self, value_expr, error.InvalidArgumentCount, "Interface mismatch in procedure pointer assignment");
         }
         if (expected.intent != null and actual.intent != null and expected.intent.? != actual.intent.?) {
-            return emitProcedureActualDiagnostic(self, value_expr, error.InvalidArgumentCount, "INTENT mismatch in argument");
+            return emitProcedureActualDiagnostic(self, value_expr, error.InvalidArgumentCount, "Interface mismatch in procedure pointer assignment");
+        }
+        if (!expected.is_procedure and procedureDummyDataArgMismatchMessage(self, expected, actual, deps) != null) {
+            return emitProcedureActualDiagnostic(self, value_expr, error.InvalidArgumentCount, "Interface mismatch in procedure pointer assignment");
         }
     }
     if (target_sig.result_rank != value_sig.result_rank) {
@@ -848,7 +868,7 @@ fn procedurePointerExprSig(
             const derived_name = base_spec.derived_type_name orelse break :blk null;
             const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse break :blk null;
             if (!component.procedure) break :blk null;
-            if (component.procedure_sig) |sig| break :blk sig;
+            if (procedureComponentSig(self, component)) |sig| break :blk sig;
             const kind = component.procedure_kind orelse break :blk null;
             break :blk .{
                 .kind = kind,
@@ -859,6 +879,14 @@ fn procedurePointerExprSig(
         },
         else => null,
     };
+}
+
+fn procedureComponentSig(
+    self: *context.Context,
+    component: context.Context.DerivedTypeInfo.ComponentInfo,
+) ?context.Context.ProcedureSig {
+    return component.procedure_sig orelse
+        (if (component.interface_name) |iface_name| resolve_symbols.lookupKnownProcedureSig(self, iface_name) else null);
 }
 
 fn checkDataActualArgCompatibility(
@@ -1002,6 +1030,11 @@ fn procedureDummyDataArgMismatchMessage(
     if (formal.pointer != actual.pointer) return "Type mismatch in argument";
     if (formal.allocatable != actual.allocatable) return "Type mismatch in argument";
     if (formal.type_spec.polymorphic != actual.type_spec.polymorphic) return "Type mismatch in argument";
+    if (formal.type_spec.lowered_kind == .derived or actual.type_spec.lowered_kind == .derived) {
+        if (formal.type_spec.lowered_kind != actual.type_spec.lowered_kind) return "Type mismatch in argument";
+        if (formal.type_spec.derived_type_name == null or actual.type_spec.derived_type_name == null) return "Type mismatch in argument";
+        if (!std.ascii.eqlIgnoreCase(formal.type_spec.derived_type_name.?, actual.type_spec.derived_type_name.?)) return "Type mismatch in argument";
+    }
     if (!deps.dummyArgTypeCompatible(self, formal.type_spec, actual.type_spec)) return "Type mismatch in argument";
     return null;
 }

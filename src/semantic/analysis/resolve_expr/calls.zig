@@ -217,7 +217,7 @@ pub fn resolveComponentExpr(
                 return;
             }
             try validateProcedureComponentCall(self, comp.base, component, comp.args, deps);
-            try deps.cacheExprType(self, expr_node, try procedureComponentResultTypeSpec(component));
+            try deps.cacheExprType(self, expr_node, try procedureComponentResultTypeSpec(self, component));
             return;
         }
         try validateComponentArgs(self, component.dims, comp.args, deps);
@@ -256,7 +256,7 @@ pub fn exprRankForComponent(
     const derived_name = base_spec.derived_type_name orelse return 0;
     const component = symbols_mod.lookupDerivedComponent(self, derived_name, comp.name) orelse return 0;
     if (component.procedure and comp.has_parens) {
-        const sig = component.procedure_sig orelse return 0;
+        const sig = procedureComponentSig(self, component) orelse return 0;
         return sig.result_rank;
     }
     return if (comp.args.len == 0) component.dims.len else 0;
@@ -310,7 +310,7 @@ pub fn exprTypeSpecForComponent(
     const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
     try ensureResolvedDerivedTypeForComponentBase(self, derived_name, comp.base);
     if (symbols_mod.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
-        if (component.procedure and comp.has_parens) return procedureComponentResultTypeSpec(component);
+        if (component.procedure and comp.has_parens) return procedureComponentResultTypeSpec(self, component);
         return component.type_spec;
     }
     const binding = symbols_mod.lookupDerivedBinding(self, derived_name, comp.name) orelse return error.InvalidSubscript;
@@ -652,7 +652,7 @@ fn validateProcedureComponentCall(
     args: []*ast.Expr,
     comptime deps: anytype,
 ) ResolveError!void {
-    const sig = component.procedure_sig;
+    const sig = procedureComponentSig(self, component);
     const procedure_kind = if (sig) |resolved_sig| resolved_sig.kind else component.procedure_kind orelse return error.InvalidSubscript;
     if (procedure_kind != .function) return error.InvalidSubscript;
     if (!component.procedure_has_explicit_interface) return;
@@ -725,10 +725,19 @@ fn typeBoundProcedureResultTypeSpec(
     return symbols_mod.lookupKnownFunctionResolvedSpec(self, result_name) orelse return error.InvalidSubscript;
 }
 
+fn procedureComponentSig(
+    self: *context.Context,
+    component: context.Context.DerivedTypeInfo.ComponentInfo,
+) ?context.Context.ProcedureSig {
+    return component.procedure_sig orelse
+        (if (component.interface_name) |iface_name| symbols_mod.lookupKnownProcedureSig(self, iface_name) else null);
+}
+
 fn procedureComponentResultTypeSpec(
+    self: *context.Context,
     component: context.Context.DerivedTypeInfo.ComponentInfo,
 ) ResolveError!symbols.TypeSpec {
-    const sig = component.procedure_sig orelse return error.InvalidSubscript;
+    const sig = procedureComponentSig(self, component) orelse return error.InvalidSubscript;
     if (sig.kind != .function) return error.InvalidSubscript;
     return sig.result_type_spec orelse component.type_spec;
 }

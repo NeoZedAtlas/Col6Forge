@@ -304,11 +304,17 @@ fn lookupKnownProcedureSigCaseInsensitive(
     known_procedure_sigs: *const std.StringHashMap(context.Context.ProcedureSig),
     name: []const u8,
 ) ?context.Context.ProcedureSig {
+    var qualified_match: ?context.Context.ProcedureSig = null;
     var it = known_procedure_sigs.iterator();
     while (it.next()) |entry| {
-        if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) return entry.value_ptr.*;
+        const key = entry.key_ptr.*;
+        if (std.ascii.eqlIgnoreCase(key, name)) return entry.value_ptr.*;
+        const sep = std.mem.lastIndexOf(u8, key, "::") orelse continue;
+        if (!std.ascii.eqlIgnoreCase(key[sep + 2 ..], name)) continue;
+        if (qualified_match != null) return null;
+        qualified_match = entry.value_ptr.*;
     }
-    return null;
+    return qualified_match;
 }
 
 pub fn interfaceProcedureResultTypeSpec(unit: ast.ProgramUnit, proc_header: ast.InterfaceProcedure) ?symbols.TypeSpec {

@@ -375,7 +375,8 @@ pub fn lookupKnownFunctionTypeSpec(self: *context.Context, name: []const u8) ?Ty
         return cached;
     }
     const resolved = lookupQualifiedKnownFunctionTypeSpec(self, name) orelse
-        getLowercaseMapValue(TypeSpec, self.known_function_type_specs, name);
+        getLowercaseMapValue(TypeSpec, self.known_function_type_specs, name) orelse
+        lookupVisibleQualifiedKnownFunctionTypeSpec(self, name);
     putKnownFunctionTypeSpecCache(self, name, resolved);
     return resolved;
 }
@@ -385,7 +386,8 @@ pub fn lookupKnownProcedureSig(self: *context.Context, name: []const u8) ?contex
         return cached;
     }
     const resolved = lookupQualifiedKnownProcedureSig(self, name) orelse
-        getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, name);
+        getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, name) orelse
+        lookupVisibleQualifiedKnownProcedureSig(self, name);
     putKnownProcedureSigCache(self, name, resolved);
     return resolved;
 }
@@ -400,6 +402,32 @@ fn lookupQualifiedKnownProcedureSig(self: *context.Context, name: []const u8) ?c
     const owner_name = lexicalProcedureLookupOwner(self) orelse return null;
     const qualified = std.fmt.allocPrint(self.arena, "{s}::{s}", .{ owner_name, name }) catch return null;
     return getLowercaseMapValue(context.Context.ProcedureSig, self.known_procedure_sigs, qualified);
+}
+
+fn lookupVisibleQualifiedKnownFunctionTypeSpec(self: *context.Context, name: []const u8) ?TypeSpec {
+    var match: ?TypeSpec = null;
+    var it = self.known_function_type_specs.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const sep = std.mem.lastIndexOf(u8, key, "::") orelse continue;
+        if (!std.ascii.eqlIgnoreCase(key[sep + 2 ..], name)) continue;
+        if (match != null) return null;
+        match = entry.value_ptr.*;
+    }
+    return match;
+}
+
+fn lookupVisibleQualifiedKnownProcedureSig(self: *context.Context, name: []const u8) ?context.Context.ProcedureSig {
+    var match: ?context.Context.ProcedureSig = null;
+    var it = self.known_procedure_sigs.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const sep = std.mem.lastIndexOf(u8, key, "::") orelse continue;
+        if (!std.ascii.eqlIgnoreCase(key[sep + 2 ..], name)) continue;
+        if (match != null) return null;
+        match = entry.value_ptr.*;
+    }
+    return match;
 }
 
 fn lexicalProcedureLookupOwner(self: *context.Context) ?[]const u8 {
