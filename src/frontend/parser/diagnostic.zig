@@ -63,7 +63,8 @@ pub const Bag = struct {
         notes: []const common_diag.DiagnosticMessage,
         helps: []const common_diag.DiagnosticMessage,
     ) void {
-        const owned = self.makeOwned(line, column, code, message, line_text, "", notes, helps, &.{}) catch return;
+        const refined_code = refineParseCode(code, message, line_text);
+        const owned = self.makeOwned(line, column, refined_code, message, line_text, "", notes, helps, &.{}) catch return;
         self.items.append(owned) catch {};
     }
 
@@ -79,7 +80,8 @@ pub const Bag = struct {
         helps: []const common_diag.DiagnosticMessage,
         secondary_spans: []const common_diag.DiagnosticSpan,
     ) void {
-        const owned = self.makeOwned(line, column, code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
+        const refined_code = refineParseCode(code, message, line_text);
+        const owned = self.makeOwned(line, column, refined_code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
         self.items.append(owned) catch {};
     }
 
@@ -247,7 +249,8 @@ pub fn has() bool {
 }
 
 pub fn set(line: usize, column: usize, code: []const u8, message: []const u8, line_text: []const u8) void {
-    const next = compat.makeStorage(line, column, code, message, line_text) catch return;
+    const refined_code = refineParseCode(code, message, line_text);
+    const next = compat.makeStorage(line, column, refined_code, message, line_text) catch return;
     storage.clear();
     storage = next;
     has_diag = true;
@@ -312,6 +315,72 @@ pub fn errorInfo(err: anyerror) catalog.ErrorInfo {
     return catalog.parserInfoFor(err);
 }
 
+fn refineParseCode(code: []const u8, message: []const u8, line_text: []const u8) []const u8 {
+    if (!std.mem.eql(u8, code, catalog.parser.unexpected_token.code)) return code;
+    if (isOperatorDeclLine(line_text, message)) return catalog.parser.unexpected_token_operator_decl.code;
+    if (isProcedureHeadLine(line_text)) return catalog.parser.unexpected_token_proc_head.code;
+    if (isComponentDeclLine(line_text, message)) return catalog.parser.unexpected_token_component_decl.code;
+    if (isDeclarationHeadLine(line_text)) return catalog.parser.unexpected_token_decl_head.code;
+    return catalog.parser.unexpected_token_stmt_recovery.code;
+}
+
+fn isDeclarationHeadLine(line_text: []const u8) bool {
+    return containsDoubleColon(line_text) or
+        startsWithWord(line_text, "integer") or
+        startsWithWord(line_text, "real") or
+        startsWithWord(line_text, "logical") or
+        startsWithWord(line_text, "character") or
+        startsWithWord(line_text, "complex") or
+        startsWithWord(line_text, "double precision") or
+        startsWithWord(line_text, "type") or
+        startsWithWord(line_text, "class") or
+        startsWithWord(line_text, "parameter") or
+        startsWithWord(line_text, "common") or
+        startsWithWord(line_text, "equivalence") or
+        startsWithWord(line_text, "save") or
+        startsWithWord(line_text, "data") or
+        startsWithWord(line_text, "namelist") or
+        startsWithWord(line_text, "external") or
+        startsWithWord(line_text, "intrinsic") or
+        startsWithWord(line_text, "implicit");
+}
+
+fn isProcedureHeadLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "program") or
+        startsWithWord(line_text, "subroutine") or
+        startsWithWord(line_text, "function") or
+        startsWithWord(line_text, "recursive") or
+        startsWithWord(line_text, "pure") or
+        startsWithWord(line_text, "elemental") or
+        startsWithWord(line_text, "module procedure") or
+        startsWithWord(line_text, "entry");
+}
+
+fn isOperatorDeclLine(line_text: []const u8, message: []const u8) bool {
+    return std.ascii.indexOfIgnoreCase(line_text, "operator(") != null or
+        std.ascii.indexOfIgnoreCase(line_text, "assignment(") != null or
+        std.ascii.indexOfIgnoreCase(message, "operator") != null or
+        std.ascii.indexOfIgnoreCase(message, "assignment") != null;
+}
+
+fn isComponentDeclLine(line_text: []const u8, message: []const u8) bool {
+    if (std.ascii.indexOfIgnoreCase(message, "component") != null) return true;
+    if (!startsWithWord(line_text, "procedure")) return false;
+    return std.ascii.indexOfIgnoreCase(line_text, "nopass") != null or
+        std.ascii.indexOfIgnoreCase(line_text, "pass") != null or
+        std.ascii.indexOfIgnoreCase(line_text, "deferred") != null or
+        std.ascii.indexOfIgnoreCase(line_text, "non_overridable") != null;
+}
+
+fn containsDoubleColon(line_text: []const u8) bool {
+    return std.mem.indexOf(u8, line_text, "::") != null;
+}
+
+fn startsWithWord(line_text: []const u8, keyword: []const u8) bool {
+    const trimmed = std.mem.trimLeft(u8, line_text, " \t");
+    return std.ascii.startsWithIgnoreCase(trimmed, keyword);
+}
+
 test "parser diagnostic fallback remembers last noted source" {
     const testing = std.testing;
 
@@ -321,4 +390,26 @@ test "parser diagnostic fallback remembers last noted source" {
     try testing.expectEqual(@as(usize, 4), source.line);
     try testing.expectEqual(@as(usize, 9), source.column);
     try testing.expectEqualStrings("      X =", source.line_text);
+}
+
+test "parser diagnostic refines declaration-head unexpected token" {
+    const testing = std.testing;
+
+    clear();
+    set(3, 7, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "      integer :: a(");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.unexpected_token_decl_head.code, diag.code);
+}
+
+test "parser diagnostic refines procedure-head unexpected token" {
+    const testing = std.testing;
+
+    clear();
+    set(4, 7, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "      recursive function f(x");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.unexpected_token_proc_head.code, diag.code);
 }

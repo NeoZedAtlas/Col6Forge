@@ -1,7 +1,7 @@
-error[CF3110]: Type mismatch in function result
+error[CF3141]: Type mismatch in function result
   --> tests/diagnostic_golden/semantic_known_result_type_mismatch.f90:11:5
    = stage: semantic
-   = help: see docs/errors.md#CF3110
+   = help: see docs/errors.md#CF3141
    |
 11 |     real function f(x)
    |     ^ function result type conflicts here

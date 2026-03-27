@@ -118,6 +118,31 @@ Each diagnostic is identified by a stable `CFxxxx` code:
 - Stage: parser
 - Default message: EQUIVALENCE group must contain at least two designators
 
+## CF2017
+
+- Stage: parser
+- Default message: unexpected token in declaration head
+
+## CF2018
+
+- Stage: parser
+- Default message: unexpected token in procedure head
+
+## CF2019
+
+- Stage: parser
+- Default message: unexpected token in operator or assignment declaration
+
+## CF2020
+
+- Stage: parser
+- Default message: unexpected token in component declaration
+
+## CF2021
+
+- Stage: parser
+- Default message: unexpected token during statement recovery
+
 ## CF2099
 
 - Stage: parser
@@ -287,6 +312,96 @@ Each diagnostic is identified by a stable `CFxxxx` code:
 
 - Stage: semantic
 - Default message: allocate-object is type incompatible with typespec
+
+## CF3134
+
+- Stage: semantic
+- Default message: CLASS(*) entity must be dummy, allocatable or pointer
+
+## CF3135
+
+- Stage: semantic
+- Default message: Explicit interface required for this procedure call
+
+## CF3136
+
+- Stage: semantic
+- Default message: procedure has an explicit interface already; Expecting END PROGRAM statement after invalid contained definition
+
+## CF3137
+
+- Stage: semantic
+- Default message: wrong number of procedure arguments
+
+## CF3138
+
+- Stage: semantic
+- Default message: procedure argument rank mismatch
+
+## CF3139
+
+- Stage: semantic
+- Default message: procedure argument type mismatch
+
+## CF3140
+
+- Stage: semantic
+- Default message: procedure actual kind mismatch
+
+## CF3141
+
+- Stage: semantic
+- Default message: function result type mismatch
+
+## CF3142
+
+- Stage: semantic
+- Default message: function result rank mismatch
+
+## CF3143
+
+- Stage: semantic
+- Default message: function result characteristic mismatch
+
+## CF3144
+
+- Stage: semantic
+- Default message: dummy procedure interface mismatch
+
+## CF3145
+
+- Stage: semantic
+- Default message: invalid intrinsic keyword argument
+
+## CF3146
+
+- Stage: semantic
+- Default message: actual argument does not provide enough elements
+
+## CF3147
+
+- Stage: semantic
+- Default message: array subscript count mismatch
+
+## CF3148
+
+- Stage: semantic
+- Default message: array subscript must be INTEGER
+
+## CF3149
+
+- Stage: semantic
+- Default message: invalid array section or triplet subscript
+
+## CF3150
+
+- Stage: semantic
+- Default message: object is not subscriptable in this context
+
+## CF3151
+
+- Stage: semantic
+- Default message: ambiguous function or component reference in subscript context
 
 ## CF3199
 

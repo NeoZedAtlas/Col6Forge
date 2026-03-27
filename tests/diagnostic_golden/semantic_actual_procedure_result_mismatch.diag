@@ -1,7 +1,7 @@
-error[CF3110]: Type mismatch in function result
+error[CF3141]: Type mismatch in function result
   --> tests/diagnostic_golden/semantic_actual_procedure_result_mismatch.f90:14:14
    = stage: semantic
-   = help: see docs/errors.md#CF3110
+   = help: see docs/errors.md#CF3141
    |
 14 |   call outer(actual)
    |              ^ actual argument conflicts here

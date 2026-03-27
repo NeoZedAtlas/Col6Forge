@@ -40,6 +40,11 @@ pub const parser = struct {
     pub const format_expansion_too_large = ErrorInfo{ .code = "CF2014", .message = "FORMAT statement expansion exceeds parser safety limit" };
     pub const invalid_equivalence_group = ErrorInfo{ .code = "CF2015", .message = "EQUIVALENCE group must contain at least two designators" };
     pub const invalid_array_constructor = ErrorInfo{ .code = "CF2016", .message = "Syntax error in array constructor" };
+    pub const unexpected_token_decl_head = ErrorInfo{ .code = "CF2017", .message = "unexpected token in declaration head" };
+    pub const unexpected_token_proc_head = ErrorInfo{ .code = "CF2018", .message = "unexpected token in procedure head" };
+    pub const unexpected_token_operator_decl = ErrorInfo{ .code = "CF2019", .message = "unexpected token in operator or assignment declaration" };
+    pub const unexpected_token_component_decl = ErrorInfo{ .code = "CF2020", .message = "unexpected token in component declaration" };
+    pub const unexpected_token_stmt_recovery = ErrorInfo{ .code = "CF2021", .message = "unexpected token during statement recovery" };
     pub const failed_to_understand = ErrorInfo{ .code = "CF2099", .message = "parser failed to understand source" };
 };
 
@@ -80,6 +85,21 @@ pub const semantic = struct {
     pub const invalid_unlimited_polymorphic_entity = ErrorInfo{ .code = "CF3134", .message = "CLASS(*) entity must be dummy, allocatable or pointer" };
     pub const explicit_interface_required = ErrorInfo{ .code = "CF3135", .message = "Explicit interface required for this procedure call" };
     pub const has_explicit_interface = ErrorInfo{ .code = "CF3136", .message = "procedure has an explicit interface already; Expecting END PROGRAM statement after invalid contained definition" };
+    pub const invalid_argument_arity = ErrorInfo{ .code = "CF3137", .message = "wrong number of procedure arguments" };
+    pub const invalid_argument_rank = ErrorInfo{ .code = "CF3138", .message = "procedure argument rank mismatch" };
+    pub const invalid_argument_type = ErrorInfo{ .code = "CF3139", .message = "procedure argument type mismatch" };
+    pub const invalid_argument_procedure_kind = ErrorInfo{ .code = "CF3140", .message = "procedure actual kind mismatch" };
+    pub const invalid_function_result_type = ErrorInfo{ .code = "CF3141", .message = "function result type mismatch" };
+    pub const invalid_function_result_rank = ErrorInfo{ .code = "CF3142", .message = "function result rank mismatch" };
+    pub const invalid_function_result_characteristic = ErrorInfo{ .code = "CF3143", .message = "function result characteristic mismatch" };
+    pub const invalid_dummy_procedure_interface = ErrorInfo{ .code = "CF3144", .message = "dummy procedure interface mismatch" };
+    pub const invalid_intrinsic_keyword_argument = ErrorInfo{ .code = "CF3145", .message = "invalid intrinsic keyword argument" };
+    pub const invalid_actual_element_count = ErrorInfo{ .code = "CF3146", .message = "actual argument does not provide enough elements" };
+    pub const invalid_subscript_count = ErrorInfo{ .code = "CF3147", .message = "array subscript count mismatch" };
+    pub const invalid_subscript_type = ErrorInfo{ .code = "CF3148", .message = "array subscript must be INTEGER" };
+    pub const invalid_subscript_section = ErrorInfo{ .code = "CF3149", .message = "invalid array section or triplet subscript" };
+    pub const invalid_subscript_target = ErrorInfo{ .code = "CF3150", .message = "object is not subscriptable in this context" };
+    pub const ambiguous_subscript_or_component_call = ErrorInfo{ .code = "CF3151", .message = "ambiguous function or component reference in subscript context" };
     pub const generic = ErrorInfo{ .code = "CF3199", .message = "semantic analysis failed" };
 };
 
@@ -254,6 +274,11 @@ pub const doc_entries = [_]DocEntry{
     doc(parser.data_expansion_too_large, "parser"),
     doc(parser.format_expansion_too_large, "parser"),
     doc(parser.invalid_equivalence_group, "parser"),
+    doc(parser.unexpected_token_decl_head, "parser"),
+    doc(parser.unexpected_token_proc_head, "parser"),
+    doc(parser.unexpected_token_operator_decl, "parser"),
+    doc(parser.unexpected_token_component_decl, "parser"),
+    doc(parser.unexpected_token_stmt_recovery, "parser"),
     doc(parser.failed_to_understand, "parser"),
     doc(semantic.missing_unit_scope, "semantic"),
     doc(semantic.missing_scope, "semantic"),
@@ -288,6 +313,24 @@ pub const doc_entries = [_]DocEntry{
     doc(semantic.invalid_allocate_type_spec, "semantic"),
     doc(semantic.abstract_allocate_type, "semantic"),
     doc(semantic.allocate_type_incompatible, "semantic"),
+    doc(semantic.invalid_unlimited_polymorphic_entity, "semantic"),
+    doc(semantic.explicit_interface_required, "semantic"),
+    doc(semantic.has_explicit_interface, "semantic"),
+    doc(semantic.invalid_argument_arity, "semantic"),
+    doc(semantic.invalid_argument_rank, "semantic"),
+    doc(semantic.invalid_argument_type, "semantic"),
+    doc(semantic.invalid_argument_procedure_kind, "semantic"),
+    doc(semantic.invalid_function_result_type, "semantic"),
+    doc(semantic.invalid_function_result_rank, "semantic"),
+    doc(semantic.invalid_function_result_characteristic, "semantic"),
+    doc(semantic.invalid_dummy_procedure_interface, "semantic"),
+    doc(semantic.invalid_intrinsic_keyword_argument, "semantic"),
+    doc(semantic.invalid_actual_element_count, "semantic"),
+    doc(semantic.invalid_subscript_count, "semantic"),
+    doc(semantic.invalid_subscript_type, "semantic"),
+    doc(semantic.invalid_subscript_section, "semantic"),
+    doc(semantic.invalid_subscript_target, "semantic"),
+    doc(semantic.ambiguous_subscript_or_component_call, "semantic"),
     doc(semantic.generic, "semantic"),
     doc(codegen.multiple_program_units, "codegen"),
     doc(codegen.missing_semantic_unit, "codegen"),

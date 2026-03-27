@@ -1,7 +1,7 @@
-error[CF3110]: Type mismatch in argument
+error[CF3139]: Type mismatch in argument
   --> tests/diagnostic_golden/semantic_actual_type_mismatch.f90:7:12
    = stage: semantic
-   = help: see docs/errors.md#CF3110
+   = help: see docs/errors.md#CF3139
   |
 7 |   call foo(1.0)
   |            ^ actual argument conflicts here

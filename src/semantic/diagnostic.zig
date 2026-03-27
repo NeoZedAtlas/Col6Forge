@@ -1,6 +1,7 @@
 const std = @import("std");
 const common_diag = @import("../common/diagnostic.zig");
 const compat = @import("../common/compat_diagnostic_storage.zig");
+const catalog = @import("../common/error_catalog.zig");
 
 pub const SemanticDiagnostic = struct {
     line: usize,
@@ -81,7 +82,8 @@ pub const Bag = struct {
         helps: []const common_diag.DiagnosticMessage,
         secondary_spans: []const common_diag.DiagnosticSpan,
     ) void {
-        const owned = self.makeOwned(line, column, code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
+        const refined_code = refineSemanticCode(code, message);
+        const owned = self.makeOwned(line, column, refined_code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
         if (self.items.items.len != 0 and semanticDiagnosticEqual(self.items.items[self.items.items.len - 1], owned)) {
             self.freeOwned(owned);
             return;
@@ -356,7 +358,8 @@ pub fn setStructured(
     helps: []const common_diag.DiagnosticMessage,
     secondary_spans: []const common_diag.DiagnosticSpan,
 ) void {
-    const next = makeCompatStorage(line, column, code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
+    const refined_code = refineSemanticCode(code, message);
+    const next = makeCompatStorage(line, column, refined_code, message, line_text, primary_label, notes, helps, secondary_spans) catch return;
     storage.clear();
     storage = next;
     has_diag = true;
@@ -418,4 +421,111 @@ pub fn takeFallbackSource() ?FallbackSource {
 
 pub fn releaseTakenFallbackSource(_: FallbackSource) void {
     fallback_storage.clear();
+}
+
+fn refineSemanticCode(code: []const u8, message: []const u8) []const u8 {
+    if (std.mem.eql(u8, code, catalog.semantic.invalid_argument_count.code)) {
+        return refineInvalidArgumentCode(message);
+    }
+    if (std.mem.eql(u8, code, catalog.semantic.invalid_subscript.code)) {
+        return refineInvalidSubscriptCode(message);
+    }
+    return code;
+}
+
+fn refineInvalidArgumentCode(message: []const u8) []const u8 {
+    if (std.mem.indexOf(u8, message, "too few elements for dummy argument") != null) return catalog.semantic.invalid_actual_element_count.code;
+    if (std.mem.indexOf(u8, message, "wrong number of arguments") != null or
+        std.mem.indexOf(u8, message, "too many") != null or
+        std.mem.indexOf(u8, message, "too few") != null)
+    {
+        return catalog.semantic.invalid_argument_arity.code;
+    }
+    if (std.mem.indexOf(u8, message, "Rank mismatch in argument") != null) return catalog.semantic.invalid_argument_rank.code;
+    if (std.mem.indexOf(u8, message, "Type mismatch in function result") != null) return catalog.semantic.invalid_function_result_type.code;
+    if (std.mem.indexOf(u8, message, "Rank mismatch in function result") != null) return catalog.semantic.invalid_function_result_rank.code;
+    if (std.mem.indexOf(u8, message, "function result") != null and
+        (std.mem.indexOf(u8, message, "Character length mismatch") != null or
+            std.mem.indexOf(u8, message, "Shape mismatch") != null or
+            std.mem.indexOf(u8, message, "POINTER attribute mismatch") != null or
+            std.mem.indexOf(u8, message, "ALLOCATABLE attribute mismatch") != null or
+            std.mem.indexOf(u8, message, "CONTIGUOUS attribute mismatch") != null or
+            std.mem.indexOf(u8, message, "PROCEDURE POINTER mismatch") != null))
+    {
+        return catalog.semantic.invalid_function_result_characteristic.code;
+    }
+    if (std.mem.indexOf(u8, message, "actual argument is not a") != null or
+        std.mem.indexOf(u8, message, "wrong procedure kind") != null or
+        std.mem.indexOf(u8, message, "Passing global") != null)
+    {
+        return catalog.semantic.invalid_argument_procedure_kind.code;
+    }
+    if (std.mem.indexOf(u8, message, "OPTIONAL mismatch") != null or
+        std.mem.indexOf(u8, message, "INTENT mismatch") != null or
+        std.mem.indexOf(u8, message, "ASYNCHRONOUS mismatch") != null or
+        std.mem.indexOf(u8, message, "CONTIGUOUS mismatch") != null or
+        std.mem.indexOf(u8, message, "VALUE mismatch") != null or
+        std.mem.indexOf(u8, message, "VOLATILE mismatch") != null or
+        std.mem.indexOf(u8, message, "Shape mismatch in dimension") != null)
+    {
+        return catalog.semantic.invalid_dummy_procedure_interface.code;
+    }
+    if (std.mem.indexOf(u8, message, "keyword") != null) return catalog.semantic.invalid_intrinsic_keyword_argument.code;
+    if (std.mem.indexOf(u8, message, "Type mismatch in argument") != null or
+        std.mem.indexOf(u8, message, "Character length mismatch") != null)
+    {
+        return catalog.semantic.invalid_argument_type.code;
+    }
+    return codeForFallback(catalog.semantic.invalid_argument_count.code);
+}
+
+fn refineInvalidSubscriptCode(message: []const u8) []const u8 {
+    if (std.mem.indexOf(u8, message, "count") != null) return catalog.semantic.invalid_subscript_count.code;
+    if (std.mem.indexOf(u8, message, "integer") != null or std.mem.indexOf(u8, message, "INTEGER") != null) return catalog.semantic.invalid_subscript_type.code;
+    if (std.mem.indexOf(u8, message, "triplet") != null or std.mem.indexOf(u8, message, "section") != null) return catalog.semantic.invalid_subscript_section.code;
+    if (std.mem.indexOf(u8, message, "FUNCTION") != null or
+        std.mem.indexOf(u8, message, "function") != null or
+        std.mem.indexOf(u8, message, "impure function") != null)
+    {
+        return catalog.semantic.ambiguous_subscript_or_component_call.code;
+    }
+    if (std.mem.indexOf(u8, message, "subscriptable") != null) return catalog.semantic.invalid_subscript_target.code;
+    return codeForFallback(catalog.semantic.invalid_subscript.code);
+}
+
+fn codeForFallback(code: []const u8) []const u8 {
+    return code;
+}
+
+test "semantic diagnostic refines invalid argument rank mismatch" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(12, 5, catalog.semantic.invalid_argument_count.code, "Rank mismatch in argument", "      call s(a)", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_rank.code, diag.code);
+}
+
+test "semantic diagnostic refines actual element count mismatch" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(13, 5, catalog.semantic.invalid_argument_count.code, "Actual argument contains too few elements for dummy argument 'x'", "      call s(a)", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_actual_element_count.code, diag.code);
+}
+
+test "semantic diagnostic keeps fallback code for generic invalid argument count" {
+    const testing = std.testing;
+
+    clear();
+    set(8, 3, catalog.semantic.invalid_argument_count.code, catalog.semantic.invalid_argument_count.message, "      call s()");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_argument_count.code, diag.code);
 }
