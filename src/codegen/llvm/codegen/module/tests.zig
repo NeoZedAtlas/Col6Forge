@@ -1118,6 +1118,41 @@ test "emitModuleToWriter lowers character whole-array section scalar assignment 
     try testing.expect(std.mem.indexOf(u8, output, "str_loop_cond") != null);
 }
 
+test "character substring compare narrows runtime helper lengths to i32" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "      SUBROUTINE S(A)\n" ++
+        "      CHARACTER*5 A\n" ++
+        "      IF (A(1:1) .EQ. ' ') THEN\n" ++
+        "      END IF\n" ++
+        "      END\n";
+    const lines = try fixed_form.normalizeFixedForm(allocator, source);
+    defer fixed_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "char_substring_compare.f", .{});
+
+    var saw_compare_call = false;
+    var lines_it = std.mem.splitScalar(u8, buffer.items, '\n');
+    while (lines_it.next()) |line| {
+        if (std.mem.indexOf(u8, line, "call i32 @col6forge_char_compare") != null) {
+            saw_compare_call = true;
+            try testing.expect(std.mem.indexOf(u8, line, ", i64 ") == null);
+            try testing.expect(std.mem.count(u8, line, ", i32 ") >= 2);
+        }
+    }
+    try testing.expect(saw_compare_call);
+}
+
 test "emitModuleToWriter resolves mirrored prelude parameters for derived layouts used by contained procedure calls" {
     const testing = std.testing;
     const allocator = testing.allocator;

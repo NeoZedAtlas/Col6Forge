@@ -491,8 +491,10 @@ pub fn emitCharCompare(
     try lhs.validate();
     try rhs.validate();
     const compare_name = try ctx.ensureDeclRaw("col6forge_char_compare", .i32, &[_]ir.IRType{ .ptr, .i32, .ptr, .i32 }, false);
+    const lhs_len = try coerceCharacterLenToI32(ctx, builder, lhs.logical_len);
+    const rhs_len = try coerceCharacterLenToI32(ctx, builder, rhs.logical_len);
     const cmp_tmp = try ctx.nextTemp();
-    try builder.callTyped(cmp_tmp, .i32, compare_name, &.{ lhs.ptr, lhs.logical_len, rhs.ptr, rhs.logical_len });
+    try builder.callTyped(cmp_tmp, .i32, compare_name, &.{ lhs.ptr, lhs_len, rhs.ptr, rhs_len });
     const cmp_val = ValueRef{ .name = cmp_tmp, .ty = .i32, .is_ptr = false };
     const zero = ValueRef{ .name = "0", .ty = .i32, .is_ptr = false };
 
