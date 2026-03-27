@@ -329,7 +329,7 @@ const Comparator = struct {
 
             const exp_line = trimCr(exp_opt.?);
             const act_line = trimCr(act_opt.?);
-            if (!std.mem.eql(u8, exp_line, act_line)) {
+            if (!equalIgnoringPathSeparators(exp_line, act_line)) {
                 const diff = try std.fmt.allocPrint(
                     allocator,
                     "line {d} mismatch\nexpected: {s}\nactual:   {s}\n",
@@ -345,6 +345,16 @@ const Comparator = struct {
 
 fn trimCr(line: []const u8) []const u8 {
     return std.mem.trimRight(u8, line, "\r");
+}
+
+fn equalIgnoringPathSeparators(expected: []const u8, actual: []const u8) bool {
+    if (expected.len != actual.len) return false;
+    for (expected, actual) |exp_ch, act_ch| {
+        const norm_exp = if (exp_ch == '\\') '/' else exp_ch;
+        const norm_act = if (act_ch == '\\') '/' else act_ch;
+        if (norm_exp != norm_act) return false;
+    }
+    return true;
 }
 
 fn normalizeDisplayPath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
@@ -558,4 +568,18 @@ fn logProgress(log_state: *LogState, progress: *Progress, input_path: []const u8
 
 fn defaultJobs() usize {
     return 1;
+}
+
+test "diagnostic comparator ignores path separator differences" {
+    const testing = std.testing;
+    const expected =
+        "error[CF2001]: sample\n" ++
+        "  ::: tests/diagnostic_golden\\fixed_parse_continuation.f\n";
+    const actual =
+        "error[CF2001]: sample\n" ++
+        "  ::: tests/diagnostic_golden/fixed_parse_continuation.f\n";
+
+    const result = try Comparator.compareText(testing.allocator, expected, actual);
+    defer if (result.diff) |diff| testing.allocator.free(diff);
+    try testing.expect(result.ok);
 }

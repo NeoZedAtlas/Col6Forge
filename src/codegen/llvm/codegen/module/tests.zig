@@ -986,6 +986,80 @@ test "emitModuleToWriter lowers intrinsic procedure actuals through wrappers" {
     try testing.expect(std.mem.indexOf(u8, output, "ptr @__cf_intrinsic_conjg") != null);
 }
 
+test "emitModuleToWriter lowers zero-argument type-bound function calls from used modules without crashing" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module a_mod\n" ++
+        "  implicit none\n" ++
+        "  type :: a_type\n" ++
+        "    integer :: size = 1\n" ++
+        "  contains\n" ++
+        "    procedure :: sizeReturn\n" ++
+        "  end type a_type\n" ++
+        "contains\n" ++
+        "  function sizeReturn(this)\n" ++
+        "    implicit none\n" ++
+        "    class(a_type) :: this\n" ++
+        "    integer :: sizeReturn\n" ++
+        "    sizeReturn = this%size\n" ++
+        "  end function sizeReturn\n" ++
+        "end module a_mod\n" ++
+        "module b_mod\n" ++
+        "  implicit none\n" ++
+        "  type :: b_type\n" ++
+        "    integer :: size = 2\n" ++
+        "  contains\n" ++
+        "    procedure :: sizeReturn\n" ++
+        "  end type b_type\n" ++
+        "contains\n" ++
+        "  function sizeReturn(this)\n" ++
+        "    implicit none\n" ++
+        "    class(b_type) :: this\n" ++
+        "    integer :: sizeReturn\n" ++
+        "    sizeReturn = this%size\n" ++
+        "  end function sizeReturn\n" ++
+        "end module b_mod\n" ++
+        "program main\n" ++
+        "contains\n" ++
+        "  subroutine test1\n" ++
+        "    use a_mod\n" ++
+        "    use b_mod\n" ++
+        "    implicit none\n" ++
+        "    type(a_type) :: a_inst\n" ++
+        "    type(b_type) :: b_inst\n" ++
+        "    print *, a_inst%sizeReturn()\n" ++
+        "    print *, b_inst%sizeReturn()\n" ++
+        "  end subroutine test1\n" ++
+        "  subroutine test2\n" ++
+        "    use b_mod\n" ++
+        "    use a_mod\n" ++
+        "    implicit none\n" ++
+        "    type(a_type) :: a_inst\n" ++
+        "    type(b_type) :: b_inst\n" ++
+        "    print *, a_inst%sizeReturn()\n" ++
+        "    print *, b_inst%sizeReturn()\n" ++
+        "  end subroutine test2\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "typebound_zero_arg_used_module_print.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "@a_mod__sizeReturn") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "@b_mod__sizeReturn") != null);
+}
+
 test "emitModuleToWriter lowers contiguous section assignment from whole array with copy loop" {
     const testing = std.testing;
     const allocator = testing.allocator;

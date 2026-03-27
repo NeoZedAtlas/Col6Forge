@@ -141,10 +141,11 @@ pub fn buildTypeBoundProcedureActuals(
     const pass_idx = if (binding.nopass or proc_sig == null) null else bindingPassArgIndex(proc_sig.?, binding.pass_name);
     const extra: usize = if (binding.nopass) 0 else 1;
     const actuals = try ctx.allocator.alloc(*Expr, comp.args.len + extra);
+    const fallback_pass_idx: ?usize = if (!binding.nopass and pass_idx == null and actuals.len > comp.args.len) 0 else pass_idx;
     var actual_idx: usize = 0;
     var comp_idx: usize = 0;
     while (actual_idx < actuals.len) : (actual_idx += 1) {
-        if (pass_idx != null and actual_idx == pass_idx.?) {
+        if (fallback_pass_idx != null and actual_idx == fallback_pass_idx.?) {
             actuals[actual_idx] = comp.base;
             continue;
         }
