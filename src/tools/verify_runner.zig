@@ -870,6 +870,24 @@ fn deleteFileAbsoluteIfExists(path: []const u8) void {
     std.fs.deleteFileAbsolute(path) catch {};
 }
 
+fn deleteWindowsLinkSidecarsIfExists(allocator: std.mem.Allocator, exe_path: []const u8) void {
+    if (builtin.os.tag != .windows) return;
+    const ext = std.fs.path.extension(exe_path);
+    const stem = if (ext.len != 0) exe_path[0 .. exe_path.len - ext.len] else exe_path;
+    const suffixes = [_][]const u8{ ".pdb", ".lib", ".exp" };
+    for (suffixes) |suffix| {
+        const sidecar = std.fmt.allocPrint(allocator, "{s}{s}", .{ stem, suffix }) catch continue;
+        defer allocator.free(sidecar);
+        deleteFileAbsoluteIfExists(sidecar);
+    }
+}
+
+fn isWindowsLinkAccessDenied(stderr: []const u8) bool {
+    if (builtin.os.tag != .windows) return false;
+    return std.mem.indexOf(u8, stderr, "failed to link with LLD: AccessDenied") != null or
+        std.mem.indexOf(u8, stderr, "AccessDenied") != null;
+}
+
 fn buildVerifyCachePath(
     allocator: std.mem.Allocator,
     cache_dir: []const u8,
@@ -1256,6 +1274,26 @@ fn runProcessCaptureWithInput(
         .term = try child.wait(),
         .timed_out = timed_out.load(.seq_cst),
     };
+}
+
+fn runZigCcLinkWithWindowsRetry(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    cwd: []const u8,
+    timeout_ms: ?u64,
+    output_exe_path: []const u8,
+) !ProcessResult {
+    deleteFileAbsoluteIfExists(output_exe_path);
+    deleteWindowsLinkSidecarsIfExists(allocator, output_exe_path);
+
+    var first = try runProcessCapture(allocator, argv, cwd, timeout_ms);
+    if (isZeroExit(first.term) or !isWindowsLinkAccessDenied(first.stderr)) return first;
+
+    first.deinit(allocator);
+    deleteFileAbsoluteIfExists(output_exe_path);
+    deleteWindowsLinkSidecarsIfExists(allocator, output_exe_path);
+    std.Thread.sleep(200 * std.time.ns_per_ms);
+    return runProcessCapture(allocator, argv, cwd, timeout_ms);
 }
 
 fn remainingTimeoutMs(timeout_ms: u64, timer: *std.time.Timer) ?u64 {
@@ -1986,11 +2024,12 @@ fn processCase(
             defer compile_args.deinit(allocator);
             try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, translated_obj_path });
             try runtime_artifacts.appendToArgs(allocator, &compile_args);
-            const our_compile = runProcessCapture(
+            const our_compile = runZigCcLinkWithWindowsRetry(
                 allocator,
                 compile_args.items,
                 work_dir,
                 link_timeout,
+                test_exe,
             ) catch |err| {
                 log_state.stderr("zig cc link failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
                 return false;
@@ -2012,11 +2051,12 @@ fn processCase(
         defer compile_args.deinit(allocator);
         try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, ll_path });
         try runtime_artifacts.appendToArgs(allocator, &compile_args);
-        const our_compile = runProcessCapture(
+        const our_compile = runZigCcLinkWithWindowsRetry(
             allocator,
             compile_args.items,
             work_dir,
             link_timeout,
+            test_exe,
         ) catch |err| {
             log_state.stderr("zig cc link failed: {s} ({s})\n", .{ abs_input_path, @errorName(err) });
             return false;
@@ -2083,11 +2123,12 @@ fn processCase(
                 defer compile_args.deinit(allocator);
                 try compile_args.appendSlice(allocator, &.{ "zig", "cc", "-O0", "-o", test_exe, translated_obj_path });
                 try runtime_artifacts.appendToArgs(allocator, &compile_args);
-                const rebuilt = runProcessCapture(
+                const rebuilt = runZigCcLinkWithWindowsRetry(
                     allocator,
                     compile_args.items,
                     work_dir,
                     test_run_timeout,
+                    test_exe,
                 ) catch |link_err| {
                     log_state.stderr("zig cc link failed while rebuilding translated exe: {s} ({s})\n", .{ abs_input_path, @errorName(link_err) });
                     return false;

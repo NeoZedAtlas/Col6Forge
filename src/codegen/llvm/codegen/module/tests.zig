@@ -1060,6 +1060,98 @@ test "emitModuleToWriter lowers zero-argument type-bound function calls from use
     try testing.expect(std.mem.indexOf(u8, output, "@b_mod__sizeReturn") != null);
 }
 
+test "emitModuleToWriter lowers ALL(SHAPE(proc-component-call) == SHAPE(array)) through known interface metadata" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type pp\n" ++
+        "    procedure(func_template), pointer, nopass :: f => null()\n" ++
+        "  end type pp\n" ++
+        "  abstract interface\n" ++
+        "     function func_template(state) result(dstate)\n" ++
+        "       implicit none\n" ++
+        "       real, dimension(:,:), intent(in)              :: state\n" ++
+        "       real, dimension(size(state,1), size(state,2)) :: dstate\n" ++
+        "     end function func_template\n" ++
+        "  end interface\n" ++
+        "contains\n" ++
+        "  function zero_state(state) result(dstate)\n" ++
+        "    real, dimension(:,:), intent(in)              :: state\n" ++
+        "    real, dimension(size(state,1), size(state,2)) :: dstate\n" ++
+        "    dstate = 0.\n" ++
+        "  end function zero_state\n" ++
+        "end module m\n" ++
+        "program test_func_array\n" ++
+        "  use m\n" ++
+        "  implicit none\n" ++
+        "  real, dimension(4,6) :: state\n" ++
+        "  type(pp) :: func_scalar\n" ++
+        "  func_scalar%f => zero_state\n" ++
+        "  if (.not. all(shape(func_scalar%f(state)) == shape(state))) stop 1\n" ++
+        "end program test_func_array\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "proc_component_shape_all.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "@malloc") != null);
+    try testing.expect(std.mem.indexOf(u8, output, "icmp eq i64") != null);
+}
+
+test "emitModuleToWriter stores procedure component values in structure constructors" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  implicit none\n" ++
+        "  type :: rectangle\n" ++
+        "    real :: width, height\n" ++
+        "    procedure(get_area_ai), pointer :: get_area\n" ++
+        "  end type rectangle\n" ++
+        "  abstract interface\n" ++
+        "    real function get_area_ai(this)\n" ++
+        "      import :: rectangle\n" ++
+        "      class(rectangle), intent(in) :: this\n" ++
+        "    end function get_area_ai\n" ++
+        "  end interface\n" ++
+        "  type(rectangle) :: rect\n" ++
+        "  rect = rectangle(1.0, 2.0, get1)\n" ++
+        "contains\n" ++
+        "  real function get1(this)\n" ++
+        "    class(rectangle), intent(in) :: this\n" ++
+        "    get1 = this%width * this%height\n" ++
+        "  end function get1\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+    const sem_prog = try split_api.analyzeProgram(arena.allocator(), program);
+
+    var buffer = std.array_list.Managed(u8).init(allocator);
+    defer buffer.deinit();
+    var writer = buffer.writer();
+    try emitModuleToWriter(&writer, allocator, program, sem_prog, "proc_component_structure_ctor.f90", .{});
+
+    const output = buffer.items;
+    try testing.expect(std.mem.indexOf(u8, output, "store ptr @") != null);
+}
+
 test "emitModuleToWriter lowers contiguous section assignment from whole array with copy loop" {
     const testing = std.testing;
     const allocator = testing.allocator;

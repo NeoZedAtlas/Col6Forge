@@ -2098,6 +2098,101 @@ test "procedure pointer assignment rejects mismatched passed-object dummy interf
     try testing.expect(std.mem.indexOf(u8, got.message, "Interface mismatch in procedure pointer assignment") != null);
 }
 
+test "procedure pointer assignment rejects array passed-object procedure components" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m\n" ++
+        "  implicit none\n" ++
+        "  type t\n" ++
+        "    procedure(myproc), pointer, pass :: myproc\n" ++
+        "  end type t\n" ++
+        "contains\n" ++
+        "  integer function myproc(me)\n" ++
+        "    class(t), intent(in) :: me\n" ++
+        "    myproc = 42\n" ++
+        "  end function myproc\n" ++
+        "end module m\n" ++
+        "program main\n" ++
+        "  use m\n" ++
+        "  implicit none\n" ++
+        "  type(t) :: arr(2)\n" ++
+        "  arr%myproc => myproc\n" ++
+        "end program main\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    diag.clear();
+    _ = split_api.analyzeProgram(arena.allocator(), program) catch {};
+    const got = diag.take() orelse return error.TestExpectedEqual;
+    try testing.expect(std.mem.indexOf(u8, got.message, "must not have the POINTER attribute") != null);
+}
+
+test "structure constructor rejects incompatible procedure component actual" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "program p\n" ++
+        "  implicit none\n" ++
+        "  type :: rectangle\n" ++
+        "    real :: width, height\n" ++
+        "    procedure(get_area_ai), pointer :: get_area\n" ++
+        "  end type rectangle\n" ++
+        "  abstract interface\n" ++
+        "    real function get_area_ai(this)\n" ++
+        "      import :: rectangle\n" ++
+        "      class(rectangle), intent(in) :: this\n" ++
+        "    end function get_area_ai\n" ++
+        "  end interface\n" ++
+        "  type(rectangle) :: rect\n" ++
+        "  rect = rectangle(1.0, 2.0, get2)\n" ++
+        "contains\n" ++
+        "  real function get2(this)\n" ++
+        "    type(rectangle), intent(in) :: this\n" ++
+        "    get2 = 2.0 * this%width * this%height\n" ++
+        "  end function get2\n" ++
+        "end program p\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    var known_fn_types = std.StringHashMap(symbols.TypeSpec).init(arena.allocator());
+    var known_procedure_sigs = std.StringHashMap(context.Context.ProcedureSig).init(arena.allocator());
+    var known_host_parameters = std.StringHashMap(symbols.Symbol).init(arena.allocator());
+    var known_host_derived_types = std.StringHashMap(context.Context.DerivedTypeInfo).init(arena.allocator());
+    var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
+    var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+    var diag_bag = diag.Bag.init(arena.allocator());
+    defer diag_bag.deinit();
+
+    _ = @import("../split/api/mod.zig").analyzeProgramWithKnownAndOptionsAndDiagnostics(
+        arena.allocator(),
+        program,
+        &known_fn_types,
+        &known_procedure_sigs,
+        &known_host_parameters,
+        &known_host_derived_types,
+        &known_host_interface_sources,
+        &known_host_abstract_interfaces,
+        .{},
+        false,
+        &diag_bag,
+    ) catch {};
+
+    const got = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.releaseTaken(got);
+    try testing.expect(std.mem.indexOf(u8, got.message, "Type mismatch in argument") != null);
+}
+
 test "procedure component actual argument keeps imported explicit interface metadata" {
     const testing = std.testing;
     const allocator = testing.allocator;

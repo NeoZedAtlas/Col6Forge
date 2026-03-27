@@ -476,15 +476,10 @@ fn emitStructureConstructorByTypeName(
         try builder.allocaArray(object_name, .i8, layout.size);
     }
     const object_ptr = ValueRef{ .name = object_name, .ty = .ptr, .is_ptr = true };
-    var data_component_count: usize = 0;
-    for (layout.components) |component| {
-        if (!component.procedure) data_component_count += 1;
-    }
-    if (call_or_sub.args.len != data_component_count) return error.InvalidArgumentCount;
+    if (call_or_sub.args.len != layout.components.len) return error.InvalidArgumentCount;
 
     var arg_idx: usize = 0;
     for (layout.components) |component| {
-        if (component.procedure) continue;
         var component_ptr = object_ptr;
         if (component.offset != 0) {
             const gep_name = try ctx.nextTemp();
@@ -504,6 +499,12 @@ fn emitStructureConstructorComponentStore(
     component: context.DerivedComponentLayout,
     value_expr: *Expr,
 ) EmitError!void {
+    if (component.procedure) {
+        const proc_ptr = try call.emitArgPointer(ctx, builder, value_expr);
+        try builder.store(proc_ptr, component_ptr);
+        return;
+    }
+
     if (component.dims.len != 0 and !component.pointer and !component.allocatable) {
         const items = try flattenStructureConstructorArrayItems(ctx, value_expr) orelse return error.UnsupportedArrayConstructor;
         const expected_count = common.arrayElementCount(ctx.sem, component.dims) catch return error.UnsupportedArrayConstructor;

@@ -317,6 +317,10 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
                         }
                     }
                 }
+                if (structureConstructorTypeName(self, call.name, sym)) |type_name| {
+                    try checkStructureConstructorProcedureComponentActuals(self, type_name, call.args, deps);
+                    return try resolve_expr.exprType(self, expr);
+                }
                 if (resolve_symbols.lookupKnownProcedureSig(self, call.name) == null and
                     procedure_interfaces.visibleSingleTargetGenericSig(self, call.name) == null and
                     resolve_symbols.lookupKnownFunctionResolvedSpec(self, call.name) == null and
@@ -340,6 +344,48 @@ pub fn checkExprType(self: *context.Context, expr: *ast.Expr, comptime deps: any
             for (implied.items) |item| _ = try checkExprType(self, item, deps);
             return try resolve_expr.exprType(self, expr);
         },
+    }
+}
+
+fn structureConstructorTypeName(
+    self: *context.Context,
+    name: []const u8,
+    sym: symbols.Symbol,
+) ?[]const u8 {
+    const info = resolve_symbols.lookupDerivedType(self, name) orelse return null;
+    if (sym.is_intrinsic or sym.is_external or sym.dims.len != 0) return null;
+    if (resolve_symbols.lookupKnownProcedureSig(self, name) != null) return null;
+    if (sym.type_explicit and sym.loweredKind() != .derived) return null;
+    return info.name;
+}
+
+fn checkStructureConstructorProcedureComponentActuals(
+    self: *context.Context,
+    type_name: []const u8,
+    args: []*ast.Expr,
+    comptime deps: anytype,
+) CheckError!void {
+    var actual_idx: usize = 0;
+    try checkStructureConstructorProcedureComponentActualsForType(self, type_name, args, &actual_idx, deps);
+}
+
+fn checkStructureConstructorProcedureComponentActualsForType(
+    self: *context.Context,
+    type_name: []const u8,
+    args: []*ast.Expr,
+    actual_idx: *usize,
+    comptime deps: anytype,
+) CheckError!void {
+    const derived = resolve_symbols.lookupDerivedType(self, type_name) orelse return;
+    if (derived.parent_name) |parent_name| {
+        try checkStructureConstructorProcedureComponentActualsForType(self, parent_name, args, actual_idx, deps);
+    }
+    for (derived.components) |component| {
+        if (actual_idx.* >= args.len) return;
+        if (component.procedure) {
+            try procedure_calls.checkStructureConstructorProcedureComponentActual(self, component, args[actual_idx.*], deps);
+        }
+        actual_idx.* += 1;
     }
 }
 

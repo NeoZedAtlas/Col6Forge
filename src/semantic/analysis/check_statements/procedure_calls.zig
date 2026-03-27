@@ -231,6 +231,7 @@ pub fn checkProcedurePointerAssignmentCompatibility(
     value_expr: *ast.Expr,
     comptime deps: anytype,
 ) CheckError!void {
+    try rejectArrayPassedObjectProcedureComponentPointerAssignment(self, target_expr);
     const target_sig = procedurePointerExprSig(self, target_expr) orelse return;
     const value_sig = procedurePointerExprSig(self, value_expr) orelse return;
     if (target_sig.kind != value_sig.kind) {
@@ -266,6 +267,40 @@ pub fn checkProcedurePointerAssignmentCompatibility(
             return emitProcedureActualDiagnostic(self, value_expr, error.InvalidArgumentCount, "Type mismatch in function result");
         }
     }
+}
+
+pub fn checkStructureConstructorProcedureComponentActual(
+    self: *context.Context,
+    component: context.Context.DerivedTypeInfo.ComponentInfo,
+    actual_expr: *ast.Expr,
+    comptime deps: anytype,
+) CheckError!void {
+    if (!component.procedure or !component.procedure_has_explicit_interface) return;
+    const target_sig = procedureComponentSig(self, component) orelse return;
+    const actual_sig = procedurePointerExprSig(self, actual_expr) orelse
+        return emitProcedureActualDiagnostic(self, actual_expr, error.InvalidArgumentCount, "Type mismatch in argument");
+    const formal = structureConstructorProcedureFormalArg(component, target_sig);
+    try checkProcedureActualSigCompatibility(self, null, formal, actual_sig, actual_expr, deps);
+}
+
+fn rejectArrayPassedObjectProcedureComponentPointerAssignment(
+    self: *context.Context,
+    target_expr: *ast.Expr,
+) CheckError!void {
+    const comp = switch (target_expr.*) {
+        .component => |comp| comp,
+        else => return,
+    };
+    if (comp.has_parens) return;
+
+    const base_spec = resolve_expr.exprTypeSpec(self, comp.base) catch return;
+    if (base_spec.lowered_kind != .derived) return;
+    const derived_name = base_spec.derived_type_name orelse return;
+    const component = resolve_symbols.lookupDerivedComponent(self, derived_name, comp.name) orelse return;
+    if (!component.procedure or component.procedure_nopass) return;
+    if (resolve_expr.exprRank(self, comp.base) == 0) return;
+
+    return emitProcedureActualDiagnostic(self, target_expr, error.InvalidArgumentCount, "must not have the POINTER attribute");
 }
 
 pub fn countCallAltReturnArgs(args: []ast.CallArg) usize {
@@ -878,6 +913,29 @@ fn procedurePointerExprSig(
             };
         },
         else => null,
+    };
+}
+
+fn structureConstructorProcedureFormalArg(
+    component: context.Context.DerivedTypeInfo.ComponentInfo,
+    sig: context.Context.ProcedureSig,
+) context.Context.ProcedureSig.ArgSig {
+    return .{
+        .name = component.name,
+        .type_spec = component.type_spec,
+        .is_procedure = true,
+        .procedure_kind = sig.kind,
+        .procedure_has_explicit_interface = component.procedure_has_explicit_interface,
+        .procedure_arg_count = sig.arg_count,
+        .procedure_alt_return_count = sig.alt_return_count,
+        .procedure_result_type_spec = sig.result_type_spec,
+        .procedure_result_rank = sig.result_rank,
+        .procedure_result_shape_signature = sig.result_shape_signature,
+        .procedure_result_pointer = sig.is_pointer,
+        .procedure_result_allocatable = sig.result_allocatable,
+        .procedure_result_contiguous = sig.result_contiguous,
+        .procedure_result_procedure_pointer = sig.result_procedure_pointer,
+        .procedure_dummy_sigs = sig.args,
     };
 }
 

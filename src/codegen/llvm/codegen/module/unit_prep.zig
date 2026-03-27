@@ -4,6 +4,7 @@ const input = @import("../../../input.zig");
 const context = @import("../context/mod.zig");
 const utils = @import("../utils.zig");
 const function_type = @import("../../../../semantic/split/function_type.zig");
+const procedure_inference = @import("../../../../semantic/split/api/procedure_inference.zig");
 
 const Program = input.Program;
 
@@ -34,10 +35,10 @@ pub fn collectPreludeState(
         try known_procedure_sigs.put(sig.name, sig);
     }
     for (program.units) |unit| {
+        try installExplicitInterfaceProcedureSigs(scratch, known_procedure_sigs, unit);
         if (unit.kind == .module) continue;
         const mangled = try utils.mangleProcedureUnitName(scratch, unit);
         try defined.put(mangled, {});
-        try installExplicitInterfaceProcedureSigs(known_procedure_sigs, unit);
         switch (unit.kind) {
             .module => unreachable,
             .program => {
@@ -100,6 +101,7 @@ pub fn prepareCodegenUnitWithOwnerDecls(
 }
 
 fn installExplicitInterfaceProcedureSigs(
+    arena: std.mem.Allocator,
     known_procedure_sigs: *context.CaseInsensitiveStringHashMap(input.sema.KnownProcedureSig),
     unit: input.ProgramUnit,
 ) !void {
@@ -111,14 +113,29 @@ fn installExplicitInterfaceProcedureSigs(
                 .kind = proc_header.kind,
                 .arg_count = proc_header.args.len,
                 .alt_return_count = proc_header.alt_return_dummy_count,
-                .args = &.{},
+                .args = try procedure_inference.inferInterfaceProcedureArgSigs(arena, unit, proc_header),
                 .is_pointer = false,
                 .result_rank = input.sema.interfaceProcedureResultRank(proc_header),
-                .result_type_spec = null,
-                .result_shape_signature = &.{},
-                .result_allocatable = false,
-                .result_contiguous = false,
-                .result_procedure_pointer = false,
+                .result_type_spec = if (proc_header.kind == .function)
+                    procedure_inference.interfaceProcedureResultTypeSpec(unit, proc_header)
+                else
+                    null,
+                .result_shape_signature = if (proc_header.kind == .function)
+                    try procedure_inference.interfaceProcedureResultShapeSignature(arena, proc_header)
+                else
+                    &.{},
+                .result_allocatable = if (proc_header.kind == .function)
+                    procedure_inference.interfaceProcedureResultAttrs(proc_header).allocatable
+                else
+                    false,
+                .result_contiguous = if (proc_header.kind == .function)
+                    procedure_inference.interfaceProcedureResultAttrs(proc_header).contiguous
+                else
+                    false,
+                .result_procedure_pointer = if (proc_header.kind == .function)
+                    procedure_inference.interfaceProcedureResultAttrs(proc_header).procedure_pointer
+                else
+                    false,
             });
         }
     }
