@@ -325,10 +325,14 @@ pub fn checkKnownProcedureCallArity(
     }
 
     if (leaf_helpers.lookupIntrinsicArity(self, name)) |arity| {
-        if (got_alt_return != 0) return error.InvalidArgumentCount;
-        if (got_expr < arity.min) return error.InvalidArgumentCount;
+        if (got_alt_return != 0) {
+            return emitNamedProcedureDiagnostic(self, name, error.InvalidArgumentCount, "wrong number of arguments");
+        }
+        if (got_expr < arity.min) {
+            return emitNamedProcedureDiagnostic(self, name, error.InvalidArgumentCount, "Missing actual argument");
+        }
         if (arity.max) |max| {
-            if (got_expr > max) return error.InvalidArgumentCount;
+            if (got_expr > max) return emitNamedProcedureDiagnostic(self, name, error.InvalidArgumentCount, "wrong number of arguments");
         }
         return;
     }

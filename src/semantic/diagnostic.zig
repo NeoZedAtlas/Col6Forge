@@ -435,6 +435,7 @@ fn refineSemanticCode(code: []const u8, message: []const u8) []const u8 {
 
 fn refineInvalidArgumentCode(message: []const u8) []const u8 {
     if (std.mem.indexOf(u8, message, "too few elements for dummy argument") != null) return catalog.semantic.invalid_actual_element_count.code;
+    if (std.mem.indexOf(u8, message, "Missing actual argument") != null) return catalog.semantic.missing_actual_argument.code;
     if (std.mem.indexOf(u8, message, "wrong number of arguments") != null or
         std.mem.indexOf(u8, message, "too many") != null or
         std.mem.indexOf(u8, message, "too few") != null)
@@ -444,6 +445,11 @@ fn refineInvalidArgumentCode(message: []const u8) []const u8 {
     if (std.mem.indexOf(u8, message, "Rank mismatch in argument") != null) return catalog.semantic.invalid_argument_rank.code;
     if (std.mem.indexOf(u8, message, "Type mismatch in function result") != null) return catalog.semantic.invalid_function_result_type.code;
     if (std.mem.indexOf(u8, message, "Rank mismatch in function result") != null) return catalog.semantic.invalid_function_result_rank.code;
+    if (std.mem.indexOf(u8, message, "Shape mismatch in function result") != null) return catalog.semantic.function_result_shape_mismatch.code;
+    if (std.mem.indexOf(u8, message, "PROCEDURE POINTER mismatch in function result") != null) return catalog.semantic.function_result_procedure_pointer_mismatch.code;
+    if (std.mem.indexOf(u8, message, "POINTER attribute mismatch in function result") != null) return catalog.semantic.function_result_pointer_attr_mismatch.code;
+    if (std.mem.indexOf(u8, message, "ALLOCATABLE attribute mismatch in function result") != null) return catalog.semantic.function_result_allocatable_attr_mismatch.code;
+    if (std.mem.indexOf(u8, message, "CONTIGUOUS attribute mismatch in function result") != null) return catalog.semantic.function_result_contiguous_attr_mismatch.code;
     if (std.mem.indexOf(u8, message, "function result") != null and
         (std.mem.indexOf(u8, message, "Character length mismatch") != null or
             std.mem.indexOf(u8, message, "Shape mismatch") != null or
@@ -454,12 +460,36 @@ fn refineInvalidArgumentCode(message: []const u8) []const u8 {
     {
         return catalog.semantic.invalid_function_result_characteristic.code;
     }
+    if (std.mem.indexOf(u8, message, "actual argument is not a function") != null or
+        std.mem.indexOf(u8, message, "should be a FUNCTION") != null)
+    {
+        return catalog.semantic.actual_argument_not_function.code;
+    }
+    if (std.mem.indexOf(u8, message, "actual argument is not a subroutine") != null or
+        std.mem.indexOf(u8, message, "should be a SUBROUTINE") != null)
+    {
+        return catalog.semantic.actual_argument_not_subroutine.code;
+    }
+    if (std.mem.indexOf(u8, message, "Passing global function") != null) return catalog.semantic.passing_global_function.code;
+    if (std.mem.indexOf(u8, message, "Passing global subroutine") != null) return catalog.semantic.passing_global_subroutine.code;
     if (std.mem.indexOf(u8, message, "actual argument is not a") != null or
         std.mem.indexOf(u8, message, "wrong procedure kind") != null or
         std.mem.indexOf(u8, message, "Passing global") != null)
     {
         return catalog.semantic.invalid_argument_procedure_kind.code;
     }
+    if (std.mem.indexOf(u8, message, "no specific function") != null or
+        std.mem.indexOf(u8, message, "no specific subroutine") != null)
+    {
+        return catalog.semantic.no_specific_procedure_match.code;
+    }
+    if (std.mem.indexOf(u8, message, "Return type mismatch of function") != null or
+        std.mem.indexOf(u8, message, "Return type mismatch") != null)
+    {
+        return catalog.semantic.function_reference_return_mismatch.code;
+    }
+    if (std.mem.indexOf(u8, message, "Interface mismatch in procedure pointer assignment") != null) return catalog.semantic.procedure_pointer_assignment_interface_mismatch.code;
+    if (std.mem.indexOf(u8, message, "Interface mismatch in dummy procedure") != null) return catalog.semantic.invalid_dummy_procedure_interface_explicit.code;
     if (std.mem.indexOf(u8, message, "OPTIONAL mismatch") != null) return catalog.semantic.invalid_dummy_optional.code;
     if (std.mem.indexOf(u8, message, "INTENT mismatch") != null) return catalog.semantic.invalid_dummy_intent.code;
     if (std.mem.indexOf(u8, message, "ASYNCHRONOUS mismatch") != null) return catalog.semantic.invalid_dummy_asynchronous.code;
@@ -487,6 +517,11 @@ fn refineInvalidSubscriptCode(message: []const u8) []const u8 {
         std.mem.indexOf(u8, message, "impure function") != null)
     {
         return catalog.semantic.ambiguous_subscript_or_component_call.code;
+    }
+    if (std.mem.indexOf(u8, message, "not a member of the") != null or
+        std.mem.indexOf(u8, message, "component or binding") != null)
+    {
+        return catalog.semantic.invalid_component_reference.code;
     }
     if (std.mem.indexOf(u8, message, "subscriptable") != null) return catalog.semantic.invalid_subscript_target.code;
     return codeForFallback(catalog.semantic.invalid_subscript.code);
@@ -560,4 +595,59 @@ test "semantic diagnostic refines descriptor mismatch in argument" {
     defer releaseTaken(diag);
 
     try testing.expectEqualStrings(catalog.semantic.invalid_argument_descriptor.code, diag.code);
+}
+
+test "semantic diagnostic refines no specific procedure match" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(12, 3, catalog.semantic.invalid_argument_count.code, "no specific function", "      x = foo(a)", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.no_specific_procedure_match.code, diag.code);
+}
+
+test "semantic diagnostic refines invalid component reference" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(13, 3, catalog.semantic.invalid_subscript.code, "'x' is not a member of the 't' structure", "      obj%x = 1", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.invalid_component_reference.code, diag.code);
+}
+
+test "semantic diagnostic refines missing actual argument" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(14, 3, catalog.semantic.invalid_argument_count.code, "Missing actual argument", "      call s()", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.missing_actual_argument.code, diag.code);
+}
+
+test "semantic diagnostic refines actual argument not function" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(15, 3, catalog.semantic.invalid_argument_count.code, "actual argument is not a function", "      call s(x)", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.actual_argument_not_function.code, diag.code);
+}
+
+test "semantic diagnostic refines function result shape mismatch" {
+    const testing = std.testing;
+
+    clear();
+    setDetailed(16, 3, catalog.semantic.invalid_argument_count.code, "Shape mismatch in function result", "      call s(f)", &.{}, &.{});
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.semantic.function_result_shape_mismatch.code, diag.code);
 }

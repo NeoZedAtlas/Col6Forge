@@ -321,6 +321,22 @@ fn refineParseCode(code: []const u8, message: []const u8, line_text: []const u8)
     if (std.ascii.indexOfIgnoreCase(message, "found outside of a module") != null) return catalog.parser.misplaced_module_only_construct.code;
     if (std.ascii.indexOfIgnoreCase(message, "Unexpected assignment") != null) return catalog.parser.unexpected_assignment_recovery.code;
     if (std.ascii.indexOfIgnoreCase(message, "Expecting END PROGRAM statement") != null) return catalog.parser.expected_end_program_recovery.code;
+    if (std.ascii.indexOfIgnoreCase(message, "does not contain a MODULE PROCEDURE") != null) return catalog.parser.missing_module_procedure_binding.code;
+    if (std.ascii.indexOfIgnoreCase(message, "Mismatch in MODULE PROCEDURE formal argument names") != null) return catalog.parser.module_procedure_formal_name_mismatch.code;
+    if (std.ascii.indexOfIgnoreCase(message, "Expecting END SUBROUTINE") != null) return catalog.parser.expected_end_subroutine_recovery.code;
+    if (std.ascii.indexOfIgnoreCase(message, "Expecting END MODULE") != null) return catalog.parser.expected_end_module_recovery.code;
+    if (std.ascii.indexOfIgnoreCase(message, "Expecting END INTERFACE") != null) return catalog.parser.expected_end_interface_recovery.code;
+    if (std.ascii.indexOfIgnoreCase(message, "PRIVATE attribute") != null or
+        std.ascii.indexOfIgnoreCase(message, "PUBLIC attribute") != null)
+    {
+        return catalog.parser.invalid_visibility_statement.code;
+    }
+    if (std.ascii.indexOfIgnoreCase(message, "Syntax error in ABSTRACT INTERFACE statement") != null) return catalog.parser.invalid_abstract_interface_stmt_syntax.code;
+    if (isEndStmtLine(line_text)) return catalog.parser.invalid_end_stmt_syntax.code;
+    if (isNamedConstructStmtLine(line_text)) return catalog.parser.invalid_named_construct_stmt_syntax.code;
+    if (startsWithWord(line_text, "include")) return catalog.parser.invalid_include_stmt_syntax.code;
+    if (hasPercentActualSyntax(line_text)) return catalog.parser.invalid_percent_actual_syntax.code;
+    if (isIoStmtLine(line_text)) return catalog.parser.invalid_io_stmt_syntax.code;
     if (isOperatorDeclLine(line_text, message)) return catalog.parser.unexpected_token_operator_decl.code;
     if (isProcedureHeadLine(line_text)) return catalog.parser.unexpected_token_proc_head.code;
     if (isComponentDeclLine(line_text, message)) return catalog.parser.unexpected_token_component_decl.code;
@@ -378,6 +394,41 @@ fn isComponentDeclLine(line_text: []const u8, message: []const u8) bool {
 
 fn containsDoubleColon(line_text: []const u8) bool {
     return std.mem.indexOf(u8, line_text, "::") != null;
+}
+
+fn isEndStmtLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "end");
+}
+
+fn isNamedConstructStmtLine(line_text: []const u8) bool {
+    const trimmed = std.mem.trimLeft(u8, line_text, " \t");
+    const colon = std.mem.indexOfScalar(u8, trimmed, ':') orelse return false;
+    const tail = std.mem.trimLeft(u8, trimmed[colon + 1 ..], " \t");
+    return startsWithWord(tail, "if") or
+        startsWithWord(tail, "do") or
+        startsWithWord(tail, "select") or
+        startsWithWord(tail, "associate") or
+        startsWithWord(tail, "block") or
+        startsWithWord(tail, "where") or
+        startsWithWord(tail, "forall");
+}
+
+fn hasPercentActualSyntax(line_text: []const u8) bool {
+    return std.ascii.indexOfIgnoreCase(line_text, "%val(") != null or
+        std.ascii.indexOfIgnoreCase(line_text, "%ref(") != null or
+        std.ascii.indexOfIgnoreCase(line_text, "%loc(") != null;
+}
+
+fn isIoStmtLine(line_text: []const u8) bool {
+    return startsWithWord(line_text, "print") or
+        startsWithWord(line_text, "read") or
+        startsWithWord(line_text, "write") or
+        startsWithWord(line_text, "open") or
+        startsWithWord(line_text, "close") or
+        startsWithWord(line_text, "inquire") or
+        startsWithWord(line_text, "rewind") or
+        startsWithWord(line_text, "backspace") or
+        startsWithWord(line_text, "endfile");
 }
 
 fn startsWithWord(line_text: []const u8, keyword: []const u8) bool {
@@ -438,4 +489,59 @@ test "parser diagnostic refines end-program recovery" {
     defer releaseTaken(diag);
 
     try testing.expectEqualStrings(catalog.parser.expected_end_program_recovery.code, diag.code);
+}
+
+test "parser diagnostic refines end-interface recovery" {
+    const testing = std.testing;
+
+    clear();
+    set(7, 1, catalog.parser.unexpected_token.code, "Expecting END INTERFACE", "end module");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.expected_end_interface_recovery.code, diag.code);
+}
+
+test "parser diagnostic refines visibility statement recovery" {
+    const testing = std.testing;
+
+    clear();
+    set(8, 1, catalog.parser.unexpected_token.code, "PRIVATE attribute", "private");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_visibility_statement.code, diag.code);
+}
+
+test "parser diagnostic refines include statement syntax" {
+    const testing = std.testing;
+
+    clear();
+    set(9, 9, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "include \"bom_include.inc\"");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_include_stmt_syntax.code, diag.code);
+}
+
+test "parser diagnostic refines percent actual syntax" {
+    const testing = std.testing;
+
+    clear();
+    set(10, 18, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "      CALL DOIT( %VAL( P ) )");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_percent_actual_syntax.code, diag.code);
+}
+
+test "parser diagnostic refines I/O statement syntax" {
+    const testing = std.testing;
+
+    clear();
+    set(11, 8, catalog.parser.unexpected_token.code, catalog.parser.unexpected_token.message, "   read*, i");
+    const diag = take() orelse return error.TestExpectedEqual;
+    defer releaseTaken(diag);
+
+    try testing.expectEqualStrings(catalog.parser.invalid_io_stmt_syntax.code, diag.code);
 }

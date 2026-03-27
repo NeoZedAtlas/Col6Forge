@@ -1,7 +1,7 @@
-error[CF3110]: Missing actual argument
+error[CF3170]: Missing actual argument
   --> tests/diagnostic_golden_cc/semantic_interface_arity.f:8:7
    = stage: semantic
-   = help: see docs/errors.md#CF3110
+   = help: see docs/errors.md#CF3170
   |
 8 |       X=F(1)
   |       ^ call site conflicts here

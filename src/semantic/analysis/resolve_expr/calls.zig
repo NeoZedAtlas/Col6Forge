@@ -51,7 +51,7 @@ pub fn resolveCallOrSubscriptExpr(
         if (sym.dims.len > 0) {
             kind = .subscript;
         } else if (sym.type_explicit and !sym.is_external and sym.kind == .variable and call.args.len == 0) {
-            return error.InvalidSubscript;
+            return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
         } else {
             kind = .call;
             if (sym.kind == .variable) sym.kind = .function;
@@ -138,7 +138,7 @@ pub fn resolveCallOrSubscriptExpr(
                 sym.is_external = true;
                 self.symbols.items[idx] = sym;
             } else {
-                return error.InvalidSubscript;
+                return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
             }
         } else {
             kind = .call;
@@ -150,10 +150,11 @@ pub fn resolveCallOrSubscriptExpr(
         return error.ExplicitInterfaceRequired;
     }
     if (kind == .subscript) {
-        if (sym.dims.len == 0 or call.args.len != sym.dims.len) return error.InvalidSubscript;
+        if (sym.dims.len == 0) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
+        if (call.args.len != sym.dims.len) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_count.code, "Subscript count mismatch");
         for (call.args) |arg| {
             const arg_ty = try deps.resolvedExprType(self, arg);
-            if (arg_ty != .integer) return error.InvalidSubscript;
+            if (arg_ty != .integer) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_type.code, "Subscript must be INTEGER");
         }
         resolved_spec = sym.type_spec;
     }
@@ -176,16 +177,16 @@ pub fn resolveSubstringExpr(
     try self.ref_symbol_index.put(@intFromPtr(expr_node), idx);
     const sym = self.symbols.items[idx];
     if (isArraySectionSubstring(sym, sub)) {
-        if (sym.dims.len == 0) return error.InvalidSubscript;
+        if (sym.dims.len == 0) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
         if (sub.start) |start_expr| {
             try deps.resolveExpr(self, start_expr);
             const start_ty = try deps.resolvedExprType(self, start_expr);
-            if (start_ty != .integer) return error.InvalidSubscript;
+            if (start_ty != .integer) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_type.code, "Subscript must be INTEGER");
         }
         if (sub.end) |end_expr| {
             try deps.resolveExpr(self, end_expr);
             const end_ty = try deps.resolvedExprType(self, end_expr);
-            if (end_ty != .integer) return error.InvalidSubscript;
+            if (end_ty != .integer) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_type.code, "Subscript must be INTEGER");
         }
         try deps.recordResolvedRef(self, expr_node, sub.name, .subscript, idx);
         try deps.cacheExprType(self, expr_node, sym.type_spec);
@@ -207,8 +208,8 @@ pub fn resolveComponentExpr(
     try deps.resolveExpr(self, comp.base);
     for (comp.args) |arg| try deps.resolveExpr(self, arg);
     const base_spec = try deps.exprTypeSpecCached(self, comp.base);
-    if (base_spec.lowered_kind != .derived) return error.InvalidSubscript;
-    const derived_name = base_spec.derived_type_name orelse return error.InvalidSubscript;
+    if (base_spec.lowered_kind != .derived) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
+    const derived_name = base_spec.derived_type_name orelse return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
     try ensureResolvedDerivedTypeForComponentBase(self, derived_name, expr_node);
     if (symbols_mod.lookupDerivedComponent(self, derived_name, comp.name)) |component| {
         if (component.procedure) {
@@ -216,17 +217,20 @@ pub fn resolveComponentExpr(
                 try deps.cacheExprType(self, expr_node, component.type_spec);
                 return;
             }
-            try validateProcedureComponentCall(self, comp.base, component, comp.args, deps);
+            try validateProcedureComponentCall(self, expr_node, comp.base, component, comp.args, deps);
             try deps.cacheExprType(self, expr_node, try procedureComponentResultTypeSpec(self, component));
             return;
         }
-        try validateComponentArgs(self, component.dims, comp.args, deps);
+        try validateComponentArgs(self, expr_node, component.dims, comp.args, deps);
         try deps.cacheExprType(self, expr_node, component.type_spec);
         return;
     }
-    const binding = symbols_mod.lookupDerivedBinding(self, derived_name, comp.name) orelse return error.InvalidSubscript;
-    if (!comp.has_parens) return error.InvalidSubscript;
-    try validateTypeBoundProcedureCall(self, comp.base, binding, comp.args, deps);
+    const binding = symbols_mod.lookupDerivedBinding(self, derived_name, comp.name) orelse {
+        const message = std.fmt.allocPrint(self.arena, "'{s}' is not a member of the '{s}' structure", .{ comp.name, derived_name }) catch "component or binding is not a member of the structure";
+        return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_component_reference.code, message);
+    };
+    if (!comp.has_parens) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
+    try validateTypeBoundProcedureCall(self, expr_node, comp.base, binding, comp.args, deps);
     try deps.cacheExprType(self, expr_node, try typeBoundProcedureResultTypeSpec(self, binding));
 }
 
@@ -585,35 +589,36 @@ fn isArraySectionSubstring(sym: symbols.Symbol, sub: ast.SubstringExpr) bool {
 
 fn validateComponentArgs(
     self: *context.Context,
+    expr_node: *ast.Expr,
     dims: []*ast.Expr,
     args: []*ast.Expr,
     comptime deps: anytype,
 ) ResolveError!void {
     if (dims.len == 0) {
-        if (args.len != 0) return error.InvalidSubscript;
+        if (args.len != 0) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_target.code, "object is not subscriptable in this context");
         return;
     }
     if (args.len == 0) return;
-    if (args.len != dims.len) return error.InvalidSubscript;
+    if (args.len != dims.len) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_count.code, "Subscript count mismatch");
     for (args) |arg| {
         switch (arg.*) {
             .dim_range => |range| {
                 if (range.lower) |lower| {
                     const lower_ty = try deps.resolvedExprType(self, lower);
-                    if (lower_ty != .integer) return error.InvalidSubscript;
+                    if (lower_ty != .integer) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_type.code, "Subscript must be INTEGER");
                 }
                 if (!(range.upper.* == .literal and range.upper.literal.kind == .assumed_size)) {
                     const upper_ty = try deps.resolvedExprType(self, range.upper);
-                    if (upper_ty != .integer) return error.InvalidSubscript;
+                    if (upper_ty != .integer) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_type.code, "Subscript must be INTEGER");
                 }
                 if (range.stride) |stride| {
                     const stride_ty = try deps.resolvedExprType(self, stride);
-                    if (stride_ty != .integer) return error.InvalidSubscript;
+                    if (stride_ty != .integer) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_type.code, "Subscript must be INTEGER");
                 }
             },
             else => {
                 const arg_ty = try deps.resolvedExprType(self, arg);
-                if (arg_ty != .integer) return error.InvalidSubscript;
+                if (arg_ty != .integer) return emitInvalidSubscriptDiagnostic(self, expr_node, catalog.semantic.invalid_subscript_type.code, "Subscript must be INTEGER");
             },
         }
     }
@@ -621,6 +626,7 @@ fn validateComponentArgs(
 
 fn validateTypeBoundProcedureCall(
     self: *context.Context,
+    expr_node: *ast.Expr,
     passed_object: *ast.Expr,
     binding: context.Context.DerivedTypeInfo.BindingInfo,
     args: []*ast.Expr,
@@ -628,8 +634,8 @@ fn validateTypeBoundProcedureCall(
 ) ResolveError!void {
     const sig = typeBoundProcedureSig(self, binding) orelse return;
     const actual_count = args.len + @as(usize, if (binding.nopass) 0 else 1);
-    if (actual_count > sig.arg_count) return error.InvalidArgumentCount;
-    if (actual_count < minimumRequiredProcedureArgs(sig)) return error.InvalidArgumentCount;
+    if (actual_count > sig.arg_count) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.invalid_argument_arity.code, "wrong number of arguments");
+    if (actual_count < minimumRequiredProcedureArgs(sig)) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.missing_actual_argument.code, "Missing actual argument");
 
     const pass_idx = if (binding.nopass) null else bindingPassArgIndex(sig, binding.pass_name);
     var actual_idx: usize = 0;
@@ -647,6 +653,7 @@ fn validateTypeBoundProcedureCall(
 
 fn validateProcedureComponentCall(
     self: *context.Context,
+    expr_node: *ast.Expr,
     passed_object: *ast.Expr,
     component: context.Context.DerivedTypeInfo.ComponentInfo,
     args: []*ast.Expr,
@@ -654,13 +661,13 @@ fn validateProcedureComponentCall(
 ) ResolveError!void {
     const sig = procedureComponentSig(self, component);
     const procedure_kind = if (sig) |resolved_sig| resolved_sig.kind else component.procedure_kind orelse return error.InvalidSubscript;
-    if (procedure_kind != .function) return error.InvalidSubscript;
+    if (procedure_kind != .function) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.actual_argument_not_function.code, "actual argument is not a function");
     if (!component.procedure_has_explicit_interface) return;
 
     const resolved_sig = sig orelse return;
     const actual_count = args.len + @as(usize, if (component.procedure_nopass) 0 else 1);
-    if (actual_count > resolved_sig.arg_count) return error.InvalidArgumentCount;
-    if (actual_count < minimumRequiredProcedureArgs(resolved_sig)) return error.InvalidArgumentCount;
+    if (actual_count > resolved_sig.arg_count) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.invalid_argument_arity.code, "wrong number of arguments");
+    if (actual_count < minimumRequiredProcedureArgs(resolved_sig)) return emitInvalidArgumentDiagnostic(self, expr_node, catalog.semantic.missing_actual_argument.code, "Missing actual argument");
 
     const pass_idx = if (component.procedure_nopass) null else bindingPassArgIndex(resolved_sig, component.procedure_pass_name);
     var actual_idx: usize = 0;
@@ -761,4 +768,40 @@ fn bindingPassArgIndex(
         if (std.ascii.eqlIgnoreCase(arg.name, target)) return idx;
     }
     return null;
+}
+
+fn emitInvalidSubscriptDiagnostic(
+    self: *context.Context,
+    expr_node: *ast.Expr,
+    code: []const u8,
+    message: []const u8,
+) ResolveError {
+    const source = self.sourceForExpr(expr_node) orelse ast.SourceRef{};
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        code,
+        message,
+        source.text,
+    );
+    self.setCurrentSource(source);
+    return error.InvalidSubscript;
+}
+
+fn emitInvalidArgumentDiagnostic(
+    self: *context.Context,
+    expr_node: *ast.Expr,
+    code: []const u8,
+    message: []const u8,
+) ResolveError {
+    const source = self.sourceForExpr(expr_node) orelse ast.SourceRef{};
+    self.setDiagnostic(
+        if (source.line == 0) 1 else source.line,
+        if (source.column == 0) 1 else source.column,
+        code,
+        message,
+        source.text,
+    );
+    self.setCurrentSource(source);
+    return error.InvalidArgumentCount;
 }

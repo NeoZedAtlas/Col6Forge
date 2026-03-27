@@ -49,6 +49,18 @@ pub const parser = struct {
     pub const misplaced_module_only_construct = ErrorInfo{ .code = "CF2023", .message = "module-only construct used outside of a module" };
     pub const unexpected_assignment_recovery = ErrorInfo{ .code = "CF2024", .message = "unexpected assignment during statement recovery" };
     pub const expected_end_program_recovery = ErrorInfo{ .code = "CF2025", .message = "expected END PROGRAM during statement recovery" };
+    pub const missing_module_procedure_binding = ErrorInfo{ .code = "CF2026", .message = "MODULE PROCEDURE binding missing from ancestor interface" };
+    pub const module_procedure_formal_name_mismatch = ErrorInfo{ .code = "CF2027", .message = "MODULE PROCEDURE formal argument names do not match ancestor interface" };
+    pub const expected_end_subroutine_recovery = ErrorInfo{ .code = "CF2028", .message = "expected END SUBROUTINE during statement recovery" };
+    pub const expected_end_module_recovery = ErrorInfo{ .code = "CF2029", .message = "expected END MODULE during statement recovery" };
+    pub const expected_end_interface_recovery = ErrorInfo{ .code = "CF2030", .message = "expected END INTERFACE during statement recovery" };
+    pub const invalid_visibility_statement = ErrorInfo{ .code = "CF2031", .message = "invalid visibility statement in current parser context" };
+    pub const invalid_abstract_interface_stmt_syntax = ErrorInfo{ .code = "CF2032", .message = "invalid ABSTRACT INTERFACE statement syntax" };
+    pub const invalid_end_stmt_syntax = ErrorInfo{ .code = "CF2033", .message = "invalid END statement syntax" };
+    pub const invalid_named_construct_stmt_syntax = ErrorInfo{ .code = "CF2034", .message = "invalid named construct statement syntax" };
+    pub const invalid_include_stmt_syntax = ErrorInfo{ .code = "CF2035", .message = "invalid INCLUDE statement syntax" };
+    pub const invalid_percent_actual_syntax = ErrorInfo{ .code = "CF2036", .message = "invalid percent-actual argument syntax" };
+    pub const invalid_io_stmt_syntax = ErrorInfo{ .code = "CF2037", .message = "invalid I/O statement syntax" };
     pub const failed_to_understand = ErrorInfo{ .code = "CF2099", .message = "parser failed to understand source" };
 };
 
@@ -117,6 +129,21 @@ pub const semantic = struct {
     pub const invalid_dummy_value = ErrorInfo{ .code = "CF3162", .message = "dummy procedure VALUE mismatch" };
     pub const invalid_dummy_volatile = ErrorInfo{ .code = "CF3163", .message = "dummy procedure VOLATILE mismatch" };
     pub const invalid_dummy_shape_signature = ErrorInfo{ .code = "CF3164", .message = "dummy procedure shape mismatch" };
+    pub const no_specific_procedure_match = ErrorInfo{ .code = "CF3165", .message = "no specific procedure matches this reference" };
+    pub const function_reference_return_mismatch = ErrorInfo{ .code = "CF3166", .message = "function reference return type mismatch" };
+    pub const procedure_pointer_assignment_interface_mismatch = ErrorInfo{ .code = "CF3167", .message = "procedure pointer assignment interface mismatch" };
+    pub const invalid_dummy_procedure_interface_explicit = ErrorInfo{ .code = "CF3168", .message = "explicit dummy procedure interface mismatch" };
+    pub const invalid_component_reference = ErrorInfo{ .code = "CF3169", .message = "derived component or binding reference is invalid" };
+    pub const missing_actual_argument = ErrorInfo{ .code = "CF3170", .message = "missing required actual argument" };
+    pub const actual_argument_not_function = ErrorInfo{ .code = "CF3171", .message = "actual argument is not a function" };
+    pub const actual_argument_not_subroutine = ErrorInfo{ .code = "CF3172", .message = "actual argument is not a subroutine" };
+    pub const passing_global_function = ErrorInfo{ .code = "CF3173", .message = "global function cannot satisfy this procedure actual" };
+    pub const passing_global_subroutine = ErrorInfo{ .code = "CF3174", .message = "global subroutine cannot satisfy this procedure actual" };
+    pub const function_result_shape_mismatch = ErrorInfo{ .code = "CF3175", .message = "function result shape mismatch" };
+    pub const function_result_pointer_attr_mismatch = ErrorInfo{ .code = "CF3176", .message = "function result POINTER attribute mismatch" };
+    pub const function_result_allocatable_attr_mismatch = ErrorInfo{ .code = "CF3177", .message = "function result ALLOCATABLE attribute mismatch" };
+    pub const function_result_contiguous_attr_mismatch = ErrorInfo{ .code = "CF3178", .message = "function result CONTIGUOUS attribute mismatch" };
+    pub const function_result_procedure_pointer_mismatch = ErrorInfo{ .code = "CF3179", .message = "function result PROCEDURE POINTER mismatch" };
     pub const generic = ErrorInfo{ .code = "CF3199", .message = "semantic analysis failed" };
 };
 
@@ -300,6 +327,18 @@ pub const doc_entries = [_]DocEntry{
     doc(parser.misplaced_module_only_construct, "parser"),
     doc(parser.unexpected_assignment_recovery, "parser"),
     doc(parser.expected_end_program_recovery, "parser"),
+    doc(parser.missing_module_procedure_binding, "parser"),
+    doc(parser.module_procedure_formal_name_mismatch, "parser"),
+    doc(parser.expected_end_subroutine_recovery, "parser"),
+    doc(parser.expected_end_module_recovery, "parser"),
+    doc(parser.expected_end_interface_recovery, "parser"),
+    doc(parser.invalid_visibility_statement, "parser"),
+    doc(parser.invalid_abstract_interface_stmt_syntax, "parser"),
+    doc(parser.invalid_end_stmt_syntax, "parser"),
+    doc(parser.invalid_named_construct_stmt_syntax, "parser"),
+    doc(parser.invalid_include_stmt_syntax, "parser"),
+    doc(parser.invalid_percent_actual_syntax, "parser"),
+    doc(parser.invalid_io_stmt_syntax, "parser"),
     doc(parser.failed_to_understand, "parser"),
     doc(semantic.missing_unit_scope, "semantic"),
     doc(semantic.missing_scope, "semantic"),
@@ -365,6 +404,21 @@ pub const doc_entries = [_]DocEntry{
     doc(semantic.invalid_dummy_value, "semantic"),
     doc(semantic.invalid_dummy_volatile, "semantic"),
     doc(semantic.invalid_dummy_shape_signature, "semantic"),
+    doc(semantic.no_specific_procedure_match, "semantic"),
+    doc(semantic.function_reference_return_mismatch, "semantic"),
+    doc(semantic.procedure_pointer_assignment_interface_mismatch, "semantic"),
+    doc(semantic.invalid_dummy_procedure_interface_explicit, "semantic"),
+    doc(semantic.invalid_component_reference, "semantic"),
+    doc(semantic.missing_actual_argument, "semantic"),
+    doc(semantic.actual_argument_not_function, "semantic"),
+    doc(semantic.actual_argument_not_subroutine, "semantic"),
+    doc(semantic.passing_global_function, "semantic"),
+    doc(semantic.passing_global_subroutine, "semantic"),
+    doc(semantic.function_result_shape_mismatch, "semantic"),
+    doc(semantic.function_result_pointer_attr_mismatch, "semantic"),
+    doc(semantic.function_result_allocatable_attr_mismatch, "semantic"),
+    doc(semantic.function_result_contiguous_attr_mismatch, "semantic"),
+    doc(semantic.function_result_procedure_pointer_mismatch, "semantic"),
     doc(semantic.generic, "semantic"),
     doc(codegen.multiple_program_units, "codegen"),
     doc(codegen.missing_semantic_unit, "codegen"),

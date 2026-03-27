@@ -163,6 +163,66 @@ Each diagnostic is identified by a stable `CFxxxx` code:
 - Stage: parser
 - Default message: expected END PROGRAM during statement recovery
 
+## CF2026
+
+- Stage: parser
+- Default message: MODULE PROCEDURE binding missing from ancestor interface
+
+## CF2027
+
+- Stage: parser
+- Default message: MODULE PROCEDURE formal argument names do not match ancestor interface
+
+## CF2028
+
+- Stage: parser
+- Default message: expected END SUBROUTINE during statement recovery
+
+## CF2029
+
+- Stage: parser
+- Default message: expected END MODULE during statement recovery
+
+## CF2030
+
+- Stage: parser
+- Default message: expected END INTERFACE during statement recovery
+
+## CF2031
+
+- Stage: parser
+- Default message: invalid visibility statement in current parser context
+
+## CF2032
+
+- Stage: parser
+- Default message: invalid ABSTRACT INTERFACE statement syntax
+
+## CF2033
+
+- Stage: parser
+- Default message: invalid END statement syntax
+
+## CF2034
+
+- Stage: parser
+- Default message: invalid named construct statement syntax
+
+## CF2035
+
+- Stage: parser
+- Default message: invalid INCLUDE statement syntax
+
+## CF2036
+
+- Stage: parser
+- Default message: invalid percent-actual argument syntax
+
+## CF2037
+
+- Stage: parser
+- Default message: invalid I/O statement syntax
+
 ## CF2099
 
 - Stage: parser
@@ -487,6 +547,81 @@ Each diagnostic is identified by a stable `CFxxxx` code:
 
 - Stage: semantic
 - Default message: dummy procedure shape mismatch
+
+## CF3165
+
+- Stage: semantic
+- Default message: no specific procedure matches this reference
+
+## CF3166
+
+- Stage: semantic
+- Default message: function reference return type mismatch
+
+## CF3167
+
+- Stage: semantic
+- Default message: procedure pointer assignment interface mismatch
+
+## CF3168
+
+- Stage: semantic
+- Default message: explicit dummy procedure interface mismatch
+
+## CF3169
+
+- Stage: semantic
+- Default message: derived component or binding reference is invalid
+
+## CF3170
+
+- Stage: semantic
+- Default message: missing required actual argument
+
+## CF3171
+
+- Stage: semantic
+- Default message: actual argument is not a function
+
+## CF3172
+
+- Stage: semantic
+- Default message: actual argument is not a subroutine
+
+## CF3173
+
+- Stage: semantic
+- Default message: global function cannot satisfy this procedure actual
+
+## CF3174
+
+- Stage: semantic
+- Default message: global subroutine cannot satisfy this procedure actual
+
+## CF3175
+
+- Stage: semantic
+- Default message: function result shape mismatch
+
+## CF3176
+
+- Stage: semantic
+- Default message: function result POINTER attribute mismatch
+
+## CF3177
+
+- Stage: semantic
+- Default message: function result ALLOCATABLE attribute mismatch
+
+## CF3178
+
+- Stage: semantic
+- Default message: function result CONTIGUOUS attribute mismatch
+
+## CF3179
+
+- Stage: semantic
+- Default message: function result PROCEDURE POINTER mismatch
 
 ## CF3199
 
