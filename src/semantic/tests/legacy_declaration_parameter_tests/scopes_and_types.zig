@@ -8,7 +8,6 @@ const symbols = h.symbols;
 const analyzeProgram = h.analyzeProgram;
 const analyzeProgramWithKnown = h.analyzeProgramWithKnown;
 const analyzeProgramWithOptions = h.analyzeProgramWithOptions;
-const takeDiagnostic = h.takeDiagnostic;
-const clearDiagnostic = h.clearDiagnostic;
 const inferFunctionType = h.inferFunctionType;
 const inferFunctionTypeSpec = h.inferFunctionTypeSpec;
+

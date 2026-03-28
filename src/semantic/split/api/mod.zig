@@ -56,14 +56,6 @@ pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(
 pub const inferProcedureArgSigs = procedure_inference.inferProcedureArgSigs;
 pub const interfaceProcedureResultRank = procedure_inference.interfaceProcedureResultRank;
 
-pub fn takeDiagnostic() ?diagnostic.SemanticDiagnostic {
-    return diagnostic.take();
-}
-
-pub fn clearDiagnostic() void {
-    diagnostic.clear();
-}
-
 test {
     _ = @import("tests.zig");
 }

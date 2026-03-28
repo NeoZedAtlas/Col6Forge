@@ -4,12 +4,66 @@ const fixed_form = @import("../../frontend/fixed_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const analysis = @import("../analysis/mod.zig");
 const analysis_context = @import("../analysis/context.zig");
+const diagnostic = @import("../diagnostic.zig");
 const symbols = @import("../symbol/mod.zig");
 
 const api = @import("../split/api/mod.zig");
 const analyzeProgram = api.analyzeProgram;
-const takeDiagnostic = api.takeDiagnostic;
-const clearDiagnostic = api.clearDiagnostic;
+
+pub const DiagCapture = struct {
+    bag: diagnostic.Bag,
+
+    pub fn init(allocator: std.mem.Allocator) DiagCapture {
+        return .{ .bag = diagnostic.Bag.init(allocator) };
+    }
+
+    pub fn deinit(self: *DiagCapture) void {
+        self.bag.deinit();
+    }
+
+    pub fn clear(self: *DiagCapture) void {
+        self.bag.clear();
+    }
+
+    pub fn take(self: *DiagCapture) !diagnostic.SemanticDiagnostic {
+        return self.bag.take() orelse error.TestExpectedEqual;
+    }
+
+    pub fn release(self: *DiagCapture, diag_info: diagnostic.SemanticDiagnostic) void {
+        self.bag.release(diag_info);
+    }
+
+    pub fn expectNone(self: *DiagCapture) !void {
+        try std.testing.expect(!self.bag.has());
+    }
+};
+
+pub fn analyzeProgramWithDiagnostics(
+    arena: std.mem.Allocator,
+    program: ast.Program,
+    diag_bag: *diagnostic.Bag,
+) !api.SemanticProgram {
+    return api.analyzeProgramWithKnownAndOptionsAndDiagnostics(arena, program, &.{}, &.{}, .{}, diag_bag);
+}
+
+pub fn analyzeProgramWithOptionsAndDiagnostics(
+    arena: std.mem.Allocator,
+    program: ast.Program,
+    options: api.AnalyzeOptions,
+    diag_bag: *diagnostic.Bag,
+) !api.SemanticProgram {
+    return api.analyzeProgramWithKnownAndOptionsAndDiagnostics(arena, program, &.{}, &.{}, options, diag_bag);
+}
+
+pub fn analyzeProgramWithKnownAndDiagnostics(
+    arena: std.mem.Allocator,
+    program: ast.Program,
+    known_fn_types: []const api.KnownFunctionType,
+    known_proc_sigs: []const api.KnownProcedureSig,
+    diag_bag: *diagnostic.Bag,
+) !api.SemanticProgram {
+    return api.analyzeProgramWithKnownAndOptionsAndDiagnostics(arena, program, known_fn_types, known_proc_sigs, .{}, diag_bag);
+}
 
 pub fn expectSemanticErrorInvariant(source: []const u8, expected_err: anyerror, expected_code: []const u8) !void {
     const testing = std.testing;
@@ -22,8 +76,12 @@ pub fn expectSemanticErrorInvariant(source: []const u8, expected_err: anyerror, 
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(expected_err, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+
+    try testing.expectError(expected_err, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, expected_code));
 }
 
@@ -70,13 +128,15 @@ pub fn expectSemanticErrorNoGeneratedTempLeakInvariant(
     var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
     var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
 
-    clearDiagnostic();
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
     var found = false;
     for (program.units) |*unit| {
         if (!std.ascii.eqlIgnoreCase(unit.name, unit_name)) continue;
         found = true;
 
-        var unit_analyzer = analysis.UnitAnalyzer.init(
+        diag_capture.clear();
+        var unit_analyzer = analysis.UnitAnalyzer.initWithDiagnostics(
             arena.allocator(),
             unit,
             &.{},
@@ -88,9 +148,12 @@ pub fn expectSemanticErrorNoGeneratedTempLeakInvariant(
             &known_host_abstract_interfaces,
             null,
             .{},
+            false,
+            &diag_capture.bag,
         );
         try testing.expectError(expected_err, unit_analyzer.analyze());
-        const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+        const diag = try diag_capture.take();
+        defer diag_capture.release(diag);
         try testing.expect(std.mem.eql(u8, diag.code, expected_code));
 
         var generated_temp_count: usize = 0;
@@ -129,13 +192,15 @@ pub fn expectSemanticErrorNoTempLeakAndFirstCallArgCallExprInvariant(
     var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
     var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
 
-    clearDiagnostic();
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
     var found = false;
     for (program.units) |*unit| {
         if (!std.ascii.eqlIgnoreCase(unit.name, unit_name)) continue;
         found = true;
 
-        var unit_analyzer = analysis.UnitAnalyzer.init(
+        diag_capture.clear();
+        var unit_analyzer = analysis.UnitAnalyzer.initWithDiagnostics(
             arena.allocator(),
             unit,
             &.{},
@@ -147,9 +212,12 @@ pub fn expectSemanticErrorNoTempLeakAndFirstCallArgCallExprInvariant(
             &known_host_abstract_interfaces,
             null,
             .{},
+            false,
+            &diag_capture.bag,
         );
         try testing.expectError(expected_err, unit_analyzer.analyze());
-        const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+        const diag = try diag_capture.take();
+        defer diag_capture.release(diag);
         try testing.expect(std.mem.eql(u8, diag.code, expected_code));
 
         var generated_temp_count: usize = 0;
@@ -186,8 +254,11 @@ pub fn expectSemanticSuccessInvariant(source: []const u8) !void {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    _ = try analyzeProgram(arena.allocator(), program);
-    try testing.expect(takeDiagnostic() == null);
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+
+    _ = try analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag);
+    try diag_capture.expectNone();
 }
 
 pub fn expectSymbolTypeInvariant(

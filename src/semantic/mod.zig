@@ -48,9 +48,6 @@ pub const inferFunctionResultRank = function_type.inferFunctionResultRank;
 pub const inferProcedureArgSigs = api.inferProcedureArgSigs;
 pub const interfaceProcedureResultRank = api.interfaceProcedureResultRank;
 pub const printSemantic = printer.printSemantic;
-pub const takeDiagnostic = api.takeDiagnostic;
-pub const takeFallbackSource = diagnostic.takeFallbackSource;
-pub const clearDiagnostic = api.clearDiagnostic;
 
 test {
     _ = @import("tests/legacy_declaration_parameter_tests.zig");

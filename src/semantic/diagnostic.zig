@@ -77,17 +77,6 @@ threadlocal var has_diag: bool = false;
 threadlocal var fallback_storage: compat.Storage = .{};
 threadlocal var has_fallback: bool = false;
 
-pub fn publishCompatFromBag(bag: *Bag) void {
-    clear();
-    if (bag.take()) |diag| {
-        defer bag.release(diag);
-        setStructured(diag.line, diag.column, diag.code, diag.message, diag.line_text, diag.primary_label, diag.notes, diag.helps, diag.secondary_spans);
-    }
-    if (bag.fallbackSource()) |source| {
-        noteFallbackSource(source.line, source.column, source.line_text);
-    }
-}
-
 pub fn clear() void {
     has_diag = false;
     has_fallback = false;
@@ -167,16 +156,6 @@ pub fn fallbackSource() ?FallbackSource {
         .column = fallback_storage.column,
         .line_text = fallback_storage.line_text orelse "",
     };
-}
-
-pub fn takeFallbackSource() ?FallbackSource {
-    const source = fallbackSource() orelse return null;
-    has_fallback = false;
-    return source;
-}
-
-pub fn releaseTakenFallbackSource(_: FallbackSource) void {
-    fallback_storage.clear();
 }
 
 fn refineSemanticCode(code: []const u8, message: []const u8, line_text: []const u8) []const u8 {

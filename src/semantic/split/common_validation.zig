@@ -28,11 +28,7 @@ const CommonLocalBlock = struct {
 pub fn validateCommonBlocks(arena: std.mem.Allocator, program: ast.Program, sem_units: []const SemanticUnit) !void {
     var diag_bag = diagnostic.Bag.init(arena);
     defer diag_bag.deinit();
-    validateCommonBlocksWithDiagnostics(arena, program, sem_units, &diag_bag) catch |err| {
-        diagnostic.publishCompatFromBag(&diag_bag);
-        return err;
-    };
-    diagnostic.publishCompatFromBag(&diag_bag);
+    return validateCommonBlocksWithDiagnostics(arena, program, sem_units, &diag_bag);
 }
 
 pub fn validateCommonBlocksWithDiagnostics(

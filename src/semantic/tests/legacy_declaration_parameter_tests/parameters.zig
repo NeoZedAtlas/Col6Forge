@@ -5,13 +5,8 @@ const fixed_form = h.fixed_form;
 const free_form = h.free_form;
 const parser = h.parser;
 const symbols = h.symbols;
-const analyzeProgram = h.analyzeProgram;
-const analyzeProgramWithKnown = h.analyzeProgramWithKnown;
-const analyzeProgramWithOptions = h.analyzeProgramWithOptions;
-const takeDiagnostic = h.takeDiagnostic;
-const clearDiagnostic = h.clearDiagnostic;
-const inferFunctionType = h.inferFunctionType;
-const inferFunctionTypeSpec = h.inferFunctionTypeSpec;
+const analyzeProgramWithDiagnostics = h.analyzeProgramWithDiagnostics;
+const DiagCapture = h.DiagCapture;
 
 test "parameter constants honor selected_int_kind, c_sizeof, and storage_size" {
     const testing = std.testing;
@@ -33,9 +28,11 @@ test "parameter constants honor selected_int_kind, c_sizeof, and storage_size" {
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
 
     const program = try parser.parseProgram(arena.allocator(), lines);
-    const sem = try analyzeProgram(arena.allocator(), program);
+    const sem = try analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag);
 
     var found_big = false;
     var found_size = false;
@@ -62,6 +59,5 @@ test "parameter constants honor selected_int_kind, c_sizeof, and storage_size" {
     try testing.expect(found_big);
     try testing.expect(found_size);
     try testing.expect(found_bits);
-    try testing.expect(takeDiagnostic() == null);
-    clearDiagnostic();
+    try diag_capture.expectNone();
 }

@@ -8,7 +8,7 @@ const analysis_context = @import("../analysis/context.zig");
 const symbols = @import("../symbol/mod.zig");
 const helpers = @import("helpers.zig");
 const analyzeProgram = api.analyzeProgram;
-const takeDiagnostic = api.takeDiagnostic;
+const DiagCapture = helpers.DiagCapture;
 
 const expectParseErrorInvariant = helpers.expectParseErrorInvariant;
 const expectSemanticErrorNoTempLeakAndFirstCallArgCallExprInvariant = helpers.expectSemanticErrorNoTempLeakAndFirstCallArgCallExprInvariant;
@@ -197,8 +197,10 @@ test "invariant array lowering 13 failed LOGICAL IF conversion keeps AST and sym
     var known_host_derived_types = std.StringHashMap(analysis_context.Context.DerivedTypeInfo).init(arena.allocator());
     var known_host_interface_sources = std.StringHashMap(ast.DeclSource).init(arena.allocator());
     var known_host_abstract_interfaces = std.StringHashMap(void).init(arena.allocator());
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
 
-    var unit_analyzer = analysis.UnitAnalyzer.init(
+    var unit_analyzer = analysis.UnitAnalyzer.initWithDiagnostics(
         arena.allocator(),
         &program.units[0],
         &.{},
@@ -210,9 +212,12 @@ test "invariant array lowering 13 failed LOGICAL IF conversion keeps AST and sym
         &known_host_abstract_interfaces,
         null,
         .{},
+        false,
+        &diag_capture.bag,
     );
     try testing.expectError(error.UnsupportedIntrinsicType, unit_analyzer.analyze());
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3127"));
 
     var generated_temp_count: usize = 0;

@@ -4,6 +4,7 @@ const fixed_form = @import("../../frontend/fixed_form.zig");
 const free_form = @import("../../frontend/free_form.zig");
 const parser = @import("../../frontend/parser/mod.zig");
 const api = @import("../split/api/mod.zig");
+const diagnostic = @import("../diagnostic.zig");
 
 test "inferProcedureArgSigs captures descriptor-bearing dummy arrays" {
     const testing = std.testing;
@@ -459,10 +460,15 @@ test "analyzeProgram rejects procedure actual dummy attribute mismatch" {
     defer arena.deinit();
 
     const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_bag = diagnostic.Bag.init(allocator);
+    defer diag_bag.deinit();
 
-    api.clearDiagnostic();
-    try testing.expectError(error.InvalidArgumentCount, api.analyzeProgram(arena.allocator(), program));
-    const got = api.takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectError(
+        error.InvalidArgumentCount,
+        api.analyzeProgramWithKnownAndOptionsAndDiagnostics(arena.allocator(), program, &.{}, &.{}, .{}, &diag_bag),
+    );
+    const got = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(got);
     try testing.expectEqualStrings("ASYNCHRONOUS mismatch in argument", got.message);
 }
 
@@ -491,9 +497,14 @@ test "analyzeProgram rejects function result character length mismatch" {
     defer arena.deinit();
 
     const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_bag = diagnostic.Bag.init(allocator);
+    defer diag_bag.deinit();
 
-    api.clearDiagnostic();
-    try testing.expectError(error.InvalidArgumentCount, api.analyzeProgram(arena.allocator(), program));
-    const got = api.takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectError(
+        error.InvalidArgumentCount,
+        api.analyzeProgramWithKnownAndOptionsAndDiagnostics(arena.allocator(), program, &.{}, &.{}, .{}, &diag_bag),
+    );
+    const got = diag_bag.take() orelse return error.TestExpectedEqual;
+    defer diag_bag.release(got);
     try testing.expectEqualStrings("Character length mismatch in function result", got.message);
 }

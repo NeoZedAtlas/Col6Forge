@@ -42,12 +42,7 @@ pub fn analyzeProgramWithKnownAndOptions(
 ) !types.SemanticProgram {
     var diag_bag = diagnostic.Bag.init(arena);
     defer diag_bag.deinit();
-    const result = analyzeProgramWithKnownAndOptionsAndDiagnostics(arena, program, known_fn_types, known_proc_sigs, options, &diag_bag) catch |err| {
-        diagnostic.publishCompatFromBag(&diag_bag);
-        return err;
-    };
-    diagnostic.publishCompatFromBag(&diag_bag);
-    return result;
+    return analyzeProgramWithKnownAndOptionsAndDiagnostics(arena, program, known_fn_types, known_proc_sigs, options, &diag_bag);
 }
 
 pub fn analyzeProgramWithKnownAndOptionsAndDiagnostics(

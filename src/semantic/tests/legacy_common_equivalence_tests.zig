@@ -7,10 +7,11 @@ const symbols = @import("../symbol/mod.zig");
 
 const api = @import("../split/api/mod.zig");
 const function_type = @import("../split/function_type.zig");
+const helpers = @import("helpers.zig");
 const analyzeProgram = api.analyzeProgram;
 const analyzeProgramWithKnown = api.analyzeProgramWithKnown;
-const takeDiagnostic = api.takeDiagnostic;
-const clearDiagnostic = api.clearDiagnostic;
+const analyzeProgramWithDiagnostics = helpers.analyzeProgramWithDiagnostics;
+const DiagCapture = helpers.DiagCapture;
 const inferFunctionType = function_type.inferFunctionType;
 
 test "semantic reports CF3113 for invalid EQUIVALENCE types" {
@@ -30,8 +31,11 @@ test "semantic reports CF3113 for invalid EQUIVALENCE types" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidEquivalence, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidEquivalence, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3113"));
 }
 
@@ -51,8 +55,10 @@ test "semantic accepts EQUIVALENCE with constant subscript offsets" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    _ = try analyzeProgram(arena.allocator(), program);
-    try testing.expect(takeDiagnostic() == null);
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    _ = try analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag);
+    try diag_capture.expectNone();
 }
 
 test "semantic reports CF3113 for contradictory EQUIVALENCE offsets" {
@@ -71,8 +77,11 @@ test "semantic reports CF3113 for contradictory EQUIVALENCE offsets" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidEquivalence, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidEquivalence, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3113"));
 }
 
@@ -92,8 +101,11 @@ test "semantic reports CF3114 for cyclic EQUIVALENCE" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.EquivalenceCycle, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.EquivalenceCycle, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3114"));
 }
 
@@ -117,8 +129,11 @@ test "semantic reports CF3115 for COMMON mismatch across units" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.CommonBlockMismatch, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.CommonBlockMismatch, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3115"));
     try testing.expectEqual(@as(usize, 7), diag.line);
     try testing.expectEqual(@as(usize, 7), diag.column);
@@ -153,8 +168,11 @@ test "semantic reports CF3110 for function argument count mismatch" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 9), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
@@ -182,8 +200,11 @@ test "semantic reports CF3110 with explicit interface related location" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "X=F(1)"));
     try testing.expect(std.mem.eql(u8, diag.primary_label, "call site conflicts here"));
@@ -218,8 +239,11 @@ test "semantic reports ambiguous interfaces with related location" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "Ambiguous interfaces"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "    module procedure sub_b"));
@@ -264,8 +288,11 @@ test "semantic reports ambiguous reference with related location" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "ambiguous reference"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "  print *, my_fun(a)"));
@@ -310,8 +337,11 @@ test "semantic reports declaration-side ambiguous interfaces with multiple relat
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "Ambiguous interfaces"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "    module procedure sub_c"));
@@ -356,8 +386,11 @@ test "semantic reports visible prelude generic specific reuse with related locat
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "is already present in the interface"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "    subroutine bar(x)"));
@@ -393,8 +426,11 @@ test "semantic reports mixed generic specific kinds with related location" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "all SUBROUTINEs or all FUNCTIONs"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "    function fun_b(y)"));
@@ -425,8 +461,11 @@ test "semantic reports non-procedure generic specific with related declaration" 
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.UnknownSymbol, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.UnknownSymbol, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "neither function nor subroutine"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "    procedure x"));
@@ -456,8 +495,11 @@ test "semantic reports unknown generic specific procedure" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.UnknownSymbol, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.UnknownSymbol, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "neither function nor subroutine"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "    procedure missing_proc"));
@@ -485,8 +527,11 @@ test "semantic reports ABSTRACT INTERFACE bind-name misuse with related end loca
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "NAME not allowed on BIND.C. for ABSTRACT INTERFACE"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "    subroutine foo() bind(c, name=\"bar\")"));
@@ -519,8 +564,11 @@ test "semantic reports ABSTRACT INTERFACE module procedure misuse" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "must be in a generic module interface"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "    module procedure foo"));
@@ -549,8 +597,11 @@ test "semantic reports deferred-shape interface function result" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "function result cannot have a deferred shape"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "    function foo() result(r)"));
@@ -587,8 +638,11 @@ test "semantic reports known procedure result type mismatch with related visible
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
     try testing.expect(std.mem.eql(u8, diag.message, "Type mismatch in function result"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "    real function f(x)"));
@@ -624,8 +678,11 @@ test "semantic reports interface derived type use before later host definition" 
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.UnexpectedTypeDecl, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.UnexpectedTypeDecl, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "is being used before it is defined"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "    subroutine foo(x)"));
@@ -663,8 +720,11 @@ test "semantic reports call-site ambiguous interfaces with related location" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.message, "Ambiguous interfaces"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "  call foo(1)"));
@@ -700,8 +760,11 @@ test "semantic reports procedure actual mismatch with related interface location
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
     try testing.expect(std.mem.eql(u8, diag.message, "Type mismatch in argument"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "  call foo(1.0)"));
@@ -731,8 +794,11 @@ test "semantic reports implicit external type mismatch with related previous cal
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
     try testing.expect(std.mem.eql(u8, diag.message, "Type mismatch in argument"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "  x = foo(1.0)"));
@@ -762,8 +828,11 @@ test "semantic reports implicit external argument-count mismatch with related pr
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
     try testing.expect(std.mem.eql(u8, diag.message, "wrong number of arguments"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "  x = foo(1, 2)"));
@@ -803,8 +872,11 @@ test "semantic reports procedure actual mismatch with actual procedure declarati
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
     try testing.expect(std.mem.eql(u8, diag.message, "Type mismatch in function result"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "  call outer(actual)"));
@@ -838,8 +910,11 @@ test "semantic reports variable definition context with related interface locati
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.AssignmentTypeMismatch, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.AssignmentTypeMismatch, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3108"));
     try testing.expect(std.mem.eql(u8, diag.message, "in variable definition context"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "  call foo(1)"));
@@ -880,8 +955,11 @@ test "semantic reports abstract passed-object actual with related type location"
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArgumentCount, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArgumentCount, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3110"));
     try testing.expect(std.mem.indexOf(u8, diag.message, "is of the ABSTRACT type") != null);
     try testing.expect(std.mem.eql(u8, diag.line_text, "    call obj%abstract_t%p()"));
@@ -914,8 +992,11 @@ test "semantic reports concrete abstract-type declaration with related type sour
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.UnexpectedTypeDecl, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.UnexpectedTypeDecl, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3107"));
     try testing.expect(std.mem.indexOf(u8, diag.message, "is of the ABSTRACT type") != null);
     try testing.expect(std.mem.eql(u8, diag.line_text, "    type(base_t) :: x"));
@@ -944,8 +1025,11 @@ test "semantic reports CF3116 for duplicate declaration" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 7), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
@@ -976,8 +1060,11 @@ test "semantic reports CF3116 for conflicting DIMENSION redeclaration" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DuplicateDeclaration, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DuplicateDeclaration, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3116"));
     try testing.expect(std.mem.eql(u8, diag.primary_label, "redeclared here"));
     try testing.expectEqual(@as(usize, 1), diag.notes.len);
@@ -1003,8 +1090,10 @@ test "semantic reuses implicit symbol across repeated references" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    _ = try analyzeProgram(arena.allocator(), program);
-    try testing.expect(takeDiagnostic() == null);
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    _ = try analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag);
+    try diag_capture.expectNone();
 }
 
 test "semantic accepts deferred CHARACTER length for dummy argument" {
@@ -1137,8 +1226,11 @@ test "semantic reports CF3117 for divide-by-zero in const expression" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.DivisionByZero, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.DivisionByZero, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3117"));
 }
 
@@ -1157,8 +1249,11 @@ test "semantic reports CF3118 for negative integer exponent in const expression"
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.NegativeIntegerExponent, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.NegativeIntegerExponent, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3118"));
 }
 
@@ -1178,8 +1273,11 @@ test "semantic reports CF3119 for CHARACTER arithmetic operand" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArithmeticOperands, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArithmeticOperands, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 9), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3119"));
@@ -1203,8 +1301,11 @@ test "semantic reports CF3119 for LOGICAL and REAL logical operator" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArithmeticOperands, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArithmeticOperands, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3119"));
 }
 
@@ -1225,8 +1326,11 @@ test "semantic reports CF3119 for REAL EQV REAL" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArithmeticOperands, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArithmeticOperands, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3119"));
 }
 
@@ -1246,8 +1350,11 @@ test "semantic reports CF3119 for CHARACTER compared with INTEGER" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArithmeticOperands, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArithmeticOperands, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3119"));
 }
 
@@ -1267,8 +1374,11 @@ test "semantic reports CF3119 for CONCAT with non-character operand" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidArithmeticOperands, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidArithmeticOperands, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3119"));
 }
 
@@ -1287,8 +1397,11 @@ test "semantic reports CF3120 for ENTRY in PROGRAM" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidEntryStatement, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidEntryStatement, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3120"));
 }
 
@@ -1307,8 +1420,11 @@ test "semantic reports CF3120 for duplicate ENTRY arguments" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidEntryStatement, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidEntryStatement, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3120"));
 }
 
@@ -1327,8 +1443,11 @@ test "semantic reports CF3121 for unlabeled FORMAT" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidFormatStatement, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidFormatStatement, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3121"));
 }
 
@@ -1347,8 +1466,11 @@ test "semantic reports CF3122 for SAVE unknown COMMON block" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.UnknownCommonBlock, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.UnknownCommonBlock, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3122"));
 }
 
@@ -1367,10 +1489,14 @@ test "semantic rejects CHARACTER*(*) for non-dummy declaration" {
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
 
-    try testing.expectError(error.InvalidCharLen, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
+    try testing.expectError(error.InvalidCharLen, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expectEqual(@as(usize, 7), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3103"));
     try testing.expect(std.mem.eql(u8, diag.line_text, "CHARACTER*(*) A"));
 }
+

@@ -6,11 +6,12 @@ const symbols = @import("../symbol/mod.zig");
 
 const api = @import("../split/api/mod.zig");
 const function_type = @import("../split/function_type.zig");
+const helpers = @import("helpers.zig");
 const analyzeProgram = api.analyzeProgram;
 const analyzeProgramWithOptions = api.analyzeProgramWithOptions;
 const analyzeProgramWithKnown = api.analyzeProgramWithKnown;
-const takeDiagnostic = api.takeDiagnostic;
-const clearDiagnostic = api.clearDiagnostic;
+const analyzeProgramWithDiagnostics = helpers.analyzeProgramWithDiagnostics;
+const DiagCapture = helpers.DiagCapture;
 const inferFunctionType = function_type.inferFunctionType;
 
 test "semantic lowers intrinsic array conversion actual argument into temporary loop copy" {
@@ -162,9 +163,12 @@ test "semantic rejects unsupported intrinsic array conversion expression shape" 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
 
-    try testing.expectError(error.UnsupportedIntrinsicType, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectError(error.UnsupportedIntrinsicType, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3127"));
 }
 
@@ -183,9 +187,12 @@ test "semantic rejects intrinsic array conversion on deferred-shape array" {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
 
-    try testing.expectError(error.UnsupportedIntrinsicType, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectError(error.UnsupportedIntrinsicType, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3127"));
 }
 
@@ -256,9 +263,12 @@ test "semantic reports CF3123 for nested logical IF" {
     };
 
     const program = ast.Program{ .units = units };
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
 
-    try testing.expectError(error.InvalidLogicalIfNesting, analyzeProgram(a, program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectError(error.InvalidLogicalIfNesting, analyzeProgramWithDiagnostics(a, program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3123"));
 }
 
@@ -276,9 +286,12 @@ test "semantic reports CF3124 for non-character OPEN control type" {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
 
-    try testing.expectError(error.InvalidIoControlType, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectError(error.InvalidIoControlType, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expectEqual(@as(usize, 27), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3124"));
@@ -299,9 +312,12 @@ test "semantic reports CF3125 for invalid OPEN control literal value" {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
 
-    try testing.expectError(error.InvalidIoControlValue, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectError(error.InvalidIoControlValue, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expectEqual(@as(usize, 2), diag.line);
     try testing.expectEqual(@as(usize, 27), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3125"));
@@ -341,9 +357,12 @@ test "semantic reports CF3130 for INTEGER IF condition" {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
 
-    try testing.expectError(error.InvalidConditionType, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectError(error.InvalidConditionType, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 11), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3130"));
@@ -367,9 +386,12 @@ test "semantic reports CF3130 for REAL DO WHILE condition" {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
 
-    try testing.expectError(error.InvalidConditionType, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectError(error.InvalidConditionType, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expectEqual(@as(usize, 17), diag.column);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3130"));
@@ -392,9 +414,12 @@ test "semantic rejects REAL DO control variable" {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
 
-    try testing.expectError(error.AssignmentTypeMismatch, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectError(error.AssignmentTypeMismatch, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3108"));
     try testing.expectEqualStrings("DO variable must be a scalar INTEGER", diag.message);
@@ -417,9 +442,12 @@ test "semantic rejects compile-time zero DO step" {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const program = try parser.parseProgram(arena.allocator(), lines);
+    var diag_capture = DiagCapture.init(allocator);
+    defer diag_capture.deinit();
 
-    try testing.expectError(error.AssignmentTypeMismatch, analyzeProgram(arena.allocator(), program));
-    const diag = takeDiagnostic() orelse return error.TestExpectedEqual;
+    try testing.expectError(error.AssignmentTypeMismatch, analyzeProgramWithDiagnostics(arena.allocator(), program, &diag_capture.bag));
+    const diag = try diag_capture.take();
+    defer diag_capture.release(diag);
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expect(std.mem.eql(u8, diag.code, "CF3108"));
     try testing.expectEqualStrings("DO step must not be zero", diag.message);
