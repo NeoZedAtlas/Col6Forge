@@ -283,7 +283,7 @@ fn dummyArgTypeCompatible(
     return if (expected.polymorphic)
         std.ascii.eqlIgnoreCase(expected_name, actual_name) or symbols_mod.isSameOrExtension(self, actual_name, expected_name)
     else
-        std.ascii.eqlIgnoreCase(expected_name, actual_name);
+        symbols_mod.areConcreteDerivedTypesCompatible(self, expected_name, actual_name);
 }
 
 fn resolvedExprType(self: *context.Context, expr: *ast.Expr) ResolveError!ast.TypeKind {

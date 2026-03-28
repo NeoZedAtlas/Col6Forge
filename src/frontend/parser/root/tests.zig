@@ -1316,6 +1316,37 @@ test "parseProgram keeps non-renamed module exports visible for USE rename witho
     try testing.expectEqualStrings("t2", unit.decls[1].derived_type_def.name);
 }
 
+test "parseProgram imports single-item object declarations through USE ONLY module preludes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module m1\n" ++
+        "  type t1\n" ++
+        "    integer :: value\n" ++
+        "  end type t1\n" ++
+        "  type(t1) :: x\n" ++
+        "end module m1\n" ++
+        "subroutine s()\n" ++
+        "  use m1, only : x\n" ++
+        "end subroutine s\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parseProgram(arena.allocator(), lines);
+
+    try testing.expectEqual(@as(usize, 1), program.units.len);
+    const unit = program.units[0];
+    try testing.expectEqual(@as(usize, 2), unit.decls.len);
+    try testing.expect(unit.decls[0] == .derived_type_def);
+    try testing.expectEqualStrings("t1", unit.decls[0].derived_type_def.name);
+    try testing.expect(unit.decls[1] == .type_decl);
+    try testing.expectEqualStrings("x", unit.decls[1].type_decl.items[0].name);
+    try testing.expectEqualStrings("t1", unit.decls[1].type_decl.derived_type_name.?);
+}
+
 test "parseProgram captures generic type-bound bindings in derived types" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -31,7 +31,7 @@ pub fn installBuiltinConstants(self: *context.Context) !void {
 }
 
 pub fn registerDerivedType(self: *context.Context, info: context.Context.DerivedTypeInfo) !void {
-    if (hasDerivedType(self, info.name)) return;
+    if (hasLocalDerivedType(self, info.name)) return;
     const key = try lowerDup(self.arena, info.name);
     try self.derived_types.put(key, info);
 }
@@ -41,9 +41,17 @@ pub fn hasDerivedType(self: *const context.Context, name: []const u8) bool {
         getLowercaseMapValue(context.Context.DerivedTypeInfo, self.known_host_derived_types, name) != null;
 }
 
+pub fn hasKnownHostDerivedType(self: *const context.Context, name: []const u8) bool {
+    return getLowercaseMapValue(context.Context.DerivedTypeInfo, self.known_host_derived_types, name) != null;
+}
+
 pub fn lookupDerivedType(self: *const context.Context, name: []const u8) ?context.Context.DerivedTypeInfo {
     return getLowercaseMapValue(context.Context.DerivedTypeInfo, &self.derived_types, name) orelse
         getLowercaseMapValue(context.Context.DerivedTypeInfo, self.known_host_derived_types, name);
+}
+
+fn hasLocalDerivedType(self: *const context.Context, name: []const u8) bool {
+    return getLowercaseMapValue(context.Context.DerivedTypeInfo, &self.derived_types, name) != null;
 }
 
 pub fn lookupDerivedComponent(
@@ -105,6 +113,82 @@ pub fn isSameOrExtension(self: *const context.Context, candidate: []const u8, ba
         const parent = current.parent_name orelse return false;
         current = lookupDerivedType(self, parent) orelse return false;
     }
+}
+
+pub fn areConcreteDerivedTypesCompatible(self: *const context.Context, left_name: []const u8, right_name: []const u8) bool {
+    var visited = std.array_list.Managed(DerivedTypePair).init(self.arena);
+    return areConcreteDerivedTypesCompatibleInner(self, left_name, right_name, &visited) catch false;
+}
+
+const DerivedTypePair = struct {
+    left: []const u8,
+    right: []const u8,
+};
+
+fn areConcreteDerivedTypesCompatibleInner(
+    self: *const context.Context,
+    left_name: []const u8,
+    right_name: []const u8,
+    visited: *std.array_list.Managed(DerivedTypePair),
+) !bool {
+    for (visited.items) |pair| {
+        if (std.ascii.eqlIgnoreCase(pair.left, left_name) and std.ascii.eqlIgnoreCase(pair.right, right_name)) {
+            return true;
+        }
+        if (std.ascii.eqlIgnoreCase(pair.left, right_name) and std.ascii.eqlIgnoreCase(pair.right, left_name)) {
+            return true;
+        }
+    }
+    try visited.append(.{ .left = left_name, .right = right_name });
+
+    const left = lookupDerivedType(self, left_name) orelse return false;
+    const right = lookupDerivedType(self, right_name) orelse return false;
+
+    if (sameDerivedTypeOrigin(left.source, right.source)) return true;
+    if (!(left.sequence and right.sequence) and !(left.bind_c and right.bind_c)) return false;
+    return areDerivedComponentListsEquivalent(self, left.components, right.components, visited);
+}
+
+fn sameDerivedTypeOrigin(left: ast.DeclSource, right: ast.DeclSource) bool {
+    if (left.line == 0 or right.line == 0) return false;
+    if (left.line != right.line or left.column != right.column) return false;
+    if (left.text.len == 0 or right.text.len == 0) return false;
+    return std.mem.eql(u8, left.text, right.text);
+}
+
+fn areDerivedComponentListsEquivalent(
+    self: *const context.Context,
+    left: []const context.Context.DerivedTypeInfo.ComponentInfo,
+    right: []const context.Context.DerivedTypeInfo.ComponentInfo,
+    visited: *std.array_list.Managed(DerivedTypePair),
+) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_component, right_component| {
+        if (left_component.dims.len != right_component.dims.len) return false;
+        if (left_component.pointer != right_component.pointer) return false;
+        if (left_component.allocatable != right_component.allocatable) return false;
+        if (left_component.procedure != right_component.procedure) return false;
+        if (!areTypeSpecsEquivalentForDerivedCompatibility(self, left_component.type_spec, right_component.type_spec, visited)) return false;
+    }
+    return true;
+}
+
+fn areTypeSpecsEquivalentForDerivedCompatibility(
+    self: *const context.Context,
+    left: TypeSpec,
+    right: TypeSpec,
+    visited: *std.array_list.Managed(DerivedTypePair),
+) bool {
+    if (left.lowered_kind != right.lowered_kind) return false;
+    if (left.polymorphic != right.polymorphic) return false;
+    if (left.kind_value != right.kind_value) return false;
+    if (left.char_len != right.char_len) return false;
+    if (left.char_len_kind != right.char_len_kind) return false;
+    if (left.lowered_kind != .derived) return true;
+
+    const left_name = left.derived_type_name orelse return false;
+    const right_name = right.derived_type_name orelse return false;
+    return areConcreteDerivedTypesCompatibleInner(self, left_name, right_name, visited) catch false;
 }
 
 pub fn findBuiltinConstant(self: *context.Context, name: []const u8) ?context.Context.BuiltinConstant {

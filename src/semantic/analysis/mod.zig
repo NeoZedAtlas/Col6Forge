@@ -1675,6 +1675,87 @@ test "mirrored host parameters must not shadow contained procedure host associat
     _ = try split_api.analyzeProgram(arena.allocator(), program);
 }
 
+test "contained procedure local derived type may shadow host-associated derived type with same name" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module global\n" ++
+        "  implicit none\n" ++
+        "  type :: different_type\n" ++
+        "    integer :: i\n" ++
+        "  end type different_type\n" ++
+        "contains\n" ++
+        "  subroutine foo()\n" ++
+        "    type(different_type) :: host_value\n" ++
+        "    call inner(host_value)\n" ++
+        "  contains\n" ++
+        "    subroutine inner(dt1)\n" ++
+        "      type(different_type), intent(in) :: dt1\n" ++
+        "      type :: different_type\n" ++
+        "        complex :: z\n" ++
+        "      end type different_type\n" ++
+        "      type(different_type) :: b\n" ++
+        "      b%z = (2.0, -1.0)\n" ++
+        "    end subroutine inner\n" ++
+        "  end subroutine foo\n" ++
+        "end module global\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
+test "derived assignment accepts renamed host type identity and sequence-equivalent local type" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module global\n" ++
+        "  implicit none\n" ++
+        "  type :: seq_type1\n" ++
+        "    sequence\n" ++
+        "    integer :: i\n" ++
+        "  end type seq_type1\n" ++
+        "  type :: nonseq_type1\n" ++
+        "    integer :: i\n" ++
+        "  end type nonseq_type1\n" ++
+        "  type(nonseq_type1) :: ns1\n" ++
+        "end module global\n" ++
+        "use global, only: seq_type2 => seq_type1, nonseq_type1, ns1\n" ++
+        "type(seq_type2) :: t1\n" ++
+        "type(nonseq_type1) :: ns2\n" ++
+        "t1 = seq_type2(42)\n" ++
+        "ns2 = ns1\n" ++
+        "call foo(t1)\n" ++
+        "contains\n" ++
+        "  subroutine foo(x)\n" ++
+        "    use global, only: seq_type3 => seq_type1\n" ++
+        "    type :: seq_type1\n" ++
+        "      sequence\n" ++
+        "      integer :: i\n" ++
+        "    end type seq_type1\n" ++
+        "    type(seq_type2) :: x\n" ++
+        "    type(seq_type1) :: y\n" ++
+        "    type(seq_type3) :: z\n" ++
+        "    y = seq_type2(46)\n" ++
+        "    z = seq_type3(47)\n" ++
+        "  end subroutine foo\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try split_api.analyzeProgram(arena.allocator(), program);
+}
+
 test "nopass type-bound call rejects array base object" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -405,6 +405,41 @@ test "analyzeProgram preserves used derived types for module and implicit-main c
     try testing.expectEqual(@as(usize, 5), sem.units.len);
 }
 
+test "analyzeProgram does not export synthetic constructor symbols into contained host context" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const source =
+        "module global\n" ++
+        "  type :: seq_type1\n" ++
+        "    sequence\n" ++
+        "    integer :: i\n" ++
+        "  end type seq_type1\n" ++
+        "end module global\n" ++
+        "use global, only: seq_type2 => seq_type1\n" ++
+        "type(seq_type2) :: t1\n" ++
+        "real :: seq_type1\n" ++
+        "t1 = seq_type2(42)\n" ++
+        "contains\n" ++
+        "  subroutine foo()\n" ++
+        "    type :: seq_type1\n" ++
+        "      sequence\n" ++
+        "      integer :: i\n" ++
+        "    end type seq_type1\n" ++
+        "    type(seq_type2) :: x\n" ++
+        "    x = seq_type1(1)\n" ++
+        "  end subroutine foo\n" ++
+        "end\n";
+    const lines = try free_form.normalizeFreeForm(allocator, source);
+    defer free_form.freeLogicalLines(allocator, lines);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const program = try parser.parseProgram(arena.allocator(), lines);
+
+    _ = try analyzeProgram(arena.allocator(), program);
+}
+
 test "analyzeProgram accepts fixed-form array constructor derived type sample" {
     const testing = std.testing;
     const allocator = testing.allocator;

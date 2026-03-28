@@ -39,6 +39,7 @@ pub const Resolver = struct {
         try symbols_mod.installDummyArgs(ctx);
         try statements.preinstallUseImports(ctx);
         for (ctx.unit.decls, 0..) |decl, decl_idx| {
+            if (shouldSkipMirroredHostDecl(ctx, decl, decl_idx)) continue;
             if (decl == .derived_type_def) {
                 const decl_source = if (decl_idx < ctx.unit.decl_sources.len) ctx.unit.decl_sources[decl_idx] else ast.DeclSource{};
                 ctx.setCurrentDeclSource(decl_source);
@@ -65,7 +66,7 @@ pub const Resolver = struct {
             } else {
                 ctx.setCurrentDeclSource(null);
             }
-            if (shouldSkipMirroredHostTypeDecl(ctx, decl, decl_idx)) {
+            if (shouldSkipMirroredHostDecl(ctx, decl, decl_idx)) {
                 ctx.setCurrentDeclSource(null);
                 ctx.setCurrentDeclIndex(null);
                 continue;
@@ -167,10 +168,14 @@ pub const Resolver = struct {
     }
 };
 
-fn shouldSkipMirroredHostTypeDecl(ctx: *context.Context, decl: ast.Decl, decl_idx: usize) bool {
+fn shouldSkipMirroredHostDecl(ctx: *context.Context, decl: ast.Decl, decl_idx: usize) bool {
     if (ctx.unit.owner_name == null) return false;
     if (decl_idx >= ctx.unit.prelude_decl_count) return false;
-    return decl == .type_decl or decl == .parameter;
+    return switch (decl) {
+        .type_decl, .parameter => true,
+        .derived_type_def => |derived| symbols_mod.hasKnownHostDerivedType(ctx, derived.name),
+        else => false,
+    };
 }
 
 fn unitScopeKind(kind: ast.ProgramUnitKind) scope.ScopeKind {

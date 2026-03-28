@@ -35,13 +35,16 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             const value_ty = try expr_semantics.checkExprType(self, assign.value, .{
                 .dummyArgTypeCompatible = dummyArgTypeCompatible,
             });
+            const target_spec = try resolve_expr.exprTypeSpec(self, assign.target);
+            const value_spec = try resolve_expr.exprTypeSpec(self, assign.value);
             try abstract_expr_use.rejectNonpolymorphicAbstractExprUse(self, assign.target, error.AssignmentTypeMismatch);
             try abstract_expr_use.rejectNonpolymorphicAbstractExprUse(self, assign.value, error.AssignmentTypeMismatch);
             if (!expr_semantics.isAssignmentTarget(self, assign.target)) {
                 self.setCurrentSource(self.sourceForExpr(assign.target));
                 return error.AssignmentTypeMismatch;
             }
-            if (!expr_semantics.isAssignmentCompatible(target_ty, value_ty) and
+            if ((!expr_semantics.isAssignmentCompatible(target_ty, value_ty) or
+                !dummyArgTypeCompatible(self, target_spec, value_spec)) and
                 !expr_semantics.isDefinedAssignmentCompatible(self, assign.target, assign.value, .{
                     .dummyArgTypeCompatible = dummyArgTypeCompatible,
                 }))
@@ -341,11 +344,15 @@ pub fn checkStmtNode(self: *context.Context, node: ast.StmtNode) CheckError!void
             const value_ty = try expr_semantics.checkExprType(self, where.value, .{
                 .dummyArgTypeCompatible = dummyArgTypeCompatible,
             });
+            const target_spec = try resolve_expr.exprTypeSpec(self, where.target);
+            const value_spec = try resolve_expr.exprTypeSpec(self, where.value);
             if (!expr_semantics.isAssignmentTarget(self, where.target)) {
                 self.setCurrentSource(self.sourceForExpr(where.target));
                 return error.AssignmentTypeMismatch;
             }
-            if (!expr_semantics.isAssignmentCompatible(target_ty, value_ty)) {
+            if (!expr_semantics.isAssignmentCompatible(target_ty, value_ty) or
+                !dummyArgTypeCompatible(self, target_spec, value_spec))
+            {
                 self.setCurrentSource(self.sourceForExpr(where.value) orelse self.sourceForExpr(where.target));
                 return error.AssignmentTypeMismatch;
             }
@@ -384,7 +391,7 @@ fn dummyArgTypeCompatible(
     return if (expected.polymorphic)
         resolve_symbols.isSameOrExtension(self, actual_name, expected_name)
     else
-        std.ascii.eqlIgnoreCase(expected_name, actual_name);
+        resolve_symbols.areConcreteDerivedTypesCompatible(self, expected_name, actual_name);
 }
 
 fn isLegacyDialectDoControlKind(kind: ast.TypeKind) bool {

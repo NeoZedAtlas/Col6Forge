@@ -1500,6 +1500,7 @@ fn checkImplicitExternalCallConsistencyForExpr(
 }
 
 fn shouldTrackImplicitExternalCall(self: *context.Context, name: []const u8) bool {
+    if (resolve_symbols.hasDerivedType(self, name)) return false;
     if (resolvedProcedureSig(self, name) != null) return false;
     if (procedure_interfaces.calleeHasVisibleExplicitInterface(self, name)) return false;
     if (hasVisibleGenericInterface(self, name)) return false;

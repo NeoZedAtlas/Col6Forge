@@ -327,11 +327,10 @@ fn installUseImports(self: *context.Context, use_stmt: ast.UseStmt) ResolveError
 }
 
 fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_name: []const u8) ResolveError!void {
-    const idx = try symbols_mod.ensureSymbol(self, local_name);
-    const sym = &self.symbols.items[idx];
-    sym.name = local_name;
-
     if (symbols_mod.lookupKnownProcedureSig(self, remote_name)) |sig| {
+        const idx = try symbols_mod.ensureSymbol(self, local_name);
+        const sym = &self.symbols.items[idx];
+        sym.name = local_name;
         sym.is_external = true;
         sym.is_pointer = sig.is_pointer;
         sym.kind = switch (sig.kind) {
@@ -350,10 +349,14 @@ fn bindKnownUseImport(self: *context.Context, local_name: []const u8, remote_nam
     }
 
     if (symbols_mod.lookupKnownFunctionResolvedSpec(self, remote_name)) |type_spec| {
+        const idx = try symbols_mod.ensureSymbol(self, local_name);
+        const sym = &self.symbols.items[idx];
+        sym.name = local_name;
         sym.is_external = true;
         sym.kind = .function;
         sym.applyTypeSpec(type_spec);
         sym.type_explicit = true;
+        return;
     }
 }
 

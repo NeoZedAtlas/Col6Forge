@@ -18,7 +18,7 @@ pub fn refreshHostContextFromAnalyzer(
     known_host_derived_types.clearRetainingCapacity();
     known_host_interface_sources.clearRetainingCapacity();
     known_host_abstract_interfaces.clearRetainingCapacity();
-    try symbol_lookup.collectHostSymbols(known_host_symbols, arena, host_symbols);
+    try symbol_lookup.collectHostSymbols(known_host_symbols, arena, host_symbols, derived_types);
     try collectHostDerivedTypes(known_host_derived_types, arena, derived_types);
     try collectHostExplicitInterfaceSources(known_host_interface_sources, arena, unit);
     try collectHostAbstractInterfaceProcedures(known_host_abstract_interfaces, arena, unit);

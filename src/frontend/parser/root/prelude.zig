@@ -230,6 +230,9 @@ fn preludeDeclExportedName(decl_node: Decl) ?[]const u8 {
     return switch (decl_node) {
         .derived_type_def => |derived| derived.name,
         .interface_block => |interface_block| interface_block.name,
+        .type_decl => |type_decl| if (type_decl.items.len == 1) type_decl.items[0].name else null,
+        .procedure => |procedure_decl| if (procedure_decl.items.len == 1) procedure_decl.items[0].name else null,
+        .parameter => |parameter_decl| if (parameter_decl.assigns.len == 1) parameter_decl.assigns[0].name else null,
         else => null,
     };
 }
@@ -243,8 +246,8 @@ fn renamePreludeDecl(
     return switch (decl_node) {
         .derived_type_def => |derived| .{ .derived_type_def = try renameDerivedTypeDef(arena, derived, local_name, only_items) },
         .interface_block => |interface_block| .{ .interface_block = try renameInterfaceBlock(arena, interface_block, local_name, only_items) },
-        .type_decl => |type_decl| .{ .type_decl = renameTypeDecl(type_decl, only_items) },
-        .procedure => |procedure_decl| .{ .procedure = renameProcedureDecl(procedure_decl, only_items) },
+        .type_decl => |type_decl| .{ .type_decl = try renameTypeDecl(arena, type_decl, local_name, only_items) },
+        .procedure => |procedure_decl| .{ .procedure = try renameProcedureDecl(arena, procedure_decl, local_name, only_items) },
         else => decl_node,
     };
 }
@@ -257,11 +260,11 @@ fn renameDerivedTypeDef(
 ) !ast.DerivedTypeDef {
     const components = try arena.alloc(ast.TypeDecl, derived.components.len);
     for (derived.components, 0..) |component, idx| {
-        components[idx] = renameTypeDecl(component, only_items);
+        components[idx] = try renameTypeDecl(arena, component, null, only_items);
     }
     const procedure_components = try arena.alloc(ast.ProcedureDecl, derived.procedure_components.len);
     for (derived.procedure_components, 0..) |procedure_component, idx| {
-        procedure_components[idx] = renameProcedureDecl(procedure_component, only_items);
+        procedure_components[idx] = try renameProcedureDecl(arena, procedure_component, null, only_items);
     }
     const bindings = try arena.dupe(ast.TypeBoundProcedureBinding, derived.bindings);
     return .{
@@ -325,20 +328,50 @@ fn renameNameList(
     return renamed;
 }
 
-fn renameTypeDecl(type_decl: ast.TypeDecl, only_items: []const ast.UseOnlyItem) ast.TypeDecl {
+fn renameTypeDecl(
+    arena: std.mem.Allocator,
+    type_decl: ast.TypeDecl,
+    local_name: ?[]const u8,
+    only_items: []const ast.UseOnlyItem,
+) !ast.TypeDecl {
     var renamed = type_decl;
     if (type_decl.derived_type_name) |type_name| {
         renamed.derived_type_name = renamePreludeTypeName(type_name, only_items);
     }
+    if (type_decl.items.len == 0) return renamed;
+    const items = try arena.alloc(ast.Declarator, type_decl.items.len);
+    for (type_decl.items, 0..) |item, idx| {
+        items[idx] = item;
+        items[idx].name = if (idx == 0 and local_name != null and type_decl.items.len == 1)
+            local_name.?
+        else
+            renamePreludeTypeName(item.name, only_items);
+    }
+    renamed.items = items;
     return renamed;
 }
 
-fn renameProcedureDecl(procedure_decl: ast.ProcedureDecl, only_items: []const ast.UseOnlyItem) ast.ProcedureDecl {
+fn renameProcedureDecl(
+    arena: std.mem.Allocator,
+    procedure_decl: ast.ProcedureDecl,
+    local_name: ?[]const u8,
+    only_items: []const ast.UseOnlyItem,
+) !ast.ProcedureDecl {
     var renamed = procedure_decl;
     renamed.interface = switch (procedure_decl.interface) {
         .type_spec => |type_spec| .{ .type_spec = renameProcedureTypeSpec(type_spec, only_items) },
         else => procedure_decl.interface,
     };
+    if (procedure_decl.items.len == 0) return renamed;
+    const items = try arena.alloc(ast.Declarator, procedure_decl.items.len);
+    for (procedure_decl.items, 0..) |item, idx| {
+        items[idx] = item;
+        items[idx].name = if (idx == 0 and local_name != null and procedure_decl.items.len == 1)
+            local_name.?
+        else
+            renamePreludeTypeName(item.name, only_items);
+    }
+    renamed.items = items;
     return renamed;
 }
 
